@@ -4,6 +4,7 @@ import { WinrateChart } from "./components/WinrateChart";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import { EngineSetupPanel } from "./components/EngineSetupPanel";
 import { CacheStatusBadge } from "./components/CacheStatusBadge";
+import { AppChrome, BottomBar, type EngineCommands, type OverlayMode, type SheetId } from "./components/AppChrome";
 import { PreferencesPanel } from "./components/PreferencesPanel";
 import { ProviderPanel } from "./components/ProviderPanel";
 import {
@@ -27,7 +28,8 @@ import { defaultAppPreferences, normalizeAppPreferences, type AppPreferences } f
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
 import type { AnalysisFrameDto, AppHealthDto, EngineProfileDto, GameDto, PositionDto, ProblemMarkerDto } from "./domain/types";
 
-const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[Lee Changho]PW[Rui Naiwei]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
+const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
+const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
 const demoGame = createDemoGame();
 type AnalysisProgress = { jobId: string; completed: number; expected: number; turn: number; responseJsonl: string };
 type PendingAnalysisTerminalEvent =
@@ -45,11 +47,11 @@ export function App() {
   const [health, setHealth] = useState<AppHealthDto | null>(null);
   const [game, setGame] = useState<GameDto>(() => demoGame);
   const [positions, setPositions] = useState<PositionDto[]>(() => replayGamePositions(demoGame));
-  const [currentMove, setCurrentMove] = useState(0);
+  const [currentMove, setCurrentMove] = useState(() => demoGame.moves.length);
   const [frames, setFrames] = useState<AnalysisFrameDto[]>([]);
   const [problems, setProblems] = useState<ProblemMarkerDto[]>([]);
   const [sgfText, setSgfText] = useState(demoSgf);
-  const [message, setMessage] = useState("Preview workspace ready. Parse the sample SGF or import a local game to start reviewing.");
+  const [message, setMessage] = useState("谱面已就绪。打开棋谱或载入示例开始复盘。");
   const [isKataGoRunning, setIsKataGoRunning] = useState(false);
   const [selectedCandidateIndex, setSelectedCandidateIndex] = useState<number | null>(null);
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
@@ -62,7 +64,18 @@ export function App() {
   const [cacheError, setCacheError] = useState<string | null>(null);
   const [currentCacheKey, setCurrentCacheKey] = useState<GameCacheKey | null>(null);
   const [preferences, setPreferences] = useState<AppPreferences>(() => defaultAppPreferences);
-  const [preferencesStatus, setPreferencesStatus] = useState("Loading preferences...");
+  const [preferencesStatus, setPreferencesStatus] = useState("正在载入设置…");
+  const [sheet, setSheet] = useState<"none" | SheetId>("none");
+  const engineCommandsRef = useRef<EngineCommands | null>(null);
+  const [engineLabel, setEngineLabel] = useState("未加载引擎");
+  const [engineReady, setEngineReady] = useState(false);
+  const [showCoordinates, setShowCoordinates] = useState(true);
+  const [showMoveNumbers, setShowMoveNumbers] = useState(false);
+  const [showBlackCandidates, setShowBlackCandidates] = useState(true);
+  const [showWhiteCandidates, setShowWhiteCandidates] = useState(true);
+  const [overlayMode, setOverlayMode] = useState<OverlayMode>("candidates");
+  const [autoPlaying, setAutoPlaying] = useState(false);
+  const jumpRef = useRef<HTMLInputElement | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
   const startingAnalysisRef = useRef(false);
   const userChangedPreferencesRef = useRef(false);
@@ -103,7 +116,7 @@ export function App() {
   const visibleCurrentFrame = useMemo(() => applyPreferencesToFrame(currentFrame, preferences), [currentFrame, preferences]);
   const currentPosition = useMemo(() => selectExactPosition(positions, currentMove, game.summary.board_size), [positions, currentMove, game.summary.board_size]);
   const maxMove = Math.max(positions.at(-1)?.move_number ?? 0, 1);
-  const documentName = useMemo(() => currentFilePath ? fileNameFromPath(currentFilePath) : fallbackFileName ?? "Untitled SGF", [currentFilePath, fallbackFileName]);
+  const documentName = useMemo(() => currentFilePath ? fileNameFromPath(currentFilePath) : fallbackFileName ?? "未命名棋谱", [currentFilePath, fallbackFileName]);
   const saveFileName = documentName.toLowerCase().endsWith(".sgf") ? documentName : `${documentName}.sgf`;
 
   useEffect(() => {
@@ -115,6 +128,55 @@ export function App() {
       setSelectedCandidateIndex(null);
     }
   }, [preferences.showCandidates, preferences.candidateLimit, selectedCandidateIndex]);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      const target = event.target;
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return;
+      if (event.key >= "1" && event.key <= "9") {
+        const index = Number(event.key) - 1;
+        if (visibleCurrentFrame?.candidates[index]) setSelectedCandidateIndex(index);
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        setCurrentMove((move) => clampMoveNumberToPositions(positions, move - 1));
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        setCurrentMove((move) => clampMoveNumberToPositions(positions, move + 1));
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [positions, visibleCurrentFrame]);
+
+  useEffect(() => {
+    if (!autoPlaying) return;
+    const timer = window.setInterval(() => {
+      setCurrentMove((move) => {
+        const next = clampMoveNumberToPositions(positions, move + 1);
+        if (next >= Math.max(positions.at(-1)?.move_number ?? 0, 1)) setAutoPlaying(false);
+        return next;
+      });
+    }, 800);
+    return () => window.clearInterval(timer);
+  }, [autoPlaying, positions]);
+
+  function toggleSheet(next: SheetId) {
+    setSheet((current) => current === next ? "none" : next);
+  }
+
+  function bindEngineCommands(commands: EngineCommands) {
+    engineCommandsRef.current = commands;
+    setEngineLabel((current) => current === commands.engineLabel ? current : commands.engineLabel);
+    setEngineReady((current) => current === commands.canRun ? current : commands.canRun);
+  }
+
+  function handleEngineCommand(kind: "once" | "game") {
+    if (kind === "once") engineCommandsRef.current?.analyzeOnce();
+    else engineCommandsRef.current?.analyzeGame();
+  }
 
   function handlePreferencesChange(nextPreferences: AppPreferences) {
     const normalized = normalizeAppPreferences(nextPreferences);
@@ -231,7 +293,7 @@ export function App() {
       setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
       setSelectedCandidateIndex(null);
       const cacheMessage = await saveAnalysisCacheForGame(sgfText, currentFilePath, parsed, result, classified, "fake");
-      setMessage(`Generated ${result.length} review frames with candidate moves and winrate history.${cacheMessage}`);
+      setMessage(`已生成 ${result.length} 个复盘局面，含候选与胜率。${cacheMessage}`);
     } catch (error) {
       setMessage(errorMessage(error));
     }
@@ -428,6 +490,56 @@ export function App() {
     await checkAnalysisCacheForGame(demoSgf, null, parsed, replayed, sampleMessage);
   }
 
+  async function handleNewGame() {
+    if (dirty && !window.confirm("放弃未保存的棋谱并新建对局？")) return;
+    const [parsed, replayed] = await Promise.all([parseSgfSummary(emptySgf), replaySgfPositions(emptySgf)]);
+    setSgfText(emptySgf);
+    setCurrentFilePath(null);
+    setFallbackFileName(null);
+    setDirty(false);
+    setGame(parsed);
+    setPositions(replayed);
+    setCurrentMove(0);
+    setFrames([]);
+    setProblems([]);
+    setSelectedCandidateIndex(null);
+    setMessage("已新建空谱。");
+    resetAnalysisCacheState();
+  }
+
+  async function handleCopySgf() {
+    try {
+      await navigator.clipboard.writeText(sgfText);
+      setMessage("棋谱已复制到剪贴板。");
+    } catch (error) {
+      setMessage(`复制失败: ${errorMessage(error)}`);
+    }
+  }
+
+  async function handlePasteSgf() {
+    try {
+      const text = (await navigator.clipboard.readText()).trim();
+      if (!text) {
+        setMessage("剪贴板没有棋谱。");
+        return;
+      }
+      const [parsed, replayed] = await Promise.all([parseSgfSummary(text), replaySgfPositions(text)]);
+      setSgfText(text);
+      setCurrentFilePath(null);
+      setFallbackFileName("clipboard.sgf");
+      setDirty(true);
+      setGame(parsed);
+      setPositions(replayed);
+      setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
+      setFrames([]);
+      setProblems([]);
+      setSelectedCandidateIndex(null);
+      setMessage(`已粘贴棋谱: ${parsed.summary.move_count} 手。`);
+    } catch (error) {
+      setMessage(`粘贴失败: ${errorMessage(error)}`);
+    }
+  }
+
   function handleMoveSelect(moveNumber: number) {
     setCurrentMove(clampMoveNumberToPositions(positions, moveNumber));
     setSelectedCandidateIndex(null);
@@ -564,40 +676,31 @@ export function App() {
         sgfHash: key.sgfHash,
         profileId: null,
         engineKind,
-        source: engineKind,
+        source: engineKind === "katago" ? "katago" : "browser",
         moveCount: parsed.summary.move_count,
         analyzedMoveCount: countAnalyzedMoves(analysisFrames, parsed.summary.move_count),
         payload
       });
-      const record: AnalysisCacheRecord = {
+      setCacheRecord({
         id: saved.id,
         gameKey: saved.gameKey,
         sgfHash: key.sgfHash,
         profileId: null,
         engineKind,
-        source: engineKind,
+        source: engineKind === "katago" ? "katago" : "browser",
         moveCount: parsed.summary.move_count,
         analyzedMoveCount: countAnalyzedMoves(analysisFrames, parsed.summary.move_count),
         payload,
-        createdAt: saved.updatedAt,
         updatedAt: saved.updatedAt
-      };
+      });
       setCacheStatus("saved");
-      setCacheRecord(record);
-      return " Cache saved.";
+      return ` Cached ${analysisFrames.length} ${cacheEngineLabel(engineKind)} frames.`;
     } catch (error) {
-      const message = errorMessage(error);
+      const failed = errorMessage(error);
       setCacheStatus("error");
-      setCacheError(message);
-      return ` Cache save failed: ${message}`;
+      setCacheError(failed);
+      return ` Cache save failed: ${failed}`;
     }
-  }
-
-  function resetAnalysisCacheState() {
-    setCacheStatus("idle");
-    setCacheRecord(null);
-    setCacheError(null);
-    setCurrentCacheKey(null);
   }
 
   function clearReviewData() {
@@ -608,80 +711,172 @@ export function App() {
     setCacheRecord(null);
   }
 
+  function resetAnalysisCacheState() {
+    setCacheStatus("idle");
+    setCacheRecord(null);
+    setCacheError(null);
+    setCurrentCacheKey(null);
+  }
+
   return <main className={`app-shell${preferences.boardTheme === "high-contrast" ? " theme-high-contrast" : ""}`}>
-    <header className="topbar">
-      <div>
-        <h1>LizzieYzy Next</h1>
-        <p>{health?.architecture ?? "Tauri 2 + React review workspace"}</p>
-      </div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-        <CacheStatusBadge status={cacheStatus} record={cacheRecord} error={cacheError} />
-        <div className="status-pill">{health?.rust_backend_ready ? "Rust backend ready" : "Browser fallback"}</div>
-      </div>
-    </header>
-    <section className="workspace">
-      <div className="left-pane">
-        <BoardCanvas position={currentPosition} analysis={visibleCurrentFrame} selectedCandidateIndex={selectedCandidateIndex} />
-        <WinrateChart frames={frames} currentMove={currentMove} />
-        <div className="timeline-row">
-          <span>Move {currentMove}</span>
-          <input className="move-slider" type="range" min={0} max={maxMove} value={Math.min(currentMove, maxMove)} onChange={(e) => setCurrentMove(clampMoveNumberToPositions(positions, Number(e.target.value)))} />
-          <span>{maxMove}</span>
+    <AppChrome
+      sheet={sheet}
+      onToggleSheet={toggleSheet}
+      busy={isKataGoRunning}
+      dirty={dirty}
+      documentName={documentName}
+      engineLabel={engineLabel}
+      engineReady={engineReady}
+      onEngineCommand={handleEngineCommand}
+      preferences={preferences}
+      onPreferencesChange={(next) => void handlePreferencesChange(next)}
+      showCoordinates={showCoordinates}
+      showMoveNumbers={showMoveNumbers}
+      onShowCoordinates={setShowCoordinates}
+      onShowMoveNumbers={setShowMoveNumbers}
+      showBlackCandidates={showBlackCandidates}
+      showWhiteCandidates={showWhiteCandidates}
+      onShowBlackCandidates={setShowBlackCandidates}
+      onShowWhiteCandidates={setShowWhiteCandidates}
+      isKataGoRunning={isKataGoRunning}
+      autoPlaying={autoPlaying}
+      komi={game.summary.komi}
+      onNew={() => void handleNewGame()}
+      onOpen={() => void handleOpenSgfDocument()}
+      onSave={() => void handleSaveSgfDocument(false)}
+      onSaveAs={() => void handleSaveSgfDocument(true)}
+      onLoadSample={() => void loadSample()}
+      onParse={() => void handleParseSgf()}
+      onFakeAnalyze={() => void handleFakeAnalyze()}
+      onCancel={() => void handleCancelKataGoAnalysis()}
+      onAbout={() => setMessage("LizzieYzy Next 0.1.0 · 桌面复盘工作区")}
+      onCopySgf={() => void handleCopySgf()}
+      onPasteSgf={() => void handlePasteSgf()}
+      onClearBoard={() => void handleNewGame()}
+      onAutoPlay={() => setAutoPlaying((value) => !value)}
+      onOverlayMode={setOverlayMode}
+      cacheBadge={<CacheStatusBadge status={cacheStatus} record={cacheRecord} error={cacheError} />}
+      message={message}
+      toPlay={currentPosition.to_play}
+    />
+    <section className="spread">
+      <aside className="rail">
+        <div className="rail-block">
+          <h2>
+            <span>胜率走势 (黑)</span>
+            <span style={{ color: "#60a5fa", fontFamily: "var(--mono)" }}>
+              {visibleCurrentFrame ? `${(visibleCurrentFrame.winrate_black * 100).toFixed(1)}%` : "50.0%"}
+            </span>
+          </h2>
+          <WinrateChart frames={frames} currentMove={currentMove} />
+          <div id="board-layers" />
         </div>
+        <AnalysisPanel
+          pane="commentary"
+          frame={visibleCurrentFrame}
+          problems={problems}
+          moves={game.moves}
+          boardSize={game.summary.board_size}
+          currentMove={currentMove}
+          currentPosition={currentPosition}
+          selectedCandidateIndex={selectedCandidateIndex}
+          onSelectCandidate={setSelectedCandidateIndex}
+          onSelectProblem={handleMoveSelect}
+        />
+      </aside>
+      <div className="diagram">
+        <BoardCanvas
+          position={currentPosition}
+          analysis={visibleCurrentFrame}
+          selectedCandidateIndex={selectedCandidateIndex}
+          moves={game.moves}
+          showCoordinates={showCoordinates}
+          showMoveNumbers={showMoveNumbers}
+          overlayMode={overlayMode}
+          onOverlayModeChange={setOverlayMode}
+          hideCandidates={(currentPosition.to_play === "black" && !showBlackCandidates) || (currentPosition.to_play === "white" && !showWhiteCandidates)}
+        />
       </div>
-      <AnalysisPanel
-        frame={visibleCurrentFrame}
-        problems={problems}
-        boardSize={game.summary.board_size}
-        currentMove={currentMove}
-        selectedCandidateIndex={selectedCandidateIndex}
-        onSelectCandidate={setSelectedCandidateIndex}
-        onSelectProblem={handleMoveSelect}
-      />
+      <aside className="sheet-col">
+        <AnalysisPanel
+          pane="reference"
+          frame={visibleCurrentFrame}
+          problems={problems}
+          moves={game.moves}
+          boardSize={game.summary.board_size}
+          currentMove={currentMove}
+          currentPosition={currentPosition}
+          selectedCandidateIndex={selectedCandidateIndex}
+          onSelectCandidate={setSelectedCandidateIndex}
+          onSelectProblem={handleMoveSelect}
+        />
+      </aside>
     </section>
-    <section className="bottom-dock">
-      <div className="sgf-tools">
+    <BottomBar
+      currentMove={currentMove}
+      maxMove={maxMove}
+      onMove={(move) => setCurrentMove(clampMoveNumberToPositions(positions, move))}
+      engineReady={engineReady}
+      isKataGoRunning={isKataGoRunning}
+      analysisProgress={analysisProgress}
+      onAnalyzeOnce={() => handleEngineCommand("once")}
+      onAnalyzeGame={() => handleEngineCommand("game")}
+      onCancel={() => void handleCancelKataGoAnalysis()}
+      onSync={() => toggleSheet("sync")}
+      onFlashAnalyze={() => void handleFakeAnalyze()}
+      onHeatmap={() => setOverlayMode("policy")}
+      onRefresh={() => void handleParseSgf()}
+      onClearBoard={() => void handleNewGame()}
+      onEstimate={() => setOverlayMode("ownership")}
+      onAutoPlay={() => setAutoPlaying((value) => !value)}
+      autoPlaying={autoPlaying}
+      showCoordinates={showCoordinates}
+      showMoveNumbers={showMoveNumbers}
+      onShowCoordinates={setShowCoordinates}
+      onShowMoveNumbers={setShowMoveNumbers}
+      jumpRef={jumpRef}
+      message={message}
+    />
+    <section className="sheet-row" hidden={sheet === "none"}>
+      {sheet === "sgf" ? <div className="sgf-tools">
         <div className="document-row">
           <strong title={currentFilePath ?? documentName}>{documentName}{dirty ? " *" : ""}</strong>
-          <span>{dirty ? "Unsaved changes" : "Saved"}</span>
+          <span>{dirty ? "未保存" : "已保存"}</span>
         </div>
-        <textarea value={sgfText} onChange={(e) => {
-          setSgfText(e.target.value);
+        <textarea value={sgfText} onChange={(event) => {
+          setSgfText(event.target.value);
           setDirty(true);
           clearReviewData();
           resetAnalysisCacheState();
           setCurrentMove(0);
-          setMessage("SGF edited. Parse SGF or run review to refresh.");
-        }} spellCheck={false} aria-label="SGF source" />
+          setMessage("棋谱已改。解析棋谱或再跑分析以刷新。");
+        }} spellCheck={false} aria-label="棋谱原文" />
         <div className="button-row">
-          <button onClick={() => void handleOpenSgfDocument()} disabled={isKataGoRunning}>Open</button>
-          <button onClick={() => void handleSaveSgfDocument(false)} disabled={isKataGoRunning || !dirty}>Save</button>
-          <button onClick={() => void handleSaveSgfDocument(true)} disabled={isKataGoRunning}>Save As</button>
           <label className={`file-button${isKataGoRunning ? " file-button-disabled" : ""}`}>
-            Import SGF
+            导入棋谱
             <input type="file" accept=".sgf,.txt,application/x-go-sgf,text/plain" disabled={isKataGoRunning} onChange={(event) => void handleImportFile(event.target.files?.[0] ?? null)} />
           </label>
-          <button onClick={() => void loadSample()} disabled={isKataGoRunning}>Load sample</button>
-          <button onClick={handleParseSgf} disabled={isKataGoRunning}>Parse SGF</button>
-          <button onClick={handleFakeAnalyze} disabled={isKataGoRunning}>Run review</button>
+          <button type="button" onClick={() => void loadSample()} disabled={isKataGoRunning}>载入示例</button>
         </div>
+      </div> : null}
+      {sheet === "sync" ? <ProviderPanel disabled={isKataGoRunning} onImport={handleProviderImport} /> : null}
+      <div hidden={sheet !== "engine"}>
+        <EngineSetupPanel
+          disabled={isKataGoRunning}
+          onRun={handleRunKataGo}
+          onAnalyzeGame={handleAnalyzeKataGoGame}
+          onCancelAnalysis={handleCancelKataGoAnalysis}
+          analysisProgress={analysisProgress}
+          activeJobId={activeJobId}
+          onBindCommands={bindEngineCommands}
+        />
       </div>
-      <ProviderPanel disabled={isKataGoRunning} onImport={handleProviderImport} />
-      <EngineSetupPanel
-        disabled={isKataGoRunning}
-        onRun={handleRunKataGo}
-        onAnalyzeGame={handleAnalyzeKataGoGame}
-        onCancelAnalysis={handleCancelKataGoAnalysis}
-        analysisProgress={analysisProgress}
-        activeJobId={activeJobId}
-      />
-      <PreferencesPanel
+      {sheet === "prefs" ? <PreferencesPanel
         preferences={preferences}
         status={preferencesStatus}
         disabled={isKataGoRunning}
         onChange={(nextPreferences) => void handlePreferencesChange(nextPreferences)}
-      />
-      <p className="message">{message}</p>
+      /> : null}
     </section>
   </main>;
 }

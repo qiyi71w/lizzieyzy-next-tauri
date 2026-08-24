@@ -208,5 +208,5 @@ export function createDemoGame(): GameDto {
     { color: "black", vertex: { point: { x: 10, y: 16 } }, move_number: 5 },
     { color: "white", vertex: { point: { x: 16, y: 10 } }, move_number: 6 }
   ];
-  return { summary: { id: "demo", board_size: 19, komi: 7.5, black_name: "Black", white_name: "White", result: null, move_count: moves.length }, moves };
+  return { summary: { id: "demo", board_size: 19, komi: 7.5, black_name: "李昌镐", white_name: "芮乃伟", result: null, move_count: moves.length }, moves };
 }

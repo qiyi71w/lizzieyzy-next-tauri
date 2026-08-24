@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { checkEngineAssets, loadEngineProfilesSettings, saveEngineProfilesSettings } from "../api/backend";
 import type { AssetCheckDto, EngineProfileDto, EngineProfileRecordDto } from "../domain/types";
+
+type EngineCommands = {
+  analyzeOnce: () => void;
+  analyzeGame: () => void;
+  canRun: boolean;
+  engineLabel: string;
+};
 
 type Props = {
   disabled?: boolean;
@@ -10,9 +18,11 @@ type Props = {
   onCancelAnalysis?: () => void | Promise<void>;
   analysisProgress?: { completed: number; expected: number; turn: number; responseJsonl: string } | null;
   activeJobId?: string | null;
+  toolbarTarget?: HTMLElement | null;
+  onBindCommands?: (commands: EngineCommands) => void;
 };
 
-export function EngineSetupPanel({ disabled = false, onRun, onAnalyzeGame, onCancelAnalysis, analysisProgress = null, activeJobId = null }: Props) {
+export function EngineSetupPanel({ disabled = false, onRun, onAnalyzeGame, onCancelAnalysis, analysisProgress = null, activeJobId = null, toolbarTarget = null, onBindCommands }: Props) {
   const [profiles, setProfiles] = useState<EngineProfileRecordDto[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState("default");
   const [profileName, setProfileName] = useState("Local KataGo");
@@ -29,9 +39,9 @@ export function EngineSetupPanel({ disabled = false, onRun, onAnalyzeGame, onCan
   const missingRequiredAssets = assetChecks.filter((check) => check.required && !check.exists);
   const hasKnownMissingRequiredAssets = missingRequiredAssets.length > 0;
   const progressLabel = analysisProgress
-    ? `${analysisProgress.completed}/${analysisProgress.expected || "?"} positions, move ${analysisProgress.turn}`
+    ? `${analysisProgress.completed}/${analysisProgress.expected || "?"} 个局面，第 ${analysisProgress.turn} 手`
     : isAnalysisActive
-      ? "Starting analysis..."
+      ? "正在起分析…"
       : "";
   const progressPercent = analysisProgress && analysisProgress.expected > 0
     ? Math.min(100, Math.round((analysisProgress.completed / analysisProgress.expected) * 100))
@@ -45,6 +55,15 @@ export function EngineSetupPanel({ disabled = false, onRun, onAnalyzeGame, onCan
     visits > 0 &&
     !hasKnownMissingRequiredAssets;
   const canSave = profileName.trim().length > 0 && Number.isFinite(visits) && visits > 0;
+
+  useEffect(() => {
+    onBindCommands?.({
+      analyzeOnce: handleRun,
+      analyzeGame: handleAnalyzeGame,
+      canRun,
+      engineLabel: enginePath.trim() ? (profileName.trim() || "已加载引擎") : "未加载引擎"
+    });
+  }, [canRun, enginePath, profileName, onBindCommands, visits, disabled, hasKnownMissingRequiredAssets]);
   const canDeleteProfile = selectedProfileId !== "default" && profiles.length > 1;
 
   useEffect(() => {
@@ -219,73 +238,11 @@ export function EngineSetupPanel({ disabled = false, onRun, onAnalyzeGame, onCan
     }
   }
 
-  return (
-    <section className="engine-setup-panel" aria-label="KataGo engine setup">
-      <div className="engine-run-row">
-        <label>
-          <span>Profile</span>
-          <select value={selectedProfileId} onChange={(event) => void handleSelectProfile(event.target.value)}>
-            {profiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>{profile.profile.name}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>Name</span>
-          <input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="Local KataGo" />
-        </label>
-        <button type="button" onClick={() => void handleAddProfile()} disabled={!canSave}>Add profile</button>
-        <button type="button" onClick={() => void handleDeleteProfile()} disabled={!canDeleteProfile}>Delete profile</button>
-      </div>
-      <div className="engine-grid">
-        <label>
-          <span>Engine</span>
-          <div className="path-input-row">
-            <input value={enginePath} onChange={(event) => updatePath(setEnginePath, event.target.value)} placeholder="/path/to/katago" aria-invalid={isKnownMissing(assetChecks, "engine binary")} title={pathCheckTitle(assetChecks, "engine binary")} />
-            <button type="button" className="path-picker-button" onClick={() => void handlePickPath("Engine", enginePath, false, setEnginePath)}>
-              Browse
-            </button>
-          </div>
-        </label>
-        <label>
-          <span>Model</span>
-          <div className="path-input-row">
-            <input value={modelPath} onChange={(event) => updatePath(setModelPath, event.target.value)} placeholder="/path/to/model.bin.gz" aria-invalid={isKnownMissing(assetChecks, "model")} title={pathCheckTitle(assetChecks, "model")} />
-            <button type="button" className="path-picker-button" onClick={() => void handlePickPath("Model", modelPath, false, setModelPath)}>
-              Browse
-            </button>
-          </div>
-        </label>
-        <label>
-          <span>Config</span>
-          <div className="path-input-row">
-            <input value={configPath} onChange={(event) => updatePath(setConfigPath, event.target.value)} placeholder="/path/to/analysis.cfg" aria-invalid={isKnownMissing(assetChecks, "config")} title={pathCheckTitle(assetChecks, "config")} />
-            <button type="button" className="path-picker-button" onClick={() => void handlePickPath("Config", configPath, false, setConfigPath)}>
-              Browse
-            </button>
-          </div>
-        </label>
-        <label>
-          <span>Work dir</span>
-          <div className="path-input-row">
-            <input value={workingDir} onChange={(event) => updatePath(setWorkingDir, event.target.value)} placeholder="Optional" aria-invalid={isKnownMissing(assetChecks, "working directory")} title={pathCheckTitle(assetChecks, "working directory")} />
-            <button type="button" className="path-picker-button" onClick={() => void handlePickPath("Work dir", workingDir, true, setWorkingDir)}>
-              Browse
-            </button>
-          </div>
-        </label>
-      </div>
-      <div className="engine-run-row">
-        <label>
-          <span>Max visits</span>
-          <input type="number" min={1} step={1} value={maxVisits} onChange={(event) => setMaxVisits(event.target.value)} />
-        </label>
-        <button onClick={handleRun} disabled={!canRun}>{disabled ? "Running..." : "Run KataGo"}</button>
-        <button onClick={handleAnalyzeGame} disabled={!canRun} title="Analyze every move">{disabled ? "Running..." : "Analyze game"}</button>
-        {isAnalysisActive && <button onClick={() => void onCancelAnalysis?.()} disabled={!onCancelAnalysis}>Cancel</button>}
-        <button onClick={() => void handleSaveProfile()} disabled={!canSave}>Save profile</button>
-        <button onClick={() => void handleCheckAssets()} disabled={disabled}>Check assets</button>
-      </div>
+  const runActions = (
+    <>
+      <button className="primary" onClick={handleRun} disabled={!canRun}>{disabled ? "分析中…" : "分析此手"}</button>
+      <button onClick={handleAnalyzeGame} disabled={!canRun}>{disabled ? "分析中…" : "分析全局"}</button>
+      {isAnalysisActive && <button onClick={() => void onCancelAnalysis?.()} disabled={!onCancelAnalysis}>取消</button>}
       {(isAnalysisActive || analysisProgress) && (
         <div className="analysis-progress" aria-live="polite">
           <div className="analysis-progress-track">
@@ -294,10 +251,70 @@ export function EngineSetupPanel({ disabled = false, onRun, onAnalyzeGame, onCan
           <span>{progressLabel}</span>
         </div>
       )}
+    </>
+  );
+
+  return (
+    <section className="engine-setup-panel" aria-label="KataGo 引擎">
+      {toolbarTarget ? createPortal(runActions, toolbarTarget) : <div className="engine-run-row">{runActions}</div>}
+      <div className="engine-run-row">
+        <label>
+          <span>配置</span>
+          <select value={selectedProfileId} onChange={(event) => void handleSelectProfile(event.target.value)}>
+            {profiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>{profile.profile.name}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>名称</span>
+          <input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="本地 KataGo" />
+        </label>
+        <button type="button" onClick={() => void handleAddProfile()} disabled={!canSave}>新增</button>
+        <button type="button" onClick={() => void handleDeleteProfile()} disabled={!canDeleteProfile}>删除</button>
+      </div>
+      <div className="engine-grid">
+        <label>
+          <span>引擎</span>
+          <div className="path-input-row">
+            <input value={enginePath} onChange={(event) => updatePath(setEnginePath, event.target.value)} placeholder="/path/to/katago" aria-invalid={isKnownMissing(assetChecks, "engine binary")} title={pathCheckTitle(assetChecks, "engine binary")} />
+            <button type="button" className="path-picker-button" onClick={() => void handlePickPath("引擎", enginePath, false, setEnginePath)}>浏览</button>
+          </div>
+        </label>
+        <label>
+          <span>模型</span>
+          <div className="path-input-row">
+            <input value={modelPath} onChange={(event) => updatePath(setModelPath, event.target.value)} placeholder="/path/to/model.bin.gz" aria-invalid={isKnownMissing(assetChecks, "model")} title={pathCheckTitle(assetChecks, "model")} />
+            <button type="button" className="path-picker-button" onClick={() => void handlePickPath("模型", modelPath, false, setModelPath)}>浏览</button>
+          </div>
+        </label>
+        <label>
+          <span>配置文件</span>
+          <div className="path-input-row">
+            <input value={configPath} onChange={(event) => updatePath(setConfigPath, event.target.value)} placeholder="/path/to/analysis.cfg" aria-invalid={isKnownMissing(assetChecks, "config")} title={pathCheckTitle(assetChecks, "config")} />
+            <button type="button" className="path-picker-button" onClick={() => void handlePickPath("配置文件", configPath, false, setConfigPath)}>浏览</button>
+          </div>
+        </label>
+        <label>
+          <span>工作目录</span>
+          <div className="path-input-row">
+            <input value={workingDir} onChange={(event) => updatePath(setWorkingDir, event.target.value)} placeholder="可选" aria-invalid={isKnownMissing(assetChecks, "working directory")} title={pathCheckTitle(assetChecks, "working directory")} />
+            <button type="button" className="path-picker-button" onClick={() => void handlePickPath("工作目录", workingDir, true, setWorkingDir)}>浏览</button>
+          </div>
+        </label>
+      </div>
+      <div className="engine-run-row">
+        <label>
+          <span>最大计算量</span>
+          <input type="number" min={1} step={1} value={maxVisits} onChange={(event) => setMaxVisits(event.target.value)} />
+        </label>
+        <button onClick={() => void handleSaveProfile()} disabled={!canSave}>保存配置</button>
+        <button onClick={() => void handleCheckAssets()} disabled={disabled}>检查资源</button>
+      </div>
       <p className="message">{profileStatus}</p>
       {assetChecks.length > 0 && (
         <p className="message">
-          {assetChecks.map((check) => `${check.exists ? "OK" : "Missing"} ${check.label}${check.path ? `: ${check.path}` : ""}`).join(" | ")}
+          {assetChecks.map((check) => `${check.exists ? "有" : "缺"} ${check.label}${check.path ? `: ${check.path}` : ""}`).join(" | ")}
         </p>
       )}
     </section>

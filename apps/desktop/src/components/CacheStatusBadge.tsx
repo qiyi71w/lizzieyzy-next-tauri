@@ -7,48 +7,23 @@ type Props = {
 };
 
 const statusLabels: Record<CacheStatus, string> = {
-  idle: "Cache idle",
-  checking: "Checking cache",
-  hit: "Cache hit",
-  miss: "Cache miss",
-  saving: "Saving cache",
-  saved: "Cache saved",
-  error: "Cache error"
-};
-
-const statusColors: Record<CacheStatus, { background: string; border: string; color: string }> = {
-  idle: { background: "#f8fafc", border: "#cbd5e1", color: "#475569" },
-  checking: { background: "#eff6ff", border: "#bfdbfe", color: "#1d4ed8" },
-  hit: { background: "#ecfdf5", border: "#a7f3d0", color: "#047857" },
-  miss: { background: "#fff7ed", border: "#fed7aa", color: "#c2410c" },
-  saving: { background: "#f5f3ff", border: "#ddd6fe", color: "#6d28d9" },
-  saved: { background: "#f0fdf4", border: "#bbf7d0", color: "#15803d" },
-  error: { background: "#fef2f2", border: "#fecaca", color: "#b91c1c" }
+  idle: "缓存未用",
+  checking: "正在查缓存",
+  hit: "命中缓存",
+  miss: "无缓存",
+  saving: "正在写入缓存",
+  saved: "已写入缓存",
+  error: "缓存出错"
 };
 
 export function CacheStatusBadge({ status, record = null, error = null }: Props) {
-  const colors = statusColors[status];
   const metadata = record ? cacheRecordMetadata(record) : null;
   const detail = status === "error" ? error : metadata;
 
   return (
-    <div
-      className="status-pill"
-      title={detail ?? statusLabels[status]}
-      aria-live="polite"
-      style={{
-        display: "inline-flex",
-        flexDirection: "column",
-        alignItems: "flex-start",
-        gap: 2,
-        maxWidth: "100%",
-        background: colors.background,
-        borderColor: colors.border,
-        color: colors.color
-      }}
-    >
-      <span style={{ color: "inherit", fontSize: 13, fontWeight: 800, lineHeight: 1.2 }}>{statusLabels[status]}</span>
-      {detail ? <small style={{ color: "inherit", fontSize: 11, fontWeight: 700, lineHeight: 1.25 }}>{detail}</small> : null}
+    <div className="status-pill" data-status={status} title={detail ?? statusLabels[status]} aria-live="polite">
+      <span>{statusLabels[status]}</span>
+      {detail ? <small>{detail}</small> : null}
     </div>
   );
 }
@@ -67,8 +42,8 @@ function cacheRecordMetadata(record: AnalysisCacheRecord): string {
 function formatUpdatedAt(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("en-US", {
-    month: "short",
+  return date.toLocaleString("zh-CN", {
+    month: "numeric",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit"

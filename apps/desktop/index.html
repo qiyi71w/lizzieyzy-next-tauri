@@ -9,8 +9,19 @@
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>LizzieYzy Next</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap" rel="stylesheet" />
   </head>
   <body>
+    <!--
+    SEED locked-jishi-2026-08-24
+    THESIS: Java LizzieYzy review chrome on Tauri. Native OS title bar; one silver workbench on Win/macOS/Linux.
+    OWN-WORLD: #d8dce3 chrome, #2b2d32 HUD, #e4c27a goban. 26px icon buttons, 4px radius, 1px stroke. Square AI 解说. Java toolbar PNGs.
+    STORY: After a game the reviewer opens a record and reads board, winrate, 问题手, and 参考图 in one persistent layout.
+    FIRST VIEWPORT: Menu / icon strip / params / HUD+board+candidates / stroked bottom nav. Sheets hold SGF, engine, sync, settings.
+    FORM: Choosing a 参考图 or 问题手 marks it on the board. Keys 1–9 pick candidates.
+    -->
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

@@ -13,19 +13,19 @@ export function PreferencesPanel({ preferences, status, disabled = false, onChan
   }
 
   return (
-    <section className="preferences-panel" aria-label="Application preferences">
+    <section className="preferences-panel" aria-label="设置">
       <div className="preferences-header">
-        <h2>Preferences</h2>
+        <h2>设置</h2>
         <span>{status}</span>
       </div>
       <div className="preferences-grid">
-        <Toggle label="Candidates" checked={preferences.showCandidates} disabled={disabled} onChange={(checked) => update({ showCandidates: checked })} />
-        <Toggle label="Ownership" checked={preferences.showOwnership} disabled={disabled} onChange={(checked) => update({ showOwnership: checked })} />
-        <Toggle label="Policy" checked={preferences.showPolicy} disabled={disabled} onChange={(checked) => update({ showPolicy: checked })} />
-        <Toggle label="Auto-load cache" checked={preferences.autoLoadCache} disabled={disabled} onChange={(checked) => update({ autoLoadCache: checked })} />
-        <Toggle label="Auto-save analysis" checked={preferences.autoSaveAnalysis} disabled={disabled} onChange={(checked) => update({ autoSaveAnalysis: checked })} />
+        <Toggle label="候选" checked={preferences.showCandidates} disabled={disabled} onChange={(checked) => update({ showCandidates: checked })} />
+        <Toggle label="领地" checked={preferences.showOwnership} disabled={disabled} onChange={(checked) => update({ showOwnership: checked })} />
+        <Toggle label="策略" checked={preferences.showPolicy} disabled={disabled} onChange={(checked) => update({ showPolicy: checked })} />
+        <Toggle label="自动载入缓存" checked={preferences.autoLoadCache} disabled={disabled} onChange={(checked) => update({ autoLoadCache: checked })} />
+        <Toggle label="自动保存分析" checked={preferences.autoSaveAnalysis} disabled={disabled} onChange={(checked) => update({ autoSaveAnalysis: checked })} />
         <label>
-          <span>Candidates shown</span>
+          <span>显示候选数</span>
           <input
             type="number"
             min={1}
@@ -37,7 +37,7 @@ export function PreferencesPanel({ preferences, status, disabled = false, onChan
           />
         </label>
         <label>
-          <span>Default visits</span>
+          <span>默认计算量</span>
           <input
             type="number"
             min={1}
@@ -48,17 +48,17 @@ export function PreferencesPanel({ preferences, status, disabled = false, onChan
           />
         </label>
         <label>
-          <span>Review mode</span>
+          <span>复盘深度</span>
           <select value={preferences.reviewMode} disabled={disabled} onChange={(event) => update({ reviewMode: event.target.value as ReviewMode })}>
-            <option value="quick">Quick</option>
-            <option value="deep">Deep</option>
+            <option value="quick">快复</option>
+            <option value="deep">深复</option>
           </select>
         </label>
         <label>
-          <span>Board theme</span>
+          <span>棋盘对比</span>
           <select value={preferences.boardTheme} disabled={disabled} onChange={(event) => update({ boardTheme: event.target.value as BoardTheme })}>
-            <option value="classic">Classic</option>
-            <option value="high-contrast">High contrast</option>
+            <option value="classic">浅色</option>
+            <option value="high-contrast">高对比</option>
           </select>
         </label>
       </div>

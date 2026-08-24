@@ -190,9 +190,9 @@ export function ProviderPanel({ disabled = false, onImport }: Props) {
   }
 
   return (
-    <section className="provider-panel" aria-label="Provider import">
+    <section className="provider-panel" aria-label="同步">
       <div className="provider-header">
-        <h2>Provider</h2>
+        <h2>同步</h2>
         <span title={headerStatus}>{headerStatus}</span>
       </div>
       <div className="provider-grid">

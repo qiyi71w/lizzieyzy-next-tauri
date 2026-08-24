@@ -1,14 +1,41 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AnalysisFrameDto, PositionDto } from "../domain/types";
-import { isPoint, vertexLabel } from "../domain/board";
+import { createPortal } from "react-dom";
+import type { AnalysisFrameDto, MoveDto, PositionDto } from "../domain/types";
+import { isPoint } from "../domain/board";
 
-type Props = { position: PositionDto; analysis?: AnalysisFrameDto; selectedCandidateIndex?: number | null };
-type OverlayMode = "candidates" | "ownership" | "policy";
+export type OverlayMode = "candidates" | "ownership" | "policy";
+
+type Props = {
+  position: PositionDto;
+  analysis?: AnalysisFrameDto;
+  selectedCandidateIndex?: number | null;
+  moves?: MoveDto[];
+  showCoordinates?: boolean;
+  showMoveNumbers?: boolean;
+  overlayMode?: OverlayMode;
+  onOverlayModeChange?: (mode: OverlayMode) => void;
+  hideCandidates?: boolean;
+};
 type PolicyPoint = { x: number; y: number; value: number };
 
-export function BoardCanvas({ position, analysis, selectedCandidateIndex }: Props) {
+export function BoardCanvas({
+  position,
+  analysis,
+  selectedCandidateIndex,
+  moves = [],
+  showCoordinates = true,
+  showMoveNumbers = false,
+  overlayMode: overlayModeProp,
+  onOverlayModeChange,
+  hideCandidates = false
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [overlayMode, setOverlayMode] = useState<OverlayMode>("candidates");
+  const [overlayModeLocal, setOverlayModeLocal] = useState<OverlayMode>("candidates");
+  const overlayMode = overlayModeProp ?? overlayModeLocal;
+  function setOverlayMode(mode: OverlayMode) {
+    onOverlayModeChange?.(mode);
+    if (overlayModeProp === undefined) setOverlayModeLocal(mode);
+  }
   const boardPointCount = position.board_size * position.board_size;
   const hasOwnership = (analysis?.ownership?.length ?? 0) >= boardPointCount;
   const policyPoints = useMemo(() => getTopPolicyPoints(analysis?.policy, position.board_size, 12), [analysis?.policy, position.board_size]);
@@ -27,22 +54,37 @@ export function BoardCanvas({ position, analysis, selectedCandidateIndex }: Prop
     ctx.clearRect(0, 0, cssSize, cssSize);
 
     const boardSize = position.board_size;
-    const padding = cssSize * 0.07;
+    const padding = cssSize * 0.09;
     const grid = (cssSize - padding * 2) / (boardSize - 1);
     const coord = (n: number) => padding + n * grid;
 
-    ctx.lineWidth = 1;
-    ctx.fillStyle = "#d8aa68";
+    ctx.fillStyle = "#e4c27a";
     ctx.fillRect(0, 0, cssSize, cssSize);
-    ctx.strokeStyle = "rgba(35,20,8,.82)";
+    ctx.strokeStyle = "rgba(74,53,24,.85)";
+    ctx.lineWidth = 1;
     for (let i = 0; i < boardSize; i += 1) {
       ctx.beginPath(); ctx.moveTo(coord(0), coord(i)); ctx.lineTo(coord(boardSize - 1), coord(i)); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(coord(i), coord(0)); ctx.lineTo(coord(i), coord(boardSize - 1)); ctx.stroke();
     }
 
     const stars = boardSize === 19 ? [3, 9, 15] : boardSize === 13 ? [3, 6, 9] : [2, boardSize - 3];
-    ctx.fillStyle = "rgba(35,20,8,.85)";
-    for (const x of stars) for (const y of stars) { ctx.beginPath(); ctx.arc(coord(x), coord(y), 3, 0, Math.PI * 2); ctx.fill(); }
+    ctx.fillStyle = "rgba(42,28,14,.88)";
+    for (const x of stars) for (const y of stars) { ctx.beginPath(); ctx.arc(coord(x), coord(y), Math.max(2, grid * 0.08), 0, Math.PI * 2); ctx.fill(); }
+
+    if (showCoordinates) {
+      const letters = "ABCDEFGHJKLMNOPQRST";
+      ctx.fillStyle = "#4a3518";
+      ctx.font = `${Math.max(9, grid * 0.28)}px "Noto Sans SC", sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      for (let i = 0; i < boardSize; i += 1) {
+        const label = letters[i] ?? String(i + 1);
+        ctx.fillText(label, coord(i), padding * 0.38);
+        ctx.fillText(label, coord(i), cssSize - padding * 0.38);
+        ctx.fillText(String(boardSize - i), padding * 0.38, coord(i));
+        ctx.fillText(String(boardSize - i), cssSize - padding * 0.38, coord(i));
+      }
+    }
 
     if (effectiveOverlayMode === "ownership" && hasOwnership && analysis?.ownership) {
       const cellSize = Math.max(2, grid * 0.94);
@@ -51,76 +93,85 @@ export function BoardCanvas({ position, analysis, selectedCandidateIndex }: Prop
           const value = normalizeOwnershipValue(analysis.ownership[y * boardSize + x]);
           const magnitude = Math.abs(value);
           if (magnitude < 0.015) continue;
-          const alpha = 0.12 + magnitude * 0.42;
-          ctx.fillStyle = value >= 0 ? `rgba(37,99,235,${alpha})` : `rgba(244,63,94,${alpha})`;
+          const alpha = 0.1 + magnitude * 0.38;
+          ctx.fillStyle = value >= 0 ? `rgba(33,86,199,${alpha})` : `rgba(194,65,12,${alpha})`;
           ctx.fillRect(coord(x) - cellSize / 2, coord(y) - cellSize / 2, cellSize, cellSize);
         }
       }
     }
 
+    const moveByPoint = new Map<string, number>();
+    if (showMoveNumbers) {
+      for (const move of moves) {
+        if (move.move_number > position.move_number || !isPoint(move.vertex)) continue;
+        moveByPoint.set(`${move.vertex.point.x}:${move.vertex.point.y}`, move.move_number);
+      }
+    }
     for (const stone of position.stones) {
       const cx = coord(stone.x); const cy = coord(stone.y); const radius = grid * 0.45;
       ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-      ctx.fillStyle = stone.color === "black" ? "#101010" : "#f5f5f2"; ctx.fill();
-      ctx.strokeStyle = stone.color === "black" ? "#000" : "#b8b8b8"; ctx.stroke();
+      ctx.fillStyle = stone.color === "black" ? "#161616" : "#f7f4ee"; ctx.fill();
+      ctx.strokeStyle = "#1c1915";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      const moveNumber = moveByPoint.get(`${stone.x}:${stone.y}`);
+      if (moveNumber !== undefined) {
+        ctx.fillStyle = stone.color === "black" ? "#f7f4ee" : "#161616";
+        ctx.font = `${Math.max(9, grid * 0.32)}px "Noto Sans SC", sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(moveNumber), cx, cy);
+      }
     }
 
     if (position.last_move && isPoint(position.last_move.vertex)) {
       const { x, y } = position.last_move.vertex.point;
       const cx = coord(x); const cy = coord(y);
-      ctx.strokeStyle = position.last_move.color === "black" ? "#f3f3f3" : "#222";
-      ctx.lineWidth = Math.max(2, grid * 0.07);
-      ctx.beginPath(); ctx.arc(cx, cy, grid * 0.18, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = "#2156c7";
+      ctx.beginPath(); ctx.arc(cx, cy, Math.max(2.5, grid * 0.12), 0, Math.PI * 2); ctx.fill();
     }
 
     if (effectiveOverlayMode === "policy" && hasPolicy) {
       drawPolicyOverlay(ctx, policyPoints, boardSize, coord, grid);
-    } else {
+    } else if (!hideCandidates) {
       const topCandidates = analysis?.candidates.slice(0, 8) ?? [];
       for (const [index, candidate] of topCandidates.entries()) {
         if (!isPoint(candidate.vertex)) continue;
         const cx = coord(candidate.vertex.point.x); const cy = coord(candidate.vertex.point.y);
-        const radius = grid * (0.18 + Math.min(candidate.visits / Math.max(analysis?.visits ?? 1, 1), 1) * 0.24);
+        const radius = grid * (0.18 + Math.min(candidate.visits / Math.max(analysis?.visits ?? 1, 1), 1) * 0.22);
         const isSelected = selectedCandidateIndex === index;
-        ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.fillStyle = isSelected ? "rgba(249,115,22,.86)" : "rgba(74,144,226,.75)"; ctx.fill();
-        if (isSelected) {
-          ctx.strokeStyle = "rgba(15,23,42,.86)";
-          ctx.lineWidth = Math.max(2, grid * 0.08);
-          ctx.beginPath(); ctx.arc(cx, cy, radius + grid * 0.1, 0, Math.PI * 2); ctx.stroke();
-        }
-        ctx.fillStyle = "white"; ctx.font = `${Math.max(10, grid * 0.3)}px system-ui`; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(String(index + 1), cx, cy);
-        ctx.fillStyle = "rgba(0,0,0,.72)"; ctx.font = `${Math.max(9, grid * 0.22)}px system-ui`; ctx.fillText(vertexLabel(candidate.vertex, boardSize), cx, cy + radius + 11);
+        ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fillStyle = isSelected ? "#2156c7" : "rgba(255,255,255,.88)";
+        ctx.fill();
+        ctx.strokeStyle = isSelected ? "#163f96" : "rgba(42,28,14,.55)";
+        ctx.lineWidth = isSelected ? Math.max(1.5, grid * 0.06) : 1;
+        ctx.stroke();
+        ctx.fillStyle = isSelected ? "#fff" : "#1a1d21";
+        ctx.font = `${Math.max(10, grid * 0.28)}px "Noto Sans SC", sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(index + 1), cx, cy);
       }
     }
-  }, [position, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints]);
+  }, [position, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, moves, showCoordinates, showMoveNumbers, hideCandidates]);
 
-  return <div className="board-canvas" style={{ position: "relative", overflow: "hidden" }}>
-    <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} aria-label="Go board" />
-    <div style={{ position: "absolute", left: 10, top: 10, display: "flex", gap: 6, padding: 4, borderRadius: 6, background: "rgba(255,255,255,.82)", boxShadow: "0 4px 14px rgba(15,23,42,.14)" }} aria-label="Board overlay mode">
-      <OverlayButton label="Candidates" active={effectiveOverlayMode === "candidates"} onClick={() => setOverlayMode("candidates")} />
-      <OverlayButton label="Ownership" active={effectiveOverlayMode === "ownership"} disabled={!hasOwnership} onClick={() => setOverlayMode("ownership")} />
-      <OverlayButton label="Policy" active={effectiveOverlayMode === "policy"} disabled={!hasPolicy} onClick={() => setOverlayMode("policy")} />
+  const layerHost = document.getElementById("board-layers");
+  const overlays = (
+    <div className="board-overlays" aria-label="棋盘图层">
+      <OverlayButton label="候选" active={effectiveOverlayMode === "candidates"} onClick={() => setOverlayMode("candidates")} />
+      <OverlayButton label="领地" active={effectiveOverlayMode === "ownership"} disabled={!hasOwnership} onClick={() => setOverlayMode("ownership")} />
+      <OverlayButton label="策略" active={effectiveOverlayMode === "policy"} disabled={!hasPolicy} onClick={() => setOverlayMode("policy")} />
     </div>
+  );
+
+  return <div className="board-canvas">
+    <canvas ref={canvasRef} aria-label="棋盘" />
+    {layerHost ? createPortal(overlays, layerHost) : overlays}
   </div>;
 }
 
 function OverlayButton({ label, active, disabled, onClick }: { label: string; active: boolean; disabled?: boolean; onClick: () => void }) {
-  return <button
-    type="button"
-    disabled={disabled}
-    aria-pressed={active}
-    onClick={onClick}
-    style={{
-      border: "1px solid rgba(15,23,42,.18)",
-      borderRadius: 5,
-      background: active ? "#0f172a" : "rgba(255,255,255,.88)",
-      color: active ? "#fff" : disabled ? "rgba(15,23,42,.38)" : "#0f172a",
-      cursor: disabled ? "not-allowed" : "pointer",
-      font: "700 12px system-ui",
-      lineHeight: 1,
-      padding: "7px 8px"
-    }}
-  >{label}</button>;
+  return <button type="button" disabled={disabled} aria-pressed={active} onClick={onClick}>{label}</button>;
 }
 
 function normalizeOwnershipValue(value: number | undefined): number {
@@ -149,20 +200,17 @@ function drawPolicyOverlay(ctx: CanvasRenderingContext2D, points: PolicyPoint[],
     const radius = grid * (0.12 + weight * 0.32);
     ctx.beginPath();
     ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(20,184,166,${0.28 + weight * 0.58})`;
+    ctx.fillStyle = rank === 0 ? "#9a2a1f" : "#efe6d2";
     ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,.85)";
-    ctx.lineWidth = Math.max(1.5, grid * 0.04);
+    ctx.strokeStyle = "#1c1915";
+    ctx.lineWidth = 1;
     ctx.stroke();
     if (rank < 8) {
-      ctx.fillStyle = "white";
-      ctx.font = `${Math.max(10, grid * 0.26)}px system-ui`;
+      ctx.fillStyle = rank === 0 ? "#efe6d2" : "#1c1915";
+      ctx.font = `${Math.max(10, grid * 0.26)}px "Noto Sans SC", sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(String(rank + 1), cx, cy);
-      ctx.fillStyle = "rgba(0,0,0,.72)";
-      ctx.font = `${Math.max(9, grid * 0.2)}px system-ui`;
-      ctx.fillText(vertexLabel({ point: { x: point.x, y: point.y } }, boardSize), cx, cy + radius + 10);
     }
   }
 }
