@@ -474,6 +474,18 @@ fn replace_current_game(
 }
 
 #[tauri::command]
+fn serialize_current_game(state: State<CurrentGameState>) -> Result<String, CurrentGameError> {
+    state.serialize()
+}
+
+#[tauri::command]
+fn project_current_game_mainline(
+    state: State<CurrentGameState>,
+) -> Result<app_model::GameDto, CurrentGameError> {
+    state.mainline_projection()
+}
+
+#[tauri::command]
 fn fake_analyze(sgf_text: String) -> Result<Vec<AnalysisFrameDto>, String> {
     let document = sgf::parse_sgf(&sgf_text).map_err(|err| err.to_string())?;
     let job_id = Uuid::new_v4();
@@ -1940,6 +1952,8 @@ pub fn run() {
             replay_sgf_positions,
             read_sgf_file,
             replace_current_game,
+            serialize_current_game,
+            project_current_game_mainline,
             write_sgf_file,
             fake_analyze,
             classify_problems,

@@ -36,6 +36,8 @@ type Props = {
   komi: number;
   onNew: () => void;
   onOpen: () => void;
+  nativeRuntime?: boolean;
+  nativeUnavailable?: string;
   onSave: () => void;
   onSaveAs: () => void;
   onLoadSample: () => void;
@@ -59,6 +61,11 @@ export function AppChrome(props: Props) {
   const [openMenu, setOpenMenu] = useState<MenuKey>(null);
   const barRef = useRef<HTMLElement | null>(null);
   const later = "尚未接入";
+  const nativeAvailable = props.nativeRuntime !== false;
+  const nativeUnavailable = props.nativeUnavailable ?? "Native current-game, edit, and authoritative Save require the Tauri desktop backend. Browser preview is non-authoritative.";
+  const openDisabled = props.busy || !nativeAvailable;
+  const saveDisabled = props.busy || !nativeAvailable || !props.dirty;
+  const saveAsDisabled = props.busy || !nativeAvailable;
 
   useEffect(() => {
     function onPointerDown(event: PointerEvent) {
@@ -86,12 +93,12 @@ export function AppChrome(props: Props) {
         <div className="menu-cluster">
           <ChromeMenu label="文件" open={openMenu === "file"} onToggle={() => setOpenMenu(openMenu === "file" ? null : "file")}>
             <MenuItem label="新建" onClick={() => run(props.onNew)} disabled={props.busy} />
-            <MenuItem label="打开棋谱(O)" onClick={() => run(props.onOpen)} disabled={props.busy} />
+            <MenuItem label="打开棋谱(O)" onClick={() => run(props.onOpen)} disabled={openDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
             <MenuItem label="最近打开" disabled title={later} />
             <MenuItem label="打开在线链接(Q)" disabled title={later} />
             <div className="menu-sep" role="separator" />
-            <MenuItem label="保存(Ctrl+S)" onClick={() => run(props.onSave)} disabled={props.busy || !props.dirty} />
-            <MenuItem label="另存为(S)" onClick={() => run(props.onSaveAs)} disabled={props.busy} />
+            <MenuItem label="保存(Ctrl+S)" onClick={() => run(props.onSave)} disabled={saveDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
+            <MenuItem label="另存为(S)" onClick={() => run(props.onSaveAs)} disabled={saveAsDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
             <SubMenu label="更多保存">
               <MenuItem label="保存纯净棋谱" disabled title={later} />
               <MenuItem label="保存纯净棋谱(带评论)" disabled title={later} />
@@ -233,8 +240,8 @@ export function AppChrome(props: Props) {
       <div className="tool-strip" role="toolbar" aria-label="分析工具">
         <div className="icon-group">
           <IconBtn src={toolbarIcons.newFile} label="新建" onClick={props.onNew} disabled={props.busy} />
-          <IconBtn src={toolbarIcons.open} label="打开" onClick={props.onOpen} disabled={props.busy} />
-          <IconBtn src={toolbarIcons.save} label="保存" onClick={props.onSave} disabled={props.busy || !props.dirty} />
+          <IconBtn src={toolbarIcons.open} label="打开" onClick={props.onOpen} disabled={openDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
+          <IconBtn src={toolbarIcons.save} label="保存" onClick={props.onSave} disabled={saveDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
         </div>
         <span className="tool-sep" />
         <div className="icon-group">
@@ -292,7 +299,7 @@ export function AppChrome(props: Props) {
         <button type="button" className="chrome-btn" disabled title={later}>死活</button>
         <button type="button" className="chrome-btn" onClick={() => props.onToggleSheet("prefs")}>参数</button>
         <button type="button" className="chrome-btn" onClick={() => props.onToggleSheet("prefs")}>棋盘</button>
-        <button type="button" className="chrome-btn" onClick={props.onSave} disabled={props.busy || !props.dirty}>存档</button>
+        <button type="button" className="chrome-btn" onClick={props.onSave} disabled={saveDisabled} title={!nativeAvailable ? nativeUnavailable : undefined}>存档</button>
         <span className="spacer" />
         {props.cacheBadge}
         <span className="doc-name" title={props.message}>{props.documentName}{props.dirty ? " *" : ""}</span>

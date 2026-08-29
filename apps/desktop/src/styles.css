@@ -104,6 +104,18 @@ button[aria-pressed="true"] {
   color: var(--ink);
 }
 
+.app-shell.has-native-runtime-note {
+  grid-template-rows: auto 30px 38px 34px minmax(0, 1fr) 42px auto;
+}
+
+.native-runtime-note {
+  margin: 0;
+  padding: 6px 10px;
+  background: #fff7ed;
+  color: #9a3412;
+  border-bottom: 1px solid #fdba74;
+}
+
 .spacer { flex: 1; }
 
 .menu-bar,

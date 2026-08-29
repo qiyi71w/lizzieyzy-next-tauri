@@ -15,11 +15,14 @@ import {
   getHealth,
   isTauriRuntime,
   listenToKataGoAnalysisEvents,
+  nativeCurrentGameUnavailable,
   openSgfDocument,
   parseSgfSummary,
+  projectCurrentGameMainline,
   replaySgfPositions,
   replaceCurrentGame,
   saveSgfDocument,
+  serializeCurrentGame,
   startKataGoGameAnalysis
 } from "./api/backend";
 import { computeGameCacheKey, loadAnalysisCache, saveAnalysisCache } from "./api/analysisCache";
@@ -53,7 +56,10 @@ export function App() {
   const [frames, setFrames] = useState<AnalysisFrameDto[]>([]);
   const [problems, setProblems] = useState<ProblemMarkerDto[]>([]);
   const [sgfText, setSgfText] = useState(demoSgf);
-  const [message, setMessage] = useState("谱面已就绪。打开棋谱或载入示例开始复盘。");
+  const [message, setMessage] = useState(
+    isTauriRuntime() ? "谱面已就绪。打开棋谱或载入示例开始复盘。" : nativeCurrentGameUnavailable
+  );
+  const nativeRuntime = isTauriRuntime();
   const [isKataGoRunning, setIsKataGoRunning] = useState(false);
   const [selectedCandidateIndex, setSelectedCandidateIndex] = useState<number | null>(null);
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
@@ -93,6 +99,16 @@ export function App() {
     getHealth()
       .then(setHealth)
       .catch((error: unknown) => setMessage(errorMessage(error)));
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    void applyReplacement(demoSgf, null, {
+      confirmMessage: "放弃未保存的棋谱并载入示例？",
+      fallbackName: "sample.sgf",
+      successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
+      failurePrefix: "Sample load failed"
+    });
   }, []);
 
   useEffect(() => {
@@ -231,64 +247,128 @@ export function App() {
     }
   }
 
-  async function handleParseSgf() {
-    try {
-      const [parsed, replayed] = await Promise.all([parseSgfSummary(sgfText), replaySgfPositions(sgfText)]);
-      const loadedMessage = `Loaded ${parsed.summary.black_name ?? "Black"} vs ${parsed.summary.white_name ?? "White"}: ${parsed.summary.move_count} moves.`;
-      setGame(parsed);
-      setPositions(replayed);
-      setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
-      setFrames([]);
-      setProblems([]);
-      setSelectedCandidateIndex(null);
-      setMessage(loadedMessage);
-      await checkAnalysisCacheForGame(sgfText, currentFilePath, parsed, replayed, loadedMessage);
-    } catch (error) {
-      clearReviewData();
-      resetAnalysisCacheState();
-      setCurrentMove(0);
-      setMessage(`Parse failed: ${errorMessage(error)}`);
-    }
+
+  function confirmDirtyReplacement(confirmMessage: string): boolean {
+    return !dirty || window.confirm(confirmMessage);
   }
 
-  async function handleOpenSgfDocument() {
-    if (dirty && !window.confirm("Discard unsaved SGF changes and open another file?")) return;
-    try {
-      const document = await openSgfDocument();
-      if (!document) {
-        if (!isTauriRuntime()) {
-          setMessage("Native Open is unavailable here. Use Import SGF in browser preview.");
-        }
-        return;
+  async function artifactsFromCurrentGame(): Promise<{ serialized: string; projection: GameDto; replayed: PositionDto[] }> {
+    const [serialized, projection] = await Promise.all([serializeCurrentGame(), projectCurrentGameMainline()]);
+    return { serialized, projection, replayed: await replaySgfPositions(serialized) };
+  }
+
+  async function applyReplacement(
+    sgfInput: string,
+    nativePath: string | null,
+    options: {
+      confirmMessage: string;
+      fallbackName?: string | null;
+      successMessage: (projection: GameDto, fileName: string) => string;
+      failurePrefix: string;
+      checkCache?: boolean;
+    }
+  ): Promise<boolean> {
+    if (!confirmDirtyReplacement(options.confirmMessage)) return false;
+
+    if (!nativeRuntime) {
+      try {
+        const [parsed, replayed] = await Promise.all([parseSgfSummary(sgfInput), replaySgfPositions(sgfInput)]);
+        setCurrentGame(null);
+        setSgfText(sgfInput);
+        setCurrentFilePath(null);
+        setFallbackFileName(options.fallbackName ?? null);
+        setDirty(false);
+        setGame(parsed);
+        setPositions(replayed);
+        setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
+        setFrames([]);
+        setProblems([]);
+        setSelectedCandidateIndex(null);
+        const previewMessage = options.successMessage(parsed, options.fallbackName ?? "SGF");
+        setMessage(`${nativeCurrentGameUnavailable} ${previewMessage}`);
+        if (options.checkCache === false) resetAnalysisCacheState();
+        else await checkAnalysisCacheForGame(sgfInput, null, parsed, replayed, `${nativeCurrentGameUnavailable} ${previewMessage}`);
+        return true;
+      } catch (error) {
+        setMessage(`${options.failurePrefix}: ${errorMessage(error)}`);
+        return false;
       }
-      const result = await replaceCurrentGame(document.sgfText, document.path);
+    }
+
+    try {
+      const result = await replaceCurrentGame(sgfInput, nativePath);
+      const artifacts = await artifactsFromCurrentGame();
       setCurrentGame(result);
-      setSgfText(document.sgfText);
-      setCurrentFilePath(result.native_path ?? document.path);
-      setFallbackFileName(null);
+      setSgfText(artifacts.serialized);
+      setCurrentFilePath(result.native_path ?? nativePath);
+      setFallbackFileName(result.native_path ? null : options.fallbackName ?? null);
       setDirty(result.dirty);
+      setGame(artifacts.projection);
+      setPositions(artifacts.replayed);
       setCurrentMove(result.snapshot.position.move_number);
       setFrames([]);
       setProblems([]);
       setSelectedCandidateIndex(null);
-      try {
-        const [parsed, replayed] = await Promise.all([parseSgfSummary(document.sgfText), replaySgfPositions(document.sgfText)]);
-        const openedMessage = `Opened ${fileNameFromPath(document.path ?? "SGF")}: ${parsed.summary.move_count} moves.`;
-        setGame(parsed);
-        setPositions(replayed);
-        setMessage(openedMessage);
-        await checkAnalysisCacheForGame(document.sgfText, document.path, parsed, replayed, openedMessage);
-      } catch (mirrorError) {
-        setMessage(`Opened ${fileNameFromPath(document.path ?? "SGF")}; transitional mainline mirror failed: ${errorMessage(mirrorError)}`);
-      }
+      const fileName = fileNameFromPath(result.native_path ?? options.fallbackName ?? "SGF");
+      const success = options.successMessage(artifacts.projection, fileName);
+      setMessage(success);
+      if (options.checkCache === false) resetAnalysisCacheState();
+      else await checkAnalysisCacheForGame(artifacts.serialized, result.native_path ?? null, artifacts.projection, artifacts.replayed, success);
+      return true;
+    } catch (error) {
+      setMessage(`${options.failurePrefix}: ${errorMessage(error)}`);
+      return false;
+    }
+  }
+
+  async function handleParseSgf() {
+    await applyReplacement(sgfText, null, {
+      confirmMessage: "放弃未保存的棋谱并载入这段文本？",
+      fallbackName: fallbackFileName ?? "imported.sgf",
+      successMessage: (projection) =>
+        `Loaded ${projection.summary.black_name ?? "Black"} vs ${projection.summary.white_name ?? "White"}: ${projection.summary.move_count} moves.`,
+      failurePrefix: "Parse failed"
+    });
+  }
+
+  async function handleOpenSgfDocument() {
+    if (!nativeRuntime) {
+      setMessage(nativeCurrentGameUnavailable);
+      return;
+    }
+    if (!confirmDirtyReplacement("Discard unsaved SGF changes and open another file?")) return;
+    try {
+      const document = await openSgfDocument();
+      if (!document) return;
+      const result = await replaceCurrentGame(document.sgfText, document.path);
+      const artifacts = await artifactsFromCurrentGame();
+      setCurrentGame(result);
+      setSgfText(artifacts.serialized);
+      setCurrentFilePath(result.native_path ?? document.path);
+      setFallbackFileName(null);
+      setDirty(result.dirty);
+      setGame(artifacts.projection);
+      setPositions(artifacts.replayed);
+      setCurrentMove(result.snapshot.position.move_number);
+      setFrames([]);
+      setProblems([]);
+      setSelectedCandidateIndex(null);
+      const openedMessage = `Opened ${fileNameFromPath(result.native_path ?? document.path ?? "SGF")}: ${artifacts.projection.summary.move_count} moves.`;
+      setMessage(openedMessage);
+      await checkAnalysisCacheForGame(artifacts.serialized, result.native_path ?? document.path, artifacts.projection, artifacts.replayed, openedMessage);
     } catch (error) {
       setMessage(`Open failed: ${errorMessage(error)}`);
     }
   }
 
   async function handleSaveSgfDocument(saveAs = false) {
+    if (!nativeRuntime) {
+      setMessage(nativeCurrentGameUnavailable);
+      return;
+    }
     try {
-      const saved = await saveSgfDocument(saveAs ? null : currentFilePath, sgfText, saveFileName);
+      const serialized = await serializeCurrentGame();
+      const saved = await saveSgfDocument(saveAs ? null : currentFilePath, serialized, saveFileName);
       if (!saved) {
         setMessage("Save cancelled.");
         return;
@@ -303,15 +383,29 @@ export function App() {
 
   async function handleFakeAnalyze() {
     try {
-      const [parsed, result, replayed] = await Promise.all([parseSgfSummary(sgfText), fakeAnalyze(sgfText), replaySgfPositions(sgfText)]);
+      if (!nativeRuntime) {
+        const [parsed, result, replayed] = await Promise.all([parseSgfSummary(sgfText), fakeAnalyze(sgfText), replaySgfPositions(sgfText)]);
+        const classified = await classifyProblems(result);
+        setGame(parsed);
+        setPositions(replayed);
+        setFrames(result);
+        setProblems(classified);
+        setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
+        setSelectedCandidateIndex(null);
+        const cacheMessage = await saveAnalysisCacheForGame(sgfText, currentFilePath, parsed, result, classified, "fake");
+        setMessage(`${nativeCurrentGameUnavailable} 已生成 ${result.length} 个预览复盘局面。${cacheMessage}`);
+        return;
+      }
+      const artifacts = await artifactsFromCurrentGame();
+      const result = await fakeAnalyze(artifacts.serialized);
       const classified = await classifyProblems(result);
-      setGame(parsed);
-      setPositions(replayed);
+      setGame(artifacts.projection);
+      setPositions(artifacts.replayed);
       setFrames(result);
       setProblems(classified);
-      setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
+      setCurrentMove(artifacts.replayed.at(-1)?.move_number ?? artifacts.projection.moves.length);
       setSelectedCandidateIndex(null);
-      const cacheMessage = await saveAnalysisCacheForGame(sgfText, currentFilePath, parsed, result, classified, "fake");
+      const cacheMessage = await saveAnalysisCacheForGame(artifacts.serialized, currentFilePath, artifacts.projection, result, classified, "fake");
       setMessage(`已生成 ${result.length} 个复盘局面，含候选与胜率。${cacheMessage}`);
     } catch (error) {
       setMessage(errorMessage(error));
@@ -324,12 +418,15 @@ export function App() {
     setIsKataGoRunning(true);
     setMessage(`Running KataGo analysis for move ${targetTurn}...`);
     try {
-      const [parsed, replayed] = await Promise.all([parseSgfSummary(sgfText), replaySgfPositions(sgfText)]);
-      const turn = clampMoveNumberToPositions(replayed, Math.min(targetTurn, replayed.at(-1)?.move_number ?? parsed.moves.length));
-      const frame = await analyzeKataGoOnce(profile, sgfText, turn, visits);
+      const artifacts = nativeRuntime
+        ? await artifactsFromCurrentGame()
+        : { serialized: sgfText, projection: await parseSgfSummary(sgfText), replayed: await replaySgfPositions(sgfText) };
+      if (!nativeRuntime) setMessage(nativeCurrentGameUnavailable);
+      const turn = clampMoveNumberToPositions(artifacts.replayed, Math.min(targetTurn, artifacts.replayed.at(-1)?.move_number ?? artifacts.projection.moves.length));
+      const frame = await analyzeKataGoOnce(profile, artifacts.serialized, turn, visits);
       const mergedFrames = mergeAnalysisFrame(frames, frame);
-      setGame(parsed);
-      setPositions(replayed);
+      setGame(artifacts.projection);
+      setPositions(artifacts.replayed);
       setFrames(mergedFrames);
       setProblems(await classifyProblems(mergedFrames));
       setCurrentMove(frame.turn);
@@ -353,7 +450,12 @@ export function App() {
     setMessage("Starting full-game KataGo analysis...");
     let cleanup: (() => void) | null = null;
     try {
-      const [parsed, replayed] = await Promise.all([parseSgfSummary(sgfText), replaySgfPositions(sgfText)]);
+      const artifacts = nativeRuntime
+        ? await artifactsFromCurrentGame()
+        : { serialized: sgfText, projection: await parseSgfSummary(sgfText), replayed: await replaySgfPositions(sgfText) };
+      if (!nativeRuntime) setMessage(nativeCurrentGameUnavailable);
+      const parsed = artifacts.projection;
+      const replayed = artifacts.replayed;
       cleanup = await listenToKataGoAnalysisEvents({
         onProgress: (payload) => {
           if (startingAnalysisRef.current && activeJobIdRef.current === null) {
@@ -406,7 +508,7 @@ export function App() {
       });
       cleanupAnalysisListeners();
       analysisCleanupRef.current = cleanup;
-      const jobId = await startKataGoGameAnalysis(profile, sgfText, visits);
+      const jobId = await startKataGoGameAnalysis(profile, artifacts.serialized, visits);
       const pendingTerminalEvent = pendingAnalysisTerminalEventsRef.current.get(jobId);
       const pendingProgress = pendingAnalysisProgressRef.current.get(jobId);
       startingAnalysisRef.current = false;
@@ -447,92 +549,50 @@ export function App() {
 
   async function handleImportFile(file: File | null) {
     if (!file) return;
-    try {
-      const text = await file.text();
-      const [parsed, replayed] = await Promise.all([parseSgfSummary(text), replaySgfPositions(text)]);
-      const importedMessage = `Imported ${file.name}: ${parsed.summary.move_count} moves.`;
-      setSgfText(text);
-      setCurrentGame(null);
-      setCurrentFilePath(null);
-      setFallbackFileName(file.name);
-      setDirty(false);
-      setGame(parsed);
-      setPositions(replayed);
-      setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
-      setFrames([]);
-      setProblems([]);
-      setSelectedCandidateIndex(null);
-      setMessage(importedMessage);
-      await checkAnalysisCacheForGame(text, null, parsed, replayed, importedMessage);
-    } catch (error) {
-      setMessage(`Import failed: ${errorMessage(error)}`);
-    }
+    const text = await file.text();
+    await applyReplacement(text, null, {
+      confirmMessage: "放弃未保存的棋谱并导入这个文件？",
+      fallbackName: file.name,
+      successMessage: (projection, fileName) => `Imported ${fileName}: ${projection.summary.move_count} moves.`,
+      failurePrefix: "Import failed"
+    });
   }
 
   async function handleProviderImport(result: ProviderImportResult) {
-    try {
-      const [parsed, replayed] = await Promise.all([parseSgfSummary(result.sgf_text), replaySgfPositions(result.sgf_text)]);
-      const source = providerSourceLabel(result);
-      const warningText = result.warnings.length > 0 ? ` ${result.warnings.length} provider warning(s).` : "";
-      const importedMessage = `Imported ${providerLabel(result.provider)} provider payload from ${source}: ${parsed.summary.move_count} moves.${warningText}`;
-      setSgfText(result.sgf_text);
-      setCurrentGame(null);
-      setCurrentFilePath(null);
-      setFallbackFileName(providerDocumentName(result));
-      setDirty(false);
-      setGame(parsed);
-      setPositions(replayed);
-      setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
-      setFrames([]);
-      setProblems([]);
-      setSelectedCandidateIndex(null);
-      setMessage(importedMessage);
-      await checkAnalysisCacheForGame(result.sgf_text, null, parsed, replayed, importedMessage);
-    } catch (error) {
-      setMessage(`Provider import failed: ${errorMessage(error)}`);
-      throw error;
-    }
+    const source = providerSourceLabel(result);
+    const warningText = result.warnings.length > 0 ? ` ${result.warnings.length} provider warning(s).` : "";
+    const applied = await applyReplacement(result.sgf_text, null, {
+      confirmMessage: "放弃未保存的棋谱并载入 Provider 棋谱？",
+      fallbackName: providerDocumentName(result),
+      successMessage: (projection) =>
+        `Imported ${providerLabel(result.provider)} provider payload from ${source}: ${projection.summary.move_count} moves.${warningText}`,
+      failurePrefix: "Provider import failed"
+    });
+    if (!applied) throw new Error("已取消载入，当前棋谱未改动。");
   }
 
   async function loadSample() {
-    const [parsed, replayed] = await Promise.all([parseSgfSummary(demoSgf), replaySgfPositions(demoSgf)]);
-    const sampleMessage = `Sample SGF restored: ${parsed.summary.move_count} moves.`;
-    setSgfText(demoSgf);
-    setCurrentGame(null);
-    setCurrentFilePath(null);
-    setFallbackFileName("sample.sgf");
-    setDirty(false);
-    setGame(parsed);
-    setPositions(replayed);
-    setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
-    setFrames([]);
-    setProblems([]);
-    setSelectedCandidateIndex(null);
-    setMessage(sampleMessage);
-    await checkAnalysisCacheForGame(demoSgf, null, parsed, replayed, sampleMessage);
+    await applyReplacement(demoSgf, null, {
+      confirmMessage: "放弃未保存的棋谱并载入示例？",
+      fallbackName: "sample.sgf",
+      successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
+      failurePrefix: "Sample load failed"
+    });
   }
 
   async function handleNewGame() {
-    if (dirty && !window.confirm("放弃未保存的棋谱并新建对局？")) return;
-    const [parsed, replayed] = await Promise.all([parseSgfSummary(emptySgf), replaySgfPositions(emptySgf)]);
-    setSgfText(emptySgf);
-    setCurrentGame(null);
-    setCurrentFilePath(null);
-    setFallbackFileName(null);
-    setDirty(false);
-    setGame(parsed);
-    setPositions(replayed);
-    setCurrentMove(0);
-    setFrames([]);
-    setProblems([]);
-    setSelectedCandidateIndex(null);
-    setMessage("已新建空谱。");
-    resetAnalysisCacheState();
+    await applyReplacement(emptySgf, null, {
+      confirmMessage: "放弃未保存的棋谱并新建对局？",
+      successMessage: () => "已新建空谱。",
+      failurePrefix: "New game failed",
+      checkCache: false
+    });
   }
 
   async function handleCopySgf() {
     try {
-      await navigator.clipboard.writeText(sgfText);
+      const text = nativeRuntime ? await serializeCurrentGame() : sgfText;
+      await navigator.clipboard.writeText(text);
       setMessage("棋谱已复制到剪贴板。");
     } catch (error) {
       setMessage(`复制失败: ${errorMessage(error)}`);
@@ -546,19 +606,12 @@ export function App() {
         setMessage("剪贴板没有棋谱。");
         return;
       }
-      const [parsed, replayed] = await Promise.all([parseSgfSummary(text), replaySgfPositions(text)]);
-      setSgfText(text);
-      setCurrentGame(null);
-      setCurrentFilePath(null);
-      setFallbackFileName("clipboard.sgf");
-      setDirty(true);
-      setGame(parsed);
-      setPositions(replayed);
-      setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
-      setFrames([]);
-      setProblems([]);
-      setSelectedCandidateIndex(null);
-      setMessage(`已粘贴棋谱: ${parsed.summary.move_count} 手。`);
+      await applyReplacement(text, null, {
+        confirmMessage: "放弃未保存的棋谱并粘贴剪贴板棋谱？",
+        fallbackName: "clipboard.sgf",
+        successMessage: (projection) => `已粘贴棋谱: ${projection.summary.move_count} 手。`,
+        failurePrefix: "粘贴失败"
+      });
     } catch (error) {
       setMessage(`粘贴失败: ${errorMessage(error)}`);
     }
@@ -602,7 +655,8 @@ export function App() {
     setSelectedCandidateIndex(null);
     setAnalysisProgress((progress) => progress ? { ...progress, completed: progress.expected || result.length, expected: progress.expected || result.length } : progress);
     finishStoppedAnalysis(jobId);
-    const cacheMessage = await saveAnalysisCacheForGame(sgfText, currentFilePath, parsed, result, classified, "katago");
+    const serialized = nativeRuntime ? await serializeCurrentGame() : sgfText;
+    const cacheMessage = await saveAnalysisCacheForGame(serialized, currentFilePath, parsed, result, classified, "katago");
     setMessage(`Full-game KataGo analysis completed with ${result.length} frames. Showing move ${shownMove}.${cacheMessage}`);
   }
 
@@ -742,7 +796,8 @@ export function App() {
     setCurrentCacheKey(null);
   }
 
-  return <main className={`app-shell${preferences.boardTheme === "high-contrast" ? " theme-high-contrast" : ""}`}>
+  return <main className={`app-shell${preferences.boardTheme === "high-contrast" ? " theme-high-contrast" : ""}${nativeRuntime ? "" : " has-native-runtime-note"}`}>
+    {!nativeRuntime ? <p className="native-runtime-note" role="status">{nativeCurrentGameUnavailable}</p> : null}
     <AppChrome
       sheet={sheet}
       onToggleSheet={toggleSheet}
@@ -767,6 +822,8 @@ export function App() {
       komi={game.summary.komi}
       onNew={() => void handleNewGame()}
       onOpen={() => void handleOpenSgfDocument()}
+      nativeRuntime={nativeRuntime}
+      nativeUnavailable={nativeCurrentGameUnavailable}
       onSave={() => void handleSaveSgfDocument(false)}
       onSaveAs={() => void handleSaveSgfDocument(true)}
       onLoadSample={() => void loadSample()}
@@ -871,13 +928,8 @@ export function App() {
         </div>
         <textarea value={sgfText} onChange={(event) => {
           setSgfText(event.target.value);
-          setCurrentGame(null);
-          setDirty(true);
-          clearReviewData();
-          resetAnalysisCacheState();
-          setCurrentMove(0);
-          setMessage("棋谱已改。解析棋谱或再跑分析以刷新。");
-        }} spellCheck={false} aria-label="棋谱原文" />
+          setMessage("这段文本只是载入输入。解析棋谱才会替换当前对局。");
+        }} spellCheck={false} aria-label="棋谱载入文本" />
         <div className="button-row">
           <label className={`file-button${isKataGoRunning ? " file-button-disabled" : ""}`}>
             导入棋谱

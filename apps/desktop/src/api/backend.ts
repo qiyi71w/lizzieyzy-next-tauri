@@ -103,17 +103,33 @@ export async function openSgfDocument(): Promise<SgfDocument | null> {
   return { path: selected, sgfText };
 }
 
+export const nativeCurrentGameUnavailable =
+  "Native current-game, edit, and authoritative Save require the Tauri desktop backend. Browser preview is non-authoritative.";
+
 export async function replaceCurrentGame(sgfText: string, nativePath: string | null): Promise<CurrentGameResultDto> {
   if (!isTauriRuntime()) {
-    throw new Error("Native current-game load requires the Tauri desktop backend.");
+    throw new Error(nativeCurrentGameUnavailable);
   }
   return invoke<CurrentGameResultDto>("replace_current_game", { sgfText, nativePath });
 }
 
+export async function serializeCurrentGame(): Promise<string> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<string>("serialize_current_game");
+}
+
+export async function projectCurrentGameMainline(): Promise<GameDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<GameDto>("project_current_game_mainline");
+}
+
 export async function saveSgfDocument(path: string | null, sgfText: string, defaultFileName = "review.sgf"): Promise<SgfDocument | null> {
   if (!isTauriRuntime()) {
-    downloadSgf(sgfText, path ? fileNameFromPath(path) : defaultFileName);
-    return { path, sgfText };
+    throw new Error(nativeCurrentGameUnavailable);
   }
 
   const targetPath = path ?? await save({
