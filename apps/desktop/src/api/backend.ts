@@ -7,6 +7,7 @@ import type {
   AssetCheckDto,
   CandidateMoveDto,
   CurrentGameResultDto,
+  NodePath,
   EngineProfileRecordDto,
   EngineProfileDto,
   EngineProfilesSettingsDto,
@@ -125,6 +126,13 @@ export async function projectCurrentGameMainline(): Promise<GameDto> {
     throw new Error(nativeCurrentGameUnavailable);
   }
   return invoke<GameDto>("project_current_game_mainline");
+}
+
+export async function selectCurrentGameNode(path: NodePath): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) {
+    throw new Error("Native current-game navigation requires the Tauri desktop backend.");
+  }
+  return invoke<CurrentGameResultDto>("select_current_game_node", { path });
 }
 
 export async function saveSgfDocument(path: string | null, sgfText: string, defaultFileName = "review.sgf"): Promise<SgfDocument | null> {

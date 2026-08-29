@@ -1,6 +1,6 @@
 use app_model::{
     AnalysisFrameDto, AppHealthDto, CandidateMoveDto, CurrentGameError, CurrentGameResultDto, EngineBackend,
-    EngineProfileDto, MoveVertex, PointDto, PositionDto, ProviderError, ProviderErrorKind,
+    EngineProfileDto, MoveVertex, NodePath, PointDto, PositionDto, ProviderError, ProviderErrorKind,
     ProviderFetchMethod, ProviderFetchRequest, ProviderFetchResult, ProviderGameMetadata,
     ProviderImportRequest, ProviderImportResult, ProviderKind, ReadboardSidecarProbeRequest,
     ReadboardSidecarProbeResult, ReadboardSidecarSyncSnapshotRequest, ReadboardSidecarSyncSnapshotResult,
@@ -483,6 +483,14 @@ fn project_current_game_mainline(
     state: State<CurrentGameState>,
 ) -> Result<app_model::GameDto, CurrentGameError> {
     state.mainline_projection()
+}
+
+#[tauri::command]
+fn select_current_game_node(
+    state: State<CurrentGameState>,
+    path: NodePath,
+) -> Result<CurrentGameResultDto, CurrentGameError> {
+    state.select_path(path)
 }
 
 #[tauri::command]
@@ -1954,6 +1962,7 @@ pub fn run() {
             replace_current_game,
             serialize_current_game,
             project_current_game_mainline,
+            select_current_game_node,
             write_sgf_file,
             fake_analyze,
             classify_problems,

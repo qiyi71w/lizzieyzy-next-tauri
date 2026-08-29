@@ -299,3 +299,127 @@ mod editable_workspace_open {
             .any(|stone| stone.x == x && stone.y == y && stone.color == color)
     }
 }
+
+#[cfg(test)]
+mod editable_workspace_navigation {
+    use super::*;
+    use app_model::{CurrentGameErrorKind, MoveVertex, PlayerColor, PointDto};
+
+    const BRANCHING: &str = include_str!("../../../tests/golden/editable-workspace-branching.sgf");
+
+    #[test]
+    fn editable_workspace_navigation_snapshots_root_parent_siblings_and_rejects_invalid_paths() {
+        let document = CurrentSgfDocument::open(BRANCHING).unwrap();
+        let before = document.serialize().unwrap();
+        let tree = document.tree().unwrap();
+        let root = NodePath { indices: Vec::new() };
+        let parent = NodePath { indices: vec![0] };
+        let first_sibling = NodePath { indices: vec![0, 0] };
+        let second_sibling = NodePath { indices: vec![0, 1] };
+        let mainline_leaf = NodePath {
+            indices: vec![0, 0, 0],
+        };
+
+        assert_eq!(tree.children.len(), 1);
+        assert_eq!(tree.children[0].children.len(), 2);
+        assert_eq!(comment(&tree.children[0].children[0]), Some("first continuation"));
+        assert_eq!(
+            comment(&tree.children[0].children[1]),
+            Some("second continuation")
+        );
+
+        let root_snapshot = document.snapshot(&root).unwrap();
+        assert_eq!(root_snapshot.path.indices, root.indices);
+        assert_eq!(root_snapshot.personal_comment, "root personal");
+        assert_eq!(root_snapshot.position.board_size, 5);
+        assert_eq!(root_snapshot.position.move_number, 0);
+        assert_eq!(root_snapshot.position.to_play, PlayerColor::White);
+        assert_eq!(root_snapshot.position.captures_black, 0);
+        assert_eq!(root_snapshot.position.captures_white, 0);
+        assert!(root_snapshot.position.last_move.is_none());
+        assert!(has_stone(&root_snapshot.position, 0, 0, PlayerColor::Black));
+        assert!(has_stone(&root_snapshot.position, 2, 2, PlayerColor::White));
+        assert!(!root_snapshot
+            .position
+            .stones
+            .iter()
+            .any(|stone| stone.x == 1 && stone.y == 1));
+
+        let parent_snapshot = document.snapshot(&parent).unwrap();
+        assert_eq!(parent_snapshot.personal_comment, "main move");
+        assert_eq!(parent_snapshot.position.move_number, 1);
+        assert_eq!(parent_snapshot.position.to_play, PlayerColor::Black);
+        let parent_last = parent_snapshot.position.last_move.as_ref().unwrap();
+        assert_eq!(parent_last.color, PlayerColor::White);
+        assert_eq!(parent_last.move_number, 1);
+        assert_eq!(parent_last.vertex, MoveVertex::Point(PointDto { x: 3, y: 3 }));
+        assert!(has_stone(&parent_snapshot.position, 3, 3, PlayerColor::White));
+
+        let first_snapshot = document.snapshot(&first_sibling).unwrap();
+        assert_eq!(first_snapshot.personal_comment, "first continuation");
+        assert_eq!(first_snapshot.position.move_number, 2);
+        assert_eq!(first_snapshot.position.to_play, PlayerColor::White);
+        assert_eq!(first_snapshot.position.captures_black, 0);
+        assert_eq!(first_snapshot.position.captures_white, 0);
+        let first_last = first_snapshot.position.last_move.as_ref().unwrap();
+        assert_eq!(first_last.color, PlayerColor::Black);
+        assert_eq!(first_last.vertex, MoveVertex::Point(PointDto { x: 4, y: 4 }));
+        assert!(has_stone(&first_snapshot.position, 4, 4, PlayerColor::Black));
+        assert!(!has_stone(&first_snapshot.position, 0, 3, PlayerColor::Black));
+
+        let second_snapshot = document.snapshot(&second_sibling).unwrap();
+        assert_eq!(second_snapshot.personal_comment, "second continuation");
+        assert_eq!(second_snapshot.position.move_number, 2);
+        assert_eq!(second_snapshot.position.to_play, PlayerColor::White);
+        assert_eq!(second_snapshot.position.captures_black, 0);
+        assert_eq!(second_snapshot.position.captures_white, 0);
+        let second_last = second_snapshot.position.last_move.as_ref().unwrap();
+        assert_eq!(second_last.color, PlayerColor::Black);
+        assert_eq!(second_last.vertex, MoveVertex::Point(PointDto { x: 0, y: 3 }));
+        assert!(has_stone(&second_snapshot.position, 0, 3, PlayerColor::Black));
+        assert!(!has_stone(&second_snapshot.position, 4, 4, PlayerColor::Black));
+
+        let leaf_snapshot = document.snapshot(&mainline_leaf).unwrap();
+        assert_eq!(leaf_snapshot.personal_comment, "mainline pass");
+        assert_eq!(leaf_snapshot.position.move_number, 3);
+        assert_eq!(leaf_snapshot.position.to_play, PlayerColor::Black);
+        assert!(matches!(
+            leaf_snapshot.position.last_move.as_ref().unwrap().vertex,
+            MoveVertex::Pass
+        ));
+
+        for path in [
+            NodePath { indices: vec![9] },
+            NodePath { indices: vec![0, 2] },
+            NodePath {
+                indices: vec![0, 0, 0, 0],
+            },
+        ] {
+            let error = document.snapshot(&path).unwrap_err();
+            assert_eq!(error.kind, CurrentGameErrorKind::InvalidNodePath);
+            assert_eq!(document.serialize().unwrap(), before);
+            assert_eq!(
+                document.snapshot(&mainline_leaf).unwrap().personal_comment,
+                "mainline pass"
+            );
+        }
+
+        assert_eq!(document.serialize().unwrap(), before);
+        assert_eq!(document.default_selected_path(), mainline_leaf);
+    }
+
+    fn comment(node: &SgfTreeNodeDto) -> Option<&str> {
+        node.properties
+            .iter()
+            .find(|property| property.key == "C")
+            .and_then(|property| property.values.first())
+            .map(String::as_str)
+    }
+
+    fn has_stone(position: &PositionDto, x: u8, y: u8, color: PlayerColor) -> bool {
+        position
+            .stones
+            .iter()
+            .any(|stone| stone.x == x && stone.y == y && stone.color == color)
+    }
+}

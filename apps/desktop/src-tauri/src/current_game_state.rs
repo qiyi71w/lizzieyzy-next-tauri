@@ -1,4 +1,4 @@
-use app_model::{CurrentGameError, CurrentGameErrorKind, CurrentGameResultDto, GameDto};
+use app_model::{CurrentGameError, CurrentGameErrorKind, CurrentGameResultDto, GameDto, NodePath};
 use sgf::CurrentSgfDocument;
 use std::sync::Mutex;
 
@@ -49,6 +49,10 @@ impl CurrentGameState {
     #[allow(dead_code)]
     pub fn discard_confirmation_required(&self) -> bool {
         self.holder.lock().expect("current game state").dirty
+    }
+
+    pub fn select_path(&self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.holder.lock().expect("current game state").select_path(path)
     }
 
     fn with_document<T>(
@@ -102,12 +106,28 @@ impl CurrentGameHolder {
                 .and_then(|document| document.serialize().ok()),
         )
     }
+
+    fn select_path(&self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let document = self.document.as_ref().ok_or_else(|| CurrentGameError {
+            kind: CurrentGameErrorKind::NoCurrentGame,
+            message: "no current game".to_string(),
+        })?;
+        let snapshot = document.snapshot(&path)?;
+        Ok(CurrentGameResultDto {
+            tree: document.tree()?,
+            selected_path: path,
+            snapshot,
+            generation: self.generation,
+            dirty: self.dirty,
+            native_path: self.native_path.clone(),
+        })
+    }
 }
 
 #[cfg(test)]
 mod current_game_replacement {
     use super::*;
-    use app_model::MoveVertex;
+    use app_model::{CurrentGameErrorKind, MoveVertex, NodePath};
 
     const BRANCHING: &str = include_str!("../../../../tests/golden/editable-workspace-branching.sgf");
     const EMPTY: &str = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
@@ -161,9 +181,7 @@ mod current_game_replacement {
         assert_eq!(state.inspect(), before_failure);
 
         let before_unsupported = state.inspect();
-        let unsupported = state
-            .replace("(;GM[1]FF[4]SZ[99])", None)
-            .unwrap_err();
+        let unsupported = state.replace("(;GM[1]FF[4]SZ[99])", None).unwrap_err();
         assert_eq!(unsupported.kind, CurrentGameErrorKind::UnsupportedBoardSize);
         assert_eq!(state.inspect(), before_unsupported);
     }
@@ -171,11 +189,49 @@ mod current_game_replacement {
     #[test]
     fn current_game_replacement_reports_no_current_game_before_install() {
         let state = CurrentGameState::default();
-        assert_eq!(state.serialize().unwrap_err().kind, CurrentGameErrorKind::NoCurrentGame);
+        assert_eq!(
+            state.serialize().unwrap_err().kind,
+            CurrentGameErrorKind::NoCurrentGame
+        );
         assert_eq!(
             state.mainline_projection().unwrap_err().kind,
             CurrentGameErrorKind::NoCurrentGame
         );
+    }
+
+    #[test]
+    fn select_path_returns_snapshot_without_mutating_document_identity() {
+        let state = CurrentGameState::default();
+        let missing = state.select_path(NodePath { indices: Vec::new() }).unwrap_err();
+        assert_eq!(missing.kind, CurrentGameErrorKind::NoCurrentGame);
+
+        let opened = state
+            .replace(BRANCHING, Some("/tmp/branching.sgf".to_string()))
+            .unwrap();
+        let before = state.holder.lock().expect("current game state").snapshot_state();
+
+        let second = state.select_path(NodePath { indices: vec![0, 1] }).unwrap();
+        assert_eq!(
+            state.holder.lock().expect("current game state").snapshot_state(),
+            before
+        );
+        assert_eq!(second.generation, opened.generation);
+        assert_eq!(second.dirty, opened.dirty);
+        assert_eq!(second.native_path, opened.native_path);
+        assert_eq!(second.tree, opened.tree);
+        assert_eq!(second.selected_path.indices, vec![0, 1]);
+        assert_eq!(second.snapshot.path.indices, vec![0, 1]);
+        assert_eq!(second.snapshot.personal_comment, "second continuation");
+        assert_eq!(second.snapshot.position.move_number, 2);
+        assert_eq!(second.snapshot.position.to_play, app_model::PlayerColor::White);
+
+        let invalid = state.select_path(NodePath { indices: vec![0, 2] }).unwrap_err();
+        assert_eq!(invalid.kind, CurrentGameErrorKind::InvalidNodePath);
+        assert_eq!(
+            state.holder.lock().expect("current game state").snapshot_state(),
+            before
+        );
+        assert_eq!(opened.selected_path.indices, vec![0, 0, 0]);
     }
 }
 

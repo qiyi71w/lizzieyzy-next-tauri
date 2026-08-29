@@ -180,6 +180,7 @@ export function AnalysisPanel({
                   手数 {currentPosition?.move_number ?? currentMove}
                   {" · "}上一手 {lastMoveLabel(currentPosition, boardSize)}
                   {" · "}下一手 {nextPlayerLabel(currentPosition)}
+                  {" · "}提子 黑 {currentPosition?.captures_black ?? 0} 白 {currentPosition?.captures_white ?? 0}
                 </p>
                 {personalComment ? <p className="personal-comment">{personalComment}</p> : null}
               </div>
