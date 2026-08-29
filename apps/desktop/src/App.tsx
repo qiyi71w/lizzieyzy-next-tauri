@@ -24,6 +24,7 @@ import {
   saveSgfDocument,
   serializeCurrentGame,
   selectCurrentGameNode,
+  removeCurrentGameVariation,
   startKataGoGameAnalysis
 } from "./api/backend";
 import { computeGameCacheKey, loadAnalysisCache, saveAnalysisCache } from "./api/analysisCache";
@@ -69,6 +70,7 @@ export function App() {
   const [currentGame, setCurrentGame] = useState<CurrentGameResultDto | null>(null);
   const [chosenChildren, setChosenChildren] = useState<Map<string, number>>(() => new Map());
   const navigatingRef = useRef(false);
+  const documentGenerationRef = useRef(0);
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus>("idle");
@@ -147,6 +149,7 @@ export function App() {
   const parentNode = currentGame && parentOfSelected ? nodeAt(currentGame.tree, parentOfSelected) : null;
   const siblingIndex = selectedPath.indices.at(-1);
   const canParent = Boolean(currentGame && parentOfSelected);
+  const canRemoveVariation = Boolean(nativeRuntime && currentGame && selectedPath.indices.length > 0);
   const canNext = Boolean(selectedNode && selectedNode.children.length > 0);
   const canPrevSibling = Boolean(parentNode && siblingIndex !== undefined && siblingIndex > 0);
   const canNextSibling = Boolean(parentNode && siblingIndex !== undefined && siblingIndex + 1 < parentNode.children.length);
@@ -292,6 +295,15 @@ export function App() {
     return !dirty || window.confirm(confirmMessage);
   }
 
+  function adoptCurrentGame(result: CurrentGameResultDto) {
+    documentGenerationRef.current = result.generation;
+    setCurrentGame(result);
+  }
+
+  function isCurrentDocumentGeneration(capturedGeneration: number): boolean {
+    return documentGenerationRef.current === capturedGeneration;
+  }
+
   async function artifactsFromCurrentGame(): Promise<{ serialized: string; projection: GameDto; replayed: PositionDto[] }> {
     const [serialized, projection] = await Promise.all([serializeCurrentGame(), projectCurrentGameMainline()]);
     return { serialized, projection, replayed: await replaySgfPositions(serialized) };
@@ -313,6 +325,7 @@ export function App() {
     if (!nativeRuntime) {
       try {
         const [parsed, replayed] = await Promise.all([parseSgfSummary(sgfInput), replaySgfPositions(sgfInput)]);
+        documentGenerationRef.current = 0;
         setCurrentGame(null);
         setSgfText(sgfInput);
         setCurrentFilePath(null);
@@ -337,8 +350,8 @@ export function App() {
 
     try {
       const result = await replaceCurrentGame(sgfInput, nativePath);
+      adoptCurrentGame(result);
       const artifacts = await artifactsFromCurrentGame();
-      setCurrentGame(result);
       setChosenChildren(chosenFromPath(result.selected_path));
       setSgfText(artifacts.serialized);
       setCurrentFilePath(result.native_path ?? nativePath);
@@ -382,8 +395,8 @@ export function App() {
       const document = await openSgfDocument();
       if (!document) return;
       const result = await replaceCurrentGame(document.sgfText, document.path);
+      adoptCurrentGame(result);
       const artifacts = await artifactsFromCurrentGame();
-      setCurrentGame(result);
       setSgfText(artifacts.serialized);
       setCurrentFilePath(result.native_path ?? document.path);
       setFallbackFileName(null);
@@ -438,8 +451,11 @@ export function App() {
         return;
       }
       const artifacts = await artifactsFromCurrentGame();
+      const capturedGeneration = documentGenerationRef.current;
       const result = await fakeAnalyze(artifacts.serialized);
+      if (!isCurrentDocumentGeneration(capturedGeneration)) return;
       const classified = await classifyProblems(result);
+      if (!isCurrentDocumentGeneration(capturedGeneration)) return;
       setGame(artifacts.projection);
       setPositions(artifacts.replayed);
       setFrames(result);
@@ -464,7 +480,9 @@ export function App() {
         : { serialized: sgfText, projection: await parseSgfSummary(sgfText), replayed: await replaySgfPositions(sgfText) };
       if (!nativeRuntime) setMessage(nativeCurrentGameUnavailable);
       const turn = clampMoveNumberToPositions(artifacts.replayed, Math.min(targetTurn, artifacts.replayed.at(-1)?.move_number ?? artifacts.projection.moves.length));
+      const capturedGeneration = documentGenerationRef.current;
       const frame = await analyzeKataGoOnce(profile, artifacts.serialized, turn, visits);
+      if (!isCurrentDocumentGeneration(capturedGeneration)) return;
       const mergedFrames = mergeAnalysisFrame(frames, frame);
       setGame(artifacts.projection);
       setPositions(artifacts.replayed);
@@ -484,6 +502,7 @@ export function App() {
     if (activeJobIdRef.current || startingAnalysisRef.current) return;
     const visits = resolveAnalysisMaxVisits(maxVisits, preferences);
     startingAnalysisRef.current = true;
+    const capturedGeneration = documentGenerationRef.current;
     pendingAnalysisProgressRef.current.clear();
     pendingAnalysisTerminalEventsRef.current.clear();
     setIsKataGoRunning(true);
@@ -524,8 +543,11 @@ export function App() {
             pendingAnalysisTerminalEventsRef.current.set(payload.job_id, { kind: "complete", frames: payload.frames });
             return;
           }
-          if (!isCurrentAnalysisJob(payload.job_id)) return;
-          void finishCompletedAnalysis(payload.job_id, payload.frames, parsed, replayed);
+          if (!isCurrentAnalysisJob(payload.job_id) || !isCurrentDocumentGeneration(capturedGeneration)) {
+            if (isCurrentAnalysisJob(payload.job_id)) finishStoppedAnalysis(payload.job_id);
+            return;
+          }
+          void finishCompletedAnalysis(payload.job_id, payload.frames, parsed, replayed, capturedGeneration);
         },
         onError: (payload) => {
           if (startingAnalysisRef.current && activeJobIdRef.current === null) {
@@ -556,7 +578,7 @@ export function App() {
       pendingAnalysisProgressRef.current.clear();
       pendingAnalysisTerminalEventsRef.current.clear();
       if (pendingTerminalEvent) {
-        await finishPendingAnalysisTerminalEvent(jobId, pendingTerminalEvent, parsed, replayed);
+        await finishPendingAnalysisTerminalEvent(jobId, pendingTerminalEvent, parsed, replayed, capturedGeneration);
         return;
       }
       activeJobIdRef.current = jobId;
@@ -664,7 +686,7 @@ export function App() {
     navigatingRef.current = true;
     try {
       const result = await selectCurrentGameNode(path);
-      setCurrentGame(result);
+      adoptCurrentGame(result);
       setChosenChildren((prev) => rememberChosenChildren(prev, result.selected_path));
       setCurrentMove(result.snapshot.position.move_number);
       setSelectedCandidateIndex(null);
@@ -705,6 +727,28 @@ export function App() {
     void selectNode({ indices: [...selectedPath.indices.slice(0, -1), siblingIndex + 1] });
   }
 
+  async function handleRemoveVariation() {
+    if (!currentGame || selectedPath.indices.length === 0) return;
+    try {
+      const result = await removeCurrentGameVariation(selectedPath);
+      adoptCurrentGame(result);
+      documentGenerationRef.current = result.generation;
+      setChosenChildren(chosenFromPath(result.selected_path));
+      setDirty(result.dirty);
+      setCurrentMove(result.snapshot.position.move_number);
+      clearReviewData();
+      resetAnalysisCacheState();
+      const artifacts = await artifactsFromCurrentGame();
+      if (!isCurrentDocumentGeneration(result.generation)) return;
+      setSgfText(artifacts.serialized);
+      setGame(artifacts.projection);
+      setPositions(artifacts.replayed);
+      setMessage("已删除选中变化，并回到其父节点。");
+    } catch (error) {
+      setMessage(`删除变化失败: ${errorMessage(error)}`);
+    }
+  }
+
   function cleanupAnalysisListeners() {
     analysisCleanupRef.current?.();
     analysisCleanupRef.current = null;
@@ -714,9 +758,13 @@ export function App() {
     return activeJobIdRef.current === jobId;
   }
 
-  async function finishPendingAnalysisTerminalEvent(jobId: string, event: PendingAnalysisTerminalEvent, parsed: GameDto, replayed: PositionDto[]) {
+  async function finishPendingAnalysisTerminalEvent(jobId: string, event: PendingAnalysisTerminalEvent, parsed: GameDto, replayed: PositionDto[], capturedGeneration: number) {
     if (event.kind === "complete") {
-      await finishCompletedAnalysis(jobId, event.frames, parsed, replayed);
+      if (!isCurrentDocumentGeneration(capturedGeneration)) {
+        finishStoppedAnalysis(jobId);
+        return;
+      }
+      await finishCompletedAnalysis(jobId, event.frames, parsed, replayed, capturedGeneration);
       return;
     }
     finishStoppedAnalysis(jobId);
@@ -726,10 +774,18 @@ export function App() {
       : event.message || "Full-game KataGo analysis cancelled.");
   }
 
-  async function finishCompletedAnalysis(jobId: string, result: AnalysisFrameDto[], parsed: GameDto, replayed: PositionDto[]) {
+  async function finishCompletedAnalysis(jobId: string, result: AnalysisFrameDto[], parsed: GameDto, replayed: PositionDto[], capturedGeneration?: number) {
+    if (capturedGeneration !== undefined && documentGenerationRef.current !== capturedGeneration) {
+      finishStoppedAnalysis(jobId);
+      return;
+    }
     const lastAnalyzedMove = result.at(-1)?.turn ?? replayed.at(-1)?.move_number ?? parsed.moves.length;
     const shownMove = clampMoveNumberToPositions(replayed, lastAnalyzedMove);
     const classified = await classifyProblems(result);
+    if (capturedGeneration !== undefined && documentGenerationRef.current !== capturedGeneration) {
+      finishStoppedAnalysis(jobId);
+      return;
+    }
     setGame(parsed);
     setPositions(replayed);
     setFrames(result);
@@ -985,11 +1041,14 @@ export function App() {
       canNext={canNext}
       canPrevSibling={canPrevSibling}
       canNextSibling={canNextSibling}
+      canRemoveVariation={canRemoveVariation}
       siblingLabel={siblingLabel}
+      nativeUnavailable={nativeRuntime ? undefined : nativeCurrentGameUnavailable}
       onParent={handleParent}
       onNext={handleNextChild}
       onPrevSibling={handlePrevSibling}
       onNextSibling={handleNextSibling}
+      onRemoveVariation={() => void handleRemoveVariation()}
       engineReady={engineReady}
       isKataGoRunning={isKataGoRunning}
       analysisProgress={analysisProgress}

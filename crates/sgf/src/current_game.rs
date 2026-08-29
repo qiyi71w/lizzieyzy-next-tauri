@@ -66,6 +66,22 @@ impl CurrentSgfDocument {
         Ok(tree_dto(self.root()?))
     }
 
+    pub fn remove_variation(&mut self, path: &NodePath) -> Result<NodePath, CurrentGameError> {
+        if path.indices.is_empty() {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::RootRemoval,
+                message: "cannot remove the root".to_string(),
+            });
+        }
+        let _ = self.nodes_on_path(path)?;
+        let child_index = *path.indices.last().expect("non-root path") as usize;
+        let parent_path = NodePath {
+            indices: path.indices[..path.indices.len() - 1].to_vec(),
+        };
+        self.node_mut(&parent_path)?.children.remove(child_index);
+        Ok(parent_path)
+    }
+
     fn root(&self) -> Result<&SgfNode, CurrentGameError> {
         self.document.root.as_ref().ok_or_else(|| CurrentGameError {
             kind: CurrentGameErrorKind::MalformedSgf,
@@ -87,6 +103,20 @@ impl CurrentSgfDocument {
             nodes.push(node);
         }
         Ok(nodes)
+    }
+
+    fn node_mut(&mut self, path: &NodePath) -> Result<&mut SgfNode, CurrentGameError> {
+        let mut node = self.document.root.as_mut().ok_or_else(|| CurrentGameError {
+            kind: CurrentGameErrorKind::MalformedSgf,
+            message: SgfError::Malformed.to_string(),
+        })?;
+        for &index in &path.indices {
+            node = node.children.get_mut(index as usize).ok_or_else(|| CurrentGameError {
+                kind: CurrentGameErrorKind::InvalidNodePath,
+                message: "invalid node path".to_string(),
+            })?;
+        }
+        Ok(node)
     }
 
     fn replay_nodes(&self, nodes: &[&SgfNode]) -> Result<PositionDto, CurrentGameError> {
@@ -421,5 +451,138 @@ mod editable_workspace_navigation {
             .stones
             .iter()
             .any(|stone| stone.x == x && stone.y == y && stone.color == color)
+    }
+}
+
+
+#[cfg(test)]
+mod editable_workspace_remove_variation {
+    use super::*;
+    use app_model::{CurrentGameErrorKind, MoveVertex, PlayerColor, PointDto};
+
+    const BRANCHING: &str = include_str!("../../../tests/golden/editable-workspace-branching.sgf");
+
+    #[test]
+    fn editable_workspace_remove_variation_deletes_named_second_sibling_and_selects_parent() {
+        let mut document = CurrentSgfDocument::open(BRANCHING).unwrap();
+        let parent = NodePath { indices: vec![0] };
+        let first_sibling = NodePath { indices: vec![0, 0] };
+        let second_sibling = NodePath { indices: vec![0, 1] };
+        let parent_before = document.snapshot(&parent).unwrap();
+
+        let selected = document.remove_variation(&second_sibling).unwrap();
+        let snapshot = document.snapshot(&selected).unwrap();
+        let tree = document.tree().unwrap();
+
+        assert_eq!(selected.indices, parent.indices);
+        assert_eq!(snapshot.path.indices, parent.indices);
+        assert_eq!(snapshot.personal_comment, "main move");
+        assert_eq!(snapshot.position.to_play, PlayerColor::Black);
+        assert_eq!(snapshot.position.move_number, 1);
+        let last_move = snapshot.position.last_move.as_ref().unwrap();
+        assert_eq!(last_move.color, PlayerColor::White);
+        assert_eq!(last_move.vertex, MoveVertex::Point(PointDto { x: 3, y: 3 }));
+        assert_eq!(snapshot.position.stones, parent_before.position.stones);
+        assert_eq!(tree.children[0].children.len(), 1);
+        assert_eq!(comment(&tree.children[0].children[0]), Some("first continuation"));
+        assert!(has_unknown_property(&tree));
+        assert_eq!(
+            document.snapshot(&first_sibling).unwrap().personal_comment,
+            "first continuation"
+        );
+        assert_eq!(
+            document.snapshot(&second_sibling).unwrap_err().kind,
+            CurrentGameErrorKind::InvalidNodePath
+        );
+    }
+
+    #[test]
+    fn editable_workspace_remove_variation_serializes_leaf_and_subtree_without_removed_nodes() {
+        let mut leaf_document = CurrentSgfDocument::open(BRANCHING).unwrap();
+        let pass = NodePath {
+            indices: vec![0, 0, 0],
+        };
+        leaf_document.remove_variation(&pass).unwrap();
+        let leaf_reopened = CurrentSgfDocument::open(&leaf_document.serialize().unwrap()).unwrap();
+        let leaf_tree = leaf_reopened.tree().unwrap();
+        assert!(has_unknown_property(&leaf_tree));
+        assert_eq!(leaf_tree.children[0].children.len(), 2);
+        assert_eq!(comment(&leaf_tree.children[0].children[0]), Some("first continuation"));
+        assert_eq!(comment(&leaf_tree.children[0].children[1]), Some("second continuation"));
+        assert!(leaf_tree.children[0].children[0].children.is_empty());
+        assert!(serialized_omits(&leaf_document, "mainline pass"));
+        assert!(serialized_contains(&leaf_document, "first continuation"));
+        assert!(serialized_contains(&leaf_document, "second continuation"));
+
+        let mut subtree_document = CurrentSgfDocument::open(BRANCHING).unwrap();
+        let first_sibling = NodePath { indices: vec![0, 0] };
+        subtree_document.remove_variation(&first_sibling).unwrap();
+        let subtree_reopened = CurrentSgfDocument::open(&subtree_document.serialize().unwrap()).unwrap();
+        let subtree_tree = subtree_reopened.tree().unwrap();
+        assert!(has_unknown_property(&subtree_tree));
+        assert_eq!(subtree_tree.children[0].children.len(), 1);
+        assert_eq!(
+            comment(&subtree_tree.children[0].children[0]),
+            Some("second continuation")
+        );
+        assert!(serialized_omits(&subtree_document, "first continuation"));
+        assert!(serialized_omits(&subtree_document, "mainline pass"));
+        assert!(serialized_contains(&subtree_document, "second continuation"));
+    }
+
+    #[test]
+    fn editable_workspace_remove_variation_rejects_root_and_invalid_paths_atomically() {
+        let mut document = CurrentSgfDocument::open(BRANCHING).unwrap();
+        let before = document.serialize().unwrap();
+        let mainline = document.default_selected_path();
+        let snapshot = document.snapshot(&mainline).unwrap();
+        let tree = document.tree().unwrap();
+        let projection = document.mainline_projection();
+
+        let root = document
+            .remove_variation(&NodePath { indices: Vec::new() })
+            .unwrap_err();
+        assert_eq!(root.kind, CurrentGameErrorKind::RootRemoval);
+        assert_eq!(document.serialize().unwrap(), before);
+        assert_eq!(document.default_selected_path(), mainline);
+        assert_eq!(document.snapshot(&mainline).unwrap(), snapshot);
+        assert_eq!(document.tree().unwrap(), tree);
+        assert_eq!(document.mainline_projection().moves.len(), projection.moves.len());
+
+        for path in [
+            NodePath { indices: vec![9] },
+            NodePath { indices: vec![0, 2] },
+            NodePath {
+                indices: vec![0, 0, 0, 0],
+            },
+        ] {
+            let error = document.remove_variation(&path).unwrap_err();
+            assert_eq!(error.kind, CurrentGameErrorKind::InvalidNodePath);
+            assert_eq!(document.serialize().unwrap(), before);
+            assert_eq!(document.snapshot(&mainline).unwrap(), snapshot);
+            assert_eq!(document.tree().unwrap(), tree);
+        }
+    }
+
+    fn comment(node: &SgfTreeNodeDto) -> Option<&str> {
+        node.properties
+            .iter()
+            .find(|property| property.key == "C")
+            .and_then(|property| property.values.first())
+            .map(String::as_str)
+    }
+
+    fn has_unknown_property(node: &SgfTreeNodeDto) -> bool {
+        node.properties
+            .iter()
+            .any(|property| property.key == "XY" && property.values == ["keep-me"])
+    }
+
+    fn serialized_contains(document: &CurrentSgfDocument, needle: &str) -> bool {
+        document.serialize().unwrap().contains(needle)
+    }
+
+    fn serialized_omits(document: &CurrentSgfDocument, needle: &str) -> bool {
+        !serialized_contains(document, needle)
     }
 }

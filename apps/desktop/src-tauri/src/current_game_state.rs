@@ -55,6 +55,10 @@ impl CurrentGameState {
         self.holder.lock().expect("current game state").select_path(path)
     }
 
+    pub fn remove_variation(&self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.holder.lock().expect("current game state").remove_variation(path)
+    }
+
     fn with_document<T>(
         &self,
         f: impl FnOnce(&CurrentSgfDocument) -> Result<T, CurrentGameError>,
@@ -116,6 +120,23 @@ impl CurrentGameHolder {
         Ok(CurrentGameResultDto {
             tree: document.tree()?,
             selected_path: path,
+            snapshot,
+            generation: self.generation,
+            dirty: self.dirty,
+            native_path: self.native_path.clone(),
+        })
+    }
+
+    fn remove_variation(&mut self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let document = self.document.as_mut().ok_or_else(no_current_game)?;
+        let selected_path = document.remove_variation(&path)?;
+        let snapshot = document.snapshot(&selected_path)?;
+        let tree = document.tree()?;
+        self.generation += 1;
+        self.dirty = true;
+        Ok(CurrentGameResultDto {
+            tree,
+            selected_path,
             snapshot,
             generation: self.generation,
             dirty: self.dirty,
@@ -232,6 +253,64 @@ mod current_game_replacement {
             before
         );
         assert_eq!(opened.selected_path.indices, vec![0, 0, 0]);
+    }
+}
+
+#[cfg(test)]
+mod current_game_remove_variation {
+    use super::*;
+    use app_model::{CurrentGameErrorKind, PlayerColor};
+
+    const BRANCHING: &str = include_str!("../../../../tests/golden/editable-workspace-branching.sgf");
+
+    #[test]
+    fn current_game_remove_variation_returns_parent_and_preserves_state_on_rejection() {
+        let state = CurrentGameState::default();
+        assert_eq!(
+            state
+                .remove_variation(NodePath { indices: vec![0] })
+                .unwrap_err()
+                .kind,
+            CurrentGameErrorKind::NoCurrentGame
+        );
+
+        let opened = state
+            .replace(BRANCHING, Some("/tmp/branching.sgf".to_string()))
+            .unwrap();
+        let before = state.inspect();
+        let before_projection = state.mainline_projection().unwrap();
+        let before_serialize = state.serialize().unwrap();
+
+        let root = state
+            .remove_variation(NodePath { indices: Vec::new() })
+            .unwrap_err();
+        assert_eq!(root.kind, CurrentGameErrorKind::RootRemoval);
+        assert_eq!(state.inspect(), before);
+        assert_eq!(state.serialize().unwrap(), before_serialize);
+        assert_eq!(state.mainline_projection().unwrap().moves.len(), before_projection.moves.len());
+
+        let invalid = state
+            .remove_variation(NodePath { indices: vec![0, 2] })
+            .unwrap_err();
+        assert_eq!(invalid.kind, CurrentGameErrorKind::InvalidNodePath);
+        assert_eq!(state.inspect(), before);
+        assert_eq!(state.serialize().unwrap(), before_serialize);
+
+        let removed = state
+            .remove_variation(NodePath { indices: vec![0, 1] })
+            .unwrap();
+        assert_eq!(removed.selected_path.indices, vec![0]);
+        assert_eq!(removed.snapshot.path.indices, vec![0]);
+        assert_eq!(removed.snapshot.personal_comment, "main move");
+        assert_eq!(removed.snapshot.position.to_play, PlayerColor::Black);
+        assert_eq!(removed.generation, opened.generation + 1);
+        assert!(removed.dirty);
+        assert_eq!(removed.native_path, opened.native_path);
+        assert_eq!(removed.tree.children[0].children.len(), 1);
+        assert!(state.serialize().unwrap().contains("first continuation"));
+        assert!(!state.serialize().unwrap().contains("second continuation"));
+        assert_eq!(state.inspect(), (removed.generation, true, opened.native_path.clone(), Some(state.serialize().unwrap())));
+        assert_eq!(state.mainline_projection().unwrap().moves.len(), 3);
     }
 }
 
