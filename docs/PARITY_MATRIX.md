@@ -1,0 +1,99 @@
+# Parity Matrix
+
+This matrix is the item-level source of truth for migration progress against [Migration Baseline v1](JAVA_BASELINE.md). The roadmap in [MIGRATION_PLAN.md](MIGRATION_PLAN.md) orders the work; this file states the observable gap and acceptance condition for each item.
+
+## Status And Evidence Rules
+
+- Item IDs are stable. Do not renumber an accepted item; add a successor item when scope changes materially.
+- `Accepted` means the stated acceptance condition has evidence. `Partial` means a real path exists but the complete condition does not. `Missing` means the user workflow is absent. `Deferred` is allowed only with an explicit product decision.
+- Repository evidence and live/environment evidence are separate. One does not imply the other.
+- `Not required` in the environment column means the behavior is deterministic and fully exercisable in the repository. `Pending` means an environment-dependent claim must not be described as shipped or externally validated.
+- Progress is reported by accepted item IDs, never by a completion percentage.
+
+## R0 — Baseline And Inventory
+
+| ID | Status | Capability | Current repository evidence | Current live/environment evidence | Remaining gap | Acceptance | Phase |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| BASE-01 | Accepted | Fixed Java behavior baseline | [JAVA_BASELINE.md](JAVA_BASELINE.md) fixes Migration Baseline v1 at `7b4027531c2b26062d0bfc27a040cc550cfbea4d`. | Not required. | None. | Baseline commit, governance, reference rules, and successor policy are recorded. | R0 |
+| BASE-02 | Accepted | Stable parity inventory | This matrix records 41 stable parity items without percentages and separates repository evidence from live/environment evidence. | Not required. | None; maintain the inventory as slices land and add successor items when scope changes materially. | Every claimed migration capability maps to a stable item with a gap and acceptance condition. | R0 |
+
+## R1 — SGF And Board Semantics
+
+`NodePath` means a zero-based child-index path from the SGF root: the root is `[]`, its first child is `[0]`, and that child's second child is `[0, 1]`. It is a location in the current tree, not a hash or permanent identity. A Rust wire DTO owns the definition and TypeScript copies it as `number[]`.
+
+| ID | Status | Capability | Current repository evidence | Current live/environment evidence | Remaining gap | Acceptance | Phase |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| SGF-01 | Accepted | Semantic SGF tree round-trip | `editable-workspace-branching.sgf`, `editable_workspace_open`, and `editable_workspace_roundtrip` cover sibling variations, setup, player-to-play, comments, pass, metadata, escaped values, and preserved unknown properties through parse/edit/serialize/reparse. | Not required. | None for the frozen R1 semantic set. | Cross-language fixtures cover the supported semantic set; parse → serialize → parse preserves tree meaning and unknown supported properties. | R1 |
+| SGF-02 | Accepted | Tree-shaped wire DTO and `NodePath` | `app-model` current-game wire tests define the complete tree, `NodePath`, generation, dirty/path, snapshots, mutation results, and typed errors; the TypeScript copy and frontend build consume the same shape. | Not required. | None. | `app-model` defines the Rust DTO first; the TypeScript copy represents every node and uses `NodePath` for selection and edits. | R1 |
+| SGF-03 | Accepted | Variation navigation | Ticket 03 navigation tests and parent/child/sibling controls bind board, move data, comments, and analysis cleanup to the selected `NodePath`. | Ticket 08 Case 2 navigated both siblings and parent/next-child memory with synchronized board, move number, next player, captures, and comments. | None. | A user can select a branch, move through parent/child/siblings, and see board, move number, comments, and analysis context follow the selected node. | R1 |
+| SGF-04 | Accepted | Board and branch editing | Tickets 04 and 06 cover legal move/pass insertion, existing-child selection, rejected edits without mutation, variation removal, and valid resulting paths; Ticket 07 covers semantic reopen. | Ticket 08 Cases 3 and 5 added a move, removed a sibling, recovered selection, and preserved the retained branch after reopen. | None. | Legal move/pass edits are applied by Rust SGF/Go domain logic, return a valid cursor path, and survive save/reopen. | R1 |
+| SGF-05 | Accepted | Personal comment editing and separation | Ticket 05 covers edit/clear/no-op comment behavior and keeps generated information outside the personal-comment field; Ticket 07 round-trips the retained comment. | Ticket 08 Cases 3 and 5 wrote and reopened `ticket-08 retained comment` on the retained branch. | None. | Personal comments can be edited and round-trip independently; generated information does not overwrite or serialize into the personal-comment field. | R1 |
+| SGF-06 | Accepted | Save the current edited game | Ticket 07 serializes the Rust-owned current tree and covers semantic reopen/write failure; Ticket 09 covers chosen/cancelled/denied/redirected Save As outcomes. | Ticket 08 Cases 4–5 passed cancel and Save As/reopen. Ticket 09 Case 6 passed on PID 73980: ACL rejection reported the original target, preserved prior path/dirty state, and wrote no redirected user-profile file. | None. | After navigation and edits, Save serializes the current tree; reopening reproduces the visible position, variations, setup, metadata, and comments. | R1 |
+| RULE-01 | Accepted | Go-rule behavior used by SGF editing | Focused `go-core` and editable-workspace tests cover setup, capture, occupied point, suicide, pass, and simple ko, and verify rejected edits leave the tree unchanged. | Not required. | None for the rules required by the frozen R1 fixtures. | Focused tests cover every rule required by the imported `#317` fixtures and reject illegal edits without mutating the tree. | R1 |
+
+## R2 — Core Desktop Review UI
+
+| ID | Status | Capability | Current repository evidence | Current live/environment evidence | Remaining gap | Acceptance | Phase |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| UI-01 | Partial | Baseline desktop chrome and review layout | React renders the workbench, board, analysis panel, win-rate chart, candidate list, and mini-board; [DESIGN.md](../DESIGN.md) records the intended visual system. | One same-state native screenshot set is still required. | The frozen Java reference has not been captured and compared under recorded display conditions. | Baseline and Next screenshots at the same state demonstrate the intended hierarchy and controls; deviations are recorded as deliberate Next decisions. | R2 |
+| UI-02 | Partial | Non-blocking board interaction | `BoardCanvas` emits point intent and the owning workspace applies it through Rust current-game mutation without blocking rendering. | Ticket 08 Case 3 exercised native pointer editing and visible mutation results. | Keyboard move intent and its focus contract remain incomplete. | Pointer/keyboard move intent updates the selected node without blocking rendering or engine events; illegal intent receives visible feedback. | R2 |
+| UI-03 | Partial | Candidate selection, hover intent, and stale eviction | Candidate rows are selectable by click and number keys; PV is shown on the mini-board. | Pending native desktop smoke with an engine. | Hover intent is absent and stale candidates can remain conceptually tied to an old node/job. | Hover previews a candidate without committing it; node/job changes remove stale hover and candidate state. | R2 |
+| UI-04 | Accepted | No-engine desktop workflow | The current-game workspace, navigation/edit/comment/removal commands, and authoritative Save paths do not require an engine profile or process. | Tickets 08–09 Cases 1–6 covered launch, open, inspect, edit, cancel, save, reopen, and failed Save As with `未加载引擎` while SGF controls remained usable. | None. | Native desktop smoke passes with no engine configured, and engine-only actions are unavailable or explanatory without blocking SGF work. | R2 |
+| UI-05 | Partial | Core review actions and shortcuts | Candidate number-key selection and some review controls exist. | Pending native desktop smoke. | Variation navigation/editing and the baseline review shortcuts are incomplete. | Each supported action has one visible control and the intended shortcut; unwired baseline actions are not claimed complete. | R2 |
+
+## R3 — Foreground Engine Lifecycle
+
+| ID | Status | Capability | Current repository evidence | Current live/environment evidence | Remaining gap | Acceptance | Phase |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ENG-01 | Accepted | Engine profiles and asset checks | Profiles persist binary/model/config/workdir/visits and required paths are checked. | Environment-dependent asset validity remains machine-specific. | No migration gap for profile storage itself. | Existing focused DTO, persistence, and asset-check evidence remains green while lifecycle work lands. | R3 |
+| ENG-02 | Missing | Foreground engine identity and lifecycle | Profile selection changes configuration only. | Pending real KataGo smoke. | There is no authoritative foreground process identity or lifecycle state. | `engine-manager` owns no-engine/starting/ready/stopping/error state and exposes a snapshot through Tauri commands/events. | R3 |
+| ENG-03 | Missing | Successful A → B foreground switch | Analysis commands consume profile configuration directly. | Pending two-profile KataGo smoke. | A new engine is not started and proven ready before becoming primary. | B is launched and handshaken before promotion; new jobs bind to B; A is stopped only after promotion. | R3 |
+| ENG-04 | Missing | Failed switch rollback and stale-token rejection | No switch transaction or switch token exists. | Pending failed-start and delayed-completion smoke. | A failed or late B start can not be modeled while preserving A as primary. | Failed B leaves A ready and primary; stale completions/events from superseded switches cannot change identity or UI state. | R3 |
+| ENG-05 | Partial | Cancellable one-shot analysis job | One-shot analysis exists, but cancellation is implemented for the full-game path rather than an authoritative one-shot job. | Pending real KataGo cancellation smoke. | One-shot work has no stable cancellable job lifecycle. | Starting, cancelling, completing, and superseding one-shot work use manager-owned job identity and never publish stale results. | R3 |
+
+## R4 — Analysis Workflows
+
+| ID | Status | Capability | Current repository evidence | Current live/environment evidence | Remaining gap | Acceptance | Phase |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ANA-01 | Partial | One-shot position analysis | KataGo JSONL request/response validation and UI result display are wired. | Pending controlled/real KataGo smoke after lifecycle cutover. | The request bypasses the final foreground lifecycle/job model. | The current node can be analyzed through the manager; result, typed error, cancellation, and stale-result behavior are observable. | R4 |
+| ANA-02 | Partial | Whole-game batch analysis | Full-game JSONL analysis, progress events, timeout/error propagation, and cancellation token exist. | Pending controlled/real KataGo smoke. | Session/request framing and navigation integration do not yet match the frozen behavior. | One session reports current request, completed/remaining work, error/cancel state, and node-linked results across the selected game scope. | R4 |
+| ANA-03 | Partial | Analysis cancellation and supersession | Full-game cancellation exists. | Pending native smoke. | Cancellation behavior is split across paths and UI state can outlive its engine/node context. | One-shot and whole-game jobs share manager-owned identity; cancellation and supersession stop publication of later stale events. | R4 |
+| ANA-04 | Partial | Candidate/PV/ownership/policy review | Candidate moves, PV, ownership, policy, problem markers, and mini-board data paths exist. | Pending native KataGo smoke. | Tree cursor, hover intent, and lifecycle binding are incomplete. | Results render only for their node/job; candidate selection and hover update the intended board/mini-board presentation. | R4 |
+| ANA-05 | Accepted | Analysis cache basics | SQLite cache, stable SGF cache keys, lookup/save/delete commands, and UI status integration exist. | Native app-data path remains part of desktop smoke. | Schema migration tests wait until the schema changes beyond the current MVP. | Existing cache behavior remains intact; node/tree semantics are incorporated before cached variation-aware analysis is claimed. | R4 |
+
+## R5 — Settings And Layout
+
+| ID | Status | Capability | Current repository evidence | Current live/environment evidence | Remaining gap | Acceptance | Phase |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| PREF-01 | Partial | Next-native settings | Engine profiles and selected preferences persist in app data. | Pending native restart smoke. | Java/Swing user-visible settings are not inventoried and mapped to deliberate Next equivalents. | Every supported setting has a Next owner, default, persistence behavior, and UI; Java configuration files are not imported unless separately approved. | R5 |
+| LAYOUT-01 | Missing | Draggable main-panel splitters | Layout uses fixed `228px` and `260px` rails. | Pending native pointer smoke. | Main panels cannot be resized. | Left/board/right proportions can be adjusted without hiding controls or shrinking the board below its supported minimum. | R5 |
+| LAYOUT-02 | Missing | Persisted layout proportions | No splitter preference exists. | Pending restart smoke. | Resized proportions are lost at restart. | Layout proportions persist through the preferences owner and restore on native relaunch. | R5 |
+| LAYOUT-03 | Missing | Narrow restore-layout-default action | No reset action exists. | Pending native smoke. | Reset semantics are undefined. | Restore Default resets only panel sizes/board proportion; it does not change panel visibility, window bounds, or unrelated settings. | R5 |
+
+## R6 — Game Modes
+
+| ID | Status | Capability | Current repository evidence | Current live/environment evidence | Remaining gap | Acceptance | Phase |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| GAME-01 | Missing | Engine-game session state | No Next engine-game state module exists. | Pending real-engine smoke. | Start/stop/pause/resume and authoritative status are absent. | An `engine-manager` internal module owns start, stop, pause, resume, and snapshot transitions with one current session. | R6 |
+| GAME-02 | Missing | Revisable batch limit | Full-game analysis has batch mechanics but not the frozen engine-game control behavior. | Pending real-engine smoke. | A running game session cannot revise its batch limit. | A supported limit change affects subsequent scheduling, is reflected in the session snapshot, and does not corrupt completed moves. | R6 |
+| GAME-03 | Missing | Game-mode board and comment integration | Review UI has no complete game-mode workflow. | Pending native real-engine smoke. | Game state, SGF tree, controls, and generated information are disconnected. | Engine moves update the Rust-owned game tree; pause/resume/stop remain coherent; generated game information stays separate from personal comments. | R6 |
+
+## R7 — Providers And readboard
+
+| ID | Status | Capability | Current repository evidence | Current live/environment evidence | Remaining gap | Acceptance | Phase |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| PROV-01 | Partial | Yike fetch and import | `provider_fetch_yike` returns normalized DTOs/errors and imported SGF can enter the active workspace. | Pending live Yike smoke. | External session/network behavior is unvalidated. | Offline contracts pass and a recorded live fetch/import covers success, expiry/auth failure, network failure, result count, and latency. | R7 |
+| PROV-02 | Partial | Fox fetch and import | `provider_fetch_fox` covers `chessid`, `uid`, and `user_name` command shapes and can import SGF. | Pending live Fox smoke. | External client/session behavior is unvalidated. | Offline contracts pass and recorded live smoke covers each supported lookup plus unavailable/expired/ambiguous/failure behavior. | R7 |
+| READ-01 | Partial | readboard sidecar readiness | `readboard_sidecar_probe` returns typed readiness/runtime outcomes. | Pending live sidecar smoke. | Real process/version/path/timeout behavior is unvalidated. | Repository tests pass and native smoke records ready, incompatible, unavailable, timeout, and restart behavior. | R7 |
+| READ-02 | Partial | readboard snapshot import | `readboard_sidecar_sync_snapshot` parses protocol-line snapshot data and the UI can preview it. | Pending live target smoke. | A synchronized snapshot is not imported into the Rust-owned active game tree. | A real snapshot updates the active workspace with correct coordinates, move state, and repeat-sync behavior after target or sidecar changes. | R7 |
+| READ-03 | Accepted | Explicit OCR limitation | Image-only sync returns a structured unsupported/not-implemented result when OCR is unavailable. | Live OCR smoke is not required until an OCR-capable runtime is supported. | None within current scope. | Product/docs do not claim image OCR; adding it requires a new parity item and environment evidence. | R7 |
+
+## R8 — Update, Packaging, And Release
+
+| ID | Status | Capability | Current repository evidence | Current live/environment evidence | Remaining gap | Acceptance | Phase |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| REL-01 | Partial | Release preflight and dry-run | Release asset/workflow validators and compile-oriented dry-run paths exist. | CI dry-run evidence is distinct from production publication. | Current evidence does not prove installable production assets. | Validators and dry-run pass for the release commit and their limitations remain explicit. | R8 |
+| REL-02 | Missing | Production signing and notarization | Workflow structure exists without production credentials. | Pending Windows/macOS release environment. | Signed Windows artifacts and macOS signing/notarization are unproven. | A tagged release produces signed/notarized artifacts with recorded CI evidence; unsigned builds remain labeled unsigned. | R8 |
+| REL-03 | Missing | Updater strategy and behavior | No completed production updater path is claimed. | Pending hosted update smoke. | Feed, signature, upgrade, rollback/failure UX, and version policy are not accepted. | A documented updater path installs a newer supported build and handles unavailable/invalid updates without damaging the installed app. | R8 |
+| REL-04 | Missing | Platform installer smoke | Packaging preflight exists. | Windows, macOS, and Linux install/launch/uninstall evidence is pending. | Compiled assets have not been exercised as installed products. | Each shipped platform artifact is installed, launched through the primary workflow, and removed or upgraded using the release checklist. | R8 |
+| REL-05 | Partial | Bundled runtime assets | Asset layout and checks exist for configured engine/model/config paths. | Pending packaged-app smoke. | Bundled KataGo/runtime resolution from installed application paths is unproven. | Packaged builds resolve their declared bundled assets and report missing/incompatible assets through the supported UI. | R8 |
