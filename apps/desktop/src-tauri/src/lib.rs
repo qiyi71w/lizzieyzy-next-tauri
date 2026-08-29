@@ -28,6 +28,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 mod current_game_state;
 mod save_as;
+#[cfg(windows)]
+extern crate windows_core;
 use current_game_state::CurrentGameState;
 use uuid::Uuid;
 

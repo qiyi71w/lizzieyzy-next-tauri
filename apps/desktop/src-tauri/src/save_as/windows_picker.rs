@@ -10,8 +10,8 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
 use windows::Win32::UI::Shell::{
-    FileSaveDialog, IFileDialog, IFileDialogEvents, IFileSaveDialog, IShellItem, FDEOR_DEFAULT,
-    FDESVR_DEFAULT, FDE_OVERWRITE_RESPONSE, FDE_SHAREVIOLATION_RESPONSE, FOS_FORCEFILESYSTEM,
+    FileSaveDialog, IFileDialog, IFileDialogEvents, IFileDialogEvents_Impl, IFileSaveDialog, IShellItem,
+    FDEOR_DEFAULT, FDESVR_DEFAULT, FDE_OVERWRITE_RESPONSE, FDE_SHAREVIOLATION_RESPONSE, FOS_FORCEFILESYSTEM,
     FOS_OVERWRITEPROMPT, SIGDN_FILESYSPATH,
 };
 
