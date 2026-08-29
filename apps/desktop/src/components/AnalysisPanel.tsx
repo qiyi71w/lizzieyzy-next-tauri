@@ -13,6 +13,9 @@ type Props = {
   currentMove: number;
   currentPosition?: PositionDto;
   personalComment?: string;
+  generatedInformation?: string | null;
+  commentEditorEnabled?: boolean;
+  onCommitPersonalComment?: (comment: string) => void;
   selectedCandidateIndex: number | null;
   onSelectCandidate: (index: number) => void;
   onSelectProblem: (moveNumber: number) => void;
@@ -34,12 +37,19 @@ export function AnalysisPanel({
   currentMove,
   currentPosition,
   personalComment = "",
+  generatedInformation = null,
+  commentEditorEnabled = false,
+  onCommitPersonalComment,
   selectedCandidateIndex,
   onSelectCandidate,
   onSelectProblem,
   pane = "commentary"
 }: Props) {
   const [leftTab, setLeftTab] = useState<"commentary" | "problems">("commentary");
+  const [commentDraft, setCommentDraft] = useState(personalComment);
+  useEffect(() => {
+    setCommentDraft(personalComment);
+  }, [personalComment]);
   const hasOwnership = (frame?.ownership?.length ?? 0) >= boardSize * boardSize;
 
   const candidates = frame?.candidates ?? [];
@@ -182,7 +192,25 @@ export function AnalysisPanel({
                   {" · "}下一手 {nextPlayerLabel(currentPosition)}
                   {" · "}提子 黑 {currentPosition?.captures_black ?? 0} 白 {currentPosition?.captures_white ?? 0}
                 </p>
-                {personalComment ? <p className="personal-comment">{personalComment}</p> : null}
+                {commentEditorEnabled ? (
+                  <label className="personal-comment-editor-label">
+                    个人评论
+                    <textarea
+                      className="personal-comment-editor"
+                      value={commentDraft}
+                      onChange={(event) => setCommentDraft(event.target.value)}
+                      onBlur={() => onCommitPersonalComment?.(commentDraft)}
+                      spellCheck={false}
+                      aria-label="个人评论"
+                      placeholder="为当前选中节点写下个人评论"
+                    />
+                  </label>
+                ) : personalComment ? (
+                  <p className="personal-comment">{personalComment}</p>
+                ) : null}
+                {generatedInformation ? (
+                  <p className="generated-information">{generatedInformation}</p>
+                ) : null}
               </div>
               {frame ? (
                 <div className="commentary-metrics">

@@ -55,6 +55,17 @@ impl CurrentGameState {
         self.holder.lock().expect("current game state").select_path(path)
     }
 
+    pub fn set_personal_comment(
+        &self,
+        path: NodePath,
+        comment: String,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.holder
+            .lock()
+            .expect("current game state")
+            .set_personal_comment(path, &comment)
+    }
+
     fn with_document<T>(
         &self,
         f: impl FnOnce(&CurrentSgfDocument) -> Result<T, CurrentGameError>,
@@ -115,6 +126,32 @@ impl CurrentGameHolder {
         let snapshot = document.snapshot(&path)?;
         Ok(CurrentGameResultDto {
             tree: document.tree()?,
+            selected_path: path,
+            snapshot,
+            generation: self.generation,
+            dirty: self.dirty,
+            native_path: self.native_path.clone(),
+        })
+    }
+
+    fn set_personal_comment(
+        &mut self,
+        path: NodePath,
+        comment: &str,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let (snapshot, tree, changed) = {
+            let document = self.document.as_mut().ok_or_else(no_current_game)?;
+            let before = document.serialize()?;
+            let snapshot = document.set_personal_comment(&path, comment)?;
+            let changed = document.serialize()? != before;
+            (snapshot, document.tree()?, changed)
+        };
+        if changed {
+            self.generation += 1;
+            self.dirty = true;
+        }
+        Ok(CurrentGameResultDto {
+            tree,
             selected_path: path,
             snapshot,
             generation: self.generation,
@@ -243,5 +280,100 @@ impl CurrentGameState {
 
     fn inspect(&self) -> (u64, bool, Option<String>, Option<String>) {
         self.holder.lock().expect("current game state").snapshot_state()
+    }
+}
+
+#[cfg(test)]
+mod current_game_comment_edit {
+    use super::*;
+    use app_model::{CurrentGameErrorKind, NodePath};
+
+    const BRANCHING: &str = include_str!("../../../../tests/golden/editable-workspace-branching.sgf");
+
+    #[test]
+    fn current_game_comment_edit_marks_dirty_and_leaves_noop_unchanged() {
+        let state = CurrentGameState::default();
+        let opened = state
+            .replace(BRANCHING, Some("/tmp/branching.sgf".to_string()))
+            .unwrap();
+        let root = NodePath { indices: Vec::new() };
+        let move_node = NodePath { indices: vec![0] };
+        let second_sibling = NodePath { indices: vec![0, 1] };
+
+        let edited = state
+            .set_personal_comment(second_sibling.clone(), "sibling edited".to_string())
+            .unwrap();
+        assert_eq!(edited.selected_path.indices, second_sibling.indices);
+        assert_eq!(edited.snapshot.path.indices, second_sibling.indices);
+        assert_eq!(edited.snapshot.personal_comment, "sibling edited");
+        assert!(edited.snapshot.generated_information.is_none());
+        assert_eq!(edited.generation, opened.generation + 1);
+        assert!(edited.dirty);
+        assert_eq!(edited.native_path, opened.native_path);
+        assert!(state.serialize().unwrap().contains("C[sibling edited]"));
+        assert_eq!(
+            state.mainline_projection().unwrap().moves.len(),
+            opened.snapshot.position.move_number as usize
+        );
+
+        let before_noop = state.inspect();
+        let serialized = state.serialize().unwrap();
+        let projection = state.mainline_projection().unwrap();
+        let noop = state
+            .set_personal_comment(second_sibling.clone(), "sibling edited".to_string())
+            .unwrap();
+        assert_eq!(noop.generation, edited.generation);
+        assert_eq!(noop.dirty, edited.dirty);
+        assert_eq!(noop.snapshot.personal_comment, "sibling edited");
+        assert_eq!(state.inspect(), before_noop);
+        assert_eq!(state.serialize().unwrap(), serialized);
+        assert_eq!(state.mainline_projection().unwrap().moves, projection.moves);
+
+        let root_edit = state
+            .set_personal_comment(root.clone(), "root edited".to_string())
+            .unwrap();
+        assert_eq!(root_edit.selected_path.indices, root.indices);
+        assert_eq!(root_edit.snapshot.personal_comment, "root edited");
+        assert_eq!(root_edit.generation, edited.generation + 1);
+        assert!(root_edit.dirty);
+
+        let move_edit = state
+            .set_personal_comment(move_node.clone(), "".to_string())
+            .unwrap();
+        assert_eq!(move_edit.selected_path.indices, move_node.indices);
+        assert_eq!(move_edit.snapshot.personal_comment, "");
+        assert_eq!(move_edit.generation, root_edit.generation + 1);
+
+        let before_invalid = state.inspect();
+        let error = state
+            .set_personal_comment(NodePath { indices: vec![9] }, "nope".to_string())
+            .unwrap_err();
+        assert_eq!(error.kind, CurrentGameErrorKind::InvalidNodePath);
+        assert_eq!(state.inspect(), before_invalid);
+    }
+
+    #[test]
+    fn current_game_comment_edit_preserves_loaded_empty_comment_on_empty_submit() {
+        let state = CurrentGameState::default();
+        let opened = state.replace("(;GM[1]FF[4]SZ[5]C[])", None).unwrap();
+        let root = NodePath { indices: Vec::new() };
+        assert_eq!(opened.snapshot.personal_comment, "");
+        let before = state.inspect();
+        let serialized = state.serialize().unwrap();
+        let noop = state.set_personal_comment(root, "".to_string()).unwrap();
+        assert_eq!(noop.generation, opened.generation);
+        assert!(!noop.dirty);
+        assert_eq!(noop.snapshot.personal_comment, "");
+        assert_eq!(state.inspect(), before);
+        assert_eq!(state.serialize().unwrap(), serialized);
+    }
+
+    #[test]
+    fn current_game_comment_edit_reports_no_current_game() {
+        let state = CurrentGameState::default();
+        let error = state
+            .set_personal_comment(NodePath { indices: Vec::new() }, "note".to_string())
+            .unwrap_err();
+        assert_eq!(error.kind, CurrentGameErrorKind::NoCurrentGame);
     }
 }

@@ -1155,6 +1155,32 @@ textarea {
   color: var(--hud-text-muted);
 }
 
+.personal-comment-editor-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  color: var(--hud-text-muted);
+  font-size: 12px;
+}
+
+.personal-comment-editor {
+  min-height: 72px;
+  resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid var(--hud-border, #2c313a);
+  border-radius: 4px;
+  background: #12141a;
+  color: var(--hud-text, #e5e7eb);
+  font: inherit;
+}
+
+.generated-information {
+  margin-top: 8px;
+  color: var(--hud-text-muted);
+  font-size: 12px;
+}
+
 .nav-to-play {
   margin-left: 8px;
   font-size: 12px;
