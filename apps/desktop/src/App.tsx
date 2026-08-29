@@ -35,6 +35,11 @@ import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, select
 import type { AnalysisCacheRecord, CacheStatus, GameCacheKey, JsonValue } from "./domain/cache";
 import { defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "./domain/preferences";
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
+import {
+  createLocalRequestToken,
+  shouldPublishReviewPresentation,
+  type ReviewPresentationScope
+} from "./domain/reviewPresentation";
 import type { AnalysisFrameDto, AppHealthDto, CurrentGameResultDto, EngineProfileDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, SgfTreeNodeDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
@@ -47,7 +52,7 @@ type PendingAnalysisTerminalEvent =
 type CacheEngineKind = "fake" | "katago";
 type CachedAnalysisPayload = { frames: AnalysisFrameDto[]; problems: ProblemMarkerDto[] };
 type PendingPreferencesSave = { version: number; preferences: AppPreferences };
-type CandidatePreview = { index: number; scope: object };
+type CandidatePreview = { index: number; scope: ReviewPresentationScope };
 type AnalysisCacheLoadResult =
   | { status: "hit"; record: AnalysisCacheRecord; engineKind: CacheEngineKind }
   | { status: "miss" }
@@ -98,6 +103,10 @@ export function App() {
   const [autoPlaying, setAutoPlaying] = useState(false);
   const jumpRef = useRef<HTMLInputElement | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
+  const requestSerialRef = useRef(0);
+  const [activeRequestToken, setActiveRequestToken] = useState("idle:0");
+  const activeRequestTokenRef = useRef("idle:0");
+  const [publishedScope, setPublishedScope] = useState<ReviewPresentationScope | null>(null);
   const startingAnalysisRef = useRef(false);
   const userChangedPreferencesRef = useRef(false);
   const preferencesSaveInFlightRef = useRef(false);
@@ -144,8 +153,6 @@ export function App() {
     return () => cleanupAnalysisListeners();
   }, []);
 
-  const currentFrame = useMemo(() => frames.find((f) => f.turn === currentMove) ?? frames.at(-1), [frames, currentMove]);
-  const visibleCurrentFrame = useMemo(() => applyPreferencesToFrame(currentFrame, preferences), [currentFrame, preferences]);
   const currentPosition = useMemo(() => {
     if (currentGame) return currentGame.snapshot.position;
     return selectExactPosition(positions, currentMove, game.summary.board_size);
@@ -156,11 +163,22 @@ export function App() {
   const selectedPath = currentGame?.selected_path ?? { indices: [] };
   const selectedNode = currentGame ? nodeAt(currentGame.tree, selectedPath) : null;
   const selectedPathKey = selectedPath.indices.join(".");
-  const candidatePreviewScope = useMemo<object>(
-    () => ({}),
-    [currentGame?.generation, selectedPathKey, activeJobId, currentFrame]
-  );
-  const previewCandidateIndex = candidatePreview?.scope === candidatePreviewScope ? candidatePreview.index : null;
+  const activeScope = useMemo<ReviewPresentationScope>(() => ({
+    generation: currentGame?.generation ?? 0,
+    selectedPath: selectedPath.indices,
+    requestToken: activeRequestToken
+  }), [currentGame?.generation, selectedPathKey, activeRequestToken]);
+  const presentationLive = publishedScope !== null && shouldPublishReviewPresentation(activeScope, publishedScope);
+  const currentFrame = useMemo(() => {
+    if (!presentationLive) return undefined;
+    return frames.find((f) => f.turn === currentMove) ?? frames.at(-1);
+  }, [presentationLive, frames, currentMove]);
+  const visibleCurrentFrame = useMemo(() => applyPreferencesToFrame(currentFrame, preferences), [currentFrame, preferences]);
+  const previewCandidateIndex = candidatePreview
+    && presentationLive
+    && shouldPublishReviewPresentation(activeScope, candidatePreview.scope)
+    ? candidatePreview.index
+    : null;
   const parentOfSelected = parentPath(selectedPath);
   const parentNode = currentGame && parentOfSelected ? nodeAt(currentGame.tree, parentOfSelected) : null;
   const siblingIndex = selectedPath.indices.at(-1);
@@ -181,9 +199,6 @@ export function App() {
   const saveFileName = documentName.toLowerCase().endsWith(".sgf") ? documentName : `${documentName}.sgf`;
 
 
-  useEffect(() => {
-    setCandidatePreview(null);
-  }, [candidatePreviewScope]);
   useEffect(() => {
     setSelectedCandidateIndex(null);
   }, [currentMove]);
@@ -326,6 +341,51 @@ export function App() {
     return documentGenerationRef.current === capturedGeneration;
   }
 
+  function activeScopeFromRefs(): ReviewPresentationScope {
+    return {
+      generation: documentGenerationRef.current,
+      selectedPath: currentGameRef.current?.selected_path.indices ?? [],
+      requestToken: activeRequestTokenRef.current
+    };
+  }
+
+  function beginReviewRequest(requestToken?: string): ReviewPresentationScope {
+    const token = requestToken ?? createLocalRequestToken(() => {
+      requestSerialRef.current += 1;
+      return requestSerialRef.current;
+    });
+    activeRequestTokenRef.current = token;
+    setActiveRequestToken(token);
+    clearReviewData();
+    return {
+      generation: documentGenerationRef.current,
+      selectedPath: [...(currentGameRef.current?.selected_path.indices ?? [])],
+      requestToken: token
+    };
+  }
+
+  function adoptRequestToken(captured: ReviewPresentationScope, requestToken: string): ReviewPresentationScope {
+    if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) return captured;
+    const next = { ...captured, requestToken };
+    activeRequestTokenRef.current = requestToken;
+    setActiveRequestToken(requestToken);
+    return next;
+  }
+
+  function publishReviewPresentation(
+    captured: ReviewPresentationScope,
+    nextFrames: AnalysisFrameDto[],
+    nextProblems: ProblemMarkerDto[]
+  ): boolean {
+    if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) return false;
+    setPublishedScope(captured);
+    setFrames(nextFrames);
+    setProblems(nextProblems);
+    setSelectedCandidateIndex(null);
+    setCandidatePreview(null);
+    return true;
+  }
+
   async function artifactsFromCurrentGame(): Promise<{ serialized: string; projection: GameDto }> {
     const [serialized, projection] = await Promise.all([serializeCurrentGame(), projectCurrentGameMainline()]);
     return { serialized, projection };
@@ -464,35 +524,27 @@ export function App() {
   }
 
   async function handleFakeAnalyze() {
-    const capturedGeneration = documentGenerationRef.current;
+    const captured = beginReviewRequest();
     try {
       if (!nativeRuntime) {
         const [parsed, result, replayed] = await Promise.all([parseSgfSummary(sgfText), fakeAnalyze(sgfText), replaySgfPositions(sgfText)]);
         const classified = await classifyProblems(result);
-        if (documentGenerationRef.current !== capturedGeneration) return;
+        if (!publishReviewPresentation(captured, result, classified)) return;
         setGame(parsed);
         setPositions(replayed);
-        setFrames(result);
-        setProblems(classified);
         setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
-        setSelectedCandidateIndex(null);
         const cacheMessage = await saveAnalysisCacheForGame(sgfText, currentFilePath, parsed, result, classified, "fake");
-        if (documentGenerationRef.current !== capturedGeneration) return;
+        if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) return;
         setMessage(`${nativeCurrentGameUnavailable} 已生成 ${result.length} 个预览复盘局面。${cacheMessage}`);
         return;
       }
       const artifacts = await artifactsFromCurrentGame();
-      const generation = currentGameRef.current?.generation ?? 0;
       const result = await fakeAnalyze(artifacts.serialized);
-      if (!isCurrentDocumentGeneration(generation)) return;
       const classified = await classifyProblems(result);
-      if (documentGenerationRef.current !== capturedGeneration) return;
+      if (!publishReviewPresentation(captured, result, classified)) return;
       setGame(artifacts.projection);
-      setFrames(result);
-      setProblems(classified);
-      setSelectedCandidateIndex(null);
       const cacheMessage = await saveAnalysisCacheForGame(artifacts.serialized, documentPath, artifacts.projection, result, classified, "fake");
-      if (documentGenerationRef.current !== capturedGeneration) return;
+      if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) return;
       setMessage(`已生成 ${result.length} 个复盘局面，含候选与胜率。${cacheMessage}`);
     } catch (error) {
       setMessage(errorMessage(error));
@@ -500,7 +552,7 @@ export function App() {
   }
 
   async function handleRunKataGo(profile: EngineProfileDto, maxVisits: number) {
-    const capturedGeneration = documentGenerationRef.current;
+    const captured = beginReviewRequest();
     const targetTurn = currentMove;
     const visits = resolveAnalysisMaxVisits(maxVisits, preferences);
     setIsKataGoRunning(true);
@@ -514,18 +566,13 @@ export function App() {
       const turn = nativeRuntime
         ? (currentGameRef.current?.snapshot.position.move_number ?? Math.min(targetTurn, artifacts.projection.moves.length))
         : clampMoveNumberToPositions(replayed, Math.min(targetTurn, replayed.at(-1)?.move_number ?? artifacts.projection.moves.length));
-      const generation = currentGameRef.current?.generation ?? 0;
       const frame = await analyzeKataGoOnce(profile, artifacts.serialized, turn, visits);
-      if (documentGenerationRef.current !== capturedGeneration) return;
-      const mergedFrames = mergeAnalysisFrame(frames, frame);
+      const mergedFrames = mergeAnalysisFrame([], frame);
       const classified = await classifyProblems(mergedFrames);
-      if (documentGenerationRef.current !== capturedGeneration) return;
+      if (!publishReviewPresentation(captured, mergedFrames, classified)) return;
       setGame(artifacts.projection);
       if (!nativeRuntime) setPositions(replayed);
-      setFrames(mergedFrames);
-      setProblems(classified);
       setCurrentMove(frame.turn);
-      setSelectedCandidateIndex(null);
       setMessage(`KataGo analysis completed for move ${frame.turn} with ${frame.visits} visits.`);
     } catch (error) {
       setMessage(`KataGo analysis failed: ${errorMessage(error)}`);
@@ -537,7 +584,8 @@ export function App() {
   async function handleAnalyzeKataGoGame(profile: EngineProfileDto, maxVisits: number) {
     if (activeJobIdRef.current || startingAnalysisRef.current) return;
     const visits = resolveAnalysisMaxVisits(maxVisits, preferences);
-    const capturedGeneration = documentGenerationRef.current;
+    let captured = beginReviewRequest();
+    const capturedGeneration = captured.generation;
     startingAnalysisRef.current = true;
     pendingAnalysisProgressRef.current.clear();
     pendingAnalysisTerminalEventsRef.current.clear();
@@ -582,11 +630,11 @@ export function App() {
             pendingAnalysisTerminalEventsRef.current.set(payload.job_id, { kind: "complete", frames: payload.frames });
             return;
           }
-          if (!isCurrentAnalysisJob(payload.job_id) || !isCurrentDocumentGeneration(capturedGeneration)) {
+          if (!isCurrentAnalysisJob(payload.job_id) || !shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) {
             if (isCurrentAnalysisJob(payload.job_id)) finishStoppedAnalysis(payload.job_id);
             return;
           }
-          void finishCompletedAnalysis(payload.job_id, payload.frames, parsed, replayed, capturedGeneration);
+          void finishCompletedAnalysis(payload.job_id, payload.frames, parsed, replayed, captured);
         },
         onError: (payload) => {
           if (startingAnalysisRef.current && activeJobIdRef.current === null) {
@@ -611,13 +659,14 @@ export function App() {
       cleanupAnalysisListeners();
       analysisCleanupRef.current = cleanup;
       const jobId = await startKataGoGameAnalysis(profile, artifacts.serialized, visits);
+      captured = adoptRequestToken(captured, jobId);
       const pendingTerminalEvent = pendingAnalysisTerminalEventsRef.current.get(jobId);
       const pendingProgress = pendingAnalysisProgressRef.current.get(jobId);
       startingAnalysisRef.current = false;
       pendingAnalysisProgressRef.current.clear();
       pendingAnalysisTerminalEventsRef.current.clear();
       if (pendingTerminalEvent) {
-        await finishPendingAnalysisTerminalEvent(jobId, pendingTerminalEvent, parsed, replayed, capturedGeneration);
+        await finishPendingAnalysisTerminalEvent(jobId, pendingTerminalEvent, parsed, replayed, captured);
         return;
       }
       activeJobIdRef.current = jobId;
@@ -880,13 +929,13 @@ export function App() {
     return activeJobIdRef.current === jobId;
   }
 
-  async function finishPendingAnalysisTerminalEvent(jobId: string, event: PendingAnalysisTerminalEvent, parsed: GameDto, replayed: PositionDto[], capturedGeneration: number) {
+  async function finishPendingAnalysisTerminalEvent(jobId: string, event: PendingAnalysisTerminalEvent, parsed: GameDto, replayed: PositionDto[], captured: ReviewPresentationScope) {
     if (event.kind === "complete") {
-      if (!isCurrentDocumentGeneration(capturedGeneration)) {
+      if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) {
         finishStoppedAnalysis(jobId);
         return;
       }
-      await finishCompletedAnalysis(jobId, event.frames, parsed, replayed, capturedGeneration);
+      await finishCompletedAnalysis(jobId, event.frames, parsed, replayed, captured);
       return;
     }
     finishStoppedAnalysis(jobId);
@@ -896,8 +945,8 @@ export function App() {
       : event.message || "Full-game KataGo analysis cancelled.");
   }
 
-  async function finishCompletedAnalysis(jobId: string, result: AnalysisFrameDto[], parsed: GameDto, replayed: PositionDto[], capturedGeneration: number) {
-    if (documentGenerationRef.current !== capturedGeneration) {
+  async function finishCompletedAnalysis(jobId: string, result: AnalysisFrameDto[], parsed: GameDto, replayed: PositionDto[], captured: ReviewPresentationScope) {
+    if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) {
       finishStoppedAnalysis(jobId);
       return;
     }
@@ -906,22 +955,19 @@ export function App() {
       ? (currentGameRef.current?.snapshot.position.move_number ?? lastAnalyzedMove)
       : clampMoveNumberToPositions(replayed, lastAnalyzedMove);
     const classified = await classifyProblems(result);
-    if (documentGenerationRef.current !== capturedGeneration) {
+    if (!publishReviewPresentation(captured, result, classified)) {
       finishStoppedAnalysis(jobId);
       return;
     }
     setGame(parsed);
     if (!nativeRuntime) setPositions(replayed);
-    setFrames(result);
-    setProblems(classified);
     setCurrentMove(shownMove);
-    setSelectedCandidateIndex(null);
     setAnalysisProgress((progress) => progress ? { ...progress, completed: progress.expected || result.length, expected: progress.expected || result.length } : progress);
     finishStoppedAnalysis(jobId);
     const serialized = nativeRuntime ? await serializeCurrentGame() : sgfText;
-    if (documentGenerationRef.current !== capturedGeneration) return;
+    if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) return;
     const cacheMessage = await saveAnalysisCacheForGame(serialized, documentPath, parsed, result, classified, "katago");
-    if (documentGenerationRef.current !== capturedGeneration) return;
+    if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) return;
     setMessage(`Full-game KataGo analysis completed with ${result.length} frames. Showing move ${shownMove}.${cacheMessage}`);
   }
 
@@ -934,7 +980,7 @@ export function App() {
   }
 
   async function checkAnalysisCacheForGame(text: string, filePath: string | null, parsed: GameDto, baseMessage: string) {
-    const capturedGeneration = documentGenerationRef.current;
+    const captured = beginReviewRequest();
     if (!preferences.autoLoadCache) {
       resetAnalysisCacheState();
       setMessage(`${baseMessage} Cache auto-load is off.`);
@@ -956,13 +1002,10 @@ export function App() {
           setMessage(`${baseMessage} ${cacheEngineLabel(lookup.engineKind)} cache hit, but the payload could not be restored.`);
           return;
         }
-        if (documentGenerationRef.current !== capturedGeneration) return;
-        setFrames(payload.frames);
-        setProblems(payload.problems);
+        if (!publishReviewPresentation(captured, payload.frames, payload.problems)) return;
         setCurrentMove(nativeRuntime
           ? (currentGameRef.current?.snapshot.position.move_number ?? payload.frames.at(-1)?.turn ?? parsed.moves.length)
           : clampMoveNumberToPositions(positions, payload.frames.at(-1)?.turn ?? parsed.moves.length));
-        setSelectedCandidateIndex(null);
         setCacheStatus("hit");
         setCacheRecord(lookup.record);
         setMessage(`${baseMessage} Restored ${payload.frames.length} cached ${cacheEngineLabel(lookup.engineKind)} review frames.`);
@@ -1051,7 +1094,7 @@ export function App() {
   }
 
   function previewCandidate(index: number | null) {
-    setCandidatePreview(index === null ? null : { index, scope: candidatePreviewScope });
+    setCandidatePreview(index === null ? null : { index, scope: activeScope });
   }
 
   function selectCandidate(index: number) {
@@ -1063,6 +1106,8 @@ export function App() {
     setFrames([]);
     setProblems([]);
     setSelectedCandidateIndex(null);
+    setCandidatePreview(null);
+    setPublishedScope(null);
     setAnalysisProgress(null);
     setCacheRecord(null);
   }
@@ -1153,7 +1198,7 @@ export function App() {
           position={currentPosition}
           analysis={visibleCurrentFrame}
           selectedCandidateIndex={selectedCandidateIndex}
-          previewScope={candidatePreviewScope}
+          previewScope={activeScope}
           onCandidatePreview={previewCandidate}
           moves={game.moves}
           showCoordinates={showCoordinates}
