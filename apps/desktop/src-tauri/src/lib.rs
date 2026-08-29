@@ -1,9 +1,9 @@
 use app_model::{
-    AnalysisFrameDto, AppHealthDto, CandidateMoveDto, EngineBackend, EngineProfileDto, MoveVertex, PointDto,
-    PositionDto, ProviderError, ProviderErrorKind, ProviderFetchMethod, ProviderFetchRequest,
-    ProviderFetchResult, ProviderGameMetadata, ProviderImportRequest, ProviderImportResult, ProviderKind,
-    ReadboardSidecarProbeRequest, ReadboardSidecarProbeResult, ReadboardSidecarSyncSnapshotRequest,
-    ReadboardSidecarSyncSnapshotResult,
+    AnalysisFrameDto, AppHealthDto, CandidateMoveDto, CurrentGameError, CurrentGameResultDto, EngineBackend,
+    EngineProfileDto, MoveVertex, PointDto, PositionDto, ProviderError, ProviderErrorKind,
+    ProviderFetchMethod, ProviderFetchRequest, ProviderFetchResult, ProviderGameMetadata,
+    ProviderImportRequest, ProviderImportResult, ProviderKind, ReadboardSidecarProbeRequest,
+    ReadboardSidecarProbeResult, ReadboardSidecarSyncSnapshotRequest, ReadboardSidecarSyncSnapshotResult,
 };
 use engine_manager::{
     build_command_spec, check_assets, AnalysisBatchRunOptions, AnalysisCancelToken, AssetCheck, CommandSpec,
@@ -25,6 +25,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
+
+mod current_game_state;
+use current_game_state::CurrentGameState;
 use uuid::Uuid;
 
 const ENGINE_PROFILE_FILE: &str = "lizzieyzy-next-engine-profile.json";
@@ -459,6 +462,15 @@ fn write_sgf_file(path: String, sgf_text: String) -> Result<(), String> {
     let path = non_empty_path(path)?;
     sgf::parse_sgf(&sgf_text).map_err(|err| format!("failed to parse SGF text: {err}"))?;
     fs::write(&path, sgf_text).map_err(|err| format!("failed to write SGF file {}: {err}", path.display()))
+}
+
+#[tauri::command]
+fn replace_current_game(
+    state: State<CurrentGameState>,
+    sgf_text: String,
+    native_path: Option<String>,
+) -> Result<CurrentGameResultDto, CurrentGameError> {
+    state.replace(&sgf_text, native_path)
 }
 
 #[tauri::command]
@@ -1913,6 +1925,7 @@ fn demo_candidates(turn: u32, board_size: u8) -> Vec<CandidateMoveDto> {
 pub fn run() {
     tauri::Builder::default()
         .manage(AnalysisJobRegistry::default())
+        .manage(CurrentGameState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
@@ -1926,6 +1939,7 @@ pub fn run() {
             readboard_sidecar_sync_snapshot,
             replay_sgf_positions,
             read_sgf_file,
+            replace_current_game,
             write_sgf_file,
             fake_analyze,
             classify_problems,

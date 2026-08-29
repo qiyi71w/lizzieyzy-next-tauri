@@ -12,6 +12,7 @@ type Props = {
   boardSize: number;
   currentMove: number;
   currentPosition?: PositionDto;
+  personalComment?: string;
   selectedCandidateIndex: number | null;
   onSelectCandidate: (index: number) => void;
   onSelectProblem: (moveNumber: number) => void;
@@ -32,6 +33,7 @@ export function AnalysisPanel({
   boardSize,
   currentMove,
   currentPosition,
+  personalComment = "",
   selectedCandidateIndex,
   onSelectCandidate,
   onSelectProblem,
@@ -173,6 +175,14 @@ export function AnalysisPanel({
         <div className="hud-tab-content">
           {leftTab === "commentary" ? (
             <div className="commentary-body">
+              <div className="selected-node-facts">
+                <p>
+                  手数 {currentPosition?.move_number ?? currentMove}
+                  {" · "}上一手 {lastMoveLabel(currentPosition, boardSize)}
+                  {" · "}下一手 {nextPlayerLabel(currentPosition)}
+                </p>
+                {personalComment ? <p className="personal-comment">{personalComment}</p> : null}
+              </div>
               {frame ? (
                 <div className="commentary-metrics">
                   <p className="commentary-text">
@@ -339,4 +349,17 @@ function SubBoardCanvas({
   }, [boardSize, position, candidate]);
 
   return <canvas ref={canvasRef} className="subboard-canvas" aria-label="参考图变化副棋盘" />;
+}
+
+function lastMoveLabel(position: PositionDto | undefined, boardSize: number): string {
+  const last = position?.last_move;
+  if (!last) return "无";
+  const color = last.color === "black" ? "黑" : "白";
+  if (!isPoint(last.vertex)) return `${color} 虚手`;
+  return `${color} ${vertexLabel(last.vertex, boardSize)}`;
+}
+
+function nextPlayerLabel(position: PositionDto | undefined): string {
+  if (!position) return "—";
+  return position.to_play === "black" ? "黑" : "白";
 }

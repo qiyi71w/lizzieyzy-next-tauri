@@ -78,6 +78,70 @@ pub struct GameDto {
     pub moves: Vec<MoveDto>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct NodePath {
+    pub indices: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SgfPropertyDto {
+    pub key: String,
+    pub values: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SgfTreeNodeDto {
+    pub properties: Vec<SgfPropertyDto>,
+    pub children: Vec<SgfTreeNodeDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SelectedNodeSnapshotDto {
+    pub path: NodePath,
+    pub position: PositionDto,
+    pub personal_comment: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated_information: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CurrentGameResultDto {
+    pub tree: SgfTreeNodeDto,
+    pub selected_path: NodePath,
+    pub snapshot: SelectedNodeSnapshotDto,
+    pub generation: u64,
+    pub dirty: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CurrentGameError {
+    pub kind: CurrentGameErrorKind,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CurrentGameErrorKind {
+    NoCurrentGame,
+    InvalidNodePath,
+    MalformedSgf,
+    UnsupportedBoardSize,
+    OccupiedPoint,
+    Suicide,
+    SimpleKo,
+    RootRemoval,
+}
+
+impl std::fmt::Display for CurrentGameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for CurrentGameError {}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CandidateMoveDto {
     pub vertex: MoveVertex,
@@ -426,5 +490,104 @@ mod provider_tests {
         assert_eq!(json["snapshot_id"], "snapshot-1");
         assert_eq!(json["image_path"], "/tmp/board.png");
         assert_eq!(json["timeout_ms"], 250);
+    }
+}
+
+#[cfg(test)]
+mod current_game_wire {
+    use super::*;
+
+    #[test]
+    fn current_game_wire_tree_path_snapshot_and_result_use_snake_case() {
+        let result = CurrentGameResultDto {
+            tree: SgfTreeNodeDto {
+                properties: vec![SgfPropertyDto {
+                    key: "C".to_string(),
+                    values: vec!["root personal".to_string()],
+                }],
+                children: vec![SgfTreeNodeDto {
+                    properties: vec![SgfPropertyDto {
+                        key: "W".to_string(),
+                        values: vec!["dd".to_string()],
+                    }],
+                    children: Vec::new(),
+                }],
+            },
+            selected_path: NodePath {
+                indices: vec![0, 0, 0],
+            },
+            snapshot: SelectedNodeSnapshotDto {
+                path: NodePath {
+                    indices: vec![0, 0, 0],
+                },
+                position: PositionDto {
+                    board_size: 5,
+                    move_number: 3,
+                    to_play: PlayerColor::Black,
+                    stones: vec![StoneDto {
+                        x: 0,
+                        y: 0,
+                        color: PlayerColor::Black,
+                    }],
+                    captures_black: 0,
+                    captures_white: 1,
+                    last_move: Some(MoveDto {
+                        color: PlayerColor::White,
+                        vertex: MoveVertex::Pass,
+                        move_number: 3,
+                    }),
+                    errors: Vec::new(),
+                },
+                personal_comment: "mainline pass".to_string(),
+                generated_information: None,
+            },
+            generation: 1,
+            dirty: false,
+            native_path: Some("/tmp/game.sgf".to_string()),
+        };
+
+        let json = serde_json::to_value(&result).unwrap();
+        let decoded: CurrentGameResultDto = serde_json::from_value(json.clone()).unwrap();
+
+        assert_eq!(json["selected_path"]["indices"], serde_json::json!([0, 0, 0]));
+        assert_eq!(json["snapshot"]["personal_comment"], "mainline pass");
+        assert_eq!(json["snapshot"]["position"]["to_play"], "black");
+        assert_eq!(json["snapshot"]["position"]["last_move"]["vertex"], "pass");
+        assert_eq!(json["snapshot"]["position"]["captures_white"], 1);
+        assert_eq!(json["generation"], 1);
+        assert_eq!(json["dirty"], false);
+        assert_eq!(json["native_path"], "/tmp/game.sgf");
+        assert_eq!(json["tree"]["children"][0]["properties"][0]["key"], "W");
+        assert!(json["snapshot"].get("generated_information").is_none());
+        assert_eq!(decoded, result);
+    }
+
+    #[test]
+    fn current_game_wire_typed_errors_use_snake_case_kinds() {
+        let kinds = [
+            (CurrentGameErrorKind::NoCurrentGame, "no_current_game"),
+            (CurrentGameErrorKind::InvalidNodePath, "invalid_node_path"),
+            (CurrentGameErrorKind::MalformedSgf, "malformed_sgf"),
+            (
+                CurrentGameErrorKind::UnsupportedBoardSize,
+                "unsupported_board_size",
+            ),
+            (CurrentGameErrorKind::OccupiedPoint, "occupied_point"),
+            (CurrentGameErrorKind::Suicide, "suicide"),
+            (CurrentGameErrorKind::SimpleKo, "simple_ko"),
+            (CurrentGameErrorKind::RootRemoval, "root_removal"),
+        ];
+
+        for (kind, expected) in kinds {
+            let error = CurrentGameError {
+                kind,
+                message: "user-presentable".to_string(),
+            };
+            let json = serde_json::to_value(&error).unwrap();
+            assert_eq!(json["kind"], expected);
+            assert_eq!(json["message"], "user-presentable");
+            let decoded: CurrentGameError = serde_json::from_value(json).unwrap();
+            assert_eq!(decoded.kind, kind);
+        }
     }
 }

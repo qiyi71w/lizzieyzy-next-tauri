@@ -13,10 +13,12 @@ import {
   classifyProblems,
   fakeAnalyze,
   getHealth,
+  isTauriRuntime,
   listenToKataGoAnalysisEvents,
   openSgfDocument,
   parseSgfSummary,
   replaySgfPositions,
+  replaceCurrentGame,
   saveSgfDocument,
   startKataGoGameAnalysis
 } from "./api/backend";
@@ -26,7 +28,7 @@ import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, select
 import type { AnalysisCacheRecord, CacheStatus, GameCacheKey, JsonValue } from "./domain/cache";
 import { defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "./domain/preferences";
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
-import type { AnalysisFrameDto, AppHealthDto, EngineProfileDto, GameDto, PositionDto, ProblemMarkerDto } from "./domain/types";
+import type { AnalysisFrameDto, AppHealthDto, CurrentGameResultDto, EngineProfileDto, GameDto, PositionDto, ProblemMarkerDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
@@ -57,6 +59,7 @@ export function App() {
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
   const [fallbackFileName, setFallbackFileName] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [currentGame, setCurrentGame] = useState<CurrentGameResultDto | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus>("idle");
@@ -114,7 +117,15 @@ export function App() {
 
   const currentFrame = useMemo(() => frames.find((f) => f.turn === currentMove) ?? frames.at(-1), [frames, currentMove]);
   const visibleCurrentFrame = useMemo(() => applyPreferencesToFrame(currentFrame, preferences), [currentFrame, preferences]);
-  const currentPosition = useMemo(() => selectExactPosition(positions, currentMove, game.summary.board_size), [positions, currentMove, game.summary.board_size]);
+  const currentPosition = useMemo(() => {
+    if (currentGame && currentMove === currentGame.snapshot.position.move_number) {
+      return currentGame.snapshot.position;
+    }
+    return selectExactPosition(positions, currentMove, game.summary.board_size);
+  }, [currentGame, currentMove, positions, game.summary.board_size]);
+  const selectedPersonalComment = currentGame && currentMove === currentGame.snapshot.position.move_number
+    ? currentGame.snapshot.personal_comment
+    : "";
   const maxMove = Math.max(positions.at(-1)?.move_number ?? 0, 1);
   const documentName = useMemo(() => currentFilePath ? fileNameFromPath(currentFilePath) : fallbackFileName ?? "未命名棋谱", [currentFilePath, fallbackFileName]);
   const saveFileName = documentName.toLowerCase().endsWith(".sgf") ? documentName : `${documentName}.sgf`;
@@ -245,23 +256,31 @@ export function App() {
     try {
       const document = await openSgfDocument();
       if (!document) {
-        setMessage("Native Open is unavailable here. Use Import SGF in browser preview.");
+        if (!isTauriRuntime()) {
+          setMessage("Native Open is unavailable here. Use Import SGF in browser preview.");
+        }
         return;
       }
+      const result = await replaceCurrentGame(document.sgfText, document.path);
+      setCurrentGame(result);
       setSgfText(document.sgfText);
-      setCurrentFilePath(document.path);
+      setCurrentFilePath(result.native_path ?? document.path);
       setFallbackFileName(null);
-      setDirty(false);
-      const [parsed, replayed] = await Promise.all([parseSgfSummary(document.sgfText), replaySgfPositions(document.sgfText)]);
-      const openedMessage = `Opened ${fileNameFromPath(document.path ?? "SGF")}: ${parsed.summary.move_count} moves.`;
-      setGame(parsed);
-      setPositions(replayed);
-      setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
+      setDirty(result.dirty);
+      setCurrentMove(result.snapshot.position.move_number);
       setFrames([]);
       setProblems([]);
       setSelectedCandidateIndex(null);
-      setMessage(openedMessage);
-      await checkAnalysisCacheForGame(document.sgfText, document.path, parsed, replayed, openedMessage);
+      try {
+        const [parsed, replayed] = await Promise.all([parseSgfSummary(document.sgfText), replaySgfPositions(document.sgfText)]);
+        const openedMessage = `Opened ${fileNameFromPath(document.path ?? "SGF")}: ${parsed.summary.move_count} moves.`;
+        setGame(parsed);
+        setPositions(replayed);
+        setMessage(openedMessage);
+        await checkAnalysisCacheForGame(document.sgfText, document.path, parsed, replayed, openedMessage);
+      } catch (mirrorError) {
+        setMessage(`Opened ${fileNameFromPath(document.path ?? "SGF")}; transitional mainline mirror failed: ${errorMessage(mirrorError)}`);
+      }
     } catch (error) {
       setMessage(`Open failed: ${errorMessage(error)}`);
     }
@@ -433,6 +452,7 @@ export function App() {
       const [parsed, replayed] = await Promise.all([parseSgfSummary(text), replaySgfPositions(text)]);
       const importedMessage = `Imported ${file.name}: ${parsed.summary.move_count} moves.`;
       setSgfText(text);
+      setCurrentGame(null);
       setCurrentFilePath(null);
       setFallbackFileName(file.name);
       setDirty(false);
@@ -456,6 +476,7 @@ export function App() {
       const warningText = result.warnings.length > 0 ? ` ${result.warnings.length} provider warning(s).` : "";
       const importedMessage = `Imported ${providerLabel(result.provider)} provider payload from ${source}: ${parsed.summary.move_count} moves.${warningText}`;
       setSgfText(result.sgf_text);
+      setCurrentGame(null);
       setCurrentFilePath(null);
       setFallbackFileName(providerDocumentName(result));
       setDirty(false);
@@ -477,6 +498,7 @@ export function App() {
     const [parsed, replayed] = await Promise.all([parseSgfSummary(demoSgf), replaySgfPositions(demoSgf)]);
     const sampleMessage = `Sample SGF restored: ${parsed.summary.move_count} moves.`;
     setSgfText(demoSgf);
+    setCurrentGame(null);
     setCurrentFilePath(null);
     setFallbackFileName("sample.sgf");
     setDirty(false);
@@ -494,6 +516,7 @@ export function App() {
     if (dirty && !window.confirm("放弃未保存的棋谱并新建对局？")) return;
     const [parsed, replayed] = await Promise.all([parseSgfSummary(emptySgf), replaySgfPositions(emptySgf)]);
     setSgfText(emptySgf);
+    setCurrentGame(null);
     setCurrentFilePath(null);
     setFallbackFileName(null);
     setDirty(false);
@@ -525,6 +548,7 @@ export function App() {
       }
       const [parsed, replayed] = await Promise.all([parseSgfSummary(text), replaySgfPositions(text)]);
       setSgfText(text);
+      setCurrentGame(null);
       setCurrentFilePath(null);
       setFallbackFileName("clipboard.sgf");
       setDirty(true);
@@ -779,6 +803,7 @@ export function App() {
           boardSize={game.summary.board_size}
           currentMove={currentMove}
           currentPosition={currentPosition}
+          personalComment={selectedPersonalComment}
           selectedCandidateIndex={selectedCandidateIndex}
           onSelectCandidate={setSelectedCandidateIndex}
           onSelectProblem={handleMoveSelect}
@@ -836,6 +861,7 @@ export function App() {
       onShowMoveNumbers={setShowMoveNumbers}
       jumpRef={jumpRef}
       message={message}
+      toPlay={currentPosition.to_play}
     />
     <section className="sheet-row" hidden={sheet === "none"}>
       {sheet === "sgf" ? <div className="sgf-tools">
@@ -845,6 +871,7 @@ export function App() {
         </div>
         <textarea value={sgfText} onChange={(event) => {
           setSgfText(event.target.value);
+          setCurrentGame(null);
           setDirty(true);
           clearReviewData();
           resetAnalysisCacheState();
@@ -921,7 +948,12 @@ function countAnalyzedMoves(frames: AnalysisFrameDto[], moveCount: number): numb
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object" && "message" in error) {
+    const message = Reflect.get(error, "message");
+    if (typeof message === "string" && message.trim()) return message;
+  }
+  return String(error);
 }
 
 function cacheEngineLabel(engineKind: CacheEngineKind): string {

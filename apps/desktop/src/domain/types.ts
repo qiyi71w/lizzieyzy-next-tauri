@@ -15,6 +15,33 @@ export type PositionDto = {
 };
 export type GameSummaryDto = { id: string; board_size: number; komi: number; black_name?: string | null; white_name?: string | null; result?: string | null; move_count: number };
 export type GameDto = { summary: GameSummaryDto; moves: MoveDto[] };
+export type NodePath = { indices: number[] };
+export type SgfPropertyDto = { key: string; values: string[] };
+export type SgfTreeNodeDto = { properties: SgfPropertyDto[]; children: SgfTreeNodeDto[] };
+export type SelectedNodeSnapshotDto = {
+  path: NodePath;
+  position: PositionDto;
+  personal_comment: string;
+  generated_information?: string | null;
+};
+export type CurrentGameResultDto = {
+  tree: SgfTreeNodeDto;
+  selected_path: NodePath;
+  snapshot: SelectedNodeSnapshotDto;
+  generation: number;
+  dirty: boolean;
+  native_path?: string | null;
+};
+export type CurrentGameErrorKind =
+  | "no_current_game"
+  | "invalid_node_path"
+  | "malformed_sgf"
+  | "unsupported_board_size"
+  | "occupied_point"
+  | "suicide"
+  | "simple_ko"
+  | "root_removal";
+export type CurrentGameError = { kind: CurrentGameErrorKind; message: string };
 export type CandidateMoveDto = { vertex: MoveVertex; visits: number; winrate_black: number; score_mean_black: number; policy_prior?: number | null; pv: MoveVertex[] };
 export type AnalysisFrameDto = { job_id: string; game_id?: string | null; node_id?: string | null; turn: number; visits: number; winrate_black: number; score_mean_black: number; score_stdev?: number | null; candidates: CandidateMoveDto[]; ownership?: number[] | null; policy?: number[] | null };
 export type ProblemMarkerDto = { turn: number; severity: "info" | "inaccuracy" | "mistake" | "blunder"; winrate_loss: number; score_loss: number; label: string };

@@ -6,6 +6,7 @@ import type {
   AppHealthDto,
   AssetCheckDto,
   CandidateMoveDto,
+  CurrentGameResultDto,
   EngineProfileRecordDto,
   EngineProfileDto,
   EngineProfilesSettingsDto,
@@ -59,7 +60,7 @@ declare global {
   }
 }
 
-const isTauriRuntime = () => typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
+export const isTauriRuntime = () => typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
 
 export async function getHealth(): Promise<AppHealthDto> {
   if (!isTauriRuntime()) {
@@ -100,6 +101,13 @@ export async function openSgfDocument(): Promise<SgfDocument | null> {
   if (typeof selected !== "string") return null;
   const sgfText = await invoke<string>("read_sgf_file", { path: selected });
   return { path: selected, sgfText };
+}
+
+export async function replaceCurrentGame(sgfText: string, nativePath: string | null): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) {
+    throw new Error("Native current-game load requires the Tauri desktop backend.");
+  }
+  return invoke<CurrentGameResultDto>("replace_current_game", { sgfText, nativePath });
 }
 
 export async function saveSgfDocument(path: string | null, sgfText: string, defaultFileName = "review.sgf"): Promise<SgfDocument | null> {

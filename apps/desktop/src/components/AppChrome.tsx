@@ -269,6 +269,7 @@ export function AppChrome(props: Props) {
           贴目:
           <input className="param-input-sm" value={props.komi} readOnly />
         </label>
+        <span className="param-label">{props.toPlay === "black" ? "下一手 黑" : "下一手 白"}</span>
         <label className="param-label" title="激进/保守程度，尚未接入引擎">
           激进度
           <input className="param-input-sm" value={0} disabled />
@@ -324,6 +325,7 @@ export function BottomBar(props: {
   onShowMoveNumbers: (value: boolean) => void;
   jumpRef: { current: HTMLInputElement | null };
   message: string;
+  toPlay: "black" | "white";
 }) {
   const progress = props.analysisProgress;
   const progressText = progress
@@ -378,6 +380,7 @@ export function BottomBar(props: {
       <button type="button" className="chrome-btn" aria-pressed={props.showMoveNumbers} onClick={() => props.onShowMoveNumbers(!props.showMoveNumbers)}>手数</button>
       <button type="button" className="chrome-btn" aria-pressed={props.showCoordinates} onClick={() => props.onShowCoordinates(!props.showCoordinates)}>坐标</button>
       <button type="button" className="chrome-btn" aria-pressed={props.autoPlaying} onClick={props.onAutoPlay}>自动播放</button>
+      <span className="nav-to-play">{props.toPlay === "black" ? "下一手 黑" : "下一手 白"}</span>
       <span className="nav-message" title={props.message}>{props.message}</span>
     </nav>
   );
