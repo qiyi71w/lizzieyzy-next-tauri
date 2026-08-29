@@ -43,8 +43,7 @@ fn editable_workspace_roundtrip_retains_edit_and_drops_removed_sibling() {
     assert_eq!(tree.children[0].children.len(), 2);
     assert_eq!(comment(&tree.children[0].children[0]), Some("first continuation"));
     assert_eq!(comment(&tree.children[0].children[1]), Some("retained note"));
-    assert!(tree
-        .children[0]
+    assert!(tree.children[0]
         .children
         .iter()
         .all(|child| comment(child) != Some("second continuation")));
@@ -76,9 +75,7 @@ fn editable_workspace_roundtrip_retains_edit_and_drops_removed_sibling() {
     assert_eq!(retained.position.to_play, PlayerColor::White);
     assert!(has_stone(&retained.position, 1, 1, PlayerColor::Black));
     assert!(!has_stone(&retained.position, 0, 3, PlayerColor::Black));
-    assert!(reopened
-        .snapshot(&NodePath { indices: vec![0, 2] })
-        .is_err());
+    assert!(reopened.snapshot(&NodePath { indices: vec![0, 2] }).is_err());
 }
 
 fn comment(node: &SgfTreeNodeDto) -> Option<&str> {
