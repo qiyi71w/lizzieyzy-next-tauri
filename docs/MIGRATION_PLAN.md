@@ -83,7 +83,7 @@ The current state is useful and testable, but it is not full legacy parity. Core
 ### Test And Acceptance Coverage
 
 - Broader Rust fixture coverage for SGF edge cases.
-- UI automation for the primary desktop smoke flow.
+- UI automation for the primary desktop smoke flow. Ticket 08 recorded a human-guided Windows no-engine run on `8c749a6`: launch/open/navigate/edit/save/reopen passed; ACL-denied Save As failed (ticket 09).
 - Engine integration tests that can run against a controlled KataGo fixture or mock process.
 - Cache migration tests once the storage schema stabilizes beyond the current MVP.
 - Provider contract tests and runtime fetch path checks before Fox/Yike repository work is considered implemented.

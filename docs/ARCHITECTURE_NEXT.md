@@ -141,11 +141,21 @@ The cache key is derived from parsed SGF content and the raw SGF hash. Cache rec
 | readboard probe | Domain command/DTO coverage and `readboard_sidecar_probe` path wired behind the sidecar boundary. | A real readboard sidecar process, expected port/path/process state, probe success/failure, timeout, and version evidence. |
 | readboard sync | Protocol line parsing and `readboard_sidecar_sync_snapshot` path wired behind the sidecar boundary. | A real sidecar plus target client/window state, sync behavior, stale-state handling, timeout, and restart evidence. |
 | image OCR | Structured unsupported/not-implemented error when image OCR is unavailable. | A sidecar/runtime that explicitly supports OCR, plus image fixture evidence and false-positive/timeout checks. |
-| Editable current-game Save | `editable_workspace_roundtrip` semantic serialize/parse coverage on `editable-workspace-branching`, plus `current_game_save_write_failure` proving a directory-as-file write error leaves path/dirty unchanged. | Ticket 08 Windows/native dialog, path, and interactive Save/reopen evidence. |
+| Editable current-game Save | `editable_workspace_roundtrip` semantic serialize/parse coverage on `editable-workspace-branching`, plus `current_game_save_write_failure` proving a directory-as-file write error leaves path/dirty unchanged. | Ticket 08 Windows native: cancel Save As and happy-path Save As/reopen passed on `8c749a6` (PID 75084). Saved `D:\dev\weiqi\tmp\editable-workspace-branching.sgf` reproduced retained `W[cb]` + `ticket-08 retained comment`, omitted `second continuation`, and kept setup/metadata. ACL-denied Save As failed: the common dialog redirected to `C:\Users\admin\denied.sgf` and the app adopted that path as a successful Save. Repair is ticket 09. |
 
 ## Current-Game And Parity Evidence
 
-Repository evidence for the editable SGF workspace is the focused Rust filters above, frontend type/build validation, and the command/DTO ownership recorded in this document. That is not Windows/native interaction evidence. Ticket 08 records actual native Save/Save As dialogs, filesystem paths, and reopen behavior on the target desktop.
+Repository evidence for the editable SGF workspace is the focused Rust filters above, frontend type/build validation, and the command/DTO ownership recorded in this document. Ticket 08 recorded Windows/native dialog, path, and reopen evidence on `8c749a6` and updates these rows only where both repository and native criteria hold:
+
+| ID | Status | Repository evidence | Native evidence (ticket 08) | Remaining gap |
+| --- | --- | --- | --- | --- |
+| SGF-03 | Accepted | Ticket 03 navigation tests and BottomBar parent/child/sibling wiring. | Case 2: both siblings, parent/next-child memory, and sibling round-trip kept board, 手数, 下一手, 提子, and comments in sync. | None for this item. |
+| SGF-04 | Accepted | Tickets 04 and 06 move/pass/remove tests; edits return a valid `NodePath`. | Case 3: 白 C4 on the first continuation; second continuation removed; selection recovered to the parent; retained branch stayed navigable and survived Case 5 reopen. | None for this item. |
+| SGF-05 | Accepted | Ticket 05 personal-comment edit tests; generated information stays off the personal field. | Case 3 wrote `ticket-08 retained comment` on C4; Case 5 reopen showed the same comment on that node. | None for this item. |
+| SGF-06 | Partial | Ticket 07 `editable_workspace_roundtrip` and `current_game_save_write_failure`. | Case 4 cancel and Case 5 Save As/reopen met the happy-path acceptance text. Case 6 ACL write-failure did not keep path/dirty and wrote a user-profile file. | Native dialog denial/redirect. Ticket 09. |
+| UI-04 | Partial | No-engine UI and native Open/Save commands exist without a configured engine. | Cases 1–5: launch, open, inspect, edit, save, reopen with `未加载引擎` and SGF controls usable. | Case 6 failed; process exit was not a separate case. |
+
+Browser preview is not native evidence. Ticket 08 confirmed the preview copy `Native current-game, edit, and authoritative Save require the Tauri desktop backend. Browser preview is non-authoritative.`
 
 Docs, release notes, and handoffs should describe these as two different gates: offline contract plus runtime path is an implementation milestone; live provider/sidecar smoke is an environment milestone.
 
