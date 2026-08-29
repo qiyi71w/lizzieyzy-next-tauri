@@ -512,6 +512,14 @@ fn set_current_game_personal_comment(
 }
 
 #[tauri::command]
+fn remove_current_game_variation(
+    state: State<CurrentGameState>,
+    path: NodePath,
+) -> Result<CurrentGameResultDto, CurrentGameError> {
+    state.remove_variation(path)
+}
+
+#[tauri::command]
 fn fake_analyze(sgf_text: String) -> Result<Vec<AnalysisFrameDto>, String> {
     let document = sgf::parse_sgf(&sgf_text).map_err(|err| err.to_string())?;
     let job_id = Uuid::new_v4();
@@ -1983,6 +1991,7 @@ pub fn run() {
             select_current_game_node,
             play_current_game,
             set_current_game_personal_comment,
+            remove_current_game_variation,
             write_sgf_file,
             fake_analyze,
             classify_problems,

@@ -323,11 +323,14 @@ export function BottomBar(props: {
   canNext: boolean;
   canPrevSibling: boolean;
   canNextSibling: boolean;
+  canRemoveVariation: boolean;
   siblingLabel: string;
+  nativeUnavailable?: string;
   onParent: () => void;
   onNext: () => void;
   onPrevSibling: () => void;
   onNextSibling: () => void;
+  onRemoveVariation: () => void;
   engineReady: boolean;
   isKataGoRunning: boolean;
   analysisProgress: { completed: number; expected: number; turn: number } | null;
@@ -403,6 +406,13 @@ export function BottomBar(props: {
         <button type="button" className="chrome-btn" onClick={props.onNext} disabled={!props.canNext} title="进入最近选择的变化，否则第一变化">下一变化</button>
         <button type="button" className="chrome-btn" onClick={props.onPrevSibling} disabled={!props.canPrevSibling} title="上一分支">上一分支</button>
         <button type="button" className="chrome-btn" onClick={props.onNextSibling} disabled={!props.canNextSibling} title="下一分支">下一分支</button>
+        <button
+          type="button"
+          className="chrome-btn"
+          onClick={props.onRemoveVariation}
+          disabled={!props.canRemoveVariation}
+          title={props.canRemoveVariation ? "删除当前选中的非根变化" : (props.nativeUnavailable ?? "只能删除已选中的非根变化")}
+        >删除变化</button>
         <span className="move-indicator">分支 {props.siblingLabel}</span>
       </div>
       <span className="spacer" />

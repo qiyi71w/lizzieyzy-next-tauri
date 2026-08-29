@@ -149,6 +149,13 @@ export async function setCurrentGamePersonalComment(path: NodePath, comment: str
   return invoke<CurrentGameResultDto>("set_current_game_personal_comment", { path, comment });
 }
 
+export async function removeCurrentGameVariation(path: NodePath): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<CurrentGameResultDto>("remove_current_game_variation", { path });
+}
+
 export async function saveSgfDocument(path: string | null, sgfText: string, defaultFileName = "review.sgf"): Promise<SgfDocument | null> {
   if (!isTauriRuntime()) {
     throw new Error(nativeCurrentGameUnavailable);

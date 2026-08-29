@@ -26,6 +26,7 @@ import {
   serializeCurrentGame,
   selectCurrentGameNode,
   setCurrentGamePersonalComment,
+  removeCurrentGameVariation,
   startKataGoGameAnalysis
 } from "./api/backend";
 import { computeGameCacheKey, loadAnalysisCache, saveAnalysisCache } from "./api/analysisCache";
@@ -154,6 +155,7 @@ export function App() {
   const parentNode = currentGame && parentOfSelected ? nodeAt(currentGame.tree, parentOfSelected) : null;
   const siblingIndex = selectedPath.indices.at(-1);
   const canParent = Boolean(currentGame && parentOfSelected);
+  const canRemoveVariation = Boolean(nativeRuntime && currentGame && selectedPath.indices.length > 0);
   const canNext = Boolean(selectedNode && selectedNode.children.length > 0);
   const canPrevSibling = Boolean(parentNode && siblingIndex !== undefined && siblingIndex > 0);
   const canNextSibling = Boolean(parentNode && siblingIndex !== undefined && siblingIndex + 1 < parentNode.children.length);
@@ -299,6 +301,15 @@ export function App() {
     return !dirty || window.confirm(confirmMessage);
   }
 
+  function adoptCurrentGame(result: CurrentGameResultDto) {
+    documentGenerationRef.current = result.generation;
+    setCurrentGame(result);
+  }
+
+  function isCurrentDocumentGeneration(capturedGeneration: number): boolean {
+    return documentGenerationRef.current === capturedGeneration;
+  }
+
   async function artifactsFromCurrentGame(): Promise<{ serialized: string; projection: GameDto; replayed: PositionDto[] }> {
     const [serialized, projection] = await Promise.all([serializeCurrentGame(), projectCurrentGameMainline()]);
     return { serialized, projection, replayed: await replaySgfPositions(serialized) };
@@ -346,9 +357,8 @@ export function App() {
 
     try {
       const result = await replaceCurrentGame(sgfInput, nativePath);
+      adoptCurrentGame(result);
       const artifacts = await artifactsFromCurrentGame();
-      documentGenerationRef.current = result.generation;
-      setCurrentGame(result);
       pendingSelectedPathRef.current = result.selected_path;
       setChosenChildren(chosenFromPath(result.selected_path));
       setSgfText(artifacts.serialized);
@@ -393,9 +403,8 @@ export function App() {
       const document = await openSgfDocument();
       if (!document) return;
       const result = await replaceCurrentGame(document.sgfText, document.path);
+      adoptCurrentGame(result);
       const artifacts = await artifactsFromCurrentGame();
-      documentGenerationRef.current = result.generation;
-      setCurrentGame(result);
       pendingSelectedPathRef.current = result.selected_path;
       setSgfText(artifacts.serialized);
       setCurrentFilePath(result.native_path ?? document.path);
@@ -553,7 +562,10 @@ export function App() {
             pendingAnalysisTerminalEventsRef.current.set(payload.job_id, { kind: "complete", frames: payload.frames });
             return;
           }
-          if (!isCurrentAnalysisJob(payload.job_id)) return;
+          if (!isCurrentAnalysisJob(payload.job_id) || !isCurrentDocumentGeneration(capturedGeneration)) {
+            if (isCurrentAnalysisJob(payload.job_id)) finishStoppedAnalysis(payload.job_id);
+            return;
+          }
           void finishCompletedAnalysis(payload.job_id, payload.frames, parsed, replayed, capturedGeneration);
         },
         onError: (payload) => {
@@ -796,6 +808,7 @@ export function App() {
       const result = await playCurrentGame(currentGame.selected_path, vertex);
       documentGenerationRef.current = result.generation;
       setCurrentGame(result);
+      pendingSelectedPathRef.current = result.selected_path;
       setChosenChildren((prev) => rememberChosenChildren(prev, result.selected_path));
       setDirty(result.dirty);
       setCurrentMove(result.snapshot.position.move_number);
@@ -814,6 +827,28 @@ export function App() {
     }
   }
 
+  async function handleRemoveVariation() {
+    if (!currentGame || selectedPath.indices.length === 0) return;
+    try {
+      const result = await removeCurrentGameVariation(selectedPath);
+      adoptCurrentGame(result);
+      pendingSelectedPathRef.current = result.selected_path;
+      setChosenChildren(chosenFromPath(result.selected_path));
+      setDirty(result.dirty);
+      setCurrentMove(result.snapshot.position.move_number);
+      clearReviewData();
+      resetAnalysisCacheState();
+      const artifacts = await artifactsFromCurrentGame();
+      if (!isCurrentDocumentGeneration(result.generation)) return;
+      setSgfText(artifacts.serialized);
+      setGame(artifacts.projection);
+      setPositions(artifacts.replayed);
+      setMessage("已删除选中变化，并回到其父节点。");
+    } catch (error) {
+      setMessage(`删除变化失败: ${errorMessage(error)}`);
+    }
+  }
+
   function cleanupAnalysisListeners() {
     analysisCleanupRef.current?.();
     analysisCleanupRef.current = null;
@@ -823,12 +858,12 @@ export function App() {
     return activeJobIdRef.current === jobId;
   }
 
-  function isCurrentDocumentGeneration(generation: number): boolean {
-    return documentGenerationRef.current === generation;
-  }
-
   async function finishPendingAnalysisTerminalEvent(jobId: string, event: PendingAnalysisTerminalEvent, parsed: GameDto, replayed: PositionDto[], capturedGeneration: number) {
     if (event.kind === "complete") {
+      if (!isCurrentDocumentGeneration(capturedGeneration)) {
+        finishStoppedAnalysis(jobId);
+        return;
+      }
       await finishCompletedAnalysis(jobId, event.frames, parsed, replayed, capturedGeneration);
       return;
     }
@@ -1115,11 +1150,14 @@ export function App() {
       canNext={canNext}
       canPrevSibling={canPrevSibling}
       canNextSibling={canNextSibling}
+      canRemoveVariation={canRemoveVariation}
       siblingLabel={siblingLabel}
+      nativeUnavailable={nativeRuntime ? undefined : nativeCurrentGameUnavailable}
       onParent={handleParent}
       onNext={handleNextChild}
       onPrevSibling={handlePrevSibling}
       onNextSibling={handleNextSibling}
+      onRemoveVariation={() => void handleRemoveVariation()}
       engineReady={engineReady}
       isKataGoRunning={isKataGoRunning}
       analysisProgress={analysisProgress}
