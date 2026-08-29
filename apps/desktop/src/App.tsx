@@ -63,6 +63,7 @@ export function App() {
   const [message, setMessage] = useState(
     isTauriRuntime() ? "谱面已就绪。打开棋谱或载入示例开始复盘。" : nativeCurrentGameUnavailable
   );
+  const [boardIntentFeedback, setBoardIntentFeedback] = useState<string | null>(null);
   const nativeRuntime = isTauriRuntime();
   const [isKataGoRunning, setIsKataGoRunning] = useState(false);
   const [selectedCandidateIndex, setSelectedCandidateIndex] = useState<number | null>(null);
@@ -74,6 +75,7 @@ export function App() {
   const navigatingRef = useRef(false);
   const documentGenerationRef = useRef(0);
   const pendingSelectedPathRef = useRef<NodePath | null>(null);
+  const pendingBoardIntentRef = useRef<string | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus>("idle");
@@ -806,7 +808,9 @@ export function App() {
       setMessage(nativeCurrentGameUnavailable);
       return;
     }
-    if (!currentGame) return;
+    if (!currentGame || pendingBoardIntentRef.current !== null) return;
+    const intentKey = vertex === "pass" ? "pass" : `${vertex.point.x},${vertex.point.y}`;
+    pendingBoardIntentRef.current = intentKey;
     const previousGeneration = currentGame.generation;
     try {
       const result = await playCurrentGame(currentGame.selected_path, vertex);
@@ -817,6 +821,8 @@ export function App() {
       setDirty(result.dirty);
       setCurrentMove(result.snapshot.position.move_number);
       setSelectedCandidateIndex(null);
+      setBoardIntentFeedback(null);
+      setMessage("落子已接受。");
       if (result.generation !== previousGeneration) {
         clearReviewData();
         resetAnalysisCacheState();
@@ -825,7 +831,11 @@ export function App() {
         setGame(artifacts.projection);
       }
     } catch (error) {
-      setMessage(`落子失败: ${errorMessage(error)}`);
+      const feedback = `落子失败: ${errorMessage(error)}`;
+      setBoardIntentFeedback(feedback);
+      setMessage(feedback);
+    } finally {
+      if (pendingBoardIntentRef.current === intentKey) pendingBoardIntentRef.current = null;
     }
   }
 
@@ -1130,6 +1140,9 @@ export function App() {
           hideCandidates={(currentPosition.to_play === "black" && !showBlackCandidates) || (currentPosition.to_play === "white" && !showWhiteCandidates)}
           onPointClick={(point) => void playAt({ point })}
         />
+        {boardIntentFeedback ? (
+          <p className="board-intent-status" role="status" aria-live="polite">{boardIntentFeedback}</p>
+        ) : null}
       </div>
       <aside className="sheet-col">
         <AnalysisPanel
