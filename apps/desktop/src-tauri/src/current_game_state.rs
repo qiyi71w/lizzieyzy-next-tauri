@@ -1,4 +1,6 @@
-use app_model::{CurrentGameError, CurrentGameErrorKind, CurrentGameResultDto, GameDto, NodePath};
+use app_model::{
+    CurrentGameError, CurrentGameErrorKind, CurrentGameResultDto, GameDto, MoveVertex, NodePath,
+};
 use sgf::CurrentSgfDocument;
 use std::sync::Mutex;
 
@@ -55,6 +57,10 @@ impl CurrentGameState {
         self.holder.lock().expect("current game state").select_path(path)
     }
 
+    pub fn play(&self, path: NodePath, vertex: MoveVertex) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.holder.lock().expect("current game state").play(path, vertex)
+    }
+
     fn with_document<T>(
         &self,
         f: impl FnOnce(&CurrentSgfDocument) -> Result<T, CurrentGameError>,
@@ -105,6 +111,25 @@ impl CurrentGameHolder {
                 .as_ref()
                 .and_then(|document| document.serialize().ok()),
         )
+    }
+
+    fn play(&mut self, path: NodePath, vertex: MoveVertex) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let document = self.document.as_mut().ok_or_else(no_current_game)?;
+        let before = document.serialize()?;
+        let snapshot = document.play(&path, vertex)?;
+        let after = document.serialize()?;
+        if before != after {
+            self.generation += 1;
+            self.dirty = true;
+        }
+        Ok(CurrentGameResultDto {
+            tree: document.tree()?,
+            selected_path: snapshot.path.clone(),
+            snapshot,
+            generation: self.generation,
+            dirty: self.dirty,
+            native_path: self.native_path.clone(),
+        })
     }
 
     fn select_path(&self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
@@ -243,5 +268,75 @@ impl CurrentGameState {
 
     fn inspect(&self) -> (u64, bool, Option<String>, Option<String>) {
         self.holder.lock().expect("current game state").snapshot_state()
+    }
+}
+
+#[cfg(test)]
+mod current_game_move_edit {
+    use super::*;
+    use app_model::{CurrentGameErrorKind, MoveVertex, PointDto};
+
+    const BRANCHING: &str = include_str!("../../../../tests/golden/editable-workspace-branching.sgf");
+
+    #[test]
+    fn current_game_move_edit_updates_generation_dirty_and_stays_atomic() {
+        let state = CurrentGameState::default();
+        assert_eq!(
+            state
+                .play(NodePath { indices: Vec::new() }, MoveVertex::Pass)
+                .unwrap_err()
+                .kind,
+            CurrentGameErrorKind::NoCurrentGame
+        );
+
+        let opened = state
+            .replace(BRANCHING, Some("/tmp/branching.sgf".to_string()))
+            .unwrap();
+        assert_eq!(opened.generation, 1);
+        assert!(!opened.dirty);
+
+        let parent = NodePath { indices: vec![0] };
+        let played = state
+            .play(parent.clone(), MoveVertex::Point(PointDto { x: 1, y: 1 }))
+            .unwrap();
+        assert_eq!(played.generation, 2);
+        assert!(played.dirty);
+        assert_eq!(played.selected_path.indices, vec![0, 2]);
+        assert_eq!(
+            played.snapshot.position.last_move.as_ref().unwrap().color,
+            app_model::PlayerColor::Black
+        );
+        assert_eq!(state.mainline_projection().unwrap().moves.len(), 3);
+        assert_eq!(
+            CurrentSgfDocument::open(&state.serialize().unwrap())
+                .unwrap()
+                .tree()
+                .unwrap()
+                .children[0]
+                .children
+                .len(),
+            3
+        );
+
+        let existing = state
+            .play(parent.clone(), MoveVertex::Point(PointDto { x: 4, y: 4 }))
+            .unwrap();
+        assert_eq!(existing.generation, 2);
+        assert!(existing.dirty);
+        assert_eq!(existing.selected_path.indices, vec![0, 0]);
+        assert_eq!(existing.snapshot.personal_comment, "first continuation");
+
+        let before = state.inspect();
+        let occupied = state
+            .play(parent, MoveVertex::Point(PointDto { x: 3, y: 3 }))
+            .unwrap_err();
+        assert_eq!(occupied.kind, CurrentGameErrorKind::OccupiedPoint);
+        assert_eq!(state.inspect(), before);
+
+        let invalid = state
+            .play(NodePath { indices: vec![9] }, MoveVertex::Pass)
+            .unwrap_err();
+        assert_eq!(invalid.kind, CurrentGameErrorKind::InvalidNodePath);
+        assert_eq!(state.inspect(), before);
     }
 }

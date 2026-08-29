@@ -48,6 +48,7 @@ type Props = {
   onCopySgf: () => void;
   onPasteSgf: () => void;
   onClearBoard: () => void;
+  onPass?: () => void;
   onAutoPlay: () => void;
   onOverlayMode: (mode: OverlayMode) => void;
   cacheBadge: ReactNode;
@@ -256,7 +257,13 @@ export function AppChrome(props: Props) {
           <IconBtn src={toolbarIcons.smallblack1} label="添加黑子" disabled title={later} />
           <IconBtn src={toolbarIcons.smallwhite} label="添加白子" disabled title={later} />
           <IconBtn src={toolbarIcons.hb} label="交替落子" disabled title={later} />
-          <IconBtn src={toolbarIcons.playpass} label="虚手" disabled title={later} />
+          <IconBtn
+            src={toolbarIcons.playpass}
+            label="虚手"
+            onClick={props.onPass}
+            disabled={props.busy || !nativeAvailable}
+            title={!nativeAvailable ? nativeUnavailable : "虚手"}
+          />
         </div>
         <span className="tool-sep" />
         <div className="icon-group">

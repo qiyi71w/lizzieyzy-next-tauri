@@ -1077,7 +1077,7 @@ fn escape_sgf_value(value: &str) -> String {
     escaped
 }
 
-fn serialize_vertex(vertex: &MoveVertex, board_size: u8) -> Result<String, SgfError> {
+pub(crate) fn serialize_vertex(vertex: &MoveVertex, board_size: u8) -> Result<String, SgfError> {
     match vertex {
         MoveVertex::Pass => Ok(String::new()),
         MoveVertex::Point(point) if point.x < board_size && point.y < board_size => Ok(format!(

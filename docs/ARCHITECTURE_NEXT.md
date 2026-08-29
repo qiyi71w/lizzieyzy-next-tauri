@@ -37,6 +37,8 @@ Tauri 2 command gateway. It exposes health, SGF parse/replay, native SGF read/wr
 
 This layer should stay a gateway. Domain behavior belongs in crates unless it is directly about Tauri lifecycle, app data paths, command shape, or event emission.
 
+Current-game commands are `replace_current_game`, `select_current_game_node`, `play_current_game`, `serialize_current_game`, and `project_current_game_mainline`. `play_current_game` sends a `NodePath` plus point/pass vertex; Rust uses the selected position's player-to-play color and `go-core` legality. An identical existing child is selected without mutation. A new child increments document generation and marks the game dirty. Occupied, suicide, simple-ko, and invalid-path failures are atomic.
+
 Provider/readboard command contracts in this batch:
 
 - `provider_fetch_yike` is the Tauri entry point for Yike runtime fetch. It must validate the request provider and timeout, call the Yike provider runtime path, and return `ProviderFetchResult` on success or a typed `ProviderError` on auth, network, payload, timeout, or runtime unavailable states.

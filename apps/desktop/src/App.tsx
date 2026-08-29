@@ -18,6 +18,7 @@ import {
   nativeCurrentGameUnavailable,
   openSgfDocument,
   parseSgfSummary,
+  playCurrentGame,
   projectCurrentGameMainline,
   replaySgfPositions,
   replaceCurrentGame,
@@ -32,7 +33,7 @@ import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, select
 import type { AnalysisCacheRecord, CacheStatus, GameCacheKey, JsonValue } from "./domain/cache";
 import { defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "./domain/preferences";
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
-import type { AnalysisFrameDto, AppHealthDto, CurrentGameResultDto, EngineProfileDto, GameDto, NodePath, PositionDto, ProblemMarkerDto, SgfTreeNodeDto } from "./domain/types";
+import type { AnalysisFrameDto, AppHealthDto, CurrentGameResultDto, EngineProfileDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, SgfTreeNodeDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
@@ -69,6 +70,7 @@ export function App() {
   const [currentGame, setCurrentGame] = useState<CurrentGameResultDto | null>(null);
   const [chosenChildren, setChosenChildren] = useState<Map<string, number>>(() => new Map());
   const navigatingRef = useRef(false);
+  const documentGenerationRef = useRef(0);
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus>("idle");
@@ -313,6 +315,7 @@ export function App() {
     if (!nativeRuntime) {
       try {
         const [parsed, replayed] = await Promise.all([parseSgfSummary(sgfInput), replaySgfPositions(sgfInput)]);
+        documentGenerationRef.current = 0;
         setCurrentGame(null);
         setSgfText(sgfInput);
         setCurrentFilePath(null);
@@ -338,6 +341,7 @@ export function App() {
     try {
       const result = await replaceCurrentGame(sgfInput, nativePath);
       const artifacts = await artifactsFromCurrentGame();
+      documentGenerationRef.current = result.generation;
       setCurrentGame(result);
       setChosenChildren(chosenFromPath(result.selected_path));
       setSgfText(artifacts.serialized);
@@ -383,6 +387,7 @@ export function App() {
       if (!document) return;
       const result = await replaceCurrentGame(document.sgfText, document.path);
       const artifacts = await artifactsFromCurrentGame();
+      documentGenerationRef.current = result.generation;
       setCurrentGame(result);
       setSgfText(artifacts.serialized);
       setCurrentFilePath(result.native_path ?? document.path);
@@ -423,10 +428,12 @@ export function App() {
   }
 
   async function handleFakeAnalyze() {
+    const capturedGeneration = documentGenerationRef.current;
     try {
       if (!nativeRuntime) {
         const [parsed, result, replayed] = await Promise.all([parseSgfSummary(sgfText), fakeAnalyze(sgfText), replaySgfPositions(sgfText)]);
         const classified = await classifyProblems(result);
+        if (documentGenerationRef.current !== capturedGeneration) return;
         setGame(parsed);
         setPositions(replayed);
         setFrames(result);
@@ -434,12 +441,14 @@ export function App() {
         setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
         setSelectedCandidateIndex(null);
         const cacheMessage = await saveAnalysisCacheForGame(sgfText, currentFilePath, parsed, result, classified, "fake");
+        if (documentGenerationRef.current !== capturedGeneration) return;
         setMessage(`${nativeCurrentGameUnavailable} 已生成 ${result.length} 个预览复盘局面。${cacheMessage}`);
         return;
       }
       const artifacts = await artifactsFromCurrentGame();
       const result = await fakeAnalyze(artifacts.serialized);
       const classified = await classifyProblems(result);
+      if (documentGenerationRef.current !== capturedGeneration) return;
       setGame(artifacts.projection);
       setPositions(artifacts.replayed);
       setFrames(result);
@@ -447,6 +456,7 @@ export function App() {
       setCurrentMove(artifacts.replayed.at(-1)?.move_number ?? artifacts.projection.moves.length);
       setSelectedCandidateIndex(null);
       const cacheMessage = await saveAnalysisCacheForGame(artifacts.serialized, currentFilePath, artifacts.projection, result, classified, "fake");
+      if (documentGenerationRef.current !== capturedGeneration) return;
       setMessage(`已生成 ${result.length} 个复盘局面，含候选与胜率。${cacheMessage}`);
     } catch (error) {
       setMessage(errorMessage(error));
@@ -454,6 +464,7 @@ export function App() {
   }
 
   async function handleRunKataGo(profile: EngineProfileDto, maxVisits: number) {
+    const capturedGeneration = documentGenerationRef.current;
     const targetTurn = currentMove;
     const visits = resolveAnalysisMaxVisits(maxVisits, preferences);
     setIsKataGoRunning(true);
@@ -465,11 +476,14 @@ export function App() {
       if (!nativeRuntime) setMessage(nativeCurrentGameUnavailable);
       const turn = clampMoveNumberToPositions(artifacts.replayed, Math.min(targetTurn, artifacts.replayed.at(-1)?.move_number ?? artifacts.projection.moves.length));
       const frame = await analyzeKataGoOnce(profile, artifacts.serialized, turn, visits);
+      if (documentGenerationRef.current !== capturedGeneration) return;
       const mergedFrames = mergeAnalysisFrame(frames, frame);
+      const classified = await classifyProblems(mergedFrames);
+      if (documentGenerationRef.current !== capturedGeneration) return;
       setGame(artifacts.projection);
       setPositions(artifacts.replayed);
       setFrames(mergedFrames);
-      setProblems(await classifyProblems(mergedFrames));
+      setProblems(classified);
       setCurrentMove(frame.turn);
       setSelectedCandidateIndex(null);
       setMessage(`KataGo analysis completed for move ${frame.turn} with ${frame.visits} visits.`);
@@ -483,6 +497,7 @@ export function App() {
   async function handleAnalyzeKataGoGame(profile: EngineProfileDto, maxVisits: number) {
     if (activeJobIdRef.current || startingAnalysisRef.current) return;
     const visits = resolveAnalysisMaxVisits(maxVisits, preferences);
+    const capturedGeneration = documentGenerationRef.current;
     startingAnalysisRef.current = true;
     pendingAnalysisProgressRef.current.clear();
     pendingAnalysisTerminalEventsRef.current.clear();
@@ -499,6 +514,7 @@ export function App() {
       const replayed = artifacts.replayed;
       cleanup = await listenToKataGoAnalysisEvents({
         onProgress: (payload) => {
+          if (documentGenerationRef.current !== capturedGeneration) return;
           if (startingAnalysisRef.current && activeJobIdRef.current === null) {
             pendingAnalysisProgressRef.current.set(payload.job_id, {
               jobId: payload.job_id,
@@ -520,12 +536,13 @@ export function App() {
           setMessage(`Analyzing move ${payload.turn}: ${payload.completed}/${payload.expected} positions complete.`);
         },
         onComplete: (payload) => {
+          if (documentGenerationRef.current !== capturedGeneration) return;
           if (startingAnalysisRef.current && activeJobIdRef.current === null) {
             pendingAnalysisTerminalEventsRef.current.set(payload.job_id, { kind: "complete", frames: payload.frames });
             return;
           }
           if (!isCurrentAnalysisJob(payload.job_id)) return;
-          void finishCompletedAnalysis(payload.job_id, payload.frames, parsed, replayed);
+          void finishCompletedAnalysis(payload.job_id, payload.frames, parsed, replayed, capturedGeneration);
         },
         onError: (payload) => {
           if (startingAnalysisRef.current && activeJobIdRef.current === null) {
@@ -556,7 +573,7 @@ export function App() {
       pendingAnalysisProgressRef.current.clear();
       pendingAnalysisTerminalEventsRef.current.clear();
       if (pendingTerminalEvent) {
-        await finishPendingAnalysisTerminalEvent(jobId, pendingTerminalEvent, parsed, replayed);
+        await finishPendingAnalysisTerminalEvent(jobId, pendingTerminalEvent, parsed, replayed, capturedGeneration);
         return;
       }
       activeJobIdRef.current = jobId;
@@ -664,6 +681,7 @@ export function App() {
     navigatingRef.current = true;
     try {
       const result = await selectCurrentGameNode(path);
+      documentGenerationRef.current = result.generation;
       setCurrentGame(result);
       setChosenChildren((prev) => rememberChosenChildren(prev, result.selected_path));
       setCurrentMove(result.snapshot.position.move_number);
@@ -705,6 +723,35 @@ export function App() {
     void selectNode({ indices: [...selectedPath.indices.slice(0, -1), siblingIndex + 1] });
   }
 
+  async function playAt(vertex: MoveVertex) {
+    if (!nativeRuntime) {
+      setMessage(nativeCurrentGameUnavailable);
+      return;
+    }
+    if (!currentGame) return;
+    const previousGeneration = currentGame.generation;
+    try {
+      const result = await playCurrentGame(currentGame.selected_path, vertex);
+      documentGenerationRef.current = result.generation;
+      setCurrentGame(result);
+      setChosenChildren((prev) => rememberChosenChildren(prev, result.selected_path));
+      setDirty(result.dirty);
+      setCurrentMove(result.snapshot.position.move_number);
+      setSelectedCandidateIndex(null);
+      if (result.generation !== previousGeneration) {
+        clearReviewData();
+        resetAnalysisCacheState();
+        const artifacts = await artifactsFromCurrentGame();
+        if (documentGenerationRef.current !== result.generation) return;
+        setSgfText(artifacts.serialized);
+        setGame(artifacts.projection);
+        setPositions(artifacts.replayed);
+      }
+    } catch (error) {
+      setMessage(`落子失败: ${errorMessage(error)}`);
+    }
+  }
+
   function cleanupAnalysisListeners() {
     analysisCleanupRef.current?.();
     analysisCleanupRef.current = null;
@@ -714,9 +761,9 @@ export function App() {
     return activeJobIdRef.current === jobId;
   }
 
-  async function finishPendingAnalysisTerminalEvent(jobId: string, event: PendingAnalysisTerminalEvent, parsed: GameDto, replayed: PositionDto[]) {
+  async function finishPendingAnalysisTerminalEvent(jobId: string, event: PendingAnalysisTerminalEvent, parsed: GameDto, replayed: PositionDto[], capturedGeneration: number) {
     if (event.kind === "complete") {
-      await finishCompletedAnalysis(jobId, event.frames, parsed, replayed);
+      await finishCompletedAnalysis(jobId, event.frames, parsed, replayed, capturedGeneration);
       return;
     }
     finishStoppedAnalysis(jobId);
@@ -726,10 +773,18 @@ export function App() {
       : event.message || "Full-game KataGo analysis cancelled.");
   }
 
-  async function finishCompletedAnalysis(jobId: string, result: AnalysisFrameDto[], parsed: GameDto, replayed: PositionDto[]) {
+  async function finishCompletedAnalysis(jobId: string, result: AnalysisFrameDto[], parsed: GameDto, replayed: PositionDto[], capturedGeneration: number) {
+    if (documentGenerationRef.current !== capturedGeneration) {
+      finishStoppedAnalysis(jobId);
+      return;
+    }
     const lastAnalyzedMove = result.at(-1)?.turn ?? replayed.at(-1)?.move_number ?? parsed.moves.length;
     const shownMove = clampMoveNumberToPositions(replayed, lastAnalyzedMove);
     const classified = await classifyProblems(result);
+    if (documentGenerationRef.current !== capturedGeneration) {
+      finishStoppedAnalysis(jobId);
+      return;
+    }
     setGame(parsed);
     setPositions(replayed);
     setFrames(result);
@@ -739,7 +794,9 @@ export function App() {
     setAnalysisProgress((progress) => progress ? { ...progress, completed: progress.expected || result.length, expected: progress.expected || result.length } : progress);
     finishStoppedAnalysis(jobId);
     const serialized = nativeRuntime ? await serializeCurrentGame() : sgfText;
+    if (documentGenerationRef.current !== capturedGeneration) return;
     const cacheMessage = await saveAnalysisCacheForGame(serialized, currentFilePath, parsed, result, classified, "katago");
+    if (documentGenerationRef.current !== capturedGeneration) return;
     setMessage(`Full-game KataGo analysis completed with ${result.length} frames. Showing move ${shownMove}.${cacheMessage}`);
   }
 
@@ -752,6 +809,7 @@ export function App() {
   }
 
   async function checkAnalysisCacheForGame(text: string, filePath: string | null, parsed: GameDto, replayed: PositionDto[], baseMessage: string) {
+    const capturedGeneration = documentGenerationRef.current;
     if (!preferences.autoLoadCache) {
       resetAnalysisCacheState();
       setMessage(`${baseMessage} Cache auto-load is off.`);
@@ -773,6 +831,7 @@ export function App() {
           setMessage(`${baseMessage} ${cacheEngineLabel(lookup.engineKind)} cache hit, but the payload could not be restored.`);
           return;
         }
+        if (documentGenerationRef.current !== capturedGeneration) return;
         setFrames(payload.frames);
         setProblems(payload.problems);
         setCurrentMove(clampMoveNumberToPositions(replayed, payload.frames.at(-1)?.turn ?? parsed.moves.length));
@@ -917,6 +976,7 @@ export function App() {
       onCopySgf={() => void handleCopySgf()}
       onPasteSgf={() => void handlePasteSgf()}
       onClearBoard={() => void handleNewGame()}
+      onPass={() => void playAt("pass")}
       onAutoPlay={() => setAutoPlaying((value) => !value)}
       onOverlayMode={setOverlayMode}
       cacheBadge={<CacheStatusBadge status={cacheStatus} record={cacheRecord} error={cacheError} />}
@@ -960,6 +1020,7 @@ export function App() {
           overlayMode={overlayMode}
           onOverlayModeChange={setOverlayMode}
           hideCandidates={(currentPosition.to_play === "black" && !showBlackCandidates) || (currentPosition.to_play === "white" && !showWhiteCandidates)}
+          onPointClick={(point) => void playAt({ point })}
         />
       </div>
       <aside className="sheet-col">

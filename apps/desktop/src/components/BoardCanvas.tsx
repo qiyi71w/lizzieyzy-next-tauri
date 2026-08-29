@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { AnalysisFrameDto, MoveDto, PositionDto } from "../domain/types";
+import type { AnalysisFrameDto, MoveDto, PointDto, PositionDto } from "../domain/types";
 import { isPoint } from "../domain/board";
 
 export type OverlayMode = "candidates" | "ownership" | "policy";
@@ -15,6 +15,7 @@ type Props = {
   overlayMode?: OverlayMode;
   onOverlayModeChange?: (mode: OverlayMode) => void;
   hideCandidates?: boolean;
+  onPointClick?: (point: PointDto) => void;
 };
 type PolicyPoint = { x: number; y: number; value: number };
 
@@ -27,7 +28,8 @@ export function BoardCanvas({
   showMoveNumbers = false,
   overlayMode: overlayModeProp,
   onOverlayModeChange,
-  hideCandidates = false
+  hideCandidates = false,
+  onPointClick
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [overlayModeLocal, setOverlayModeLocal] = useState<OverlayMode>("candidates");
@@ -165,7 +167,22 @@ export function BoardCanvas({
   );
 
   return <div className="board-canvas">
-    <canvas ref={canvasRef} aria-label="棋盘" />
+    <canvas
+      ref={canvasRef}
+      aria-label="棋盘"
+      onClick={(event) => {
+        if (!onPointClick) return;
+        const rect = event.currentTarget.getBoundingClientRect();
+        const cssSize = Math.min(rect.width, rect.height);
+        const boardSize = position.board_size;
+        const padding = cssSize * 0.09;
+        const grid = (cssSize - padding * 2) / Math.max(boardSize - 1, 1);
+        const x = Math.round((event.clientX - rect.left - padding) / grid);
+        const y = Math.round((event.clientY - rect.top - padding) / grid);
+        if (x < 0 || y < 0 || x >= boardSize || y >= boardSize) return;
+        onPointClick({ x, y });
+      }}
+    />
     {layerHost ? createPortal(overlays, layerHost) : overlays}
   </div>;
 }
