@@ -184,40 +184,138 @@ export function App() {
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      const target = event.target;
-      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return;
-      if (event.key >= "1" && event.key <= "9") {
-        const index = Number(event.key) - 1;
+      if (shouldIgnoreApplicationShortcut(event.target)) return;
+      const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+      const ctrl = event.ctrlKey || event.metaKey;
+      const plain = !ctrl && !event.shiftKey && !event.altKey;
+      const onlyCtrl = ctrl && !event.shiftKey && !event.altKey;
+      const openEnabled = !isKataGoRunning && nativeRuntime;
+      const saveEnabled = openEnabled && documentDirty;
+      const passEnabled = openEnabled;
+
+      if (plain && key >= "1" && key <= "9") {
+        const index = Number(key) - 1;
         if (visibleCurrentFrame?.candidates[index]) setSelectedCandidateIndex(index);
         return;
       }
-      if (event.key === "ArrowLeft") {
+      if (plain && key === "ArrowLeft") {
         event.preventDefault();
-        if (currentGame) {
-          const parent = parentPath(currentGame.selected_path);
-          if (parent) void selectNode(parent);
-          return;
-        }
-        setCurrentMove((move) => clampMoveNumberToPositions(positions, move - 1));
+        if (currentGame) handleParent();
+        else setCurrentMove((move) => clampMoveNumberToPositions(positions, move - 1));
+        return;
       }
-      if (event.key === "ArrowRight") {
+      if (plain && key === "ArrowRight") {
         event.preventDefault();
-        if (currentGame) {
-          const node = nodeAt(currentGame.tree, currentGame.selected_path);
-          if (node && node.children.length > 0) {
-            void selectNode(childPath(
-              currentGame.selected_path,
-              chosenChildIndex(chosenChildren, currentGame.selected_path, node.children.length)
-            ));
-          }
-          return;
-        }
-        setCurrentMove((move) => clampMoveNumberToPositions(positions, move + 1));
+        if (currentGame) handleNextChild();
+        else setCurrentMove((move) => clampMoveNumberToPositions(positions, move + 1));
+        return;
+      }
+      if (plain && key === "ArrowUp") {
+        event.preventDefault();
+        handlePrevSibling();
+        return;
+      }
+      if (plain && key === "ArrowDown") {
+        event.preventDefault();
+        handleNextSibling();
+        return;
+      }
+      if (plain && key === "Home") {
+        event.preventDefault();
+        handleMoveSelect(0);
+        return;
+      }
+      if (onlyCtrl && key === "Home") {
+        event.preventDefault();
+        if (!isKataGoRunning) void handleNewGame();
+        return;
+      }
+      if (plain && key === "End") {
+        event.preventDefault();
+        handleMoveSelect(reviewMax);
+        return;
+      }
+      if (plain && key === "PageUp") {
+        event.preventDefault();
+        handleMoveSelect(reviewIndex - 10);
+        return;
+      }
+      if (plain && key === "PageDown") {
+        event.preventDefault();
+        handleMoveSelect(reviewIndex + 10);
+        return;
+      }
+      if (event.shiftKey && !ctrl && !event.altKey && key === "Delete") {
+        event.preventDefault();
+        void handleRemoveVariation();
+        return;
+      }
+      if (plain && key === "p") {
+        if (passEnabled) void playAt("pass");
+        return;
+      }
+      if (plain && key === "o") {
+        if (openEnabled) void handleOpenSgfDocument();
+        return;
+      }
+      if (plain && key === "s") {
+        if (openEnabled) void handleSaveSgfDocument(true);
+        return;
+      }
+      if (onlyCtrl && key === "s") {
+        event.preventDefault();
+        if (saveEnabled) void handleSaveSgfDocument(false);
+        return;
+      }
+      if (onlyCtrl && key === "c") {
+        event.preventDefault();
+        void handleCopySgf();
+        return;
+      }
+      if (onlyCtrl && key === "v") {
+        event.preventDefault();
+        if (!isKataGoRunning) void handlePasteSgf();
+        return;
+      }
+      if (onlyCtrl && key === "a") {
+        event.preventDefault();
+        setAutoPlaying((value) => !value);
+        return;
+      }
+      if (plain && key === "n") {
+        if (!isKataGoRunning) void handleNewGame();
+        return;
+      }
+      if (plain && key === "c") {
+        setShowCoordinates((value) => !value);
+        return;
+      }
+      if (plain && key === "m") {
+        setShowMoveNumbers((value) => !value);
+        return;
+      }
+      if (plain && key === "t") {
+        void handlePreferencesChange({ ...preferences, showPolicy: !preferences.showPolicy });
+        return;
+      }
+      if (plain && key === "h") {
+        setOverlayMode("policy");
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [positions, visibleCurrentFrame, currentGame, chosenChildren]);
+  }, [
+    chosenChildren,
+    currentGame,
+    documentDirty,
+    isKataGoRunning,
+    nativeRuntime,
+    positions,
+    preferences,
+    reviewIndex,
+    reviewMax,
+    visibleCurrentFrame
+  ]);
 
   useEffect(() => {
     if (!autoPlaying) return;
@@ -1092,6 +1190,9 @@ export function App() {
       onPasteSgf={() => void handlePasteSgf()}
       onClearBoard={() => void handleNewGame()}
       onPass={() => void playAt("pass")}
+      onRemoveVariation={() => void handleRemoveVariation()}
+      canRemoveVariation={canRemoveVariation}
+      onFirstMove={() => handleMoveSelect(0)}
       onAutoPlay={() => setAutoPlaying((value) => !value)}
       onOverlayMode={setOverlayMode}
       cacheBadge={<CacheStatusBadge status={cacheStatus} record={cacheRecord} error={cacheError} />}
@@ -1299,6 +1400,16 @@ function pathKey(path: NodePath): string {
 
 function samePath(left: NodePath, right: NodePath): boolean {
   return left.indices.length === right.indices.length && left.indices.every((index, offset) => index === right.indices[offset]);
+}
+
+
+function shouldIgnoreApplicationShortcut(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
+  if (target.isContentEditable) return true;
+  const editable = target.getAttribute("contenteditable");
+  if (editable !== null && editable !== "false") return true;
+  return target.getAttribute("aria-label") === "棋盘";
 }
 
 function parentPath(path: NodePath): NodePath | null {

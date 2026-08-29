@@ -49,6 +49,9 @@ type Props = {
   onPasteSgf: () => void;
   onClearBoard: () => void;
   onPass?: () => void;
+  onRemoveVariation?: () => void;
+  canRemoveVariation?: boolean;
+  onFirstMove?: () => void;
   onAutoPlay: () => void;
   onOverlayMode: (mode: OverlayMode) => void;
   cacheBadge: ReactNode;
@@ -174,13 +177,13 @@ export function AppChrome(props: Props) {
             <MenuItem label="添加黑子" disabled title={later} />
             <MenuItem label="添加白子" disabled title={later} />
             <MenuItem label="交替落子" disabled title={later} />
-            <MenuItem label="停一手(P)" disabled title={later} />
+            <MenuItem label="停一手(P)" onClick={() => run(() => props.onPass?.())} disabled={props.busy || !nativeAvailable || !props.onPass} title={!nativeAvailable ? nativeUnavailable : undefined} />
             <div className="menu-sep" role="separator" />
             <MenuItem label="设为主分支(L)" disabled title={later} />
             <MenuItem label="返回主分支(B)" disabled title={later} />
-            <MenuItem label="跳转到最前" onClick={() => run(() => props.onShowCoordinates(props.showCoordinates))} disabled />
+            <MenuItem label="跳转到最前" onClick={() => run(() => props.onFirstMove?.())} disabled={!props.onFirstMove} />
             <MenuItem label="删除一手" disabled title={later} />
-            <MenuItem label="删除分支" disabled title={later} />
+            <MenuItem label="删除分支" onClick={() => run(() => props.onRemoveVariation?.())} disabled={!props.canRemoveVariation} title={props.canRemoveVariation ? "删除当前选中的非根变化" : (props.nativeUnavailable ?? "只能删除已选中的非根变化")} />
             <div className="menu-sep" role="separator" />
             <MenuItem label="编辑棋谱原文" onClick={() => run(() => props.onToggleSheet("sgf"))} />
             <MenuItem label="交换黑白" disabled title={later} />
