@@ -458,13 +458,6 @@ fn read_sgf_file(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn write_sgf_file(path: String, sgf_text: String) -> Result<(), String> {
-    let path = non_empty_path(path)?;
-    sgf::parse_sgf(&sgf_text).map_err(|err| format!("failed to parse SGF text: {err}"))?;
-    fs::write(&path, sgf_text).map_err(|err| format!("failed to write SGF file {}: {err}", path.display()))
-}
-
-#[tauri::command]
 fn replace_current_game(
     state: State<CurrentGameState>,
     sgf_text: String,
@@ -476,6 +469,15 @@ fn replace_current_game(
 #[tauri::command]
 fn serialize_current_game(state: State<CurrentGameState>) -> Result<String, CurrentGameError> {
     state.serialize()
+}
+
+#[tauri::command]
+fn save_current_game(
+    state: State<CurrentGameState>,
+    path: String,
+    selected_path: NodePath,
+) -> Result<CurrentGameResultDto, String> {
+    state.save_to_path(path, selected_path)
 }
 
 #[tauri::command]
@@ -1987,12 +1989,12 @@ pub fn run() {
             read_sgf_file,
             replace_current_game,
             serialize_current_game,
+            save_current_game,
             project_current_game_mainline,
             select_current_game_node,
             play_current_game,
             set_current_game_personal_comment,
             remove_current_game_variation,
-            write_sgf_file,
             fake_analyze,
             classify_problems,
             katago_launch_plan,
@@ -2019,20 +2021,6 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn write_sgf_file_preserves_original_text_after_validation() {
-        let path = std::env::temp_dir().join(format!("lizzieyzy-save-{}.sgf", Uuid::new_v4()));
-        let sgf_text =
-            "(;GM[1]FF[4]SZ[19]KM[7.5]DT[2026-05-01]PB[Black]BR[1d]PW[White]WR[2d]AB[pd][dp]C[root comment]\n\
-            ;B[dd]C[kept comment](;W[qq]C[main variation])(;W[pp]C[side variation]))";
-
-        write_sgf_file(path.display().to_string(), sgf_text.to_string()).unwrap();
-
-        let written = fs::read_to_string(&path).unwrap();
-        let _ = fs::remove_file(&path);
-        assert_eq!(written, sgf_text);
-    }
 
     #[test]
     fn batch_analysis_query_requests_ownership_and_policy() {

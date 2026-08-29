@@ -4,6 +4,9 @@ use app_model::{
 use sgf::CurrentSgfDocument;
 use std::sync::Mutex;
 
+#[cfg(test)]
+mod current_game_save_write;
+
 #[derive(Default)]
 pub struct CurrentGameState {
     holder: Mutex<CurrentGameHolder>,
@@ -42,6 +45,38 @@ impl CurrentGameState {
 
     pub fn serialize(&self) -> Result<String, CurrentGameError> {
         self.with_document(|document| document.serialize())
+    }
+
+    pub fn save_to_path(
+        &self,
+        path: String,
+        selected_path: NodePath,
+    ) -> Result<CurrentGameResultDto, String> {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            return Err("path must not be empty".to_string());
+        }
+        let target = std::path::PathBuf::from(trimmed);
+        let mut holder = self.holder.lock().expect("current game state");
+        let document = holder.document.as_ref().ok_or_else(|| no_current_game().to_string())?;
+        let serialized = document.serialize().map_err(|error| error.to_string())?;
+        let snapshot = document
+            .snapshot(&selected_path)
+            .map_err(|error| error.to_string())?;
+        let tree = document.tree().map_err(|error| error.to_string())?;
+        std::fs::write(&target, &serialized).map_err(|err| {
+            format!("failed to write SGF file {}: {err}", target.display())
+        })?;
+        holder.dirty = false;
+        holder.native_path = Some(trimmed.to_string());
+        Ok(CurrentGameResultDto {
+            tree,
+            selected_path,
+            snapshot,
+            generation: holder.generation,
+            dirty: holder.dirty,
+            native_path: holder.native_path.clone(),
+        })
     }
 
     pub fn mainline_projection(&self) -> Result<GameDto, CurrentGameError> {

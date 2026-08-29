@@ -29,7 +29,7 @@ Provider and readboard live paths follow the same boundary rule. The React UI sh
 
 React + TypeScript desktop UI built with Vite. The current UI includes board rendering, SGF text/import workflow, native open/save entry points, winrate and analysis panels, cache status, and engine profile controls.
 
-The browser preview can exercise UI fallback paths and fake analysis, but it cannot perform native file dialogs, app-data profile persistence, local asset checks, or real KataGo execution.
+The browser preview can exercise UI fallback paths and fake analysis, but it cannot perform native file dialogs, authoritative current-game edit/Save, app-data profile persistence, local asset checks, or real KataGo execution.
 
 ### `apps/desktop/src-tauri`
 
@@ -37,7 +37,13 @@ Tauri 2 command gateway. It exposes health, SGF parse/replay, native SGF read/wr
 
 This layer should stay a gateway. Domain behavior belongs in crates unless it is directly about Tauri lifecycle, app data paths, command shape, or event emission.
 
-Current-game commands are `replace_current_game`, `select_current_game_node`, `play_current_game`, `serialize_current_game`, and `project_current_game_mainline`. `play_current_game` sends a `NodePath` plus point/pass vertex; Rust uses the selected position's player-to-play color and `go-core` legality. An identical existing child is selected without mutation. A new child increments document generation and marks the game dirty. Occupied, suicide, simple-ko, and invalid-path failures are atomic.
+Rust owns the authoritative current game. The holder stores `CurrentSgfDocument`, a monotonic `generation`, `dirty`, and `native_path`. It does not store the React-owned `NodePath` cursor. Shared results use `CurrentGameResultDto` (`tree`, `selected_path`, `snapshot`, `generation`, `dirty`, `native_path`). Domain failures stay in `CurrentGameError` / `CurrentGameErrorKind`. Filesystem Save failures stay Gateway `String` errors and do not extend the domain kind enum.
+
+Current-game commands are `replace_current_game`, `select_current_game_node`, `play_current_game`, `set_current_game_personal_comment`, `remove_current_game_variation`, `serialize_current_game`, `save_current_game`, and `project_current_game_mainline`. `play_current_game` sends a `NodePath` plus point/pass vertex; Rust uses the selected position's player-to-play color and `go-core` legality. An identical existing child is selected without mutation. A new child increments document generation and marks the game dirty. Occupied, suicide, simple-ko, and invalid-path failures are atomic.
+
+`save_current_game` is the authoritative persistence command. Native Save/Save As dialogs stay in the frontend Gateway wrapper; cancel never reaches Rust. The command serializes the current document, writes that text, then clears `dirty` and updates `native_path` only after a successful write. Successful Save keeps the caller-supplied cursor and does not increment `generation`. Write failure leaves path and dirty unchanged. Save is a semantic SGF round-trip, not byte-for-byte format preservation.
+
+`serialize_current_game` and `project_current_game_mainline` are derived reads. The only remaining first-child adapter is the fresh Rust mainline `GameDto` consumed by analysis, cache, and review. React must not treat original `sgfText`, independently replayed positions, or `GameDto.moves` as document authority. The SGF textarea remains load input. Browser preview keeps edit and authoritative Save unavailable and explains that they need the native runtime.
 
 Provider/readboard command contracts in this batch:
 
@@ -135,6 +141,11 @@ The cache key is derived from parsed SGF content and the raw SGF hash. Cache rec
 | readboard probe | Domain command/DTO coverage and `readboard_sidecar_probe` path wired behind the sidecar boundary. | A real readboard sidecar process, expected port/path/process state, probe success/failure, timeout, and version evidence. |
 | readboard sync | Protocol line parsing and `readboard_sidecar_sync_snapshot` path wired behind the sidecar boundary. | A real sidecar plus target client/window state, sync behavior, stale-state handling, timeout, and restart evidence. |
 | image OCR | Structured unsupported/not-implemented error when image OCR is unavailable. | A sidecar/runtime that explicitly supports OCR, plus image fixture evidence and false-positive/timeout checks. |
+| Editable current-game Save | `editable_workspace_roundtrip` semantic serialize/parse coverage on `editable-workspace-branching`, plus `current_game_save_write_failure` proving a directory-as-file write error leaves path/dirty unchanged. | Ticket 08 Windows/native dialog, path, and interactive Save/reopen evidence. |
+
+## Current-Game And Parity Evidence
+
+Repository evidence for the editable SGF workspace is the focused Rust filters above, frontend type/build validation, and the command/DTO ownership recorded in this document. That is not Windows/native interaction evidence. Ticket 08 records actual native Save/Save As dialogs, filesystem paths, and reopen behavior on the target desktop.
 
 Docs, release notes, and handoffs should describe these as two different gates: offline contract plus runtime path is an implementation milestone; live provider/sidecar smoke is an environment milestone.
 

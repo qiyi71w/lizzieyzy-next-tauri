@@ -156,7 +156,11 @@ export async function removeCurrentGameVariation(path: NodePath): Promise<Curren
   return invoke<CurrentGameResultDto>("remove_current_game_variation", { path });
 }
 
-export async function saveSgfDocument(path: string | null, sgfText: string, defaultFileName = "review.sgf"): Promise<SgfDocument | null> {
+export async function saveCurrentGame(
+  path: string | null,
+  selectedPath: NodePath,
+  defaultFileName = "review.sgf"
+): Promise<CurrentGameResultDto | null> {
   if (!isTauriRuntime()) {
     throw new Error(nativeCurrentGameUnavailable);
   }
@@ -166,8 +170,7 @@ export async function saveSgfDocument(path: string | null, sgfText: string, defa
     defaultPath: defaultFileName
   });
   if (!targetPath) return null;
-  await invoke<void>("write_sgf_file", { path: targetPath, sgfText });
-  return { path: targetPath, sgfText };
+  return invoke<CurrentGameResultDto>("save_current_game", { path: targetPath, selectedPath });
 }
 
 export async function analyzeKataGoOnce(profile: EngineProfileDto, sgfText: string, turn: number, maxVisits: number): Promise<AnalysisFrameDto> {
