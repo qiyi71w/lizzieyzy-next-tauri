@@ -20,6 +20,7 @@ import {
   replaySgfPositions,
   replaceCurrentGame,
   saveSgfDocument,
+  selectCurrentGameNode,
   startKataGoGameAnalysis
 } from "./api/backend";
 import { computeGameCacheKey, loadAnalysisCache, saveAnalysisCache } from "./api/analysisCache";
@@ -28,7 +29,7 @@ import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, select
 import type { AnalysisCacheRecord, CacheStatus, GameCacheKey, JsonValue } from "./domain/cache";
 import { defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "./domain/preferences";
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
-import type { AnalysisFrameDto, AppHealthDto, CurrentGameResultDto, EngineProfileDto, GameDto, PositionDto, ProblemMarkerDto } from "./domain/types";
+import type { AnalysisFrameDto, AppHealthDto, CurrentGameResultDto, EngineProfileDto, GameDto, NodePath, PositionDto, ProblemMarkerDto, SgfTreeNodeDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
@@ -60,6 +61,8 @@ export function App() {
   const [fallbackFileName, setFallbackFileName] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [currentGame, setCurrentGame] = useState<CurrentGameResultDto | null>(null);
+  const [chosenChildren, setChosenChildren] = useState<Map<string, number>>(() => new Map());
+  const navigatingRef = useRef(false);
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus>("idle");
@@ -118,15 +121,25 @@ export function App() {
   const currentFrame = useMemo(() => frames.find((f) => f.turn === currentMove) ?? frames.at(-1), [frames, currentMove]);
   const visibleCurrentFrame = useMemo(() => applyPreferencesToFrame(currentFrame, preferences), [currentFrame, preferences]);
   const currentPosition = useMemo(() => {
-    if (currentGame && currentMove === currentGame.snapshot.position.move_number) {
-      return currentGame.snapshot.position;
-    }
+    if (currentGame) return currentGame.snapshot.position;
     return selectExactPosition(positions, currentMove, game.summary.board_size);
   }, [currentGame, currentMove, positions, game.summary.board_size]);
-  const selectedPersonalComment = currentGame && currentMove === currentGame.snapshot.position.move_number
-    ? currentGame.snapshot.personal_comment
-    : "";
+  const selectedPersonalComment = currentGame ? currentGame.snapshot.personal_comment : "";
+  const selectedPath = currentGame?.selected_path ?? { indices: [] };
+  const selectedNode = currentGame ? nodeAt(currentGame.tree, selectedPath) : null;
+  const parentOfSelected = parentPath(selectedPath);
+  const parentNode = currentGame && parentOfSelected ? nodeAt(currentGame.tree, parentOfSelected) : null;
+  const siblingIndex = selectedPath.indices.at(-1);
+  const canParent = Boolean(currentGame && parentOfSelected);
+  const canNext = Boolean(selectedNode && selectedNode.children.length > 0);
+  const canPrevSibling = Boolean(parentNode && siblingIndex !== undefined && siblingIndex > 0);
+  const canNextSibling = Boolean(parentNode && siblingIndex !== undefined && siblingIndex + 1 < parentNode.children.length);
+  const siblingLabel = parentNode && siblingIndex !== undefined ? `${siblingIndex + 1}/${parentNode.children.length}` : "—";
   const maxMove = Math.max(positions.at(-1)?.move_number ?? 0, 1);
+  const reviewIndex = currentGame ? selectedPath.indices.length : currentMove;
+  const reviewMax = currentGame
+    ? chosenLeafPath(currentGame.tree, { indices: [] }, chosenChildren).indices.length
+    : maxMove;
   const documentName = useMemo(() => currentFilePath ? fileNameFromPath(currentFilePath) : fallbackFileName ?? "未命名棋谱", [currentFilePath, fallbackFileName]);
   const saveFileName = documentName.toLowerCase().endsWith(".sgf") ? documentName : `${documentName}.sgf`;
 
@@ -151,20 +164,47 @@ export function App() {
       }
       if (event.key === "ArrowLeft") {
         event.preventDefault();
+        if (currentGame) {
+          const parent = parentPath(currentGame.selected_path);
+          if (parent) void selectNode(parent);
+          return;
+        }
         setCurrentMove((move) => clampMoveNumberToPositions(positions, move - 1));
       }
       if (event.key === "ArrowRight") {
         event.preventDefault();
+        if (currentGame) {
+          const node = nodeAt(currentGame.tree, currentGame.selected_path);
+          if (node && node.children.length > 0) {
+            void selectNode(childPath(
+              currentGame.selected_path,
+              chosenChildIndex(chosenChildren, currentGame.selected_path, node.children.length)
+            ));
+          }
+          return;
+        }
         setCurrentMove((move) => clampMoveNumberToPositions(positions, move + 1));
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [positions, visibleCurrentFrame]);
+  }, [positions, visibleCurrentFrame, currentGame, chosenChildren]);
 
   useEffect(() => {
     if (!autoPlaying) return;
     const timer = window.setInterval(() => {
+      if (currentGame) {
+        const node = nodeAt(currentGame.tree, currentGame.selected_path);
+        if (!node || node.children.length === 0) {
+          setAutoPlaying(false);
+          return;
+        }
+        void selectNode(childPath(
+          currentGame.selected_path,
+          chosenChildIndex(chosenChildren, currentGame.selected_path, node.children.length)
+        ));
+        return;
+      }
       setCurrentMove((move) => {
         const next = clampMoveNumberToPositions(positions, move + 1);
         if (next >= Math.max(positions.at(-1)?.move_number ?? 0, 1)) setAutoPlaying(false);
@@ -172,7 +212,7 @@ export function App() {
       });
     }, 800);
     return () => window.clearInterval(timer);
-  }, [autoPlaying, positions]);
+  }, [autoPlaying, positions, currentGame, chosenChildren]);
 
   function toggleSheet(next: SheetId) {
     setSheet((current) => current === next ? "none" : next);
@@ -263,6 +303,7 @@ export function App() {
       }
       const result = await replaceCurrentGame(document.sgfText, document.path);
       setCurrentGame(result);
+      setChosenChildren(chosenFromPath(result.selected_path));
       setSgfText(document.sgfText);
       setCurrentFilePath(result.native_path ?? document.path);
       setFallbackFileName(null);
@@ -453,6 +494,7 @@ export function App() {
       const importedMessage = `Imported ${file.name}: ${parsed.summary.move_count} moves.`;
       setSgfText(text);
       setCurrentGame(null);
+      setChosenChildren(new Map());
       setCurrentFilePath(null);
       setFallbackFileName(file.name);
       setDirty(false);
@@ -477,6 +519,7 @@ export function App() {
       const importedMessage = `Imported ${providerLabel(result.provider)} provider payload from ${source}: ${parsed.summary.move_count} moves.${warningText}`;
       setSgfText(result.sgf_text);
       setCurrentGame(null);
+      setChosenChildren(new Map());
       setCurrentFilePath(null);
       setFallbackFileName(providerDocumentName(result));
       setDirty(false);
@@ -499,6 +542,7 @@ export function App() {
     const sampleMessage = `Sample SGF restored: ${parsed.summary.move_count} moves.`;
     setSgfText(demoSgf);
     setCurrentGame(null);
+      setChosenChildren(new Map());
     setCurrentFilePath(null);
     setFallbackFileName("sample.sgf");
     setDirty(false);
@@ -517,6 +561,7 @@ export function App() {
     const [parsed, replayed] = await Promise.all([parseSgfSummary(emptySgf), replaySgfPositions(emptySgf)]);
     setSgfText(emptySgf);
     setCurrentGame(null);
+      setChosenChildren(new Map());
     setCurrentFilePath(null);
     setFallbackFileName(null);
     setDirty(false);
@@ -549,6 +594,7 @@ export function App() {
       const [parsed, replayed] = await Promise.all([parseSgfSummary(text), replaySgfPositions(text)]);
       setSgfText(text);
       setCurrentGame(null);
+      setChosenChildren(new Map());
       setCurrentFilePath(null);
       setFallbackFileName("clipboard.sgf");
       setDirty(true);
@@ -564,9 +610,51 @@ export function App() {
     }
   }
 
+  async function selectNode(path: NodePath) {
+    if (!currentGame || navigatingRef.current) return;
+    if (samePath(path, currentGame.selected_path)) return;
+    navigatingRef.current = true;
+    try {
+      const result = await selectCurrentGameNode(path);
+      setCurrentGame(result);
+      setChosenChildren((prev) => rememberChosenChildren(prev, result.selected_path));
+      setCurrentMove(result.snapshot.position.move_number);
+      setSelectedCandidateIndex(null);
+    } catch (error) {
+      setMessage(`导航失败: ${errorMessage(error)}`);
+    } finally {
+      navigatingRef.current = false;
+    }
+  }
+
   function handleMoveSelect(moveNumber: number) {
+    if (currentGame) {
+      const leaf = chosenLeafPath(currentGame.tree, { indices: [] }, chosenChildren);
+      const depth = Math.max(0, Math.min(moveNumber, leaf.indices.length));
+      void selectNode({ indices: leaf.indices.slice(0, depth) });
+      return;
+    }
     setCurrentMove(clampMoveNumberToPositions(positions, moveNumber));
     setSelectedCandidateIndex(null);
+  }
+
+  function handleParent() {
+    if (parentOfSelected) void selectNode(parentOfSelected);
+  }
+
+  function handleNextChild() {
+    if (!selectedNode || selectedNode.children.length === 0) return;
+    void selectNode(childPath(selectedPath, chosenChildIndex(chosenChildren, selectedPath, selectedNode.children.length)));
+  }
+
+  function handlePrevSibling() {
+    if (siblingIndex === undefined || siblingIndex <= 0) return;
+    void selectNode({ indices: [...selectedPath.indices.slice(0, -1), siblingIndex - 1] });
+  }
+
+  function handleNextSibling() {
+    if (!parentNode || siblingIndex === undefined || siblingIndex + 1 >= parentNode.children.length) return;
+    void selectNode({ indices: [...selectedPath.indices.slice(0, -1), siblingIndex + 1] });
   }
 
   function cleanupAnalysisListeners() {
@@ -838,9 +926,18 @@ export function App() {
       </aside>
     </section>
     <BottomBar
-      currentMove={currentMove}
-      maxMove={maxMove}
-      onMove={(move) => setCurrentMove(clampMoveNumberToPositions(positions, move))}
+      currentMove={reviewIndex}
+      maxMove={reviewMax}
+      onMove={handleMoveSelect}
+      canParent={canParent}
+      canNext={canNext}
+      canPrevSibling={canPrevSibling}
+      canNextSibling={canNextSibling}
+      siblingLabel={siblingLabel}
+      onParent={handleParent}
+      onNext={handleNextChild}
+      onPrevSibling={handlePrevSibling}
+      onNextSibling={handleNextSibling}
       engineReady={engineReady}
       isKataGoRunning={isKataGoRunning}
       analysisProgress={analysisProgress}
@@ -872,6 +969,7 @@ export function App() {
         <textarea value={sgfText} onChange={(event) => {
           setSgfText(event.target.value);
           setCurrentGame(null);
+          setChosenChildren(new Map());
           setDirty(true);
           clearReviewData();
           resetAnalysisCacheState();
@@ -962,4 +1060,63 @@ function cacheEngineLabel(engineKind: CacheEngineKind): string {
 
 function fileNameFromPath(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+}
+
+function pathKey(path: NodePath): string {
+  return path.indices.join(",");
+}
+
+function samePath(left: NodePath, right: NodePath): boolean {
+  return left.indices.length === right.indices.length && left.indices.every((index, offset) => index === right.indices[offset]);
+}
+
+function parentPath(path: NodePath): NodePath | null {
+  if (path.indices.length === 0) return null;
+  return { indices: path.indices.slice(0, -1) };
+}
+
+function childPath(path: NodePath, index: number): NodePath {
+  return { indices: [...path.indices, index] };
+}
+
+function nodeAt(root: SgfTreeNodeDto, path: NodePath): SgfTreeNodeDto | null {
+  let node: SgfTreeNodeDto | undefined = root;
+  for (const index of path.indices) {
+    node = node.children[index];
+    if (!node) return null;
+  }
+  return node;
+}
+
+function chosenFromPath(path: NodePath): Map<string, number> {
+  const chosen = new Map<string, number>();
+  for (let depth = 0; depth < path.indices.length; depth += 1) {
+    chosen.set(pathKey({ indices: path.indices.slice(0, depth) }), path.indices[depth]);
+  }
+  return chosen;
+}
+
+function rememberChosenChildren(previous: Map<string, number>, path: NodePath): Map<string, number> {
+  const next = new Map(previous);
+  for (const [key, index] of chosenFromPath(path)) {
+    next.set(key, index);
+  }
+  return next;
+}
+
+function chosenChildIndex(chosen: Map<string, number>, path: NodePath, childCount: number): number {
+  const remembered = chosen.get(pathKey(path));
+  if (remembered !== undefined && remembered >= 0 && remembered < childCount) return remembered;
+  return 0;
+}
+
+function chosenLeafPath(root: SgfTreeNodeDto, start: NodePath, chosen: Map<string, number>): NodePath {
+  const indices = [...start.indices];
+  let node = nodeAt(root, start);
+  while (node && node.children.length > 0) {
+    const index = chosenChildIndex(chosen, { indices }, node.children.length);
+    indices.push(index);
+    node = node.children[index];
+  }
+  return { indices };
 }

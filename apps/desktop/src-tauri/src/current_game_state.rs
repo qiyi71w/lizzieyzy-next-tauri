@@ -1,4 +1,4 @@
-use app_model::{CurrentGameError, CurrentGameResultDto};
+use app_model::{CurrentGameError, CurrentGameErrorKind, CurrentGameResultDto, NodePath};
 use sgf::CurrentSgfDocument;
 use std::sync::Mutex;
 
@@ -25,6 +25,10 @@ impl CurrentGameState {
             .lock()
             .expect("current game state")
             .replace(sgf_text, native_path)
+    }
+
+    pub fn select_path(&self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.holder.lock().expect("current game state").select_path(path)
     }
 }
 
@@ -62,12 +66,28 @@ impl CurrentGameHolder {
                 .and_then(|document| document.serialize().ok()),
         )
     }
+
+    fn select_path(&self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let document = self.document.as_ref().ok_or_else(|| CurrentGameError {
+            kind: CurrentGameErrorKind::NoCurrentGame,
+            message: "no current game".to_string(),
+        })?;
+        let snapshot = document.snapshot(&path)?;
+        Ok(CurrentGameResultDto {
+            tree: document.tree()?,
+            selected_path: path,
+            snapshot,
+            generation: self.generation,
+            dirty: self.dirty,
+            native_path: self.native_path.clone(),
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use app_model::CurrentGameErrorKind;
+    use app_model::{CurrentGameErrorKind, NodePath};
 
     const BRANCHING: &str = include_str!("../../../../tests/golden/editable-workspace-branching.sgf");
 
@@ -102,5 +122,40 @@ mod tests {
             state.holder.lock().expect("current game state").snapshot_state(),
             before
         );
+    }
+
+    #[test]
+    fn select_path_returns_snapshot_without_mutating_document_identity() {
+        let state = CurrentGameState::default();
+        let missing = state.select_path(NodePath { indices: Vec::new() }).unwrap_err();
+        assert_eq!(missing.kind, CurrentGameErrorKind::NoCurrentGame);
+
+        let opened = state
+            .replace(BRANCHING, Some("/tmp/branching.sgf".to_string()))
+            .unwrap();
+        let before = state.holder.lock().expect("current game state").snapshot_state();
+
+        let second = state.select_path(NodePath { indices: vec![0, 1] }).unwrap();
+        assert_eq!(
+            state.holder.lock().expect("current game state").snapshot_state(),
+            before
+        );
+        assert_eq!(second.generation, opened.generation);
+        assert_eq!(second.dirty, opened.dirty);
+        assert_eq!(second.native_path, opened.native_path);
+        assert_eq!(second.tree, opened.tree);
+        assert_eq!(second.selected_path.indices, vec![0, 1]);
+        assert_eq!(second.snapshot.path.indices, vec![0, 1]);
+        assert_eq!(second.snapshot.personal_comment, "second continuation");
+        assert_eq!(second.snapshot.position.move_number, 2);
+        assert_eq!(second.snapshot.position.to_play, app_model::PlayerColor::White);
+
+        let invalid = state.select_path(NodePath { indices: vec![0, 2] }).unwrap_err();
+        assert_eq!(invalid.kind, CurrentGameErrorKind::InvalidNodePath);
+        assert_eq!(
+            state.holder.lock().expect("current game state").snapshot_state(),
+            before
+        );
+        assert_eq!(opened.selected_path.indices, vec![0, 0, 0]);
     }
 }

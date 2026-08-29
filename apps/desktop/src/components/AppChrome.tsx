@@ -305,6 +305,15 @@ export function BottomBar(props: {
   currentMove: number;
   maxMove: number;
   onMove: (move: number) => void;
+  canParent: boolean;
+  canNext: boolean;
+  canPrevSibling: boolean;
+  canNextSibling: boolean;
+  siblingLabel: string;
+  onParent: () => void;
+  onNext: () => void;
+  onPrevSibling: () => void;
+  onNextSibling: () => void;
   engineReady: boolean;
   isKataGoRunning: boolean;
   analysisProgress: { completed: number; expected: number; turn: number } | null;
@@ -374,6 +383,13 @@ export function BottomBar(props: {
           onChange={(event) => props.onMove(Number(event.target.value))}
         />
         <span className="move-indicator">第 {props.currentMove} / {props.maxMove} 手</span>
+      </div>
+      <div className="nav-cluster" aria-label="变化导航">
+        <button type="button" className="chrome-btn" onClick={props.onParent} disabled={!props.canParent} title="回到父节点">父节点</button>
+        <button type="button" className="chrome-btn" onClick={props.onNext} disabled={!props.canNext} title="进入最近选择的变化，否则第一变化">下一变化</button>
+        <button type="button" className="chrome-btn" onClick={props.onPrevSibling} disabled={!props.canPrevSibling} title="上一分支">上一分支</button>
+        <button type="button" className="chrome-btn" onClick={props.onNextSibling} disabled={!props.canNextSibling} title="下一分支">下一分支</button>
+        <span className="move-indicator">分支 {props.siblingLabel}</span>
       </div>
       <span className="spacer" />
       <button type="button" className="chrome-btn" onClick={props.onEstimate}>形势判断</button>
