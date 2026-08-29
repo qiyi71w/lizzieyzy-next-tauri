@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AnalysisFrameDto,
   AppHealthDto,
@@ -165,12 +165,10 @@ export async function saveCurrentGame(
     throw new Error(nativeCurrentGameUnavailable);
   }
 
-  const targetPath = path ?? await save({
-    filters: sgfDialogFilters,
-    defaultPath: defaultFileName
-  });
-  if (!targetPath) return null;
-  return invoke<CurrentGameResultDto>("save_current_game", { path: targetPath, selectedPath });
+  if (path) {
+    return invoke<CurrentGameResultDto>("save_current_game", { path, selectedPath });
+  }
+  return invoke<CurrentGameResultDto | null>("save_current_game_as", { selectedPath, defaultFileName });
 }
 
 export async function analyzeKataGoOnce(profile: EngineProfileDto, sgfText: string, turn: number, maxVisits: number): Promise<AnalysisFrameDto> {

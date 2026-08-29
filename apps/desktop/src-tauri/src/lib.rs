@@ -27,6 +27,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod current_game_state;
+mod save_as;
 use current_game_state::CurrentGameState;
 use uuid::Uuid;
 
@@ -478,6 +479,22 @@ fn save_current_game(
     selected_path: NodePath,
 ) -> Result<CurrentGameResultDto, String> {
     state.save_to_path(path, selected_path)
+}
+
+#[tauri::command]
+async fn save_current_game_as(
+    app: AppHandle,
+    state: State<'_, CurrentGameState>,
+    selected_path: NodePath,
+    default_file_name: Option<String>,
+) -> Result<Option<CurrentGameResultDto>, String> {
+    let default_file_name = default_file_name.unwrap_or_else(|| "review.sgf".to_string());
+    let app = app.clone();
+    let outcome =
+        tauri::async_runtime::spawn_blocking(move || save_as::pick_save_as_outcome(&app, &default_file_name))
+            .await
+            .map_err(|error| error.to_string())??;
+    save_as::persist_current_game_save_as(&state, outcome, selected_path)
 }
 
 #[tauri::command]
@@ -1990,6 +2007,7 @@ pub fn run() {
             replace_current_game,
             serialize_current_game,
             save_current_game,
+            save_current_game_as,
             project_current_game_mainline,
             select_current_game_node,
             play_current_game,

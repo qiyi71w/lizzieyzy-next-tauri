@@ -58,15 +58,17 @@ impl CurrentGameState {
         }
         let target = std::path::PathBuf::from(trimmed);
         let mut holder = self.holder.lock().expect("current game state");
-        let document = holder.document.as_ref().ok_or_else(|| no_current_game().to_string())?;
+        let document = holder
+            .document
+            .as_ref()
+            .ok_or_else(|| no_current_game().to_string())?;
         let serialized = document.serialize().map_err(|error| error.to_string())?;
         let snapshot = document
             .snapshot(&selected_path)
             .map_err(|error| error.to_string())?;
         let tree = document.tree().map_err(|error| error.to_string())?;
-        std::fs::write(&target, &serialized).map_err(|err| {
-            format!("failed to write SGF file {}: {err}", target.display())
-        })?;
+        std::fs::write(&target, &serialized)
+            .map_err(|err| format!("failed to write SGF file {}: {err}", target.display()))?;
         holder.dirty = false;
         holder.native_path = Some(trimmed.to_string());
         Ok(CurrentGameResultDto {
