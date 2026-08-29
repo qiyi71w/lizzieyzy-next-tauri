@@ -103,11 +103,37 @@ impl CurrentSgfDocument {
         self.snapshot(&NodePath { indices })
     }
 
+    pub fn set_personal_comment(
+        &mut self,
+        path: &NodePath,
+        comment: &str,
+    ) -> Result<SelectedNodeSnapshotDto, CurrentGameError> {
+        apply_personal_comment(self.node_mut(path)?, comment);
+        self.snapshot(path)
+    }
+
     fn root(&self) -> Result<&SgfNode, CurrentGameError> {
         self.document.root.as_ref().ok_or_else(|| CurrentGameError {
             kind: CurrentGameErrorKind::MalformedSgf,
             message: SgfError::Malformed.to_string(),
         })
+    }
+
+    fn node_mut(&mut self, path: &NodePath) -> Result<&mut SgfNode, CurrentGameError> {
+        let mut node = self.document.root.as_mut().ok_or_else(|| CurrentGameError {
+            kind: CurrentGameErrorKind::MalformedSgf,
+            message: SgfError::Malformed.to_string(),
+        })?;
+        for &index in &path.indices {
+            node = node
+                .children
+                .get_mut(index as usize)
+                .ok_or_else(|| CurrentGameError {
+                    kind: CurrentGameErrorKind::InvalidNodePath,
+                    message: "invalid node path".to_string(),
+                })?;
+        }
+        Ok(node)
     }
 
     fn nodes_on_path(&self, path: &NodePath) -> Result<Vec<&SgfNode>, CurrentGameError> {
@@ -288,6 +314,40 @@ fn personal_comment(node: &SgfNode) -> String {
         .and_then(|values| values.first())
         .cloned()
         .unwrap_or_default()
+}
+
+fn apply_personal_comment(node: &mut SgfNode, comment: &str) {
+    let submitted_empty = comment.trim().is_empty();
+    let current = property_values(node, "C")
+        .and_then(|values| values.first())
+        .cloned();
+    let current_empty = current
+        .as_deref()
+        .map(str::trim)
+        .map(str::is_empty)
+        .unwrap_or(true);
+
+    if submitted_empty {
+        if current_empty {
+            return;
+        }
+        node.properties.retain(|property| property.key != "C");
+        return;
+    }
+
+    if current.as_deref() == Some(comment) {
+        return;
+    }
+
+    if let Some(property) = node.properties.iter_mut().find(|property| property.key == "C") {
+        property.values = vec![comment.to_string()];
+        return;
+    }
+
+    node.properties.push(SgfProperty {
+        key: "C".to_string(),
+        values: vec![comment.to_string()],
+    });
 }
 
 fn tree_dto(node: &SgfNode) -> SgfTreeNodeDto {
@@ -546,7 +606,7 @@ mod editable_workspace_navigation {
 }
 
 #[cfg(test)]
-mod editable_workspace_move_edit {
+mod editable_workspace_mutation_edit {
     use super::*;
     use app_model::{CurrentGameErrorKind, MoveVertex, PlayerColor, PointDto, PositionDto};
 
@@ -745,6 +805,140 @@ mod editable_workspace_move_edit {
             path = snapshot.path.clone();
         }
         snapshot
+    }
+
+    #[test]
+    fn editable_workspace_comment_edit_adds_replaces_clears_and_preserves_empty() {
+        let mut document = CurrentSgfDocument::open(BRANCHING).unwrap();
+        let root = NodePath { indices: Vec::new() };
+        let move_node = NodePath { indices: vec![0] };
+        let first_sibling = NodePath { indices: vec![0, 0] };
+        let second_sibling = NodePath { indices: vec![0, 1] };
+
+        assert_eq!(
+            document.snapshot(&root).unwrap().personal_comment,
+            "root personal"
+        );
+        assert_eq!(
+            document.snapshot(&move_node).unwrap().personal_comment,
+            "main move"
+        );
+        assert_eq!(
+            document.snapshot(&first_sibling).unwrap().personal_comment,
+            "first continuation"
+        );
+        assert_eq!(
+            document.snapshot(&second_sibling).unwrap().personal_comment,
+            "second continuation"
+        );
+
+        let replaced_root = document.set_personal_comment(&root, "root edited").unwrap();
+        assert_eq!(replaced_root.path.indices, root.indices);
+        assert_eq!(replaced_root.personal_comment, "root edited");
+        assert!(replaced_root.generated_information.is_none());
+        assert_eq!(
+            document.snapshot(&move_node).unwrap().personal_comment,
+            "main move"
+        );
+
+        let replaced_move = document.set_personal_comment(&move_node, "move edited").unwrap();
+        assert_eq!(replaced_move.path.indices, move_node.indices);
+        assert_eq!(replaced_move.personal_comment, "move edited");
+
+        let replaced_sibling = document
+            .set_personal_comment(&second_sibling, "sibling edited")
+            .unwrap();
+        assert_eq!(replaced_sibling.path.indices, second_sibling.indices);
+        assert_eq!(replaced_sibling.personal_comment, "sibling edited");
+        assert_eq!(
+            document.snapshot(&first_sibling).unwrap().personal_comment,
+            "first continuation"
+        );
+
+        let after_edits = document.serialize().unwrap();
+        let unchanged = document
+            .set_personal_comment(&second_sibling, "sibling edited")
+            .unwrap();
+        assert_eq!(unchanged.personal_comment, "sibling edited");
+        assert_eq!(document.serialize().unwrap(), after_edits);
+
+        let cleared = document.set_personal_comment(&first_sibling, "").unwrap();
+        assert_eq!(cleared.path.indices, first_sibling.indices);
+        assert_eq!(cleared.personal_comment, "");
+        assert!(comment(&document.tree().unwrap().children[0].children[0]).is_none());
+
+        let after_clear = document.serialize().unwrap();
+        let empty_noop = document.set_personal_comment(&first_sibling, "   ").unwrap();
+        assert_eq!(empty_noop.personal_comment, "");
+        assert_eq!(document.serialize().unwrap(), after_clear);
+
+        let added = document
+            .set_personal_comment(&first_sibling, "first added")
+            .unwrap();
+        assert_eq!(added.personal_comment, "first added");
+        assert_eq!(
+            comment(&document.tree().unwrap().children[0].children[0]),
+            Some("first added")
+        );
+
+        let serialized = document.serialize().unwrap();
+        let reopened = CurrentSgfDocument::open(&serialized).unwrap();
+        let reopened_root = reopened.snapshot(&root).unwrap();
+        assert_eq!(reopened_root.personal_comment, "root edited");
+        assert!(reopened_root.generated_information.is_none());
+        assert_eq!(
+            reopened.snapshot(&move_node).unwrap().personal_comment,
+            "move edited"
+        );
+        assert_eq!(
+            reopened.snapshot(&first_sibling).unwrap().personal_comment,
+            "first added"
+        );
+        assert_eq!(
+            reopened.snapshot(&second_sibling).unwrap().personal_comment,
+            "sibling edited"
+        );
+        assert!(reopened
+            .tree()
+            .unwrap()
+            .properties
+            .iter()
+            .any(|property| property.key == "XY" && property.values == ["keep-me"]));
+
+        let before_invalid = document.serialize().unwrap();
+        let error = document
+            .set_personal_comment(&NodePath { indices: vec![9] }, "nope")
+            .unwrap_err();
+        assert_eq!(error.kind, CurrentGameErrorKind::InvalidNodePath);
+        assert_eq!(document.serialize().unwrap(), before_invalid);
+
+        let mut empty_comment_doc = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[5]C[])").unwrap();
+        let empty_root = NodePath { indices: Vec::new() };
+        assert_eq!(
+            empty_comment_doc.snapshot(&empty_root).unwrap().personal_comment,
+            ""
+        );
+        let preserved = empty_comment_doc.serialize().unwrap();
+        assert!(comment(&empty_comment_doc.tree().unwrap()).is_some());
+        let empty_submit = empty_comment_doc.set_personal_comment(&empty_root, "").unwrap();
+        assert_eq!(empty_submit.personal_comment, "");
+        assert_eq!(empty_comment_doc.serialize().unwrap(), preserved);
+        assert_eq!(comment(&empty_comment_doc.tree().unwrap()), Some(""));
+
+        let filled = empty_comment_doc
+            .set_personal_comment(&empty_root, "now filled")
+            .unwrap();
+        assert_eq!(filled.personal_comment, "now filled");
+        let filled_reopened = CurrentSgfDocument::open(&empty_comment_doc.serialize().unwrap()).unwrap();
+        assert_eq!(
+            filled_reopened.snapshot(&empty_root).unwrap().personal_comment,
+            "now filled"
+        );
+        assert!(filled_reopened
+            .snapshot(&empty_root)
+            .unwrap()
+            .generated_information
+            .is_none());
     }
 
     fn comment(node: &SgfTreeNodeDto) -> Option<&str> {

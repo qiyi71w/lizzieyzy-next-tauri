@@ -25,6 +25,7 @@ import {
   saveSgfDocument,
   serializeCurrentGame,
   selectCurrentGameNode,
+  setCurrentGamePersonalComment,
   startKataGoGameAnalysis
 } from "./api/backend";
 import { computeGameCacheKey, loadAnalysisCache, saveAnalysisCache } from "./api/analysisCache";
@@ -71,6 +72,7 @@ export function App() {
   const [chosenChildren, setChosenChildren] = useState<Map<string, number>>(() => new Map());
   const navigatingRef = useRef(false);
   const documentGenerationRef = useRef(0);
+  const pendingSelectedPathRef = useRef<NodePath | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus>("idle");
@@ -99,6 +101,7 @@ export function App() {
   const pendingAnalysisProgressRef = useRef<Map<string, AnalysisProgress>>(new Map());
   const pendingAnalysisTerminalEventsRef = useRef<Map<string, PendingAnalysisTerminalEvent>>(new Map());
   const analysisCleanupRef = useRef<(() => void) | null>(null);
+  const currentGameRef = useRef<CurrentGameResultDto | null>(null);
 
   useEffect(() => {
     getHealth()
@@ -142,7 +145,9 @@ export function App() {
     if (currentGame) return currentGame.snapshot.position;
     return selectExactPosition(positions, currentMove, game.summary.board_size);
   }, [currentGame, currentMove, positions, game.summary.board_size]);
+  currentGameRef.current = currentGame;
   const selectedPersonalComment = currentGame ? currentGame.snapshot.personal_comment : "";
+  const selectedGeneratedInformation = currentGame?.snapshot.generated_information ?? null;
   const selectedPath = currentGame?.selected_path ?? { indices: [] };
   const selectedNode = currentGame ? nodeAt(currentGame.tree, selectedPath) : null;
   const parentOfSelected = parentPath(selectedPath);
@@ -317,6 +322,7 @@ export function App() {
         const [parsed, replayed] = await Promise.all([parseSgfSummary(sgfInput), replaySgfPositions(sgfInput)]);
         documentGenerationRef.current = 0;
         setCurrentGame(null);
+        pendingSelectedPathRef.current = null;
         setSgfText(sgfInput);
         setCurrentFilePath(null);
         setFallbackFileName(options.fallbackName ?? null);
@@ -343,6 +349,7 @@ export function App() {
       const artifacts = await artifactsFromCurrentGame();
       documentGenerationRef.current = result.generation;
       setCurrentGame(result);
+      pendingSelectedPathRef.current = result.selected_path;
       setChosenChildren(chosenFromPath(result.selected_path));
       setSgfText(artifacts.serialized);
       setCurrentFilePath(result.native_path ?? nativePath);
@@ -389,6 +396,7 @@ export function App() {
       const artifacts = await artifactsFromCurrentGame();
       documentGenerationRef.current = result.generation;
       setCurrentGame(result);
+      pendingSelectedPathRef.current = result.selected_path;
       setSgfText(artifacts.serialized);
       setCurrentFilePath(result.native_path ?? document.path);
       setFallbackFileName(null);
@@ -446,7 +454,9 @@ export function App() {
         return;
       }
       const artifacts = await artifactsFromCurrentGame();
+      const generation = currentGameRef.current?.generation ?? 0;
       const result = await fakeAnalyze(artifacts.serialized);
+      if (!isCurrentDocumentGeneration(generation)) return;
       const classified = await classifyProblems(result);
       if (documentGenerationRef.current !== capturedGeneration) return;
       setGame(artifacts.projection);
@@ -475,6 +485,7 @@ export function App() {
         : { serialized: sgfText, projection: await parseSgfSummary(sgfText), replayed: await replaySgfPositions(sgfText) };
       if (!nativeRuntime) setMessage(nativeCurrentGameUnavailable);
       const turn = clampMoveNumberToPositions(artifacts.replayed, Math.min(targetTurn, artifacts.replayed.at(-1)?.move_number ?? artifacts.projection.moves.length));
+      const generation = currentGameRef.current?.generation ?? 0;
       const frame = await analyzeKataGoOnce(profile, artifacts.serialized, turn, visits);
       if (documentGenerationRef.current !== capturedGeneration) return;
       const mergedFrames = mergeAnalysisFrame(frames, frame);
@@ -512,6 +523,7 @@ export function App() {
       if (!nativeRuntime) setMessage(nativeCurrentGameUnavailable);
       const parsed = artifacts.projection;
       const replayed = artifacts.replayed;
+      const generation = currentGameRef.current?.generation ?? 0;
       cleanup = await listenToKataGoAnalysisEvents({
         onProgress: (payload) => {
           if (documentGenerationRef.current !== capturedGeneration) return;
@@ -525,7 +537,7 @@ export function App() {
             });
             return;
           }
-          if (!isCurrentAnalysisJob(payload.job_id)) return;
+          if (!isCurrentAnalysisJob(payload.job_id) || !isCurrentDocumentGeneration(generation)) return;
           setAnalysisProgress({
             jobId: payload.job_id,
             completed: payload.completed,
@@ -675,14 +687,64 @@ export function App() {
     }
   }
 
+  async function handleCommitPersonalComment(comment: string) {
+    if (!currentGame) return;
+    if (!nativeRuntime) {
+      setMessage(nativeCurrentGameUnavailable);
+      return;
+    }
+    if (comment === currentGame.snapshot.personal_comment) return;
+    const previousGeneration = currentGame.generation;
+    const editedPath = currentGame.selected_path;
+    try {
+      const result = await setCurrentGamePersonalComment(editedPath, comment);
+      const latestPath = pendingSelectedPathRef.current ?? currentGameRef.current?.selected_path ?? editedPath;
+      const stillOnEditedNode = samePath(latestPath, editedPath);
+      setCurrentGame((prev) => {
+        if (stillOnEditedNode || prev === null) return result;
+        return {
+          ...result,
+          selected_path: prev.selected_path,
+          snapshot: prev.snapshot
+        };
+      });
+      if (stillOnEditedNode) {
+        setChosenChildren((prev) => rememberChosenChildren(prev, result.selected_path));
+        setCurrentMove(result.snapshot.position.move_number);
+        setSelectedCandidateIndex(null);
+      }
+      setDirty(result.dirty);
+      if (result.generation === previousGeneration) return;
+      const artifacts = await artifactsFromCurrentGame();
+      setSgfText(artifacts.serialized);
+      setGame(artifacts.projection);
+      setPositions(artifacts.replayed);
+      clearReviewData();
+      resetAnalysisCacheState();
+      setMessage("已更新选中节点的个人评论。");
+    } catch (error) {
+      setMessage(`评论更新失败: ${errorMessage(error)}`);
+    }
+  }
+
   async function selectNode(path: NodePath) {
     if (!currentGame || navigatingRef.current) return;
     if (samePath(path, currentGame.selected_path)) return;
     navigatingRef.current = true;
+    pendingSelectedPathRef.current = path;
     try {
       const result = await selectCurrentGameNode(path);
-      documentGenerationRef.current = result.generation;
-      setCurrentGame(result);
+      documentGenerationRef.current = Math.max(documentGenerationRef.current, result.generation);
+      setCurrentGame((prev) => {
+        if (prev !== null && prev.generation > result.generation) {
+          return {
+            ...prev,
+            selected_path: result.selected_path,
+            snapshot: result.snapshot
+          };
+        }
+        return result;
+      });
       setChosenChildren((prev) => rememberChosenChildren(prev, result.selected_path));
       setCurrentMove(result.snapshot.position.move_number);
       setSelectedCandidateIndex(null);
@@ -759,6 +821,10 @@ export function App() {
 
   function isCurrentAnalysisJob(jobId: string): boolean {
     return activeJobIdRef.current === jobId;
+  }
+
+  function isCurrentDocumentGeneration(generation: number): boolean {
+    return documentGenerationRef.current === generation;
   }
 
   async function finishPendingAnalysisTerminalEvent(jobId: string, event: PendingAnalysisTerminalEvent, parsed: GameDto, replayed: PositionDto[], capturedGeneration: number) {
@@ -1004,6 +1070,9 @@ export function App() {
           currentMove={currentMove}
           currentPosition={currentPosition}
           personalComment={selectedPersonalComment}
+          generatedInformation={selectedGeneratedInformation}
+          commentEditorEnabled={nativeRuntime && Boolean(currentGame)}
+          onCommitPersonalComment={(comment) => void handleCommitPersonalComment(comment)}
           selectedCandidateIndex={selectedCandidateIndex}
           onSelectCandidate={setSelectedCandidateIndex}
           onSelectProblem={handleMoveSelect}
