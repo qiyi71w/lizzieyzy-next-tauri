@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
 import type { AnalysisFrameDto, MoveDto, PointDto, PositionDto } from "../domain/types";
 import { isPoint } from "../domain/board";
@@ -16,6 +16,8 @@ type Props = {
   onOverlayModeChange?: (mode: OverlayMode) => void;
   hideCandidates?: boolean;
   onPointClick?: (point: PointDto) => void;
+  onCandidatePreview?: (index: number | null) => void;
+  previewScope?: object;
 };
 type PolicyPoint = { x: number; y: number; value: number };
 
@@ -29,11 +31,20 @@ export function BoardCanvas({
   overlayMode: overlayModeProp,
   onOverlayModeChange,
   hideCandidates = false,
-  onPointClick
+  onPointClick,
+  onCandidatePreview,
+  previewScope
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [keyboardPoint, setKeyboardPoint] = useState<PointDto | null>(null);
   const [overlayModeLocal, setOverlayModeLocal] = useState<OverlayMode>("candidates");
+  const previewTimerRef = useRef<number | undefined>(undefined);
+  const hoveredCandidateIndexRef = useRef<number | null>(null);
+  const publishedCandidateIndexRef = useRef<number | null>(null);
+  const onCandidatePreviewRef = useRef(onCandidatePreview);
+  const previewScopeRef = useRef(previewScope);
+  onCandidatePreviewRef.current = onCandidatePreview;
+  previewScopeRef.current = previewScope;
   const overlayMode = overlayModeProp ?? overlayModeLocal;
   function setOverlayMode(mode: OverlayMode) {
     onOverlayModeChange?.(mode);
@@ -45,6 +56,64 @@ export function BoardCanvas({
   const hasPolicy = policyPoints.length > 0;
   const effectiveOverlayMode = overlayMode === "ownership" && !hasOwnership ? "candidates" : overlayMode === "policy" && !hasPolicy ? "candidates" : overlayMode;
 
+  function cancelCandidatePreview() {
+    if (previewTimerRef.current !== undefined) {
+      clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = undefined;
+    }
+    hoveredCandidateIndexRef.current = null;
+    if (publishedCandidateIndexRef.current !== null) {
+      publishedCandidateIndexRef.current = null;
+      onCandidatePreviewRef.current?.(null);
+    }
+  }
+
+  function handleCandidatePointerMove(event: PointerEvent<HTMLCanvasElement>) {
+    if (effectiveOverlayMode !== "candidates" || hideCandidates) {
+      cancelCandidatePreview();
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const cssSize = Math.min(rect.width, rect.height);
+    const boardSize = position.board_size;
+    const padding = cssSize * 0.09;
+    const grid = (cssSize - padding * 2) / Math.max(boardSize - 1, 1);
+    const pointerX = event.clientX - rect.left;
+    const pointerY = event.clientY - rect.top;
+    const candidateIndex = (analysis?.candidates.slice(0, 8) ?? []).findIndex((candidate) => {
+      if (!isPoint(candidate.vertex)) return false;
+      const centerX = padding + candidate.vertex.point.x * grid;
+      const centerY = padding + candidate.vertex.point.y * grid;
+      const radius = grid * (0.18 + Math.min(candidate.visits / Math.max(analysis?.visits ?? 1, 1), 1) * 0.22);
+      return Math.hypot(pointerX - centerX, pointerY - centerY) <= radius;
+    });
+    if (candidateIndex < 0) {
+      cancelCandidatePreview();
+      return;
+    }
+    if (hoveredCandidateIndexRef.current === candidateIndex) return;
+
+    cancelCandidatePreview();
+    hoveredCandidateIndexRef.current = candidateIndex;
+    const scheduledPreviewScope = previewScope;
+    previewTimerRef.current = setTimeout(() => {
+      previewTimerRef.current = undefined;
+      if (previewScopeRef.current !== scheduledPreviewScope) {
+        hoveredCandidateIndexRef.current = null;
+        return;
+      }
+      publishedCandidateIndexRef.current = candidateIndex;
+      onCandidatePreviewRef.current?.(candidateIndex);
+    }, 120);
+  }
+
+  useEffect(() => {
+    cancelCandidatePreview();
+  }, [analysis, position, selectedCandidateIndex, effectiveOverlayMode, hideCandidates, previewScope]);
+
+  useEffect(() => () => {
+    clearTimeout(previewTimerRef.current);
+  }, []);
   useEffect(() => {
     setKeyboardPoint((current) => {
       if (!current) return null;
@@ -71,6 +140,7 @@ export function BoardCanvas({
     const center = Math.floor(position.board_size / 2);
     const current = keyboardPoint ?? { x: center, y: center };
     if (isSubmit) {
+      cancelCandidatePreview();
       onPointClick?.(current);
       return;
     }
@@ -233,7 +303,10 @@ export function BoardCanvas({
         setKeyboardPoint((current) => current ?? { x: center, y: center });
       }}
       onKeyDown={handleKeyDown}
+      onPointerMove={handleCandidatePointerMove}
+      onPointerLeave={cancelCandidatePreview}
       onClick={(event) => {
+        cancelCandidatePreview();
         if (!onPointClick) return;
         const rect = event.currentTarget.getBoundingClientRect();
         const cssSize = Math.min(rect.width, rect.height);

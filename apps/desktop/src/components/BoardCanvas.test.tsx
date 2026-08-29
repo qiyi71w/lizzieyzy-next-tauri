@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
+import { act, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { PointDto, PositionDto } from "../domain/types";
+import type { AnalysisFrameDto, PointDto, PositionDto } from "../domain/types";
 import { BoardCanvas } from "./BoardCanvas";
 
 declare global {
@@ -19,6 +19,30 @@ const position: PositionDto = {
   captures_white: 0,
   last_move: null,
   errors: []
+};
+
+const analysis: AnalysisFrameDto = {
+  job_id: "job-1",
+  turn: 0,
+  visits: 100,
+  winrate_black: 0.52,
+  score_mean_black: 1.5,
+  candidates: [
+    {
+      vertex: { point: { x: 2, y: 3 } },
+      visits: 100,
+      winrate_black: 0.52,
+      score_mean_black: 1.5,
+      pv: [{ point: { x: 3, y: 3 } }]
+    },
+    {
+      vertex: { point: { x: 6, y: 5 } },
+      visits: 80,
+      winrate_black: 0.49,
+      score_mean_black: -0.5,
+      pv: [{ point: { x: 5, y: 5 } }]
+    }
+  ]
 };
 
 let root: Root | null = null;
@@ -37,6 +61,7 @@ afterEach(() => {
   root = null;
   document.body.replaceChildren();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("BoardCanvas keyboard intent", () => {
@@ -121,28 +146,195 @@ describe("BoardCanvas keyboard intent", () => {
   });
 });
 
+describe("BoardCanvas candidate preview", () => {
+  it("publishes a candidate only after the 120 ms dwell and clears it on exit", () => {
+    vi.useFakeTimers();
+    const onCandidatePreview = vi.fn<(index: number | null) => void>();
+    const { canvas } = renderBoard({ analysis, onCandidatePreview });
+    setCanvasBounds(canvas);
+
+    dispatchPointer(canvas, "pointermove", 29.5, 39.75);
+    act(() => vi.advanceTimersByTime(119));
+    expect(onCandidatePreview).not.toHaveBeenCalled();
+
+    act(() => vi.advanceTimersByTime(1));
+    expect(onCandidatePreview).toHaveBeenLastCalledWith(0);
+
+    dispatchPointer(canvas, "pointerout", 29.5, 39.75);
+    expect(onCandidatePreview).toHaveBeenLastCalledWith(null);
+  });
+
+  it("submits a quick click without waiting for or publishing its pending preview", () => {
+    vi.useFakeTimers();
+    const onCandidatePreview = vi.fn<(index: number | null) => void>();
+    const onPointClick = vi.fn<(point: PointDto) => void>();
+    const { canvas } = renderBoard({ analysis, onCandidatePreview, onPointClick });
+    setCanvasBounds(canvas);
+
+    dispatchPointer(canvas, "pointermove", 29.5, 39.75);
+    act(() => vi.advanceTimersByTime(60));
+    act(() => {
+      canvas.dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        clientX: 29.5,
+        clientY: 39.75
+      }));
+    });
+    act(() => vi.runAllTimers());
+
+    expect(onPointClick).toHaveBeenCalledWith({ x: 2, y: 3 });
+    expect(onCandidatePreview).not.toHaveBeenCalled();
+  });
+
+  it("replaces a pending candidate and clears a visible preview before click submission", () => {
+    vi.useFakeTimers();
+    const onCandidatePreview = vi.fn<(index: number | null) => void>();
+    const onPointClick = vi.fn<(point: PointDto) => void>();
+    const { canvas } = renderBoard({ analysis, onCandidatePreview, onPointClick });
+    setCanvasBounds(canvas);
+
+    dispatchPointer(canvas, "pointermove", 29.5, 39.75);
+    act(() => vi.advanceTimersByTime(60));
+    dispatchPointer(canvas, "pointermove", 70.5, 60.25);
+    act(() => vi.advanceTimersByTime(119));
+    expect(onCandidatePreview).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(1));
+    expect(onCandidatePreview).toHaveBeenLastCalledWith(1);
+
+    act(() => {
+      canvas.dispatchEvent(new MouseEvent("click", {
+        bubbles: true,
+        clientX: 70.5,
+        clientY: 60.25
+      }));
+    });
+    expect(onCandidatePreview).toHaveBeenLastCalledWith(null);
+    expect(onPointClick).toHaveBeenCalledWith({ x: 6, y: 5 });
+
+    act(() => vi.runAllTimers());
+    expect(onCandidatePreview).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels pending and visible preview when its presentation scope changes", () => {
+    vi.useFakeTimers();
+    const onCandidatePreview = vi.fn<(index: number | null) => void>();
+    const { canvas, rerender } = renderBoard({ analysis, onCandidatePreview, previewScope: {} });
+    setCanvasBounds(canvas);
+
+    dispatchPointer(canvas, "pointermove", 29.5, 39.75);
+    act(() => vi.advanceTimersByTime(120));
+    expect(onCandidatePreview).toHaveBeenLastCalledWith(0);
+
+    rerender(position, {});
+    expect(onCandidatePreview).toHaveBeenLastCalledWith(null);
+
+    dispatchPointer(canvas, "pointermove", 29.5, 39.75);
+    act(() => vi.advanceTimersByTime(60));
+    rerender(position, {});
+    act(() => vi.runAllTimers());
+    expect(onCandidatePreview).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not publish an old deadline during a scope-changing commit", () => {
+    vi.useFakeTimers();
+    const onCandidatePreview = vi.fn<(index: number | null) => void>();
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const initialScope = {};
+
+    act(() => root?.render(
+      <ScopeTransitionBoard
+        previewScope={initialScope}
+        onCandidatePreview={onCandidatePreview}
+        advanceDeadline={false}
+      />
+    ));
+    const canvas = host.querySelector("canvas");
+    if (!canvas) throw new Error("BoardCanvas did not render a canvas");
+    setCanvasBounds(canvas);
+    dispatchPointer(canvas, "pointermove", 29.5, 39.75);
+    act(() => vi.advanceTimersByTime(119));
+
+    act(() => root?.render(
+      <ScopeTransitionBoard
+        previewScope={{}}
+        onCandidatePreview={onCandidatePreview}
+        advanceDeadline
+      />
+    ));
+
+    expect(onCandidatePreview).not.toHaveBeenCalled();
+  });
+});
+
 function dispatchKey(canvas: HTMLCanvasElement, key: string) {
   act(() => {
     canvas.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
   });
 }
 function renderBoard({
-  onPointClick,
+  onPointClick = () => undefined,
+  onCandidatePreview,
+  analysis: boardAnalysis,
+  previewScope,
   initialPosition = position
 }: {
-  onPointClick: (point: PointDto) => void;
+  onPointClick?: (point: PointDto) => void;
+  onCandidatePreview?: (index: number | null) => void;
+  analysis?: AnalysisFrameDto;
+  previewScope?: object;
   initialPosition?: PositionDto;
 }) {
   const host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
-  const rerender = (nextPosition: PositionDto) => {
-    act(() => root?.render(<BoardCanvas position={nextPosition} onPointClick={onPointClick} />));
+  const rerender = (nextPosition: PositionDto, nextPreviewScope = previewScope) => {
+    act(() => root?.render(
+      <BoardCanvas
+        position={nextPosition}
+        analysis={boardAnalysis}
+        onPointClick={onPointClick}
+        onCandidatePreview={onCandidatePreview}
+        previewScope={nextPreviewScope}
+      />
+    ));
   };
   rerender(initialPosition);
   const canvas = host.querySelector("canvas");
   if (!canvas) throw new Error("BoardCanvas did not render a canvas");
   return { canvas, rerender };
+}
+
+function ScopeTransitionBoard({
+  previewScope,
+  onCandidatePreview,
+  advanceDeadline
+}: {
+  previewScope: object;
+  onCandidatePreview: (index: number | null) => void;
+  advanceDeadline: boolean;
+}) {
+  useLayoutEffect(() => {
+    if (advanceDeadline) vi.advanceTimersByTime(1);
+  }, [advanceDeadline, previewScope]);
+  return (
+    <BoardCanvas
+      position={position}
+      analysis={analysis}
+      previewScope={previewScope}
+      onCandidatePreview={onCandidatePreview}
+    />
+  );
+}
+function setCanvasBounds(canvas: HTMLCanvasElement) {
+  canvas.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
+}
+
+function dispatchPointer(canvas: HTMLCanvasElement, type: "pointermove" | "pointerout", clientX: number, clientY: number) {
+  act(() => {
+    canvas.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX, clientY }));
+  });
 }
 
 function canvasContext(arc: Mock, stroke: Mock): CanvasRenderingContext2D {

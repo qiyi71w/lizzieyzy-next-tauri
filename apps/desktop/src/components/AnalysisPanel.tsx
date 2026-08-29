@@ -17,6 +17,7 @@ type Props = {
   commentEditorEnabled?: boolean;
   onCommitPersonalComment?: (comment: string) => void;
   selectedCandidateIndex: number | null;
+  previewCandidateIndex?: number | null;
   onSelectCandidate: (index: number) => void;
   onSelectProblem: (moveNumber: number) => void;
   pane?: Pane;
@@ -41,6 +42,7 @@ export function AnalysisPanel({
   commentEditorEnabled = false,
   onCommitPersonalComment,
   selectedCandidateIndex,
+  previewCandidateIndex = null,
   onSelectCandidate,
   onSelectProblem,
   pane = "commentary"
@@ -53,9 +55,8 @@ export function AnalysisPanel({
   const hasOwnership = (frame?.ownership?.length ?? 0) >= boardSize * boardSize;
 
   const candidates = frame?.candidates ?? [];
-  const activeCandidate = selectedCandidateIndex !== null && candidates[selectedCandidateIndex]
-    ? candidates[selectedCandidateIndex]
-    : candidates[0] ?? null;
+  const activeCandidateIndex = previewCandidateIndex ?? selectedCandidateIndex ?? 0;
+  const activeCandidate = candidates[activeCandidateIndex] ?? candidates[0] ?? null;
 
   if (pane === "reference") {
     return (

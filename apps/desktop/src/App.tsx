@@ -47,6 +47,7 @@ type PendingAnalysisTerminalEvent =
 type CacheEngineKind = "fake" | "katago";
 type CachedAnalysisPayload = { frames: AnalysisFrameDto[]; problems: ProblemMarkerDto[] };
 type PendingPreferencesSave = { version: number; preferences: AppPreferences };
+type CandidatePreview = { index: number; scope: object };
 type AnalysisCacheLoadResult =
   | { status: "hit"; record: AnalysisCacheRecord; engineKind: CacheEngineKind }
   | { status: "miss" }
@@ -67,6 +68,7 @@ export function App() {
   const nativeRuntime = isTauriRuntime();
   const [isKataGoRunning, setIsKataGoRunning] = useState(false);
   const [selectedCandidateIndex, setSelectedCandidateIndex] = useState<number | null>(null);
+  const [candidatePreview, setCandidatePreview] = useState<CandidatePreview | null>(null);
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
   const [fallbackFileName, setFallbackFileName] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -153,6 +155,12 @@ export function App() {
   const selectedGeneratedInformation = currentGame?.snapshot.generated_information ?? null;
   const selectedPath = currentGame?.selected_path ?? { indices: [] };
   const selectedNode = currentGame ? nodeAt(currentGame.tree, selectedPath) : null;
+  const selectedPathKey = selectedPath.indices.join(".");
+  const candidatePreviewScope = useMemo<object>(
+    () => ({}),
+    [currentGame?.generation, selectedPathKey, activeJobId, currentFrame]
+  );
+  const previewCandidateIndex = candidatePreview?.scope === candidatePreviewScope ? candidatePreview.index : null;
   const parentOfSelected = parentPath(selectedPath);
   const parentNode = currentGame && parentOfSelected ? nodeAt(currentGame.tree, parentOfSelected) : null;
   const siblingIndex = selectedPath.indices.at(-1);
@@ -172,6 +180,10 @@ export function App() {
   const documentName = useMemo(() => documentPath ? fileNameFromPath(documentPath) : fallbackFileName ?? "未命名棋谱", [documentPath, fallbackFileName]);
   const saveFileName = documentName.toLowerCase().endsWith(".sgf") ? documentName : `${documentName}.sgf`;
 
+
+  useEffect(() => {
+    setCandidatePreview(null);
+  }, [candidatePreviewScope]);
   useEffect(() => {
     setSelectedCandidateIndex(null);
   }, [currentMove]);
@@ -1038,6 +1050,15 @@ export function App() {
     }
   }
 
+  function previewCandidate(index: number | null) {
+    setCandidatePreview(index === null ? null : { index, scope: candidatePreviewScope });
+  }
+
+  function selectCandidate(index: number) {
+    setCandidatePreview(null);
+    setSelectedCandidateIndex(index);
+  }
+
   function clearReviewData() {
     setFrames([]);
     setProblems([]);
@@ -1123,7 +1144,7 @@ export function App() {
           commentEditorEnabled={nativeRuntime && Boolean(currentGame)}
           onCommitPersonalComment={(comment) => void handleCommitPersonalComment(comment)}
           selectedCandidateIndex={selectedCandidateIndex}
-          onSelectCandidate={setSelectedCandidateIndex}
+          onSelectCandidate={selectCandidate}
           onSelectProblem={handleMoveSelect}
         />
       </aside>
@@ -1132,6 +1153,8 @@ export function App() {
           position={currentPosition}
           analysis={visibleCurrentFrame}
           selectedCandidateIndex={selectedCandidateIndex}
+          previewScope={candidatePreviewScope}
+          onCandidatePreview={previewCandidate}
           moves={game.moves}
           showCoordinates={showCoordinates}
           showMoveNumbers={showMoveNumbers}
@@ -1154,7 +1177,8 @@ export function App() {
           currentMove={currentMove}
           currentPosition={currentPosition}
           selectedCandidateIndex={selectedCandidateIndex}
-          onSelectCandidate={setSelectedCandidateIndex}
+          previewCandidateIndex={previewCandidateIndex}
+          onSelectCandidate={selectCandidate}
           onSelectProblem={handleMoveSelect}
         />
       </aside>

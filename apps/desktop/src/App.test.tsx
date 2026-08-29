@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CurrentGameResultDto, GameDto } from "./domain/types";
+import type { AnalysisFrameDto, CurrentGameResultDto, GameDto } from "./domain/types";
 
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
@@ -43,7 +43,6 @@ vi.mock("./api/preferences", () => ({
   saveAppPreferences: vi.fn()
 }));
 
-vi.mock("./components/AnalysisPanel", () => ({ AnalysisPanel: () => null }));
 vi.mock("./components/CacheStatusBadge", () => ({ CacheStatusBadge: () => null }));
 vi.mock("./components/EngineSetupPanel", () => ({ EngineSetupPanel: () => null }));
 vi.mock("./components/PreferencesPanel", () => ({ PreferencesPanel: () => null }));
@@ -75,6 +74,30 @@ const initialGame: CurrentGameResultDto = {
 const initialProjection: GameDto = {
   summary: { id: "test", board_size: 9, komi: 7.5, move_count: 0 },
   moves: []
+};
+
+const analysisFrame: AnalysisFrameDto = {
+  job_id: "fake-job",
+  turn: 0,
+  visits: 100,
+  winrate_black: 0.52,
+  score_mean_black: 1.5,
+  candidates: [
+    {
+      vertex: { point: { x: 2, y: 3 } },
+      visits: 100,
+      winrate_black: 0.52,
+      score_mean_black: 1.5,
+      pv: [{ point: { x: 3, y: 3 } }]
+    },
+    {
+      vertex: { point: { x: 6, y: 5 } },
+      visits: 80,
+      winrate_black: 0.49,
+      score_mean_black: -0.5,
+      pv: [{ point: { x: 5, y: 5 } }]
+    }
+  ]
 };
 
 const acceptedGame: CurrentGameResultDto = {
@@ -179,6 +202,62 @@ describe("App board intent feedback", () => {
   });
 });
 
+describe("App candidate continuation preview", () => {
+  it("propagates board dwell to the mini-board without mutating the selected game", async () => {
+    backend.fakeAnalyze.mockResolvedValue([analysisFrame]);
+    backend.classifyProblems.mockResolvedValue([]);
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<App />));
+    await act(async () => {
+      await backend.replaceCurrentGame.mock.results[0]?.value;
+      await backend.projectCurrentGameMainline.mock.results[0]?.value;
+    });
+
+    await act(async () => {
+      buttonNamed(host, "AI 解说").click();
+      await vi.waitFor(() => expect(backend.fakeAnalyze).toHaveBeenCalledOnce());
+      await backend.fakeAnalyze.mock.results[0]?.value;
+      await backend.classifyProblems.mock.results[0]?.value;
+    });
+    expect(host.querySelectorAll(".cand-row")).toHaveLength(2);
+
+    const board = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
+    const miniBoard = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="参考图变化副棋盘"]');
+    board.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
+    const beforePreview = miniBoard.dataset.drawn;
+    const serializedCalls = backend.serializeCurrentGame.mock.calls.length;
+    const currentMove = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value;
+
+    await act(async () => {
+      board.dispatchEvent(new MouseEvent("pointermove", {
+        bubbles: true,
+        clientX: 70.5,
+        clientY: 60.25
+      }));
+      await new Promise((resolve) => setTimeout(resolve, 130));
+    });
+
+    expect(miniBoard.dataset.drawn).not.toBe(beforePreview);
+    const rows = host.querySelectorAll(".cand-row");
+    expect(rows[0]?.classList.contains("is-selected")).toBe(true);
+    expect(rows[1]?.classList.contains("is-selected")).toBe(false);
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe(currentMove);
+    expect(backend.serializeCurrentGame).toHaveBeenCalledTimes(serializedCalls);
+    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    expect(backend.saveCurrentGame).not.toHaveBeenCalled();
+    expect(backend.setCurrentGamePersonalComment).not.toHaveBeenCalled();
+    expect(backend.removeCurrentGameVariation).not.toHaveBeenCalled();
+
+    act(() => {
+      board.dispatchEvent(new MouseEvent("pointerout", { bubbles: true }));
+    });
+    expect(miniBoard.dataset.drawn).toBe(beforePreview);
+  });
+});
+
 function dispatchKey(element: HTMLElement, key: string) {
   act(() => {
     element.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
@@ -203,6 +282,16 @@ function canvasContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
   return new Proxy(target, {
     get(object, property) {
       if (property in object) return Reflect.get(object, property);
+      if (property === "clearRect") {
+        return () => {
+          canvas.dataset.drawn = "";
+        };
+      }
+      if (property === "fillText") {
+        return (text: string, x: number, y: number) => {
+          canvas.dataset.drawn += `|${text}@${x.toFixed(1)},${y.toFixed(1)}`;
+        };
+      }
       return vi.fn();
     },
     set(object, property, value) {
