@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import type { AnalysisFrameDto, MoveDto, PointDto, PositionDto } from "../domain/types";
 import { isPoint } from "../domain/board";
@@ -32,6 +32,7 @@ export function BoardCanvas({
   onPointClick
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [keyboardPoint, setKeyboardPoint] = useState<PointDto | null>(null);
   const [overlayModeLocal, setOverlayModeLocal] = useState<OverlayMode>("candidates");
   const overlayMode = overlayModeProp ?? overlayModeLocal;
   function setOverlayMode(mode: OverlayMode) {
@@ -43,6 +44,45 @@ export function BoardCanvas({
   const policyPoints = useMemo(() => getTopPolicyPoints(analysis?.policy, position.board_size, 12), [analysis?.policy, position.board_size]);
   const hasPolicy = policyPoints.length > 0;
   const effectiveOverlayMode = overlayMode === "ownership" && !hasOwnership ? "candidates" : overlayMode === "policy" && !hasPolicy ? "candidates" : overlayMode;
+
+  useEffect(() => {
+    setKeyboardPoint((current) => {
+      if (!current) return null;
+      const lastCoordinate = Math.max(position.board_size - 1, 0);
+      const next = {
+        x: Math.min(current.x, lastCoordinate),
+        y: Math.min(current.y, lastCoordinate)
+      };
+      return next.x === current.x && next.y === current.y ? current : next;
+    });
+  }, [position.board_size]);
+
+  function handleKeyDown(event: KeyboardEvent<HTMLCanvasElement>) {
+    const isSubmit = event.key === "Enter" || event.key === " ";
+    const isArrow = event.key === "ArrowLeft" ||
+      event.key === "ArrowRight" ||
+      event.key === "ArrowUp" ||
+      event.key === "ArrowDown";
+    if (!isSubmit && !isArrow) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const center = Math.floor(position.board_size / 2);
+    const current = keyboardPoint ?? { x: center, y: center };
+    if (isSubmit) {
+      onPointClick?.(current);
+      return;
+    }
+
+    const lastCoordinate = Math.max(position.board_size - 1, 0);
+    const xDelta = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
+    const yDelta = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+    setKeyboardPoint({
+      x: Math.max(0, Math.min(lastCoordinate, current.x + xDelta)),
+      y: Math.max(0, Math.min(lastCoordinate, current.y + yDelta))
+    });
+  }
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -155,7 +195,23 @@ export function BoardCanvas({
         ctx.fillText(String(index + 1), cx, cy);
       }
     }
-  }, [position, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, moves, showCoordinates, showMoveNumbers, hideCandidates]);
+
+    if (keyboardPoint) {
+      const cx = coord(keyboardPoint.x);
+      const cy = coord(keyboardPoint.y);
+      const radius = grid * 0.48;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = Math.max(3, grid * 0.12);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.strokeStyle = "#2156c7";
+      ctx.lineWidth = Math.max(1.5, grid * 0.06);
+      ctx.stroke();
+    }
+  }, [position, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, moves, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint]);
 
   const layerHost = document.getElementById("board-layers");
   const overlays = (
@@ -170,6 +226,13 @@ export function BoardCanvas({
     <canvas
       ref={canvasRef}
       aria-label="棋盘"
+      role="application"
+      tabIndex={0}
+      onFocus={() => {
+        const center = Math.floor(position.board_size / 2);
+        setKeyboardPoint((current) => current ?? { x: center, y: center });
+      }}
+      onKeyDown={handleKeyDown}
       onClick={(event) => {
         if (!onPointClick) return;
         const rect = event.currentTarget.getBoundingClientRect();

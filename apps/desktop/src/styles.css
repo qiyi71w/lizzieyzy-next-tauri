@@ -686,6 +686,11 @@ button[aria-pressed="true"] {
   height: 100%;
 }
 
+.board-canvas canvas:focus-visible {
+  outline: 3px solid #2156c7;
+  outline-offset: -3px;
+}
+
 /* =========================================================
    右侧栏: 候选点表格 + 参考图副棋盘
    ========================================================= */
