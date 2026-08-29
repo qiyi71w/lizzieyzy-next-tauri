@@ -62,6 +62,20 @@ Tokens live on `:root`. This release ships only the light default.
 - Mini-board has no coordinates and no chrome border
 - Bottom-bar buttons are stroked; no full-width divider
 
+## Baseline Reference And Visual Evidence
+
+Desktop parity references [Migration Baseline v1](docs/JAVA_BASELINE.md), fixed at Java commit `7b4027531c2b26062d0bfc27a040cc550cfbea4d`. Later Java screenshots or UI changes are not implicit design requirements; add them through an explicit parity decision.
+
+For every screenshot used as acceptance evidence, record:
+
+- Baseline name and parity item ID.
+- Platform, window size, and display scale.
+- Loaded game, selected move/variation, engine state, and any open panel or dialog.
+- Whether the image is the frozen Java reference or the same-state Next result.
+
+A screenshot can prove visible hierarchy, spacing, typography, icons, control state, and layout. Interaction, persistence, SGF semantics, cancellation, protocol behavior, and error recovery require behavioral evidence in addition to the image.
+
+
 ## Colors
 
 ### Primary

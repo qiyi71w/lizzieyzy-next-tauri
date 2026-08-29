@@ -36,6 +36,8 @@ type Props = {
   komi: number;
   onNew: () => void;
   onOpen: () => void;
+  nativeRuntime?: boolean;
+  nativeUnavailable?: string;
   onSave: () => void;
   onSaveAs: () => void;
   onLoadSample: () => void;
@@ -46,6 +48,7 @@ type Props = {
   onCopySgf: () => void;
   onPasteSgf: () => void;
   onClearBoard: () => void;
+  onPass?: () => void;
   onAutoPlay: () => void;
   onOverlayMode: (mode: OverlayMode) => void;
   cacheBadge: ReactNode;
@@ -59,6 +62,11 @@ export function AppChrome(props: Props) {
   const [openMenu, setOpenMenu] = useState<MenuKey>(null);
   const barRef = useRef<HTMLElement | null>(null);
   const later = "尚未接入";
+  const nativeAvailable = props.nativeRuntime !== false;
+  const nativeUnavailable = props.nativeUnavailable ?? "Native current-game, edit, and authoritative Save require the Tauri desktop backend. Browser preview is non-authoritative.";
+  const openDisabled = props.busy || !nativeAvailable;
+  const saveDisabled = props.busy || !nativeAvailable || !props.dirty;
+  const saveAsDisabled = props.busy || !nativeAvailable;
 
   useEffect(() => {
     function onPointerDown(event: PointerEvent) {
@@ -86,12 +94,12 @@ export function AppChrome(props: Props) {
         <div className="menu-cluster">
           <ChromeMenu label="文件" open={openMenu === "file"} onToggle={() => setOpenMenu(openMenu === "file" ? null : "file")}>
             <MenuItem label="新建" onClick={() => run(props.onNew)} disabled={props.busy} />
-            <MenuItem label="打开棋谱(O)" onClick={() => run(props.onOpen)} disabled={props.busy} />
+            <MenuItem label="打开棋谱(O)" onClick={() => run(props.onOpen)} disabled={openDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
             <MenuItem label="最近打开" disabled title={later} />
             <MenuItem label="打开在线链接(Q)" disabled title={later} />
             <div className="menu-sep" role="separator" />
-            <MenuItem label="保存(Ctrl+S)" onClick={() => run(props.onSave)} disabled={props.busy || !props.dirty} />
-            <MenuItem label="另存为(S)" onClick={() => run(props.onSaveAs)} disabled={props.busy} />
+            <MenuItem label="保存(Ctrl+S)" onClick={() => run(props.onSave)} disabled={saveDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
+            <MenuItem label="另存为(S)" onClick={() => run(props.onSaveAs)} disabled={saveAsDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
             <SubMenu label="更多保存">
               <MenuItem label="保存纯净棋谱" disabled title={later} />
               <MenuItem label="保存纯净棋谱(带评论)" disabled title={later} />
@@ -233,8 +241,8 @@ export function AppChrome(props: Props) {
       <div className="tool-strip" role="toolbar" aria-label="分析工具">
         <div className="icon-group">
           <IconBtn src={toolbarIcons.newFile} label="新建" onClick={props.onNew} disabled={props.busy} />
-          <IconBtn src={toolbarIcons.open} label="打开" onClick={props.onOpen} disabled={props.busy} />
-          <IconBtn src={toolbarIcons.save} label="保存" onClick={props.onSave} disabled={props.busy || !props.dirty} />
+          <IconBtn src={toolbarIcons.open} label="打开" onClick={props.onOpen} disabled={openDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
+          <IconBtn src={toolbarIcons.save} label="保存" onClick={props.onSave} disabled={saveDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
         </div>
         <span className="tool-sep" />
         <div className="icon-group">
@@ -249,7 +257,13 @@ export function AppChrome(props: Props) {
           <IconBtn src={toolbarIcons.smallblack1} label="添加黑子" disabled title={later} />
           <IconBtn src={toolbarIcons.smallwhite} label="添加白子" disabled title={later} />
           <IconBtn src={toolbarIcons.hb} label="交替落子" disabled title={later} />
-          <IconBtn src={toolbarIcons.playpass} label="虚手" disabled title={later} />
+          <IconBtn
+            src={toolbarIcons.playpass}
+            label="虚手"
+            onClick={props.onPass}
+            disabled={props.busy || !nativeAvailable}
+            title={!nativeAvailable ? nativeUnavailable : "虚手"}
+          />
         </div>
         <span className="tool-sep" />
         <div className="icon-group">
@@ -269,6 +283,7 @@ export function AppChrome(props: Props) {
           贴目:
           <input className="param-input-sm" value={props.komi} readOnly />
         </label>
+        <span className="param-label">{props.toPlay === "black" ? "下一手 黑" : "下一手 白"}</span>
         <label className="param-label" title="激进/保守程度，尚未接入引擎">
           激进度
           <input className="param-input-sm" value={0} disabled />
@@ -291,7 +306,7 @@ export function AppChrome(props: Props) {
         <button type="button" className="chrome-btn" disabled title={later}>死活</button>
         <button type="button" className="chrome-btn" onClick={() => props.onToggleSheet("prefs")}>参数</button>
         <button type="button" className="chrome-btn" onClick={() => props.onToggleSheet("prefs")}>棋盘</button>
-        <button type="button" className="chrome-btn" onClick={props.onSave} disabled={props.busy || !props.dirty}>存档</button>
+        <button type="button" className="chrome-btn" onClick={props.onSave} disabled={saveDisabled} title={!nativeAvailable ? nativeUnavailable : undefined}>存档</button>
         <span className="spacer" />
         {props.cacheBadge}
         <span className="doc-name" title={props.message}>{props.documentName}{props.dirty ? " *" : ""}</span>
@@ -304,6 +319,18 @@ export function BottomBar(props: {
   currentMove: number;
   maxMove: number;
   onMove: (move: number) => void;
+  canParent: boolean;
+  canNext: boolean;
+  canPrevSibling: boolean;
+  canNextSibling: boolean;
+  canRemoveVariation: boolean;
+  siblingLabel: string;
+  nativeUnavailable?: string;
+  onParent: () => void;
+  onNext: () => void;
+  onPrevSibling: () => void;
+  onNextSibling: () => void;
+  onRemoveVariation: () => void;
   engineReady: boolean;
   isKataGoRunning: boolean;
   analysisProgress: { completed: number; expected: number; turn: number } | null;
@@ -324,6 +351,7 @@ export function BottomBar(props: {
   onShowMoveNumbers: (value: boolean) => void;
   jumpRef: { current: HTMLInputElement | null };
   message: string;
+  toPlay: "black" | "white";
 }) {
   const progress = props.analysisProgress;
   const progressText = progress
@@ -373,11 +401,26 @@ export function BottomBar(props: {
         />
         <span className="move-indicator">第 {props.currentMove} / {props.maxMove} 手</span>
       </div>
+      <div className="nav-cluster" aria-label="变化导航">
+        <button type="button" className="chrome-btn" onClick={props.onParent} disabled={!props.canParent} title="回到父节点">父节点</button>
+        <button type="button" className="chrome-btn" onClick={props.onNext} disabled={!props.canNext} title="进入最近选择的变化，否则第一变化">下一变化</button>
+        <button type="button" className="chrome-btn" onClick={props.onPrevSibling} disabled={!props.canPrevSibling} title="上一分支">上一分支</button>
+        <button type="button" className="chrome-btn" onClick={props.onNextSibling} disabled={!props.canNextSibling} title="下一分支">下一分支</button>
+        <button
+          type="button"
+          className="chrome-btn"
+          onClick={props.onRemoveVariation}
+          disabled={!props.canRemoveVariation}
+          title={props.canRemoveVariation ? "删除当前选中的非根变化" : (props.nativeUnavailable ?? "只能删除已选中的非根变化")}
+        >删除变化</button>
+        <span className="move-indicator">分支 {props.siblingLabel}</span>
+      </div>
       <span className="spacer" />
       <button type="button" className="chrome-btn" onClick={props.onEstimate}>形势判断</button>
       <button type="button" className="chrome-btn" aria-pressed={props.showMoveNumbers} onClick={() => props.onShowMoveNumbers(!props.showMoveNumbers)}>手数</button>
       <button type="button" className="chrome-btn" aria-pressed={props.showCoordinates} onClick={() => props.onShowCoordinates(!props.showCoordinates)}>坐标</button>
       <button type="button" className="chrome-btn" aria-pressed={props.autoPlaying} onClick={props.onAutoPlay}>自动播放</button>
+      <span className="nav-to-play">{props.toPlay === "black" ? "下一手 黑" : "下一手 白"}</span>
       <span className="nav-message" title={props.message}>{props.message}</span>
     </nav>
   );

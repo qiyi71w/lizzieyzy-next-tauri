@@ -12,6 +12,10 @@ type Props = {
   boardSize: number;
   currentMove: number;
   currentPosition?: PositionDto;
+  personalComment?: string;
+  generatedInformation?: string | null;
+  commentEditorEnabled?: boolean;
+  onCommitPersonalComment?: (comment: string) => void;
   selectedCandidateIndex: number | null;
   onSelectCandidate: (index: number) => void;
   onSelectProblem: (moveNumber: number) => void;
@@ -32,12 +36,20 @@ export function AnalysisPanel({
   boardSize,
   currentMove,
   currentPosition,
+  personalComment = "",
+  generatedInformation = null,
+  commentEditorEnabled = false,
+  onCommitPersonalComment,
   selectedCandidateIndex,
   onSelectCandidate,
   onSelectProblem,
   pane = "commentary"
 }: Props) {
   const [leftTab, setLeftTab] = useState<"commentary" | "problems">("commentary");
+  const [commentDraft, setCommentDraft] = useState(personalComment);
+  useEffect(() => {
+    setCommentDraft(personalComment);
+  }, [personalComment]);
   const hasOwnership = (frame?.ownership?.length ?? 0) >= boardSize * boardSize;
 
   const candidates = frame?.candidates ?? [];
@@ -173,6 +185,33 @@ export function AnalysisPanel({
         <div className="hud-tab-content">
           {leftTab === "commentary" ? (
             <div className="commentary-body">
+              <div className="selected-node-facts">
+                <p>
+                  手数 {currentPosition?.move_number ?? currentMove}
+                  {" · "}上一手 {lastMoveLabel(currentPosition, boardSize)}
+                  {" · "}下一手 {nextPlayerLabel(currentPosition)}
+                  {" · "}提子 黑 {currentPosition?.captures_black ?? 0} 白 {currentPosition?.captures_white ?? 0}
+                </p>
+                {commentEditorEnabled ? (
+                  <label className="personal-comment-editor-label">
+                    个人评论
+                    <textarea
+                      className="personal-comment-editor"
+                      value={commentDraft}
+                      onChange={(event) => setCommentDraft(event.target.value)}
+                      onBlur={() => onCommitPersonalComment?.(commentDraft)}
+                      spellCheck={false}
+                      aria-label="个人评论"
+                      placeholder="为当前选中节点写下个人评论"
+                    />
+                  </label>
+                ) : personalComment ? (
+                  <p className="personal-comment">{personalComment}</p>
+                ) : null}
+                {generatedInformation ? (
+                  <p className="generated-information">{generatedInformation}</p>
+                ) : null}
+              </div>
               {frame ? (
                 <div className="commentary-metrics">
                   <p className="commentary-text">
@@ -339,4 +378,17 @@ function SubBoardCanvas({
   }, [boardSize, position, candidate]);
 
   return <canvas ref={canvasRef} className="subboard-canvas" aria-label="参考图变化副棋盘" />;
+}
+
+function lastMoveLabel(position: PositionDto | undefined, boardSize: number): string {
+  const last = position?.last_move;
+  if (!last) return "无";
+  const color = last.color === "black" ? "黑" : "白";
+  if (!isPoint(last.vertex)) return `${color} 虚手`;
+  return `${color} ${vertexLabel(last.vertex, boardSize)}`;
+}
+
+function nextPlayerLabel(position: PositionDto | undefined): string {
+  if (!position) return "—";
+  return position.to_play === "black" ? "黑" : "白";
 }

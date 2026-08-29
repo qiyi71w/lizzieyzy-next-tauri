@@ -104,6 +104,18 @@ button[aria-pressed="true"] {
   color: var(--ink);
 }
 
+.app-shell.has-native-runtime-note {
+  grid-template-rows: auto 30px 38px 34px minmax(0, 1fr) 42px auto;
+}
+
+.native-runtime-note {
+  margin: 0;
+  padding: 6px 10px;
+  background: #fff7ed;
+  color: #9a3412;
+  border-bottom: 1px solid #fdba74;
+}
+
 .spacer { flex: 1; }
 
 .menu-bar,
@@ -1124,4 +1136,54 @@ textarea {
 
 @media (max-width: 1180px) {
   .spread { grid-template-columns: 210px minmax(0, 1fr) 240px; }
+}
+
+.selected-node-facts {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--hud-text);
+}
+
+.selected-node-facts p {
+  margin: 0;
+}
+
+.personal-comment {
+  margin-top: 6px;
+  color: var(--hud-text-muted);
+}
+
+.personal-comment-editor-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  color: var(--hud-text-muted);
+  font-size: 12px;
+}
+
+.personal-comment-editor {
+  min-height: 72px;
+  resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid var(--hud-border, #2c313a);
+  border-radius: 4px;
+  background: #12141a;
+  color: var(--hud-text, #e5e7eb);
+  font: inherit;
+}
+
+.generated-information {
+  margin-top: 8px;
+  color: var(--hud-text-muted);
+  font-size: 12px;
+}
+
+.nav-to-play {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
 }

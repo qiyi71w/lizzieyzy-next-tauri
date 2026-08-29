@@ -1,11 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AnalysisFrameDto,
   AppHealthDto,
   AssetCheckDto,
   CandidateMoveDto,
+  CurrentGameResultDto,
+  NodePath,
   EngineProfileRecordDto,
   EngineProfileDto,
   EngineProfilesSettingsDto,
@@ -59,7 +61,7 @@ declare global {
   }
 }
 
-const isTauriRuntime = () => typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
+export const isTauriRuntime = () => typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
 
 export async function getHealth(): Promise<AppHealthDto> {
   if (!isTauriRuntime()) {
@@ -102,19 +104,71 @@ export async function openSgfDocument(): Promise<SgfDocument | null> {
   return { path: selected, sgfText };
 }
 
-export async function saveSgfDocument(path: string | null, sgfText: string, defaultFileName = "review.sgf"): Promise<SgfDocument | null> {
+export const nativeCurrentGameUnavailable =
+  "Native current-game, edit, and authoritative Save require the Tauri desktop backend. Browser preview is non-authoritative.";
+
+export async function replaceCurrentGame(sgfText: string, nativePath: string | null): Promise<CurrentGameResultDto> {
   if (!isTauriRuntime()) {
-    downloadSgf(sgfText, path ? fileNameFromPath(path) : defaultFileName);
-    return { path, sgfText };
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<CurrentGameResultDto>("replace_current_game", { sgfText, nativePath });
+}
+
+export async function serializeCurrentGame(): Promise<string> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<string>("serialize_current_game");
+}
+
+export async function projectCurrentGameMainline(): Promise<GameDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<GameDto>("project_current_game_mainline");
+}
+
+export async function selectCurrentGameNode(path: NodePath): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) {
+    throw new Error("Native current-game navigation requires the Tauri desktop backend.");
+  }
+  return invoke<CurrentGameResultDto>("select_current_game_node", { path });
+}
+
+export async function playCurrentGame(path: NodePath, vertex: MoveVertex): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<CurrentGameResultDto>("play_current_game", { path, vertex });
+}
+
+export async function setCurrentGamePersonalComment(path: NodePath, comment: string): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<CurrentGameResultDto>("set_current_game_personal_comment", { path, comment });
+}
+
+export async function removeCurrentGameVariation(path: NodePath): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<CurrentGameResultDto>("remove_current_game_variation", { path });
+}
+
+export async function saveCurrentGame(
+  path: string | null,
+  selectedPath: NodePath,
+  defaultFileName = "review.sgf"
+): Promise<CurrentGameResultDto | null> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
   }
 
-  const targetPath = path ?? await save({
-    filters: sgfDialogFilters,
-    defaultPath: defaultFileName
-  });
-  if (!targetPath) return null;
-  await invoke<void>("write_sgf_file", { path: targetPath, sgfText });
-  return { path: targetPath, sgfText };
+  if (path) {
+    return invoke<CurrentGameResultDto>("save_current_game", { path, selectedPath });
+  }
+  return invoke<CurrentGameResultDto | null>("save_current_game_as", { selectedPath, defaultFileName });
 }
 
 export async function analyzeKataGoOnce(profile: EngineProfileDto, sgfText: string, turn: number, maxVisits: number): Promise<AnalysisFrameDto> {

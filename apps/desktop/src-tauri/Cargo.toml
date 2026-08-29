@@ -24,6 +24,7 @@ provider-core = { path = "../../../crates/provider-core" }
 go-core = { path = "../../../crates/go-core" }
 readboard-sidecar = { path = "../../../crates/readboard-sidecar" }
 sgf = { path = "../../../crates/sgf" }
+save-as-dialog = { path = "../../../crates/save-as-dialog" }
 storage = { path = "../../../crates/storage" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 rusqlite.workspace = true
@@ -33,3 +34,12 @@ tauri.workspace = true
 tauri-plugin-dialog.workspace = true
 tauri-plugin-opener.workspace = true
 uuid.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+] }
+windows-core = "0.61"

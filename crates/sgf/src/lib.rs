@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+mod current_game;
+pub use current_game::CurrentSgfDocument;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SgfDocument {
     pub board_size: u8,
@@ -998,7 +1000,7 @@ fn build_fox_root_tree(root_properties: Vec<SgfProperty>, moves: &[FoxMove]) -> 
     }
 }
 
-fn to_core_color(color: PlayerColor) -> Color {
+pub(crate) fn to_core_color(color: PlayerColor) -> Color {
     match color {
         PlayerColor::Black => Color::Black,
         PlayerColor::White => Color::White,
@@ -1012,7 +1014,7 @@ fn from_core_color(color: Color) -> PlayerColor {
     }
 }
 
-fn to_core_vertex(vertex: &MoveVertex) -> Vertex {
+pub(crate) fn to_core_vertex(vertex: &MoveVertex) -> Vertex {
     match vertex {
         MoveVertex::Point(point) => Vertex::Point(Point {
             x: point.x,
@@ -1022,7 +1024,7 @@ fn to_core_vertex(vertex: &MoveVertex) -> Vertex {
     }
 }
 
-fn stones_from_board(board: &Board) -> Vec<StoneDto> {
+pub(crate) fn stones_from_board(board: &Board) -> Vec<StoneDto> {
     let size = board.size();
     board
         .stones_snapshot()
@@ -1075,7 +1077,7 @@ fn escape_sgf_value(value: &str) -> String {
     escaped
 }
 
-fn serialize_vertex(vertex: &MoveVertex, board_size: u8) -> Result<String, SgfError> {
+pub(crate) fn serialize_vertex(vertex: &MoveVertex, board_size: u8) -> Result<String, SgfError> {
     match vertex {
         MoveVertex::Pass => Ok(String::new()),
         MoveVertex::Point(point) if point.x < board_size && point.y < board_size => Ok(format!(
@@ -1120,7 +1122,7 @@ fn serialize_node_sequence_into(node: &SgfNode, output: &mut String) {
     }
 }
 
-fn property_values<'a>(node: &'a SgfNode, key: &str) -> Option<&'a Vec<String>> {
+pub(crate) fn property_values<'a>(node: &'a SgfNode, key: &str) -> Option<&'a Vec<String>> {
     node.properties
         .iter()
         .find(|property| property.key == key)
@@ -1137,7 +1139,7 @@ fn mainline_nodes(root: &SgfNode) -> Vec<&SgfNode> {
     nodes
 }
 
-fn player_to_play(node: &SgfNode) -> Result<Option<PlayerColor>, SgfError> {
+pub(crate) fn player_to_play(node: &SgfNode) -> Result<Option<PlayerColor>, SgfError> {
     let Some(value) = property_values(node, "PL").and_then(|values| values.first()) else {
         return Ok(None);
     };
@@ -1154,7 +1156,11 @@ fn has_move_property(node: &SgfNode) -> bool {
         .any(|property| property.key == "B" || property.key == "W")
 }
 
-fn apply_setup_properties(board: &mut Board, node: &SgfNode, board_size: u8) -> Result<(), SgfError> {
+pub(crate) fn apply_setup_properties(
+    board: &mut Board,
+    node: &SgfNode,
+    board_size: u8,
+) -> Result<(), SgfError> {
     for property in &node.properties {
         let color = match property.key.as_str() {
             "AB" => Some(Some(Color::Black)),
@@ -1359,7 +1365,7 @@ fn chain_sequence(mut sequence: Vec<SgfNode>) -> SgfNode {
     node
 }
 
-fn parse_vertex(raw: &str, board_size: u8) -> Result<MoveVertex, SgfError> {
+pub(crate) fn parse_vertex(raw: &str, board_size: u8) -> Result<MoveVertex, SgfError> {
     if raw.is_empty() || (raw.eq_ignore_ascii_case("tt") && board_size <= 19) {
         return Ok(MoveVertex::Pass);
     }

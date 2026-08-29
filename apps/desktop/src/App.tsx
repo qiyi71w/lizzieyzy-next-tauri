@@ -13,11 +13,20 @@ import {
   classifyProblems,
   fakeAnalyze,
   getHealth,
+  isTauriRuntime,
   listenToKataGoAnalysisEvents,
+  nativeCurrentGameUnavailable,
   openSgfDocument,
   parseSgfSummary,
+  playCurrentGame,
+  projectCurrentGameMainline,
   replaySgfPositions,
-  saveSgfDocument,
+  replaceCurrentGame,
+  saveCurrentGame,
+  serializeCurrentGame,
+  selectCurrentGameNode,
+  setCurrentGamePersonalComment,
+  removeCurrentGameVariation,
   startKataGoGameAnalysis
 } from "./api/backend";
 import { computeGameCacheKey, loadAnalysisCache, saveAnalysisCache } from "./api/analysisCache";
@@ -26,7 +35,7 @@ import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, select
 import type { AnalysisCacheRecord, CacheStatus, GameCacheKey, JsonValue } from "./domain/cache";
 import { defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "./domain/preferences";
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
-import type { AnalysisFrameDto, AppHealthDto, EngineProfileDto, GameDto, PositionDto, ProblemMarkerDto } from "./domain/types";
+import type { AnalysisFrameDto, AppHealthDto, CurrentGameResultDto, EngineProfileDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, SgfTreeNodeDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
@@ -51,12 +60,20 @@ export function App() {
   const [frames, setFrames] = useState<AnalysisFrameDto[]>([]);
   const [problems, setProblems] = useState<ProblemMarkerDto[]>([]);
   const [sgfText, setSgfText] = useState(demoSgf);
-  const [message, setMessage] = useState("谱面已就绪。打开棋谱或载入示例开始复盘。");
+  const [message, setMessage] = useState(
+    isTauriRuntime() ? "谱面已就绪。打开棋谱或载入示例开始复盘。" : nativeCurrentGameUnavailable
+  );
+  const nativeRuntime = isTauriRuntime();
   const [isKataGoRunning, setIsKataGoRunning] = useState(false);
   const [selectedCandidateIndex, setSelectedCandidateIndex] = useState<number | null>(null);
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
   const [fallbackFileName, setFallbackFileName] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [currentGame, setCurrentGame] = useState<CurrentGameResultDto | null>(null);
+  const [chosenChildren, setChosenChildren] = useState<Map<string, number>>(() => new Map());
+  const navigatingRef = useRef(false);
+  const documentGenerationRef = useRef(0);
+  const pendingSelectedPathRef = useRef<NodePath | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus>("idle");
@@ -85,11 +102,22 @@ export function App() {
   const pendingAnalysisProgressRef = useRef<Map<string, AnalysisProgress>>(new Map());
   const pendingAnalysisTerminalEventsRef = useRef<Map<string, PendingAnalysisTerminalEvent>>(new Map());
   const analysisCleanupRef = useRef<(() => void) | null>(null);
+  const currentGameRef = useRef<CurrentGameResultDto | null>(null);
 
   useEffect(() => {
     getHealth()
       .then(setHealth)
       .catch((error: unknown) => setMessage(errorMessage(error)));
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    void applyReplacement(demoSgf, null, {
+      confirmMessage: "放弃未保存的棋谱并载入示例？",
+      fallbackName: "sample.sgf",
+      successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
+      failurePrefix: "Sample load failed"
+    });
   }, []);
 
   useEffect(() => {
@@ -114,9 +142,32 @@ export function App() {
 
   const currentFrame = useMemo(() => frames.find((f) => f.turn === currentMove) ?? frames.at(-1), [frames, currentMove]);
   const visibleCurrentFrame = useMemo(() => applyPreferencesToFrame(currentFrame, preferences), [currentFrame, preferences]);
-  const currentPosition = useMemo(() => selectExactPosition(positions, currentMove, game.summary.board_size), [positions, currentMove, game.summary.board_size]);
+  const currentPosition = useMemo(() => {
+    if (currentGame) return currentGame.snapshot.position;
+    return selectExactPosition(positions, currentMove, game.summary.board_size);
+  }, [currentGame, currentMove, positions, game.summary.board_size]);
+  currentGameRef.current = currentGame;
+  const selectedPersonalComment = currentGame ? currentGame.snapshot.personal_comment : "";
+  const selectedGeneratedInformation = currentGame?.snapshot.generated_information ?? null;
+  const selectedPath = currentGame?.selected_path ?? { indices: [] };
+  const selectedNode = currentGame ? nodeAt(currentGame.tree, selectedPath) : null;
+  const parentOfSelected = parentPath(selectedPath);
+  const parentNode = currentGame && parentOfSelected ? nodeAt(currentGame.tree, parentOfSelected) : null;
+  const siblingIndex = selectedPath.indices.at(-1);
+  const canParent = Boolean(currentGame && parentOfSelected);
+  const canRemoveVariation = Boolean(nativeRuntime && currentGame && selectedPath.indices.length > 0);
+  const canNext = Boolean(selectedNode && selectedNode.children.length > 0);
+  const canPrevSibling = Boolean(parentNode && siblingIndex !== undefined && siblingIndex > 0);
+  const canNextSibling = Boolean(parentNode && siblingIndex !== undefined && siblingIndex + 1 < parentNode.children.length);
+  const siblingLabel = parentNode && siblingIndex !== undefined ? `${siblingIndex + 1}/${parentNode.children.length}` : "—";
   const maxMove = Math.max(positions.at(-1)?.move_number ?? 0, 1);
-  const documentName = useMemo(() => currentFilePath ? fileNameFromPath(currentFilePath) : fallbackFileName ?? "未命名棋谱", [currentFilePath, fallbackFileName]);
+  const reviewIndex = currentGame ? selectedPath.indices.length : currentMove;
+  const reviewMax = currentGame
+    ? chosenLeafPath(currentGame.tree, { indices: [] }, chosenChildren).indices.length
+    : maxMove;
+  const documentDirty = currentGame?.dirty ?? dirty;
+  const documentPath = currentGame?.native_path ?? currentFilePath;
+  const documentName = useMemo(() => documentPath ? fileNameFromPath(documentPath) : fallbackFileName ?? "未命名棋谱", [documentPath, fallbackFileName]);
   const saveFileName = documentName.toLowerCase().endsWith(".sgf") ? documentName : `${documentName}.sgf`;
 
   useEffect(() => {
@@ -140,20 +191,47 @@ export function App() {
       }
       if (event.key === "ArrowLeft") {
         event.preventDefault();
+        if (currentGame) {
+          const parent = parentPath(currentGame.selected_path);
+          if (parent) void selectNode(parent);
+          return;
+        }
         setCurrentMove((move) => clampMoveNumberToPositions(positions, move - 1));
       }
       if (event.key === "ArrowRight") {
         event.preventDefault();
+        if (currentGame) {
+          const node = nodeAt(currentGame.tree, currentGame.selected_path);
+          if (node && node.children.length > 0) {
+            void selectNode(childPath(
+              currentGame.selected_path,
+              chosenChildIndex(chosenChildren, currentGame.selected_path, node.children.length)
+            ));
+          }
+          return;
+        }
         setCurrentMove((move) => clampMoveNumberToPositions(positions, move + 1));
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [positions, visibleCurrentFrame]);
+  }, [positions, visibleCurrentFrame, currentGame, chosenChildren]);
 
   useEffect(() => {
     if (!autoPlaying) return;
     const timer = window.setInterval(() => {
+      if (currentGame) {
+        const node = nodeAt(currentGame.tree, currentGame.selected_path);
+        if (!node || node.children.length === 0) {
+          setAutoPlaying(false);
+          return;
+        }
+        void selectNode(childPath(
+          currentGame.selected_path,
+          chosenChildIndex(chosenChildren, currentGame.selected_path, node.children.length)
+        ));
+        return;
+      }
       setCurrentMove((move) => {
         const next = clampMoveNumberToPositions(positions, move + 1);
         if (next >= Math.max(positions.at(-1)?.move_number ?? 0, 1)) setAutoPlaying(false);
@@ -161,7 +239,7 @@ export function App() {
       });
     }, 800);
     return () => window.clearInterval(timer);
-  }, [autoPlaying, positions]);
+  }, [autoPlaying, positions, currentGame, chosenChildren]);
 
   function toggleSheet(next: SheetId) {
     setSheet((current) => current === next ? "none" : next);
@@ -220,79 +298,187 @@ export function App() {
     }
   }
 
-  async function handleParseSgf() {
+
+  function confirmDirtyReplacement(confirmMessage: string): boolean {
+    return !documentDirty || window.confirm(confirmMessage);
+  }
+
+  function adoptCurrentGame(result: CurrentGameResultDto) {
+    documentGenerationRef.current = result.generation;
+    setCurrentGame(result);
+  }
+
+  function isCurrentDocumentGeneration(capturedGeneration: number): boolean {
+    return documentGenerationRef.current === capturedGeneration;
+  }
+
+  async function artifactsFromCurrentGame(): Promise<{ serialized: string; projection: GameDto }> {
+    const [serialized, projection] = await Promise.all([serializeCurrentGame(), projectCurrentGameMainline()]);
+    return { serialized, projection };
+  }
+
+  async function applyReplacement(
+    sgfInput: string,
+    nativePath: string | null,
+    options: {
+      confirmMessage: string;
+      fallbackName?: string | null;
+      successMessage: (projection: GameDto, fileName: string) => string;
+      failurePrefix: string;
+      checkCache?: boolean;
+    }
+  ): Promise<boolean> {
+    if (!confirmDirtyReplacement(options.confirmMessage)) return false;
+
+    if (!nativeRuntime) {
+      try {
+        const [parsed, replayed] = await Promise.all([parseSgfSummary(sgfInput), replaySgfPositions(sgfInput)]);
+        documentGenerationRef.current = 0;
+        setCurrentGame(null);
+        pendingSelectedPathRef.current = null;
+        setSgfText(sgfInput);
+        setCurrentFilePath(null);
+        setFallbackFileName(options.fallbackName ?? null);
+        setDirty(false);
+        setGame(parsed);
+        setPositions(replayed);
+        setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
+        setFrames([]);
+        setProblems([]);
+        setSelectedCandidateIndex(null);
+        const previewMessage = options.successMessage(parsed, options.fallbackName ?? "SGF");
+        setMessage(`${nativeCurrentGameUnavailable} ${previewMessage}`);
+        if (options.checkCache === false) resetAnalysisCacheState();
+        else await checkAnalysisCacheForGame(sgfInput, null, parsed, `${nativeCurrentGameUnavailable} ${previewMessage}`);
+        return true;
+      } catch (error) {
+        setMessage(`${options.failurePrefix}: ${errorMessage(error)}`);
+        return false;
+      }
+    }
+
     try {
-      const [parsed, replayed] = await Promise.all([parseSgfSummary(sgfText), replaySgfPositions(sgfText)]);
-      const loadedMessage = `Loaded ${parsed.summary.black_name ?? "Black"} vs ${parsed.summary.white_name ?? "White"}: ${parsed.summary.move_count} moves.`;
-      setGame(parsed);
-      setPositions(replayed);
-      setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
+      const result = await replaceCurrentGame(sgfInput, nativePath);
+      adoptCurrentGame(result);
+      const artifacts = await artifactsFromCurrentGame();
+      pendingSelectedPathRef.current = result.selected_path;
+      setChosenChildren(chosenFromPath(result.selected_path));
+      setSgfText(sgfInput);
+      setCurrentFilePath(result.native_path ?? nativePath);
+      setFallbackFileName(result.native_path ? null : options.fallbackName ?? null);
+      setDirty(result.dirty);
+      setGame(artifacts.projection);
+      setCurrentMove(result.snapshot.position.move_number);
       setFrames([]);
       setProblems([]);
       setSelectedCandidateIndex(null);
-      setMessage(loadedMessage);
-      await checkAnalysisCacheForGame(sgfText, currentFilePath, parsed, replayed, loadedMessage);
+      const fileName = fileNameFromPath(result.native_path ?? options.fallbackName ?? "SGF");
+      const success = options.successMessage(artifacts.projection, fileName);
+      setMessage(success);
+      if (options.checkCache === false) resetAnalysisCacheState();
+      else await checkAnalysisCacheForGame(artifacts.serialized, result.native_path ?? null, artifacts.projection, success);
+      return true;
     } catch (error) {
-      clearReviewData();
-      resetAnalysisCacheState();
-      setCurrentMove(0);
-      setMessage(`Parse failed: ${errorMessage(error)}`);
+      setMessage(`${options.failurePrefix}: ${errorMessage(error)}`);
+      return false;
     }
   }
 
+  async function handleParseSgf() {
+    await applyReplacement(sgfText, null, {
+      confirmMessage: "放弃未保存的棋谱并载入这段文本？",
+      fallbackName: fallbackFileName ?? "imported.sgf",
+      successMessage: (projection) =>
+        `Loaded ${projection.summary.black_name ?? "Black"} vs ${projection.summary.white_name ?? "White"}: ${projection.summary.move_count} moves.`,
+      failurePrefix: "Parse failed"
+    });
+  }
+
   async function handleOpenSgfDocument() {
-    if (dirty && !window.confirm("Discard unsaved SGF changes and open another file?")) return;
+    if (!nativeRuntime) {
+      setMessage(nativeCurrentGameUnavailable);
+      return;
+    }
+    if (!confirmDirtyReplacement("Discard unsaved SGF changes and open another file?")) return;
     try {
       const document = await openSgfDocument();
-      if (!document) {
-        setMessage("Native Open is unavailable here. Use Import SGF in browser preview.");
-        return;
-      }
+      if (!document) return;
+      const result = await replaceCurrentGame(document.sgfText, document.path);
+      adoptCurrentGame(result);
+      const artifacts = await artifactsFromCurrentGame();
+      pendingSelectedPathRef.current = result.selected_path;
       setSgfText(document.sgfText);
-      setCurrentFilePath(document.path);
+      setCurrentFilePath(result.native_path ?? document.path);
       setFallbackFileName(null);
-      setDirty(false);
-      const [parsed, replayed] = await Promise.all([parseSgfSummary(document.sgfText), replaySgfPositions(document.sgfText)]);
-      const openedMessage = `Opened ${fileNameFromPath(document.path ?? "SGF")}: ${parsed.summary.move_count} moves.`;
-      setGame(parsed);
-      setPositions(replayed);
-      setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
+      setDirty(result.dirty);
+      setGame(artifacts.projection);
+      setCurrentMove(result.snapshot.position.move_number);
       setFrames([]);
       setProblems([]);
       setSelectedCandidateIndex(null);
+      const openedMessage = `Opened ${fileNameFromPath(result.native_path ?? document.path ?? "SGF")}: ${artifacts.projection.summary.move_count} moves.`;
       setMessage(openedMessage);
-      await checkAnalysisCacheForGame(document.sgfText, document.path, parsed, replayed, openedMessage);
+      await checkAnalysisCacheForGame(artifacts.serialized, result.native_path ?? document.path, artifacts.projection, openedMessage);
     } catch (error) {
       setMessage(`Open failed: ${errorMessage(error)}`);
     }
   }
 
   async function handleSaveSgfDocument(saveAs = false) {
+    if (!nativeRuntime) {
+      setMessage(nativeCurrentGameUnavailable);
+      return;
+    }
+    if (!currentGame) {
+      setMessage(nativeCurrentGameUnavailable);
+      return;
+    }
     try {
-      const saved = await saveSgfDocument(saveAs ? null : currentFilePath, sgfText, saveFileName);
+      const saved = await saveCurrentGame(saveAs ? null : documentPath, currentGame.selected_path, saveFileName);
       if (!saved) {
         setMessage("Save cancelled.");
         return;
       }
-      setCurrentFilePath(saved.path);
-      setDirty(false);
-      setMessage(`Saved ${saved.path ? fileNameFromPath(saved.path) : saveFileName}.`);
+      adoptCurrentGame(saved);
+      setCurrentFilePath(saved.native_path ?? null);
+      setDirty(saved.dirty);
+      setFallbackFileName(saved.native_path ? null : fallbackFileName);
+      setMessage(`Saved ${saved.native_path ? fileNameFromPath(saved.native_path) : saveFileName}.`);
     } catch (error) {
       setMessage(`Save failed: ${errorMessage(error)}`);
     }
   }
 
   async function handleFakeAnalyze() {
+    const capturedGeneration = documentGenerationRef.current;
     try {
-      const [parsed, result, replayed] = await Promise.all([parseSgfSummary(sgfText), fakeAnalyze(sgfText), replaySgfPositions(sgfText)]);
+      if (!nativeRuntime) {
+        const [parsed, result, replayed] = await Promise.all([parseSgfSummary(sgfText), fakeAnalyze(sgfText), replaySgfPositions(sgfText)]);
+        const classified = await classifyProblems(result);
+        if (documentGenerationRef.current !== capturedGeneration) return;
+        setGame(parsed);
+        setPositions(replayed);
+        setFrames(result);
+        setProblems(classified);
+        setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
+        setSelectedCandidateIndex(null);
+        const cacheMessage = await saveAnalysisCacheForGame(sgfText, currentFilePath, parsed, result, classified, "fake");
+        if (documentGenerationRef.current !== capturedGeneration) return;
+        setMessage(`${nativeCurrentGameUnavailable} 已生成 ${result.length} 个预览复盘局面。${cacheMessage}`);
+        return;
+      }
+      const artifacts = await artifactsFromCurrentGame();
+      const generation = currentGameRef.current?.generation ?? 0;
+      const result = await fakeAnalyze(artifacts.serialized);
+      if (!isCurrentDocumentGeneration(generation)) return;
       const classified = await classifyProblems(result);
-      setGame(parsed);
-      setPositions(replayed);
+      if (documentGenerationRef.current !== capturedGeneration) return;
+      setGame(artifacts.projection);
       setFrames(result);
       setProblems(classified);
-      setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
       setSelectedCandidateIndex(null);
-      const cacheMessage = await saveAnalysisCacheForGame(sgfText, currentFilePath, parsed, result, classified, "fake");
+      const cacheMessage = await saveAnalysisCacheForGame(artifacts.serialized, documentPath, artifacts.projection, result, classified, "fake");
+      if (documentGenerationRef.current !== capturedGeneration) return;
       setMessage(`已生成 ${result.length} 个复盘局面，含候选与胜率。${cacheMessage}`);
     } catch (error) {
       setMessage(errorMessage(error));
@@ -300,19 +486,30 @@ export function App() {
   }
 
   async function handleRunKataGo(profile: EngineProfileDto, maxVisits: number) {
+    const capturedGeneration = documentGenerationRef.current;
     const targetTurn = currentMove;
     const visits = resolveAnalysisMaxVisits(maxVisits, preferences);
     setIsKataGoRunning(true);
     setMessage(`Running KataGo analysis for move ${targetTurn}...`);
     try {
-      const [parsed, replayed] = await Promise.all([parseSgfSummary(sgfText), replaySgfPositions(sgfText)]);
-      const turn = clampMoveNumberToPositions(replayed, Math.min(targetTurn, replayed.at(-1)?.move_number ?? parsed.moves.length));
-      const frame = await analyzeKataGoOnce(profile, sgfText, turn, visits);
+      const artifacts = nativeRuntime
+        ? await artifactsFromCurrentGame()
+        : { serialized: sgfText, projection: await parseSgfSummary(sgfText) };
+      if (!nativeRuntime) setMessage(nativeCurrentGameUnavailable);
+      const replayed = nativeRuntime ? [] : await replaySgfPositions(sgfText);
+      const turn = nativeRuntime
+        ? (currentGameRef.current?.snapshot.position.move_number ?? Math.min(targetTurn, artifacts.projection.moves.length))
+        : clampMoveNumberToPositions(replayed, Math.min(targetTurn, replayed.at(-1)?.move_number ?? artifacts.projection.moves.length));
+      const generation = currentGameRef.current?.generation ?? 0;
+      const frame = await analyzeKataGoOnce(profile, artifacts.serialized, turn, visits);
+      if (documentGenerationRef.current !== capturedGeneration) return;
       const mergedFrames = mergeAnalysisFrame(frames, frame);
-      setGame(parsed);
-      setPositions(replayed);
+      const classified = await classifyProblems(mergedFrames);
+      if (documentGenerationRef.current !== capturedGeneration) return;
+      setGame(artifacts.projection);
+      if (!nativeRuntime) setPositions(replayed);
       setFrames(mergedFrames);
-      setProblems(await classifyProblems(mergedFrames));
+      setProblems(classified);
       setCurrentMove(frame.turn);
       setSelectedCandidateIndex(null);
       setMessage(`KataGo analysis completed for move ${frame.turn} with ${frame.visits} visits.`);
@@ -326,6 +523,7 @@ export function App() {
   async function handleAnalyzeKataGoGame(profile: EngineProfileDto, maxVisits: number) {
     if (activeJobIdRef.current || startingAnalysisRef.current) return;
     const visits = resolveAnalysisMaxVisits(maxVisits, preferences);
+    const capturedGeneration = documentGenerationRef.current;
     startingAnalysisRef.current = true;
     pendingAnalysisProgressRef.current.clear();
     pendingAnalysisTerminalEventsRef.current.clear();
@@ -334,9 +532,16 @@ export function App() {
     setMessage("Starting full-game KataGo analysis...");
     let cleanup: (() => void) | null = null;
     try {
-      const [parsed, replayed] = await Promise.all([parseSgfSummary(sgfText), replaySgfPositions(sgfText)]);
+      const artifacts = nativeRuntime
+        ? await artifactsFromCurrentGame()
+        : { serialized: sgfText, projection: await parseSgfSummary(sgfText) };
+      if (!nativeRuntime) setMessage(nativeCurrentGameUnavailable);
+      const parsed = artifacts.projection;
+      const replayed = nativeRuntime ? [] : await replaySgfPositions(sgfText);
+      const generation = currentGameRef.current?.generation ?? 0;
       cleanup = await listenToKataGoAnalysisEvents({
         onProgress: (payload) => {
+          if (documentGenerationRef.current !== capturedGeneration) return;
           if (startingAnalysisRef.current && activeJobIdRef.current === null) {
             pendingAnalysisProgressRef.current.set(payload.job_id, {
               jobId: payload.job_id,
@@ -347,7 +552,7 @@ export function App() {
             });
             return;
           }
-          if (!isCurrentAnalysisJob(payload.job_id)) return;
+          if (!isCurrentAnalysisJob(payload.job_id) || !isCurrentDocumentGeneration(generation)) return;
           setAnalysisProgress({
             jobId: payload.job_id,
             completed: payload.completed,
@@ -358,12 +563,16 @@ export function App() {
           setMessage(`Analyzing move ${payload.turn}: ${payload.completed}/${payload.expected} positions complete.`);
         },
         onComplete: (payload) => {
+          if (documentGenerationRef.current !== capturedGeneration) return;
           if (startingAnalysisRef.current && activeJobIdRef.current === null) {
             pendingAnalysisTerminalEventsRef.current.set(payload.job_id, { kind: "complete", frames: payload.frames });
             return;
           }
-          if (!isCurrentAnalysisJob(payload.job_id)) return;
-          void finishCompletedAnalysis(payload.job_id, payload.frames, parsed, replayed);
+          if (!isCurrentAnalysisJob(payload.job_id) || !isCurrentDocumentGeneration(capturedGeneration)) {
+            if (isCurrentAnalysisJob(payload.job_id)) finishStoppedAnalysis(payload.job_id);
+            return;
+          }
+          void finishCompletedAnalysis(payload.job_id, payload.frames, parsed, replayed, capturedGeneration);
         },
         onError: (payload) => {
           if (startingAnalysisRef.current && activeJobIdRef.current === null) {
@@ -387,14 +596,14 @@ export function App() {
       });
       cleanupAnalysisListeners();
       analysisCleanupRef.current = cleanup;
-      const jobId = await startKataGoGameAnalysis(profile, sgfText, visits);
+      const jobId = await startKataGoGameAnalysis(profile, artifacts.serialized, visits);
       const pendingTerminalEvent = pendingAnalysisTerminalEventsRef.current.get(jobId);
       const pendingProgress = pendingAnalysisProgressRef.current.get(jobId);
       startingAnalysisRef.current = false;
       pendingAnalysisProgressRef.current.clear();
       pendingAnalysisTerminalEventsRef.current.clear();
       if (pendingTerminalEvent) {
-        await finishPendingAnalysisTerminalEvent(jobId, pendingTerminalEvent, parsed, replayed);
+        await finishPendingAnalysisTerminalEvent(jobId, pendingTerminalEvent, parsed, replayed, capturedGeneration);
         return;
       }
       activeJobIdRef.current = jobId;
@@ -428,88 +637,50 @@ export function App() {
 
   async function handleImportFile(file: File | null) {
     if (!file) return;
-    try {
-      const text = await file.text();
-      const [parsed, replayed] = await Promise.all([parseSgfSummary(text), replaySgfPositions(text)]);
-      const importedMessage = `Imported ${file.name}: ${parsed.summary.move_count} moves.`;
-      setSgfText(text);
-      setCurrentFilePath(null);
-      setFallbackFileName(file.name);
-      setDirty(false);
-      setGame(parsed);
-      setPositions(replayed);
-      setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
-      setFrames([]);
-      setProblems([]);
-      setSelectedCandidateIndex(null);
-      setMessage(importedMessage);
-      await checkAnalysisCacheForGame(text, null, parsed, replayed, importedMessage);
-    } catch (error) {
-      setMessage(`Import failed: ${errorMessage(error)}`);
-    }
+    const text = await file.text();
+    await applyReplacement(text, null, {
+      confirmMessage: "放弃未保存的棋谱并导入这个文件？",
+      fallbackName: file.name,
+      successMessage: (projection, fileName) => `Imported ${fileName}: ${projection.summary.move_count} moves.`,
+      failurePrefix: "Import failed"
+    });
   }
 
   async function handleProviderImport(result: ProviderImportResult) {
-    try {
-      const [parsed, replayed] = await Promise.all([parseSgfSummary(result.sgf_text), replaySgfPositions(result.sgf_text)]);
-      const source = providerSourceLabel(result);
-      const warningText = result.warnings.length > 0 ? ` ${result.warnings.length} provider warning(s).` : "";
-      const importedMessage = `Imported ${providerLabel(result.provider)} provider payload from ${source}: ${parsed.summary.move_count} moves.${warningText}`;
-      setSgfText(result.sgf_text);
-      setCurrentFilePath(null);
-      setFallbackFileName(providerDocumentName(result));
-      setDirty(false);
-      setGame(parsed);
-      setPositions(replayed);
-      setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
-      setFrames([]);
-      setProblems([]);
-      setSelectedCandidateIndex(null);
-      setMessage(importedMessage);
-      await checkAnalysisCacheForGame(result.sgf_text, null, parsed, replayed, importedMessage);
-    } catch (error) {
-      setMessage(`Provider import failed: ${errorMessage(error)}`);
-      throw error;
-    }
+    const source = providerSourceLabel(result);
+    const warningText = result.warnings.length > 0 ? ` ${result.warnings.length} provider warning(s).` : "";
+    const applied = await applyReplacement(result.sgf_text, null, {
+      confirmMessage: "放弃未保存的棋谱并载入 Provider 棋谱？",
+      fallbackName: providerDocumentName(result),
+      successMessage: (projection) =>
+        `Imported ${providerLabel(result.provider)} provider payload from ${source}: ${projection.summary.move_count} moves.${warningText}`,
+      failurePrefix: "Provider import failed"
+    });
+    if (!applied) throw new Error("已取消载入，当前棋谱未改动。");
   }
 
   async function loadSample() {
-    const [parsed, replayed] = await Promise.all([parseSgfSummary(demoSgf), replaySgfPositions(demoSgf)]);
-    const sampleMessage = `Sample SGF restored: ${parsed.summary.move_count} moves.`;
-    setSgfText(demoSgf);
-    setCurrentFilePath(null);
-    setFallbackFileName("sample.sgf");
-    setDirty(false);
-    setGame(parsed);
-    setPositions(replayed);
-    setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
-    setFrames([]);
-    setProblems([]);
-    setSelectedCandidateIndex(null);
-    setMessage(sampleMessage);
-    await checkAnalysisCacheForGame(demoSgf, null, parsed, replayed, sampleMessage);
+    await applyReplacement(demoSgf, null, {
+      confirmMessage: "放弃未保存的棋谱并载入示例？",
+      fallbackName: "sample.sgf",
+      successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
+      failurePrefix: "Sample load failed"
+    });
   }
 
   async function handleNewGame() {
-    if (dirty && !window.confirm("放弃未保存的棋谱并新建对局？")) return;
-    const [parsed, replayed] = await Promise.all([parseSgfSummary(emptySgf), replaySgfPositions(emptySgf)]);
-    setSgfText(emptySgf);
-    setCurrentFilePath(null);
-    setFallbackFileName(null);
-    setDirty(false);
-    setGame(parsed);
-    setPositions(replayed);
-    setCurrentMove(0);
-    setFrames([]);
-    setProblems([]);
-    setSelectedCandidateIndex(null);
-    setMessage("已新建空谱。");
-    resetAnalysisCacheState();
+    await applyReplacement(emptySgf, null, {
+      confirmMessage: "放弃未保存的棋谱并新建对局？",
+      successMessage: () => "已新建空谱。",
+      failurePrefix: "New game failed",
+      checkCache: false
+    });
   }
 
   async function handleCopySgf() {
     try {
-      await navigator.clipboard.writeText(sgfText);
+      const text = nativeRuntime ? await serializeCurrentGame() : sgfText;
+      await navigator.clipboard.writeText(text);
       setMessage("棋谱已复制到剪贴板。");
     } catch (error) {
       setMessage(`复制失败: ${errorMessage(error)}`);
@@ -523,26 +694,159 @@ export function App() {
         setMessage("剪贴板没有棋谱。");
         return;
       }
-      const [parsed, replayed] = await Promise.all([parseSgfSummary(text), replaySgfPositions(text)]);
-      setSgfText(text);
-      setCurrentFilePath(null);
-      setFallbackFileName("clipboard.sgf");
-      setDirty(true);
-      setGame(parsed);
-      setPositions(replayed);
-      setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
-      setFrames([]);
-      setProblems([]);
-      setSelectedCandidateIndex(null);
-      setMessage(`已粘贴棋谱: ${parsed.summary.move_count} 手。`);
+      await applyReplacement(text, null, {
+        confirmMessage: "放弃未保存的棋谱并粘贴剪贴板棋谱？",
+        fallbackName: "clipboard.sgf",
+        successMessage: (projection) => `已粘贴棋谱: ${projection.summary.move_count} 手。`,
+        failurePrefix: "粘贴失败"
+      });
     } catch (error) {
       setMessage(`粘贴失败: ${errorMessage(error)}`);
     }
   }
 
+  async function handleCommitPersonalComment(comment: string) {
+    if (!currentGame) return;
+    if (!nativeRuntime) {
+      setMessage(nativeCurrentGameUnavailable);
+      return;
+    }
+    if (comment === currentGame.snapshot.personal_comment) return;
+    const previousGeneration = currentGame.generation;
+    const editedPath = currentGame.selected_path;
+    try {
+      const result = await setCurrentGamePersonalComment(editedPath, comment);
+      const latestPath = pendingSelectedPathRef.current ?? currentGameRef.current?.selected_path ?? editedPath;
+      const stillOnEditedNode = samePath(latestPath, editedPath);
+      setCurrentGame((prev) => {
+        if (stillOnEditedNode || prev === null) return result;
+        return {
+          ...result,
+          selected_path: prev.selected_path,
+          snapshot: prev.snapshot
+        };
+      });
+      if (stillOnEditedNode) {
+        setChosenChildren((prev) => rememberChosenChildren(prev, result.selected_path));
+        setCurrentMove(result.snapshot.position.move_number);
+        setSelectedCandidateIndex(null);
+      }
+      setDirty(result.dirty);
+      if (result.generation === previousGeneration) return;
+      const artifacts = await artifactsFromCurrentGame();
+      setGame(artifacts.projection);
+      clearReviewData();
+      resetAnalysisCacheState();
+      setMessage("已更新选中节点的个人评论。");
+    } catch (error) {
+      setMessage(`评论更新失败: ${errorMessage(error)}`);
+    }
+  }
+
+  async function selectNode(path: NodePath) {
+    if (!currentGame || navigatingRef.current) return;
+    if (samePath(path, currentGame.selected_path)) return;
+    navigatingRef.current = true;
+    pendingSelectedPathRef.current = path;
+    try {
+      const result = await selectCurrentGameNode(path);
+      documentGenerationRef.current = Math.max(documentGenerationRef.current, result.generation);
+      setCurrentGame((prev) => {
+        if (prev !== null && prev.generation > result.generation) {
+          return {
+            ...prev,
+            selected_path: result.selected_path,
+            snapshot: result.snapshot
+          };
+        }
+        return result;
+      });
+      setChosenChildren((prev) => rememberChosenChildren(prev, result.selected_path));
+      setCurrentMove(result.snapshot.position.move_number);
+      setSelectedCandidateIndex(null);
+    } catch (error) {
+      setMessage(`导航失败: ${errorMessage(error)}`);
+    } finally {
+      navigatingRef.current = false;
+    }
+  }
+
   function handleMoveSelect(moveNumber: number) {
+    if (currentGame) {
+      const leaf = chosenLeafPath(currentGame.tree, { indices: [] }, chosenChildren);
+      const depth = Math.max(0, Math.min(moveNumber, leaf.indices.length));
+      void selectNode({ indices: leaf.indices.slice(0, depth) });
+      return;
+    }
     setCurrentMove(clampMoveNumberToPositions(positions, moveNumber));
     setSelectedCandidateIndex(null);
+  }
+
+  function handleParent() {
+    if (parentOfSelected) void selectNode(parentOfSelected);
+  }
+
+  function handleNextChild() {
+    if (!selectedNode || selectedNode.children.length === 0) return;
+    void selectNode(childPath(selectedPath, chosenChildIndex(chosenChildren, selectedPath, selectedNode.children.length)));
+  }
+
+  function handlePrevSibling() {
+    if (siblingIndex === undefined || siblingIndex <= 0) return;
+    void selectNode({ indices: [...selectedPath.indices.slice(0, -1), siblingIndex - 1] });
+  }
+
+  function handleNextSibling() {
+    if (!parentNode || siblingIndex === undefined || siblingIndex + 1 >= parentNode.children.length) return;
+    void selectNode({ indices: [...selectedPath.indices.slice(0, -1), siblingIndex + 1] });
+  }
+
+  async function playAt(vertex: MoveVertex) {
+    if (!nativeRuntime) {
+      setMessage(nativeCurrentGameUnavailable);
+      return;
+    }
+    if (!currentGame) return;
+    const previousGeneration = currentGame.generation;
+    try {
+      const result = await playCurrentGame(currentGame.selected_path, vertex);
+      documentGenerationRef.current = result.generation;
+      setCurrentGame(result);
+      pendingSelectedPathRef.current = result.selected_path;
+      setChosenChildren((prev) => rememberChosenChildren(prev, result.selected_path));
+      setDirty(result.dirty);
+      setCurrentMove(result.snapshot.position.move_number);
+      setSelectedCandidateIndex(null);
+      if (result.generation !== previousGeneration) {
+        clearReviewData();
+        resetAnalysisCacheState();
+        const artifacts = await artifactsFromCurrentGame();
+        if (documentGenerationRef.current !== result.generation) return;
+        setGame(artifacts.projection);
+      }
+    } catch (error) {
+      setMessage(`落子失败: ${errorMessage(error)}`);
+    }
+  }
+
+  async function handleRemoveVariation() {
+    if (!currentGame || selectedPath.indices.length === 0) return;
+    try {
+      const result = await removeCurrentGameVariation(selectedPath);
+      adoptCurrentGame(result);
+      pendingSelectedPathRef.current = result.selected_path;
+      setChosenChildren(chosenFromPath(result.selected_path));
+      setDirty(result.dirty);
+      setCurrentMove(result.snapshot.position.move_number);
+      clearReviewData();
+      resetAnalysisCacheState();
+      const artifacts = await artifactsFromCurrentGame();
+      if (!isCurrentDocumentGeneration(result.generation)) return;
+      setGame(artifacts.projection);
+      setMessage("已删除选中变化，并回到其父节点。");
+    } catch (error) {
+      setMessage(`删除变化失败: ${errorMessage(error)}`);
+    }
   }
 
   function cleanupAnalysisListeners() {
@@ -554,9 +858,13 @@ export function App() {
     return activeJobIdRef.current === jobId;
   }
 
-  async function finishPendingAnalysisTerminalEvent(jobId: string, event: PendingAnalysisTerminalEvent, parsed: GameDto, replayed: PositionDto[]) {
+  async function finishPendingAnalysisTerminalEvent(jobId: string, event: PendingAnalysisTerminalEvent, parsed: GameDto, replayed: PositionDto[], capturedGeneration: number) {
     if (event.kind === "complete") {
-      await finishCompletedAnalysis(jobId, event.frames, parsed, replayed);
+      if (!isCurrentDocumentGeneration(capturedGeneration)) {
+        finishStoppedAnalysis(jobId);
+        return;
+      }
+      await finishCompletedAnalysis(jobId, event.frames, parsed, replayed, capturedGeneration);
       return;
     }
     finishStoppedAnalysis(jobId);
@@ -566,19 +874,32 @@ export function App() {
       : event.message || "Full-game KataGo analysis cancelled.");
   }
 
-  async function finishCompletedAnalysis(jobId: string, result: AnalysisFrameDto[], parsed: GameDto, replayed: PositionDto[]) {
+  async function finishCompletedAnalysis(jobId: string, result: AnalysisFrameDto[], parsed: GameDto, replayed: PositionDto[], capturedGeneration: number) {
+    if (documentGenerationRef.current !== capturedGeneration) {
+      finishStoppedAnalysis(jobId);
+      return;
+    }
     const lastAnalyzedMove = result.at(-1)?.turn ?? replayed.at(-1)?.move_number ?? parsed.moves.length;
-    const shownMove = clampMoveNumberToPositions(replayed, lastAnalyzedMove);
+    const shownMove = nativeRuntime
+      ? (currentGameRef.current?.snapshot.position.move_number ?? lastAnalyzedMove)
+      : clampMoveNumberToPositions(replayed, lastAnalyzedMove);
     const classified = await classifyProblems(result);
+    if (documentGenerationRef.current !== capturedGeneration) {
+      finishStoppedAnalysis(jobId);
+      return;
+    }
     setGame(parsed);
-    setPositions(replayed);
+    if (!nativeRuntime) setPositions(replayed);
     setFrames(result);
     setProblems(classified);
     setCurrentMove(shownMove);
     setSelectedCandidateIndex(null);
     setAnalysisProgress((progress) => progress ? { ...progress, completed: progress.expected || result.length, expected: progress.expected || result.length } : progress);
     finishStoppedAnalysis(jobId);
-    const cacheMessage = await saveAnalysisCacheForGame(sgfText, currentFilePath, parsed, result, classified, "katago");
+    const serialized = nativeRuntime ? await serializeCurrentGame() : sgfText;
+    if (documentGenerationRef.current !== capturedGeneration) return;
+    const cacheMessage = await saveAnalysisCacheForGame(serialized, documentPath, parsed, result, classified, "katago");
+    if (documentGenerationRef.current !== capturedGeneration) return;
     setMessage(`Full-game KataGo analysis completed with ${result.length} frames. Showing move ${shownMove}.${cacheMessage}`);
   }
 
@@ -590,7 +911,8 @@ export function App() {
     cleanupAnalysisListeners();
   }
 
-  async function checkAnalysisCacheForGame(text: string, filePath: string | null, parsed: GameDto, replayed: PositionDto[], baseMessage: string) {
+  async function checkAnalysisCacheForGame(text: string, filePath: string | null, parsed: GameDto, baseMessage: string) {
+    const capturedGeneration = documentGenerationRef.current;
     if (!preferences.autoLoadCache) {
       resetAnalysisCacheState();
       setMessage(`${baseMessage} Cache auto-load is off.`);
@@ -612,9 +934,12 @@ export function App() {
           setMessage(`${baseMessage} ${cacheEngineLabel(lookup.engineKind)} cache hit, but the payload could not be restored.`);
           return;
         }
+        if (documentGenerationRef.current !== capturedGeneration) return;
         setFrames(payload.frames);
         setProblems(payload.problems);
-        setCurrentMove(clampMoveNumberToPositions(replayed, payload.frames.at(-1)?.turn ?? parsed.moves.length));
+        setCurrentMove(nativeRuntime
+          ? (currentGameRef.current?.snapshot.position.move_number ?? payload.frames.at(-1)?.turn ?? parsed.moves.length)
+          : clampMoveNumberToPositions(positions, payload.frames.at(-1)?.turn ?? parsed.moves.length));
         setSelectedCandidateIndex(null);
         setCacheStatus("hit");
         setCacheRecord(lookup.record);
@@ -718,12 +1043,13 @@ export function App() {
     setCurrentCacheKey(null);
   }
 
-  return <main className={`app-shell${preferences.boardTheme === "high-contrast" ? " theme-high-contrast" : ""}`}>
+  return <main className={`app-shell${preferences.boardTheme === "high-contrast" ? " theme-high-contrast" : ""}${nativeRuntime ? "" : " has-native-runtime-note"}`}>
+    {!nativeRuntime ? <p className="native-runtime-note" role="status">{nativeCurrentGameUnavailable}</p> : null}
     <AppChrome
       sheet={sheet}
       onToggleSheet={toggleSheet}
       busy={isKataGoRunning}
-      dirty={dirty}
+      dirty={documentDirty}
       documentName={documentName}
       engineLabel={engineLabel}
       engineReady={engineReady}
@@ -743,6 +1069,8 @@ export function App() {
       komi={game.summary.komi}
       onNew={() => void handleNewGame()}
       onOpen={() => void handleOpenSgfDocument()}
+      nativeRuntime={nativeRuntime}
+      nativeUnavailable={nativeCurrentGameUnavailable}
       onSave={() => void handleSaveSgfDocument(false)}
       onSaveAs={() => void handleSaveSgfDocument(true)}
       onLoadSample={() => void loadSample()}
@@ -753,6 +1081,7 @@ export function App() {
       onCopySgf={() => void handleCopySgf()}
       onPasteSgf={() => void handlePasteSgf()}
       onClearBoard={() => void handleNewGame()}
+      onPass={() => void playAt("pass")}
       onAutoPlay={() => setAutoPlaying((value) => !value)}
       onOverlayMode={setOverlayMode}
       cacheBadge={<CacheStatusBadge status={cacheStatus} record={cacheRecord} error={cacheError} />}
@@ -779,6 +1108,10 @@ export function App() {
           boardSize={game.summary.board_size}
           currentMove={currentMove}
           currentPosition={currentPosition}
+          personalComment={selectedPersonalComment}
+          generatedInformation={selectedGeneratedInformation}
+          commentEditorEnabled={nativeRuntime && Boolean(currentGame)}
+          onCommitPersonalComment={(comment) => void handleCommitPersonalComment(comment)}
           selectedCandidateIndex={selectedCandidateIndex}
           onSelectCandidate={setSelectedCandidateIndex}
           onSelectProblem={handleMoveSelect}
@@ -795,6 +1128,7 @@ export function App() {
           overlayMode={overlayMode}
           onOverlayModeChange={setOverlayMode}
           hideCandidates={(currentPosition.to_play === "black" && !showBlackCandidates) || (currentPosition.to_play === "white" && !showWhiteCandidates)}
+          onPointClick={(point) => void playAt({ point })}
         />
       </div>
       <aside className="sheet-col">
@@ -813,9 +1147,21 @@ export function App() {
       </aside>
     </section>
     <BottomBar
-      currentMove={currentMove}
-      maxMove={maxMove}
-      onMove={(move) => setCurrentMove(clampMoveNumberToPositions(positions, move))}
+      currentMove={reviewIndex}
+      maxMove={reviewMax}
+      onMove={handleMoveSelect}
+      canParent={canParent}
+      canNext={canNext}
+      canPrevSibling={canPrevSibling}
+      canNextSibling={canNextSibling}
+      canRemoveVariation={canRemoveVariation}
+      siblingLabel={siblingLabel}
+      nativeUnavailable={nativeRuntime ? undefined : nativeCurrentGameUnavailable}
+      onParent={handleParent}
+      onNext={handleNextChild}
+      onPrevSibling={handlePrevSibling}
+      onNextSibling={handleNextSibling}
+      onRemoveVariation={() => void handleRemoveVariation()}
       engineReady={engineReady}
       isKataGoRunning={isKataGoRunning}
       analysisProgress={analysisProgress}
@@ -836,21 +1182,18 @@ export function App() {
       onShowMoveNumbers={setShowMoveNumbers}
       jumpRef={jumpRef}
       message={message}
+      toPlay={currentPosition.to_play}
     />
     <section className="sheet-row" hidden={sheet === "none"}>
       {sheet === "sgf" ? <div className="sgf-tools">
         <div className="document-row">
-          <strong title={currentFilePath ?? documentName}>{documentName}{dirty ? " *" : ""}</strong>
-          <span>{dirty ? "未保存" : "已保存"}</span>
+          <strong title={documentPath ?? documentName}>{documentName}{documentDirty ? " *" : ""}</strong>
+          <span>{documentDirty ? "未保存" : "已保存"}</span>
         </div>
         <textarea value={sgfText} onChange={(event) => {
           setSgfText(event.target.value);
-          setDirty(true);
-          clearReviewData();
-          resetAnalysisCacheState();
-          setCurrentMove(0);
-          setMessage("棋谱已改。解析棋谱或再跑分析以刷新。");
-        }} spellCheck={false} aria-label="棋谱原文" />
+          setMessage("这段文本只是载入输入。解析棋谱才会替换当前对局。");
+        }} spellCheck={false} aria-label="棋谱载入文本" />
         <div className="button-row">
           <label className={`file-button${isKataGoRunning ? " file-button-disabled" : ""}`}>
             导入棋谱
@@ -921,7 +1264,12 @@ function countAnalyzedMoves(frames: AnalysisFrameDto[], moveCount: number): numb
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object" && "message" in error) {
+    const message = Reflect.get(error, "message");
+    if (typeof message === "string" && message.trim()) return message;
+  }
+  return String(error);
 }
 
 function cacheEngineLabel(engineKind: CacheEngineKind): string {
@@ -930,4 +1278,63 @@ function cacheEngineLabel(engineKind: CacheEngineKind): string {
 
 function fileNameFromPath(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+}
+
+function pathKey(path: NodePath): string {
+  return path.indices.join(",");
+}
+
+function samePath(left: NodePath, right: NodePath): boolean {
+  return left.indices.length === right.indices.length && left.indices.every((index, offset) => index === right.indices[offset]);
+}
+
+function parentPath(path: NodePath): NodePath | null {
+  if (path.indices.length === 0) return null;
+  return { indices: path.indices.slice(0, -1) };
+}
+
+function childPath(path: NodePath, index: number): NodePath {
+  return { indices: [...path.indices, index] };
+}
+
+function nodeAt(root: SgfTreeNodeDto, path: NodePath): SgfTreeNodeDto | null {
+  let node: SgfTreeNodeDto | undefined = root;
+  for (const index of path.indices) {
+    node = node.children[index];
+    if (!node) return null;
+  }
+  return node;
+}
+
+function chosenFromPath(path: NodePath): Map<string, number> {
+  const chosen = new Map<string, number>();
+  for (let depth = 0; depth < path.indices.length; depth += 1) {
+    chosen.set(pathKey({ indices: path.indices.slice(0, depth) }), path.indices[depth]);
+  }
+  return chosen;
+}
+
+function rememberChosenChildren(previous: Map<string, number>, path: NodePath): Map<string, number> {
+  const next = new Map(previous);
+  for (const [key, index] of chosenFromPath(path)) {
+    next.set(key, index);
+  }
+  return next;
+}
+
+function chosenChildIndex(chosen: Map<string, number>, path: NodePath, childCount: number): number {
+  const remembered = chosen.get(pathKey(path));
+  if (remembered !== undefined && remembered >= 0 && remembered < childCount) return remembered;
+  return 0;
+}
+
+function chosenLeafPath(root: SgfTreeNodeDto, start: NodePath, chosen: Map<string, number>): NodePath {
+  const indices = [...start.indices];
+  let node = nodeAt(root, start);
+  while (node && node.children.length > 0) {
+    const index = chosenChildIndex(chosen, { indices }, node.children.length);
+    indices.push(index);
+    node = node.children[index];
+  }
+  return { indices };
 }
