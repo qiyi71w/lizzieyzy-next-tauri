@@ -8,6 +8,8 @@ This matrix is the item-level source of truth for migration progress against [Mi
 - `Accepted` means the stated acceptance condition has evidence. `Partial` means a real path exists but the complete condition does not. `Missing` means the user workflow is absent. `Deferred` is allowed only with an explicit product decision.
 - Repository evidence and live/environment evidence are separate. One does not imply the other.
 - `Not required` in the environment column means the behavior is deterministic and fully exercisable in the repository. `Pending` means an environment-dependent claim must not be described as shipped or externally validated.
+- Roll-up views may summarize the highest completed evidence stage as `Not started`, `Scaffolded`, `Behavior implemented`, `Repository tested`, or `Native/live verified`. This ladder does not replace item status or the evidence columns in this matrix.
+- `Native/live verified` requires the complete environment-dependent acceptance for that item; a partial smoke does not advance the whole item to that stage. An environment-independent item can be `Accepted` at `Repository tested` when its environment evidence is `Not required`.
 - Progress is reported by accepted item IDs, never by a completion percentage.
 
 ## R0 — Baseline And Inventory
