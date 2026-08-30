@@ -169,10 +169,12 @@ export function App() {
     requestToken: activeRequestToken
   }), [currentGame?.generation, selectedPathKey, activeRequestToken]);
   const presentationLive = publishedScope !== null && shouldPublishReviewPresentation(activeScope, publishedScope);
-  const currentFrame = useMemo(() => {
-    if (!presentationLive) return undefined;
-    return frames.find((f) => f.turn === currentMove) ?? frames.at(-1);
-  }, [presentationLive, frames, currentMove]);
+  const visibleFrames = useMemo(() => presentationLive ? frames : [], [presentationLive, frames]);
+  const visibleProblems = useMemo(() => presentationLive ? problems : [], [presentationLive, problems]);
+  const currentFrame = useMemo(
+    () => visibleFrames.find((frame) => frame.turn === currentMove) ?? visibleFrames.at(-1),
+    [visibleFrames, currentMove]
+  );
   const visibleCurrentFrame = useMemo(() => applyPreferencesToFrame(currentFrame, preferences), [currentFrame, preferences]);
   const previewCandidateIndex = candidatePreview
     && presentationLive
@@ -1274,13 +1276,13 @@ export function App() {
               {visibleCurrentFrame ? `${(visibleCurrentFrame.winrate_black * 100).toFixed(1)}%` : "50.0%"}
             </span>
           </h2>
-          <WinrateChart frames={frames} currentMove={currentMove} />
+          <WinrateChart frames={visibleFrames} currentMove={currentMove} />
           <div id="board-layers" />
         </div>
         <AnalysisPanel
           pane="commentary"
           frame={visibleCurrentFrame}
-          problems={problems}
+          problems={visibleProblems}
           moves={game.moves}
           boardSize={game.summary.board_size}
           currentMove={currentMove}
@@ -1317,7 +1319,7 @@ export function App() {
         <AnalysisPanel
           pane="reference"
           frame={visibleCurrentFrame}
-          problems={problems}
+          problems={visibleProblems}
           moves={game.moves}
           boardSize={game.summary.board_size}
           currentMove={currentMove}

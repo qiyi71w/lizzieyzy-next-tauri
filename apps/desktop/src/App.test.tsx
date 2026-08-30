@@ -49,7 +49,11 @@ vi.mock("./components/CacheStatusBadge", () => ({ CacheStatusBadge: () => null }
 vi.mock("./components/EngineSetupPanel", () => ({ EngineSetupPanel: () => null }));
 vi.mock("./components/PreferencesPanel", () => ({ PreferencesPanel: () => null }));
 vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
-vi.mock("./components/WinrateChart", () => ({ WinrateChart: () => null }));
+vi.mock("./components/WinrateChart", () => ({
+  WinrateChart: ({ frames }: { frames: AnalysisFrameDto[] }) => (
+    <canvas aria-label="胜率走势" data-frame-count={frames.length} />
+  )
+}));
 
 import { App } from "./App";
 
@@ -231,7 +235,7 @@ describe("App board intent feedback", () => {
       await backend.projectCurrentGameMainline.mock.results[0]?.value;
     });
 
-    const canvas = requiredElement(host, "canvas");
+    const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
     act(() => canvas.focus());
     expect(document.activeElement).toBe(canvas);
 
@@ -334,11 +338,19 @@ describe("App stale review presentation", () => {
     backend.replaceCurrentGame.mockResolvedValue(navigableRoot);
     backend.selectCurrentGameNode.mockResolvedValue(navigableChild);
     backend.fakeAnalyze.mockResolvedValue([analysisFrame]);
-    backend.classifyProblems.mockResolvedValue([]);
+    backend.classifyProblems.mockResolvedValue([{
+      turn: 1,
+      severity: "mistake",
+      winrate_loss: 0.12,
+      score_loss: 3,
+      label: "恶手"
+    }]);
 
     const host = await renderApp();
     await runFakeAnalyze(host);
     expect(candidateCoords(host)).toEqual(["C6", "G4"]);
+    expect(requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="胜率走势"]').dataset.frameCount).toBe("1");
+    expect(buttonNamed(host, "问题手 (1)")).toBeTruthy();
 
     const board = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
     const miniBoard = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="参考图变化副棋盘"]');
@@ -362,6 +374,8 @@ describe("App stale review presentation", () => {
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
     expect(candidateCoords(host)).toEqual([]);
     expect(host.querySelector(".cand-row.is-selected")).toBeNull();
+    expect(requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="胜率走势"]').dataset.frameCount).toBe("0");
+    expect(buttonNamed(host, "问题手 (0)")).toBeTruthy();
   });
 
   it("ignores a late completion after the selected NodePath has already changed", async () => {
@@ -463,7 +477,7 @@ describe("App stale review presentation", () => {
     await runFakeAnalyze(host);
     expect(candidateCoords(host)).toEqual(["C6", "G4"]);
 
-    const canvas = requiredElement(host, "canvas");
+    const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
     act(() => canvas.focus());
     dispatchKey(canvas, "Enter");
     await act(async () => {
@@ -527,7 +541,7 @@ describe("App focus-safe review controls", () => {
 
   it("ignores application shortcuts on the board and text-editing targets", async () => {
     const host = await renderApp();
-    const canvas = requiredElement(host, "canvas");
+    const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
     const coordinates = buttonNamed(host, "坐标");
     const jump = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
 
@@ -876,7 +890,7 @@ describe("App focus-safe review controls", () => {
     pressKey(buttonNamed(host, "坐标"), "1");
     expect(first?.classList.contains("is-selected")).toBe(true);
 
-    const canvas = requiredElement(host, "canvas");
+    const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
     act(() => canvas.focus());
     pressKey(canvas, "2");
     expect(first?.classList.contains("is-selected")).toBe(true);
