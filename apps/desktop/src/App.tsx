@@ -35,6 +35,11 @@ import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, select
 import type { AnalysisCacheRecord, CacheStatus, GameCacheKey, JsonValue } from "./domain/cache";
 import { defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "./domain/preferences";
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
+import {
+  createLocalRequestToken,
+  shouldPublishReviewPresentation,
+  type ReviewPresentationScope
+} from "./domain/reviewPresentation";
 import type { AnalysisFrameDto, AppHealthDto, CurrentGameResultDto, EngineProfileDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, SgfTreeNodeDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
@@ -47,6 +52,7 @@ type PendingAnalysisTerminalEvent =
 type CacheEngineKind = "fake" | "katago";
 type CachedAnalysisPayload = { frames: AnalysisFrameDto[]; problems: ProblemMarkerDto[] };
 type PendingPreferencesSave = { version: number; preferences: AppPreferences };
+type CandidatePreview = { index: number; scope: ReviewPresentationScope };
 type AnalysisCacheLoadResult =
   | { status: "hit"; record: AnalysisCacheRecord; engineKind: CacheEngineKind }
   | { status: "miss" }
@@ -63,9 +69,11 @@ export function App() {
   const [message, setMessage] = useState(
     isTauriRuntime() ? "谱面已就绪。打开棋谱或载入示例开始复盘。" : nativeCurrentGameUnavailable
   );
+  const [boardIntentFeedback, setBoardIntentFeedback] = useState<string | null>(null);
   const nativeRuntime = isTauriRuntime();
   const [isKataGoRunning, setIsKataGoRunning] = useState(false);
   const [selectedCandidateIndex, setSelectedCandidateIndex] = useState<number | null>(null);
+  const [candidatePreview, setCandidatePreview] = useState<CandidatePreview | null>(null);
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
   const [fallbackFileName, setFallbackFileName] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -74,6 +82,7 @@ export function App() {
   const navigatingRef = useRef(false);
   const documentGenerationRef = useRef(0);
   const pendingSelectedPathRef = useRef<NodePath | null>(null);
+  const pendingBoardIntentRef = useRef<string | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus>("idle");
@@ -94,6 +103,10 @@ export function App() {
   const [autoPlaying, setAutoPlaying] = useState(false);
   const jumpRef = useRef<HTMLInputElement | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
+  const requestSerialRef = useRef(0);
+  const [activeRequestToken, setActiveRequestToken] = useState("idle:0");
+  const activeRequestTokenRef = useRef("idle:0");
+  const [publishedScope, setPublishedScope] = useState<ReviewPresentationScope | null>(null);
   const startingAnalysisRef = useRef(false);
   const userChangedPreferencesRef = useRef(false);
   const preferencesSaveInFlightRef = useRef(false);
@@ -140,8 +153,6 @@ export function App() {
     return () => cleanupAnalysisListeners();
   }, []);
 
-  const currentFrame = useMemo(() => frames.find((f) => f.turn === currentMove) ?? frames.at(-1), [frames, currentMove]);
-  const visibleCurrentFrame = useMemo(() => applyPreferencesToFrame(currentFrame, preferences), [currentFrame, preferences]);
   const currentPosition = useMemo(() => {
     if (currentGame) return currentGame.snapshot.position;
     return selectExactPosition(positions, currentMove, game.summary.board_size);
@@ -151,6 +162,25 @@ export function App() {
   const selectedGeneratedInformation = currentGame?.snapshot.generated_information ?? null;
   const selectedPath = currentGame?.selected_path ?? { indices: [] };
   const selectedNode = currentGame ? nodeAt(currentGame.tree, selectedPath) : null;
+  const selectedPathKey = selectedPath.indices.join(".");
+  const activeScope = useMemo<ReviewPresentationScope>(() => ({
+    generation: currentGame?.generation ?? 0,
+    selectedPath: selectedPath.indices,
+    requestToken: activeRequestToken
+  }), [currentGame?.generation, selectedPathKey, activeRequestToken]);
+  const presentationLive = publishedScope !== null && shouldPublishReviewPresentation(activeScope, publishedScope);
+  const visibleFrames = useMemo(() => presentationLive ? frames : [], [presentationLive, frames]);
+  const visibleProblems = useMemo(() => presentationLive ? problems : [], [presentationLive, problems]);
+  const currentFrame = useMemo(
+    () => visibleFrames.find((frame) => frame.turn === currentMove) ?? visibleFrames.at(-1),
+    [visibleFrames, currentMove]
+  );
+  const visibleCurrentFrame = useMemo(() => applyPreferencesToFrame(currentFrame, preferences), [currentFrame, preferences]);
+  const previewCandidateIndex = candidatePreview
+    && presentationLive
+    && shouldPublishReviewPresentation(activeScope, candidatePreview.scope)
+    ? candidatePreview.index
+    : null;
   const parentOfSelected = parentPath(selectedPath);
   const parentNode = currentGame && parentOfSelected ? nodeAt(currentGame.tree, parentOfSelected) : null;
   const siblingIndex = selectedPath.indices.at(-1);
@@ -170,6 +200,7 @@ export function App() {
   const documentName = useMemo(() => documentPath ? fileNameFromPath(documentPath) : fallbackFileName ?? "未命名棋谱", [documentPath, fallbackFileName]);
   const saveFileName = documentName.toLowerCase().endsWith(".sgf") ? documentName : `${documentName}.sgf`;
 
+
   useEffect(() => {
     setSelectedCandidateIndex(null);
   }, [currentMove]);
@@ -182,40 +213,138 @@ export function App() {
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      const target = event.target;
-      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return;
-      if (event.key >= "1" && event.key <= "9") {
-        const index = Number(event.key) - 1;
+      if (shouldIgnoreApplicationShortcut(event.target)) return;
+      const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+      const ctrl = event.ctrlKey || event.metaKey;
+      const plain = !ctrl && !event.shiftKey && !event.altKey;
+      const onlyCtrl = ctrl && !event.shiftKey && !event.altKey;
+      const openEnabled = !isKataGoRunning && nativeRuntime;
+      const saveEnabled = openEnabled && documentDirty;
+      const passEnabled = openEnabled;
+
+      if (plain && key >= "1" && key <= "9") {
+        const index = Number(key) - 1;
         if (visibleCurrentFrame?.candidates[index]) setSelectedCandidateIndex(index);
         return;
       }
-      if (event.key === "ArrowLeft") {
+      if (plain && key === "ArrowLeft") {
         event.preventDefault();
-        if (currentGame) {
-          const parent = parentPath(currentGame.selected_path);
-          if (parent) void selectNode(parent);
-          return;
-        }
-        setCurrentMove((move) => clampMoveNumberToPositions(positions, move - 1));
+        if (currentGame) handleParent();
+        else setCurrentMove((move) => clampMoveNumberToPositions(positions, move - 1));
+        return;
       }
-      if (event.key === "ArrowRight") {
+      if (plain && key === "ArrowRight") {
         event.preventDefault();
-        if (currentGame) {
-          const node = nodeAt(currentGame.tree, currentGame.selected_path);
-          if (node && node.children.length > 0) {
-            void selectNode(childPath(
-              currentGame.selected_path,
-              chosenChildIndex(chosenChildren, currentGame.selected_path, node.children.length)
-            ));
-          }
-          return;
-        }
-        setCurrentMove((move) => clampMoveNumberToPositions(positions, move + 1));
+        if (currentGame) handleNextChild();
+        else setCurrentMove((move) => clampMoveNumberToPositions(positions, move + 1));
+        return;
+      }
+      if (plain && key === "ArrowUp") {
+        event.preventDefault();
+        handlePrevSibling();
+        return;
+      }
+      if (plain && key === "ArrowDown") {
+        event.preventDefault();
+        handleNextSibling();
+        return;
+      }
+      if (plain && key === "Home") {
+        event.preventDefault();
+        handleMoveSelect(0);
+        return;
+      }
+      if (onlyCtrl && key === "Home") {
+        event.preventDefault();
+        if (!isKataGoRunning) void handleNewGame();
+        return;
+      }
+      if (plain && key === "End") {
+        event.preventDefault();
+        handleMoveSelect(reviewMax);
+        return;
+      }
+      if (plain && key === "PageUp") {
+        event.preventDefault();
+        handleMoveSelect(reviewIndex - 10);
+        return;
+      }
+      if (plain && key === "PageDown") {
+        event.preventDefault();
+        handleMoveSelect(reviewIndex + 10);
+        return;
+      }
+      if (event.shiftKey && !ctrl && !event.altKey && key === "Delete") {
+        event.preventDefault();
+        void handleRemoveVariation();
+        return;
+      }
+      if (plain && key === "p") {
+        if (passEnabled) void playAt("pass");
+        return;
+      }
+      if (plain && key === "o") {
+        if (openEnabled) void handleOpenSgfDocument();
+        return;
+      }
+      if (plain && key === "s") {
+        if (openEnabled) void handleSaveSgfDocument(true);
+        return;
+      }
+      if (onlyCtrl && key === "s") {
+        event.preventDefault();
+        if (saveEnabled) void handleSaveSgfDocument(false);
+        return;
+      }
+      if (onlyCtrl && key === "c") {
+        event.preventDefault();
+        void handleCopySgf();
+        return;
+      }
+      if (onlyCtrl && key === "v") {
+        event.preventDefault();
+        if (!isKataGoRunning) void handlePasteSgf();
+        return;
+      }
+      if (onlyCtrl && key === "a") {
+        event.preventDefault();
+        setAutoPlaying((value) => !value);
+        return;
+      }
+      if (plain && key === "n") {
+        if (!isKataGoRunning) void handleNewGame();
+        return;
+      }
+      if (plain && key === "c") {
+        setShowCoordinates((value) => !value);
+        return;
+      }
+      if (plain && key === "m") {
+        setShowMoveNumbers((value) => !value);
+        return;
+      }
+      if (plain && key === "t") {
+        void handlePreferencesChange({ ...preferences, showPolicy: !preferences.showPolicy });
+        return;
+      }
+      if (plain && key === "h") {
+        setOverlayMode("policy");
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [positions, visibleCurrentFrame, currentGame, chosenChildren]);
+  }, [
+    chosenChildren,
+    currentGame,
+    documentDirty,
+    isKataGoRunning,
+    nativeRuntime,
+    positions,
+    preferences,
+    reviewIndex,
+    reviewMax,
+    visibleCurrentFrame
+  ]);
 
   useEffect(() => {
     if (!autoPlaying) return;
@@ -310,6 +439,51 @@ export function App() {
 
   function isCurrentDocumentGeneration(capturedGeneration: number): boolean {
     return documentGenerationRef.current === capturedGeneration;
+  }
+
+  function activeScopeFromRefs(): ReviewPresentationScope {
+    return {
+      generation: documentGenerationRef.current,
+      selectedPath: currentGameRef.current?.selected_path.indices ?? [],
+      requestToken: activeRequestTokenRef.current
+    };
+  }
+
+  function beginReviewRequest(requestToken?: string): ReviewPresentationScope {
+    const token = requestToken ?? createLocalRequestToken(() => {
+      requestSerialRef.current += 1;
+      return requestSerialRef.current;
+    });
+    activeRequestTokenRef.current = token;
+    setActiveRequestToken(token);
+    clearReviewData();
+    return {
+      generation: documentGenerationRef.current,
+      selectedPath: [...(currentGameRef.current?.selected_path.indices ?? [])],
+      requestToken: token
+    };
+  }
+
+  function adoptRequestToken(captured: ReviewPresentationScope, requestToken: string): ReviewPresentationScope {
+    if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) return captured;
+    const next = { ...captured, requestToken };
+    activeRequestTokenRef.current = requestToken;
+    setActiveRequestToken(requestToken);
+    return next;
+  }
+
+  function publishReviewPresentation(
+    captured: ReviewPresentationScope,
+    nextFrames: AnalysisFrameDto[],
+    nextProblems: ProblemMarkerDto[]
+  ): boolean {
+    if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) return false;
+    setPublishedScope(captured);
+    setFrames(nextFrames);
+    setProblems(nextProblems);
+    setSelectedCandidateIndex(null);
+    setCandidatePreview(null);
+    return true;
   }
 
   async function artifactsFromCurrentGame(): Promise<{ serialized: string; projection: GameDto }> {
@@ -450,35 +624,27 @@ export function App() {
   }
 
   async function handleFakeAnalyze() {
-    const capturedGeneration = documentGenerationRef.current;
+    const captured = beginReviewRequest();
     try {
       if (!nativeRuntime) {
         const [parsed, result, replayed] = await Promise.all([parseSgfSummary(sgfText), fakeAnalyze(sgfText), replaySgfPositions(sgfText)]);
         const classified = await classifyProblems(result);
-        if (documentGenerationRef.current !== capturedGeneration) return;
+        if (!publishReviewPresentation(captured, result, classified)) return;
         setGame(parsed);
         setPositions(replayed);
-        setFrames(result);
-        setProblems(classified);
         setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
-        setSelectedCandidateIndex(null);
         const cacheMessage = await saveAnalysisCacheForGame(sgfText, currentFilePath, parsed, result, classified, "fake");
-        if (documentGenerationRef.current !== capturedGeneration) return;
+        if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) return;
         setMessage(`${nativeCurrentGameUnavailable} 已生成 ${result.length} 个预览复盘局面。${cacheMessage}`);
         return;
       }
       const artifacts = await artifactsFromCurrentGame();
-      const generation = currentGameRef.current?.generation ?? 0;
       const result = await fakeAnalyze(artifacts.serialized);
-      if (!isCurrentDocumentGeneration(generation)) return;
       const classified = await classifyProblems(result);
-      if (documentGenerationRef.current !== capturedGeneration) return;
+      if (!publishReviewPresentation(captured, result, classified)) return;
       setGame(artifacts.projection);
-      setFrames(result);
-      setProblems(classified);
-      setSelectedCandidateIndex(null);
       const cacheMessage = await saveAnalysisCacheForGame(artifacts.serialized, documentPath, artifacts.projection, result, classified, "fake");
-      if (documentGenerationRef.current !== capturedGeneration) return;
+      if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) return;
       setMessage(`已生成 ${result.length} 个复盘局面，含候选与胜率。${cacheMessage}`);
     } catch (error) {
       setMessage(errorMessage(error));
@@ -486,7 +652,7 @@ export function App() {
   }
 
   async function handleRunKataGo(profile: EngineProfileDto, maxVisits: number) {
-    const capturedGeneration = documentGenerationRef.current;
+    const captured = beginReviewRequest();
     const targetTurn = currentMove;
     const visits = resolveAnalysisMaxVisits(maxVisits, preferences);
     setIsKataGoRunning(true);
@@ -500,18 +666,13 @@ export function App() {
       const turn = nativeRuntime
         ? (currentGameRef.current?.snapshot.position.move_number ?? Math.min(targetTurn, artifacts.projection.moves.length))
         : clampMoveNumberToPositions(replayed, Math.min(targetTurn, replayed.at(-1)?.move_number ?? artifacts.projection.moves.length));
-      const generation = currentGameRef.current?.generation ?? 0;
       const frame = await analyzeKataGoOnce(profile, artifacts.serialized, turn, visits);
-      if (documentGenerationRef.current !== capturedGeneration) return;
-      const mergedFrames = mergeAnalysisFrame(frames, frame);
+      const mergedFrames = mergeAnalysisFrame([], frame);
       const classified = await classifyProblems(mergedFrames);
-      if (documentGenerationRef.current !== capturedGeneration) return;
+      if (!publishReviewPresentation(captured, mergedFrames, classified)) return;
       setGame(artifacts.projection);
       if (!nativeRuntime) setPositions(replayed);
-      setFrames(mergedFrames);
-      setProblems(classified);
       setCurrentMove(frame.turn);
-      setSelectedCandidateIndex(null);
       setMessage(`KataGo analysis completed for move ${frame.turn} with ${frame.visits} visits.`);
     } catch (error) {
       setMessage(`KataGo analysis failed: ${errorMessage(error)}`);
@@ -523,7 +684,8 @@ export function App() {
   async function handleAnalyzeKataGoGame(profile: EngineProfileDto, maxVisits: number) {
     if (activeJobIdRef.current || startingAnalysisRef.current) return;
     const visits = resolveAnalysisMaxVisits(maxVisits, preferences);
-    const capturedGeneration = documentGenerationRef.current;
+    let captured = beginReviewRequest();
+    const capturedGeneration = captured.generation;
     startingAnalysisRef.current = true;
     pendingAnalysisProgressRef.current.clear();
     pendingAnalysisTerminalEventsRef.current.clear();
@@ -568,11 +730,11 @@ export function App() {
             pendingAnalysisTerminalEventsRef.current.set(payload.job_id, { kind: "complete", frames: payload.frames });
             return;
           }
-          if (!isCurrentAnalysisJob(payload.job_id) || !isCurrentDocumentGeneration(capturedGeneration)) {
+          if (!isCurrentAnalysisJob(payload.job_id) || !shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) {
             if (isCurrentAnalysisJob(payload.job_id)) finishStoppedAnalysis(payload.job_id);
             return;
           }
-          void finishCompletedAnalysis(payload.job_id, payload.frames, parsed, replayed, capturedGeneration);
+          void finishCompletedAnalysis(payload.job_id, payload.frames, parsed, replayed, captured);
         },
         onError: (payload) => {
           if (startingAnalysisRef.current && activeJobIdRef.current === null) {
@@ -597,13 +759,14 @@ export function App() {
       cleanupAnalysisListeners();
       analysisCleanupRef.current = cleanup;
       const jobId = await startKataGoGameAnalysis(profile, artifacts.serialized, visits);
+      captured = adoptRequestToken(captured, jobId);
       const pendingTerminalEvent = pendingAnalysisTerminalEventsRef.current.get(jobId);
       const pendingProgress = pendingAnalysisProgressRef.current.get(jobId);
       startingAnalysisRef.current = false;
       pendingAnalysisProgressRef.current.clear();
       pendingAnalysisTerminalEventsRef.current.clear();
       if (pendingTerminalEvent) {
-        await finishPendingAnalysisTerminalEvent(jobId, pendingTerminalEvent, parsed, replayed, capturedGeneration);
+        await finishPendingAnalysisTerminalEvent(jobId, pendingTerminalEvent, parsed, replayed, captured);
         return;
       }
       activeJobIdRef.current = jobId;
@@ -806,7 +969,9 @@ export function App() {
       setMessage(nativeCurrentGameUnavailable);
       return;
     }
-    if (!currentGame) return;
+    if (!currentGame || pendingBoardIntentRef.current !== null) return;
+    const intentKey = vertex === "pass" ? "pass" : `${vertex.point.x},${vertex.point.y}`;
+    pendingBoardIntentRef.current = intentKey;
     const previousGeneration = currentGame.generation;
     try {
       const result = await playCurrentGame(currentGame.selected_path, vertex);
@@ -817,6 +982,8 @@ export function App() {
       setDirty(result.dirty);
       setCurrentMove(result.snapshot.position.move_number);
       setSelectedCandidateIndex(null);
+      setBoardIntentFeedback(null);
+      setMessage("落子已接受。");
       if (result.generation !== previousGeneration) {
         clearReviewData();
         resetAnalysisCacheState();
@@ -825,7 +992,11 @@ export function App() {
         setGame(artifacts.projection);
       }
     } catch (error) {
-      setMessage(`落子失败: ${errorMessage(error)}`);
+      const feedback = `落子失败: ${errorMessage(error)}`;
+      setBoardIntentFeedback(feedback);
+      setMessage(feedback);
+    } finally {
+      if (pendingBoardIntentRef.current === intentKey) pendingBoardIntentRef.current = null;
     }
   }
 
@@ -858,13 +1029,13 @@ export function App() {
     return activeJobIdRef.current === jobId;
   }
 
-  async function finishPendingAnalysisTerminalEvent(jobId: string, event: PendingAnalysisTerminalEvent, parsed: GameDto, replayed: PositionDto[], capturedGeneration: number) {
+  async function finishPendingAnalysisTerminalEvent(jobId: string, event: PendingAnalysisTerminalEvent, parsed: GameDto, replayed: PositionDto[], captured: ReviewPresentationScope) {
     if (event.kind === "complete") {
-      if (!isCurrentDocumentGeneration(capturedGeneration)) {
+      if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) {
         finishStoppedAnalysis(jobId);
         return;
       }
-      await finishCompletedAnalysis(jobId, event.frames, parsed, replayed, capturedGeneration);
+      await finishCompletedAnalysis(jobId, event.frames, parsed, replayed, captured);
       return;
     }
     finishStoppedAnalysis(jobId);
@@ -874,8 +1045,8 @@ export function App() {
       : event.message || "Full-game KataGo analysis cancelled.");
   }
 
-  async function finishCompletedAnalysis(jobId: string, result: AnalysisFrameDto[], parsed: GameDto, replayed: PositionDto[], capturedGeneration: number) {
-    if (documentGenerationRef.current !== capturedGeneration) {
+  async function finishCompletedAnalysis(jobId: string, result: AnalysisFrameDto[], parsed: GameDto, replayed: PositionDto[], captured: ReviewPresentationScope) {
+    if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) {
       finishStoppedAnalysis(jobId);
       return;
     }
@@ -884,22 +1055,19 @@ export function App() {
       ? (currentGameRef.current?.snapshot.position.move_number ?? lastAnalyzedMove)
       : clampMoveNumberToPositions(replayed, lastAnalyzedMove);
     const classified = await classifyProblems(result);
-    if (documentGenerationRef.current !== capturedGeneration) {
+    if (!publishReviewPresentation(captured, result, classified)) {
       finishStoppedAnalysis(jobId);
       return;
     }
     setGame(parsed);
     if (!nativeRuntime) setPositions(replayed);
-    setFrames(result);
-    setProblems(classified);
     setCurrentMove(shownMove);
-    setSelectedCandidateIndex(null);
     setAnalysisProgress((progress) => progress ? { ...progress, completed: progress.expected || result.length, expected: progress.expected || result.length } : progress);
     finishStoppedAnalysis(jobId);
     const serialized = nativeRuntime ? await serializeCurrentGame() : sgfText;
-    if (documentGenerationRef.current !== capturedGeneration) return;
+    if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) return;
     const cacheMessage = await saveAnalysisCacheForGame(serialized, documentPath, parsed, result, classified, "katago");
-    if (documentGenerationRef.current !== capturedGeneration) return;
+    if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) return;
     setMessage(`Full-game KataGo analysis completed with ${result.length} frames. Showing move ${shownMove}.${cacheMessage}`);
   }
 
@@ -912,7 +1080,7 @@ export function App() {
   }
 
   async function checkAnalysisCacheForGame(text: string, filePath: string | null, parsed: GameDto, baseMessage: string) {
-    const capturedGeneration = documentGenerationRef.current;
+    const captured = beginReviewRequest();
     if (!preferences.autoLoadCache) {
       resetAnalysisCacheState();
       setMessage(`${baseMessage} Cache auto-load is off.`);
@@ -934,13 +1102,10 @@ export function App() {
           setMessage(`${baseMessage} ${cacheEngineLabel(lookup.engineKind)} cache hit, but the payload could not be restored.`);
           return;
         }
-        if (documentGenerationRef.current !== capturedGeneration) return;
-        setFrames(payload.frames);
-        setProblems(payload.problems);
+        if (!publishReviewPresentation(captured, payload.frames, payload.problems)) return;
         setCurrentMove(nativeRuntime
           ? (currentGameRef.current?.snapshot.position.move_number ?? payload.frames.at(-1)?.turn ?? parsed.moves.length)
           : clampMoveNumberToPositions(positions, payload.frames.at(-1)?.turn ?? parsed.moves.length));
-        setSelectedCandidateIndex(null);
         setCacheStatus("hit");
         setCacheRecord(lookup.record);
         setMessage(`${baseMessage} Restored ${payload.frames.length} cached ${cacheEngineLabel(lookup.engineKind)} review frames.`);
@@ -1028,10 +1193,21 @@ export function App() {
     }
   }
 
+  function previewCandidate(index: number | null) {
+    setCandidatePreview(index === null ? null : { index, scope: activeScope });
+  }
+
+  function selectCandidate(index: number) {
+    setCandidatePreview(null);
+    setSelectedCandidateIndex(index);
+  }
+
   function clearReviewData() {
     setFrames([]);
     setProblems([]);
     setSelectedCandidateIndex(null);
+    setCandidatePreview(null);
+    setPublishedScope(null);
     setAnalysisProgress(null);
     setCacheRecord(null);
   }
@@ -1082,6 +1258,9 @@ export function App() {
       onPasteSgf={() => void handlePasteSgf()}
       onClearBoard={() => void handleNewGame()}
       onPass={() => void playAt("pass")}
+      onRemoveVariation={() => void handleRemoveVariation()}
+      canRemoveVariation={canRemoveVariation}
+      onFirstMove={() => handleMoveSelect(0)}
       onAutoPlay={() => setAutoPlaying((value) => !value)}
       onOverlayMode={setOverlayMode}
       cacheBadge={<CacheStatusBadge status={cacheStatus} record={cacheRecord} error={cacheError} />}
@@ -1097,13 +1276,13 @@ export function App() {
               {visibleCurrentFrame ? `${(visibleCurrentFrame.winrate_black * 100).toFixed(1)}%` : "50.0%"}
             </span>
           </h2>
-          <WinrateChart frames={frames} currentMove={currentMove} />
+          <WinrateChart frames={visibleFrames} currentMove={currentMove} />
           <div id="board-layers" />
         </div>
         <AnalysisPanel
           pane="commentary"
           frame={visibleCurrentFrame}
-          problems={problems}
+          problems={visibleProblems}
           moves={game.moves}
           boardSize={game.summary.board_size}
           currentMove={currentMove}
@@ -1113,7 +1292,7 @@ export function App() {
           commentEditorEnabled={nativeRuntime && Boolean(currentGame)}
           onCommitPersonalComment={(comment) => void handleCommitPersonalComment(comment)}
           selectedCandidateIndex={selectedCandidateIndex}
-          onSelectCandidate={setSelectedCandidateIndex}
+          onSelectCandidate={selectCandidate}
           onSelectProblem={handleMoveSelect}
         />
       </aside>
@@ -1122,6 +1301,8 @@ export function App() {
           position={currentPosition}
           analysis={visibleCurrentFrame}
           selectedCandidateIndex={selectedCandidateIndex}
+          previewScope={activeScope}
+          onCandidatePreview={previewCandidate}
           moves={game.moves}
           showCoordinates={showCoordinates}
           showMoveNumbers={showMoveNumbers}
@@ -1130,18 +1311,22 @@ export function App() {
           hideCandidates={(currentPosition.to_play === "black" && !showBlackCandidates) || (currentPosition.to_play === "white" && !showWhiteCandidates)}
           onPointClick={(point) => void playAt({ point })}
         />
+        {boardIntentFeedback ? (
+          <p className="board-intent-status" role="status" aria-live="polite">{boardIntentFeedback}</p>
+        ) : null}
       </div>
       <aside className="sheet-col">
         <AnalysisPanel
           pane="reference"
           frame={visibleCurrentFrame}
-          problems={problems}
+          problems={visibleProblems}
           moves={game.moves}
           boardSize={game.summary.board_size}
           currentMove={currentMove}
           currentPosition={currentPosition}
           selectedCandidateIndex={selectedCandidateIndex}
-          onSelectCandidate={setSelectedCandidateIndex}
+          previewCandidateIndex={previewCandidateIndex}
+          onSelectCandidate={selectCandidate}
           onSelectProblem={handleMoveSelect}
         />
       </aside>
@@ -1286,6 +1471,16 @@ function pathKey(path: NodePath): string {
 
 function samePath(left: NodePath, right: NodePath): boolean {
   return left.indices.length === right.indices.length && left.indices.every((index, offset) => index === right.indices[offset]);
+}
+
+
+function shouldIgnoreApplicationShortcut(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
+  if (target.isContentEditable) return true;
+  const editable = target.getAttribute("contenteditable");
+  if (editable !== null && editable !== "false") return true;
+  return target.getAttribute("aria-label") === "棋盘";
 }
 
 function parentPath(path: NodePath): NodePath | null {

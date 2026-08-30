@@ -1,7 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
 import type { AnalysisFrameDto, MoveDto, PointDto, PositionDto } from "../domain/types";
 import { isPoint } from "../domain/board";
+import {
+  shouldPublishReviewPresentation,
+  type ReviewPresentationScope
+} from "../domain/reviewPresentation";
 
 export type OverlayMode = "candidates" | "ownership" | "policy";
 
@@ -16,8 +20,18 @@ type Props = {
   onOverlayModeChange?: (mode: OverlayMode) => void;
   hideCandidates?: boolean;
   onPointClick?: (point: PointDto) => void;
+  onCandidatePreview?: (index: number | null) => void;
+  previewScope?: ReviewPresentationScope;
 };
 type PolicyPoint = { x: number; y: number; value: number };
+
+function samePreviewScope(
+  current: ReviewPresentationScope | undefined,
+  scheduled: ReviewPresentationScope | undefined
+): boolean {
+  if (!current || !scheduled) return current === scheduled;
+  return shouldPublishReviewPresentation(current, scheduled);
+}
 
 export function BoardCanvas({
   position,
@@ -29,10 +43,23 @@ export function BoardCanvas({
   overlayMode: overlayModeProp,
   onOverlayModeChange,
   hideCandidates = false,
-  onPointClick
+  onPointClick,
+  onCandidatePreview,
+  previewScope
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [keyboardPoint, setKeyboardPoint] = useState<PointDto | null>(null);
   const [overlayModeLocal, setOverlayModeLocal] = useState<OverlayMode>("candidates");
+  const previewTimerRef = useRef<number | undefined>(undefined);
+  const hoveredCandidateIndexRef = useRef<number | null>(null);
+  const publishedCandidateIndexRef = useRef<number | null>(null);
+  const onCandidatePreviewRef = useRef(onCandidatePreview);
+  const previewScopeRef = useRef(previewScope);
+  onCandidatePreviewRef.current = onCandidatePreview;
+  previewScopeRef.current = previewScope;
+  const previewScopeKey = previewScope
+    ? JSON.stringify([previewScope.generation, previewScope.requestToken, previewScope.selectedPath])
+    : "";
   const overlayMode = overlayModeProp ?? overlayModeLocal;
   function setOverlayMode(mode: OverlayMode) {
     onOverlayModeChange?.(mode);
@@ -43,6 +70,104 @@ export function BoardCanvas({
   const policyPoints = useMemo(() => getTopPolicyPoints(analysis?.policy, position.board_size, 12), [analysis?.policy, position.board_size]);
   const hasPolicy = policyPoints.length > 0;
   const effectiveOverlayMode = overlayMode === "ownership" && !hasOwnership ? "candidates" : overlayMode === "policy" && !hasPolicy ? "candidates" : overlayMode;
+
+  function cancelCandidatePreview() {
+    if (previewTimerRef.current !== undefined) {
+      clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = undefined;
+    }
+    hoveredCandidateIndexRef.current = null;
+    if (publishedCandidateIndexRef.current !== null) {
+      publishedCandidateIndexRef.current = null;
+      onCandidatePreviewRef.current?.(null);
+    }
+  }
+
+  function handleCandidatePointerMove(event: PointerEvent<HTMLCanvasElement>) {
+    if (effectiveOverlayMode !== "candidates" || hideCandidates) {
+      cancelCandidatePreview();
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const cssSize = Math.min(rect.width, rect.height);
+    const boardSize = position.board_size;
+    const padding = cssSize * 0.09;
+    const grid = (cssSize - padding * 2) / Math.max(boardSize - 1, 1);
+    const pointerX = event.clientX - rect.left;
+    const pointerY = event.clientY - rect.top;
+    const candidateIndex = (analysis?.candidates.slice(0, 8) ?? []).findIndex((candidate) => {
+      if (!isPoint(candidate.vertex)) return false;
+      const centerX = padding + candidate.vertex.point.x * grid;
+      const centerY = padding + candidate.vertex.point.y * grid;
+      const radius = grid * (0.18 + Math.min(candidate.visits / Math.max(analysis?.visits ?? 1, 1), 1) * 0.22);
+      return Math.hypot(pointerX - centerX, pointerY - centerY) <= radius;
+    });
+    if (candidateIndex < 0) {
+      cancelCandidatePreview();
+      return;
+    }
+    if (hoveredCandidateIndexRef.current === candidateIndex) return;
+
+    cancelCandidatePreview();
+    hoveredCandidateIndexRef.current = candidateIndex;
+    const scheduledPreviewScope = previewScope;
+    previewTimerRef.current = setTimeout(() => {
+      previewTimerRef.current = undefined;
+      if (!samePreviewScope(previewScopeRef.current, scheduledPreviewScope)) {
+        hoveredCandidateIndexRef.current = null;
+        return;
+      }
+      publishedCandidateIndexRef.current = candidateIndex;
+      onCandidatePreviewRef.current?.(candidateIndex);
+    }, 120);
+  }
+
+  useEffect(() => {
+    cancelCandidatePreview();
+  }, [analysis, position, selectedCandidateIndex, effectiveOverlayMode, hideCandidates, previewScopeKey]);
+
+  useEffect(() => () => {
+    clearTimeout(previewTimerRef.current);
+  }, []);
+  useEffect(() => {
+    setKeyboardPoint((current) => {
+      if (!current) return null;
+      const lastCoordinate = Math.max(position.board_size - 1, 0);
+      const next = {
+        x: Math.min(current.x, lastCoordinate),
+        y: Math.min(current.y, lastCoordinate)
+      };
+      return next.x === current.x && next.y === current.y ? current : next;
+    });
+  }, [position.board_size]);
+
+  function handleKeyDown(event: KeyboardEvent<HTMLCanvasElement>) {
+    const isSubmit = event.key === "Enter" || event.key === " ";
+    const isArrow = event.key === "ArrowLeft" ||
+      event.key === "ArrowRight" ||
+      event.key === "ArrowUp" ||
+      event.key === "ArrowDown";
+    if (!isSubmit && !isArrow) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const center = Math.floor(position.board_size / 2);
+    const current = keyboardPoint ?? { x: center, y: center };
+    if (isSubmit) {
+      cancelCandidatePreview();
+      onPointClick?.(current);
+      return;
+    }
+
+    const lastCoordinate = Math.max(position.board_size - 1, 0);
+    const xDelta = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
+    const yDelta = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+    setKeyboardPoint({
+      x: Math.max(0, Math.min(lastCoordinate, current.x + xDelta)),
+      y: Math.max(0, Math.min(lastCoordinate, current.y + yDelta))
+    });
+  }
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -155,7 +280,23 @@ export function BoardCanvas({
         ctx.fillText(String(index + 1), cx, cy);
       }
     }
-  }, [position, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, moves, showCoordinates, showMoveNumbers, hideCandidates]);
+
+    if (keyboardPoint) {
+      const cx = coord(keyboardPoint.x);
+      const cy = coord(keyboardPoint.y);
+      const radius = grid * 0.48;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = Math.max(3, grid * 0.12);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.strokeStyle = "#2156c7";
+      ctx.lineWidth = Math.max(1.5, grid * 0.06);
+      ctx.stroke();
+    }
+  }, [position, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, moves, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint]);
 
   const layerHost = document.getElementById("board-layers");
   const overlays = (
@@ -170,7 +311,17 @@ export function BoardCanvas({
     <canvas
       ref={canvasRef}
       aria-label="棋盘"
+      role="application"
+      tabIndex={0}
+      onFocus={() => {
+        const center = Math.floor(position.board_size / 2);
+        setKeyboardPoint((current) => current ?? { x: center, y: center });
+      }}
+      onKeyDown={handleKeyDown}
+      onPointerMove={handleCandidatePointerMove}
+      onPointerLeave={cancelCandidatePreview}
       onClick={(event) => {
+        cancelCandidatePreview();
         if (!onPointClick) return;
         const rect = event.currentTarget.getBoundingClientRect();
         const cssSize = Math.min(rect.width, rect.height);

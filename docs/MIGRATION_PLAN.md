@@ -59,7 +59,7 @@ The existing Tauri implementation is the migration starting point and must be pr
 
 ### Known Workflow Gaps
 
-- Same-state Java/Next visual evidence, keyboard board intent, candidate hover intent, stale-candidate eviction, and the complete baseline shortcut set remain incomplete.
+- UI-02 remains Partial: there is still no evidence that engine events are delivered while a board mutation promise is pending. That residual does not block R3.
 - Selecting an engine profile does not create an authoritative foreground engine identity or lifecycle.
 - A → B engine switching, failed-switch rollback, stale switch token handling, and cancellable one-shot job identity are absent.
 - Layout rails are fixed at `228px` and `260px`; splitters, persistence, and narrow reset semantics are absent.
@@ -194,9 +194,12 @@ Deliver:
 
 Exit when:
 
-- `UI-01` through `UI-05` are accepted.
+- `UI-01`, `UI-03`, `UI-04`, and `UI-05` are accepted.
+- Any remaining `UI-02` evidence gap is recorded with an explicit migration disposition.
 - Native smoke passes both without an engine and with engine-only actions unavailable.
 - Visual evidence follows the reference rules in `DESIGN.md`.
+
+Current state: Ticket 07 closeout on native Windows candidate `66c906f` / PID 51344 accepted `UI-01`, `UI-03`, `UI-04`, and `UI-05`. `UI-02` remains Partial solely for engine-event delivery while a board mutation promise is pending. That residual is tracked in `PARITY_MATRIX.md` and is not the next executable slice.
 
 ### R3 — KataGo And Foreground Engine Lifecycle
 
@@ -307,36 +310,20 @@ Exit when:
 
 ## Next Executable Batch
 
-R1 is complete. Start R2 on top of the stable current-game/tree seam; do not mix R3–R8 lifecycle or integration work into the desktop interaction batch.
+R2 desktop review is closed except the UI-02 residual (engine events during a pending board mutation). Start R3 foreground engine lifecycle; do not mix R4–R8 integration work into this batch, and do not treat the UI-02 residual as the next slice.
 
-### Slice R2-A — Baseline Evidence And Board Interaction
-
-Scope:
-
-- Capture same-state Java and Next screenshots under the evidence rules in `DESIGN.md`.
-- Record deliberate visual divergences instead of silently copying Swing details.
-- Complete pointer and keyboard move intent, visible illegal-intent feedback, and focus behavior without blocking rendering or native events.
-- Keep the accepted no-engine SGF workflow green.
-
-Acceptance:
-
-- `UI-01` and `UI-02` are accepted with repository and native evidence.
-- The board remains the primary surface at supported window sizes.
-- Engine absence remains explanatory and does not block SGF work.
-
-### Slice R2-B — Review Intent And Stale-State Cleanup
+### Slice R3-A — Foreground engine identity and lifecycle
 
 Scope:
 
-- Add candidate hover preview without committing selection.
-- Scope candidate, hover, PV, and review presentation to the selected `NodePath` and analysis job.
-- Complete the supported review-control and shortcut inventory; remove claims for unwired actions.
+- Give `engine-manager` an authoritative no-engine / starting / ready / stopping / error snapshot.
+- Expose that snapshot through Tauri commands and events.
+- Stop treating profile selection as process identity.
 
 Acceptance:
 
-- `UI-03` and `UI-05` are accepted.
-- Node, game, generation, and job changes evict stale review state before new results render.
-- Every claimed action has one visible control and its intended shortcut.
+- `ENG-02` is accepted with repository evidence and native no-engine versus one-engine smoke.
+- Analysis callers observe manager-owned identity rather than inferring a process from the selected profile.
 
 ## Verification Strategy
 
