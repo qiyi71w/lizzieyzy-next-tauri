@@ -1,9 +1,83 @@
 # Choose Dispositions for Update, Packaging, Release, and Platform Capabilities
 
 Type: grilling
-Status: open
+Status: resolved
 Blocked by: 01, 07
 
 ## Question
 
 Given the cross-cutting Entry Point census and [Inventory Update, Packaging, Release, and Platform Capabilities](07-inventory-update-packaging-release.md), which baseline and Next-native release behaviors are product-equivalent, deliberate redesigns, deferred, abandoned, or maintainer/implementation-only; how should REL items split; and what platform, update failure/rollback, installed-runtime, signing, installer, repository-evidence, and live-evidence contracts must the migration plan state without claiming unavailable production proof?
+
+## Answer
+
+The dispositions below were confirmed live against the frozen Java Migration Baseline v1 at `7b4027531c2b26062d0bfc27a040cc550cfbea4d` and the Next inventory baseline at `18c6d189b8b01069975c4c40ead63a010249cb8c`. They are product and acceptance decisions, not claims that production artifacts, credentials, feeds, installers, updaters, or live evidence already exist.
+
+### Product release contract
+
+- **Platform admission is independent.** Windows x64, macOS, and Linux remain candidate platforms. A platform becomes a Shipped Platform only after its own production-trust gate and Installed Live Evidence pass; an unshipped platform does not block admitting another.
+- **Canonical Artifacts are fixed.** Windows owns both an NSIS installer and a portable distribution as first-class variants; macOS owns DMG; Linux owns AppImage. MSI, deb, rpm, and any other CI outputs remain validation artifacts until a later explicit disposition promotes them.
+- **Installed and portable state are different contracts.** Installed applications use OS app-data. Installer removal, deleting the macOS application, and deleting the Linux AppImage preserve OS app-data by default; clearing it is an explicit, separately confirmed operation. Windows portable keeps state under package-local `user-data/`; deleting the whole portable directory removes that state and must be documented as destructive.
+- **The base product starts in No-engine Mode.** Installer and portable packages initially contain `app-core`, not an automatic engine download or a Java GPU flavor. Engine Settings explicitly acquires signed KataGo backend and default-model components through the Managed Installed Component protocol; domain 04 owns profile creation/confirmation and engine-start behavior.
+- **Tauri uses platform WebViews.** NSIS bootstraps Windows Evergreen WebView2 when absent. Windows portable depends on the system Evergreen WebView2 and must detect its absence before the web UI, explain the dependency, and route the user to WebView2 or the NSIS installer. macOS and Linux use their platform WebKit runtimes; their declared runtime dependencies remain part of platform smoke.
+- **The Java updater's observable logic is retained in a Next-native implementation.** Help-triggered manual checks, stable/beta channels, official/GitHub sources, signed envelopes, component selection, resumable downloads, fallback, verification, Windows helper/elevation, platform-specific apply or handoff, and failure recovery remain product behavior. Rust/Tauri owns the implementation; Java classes, Swing widgets, and Java helper structure do not.
+- **Version identity is Next-native.** Public candidates and update comparison use the repository's SemVer/tag policy. The Java `next-YYYY-MM-DD.N` scheme is not migrated.
+- **Update networking follows the operating system proxy.** There is no application-specific update proxy preference. Domain 06 may make an independent provider-network decision.
+- **Supportability is a product capability.** Bounded ordinary local logs are enabled by default; full trace is explicit and default off. Users can cancel a sanitized support-bundle export and open its folder. Nothing is uploaded automatically. About reads the installed version/channel and routes to Releases, Issues, and support documentation.
+
+### Capability dispositions
+
+| Frozen Capability | Disposition | Decision |
+| --- | --- | --- |
+| `REL-C01` install a platform package and launch | Next redesign | Admit Windows NSIS and portable, macOS DMG, and Linux AppImage independently. Each Canonical Artifact must be exercised as an installed or unpacked product; extra CI formats do not expand the claim. |
+| `REL-C02` first-launch work-directory / portable layout | Next redesign | Installed variants use OS app-data. Windows portable uses package-local `user-data/`. Upgrades preserve state; installed removal preserves it by default; deleting a portable directory removes its colocated state. No Java configuration or work-directory migration is promised. |
+| `REL-C03` first-launch bundled-engine auto-setup | Next redesign, domain 04 edge | Start in No-engine Mode and never download an engine automatically. An explicit Engine Settings action acquires signed backend/model components; domain 04 creates or confirms the resulting profile and owns all engine failure presentation. |
+| `REL-C04` bundled runtime / flavor discovery | Next redesign | Replace file-presence flavor guessing with an installed manifest containing `app-core` and any acquired KataGo backend/default-model components. Abandon the Java GPU flavor matrix, bundled JRE, and JCEF component. A readboard component remains owned by domain 06 and joins the manifest only if that domain accepts its update behavior. |
+| `REL-C05` check for updates | Equivalent migration, Next-native implementation | Keep a manual Help entry, stable default and beta channel, official/GitHub source policy, persisted choices, signed-envelope/schema validation, single-flight discovery, release notes, and specific no-update/no-package/network/signature feedback. Compare SemVer and use the OS proxy. |
+| `REL-C06` Windows in-place component update | Equivalent migration, Next-native implementation | Keep installed-component diffing, pause/resume/cancel, official-to-GitHub download fallback, size and digest verification, helper launch, elevation when required, shutdown only after helper launch, installed-manifest update, and restart. Cover both NSIS and portable roots without changing user data. |
+| `REL-C07` macOS/Linux package download | Equivalent migration, Next-native implementation | Download and verify the matching full DMG/AppImage, support pause/resume/cancel and fallback, then open the DMG or containing folder with actionable install instructions. Never overwrite the running application tree in place. |
+| `REL-C08` update apply failure and rollback | Equivalent migration, Next-native implementation | Pre-apply discovery/download/verification failure leaves the running install untouched. Windows apply backs up every replaced path and restores in reverse on failure, records a durable result journal, restarts the restored version, and exposes diagnostics/retry or repair/reinstall when recovery is incomplete. Maintainer release withdrawal is not installed rollback. |
+| `REL-C09` OS integration | Next redesign / cross-domain route | Domain 07 owns package trust, platform runtime prerequisites, install/upgrade/removal, and the packaging evidence needed by `APP-01`. `APP-01` still owns `.sgf`/`.gib` activation and current-game replacement semantics; packaging must not duplicate that claim. |
+| `REL-C10` diagnostics, logs, and support bundle | Next redesign | Provide bounded local ordinary logs, explicit full trace, sanitized export with cancellation, open-folder access, crash/update diagnostics, and visible apply/export failures. Do not reproduce Swing dialog structure or automatically upload data. |
+| `REL-C11` version / About | Next redesign | Show the actual installed SemVer and channel plus Releases, Issues, and support links. Abandon the Java marketing-card presentation and the static `0.1.0` status string as evidence. |
+| `REL-C12` support routing | Absorbed | Documentation and issue routing are acceptance surfaces of diagnostics and About, not a duplicate Parity Item. |
+| `REL-C13` clear listed personal recents | Route to domains 03/06 | File/review and synchronization owners clear and explain their own histories. Domain 07 does not create a misleading broad personal-data reset. |
+| `SET-NETWORK-PROXY` update-consumer edge | Next redesign | Use the OS/system proxy and actionable network errors. Do not add a persisted application-specific update proxy. |
+
+No end-user domain-07 Capability is Deferred by this decision. The readboard component is an ownership dependency, not a release-domain deferral. Java updater classes, Swing controls, smoke probes, CI scripts, validators, signing scripts, and helper-process structure remain maintainer/implementation-only rather than abandoned Capabilities.
+
+### Stable Parity Item boundaries
+
+Existing IDs `REL-01` through `REL-05` remain stable; none is Accepted, so their prospective gaps can be narrowed without rewriting Accepted history. The oversized updater claim splits into new acceptance-sized items.
+
+- `REL-01` — **Release Preflight and Dry-run** (`Partial` at the Next inventory baseline): release validators and non-mutating dry-run execute on the exact release commit, identify tag/commit/platform/signing state, and state their limits. This is a maintainer gate, not an end-user Capability or publication proof.
+- `REL-02` — **Trusted Production Artifacts** (`Missing`): every artifact offered through stable or beta update channels has a trusted signed envelope and verified payload; Windows production artifacts are Authenticode-signed and timestamped; macOS artifacts are signed, notarized, and stapled. Unsigned public-validation prereleases are labeled as such and never enter an updater feed.
+- `REL-03` — **Update Discovery and Offer** (`Missing`): Help-triggered manual discovery implements stable/beta and official/GitHub policy, persists valid choices, compares SemVer, shows release identity/notes, follows the system proxy, and reports unpackaged, unsupported, no-update, no-package, fetch, schema, key, signature, and version failures without mutating the install.
+- `REL-04` — **Platform Package Lifecycle** (`Missing`): Windows NSIS and portable, macOS DMG, and Linux AppImage each pass their own install/unpack, primary launch, declared runtime, data-location, upgrade, and uninstall/delete contract. Installed removal preserves app-data by default. Portable launch covers present and absent WebView2. Packaging supplies `APP-01` association evidence without owning file-open semantics.
+- `REL-05` — **Managed Installed Components** (`Partial`): a signed installed manifest identifies `app-core` and acquired KataGo backend/default-model versions and locations. No-engine launch works without optional components. Explicit Engine Settings acquisition either installs a compatible signed set and hands off to domain 04 or preserves the prior set/profile and explains the failure. JRE, JCEF, file-guessed GPU flavors, and unaccepted readboard behavior are excluded.
+- `REL-06` — **Windows Component Download and Apply** (`Missing`): NSIS and portable installs select newer managed components, resume/cancel verified downloads, fall back between supported sources, launch the helper with elevation only when required, close through Safe Graceful Shutdown only after successful helper launch, replace the declared paths, update the manifest, and restart without changing package-local or OS app-data.
+- `REL-07` — **macOS/Linux Package Update Handoff** (`Missing`): the selected channel/source downloads and verifies the matching DMG/AppImage with resume/cancel/fallback, then opens the DMG or containing folder and gives the platform-specific next step. The running install is not overwritten and failed acquisition leaves it usable.
+- `REL-08` — **Update Failure, Rollback, and Recovery** (`Missing`): invalid metadata/payload and helper-launch failures leave the current application running. Windows apply creates a complete replacement backup, rolls back in reverse, journals the result, and restarts the restored version. The application reports successful restoration with diagnostics/retry; incomplete restoration retains the backup and provides an explicit repair/reinstall path.
+- `REL-09` — **Diagnostics and Support Bundle** (`Missing`): bounded ordinary local diagnostics are on by default, full trace is off until explicitly confirmed, export is sanitized/cancellable/size-bounded, the user can open the log folder, and apply/export failures remain visible. No support data leaves the machine without a separate user action.
+- `REL-10` — **Product Identity and Support Routing** (`Partial`): About reads the packaged SemVer and channel rather than a hard-coded label and exposes working Releases, Issues, and support-document links without reintroducing Java marketing cards.
+
+`REL-01` stays in the matrix as an implementation gate even though it is not a user Capability. `REL-02` owns artifact trust; `REL-03` owns discovery; `REL-05` owns component identity; `REL-06`/`REL-07` own platform acquisition and apply/handoff; `REL-08` owns installed failure recovery. Maintainer GitHub-release rollback remains documented separately and cannot satisfy `REL-08`.
+
+### Signing, installer, and installed-runtime contracts
+
+- A production Windows or macOS platform cannot become Shipped while its Canonical Artifact lacks the platform trust required by `REL-02`. Linux may publish an AppImage without a repository/package-manager signature only when its updater envelope/payload verification and release notes state the exact trust and dependency contract.
+- Stable and beta feeds accept only signed envelopes and verified matching payloads. The current unsigned `v0.1.0` prerelease shape is engineering validation evidence only.
+- Windows NSIS installs/bootstraps WebView2 and owns registered uninstall behavior. Windows portable installs no application, uses system Evergreen WebView2, and owns package-local state; it must fail before the web UI with an actionable dependency path when WebView2 is absent.
+- macOS DMG acceptance includes running from Applications rather than claiming the mounted image as installed. Linux AppImage acceptance names the supported distribution/runtime prerequisites and the user-visible failure when they are missing.
+- Managed Installed Components are release-owned payloads only. OS WebViews, Java runtime/JCEF, user SGFs, preferences, caches, logs, and recovery state are not updater components.
+
+### Repository, release-environment, and live evidence
+
+These evidence classes are independent and must remain separate in the inventory, matrix, plan, release notes, and closeout:
+
+1. **Repository Release Evidence**: deterministic envelope/channel/version/manifest fixtures; updater state-machine and helper tests against disposable install trees; failure injection for invalid metadata, signatures, downloads, apply, and rollback; release validators; asset/feed generation; and non-mutating unsigned dry-runs. This can prove contracts and artifact shape only.
+2. **Release-environment evidence**: the exact tag and commit, CI run, produced Canonical Artifact, channel feed, signing identity/status, Windows timestamp verification, and macOS notarization/stapling result. Workflow configuration or the presence of secret names is not this evidence.
+3. **Installed Live Evidence**: for each candidate platform/architecture/Canonical Artifact, record OS version, artifact identity, starting/ending version, installed components, trust state, install or unpack result, primary launch, data location, update or handoff, and uninstall/delete result. A platform is admitted independently only after its complete row passes.
+4. **Windows updater fault evidence** additionally covers invalid signature, missing matching component, interrupted download/resume, cancellation, helper-launch failure, elevation denial where reachable, apply interruption, reverse rollback, result journal, restored-version restart, and incomplete-rollback repair path. Portable evidence separately covers present and absent WebView2 and package-local state preservation across update.
+5. **macOS/Linux update evidence** covers verified download, cancellation/resume, DMG/AppImage handoff, unchanged running install on failure, and successful manual replacement or launch of the newer Canonical Artifact.
+
+Unavailable signing credentials, target machines, production feeds, or release infrastructure are recorded as `Not run`; the affected Parity Item remains `Missing` or `Partial`. No repository check, unsigned dry-run, generated bundle, documentation, or Java baseline run may be substituted for unavailable Next production or installed proof.
