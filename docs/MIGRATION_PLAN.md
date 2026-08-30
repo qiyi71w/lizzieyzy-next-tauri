@@ -194,7 +194,8 @@ Deliver:
 
 Exit when:
 
-- `UI-01` through `UI-05` are accepted.
+- `UI-01`, `UI-03`, `UI-04`, and `UI-05` are accepted.
+- Any remaining `UI-02` evidence gap is recorded with an explicit migration disposition.
 - Native smoke passes both without an engine and with engine-only actions unavailable.
 - Visual evidence follows the reference rules in `DESIGN.md`.
 

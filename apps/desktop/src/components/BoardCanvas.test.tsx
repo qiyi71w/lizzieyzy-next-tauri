@@ -3,6 +3,7 @@
 import { act, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import type { ReviewPresentationScope } from "../domain/reviewPresentation";
 import type { AnalysisFrameDto, PointDto, PositionDto } from "../domain/types";
 import { BoardCanvas } from "./BoardCanvas";
 
@@ -19,6 +20,12 @@ const position: PositionDto = {
   captures_white: 0,
   last_move: null,
   errors: []
+};
+
+const initialPreviewScope: ReviewPresentationScope = {
+  generation: 1,
+  selectedPath: [0],
+  requestToken: "local:1"
 };
 
 const analysis: AnalysisFrameDto = {
@@ -218,21 +225,43 @@ describe("BoardCanvas candidate preview", () => {
   it("cancels pending and visible preview when its presentation scope changes", () => {
     vi.useFakeTimers();
     const onCandidatePreview = vi.fn<(index: number | null) => void>();
-    const { canvas, rerender } = renderBoard({ analysis, onCandidatePreview, previewScope: {} });
+    const { canvas, rerender } = renderBoard({
+      analysis,
+      onCandidatePreview,
+      previewScope: initialPreviewScope
+    });
     setCanvasBounds(canvas);
 
     dispatchPointer(canvas, "pointermove", 29.5, 39.75);
     act(() => vi.advanceTimersByTime(120));
     expect(onCandidatePreview).toHaveBeenLastCalledWith(0);
 
-    rerender(position, {});
+    rerender(position, { ...initialPreviewScope, selectedPath: [1] });
     expect(onCandidatePreview).toHaveBeenLastCalledWith(null);
 
     dispatchPointer(canvas, "pointermove", 29.5, 39.75);
     act(() => vi.advanceTimersByTime(60));
-    rerender(position, {});
+    rerender(position, { ...initialPreviewScope, selectedPath: [2] });
     act(() => vi.runAllTimers());
     expect(onCandidatePreview).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a pending preview when its scope is value-equivalent", () => {
+    vi.useFakeTimers();
+    const onCandidatePreview = vi.fn<(index: number | null) => void>();
+    const { canvas, rerender } = renderBoard({
+      analysis,
+      onCandidatePreview,
+      previewScope: initialPreviewScope
+    });
+    setCanvasBounds(canvas);
+
+    dispatchPointer(canvas, "pointermove", 29.5, 39.75);
+    act(() => vi.advanceTimersByTime(60));
+    rerender(position, { ...initialPreviewScope, selectedPath: [0] });
+    act(() => vi.advanceTimersByTime(60));
+
+    expect(onCandidatePreview).toHaveBeenLastCalledWith(0);
   });
 
   it("does not publish an old deadline during a scope-changing commit", () => {
@@ -241,7 +270,7 @@ describe("BoardCanvas candidate preview", () => {
     const host = document.createElement("div");
     document.body.append(host);
     root = createRoot(host);
-    const initialScope = {};
+    const initialScope = initialPreviewScope;
 
     act(() => root?.render(
       <ScopeTransitionBoard
@@ -258,7 +287,7 @@ describe("BoardCanvas candidate preview", () => {
 
     act(() => root?.render(
       <ScopeTransitionBoard
-        previewScope={{}}
+        previewScope={{ ...initialScope, selectedPath: [1] }}
         onCandidatePreview={onCandidatePreview}
         advanceDeadline
       />
@@ -283,7 +312,7 @@ function renderBoard({
   onPointClick?: (point: PointDto) => void;
   onCandidatePreview?: (index: number | null) => void;
   analysis?: AnalysisFrameDto;
-  previewScope?: object;
+  previewScope?: ReviewPresentationScope;
   initialPosition?: PositionDto;
 }) {
   const host = document.createElement("div");
@@ -311,7 +340,7 @@ function ScopeTransitionBoard({
   onCandidatePreview,
   advanceDeadline
 }: {
-  previewScope: object;
+  previewScope: ReviewPresentationScope;
   onCandidatePreview: (index: number | null) => void;
   advanceDeadline: boolean;
 }) {

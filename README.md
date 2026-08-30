@@ -46,7 +46,7 @@ Status and evidence are separate. The evidence ladder is `Not started` → `Scaf
 | SGF document and tree-shaped wire model | `SGF-01`–`SGF-02` | Accepted | Repository tested | None for R1. |
 | Native variation navigation, editing, comments, and save/reopen | `SGF-03`–`SGF-06` | Accepted | Native/live verified | None for R1. |
 | Go rules required by SGF editing | `RULE-01` | Accepted | Repository tested | None for the frozen R1 fixtures. |
-| Core review presentation and interaction | `UI-01`–`UI-03`, `UI-05` | Partial | Behavior implemented | Same-state visual evidence, keyboard intent, candidate hover/stale eviction, and shortcut completion. |
+| Core review presentation and interaction | `UI-01`–`UI-03`, `UI-05` | Accepted / Partial | Native/live verified | `UI-02` still lacks engine-event delivery evidence while a board mutation promise is pending. |
 | No-engine desktop workflow | `UI-04` | Accepted | Native/live verified | None. |
 | Engine profiles and asset checks | `ENG-01` | Accepted | Repository tested | None within this item. |
 | Foreground engine lifecycle, switching, rollback, and jobs | `ENG-02`–`ENG-05` | Missing / Partial | Scaffolded | Authoritative lifecycle/job identity, controlled tests, and real KataGo smoke. |

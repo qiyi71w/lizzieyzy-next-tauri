@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerE
 import { createPortal } from "react-dom";
 import type { AnalysisFrameDto, MoveDto, PointDto, PositionDto } from "../domain/types";
 import { isPoint } from "../domain/board";
+import {
+  shouldPublishReviewPresentation,
+  type ReviewPresentationScope
+} from "../domain/reviewPresentation";
 
 export type OverlayMode = "candidates" | "ownership" | "policy";
 
@@ -17,9 +21,17 @@ type Props = {
   hideCandidates?: boolean;
   onPointClick?: (point: PointDto) => void;
   onCandidatePreview?: (index: number | null) => void;
-  previewScope?: object;
+  previewScope?: ReviewPresentationScope;
 };
 type PolicyPoint = { x: number; y: number; value: number };
+
+function samePreviewScope(
+  current: ReviewPresentationScope | undefined,
+  scheduled: ReviewPresentationScope | undefined
+): boolean {
+  if (!current || !scheduled) return current === scheduled;
+  return shouldPublishReviewPresentation(current, scheduled);
+}
 
 export function BoardCanvas({
   position,
@@ -45,6 +57,9 @@ export function BoardCanvas({
   const previewScopeRef = useRef(previewScope);
   onCandidatePreviewRef.current = onCandidatePreview;
   previewScopeRef.current = previewScope;
+  const previewScopeKey = previewScope
+    ? JSON.stringify([previewScope.generation, previewScope.requestToken, previewScope.selectedPath])
+    : "";
   const overlayMode = overlayModeProp ?? overlayModeLocal;
   function setOverlayMode(mode: OverlayMode) {
     onOverlayModeChange?.(mode);
@@ -98,7 +113,7 @@ export function BoardCanvas({
     const scheduledPreviewScope = previewScope;
     previewTimerRef.current = setTimeout(() => {
       previewTimerRef.current = undefined;
-      if (previewScopeRef.current !== scheduledPreviewScope) {
+      if (!samePreviewScope(previewScopeRef.current, scheduledPreviewScope)) {
         hoveredCandidateIndexRef.current = null;
         return;
       }
@@ -109,7 +124,7 @@ export function BoardCanvas({
 
   useEffect(() => {
     cancelCandidatePreview();
-  }, [analysis, position, selectedCandidateIndex, effectiveOverlayMode, hideCandidates, previewScope]);
+  }, [analysis, position, selectedCandidateIndex, effectiveOverlayMode, hideCandidates, previewScopeKey]);
 
   useEffect(() => () => {
     clearTimeout(previewTimerRef.current);
