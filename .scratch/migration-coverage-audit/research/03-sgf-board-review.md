@@ -1,8 +1,8 @@
 # Frozen 03 — SGF / Board / No-Engine Review Capability Census
 
-**Java unique source:** `/home/dev/dev/weiqi/worktrees/lizzieyzy-next/java-baseline-v1`  
-**Java commit (HEAD):** `7b4027531c2b26062d0bfc27a040cc550cfbea4d`  
-**Next unique source:** `/home/dev/dev/weiqi/worktrees/lizzieyzy-next-tauri/migration-coverage-audit`  
+**Java unique source:** `/home/dev/dev/weiqi/worktrees/lizzieyzy-next/java-baseline-v1`<br>
+**Java commit (HEAD):** `7b4027531c2b26062d0bfc27a040cc550cfbea4d`<br>
+**Next unique source:** `/home/dev/dev/weiqi/worktrees/lizzieyzy-next-tauri/migration-coverage-audit`<br>
 **Next commit:** `18c6d189b8b01069975c4c40ead63a010249cb8c`
 
 Not used: `/home/dev/dev/weiqi/lizzieyzy-next`, `/mnt/d/dev/weiqi/tmp/lizzie-java-baseline-r2a`, GitHub compare, or commit `42c92e3`. Old census text is not evidence. Runtime-only behavior is marked **需定向运行核验**.

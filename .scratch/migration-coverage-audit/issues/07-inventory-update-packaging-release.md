@@ -9,4 +9,3 @@ Which observable install, first-launch, bundled-runtime discovery, update-check/
 ## Answer
 
 Resolved by [Install, Update, Packaging, Release, and Platform Census](../research/07-update-packaging-release.md). The replacement report was sourced only from the clean detached Migration Baseline v1 worktree at `7b4027531c2b26062d0bfc27a040cc550cfbea4d` and the Next baseline at `18c6d189b8b01069975c4c40ead63a010249cb8c`. It identifies thirteen user capabilities, separates maintainer-only release mechanics, and records Entry Points, defaults, persistence, failure/recovery, platform conditions, current evidence, and targeted runtime checks without choosing dispositions.
-

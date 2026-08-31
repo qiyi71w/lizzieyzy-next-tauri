@@ -9,4 +9,3 @@ Which observable SGF open/import/save/export, tree navigation/editing, Go-rule, 
 ## Answer
 
 Resolved by [SGF, Board, and No-Engine Review Capability Census](../research/03-sgf-board-review.md). The replacement report uses only the clean detached Migration Baseline v1 source and the fixed Next baseline. It keeps all original Accepted R1/R2 claims at their stated scope, inventories adjacent file, tree, board, metadata, recovery, and review-presentation behavior separately, and records full baseline contracts and directed runtime checks without deciding successor dispositions.
-

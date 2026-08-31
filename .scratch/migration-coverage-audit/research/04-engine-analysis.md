@@ -1,14 +1,14 @@
 # Inventory: Foreground Engine and Analysis Capabilities (Domain 04)
 
-**Java unique source:** `/home/dev/dev/weiqi/worktrees/lizzieyzy-next/java-baseline-v1`  
-**Java commit (worktree HEAD):** `7b4027531c2b26062d0bfc27a040cc550cfbea4d` (Migration Baseline v1)  
-**Next unique source:** `/home/dev/dev/weiqi/worktrees/lizzieyzy-next-tauri/migration-coverage-audit`  
+**Java unique source:** `/home/dev/dev/weiqi/worktrees/lizzieyzy-next/java-baseline-v1`<br>
+**Java commit (worktree HEAD):** `7b4027531c2b26062d0bfc27a040cc550cfbea4d` (Migration Baseline v1)<br>
+**Next unique source:** `/home/dev/dev/weiqi/worktrees/lizzieyzy-next-tauri/migration-coverage-audit`<br>
 **Next commit:** `18c6d189b8b01069975c4c40ead63a010249cb8c` (`docs/migration-coverage-audit`)
 
 No file from `/home/dev/dev/weiqi/lizzieyzy-next` or `/mnt/d/dev/weiqi/tmp/lizzie-java-baseline-r2a` is used as evidence. Commit `42c92e3` is not referenced.
 
-Ticket: `.scratch/migration-coverage-audit/issues/04-inventory-engine-analysis.md`  
-Standing R3 input: `.scratch/migration-coverage-audit/context/r3-foreground-engine-decisions.md`  
+Ticket: `.scratch/migration-coverage-audit/issues/04-inventory-engine-analysis.md`<br>
+Standing R3 input: `.scratch/migration-coverage-audit/context/r3-foreground-engine-decisions.md`<br>
 Also read: `CONTEXT.md`, `docs/JAVA_BASELINE.md`, `docs/PARITY_MATRIX.md`, `docs/MIGRATION_PLAN.md`, `docs/ARCHITECTURE_NEXT.md`.
 
 ## Census method
