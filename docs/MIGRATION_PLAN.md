@@ -12,7 +12,7 @@ The migration is planned as complete user workflows:
 4. Run interactive and whole-game analysis against the selected tree node.
 5. Replace the current game safely, shut down, recover the current game, and persist owner-routed settings.
 6. Author SGF setup, tree structure, metadata, and markup, and review with scoring, try-play, and board display controls.
-7. Persist one adaptive workspace, window geometry, appearance, and contextual guidance.
+7. Persist one adaptive workspace, window geometry, appearance, and main-window always-on-top.
 8. Admit multi-backend engine profiles and a Generic GTP game adapter.
 9. Run Human-vs-Engine and single-game engine-vs-engine matches.
 10. Preview, import, or synchronize games through Yike, Fox, Tencent kifu, and readboard.
@@ -23,8 +23,8 @@ Each workflow crosses the Rust domain, Rust wire DTO, Tauri gateway, TypeScript 
 ## Sources Of Truth
 
 - [JAVA_CAPABILITY_INVENTORY.md](JAVA_CAPABILITY_INVENTORY.md) is the exhaustive capability census: Entry Points, defaults, persistence, failure behavior, source references, and runtime-check status against Migration Baseline v1.
-- [PARITY_MATRIX.md](PARITY_MATRIX.md) owns item-level disposition, status, evidence, remaining gap, and acceptance.
-- This document owns phase membership, the dependency graph, order, and exit criteria. It does not restate item-level evidence.
+- [PARITY_MATRIX.md](PARITY_MATRIX.md) owns item-level disposition, status, evidence, remaining gap, acceptance, and each item's canonical Item Start Prerequisites in `Depends on`.
+- This document owns phase membership, Deferred Promotion Gates, Delivery Order, Migration Phase Gates, and exit criteria. It references Matrix-owned Item Start Prerequisites rather than maintaining a second set.
 - [ARCHITECTURE_NEXT.md](ARCHITECTURE_NEXT.md) owns architecture, module boundaries, DTO conventions, and command boundaries.
 - [JAVA_BASELINE.md](JAVA_BASELINE.md) fixes the Java behavior reference at Migration Baseline v1 (`7b4027531c2b26062d0bfc27a040cc550cfbea4d`). The Next inventory baseline for this audit is `18c6d189b8b01069975c4c40ead63a010249cb8c`.
 - [DEVELOPMENT.md](DEVELOPMENT.md) and [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) own environment smoke and release procedures.
@@ -74,11 +74,12 @@ The existing Tauri implementation is the migration starting point and must be pr
 - Selecting an engine profile does not create an authoritative Foreground Engine Run, Autoload Default, transactional switch, or typed manual recovery.
 - Safe current-game replacement, native file activation, window file-drop dispatch, graceful shutdown, and current-game session recovery are not yet the R5 seams.
 - Layout rails are fixed at `228px` and `260px`; splitters, rail visibility, window-geometry reset, and narrow Restore Default are absent.
+- Review HUD player labels are hardcoded 黑棋/白棋 rather than root `PB`/`PW` (`REVIEW-09`). Main-window always-on-top is absent (`WINDOW-02`).
 - Multi-backend profiles, Generic GTP, and Match Sessions are absent.
 - Provider/readboard repository plumbing exists, but live sessions remain unvalidated; Yike ongoing sync and Tencent kifu import are unclaimed; readboard snapshots are previewed rather than synchronized into the active game.
 - Signing, notarization, production updater apply/handoff/rollback, bundled installed-runtime resolution, and Canonical Artifact Installed Live Evidence remain incomplete.
 
-These gaps are tracked individually in `PARITY_MATRIX.md`. Provider, adapter, game-mode, and release work stay behind their start gates rather than becoming the next migration frontier.
+These gaps are tracked individually in `PARITY_MATRIX.md`. Provider, adapter, game-mode, and release work stay behind their Migration Phase Gates rather than becoming the next migration frontier.
 
 ## Architecture Seams
 
@@ -170,17 +171,17 @@ Image OCR remains unsupported unless an OCR-capable runtime, explicit parity ite
 
 Platform admission is independent. Canonical Artifacts are Windows NSIS and portable, macOS DMG, and Linux AppImage. Extra CI formats stay validation artifacts until a later disposition promotes them.
 
-Installed variants use OS app-data and preserve it by default on removal. Windows portable uses package-local `user-data/`; deleting that directory is destructive. Packages start in No-engine Mode with `app-core` only. Engine Settings acquires signed KataGo backend and default-model components as Managed Installed Components; domain 04 owns the resulting profile and engine-start behavior.
+Installed variants use OS app-data and preserve it by default on removal. Windows portable uses package-local `user-data/`; deleting that directory is destructive. Packages start in No-engine Mode with `app-core` only. Engine Settings acquires signed KataGo backend and default-model components as Managed Installed Components; domain 04 owns the resulting profile and engine-start behavior. A later accepted domain owner may add a separate signed component through `REL-05` without transferring its capability semantics or making that Deferred component an earlier R11 exit; `CONTRIB-01` uses this seam for its Contribution Client Component.
 
 ## Dependency Graph
 
-Phase numbers group work and express delivery priority. They are not the dependency graph. R10 and R11 may proceed in either order after their own start gates. Other later phases may also become dependency-legal beside a lower number once that number's hard edges are satisfied; they still must not be pulled into the named Next Executable Batch.
+Phase numbers group work and express Delivery Order. They are not Item Start Prerequisites, which remain canonical in [PARITY_MATRIX.md](PARITY_MATRIX.md). This graph records Plan-owned order and gates: R10 and R11 may proceed in either order after their own Migration Phase Gates, and other later phases may become dependency-legal beside a lower number once their hard gates are satisfied; they still must not be pulled into the named Next Executable Batch.
 
 ### How To Choose The Next Slice
 
 1. If a Next Executable Batch is named below, do that slice. Do not mix later-phase work into it.
-2. Otherwise pick an incomplete active item whose every named start dependency is Accepted. A named gate may be passed even when its cross-phase item is not yet Accepted. Final-acceptance gates are not start dependencies for that item's earlier semantic work.
-3. Prefer the lowest-numbered incomplete phase, except R10 and R11 may proceed in either order after their own start gates.
+2. Otherwise pick an incomplete active item whose Matrix-owned Item Start Prerequisites are Accepted and whose applicable Plan-owned gate has passed. A named gate may be passed even when its cross-phase item is not yet Accepted. Final-acceptance gates are not Item Start Prerequisites for that item's earlier semantic work.
+3. Prefer the lowest-numbered incomplete phase, except R10 and R11 may proceed in either order after their own Migration Phase Gates.
 4. Deferred queue items are never phase exits and are never the next slice unless a later plan revision starts them.
 
 ```mermaid
@@ -210,7 +211,9 @@ flowchart TB
   R8 --> R9
 ```
 
-Layout, window, and appearance in R7 wait only for `PREF-01`. `GUIDE-01` has no R4 hard edge: Ticket 09 named a domain-04 auto-analyze education path that Ticket 11 later Abandoned as `CAP-04-ANA-08`. That contradiction is a Ticket 16 disposition-to-item gap, not an R4→R7 dependency.
+Layout, window, and appearance in R7 wait only for `PREF-01`. `GUIDE-01` is Deferred (Ticket 21) and is not an R7 member or exit.
+
+R4 may start after R3 without waiting for R5. Matrix-owned Item Start Prerequisites make `ANA-10` an item-level cross-phase exception, so R4 can execute its other items while R5 proceeds beside R3 but cannot exit before `ANA-10` is accepted. `ANA-11` through `ANA-13` persist through the `PREF-01` mechanism but do **not** wait for `PREF-01` Accepted and are not gated by R5.
 
 ### Critical Edges
 
@@ -220,20 +223,31 @@ Layout, window, and appearance in R7 wait only for `PREF-01`. `GUIDE-01` has no 
 | `ENG-03` | `ENG-04` | Failed switch and stale rejection are the failure mode of the same transaction. |
 | `ENG-02`, `ENG-05`, `ANA-03` | `ANA-01`, `ANA-02` | One-shot and whole-game work use independent manager-owned lanes. |
 | Identity-valid `ANA-01` / `ANA-02` results | `ANA-04` | Presentation consumes only current run/job/node results. |
+| `SGF-03`, `ANA-01`, `ANA-03`, `ANA-05`, `PREF-01`, `APP-05` | `ANA-10` | Exact SGF children, comparable current-or-cached analysis, durable mode, and registry-owned `J` exist before the marker is accepted. |
+| `UI-01`, `ANA-01`, `ANA-03` | `ANA-11` | Chart presence, selected-node analysis, and independent lanes exist before winrate-chart encoding is accepted. `PREF-01` is the persistence mechanism, not this edge. |
+| `UI-01`, `ANA-04` | `ANA-12` | Sub-Board presence and Variation PV drawing exist before the persisted Variation/Raw switch is accepted. `PREF-01` is the persistence mechanism, not this edge. |
+| `ANA-04`, `ANA-12` | `ANA-13` | Identity-valid active PV presentation and Sub-Board Variation/Raw exist before one synchronized Variation Replay controls both eligible surfaces. `PREF-01` is the persistence mechanism, not this edge. |
+| `ANA-11`, `APP-05` | `EXPORT-03` | Deferred Winrate Chart Image Export consumes the accepted chart encoding and registry-owned `Shift+Alt+S`; `PREF-01` is only the Recent Image Export Directory storage mechanism. |
+| `SGF-01` | `REVIEW-09` | HUD player names read current-game root `PB`/`PW`. |
 | `ENG-09` | `ENG-10` | Multi-backend catalog and capability snapshot before Generic GTP. |
+| `ENG-02`, `ENG-06`, `ENG-07`, `ENG-09` | `SSH-01` | Deferred SSH profiles reuse the shared catalog, Autoload Default, standard Foreground Engine Run, and manual recovery; each admitted stdio adapter owns its SSH compatibility evidence. |
+| `ENG-02`, `ENG-07`, `ANA-01`, `ANA-03`, `PREF-01` | `RCOMP-01` | Deferred provider configuration starts explicitly into the standard run and analysis lanes, persists only non-secret settings, and inherits manual recovery. |
 | `SGF-07` | `APP-01` semantic gate, `APP-02`, `SGF-08`, `SGF-09`, `SGF-10`, R10 import/sync | One replacement seam. Semantic `APP-01` work starts from this seam only. |
 | `APP-01` R5 semantic gate | `APP-02` | One-file drop follows the recorded semantic open/replace contract, never final `APP-01` Accepted. |
-| `PREF-01` | `SGF-09`, `REVIEW-03`, `REVIEW-07`, `REVIEW-08`, `LAYOUT-02`, `LAYOUT-04`, `WINDOW-01`, `APPEAR-01`, `GUIDE-01`, `GAME-04`, R10 recents | Durable write mechanism only. |
+| `PREF-01` | `SGF-09`, `REVIEW-03`, `REVIEW-07`, `REVIEW-08`, `WINDOW-02`, `LAYOUT-02`, `LAYOUT-04`, `WINDOW-01`, `APPEAR-01`, `GUIDE-01`, `GAME-04`, `RCOMP-01`, R10 recents | Durable write mechanism only. |
 | `APP-03` | `REL-06` | Windows helper launch is followed by Safe Graceful Shutdown. |
 | `REL-02` | `REL-03`, `REL-05` | Feeds and managed components consume trusted artifacts. |
 | `REL-03`, `REL-05`, `APP-03` | `REL-06` | Windows download/apply. |
 | `REL-03` | `REL-07` | macOS/Linux package handoff. |
 | `REL-06` | `REL-08` | Rollback is the failure path of Windows apply. |
-| `APP-01` R5 semantic gate plus `REL-04` Installed Live association | `APP-01` Accepted | Split graph: semantic gate is R5; `REL-04` is the additional R11 final-acceptance gate only. Not a start dependency for `APP-01` semantic work or `APP-02`. `APP-01` still owns open/replace semantics. |
+| `APP-01` R5 semantic gate plus `REL-04` Installed Live association | `APP-01` Accepted | Split graph: semantic gate is R5; `REL-04` is the additional R11 final-acceptance gate only. It is not an Item Start Prerequisite for `APP-01` semantic work or `APP-02`. `APP-01` still owns open/replace semantics. |
 | `PROV-01` | `PROV-03` | Public locator/center before ongoing Yike sync. |
+| `PROV-01`, `PROV-03` | `PROV-06` | Personal-category discovery reuses the public provider center and hands supported public locators to existing import/sync owners without duplicating them. |
+| `PROV-03`, `GAME-01`, `GAME-05`, `PREF-01`, `APP-03` | `PROV-07` | Authenticated Yike read/play reuses external-authoritative sync, sole Match ownership, SGF/review handoff, non-secret preference storage, and bounded teardown; it never creates a second current-game turn owner. |
 | `READ-01` | `READ-02` | Sidecar readiness before ongoing sync. |
+| `READ-01`, `READ-02`, `GAME-01`, `GAME-05`, `ENG-02`, `ENG-09`, `APP-03` | `GAME-10` | Sidecar capabilities and external-authoritative sync, sole Match ownership and SGF handoff, capability-declared engine execution, and bounded teardown exist before External-board Engine Match is admitted. `GAME-10` never expands the R10 `READ-02` exit. |
 | `GAME-01`, `GAME-04`, `GAME-05` | `GAME-02` | Ownership, rules, and SGF handoff before Human-vs-Engine. |
-| `GAME-02` | `GAME-03` | Human session before single-game PK. |
+| `GAME-02` (Delivery Order) | `GAME-03` | Deliver the Human-vs-Engine session before integrated single-game PK. This does not block `GAME-03` from starting once its Matrix-owned Item Start Prerequisites are satisfied. |
 
 ### APP-01 Cross-Phase Gate
 
@@ -259,20 +273,20 @@ flowchart LR
 
 Ordinary launch evidence stays on accepted `UI-01` / `UI-04` plus `REL-04` installed launch. It is not a second shell item.
 
-### GAME Admission Gate And Internal Order
+### GAME Migration Phase Gate And Delivery Order
 
 R9 must not begin until all of the following are Accepted: `ENG-02`, `ENG-03`, `ENG-04`, `ENG-07`, `ENG-09`, `ENG-10`, `SGF-07`, `APP-04`, `REVIEW-03`, `PREF-01`, and `ANA-04`. Temporary game-only process, tree, preference, or presentation paths are not substitutes.
 
-Inside R9: implement `GAME-01`, `GAME-04`, and `GAME-05` first; then `GAME-02`; then `GAME-03`.
+Delivery Order inside R9 is `GAME-01` + `GAME-04` + `GAME-05`, then `GAME-02`, then `GAME-03`. It does not make `GAME-02` an Item Start Prerequisite of `GAME-03`.
 
 ### R10 / R11 Overlap
 
-R10 and R11 numbers are delivery priority, not a hard edge between them. Either phase may start after its own start gate:
+R10 and R11 numbers are Delivery Order, not a hard edge between them. Either phase may start after its own Migration Phase Gate:
 
-- R10 start gate: `SGF-07`, `PREF-01`, and `APP-03` Accepted.
-- R11 start gate: repository release work may proceed at any time for `REL-01`. End-user apply/handoff requires `APP-03` for `REL-06`. `REL-04` association evidence requires the `APP-01` semantic gate. Trusted feeds require `REL-02`.
+- R10 Migration Phase Gate: `SGF-07`, `PREF-01`, and `APP-03` Accepted.
+- R11 Migration Phase Gate: repository release work may proceed at any time for `REL-01`. End-user apply/handoff requires `APP-03` for `REL-06`. `REL-04` association evidence requires the `APP-01` semantic gate. Trusted feeds require `REL-02`.
 
-The only product coupling between the two phases is whether domain 06 later accepts a readboard payload into the `REL-05` installed manifest. That decision is not an R10 or R11 exit.
+The only product coupling between R10 and R11 is whether domain 06 later accepts a readboard payload into the `REL-05` installed manifest. That decision is not an R10 or R11 exit. Deferred `CONTRIB-01` may likewise add its separate client through the accepted `REL-05` protocol, but remains outside both phase exits until promoted.
 
 ### Owner-Routed Settings
 
@@ -281,49 +295,44 @@ The only product coupling between the two phases is whether domain 06 later acce
 | Durable file, atomic write, categorized Preferences surface | `PREF-01` | R5 |
 | Autoload Default, first-use off | `ENG-06` | R3 |
 | Identity-scoped candidates, PV mini-board, ownership, policy, and candidate-limit rendering | `ANA-04` | R4 |
+| Next-move Review Marker mode and grading | `ANA-10` | R4 |
+| Graph Perspective, series trio, Blunder Bar, Graph Hover, Score Lead Scale | `ANA-11` | R4 |
+| Sub-Board Content Mode | `ANA-12` | R4 |
+| Variation Replay enablement and interval | `ANA-13` | R4 |
 | Dirty-state replacement confirmations | `SGF-07` | R5 |
 | Restore last session at launch, default off | `APP-04` | R5 |
 | Shortcut primary keys and aliases | `APP-05` | R5 |
+| Recent Image Export Directory | `EXPORT-02`, `EXPORT-03` | Deferred |
 | Recent SGF/GIB list and clear-history | `SGF-09` | R6 |
 | New Document board size and default komi | `SGF-10` | R6 |
 | Editable player names and komi | `SGF-13` | R6 |
 | Scoring rule, area default | `REVIEW-03` | R6 |
 | Coordinates default on, move numbers default off | `REVIEW-07` | R6 |
 | Review move sound, default on | `REVIEW-08` | R6 |
+| HUD player names from root `PB`/`PW` | `REVIEW-09` | R6 |
 | Rail visibility | `LAYOUT-04` | R7 |
 | Window geometry and reset | `WINDOW-01` | R7 |
+| Main window always-on-top | `WINDOW-02` | R7 |
 | Classic / High Contrast appearance | `APPEAR-01` | R7 |
-| Educational tip dismissal and Reset Guidance | `GUIDE-01` | R7 |
+| Educational tip dismissal and Reset Guidance | `GUIDE-01` | Deferred |
 | Adapter kind and adapter-owned profile fields | `ENG-09` | R8 |
+| SSH host/port/user/key reference/remote command | `SSH-01` | Deferred |
+| Remote-compute provider/endpoint/catalog choice | `RCOMP-01` | Deferred |
 | Match start defaults, Compute Budgets, PK max moves | `GAME-04` | R9 |
-| Provider locators, recents, sync interval, mute-during-sync | `PROV-01` … `PROV-04`, `READ-02` | R10 |
+| Provider locators, recents, sync interval, mute-during-sync, non-secret account references | `PROV-01` … `PROV-07`, `READ-02` | R10 / Deferred |
+| Provider Network Policy; no application override or Java-key migration | `PROV-01` … `PROV-07`; `RCOMP-01` when admitted | R10 / Deferred |
 | Update channel and source | `REL-03` | R11 |
 | Complete locale selection | `I18N-01` | Deferred |
-| Contribute entry visibility | `GAME-09` | Deferred |
+| Contribution account, consent, client component, backend/device, concurrency, and auto-save | `CONTRIB-01` | Deferred |
+| Contribute Open Watch / Close Watch | `GAME-09` | Deferred |
 
-Update networking uses the OS proxy. Provider networking remains a domain-06 decision on those owner items.
+Update networking uses the OS proxy through `REL-03`. Next-owned remote-provider HTTP(S)/WebSocket(S) uses Provider Network Policy through `PROV-01`–`PROV-07` and Deferred `RCOMP-01` when admitted; browser-owned authorization traffic stays excluded, and no independent proxy item, application preference, or Java-key migration exists. `CONTRIB-01` is not a Provider: its process-owned Contribution Network Policy supports only a fixed unauthenticated lowercase `https_proxy`, then `http_proxy`, else direct, with no platform resolver, PAC/WPAD, `NO_PROXY`, credential, or fallback claim.
 
-### Traceability Open Gaps
+### Traceability Gap Closure
 
-These records have a final owner-route or conflict but no supported Parity Item ID from Tickets 08–14. They match the inventory Ticket 16 ledger. They are not R3–R11 members, not R4 or R6 exit criteria, and not Deferred-queue items. This plan does not invent IDs for them. Ticket 16 must open a concrete decision ticket before any of them can be scheduled.
+Ticket 16 identified thirteen final owner-route or conflict records without supported Parity Item IDs from Tickets 08–14. Tickets 17–27 assigned twelve records to supported IDs or explicit exclusions. Ticket 28 closes the final autoplay remainder through Missing R4 `ANA-13` Variation Replay and an explicit Engine Continuation exclusion.
 
-| Gap | Census pointer | Why it is not scheduled |
-| --- | --- | --- |
-| Owner-routed next-move marker; not `ANA-04`/`UI-01`/`PREF-01` | SET-NEXT-MOVE | 09 → domain 04; 10–14 named no ID. Not `ANA-04`. |
-| Same next-move cluster | SGF-03-ADJ-NEXT-HINT | 10 → domain 04; 11 named no ID. Not `ANA-04`. |
-| Graph perspective/lines/blunder-bar. Chart *presence* in `UI-01` is not this Capability | SET-WINRATE-GRAPH | 09 → domain 04; 10–14 named no ID. Not `ANA-04`. |
-| Mini-board *mode* (variation/raw/heatmap). Mini-board *presence* in `UI-01` and PV mini-board in `ANA-04` are not this Capability | SET-SUBBOARD | 09 → domain 04; 10–14 named no ID. Not `ANA-04`. |
-| Large-sub / large-WR / append-WR / names-on-board / always-on-top. Do not expand `UI-01` | SET-MAIN-PANEL extras | 09 → domain 03; 10 mapped hints/coords/move-numbers only. Accepted `UI-01` and personal-comment `SGF-05` scopes cannot absorb these controls. |
-| Record both the Ticket 09 educational-tip route and Ticket 11 abandonment of automatic current-game analysis. Do not bind `GUIDE-01` to the abandoned path or substitute an unconfirmed tip | SET-HINT-AUTOANALYZE vs CAP-04-ANA-08 | 09 routed the tip to `GUIDE-01`/domain 04; 11 Abandoned `CAP-04-ANA-08`. No replacement producer has been approved. |
-| Provider-network proxy has no Parity ID | SET-NETWORK-PROXY (06 edge) | 09 → 06/07; 14 mapped the update edge to OS proxy; 13 did not decide provider proxy. |
-| SSH/remote compute owner-routed to 06 without an ID | CAP-04-ENG-01 SSH/remote remainder | 11 → domain 06; 13 created no remote-compute item. |
-| `GAME-09` is the GAME mapping; 06 service/credentials/privacy/network remains without an ID | GM-CONTRIBUTE domain-06 service half | 12 assigned `GAME-09` plus 06 service ownership; 13 did not name a contribute-service item. Not `GAME-09`. |
-| One-way sync is `READ-02`; GMA has no Parity ID | CAP-06-READBOARD GMA remainder | 13 deferred GMA to 04/05 without an ID. Not `READ-02`. |
-| Public modes are `PROV-01`/`PROV-03`; personal/auth has no successor ID | CAP-06-YIKE-LIVE-CENTER personal/auth | 13 deferred personal/private/auth-required Yike read without a successor ID. Not `PROV-01`/`PROV-03`. |
-| `EXPORT-02` is review-board only; analysis-panel images have no domain-04 ID | SGF-03-ADJ-SAVE-MORE analysis-panel images | 10 left analysis-panel image exports to domain 04 without an ID. Not `EXPORT-02`. |
-| `UI-05` toggle and `REVIEW-05` interval are named; candidate-variation / sub-board / engine-best replay have no domain-04 ID | SGF-03-ADJ-AUTOPLAY domain-04 remainder | 10 routed that remainder to 04 without an ID. Not `UI-05`/`REVIEW-05`. |
-
-Ticket 16 must close these gaps with explicit decision tickets. Until then, they remain visible but unscheduled; `GUIDE-01` cannot be Accepted by substituting an unapproved tip.
+All thirteen records now map exactly once to supported Parity Items or explicit exclusions. No traceability gap remains.
 
 ## Roadmap
 
@@ -394,9 +403,9 @@ Current state: Ticket 07 closeout on native Windows candidate `66c906f` / PID 51
 
 **Owns:** `ENG-02`, `ENG-03`, `ENG-04`, `ENG-05`, `ENG-06`, `ENG-07`. Accepted `ENG-01` remains the KataGo analysis profile and asset-check foundation and is not reopened.
 
-**Start gate:** R2 has exited. `UI-02`'s residual engine-event gap is not this gate.
+**Migration Phase Gate:** R2 has exited. `UI-02`'s residual engine-event gap is not this gate.
 
-**Order:**
+**Delivery Order:**
 
 1. `ENG-02` Foreground Engine Run identity and lifecycle (Slice R3-A).
 2. `ENG-05`, `ENG-06`, and `ENG-07` after `ENG-02`.
@@ -425,17 +434,22 @@ R3 acceptance is the `KataGoAnalysis` run lifecycle. `ENG-09`, `ENG-10`, analysi
 
 ### R4 — Analysis
 
-**Goal:** Bind interactive and whole-game analysis to the selected SGF node and the R3 run/job identity.
+**Goal:** Bind interactive and whole-game analysis to the selected SGF node and the R3 run/job identity, expose the independent Next-move Review Marker, encode the winrate chart, persist Sub-Board Content Mode, and replay one active PV coherently across eligible analysis surfaces.
 
-**Owns:** `ANA-01`, `ANA-02`, `ANA-03`, `ANA-04`. Accepted `ANA-05` remains the SQLite cache foundation and is not reopened.
+**Owns:** `ANA-01`, `ANA-02`, `ANA-03`, `ANA-04`, `ANA-10`, `ANA-11`, `ANA-12`, `ANA-13`. Accepted `ANA-05` remains the SQLite cache foundation and is not reopened.
 
-**Start gate:** `ENG-02` through `ENG-07` accepted.
+**Migration Phase Gate:** `ENG-02` through `ENG-07` accepted.
 
-**Order:**
+`ANA-10`'s Matrix-owned Item Start Prerequisites make it R4's cross-phase exception. `PREF-01` is a persistence mechanism, not an Item Start Prerequisite, for `ANA-11` through `ANA-13`; their exact sets remain canonical in the Matrix.
+
+**Delivery Order:**
 
 1. `ANA-03` independent selected-node and whole-game lanes.
 2. `ANA-01` and `ANA-02` in parallel on those lanes.
-3. `ANA-04` Next-native presentation of identity-valid results.
+3. `ANA-04` Next-native presentation of identity-valid results and `ANA-11` winrate-chart encoding in parallel after `ANA-01`/`ANA-03`.
+4. `ANA-12` Sub-Board Content Mode after `ANA-04` on the same widget.
+5. `ANA-13` synchronized Variation Replay after `ANA-12`.
+6. `ANA-10` Next-move Review Marker after its analysis, cache, preference, and shortcut gates.
 
 **Deliver:**
 
@@ -444,15 +458,21 @@ R3 acceptance is the `KataGoAnalysis` run lifecycle. `ENG-09`, `ENG-10`, analysi
 - Lane-local supersession: a new selected-node request does not silently cancel whole-game work. Stop, Restart, switch, crash, and exit cancel both lanes for that run.
 - Candidates, PV mini-board, ownership, policy, and candidate-limit rendering only for the current adapter capability and run/job/node scope.
 - Pre-invocation rejection of unsupported capabilities. No hidden dedicated analysis engine.
+- Persisted Next-move Review Marker (`Off` / `Variations` / `Graded`) with visible and `J` entry points; Graded uses comparable current or cached analysis only.
+- Winrate-chart encoding: Graph Perspective, Winrate Line / Score Lead Line, Blunder Bar, Graph Hover, and Score Lead Scale. Chart presence stays `UI-01`.
+- Persisted Sub-Board Variation / Raw switch. Heatmap-on-sub is not delivered.
+- Persisted default-off Variation Replay with a validated 500 ms default interval, exact PV identity, one synchronized main-board/Sub-Board prefix, hidden-surface pause/resume, full-PV disable/end behavior, and no current-game or Analysis Job mutation. Engine Continuation is not delivered.
 
 **Exit when:**
 
-- `ANA-01` through `ANA-04` are accepted.
-- Repository evidence covers exact-node publication, concurrent lanes, lane-local supersession, progress, explicit cancellation, typed failure, presentation scoping, and unsupported-capability rejection.
-- Controlled or real KataGo evidence covers response validation, timeout, stderr error, cancellation, and stale results.
-- Native smoke exercises one-shot and whole-game analysis against a branching edited SGF.
+- `ANA-01` through `ANA-04` and `ANA-10` through `ANA-13` are accepted.
+- Repository evidence covers exact-node publication, concurrent lanes, lane-local supersession, progress, explicit cancellation, typed failure, presentation scoping, unsupported-capability rejection, marker modes, chart encoding, Variation/Raw, and deterministic Variation Replay with a controlled clock.
+- Controlled or real KataGo evidence covers response validation, timeout, stderr error, cancellation, stale results, Graded marker, a branching current line with and without score-lead, and an active PV whose statistics and move sequence update independently.
+- Native smoke exercises one-shot and whole-game analysis against a branching edited SGF, plus marker, chart, Sub-Board Mode, synchronized main-board/Sub-Board Variation Replay, Raw suppression, and restart persistence.
 
 `ANA-05` variation-aware expansion, Java in-tree cache semantics, and SGF analysis exchange stay outside this exit.
+
+Engine Continuation, the full-variation-first pause, Java's separate replay threads, and dual interval fields are explicit Ticket 28 exclusions, not R4 deliverables.
 
 ### R5 — Safe Current Game And Application Shell
 
@@ -460,9 +480,9 @@ R3 acceptance is the `KataGoAnalysis` run lifecycle. `ENG-09`, `ENG-10`, analysi
 
 **Owns:** `PREF-01`, `SGF-07`, `APP-02`, `APP-03`, `APP-04`, `APP-05`, and the `APP-01` semantic gate.
 
-**Start gate:** R1 and R2 have exited. This phase is dependency-legal beside R3, but the named next batch remains R3-A.
+**Migration Phase Gate:** R1 and R2 have exited. This phase is dependency-legal beside R3, but the named next batch remains R3-A.
 
-**Order:**
+**Delivery Order:**
 
 1. `PREF-01` durable mechanism and categorized surface.
 2. `SGF-07` safe replacement.
@@ -490,15 +510,15 @@ R3 acceptance is the `KataGoAnalysis` run lifecycle. `ENG-09`, `ENG-10`, analysi
 
 **Goal:** Complete in-application SGF intake and the remaining no-engine authoring/review tools on top of `SGF-07`.
 
-**Owns:** `SGF-08` through `SGF-14`, `REVIEW-01`, `REVIEW-02`, `REVIEW-03`, `REVIEW-07`, `REVIEW-08`.
+**Owns:** `SGF-08` through `SGF-14`, `REVIEW-01`, `REVIEW-02`, `REVIEW-03`, `REVIEW-07`, `REVIEW-08`, `REVIEW-09`.
 
-**Start gate:** `SGF-07` and `PREF-01` accepted.
+**Migration Phase Gate:** `SGF-07` and `PREF-01` accepted.
 
-**Order:**
+**Delivery Order:**
 
 1. `SGF-08` GIB import, `SGF-09` recent kifu, `SGF-10` New Document.
 2. `SGF-11` setup editor, `SGF-12` structural tree editing, `SGF-13` metadata, `SGF-14` markup.
-3. `REVIEW-01` direct navigation, `REVIEW-02` try-play, `REVIEW-03` scoring, `REVIEW-07` board display, `REVIEW-08` move sound.
+3. `REVIEW-01` direct navigation, `REVIEW-02` try-play, `REVIEW-03` scoring, `REVIEW-07` board display, `REVIEW-08` move sound, `REVIEW-09` HUD player names.
 
 **Deliver:**
 
@@ -508,12 +528,13 @@ R3 acceptance is the `KataGoAnalysis` run lifecycle. `ENG-09`, `ENG-10`, analysi
 - Interactive setup, delete/undo/redo/promote/return-to-main, player names and komi, and supported marks.
 - Exact `NodePath` selection from the Next tree/list, an isolated try-play sandbox, and area/territory scoring with Confirm Result writing root `RE`.
 - Persisted coordinate and move-number booleans, and default-on sound for successful local moves, passes, and forward review navigation.
+- HUD player slots show current-game root `PB`/`PW`; missing or blank names show 黑棋/白棋. No board overlay and no name-visibility preference.
 
 **Exit when:**
 
-- `SGF-08` through `SGF-14` and `REVIEW-01`, `REVIEW-02`, `REVIEW-03`, `REVIEW-07`, and `REVIEW-08` are accepted.
+- `SGF-08` through `SGF-14` and `REVIEW-01`, `REVIEW-02`, `REVIEW-03`, `REVIEW-07`, `REVIEW-08`, and `REVIEW-09` are accepted.
 - Fixtures cover GIB handicap/pass/malformed preservation, New Document cancellation, setup/markup save/reopen, try-play non-mutation, and scoring Confirm Result.
-- Native smoke covers GIB open, recent reopen, New Document, scoring confirm, and display/sound persistence across restart.
+- Native smoke covers GIB open, recent reopen, New Document, scoring confirm, display/sound persistence across restart, and HUD names from a named SGF.
 
 Accepted `SGF-01` through `SGF-06`, `RULE-01`, `UI-01`, `UI-03`, `UI-04`, and `UI-05` stay at their original scope.
 
@@ -521,34 +542,31 @@ Accepted `SGF-01` through `SGF-06`, `RULE-01`, `UI-01`, `UI-03`, `UI-04`, and `U
 
 **Goal:** Persist one user-adjustable review workspace without concentrating semantic settings here.
 
-**Owns:** `LAYOUT-01`, `LAYOUT-02`, `LAYOUT-03`, `LAYOUT-04`, `WINDOW-01`, `APPEAR-01`, `GUIDE-01`.
+**Owns:** `LAYOUT-01`, `LAYOUT-02`, `LAYOUT-03`, `LAYOUT-04`, `WINDOW-01`, `WINDOW-02`, `APPEAR-01`.
 
-**Start gate:** `PREF-01` accepted. `GUIDE-01` remains blocked by the unresolved producer conflict recorded under Traceability Open Gaps; other R7 items do not wait for that decision.
+**Migration Phase Gate:** `PREF-01` accepted. `GUIDE-01` is Deferred (Ticket 21) and is not an R7 member or exit.
 
-**Order:**
+**Delivery Order:**
 
 1. `LAYOUT-01` draggable proportions.
 2. `LAYOUT-02` persisted proportions and `LAYOUT-03` narrow restore.
-3. `LAYOUT-04` rail visibility, `WINDOW-01` geometry, `APPEAR-01` appearance.
-4. `GUIDE-01` only after Ticket 16 supplies a resolved producer disposition.
+3. `LAYOUT-04` rail visibility, `WINDOW-01` geometry, `WINDOW-02` always-on-top, `APPEAR-01` appearance.
 
 **Deliver:**
 
-- Draggable left/board/right proportions with practical minimums.
+- Draggable left/board/right proportions with practical minimums. Java one-key large-sub / large-WR presets are not this deliverable.
 - Debounced atomic layout persistence; save failure keeps the session usable and visibly retryable.
 - Restore Default resets panel sizes and board proportion only.
 - Left and right rails visible by default, independently collapsible, persisted through `PREF-01`.
 - Window geometry validated against current displays; automatic reset only when saved geometry is invalid; explicit reset changes window geometry only.
+- Main-window always-on-top, first-use off, persisted through `PREF-01`. Analysis-frame and blunder-table always-on-top stay out of scope.
 - Curated Classic default and High Contrast alternate. Chrome and text follow system DPI.
-- Dismissible educational tips only, with Reset Guidance. Dirty-state confirmations cannot be permanently disabled. The producer requires an explicit disposition because the originally named auto-analyze workflow was abandoned.
 
 **Exit when:**
 
-- `LAYOUT-01` through `LAYOUT-04`, `WINDOW-01`, and `APPEAR-01` are accepted.
-- `GUIDE-01` is accepted only after its producer conflict is resolved; the abandoned automatic-analysis path cannot satisfy it.
-- Native restart smoke proves proportions, rail visibility, window geometry, and appearance.
-- Reset smoke proves unrelated visibility, engine, guidance, and owner-routed settings are unchanged.
-- Guidance smoke covers the approved producer, dismissal, restart persistence, and reset.
+- `LAYOUT-01` through `LAYOUT-04`, `WINDOW-01`, `WINDOW-02`, and `APPEAR-01` are accepted.
+- Native restart smoke proves proportions, rail visibility, window geometry, always-on-top, and appearance.
+- Reset smoke proves unrelated visibility, engine, and owner-routed settings are unchanged.
 
 ### R8 — Engine Adapters
 
@@ -556,9 +574,9 @@ Accepted `SGF-01` through `SGF-06`, `RULE-01`, `UI-01`, `UI-03`, `UI-04`, and `U
 
 **Owns:** `ENG-09`, `ENG-10`.
 
-**Start gate:** `ENG-02` through `ENG-07` accepted. This phase is a GAME prerequisite, not part of R3 or R9.
+**Migration Phase Gate:** `ENG-02` through `ENG-07` accepted. This phase is a GAME prerequisite, not part of R3 or R9.
 
-**Order:**
+**Delivery Order:**
 
 1. `ENG-09` multi-backend profiles and declared capabilities.
 2. `ENG-10` Generic GTP game adapter.
@@ -582,13 +600,15 @@ Accepted `SGF-01` through `SGF-06`, `RULE-01`, `UI-01`, `UI-03`, `UI-04`, and `U
 
 **Owns:** `GAME-01`, `GAME-02`, `GAME-03`, `GAME-04`, `GAME-05`.
 
-**Start gate:** `ENG-02`, `ENG-03`, `ENG-04`, `ENG-07`, `ENG-09`, `ENG-10`, `SGF-07`, `APP-04`, `REVIEW-03`, `PREF-01`, and `ANA-04` are Accepted.
+**Migration Phase Gate:** `ENG-02`, `ENG-03`, `ENG-04`, `ENG-07`, `ENG-09`, `ENG-10`, `SGF-07`, `APP-04`, `REVIEW-03`, `PREF-01`, and `ANA-04` are Accepted.
 
-**Order:**
+**Delivery Order:**
 
 1. `GAME-01` match ownership and transactional start, `GAME-04` shared rules and Compute Budgets, `GAME-05` SGF/review handoff.
 2. `GAME-02` Human-vs-Engine.
 3. `GAME-03` single-game engine-vs-engine.
+
+This order governs coherent R9 delivery; `GAME-03` may start earlier once its Matrix-owned Item Start Prerequisites are satisfied.
 
 **Deliver:**
 
@@ -615,9 +635,9 @@ Fixture-only backend evidence cannot mark a GAME item Accepted.
 
 **Owns:** `PROV-01`, `PROV-02`, `PROV-03`, `PROV-04`, `READ-01`, `READ-02`, `READ-03`. Accepted `READ-03` remains the OCR-unsupported foundation.
 
-**Start gate:** `SGF-07`, `PREF-01`, and `APP-03` accepted. Engine lifecycle is not required for `PROV-01`, `PROV-02`, `PROV-04`, or `READ-01`.
+**Migration Phase Gate:** `SGF-07`, `PREF-01`, and `APP-03` accepted. Engine lifecycle is not required for `PROV-01`, `PROV-02`, `PROV-04`, or `READ-01`.
 
-**Order:**
+**Delivery Order:**
 
 1. `PROV-01` Yike preview/import and `READ-01` sidecar readiness.
 2. `PROV-02` Fox preview/import and `PROV-04` Tencent kifu preview/import.
@@ -628,17 +648,19 @@ Fixture-only backend evidence cannot mark a GAME item Accepted.
 
 - Native provider center for public Yike `recommend` / `local` and recognized URL families, including unite rooms. Preview never mutates the current game; Import uses one-shot `SGF-07`.
 - Fox `chessid` / `uid` / `user_name` and Tencent username/`chessId` preview, pagination, bounded recents, and one-shot import. Fox is not live sync and is not combined with Tencent.
-- Yike Start sync and Play & Sync under the ongoing-synchronization model. Play & Sync is dual-channel: system browser for that room's login and webpage moves; Next public read-only signed path only.
+- Yike Start sync and Play & Sync under the ongoing-synchronization model. Play & Sync is dual-channel: system browser for that room's login and webpage moves; Next public read-only signed path only. Native account-authorized read/play is Deferred `PROV-07`, not an R10 expansion.
 - Sidecar probe/ready/incompatible/unavailable/timeout/restart as `READ-01`; equivalent one-way external-authoritative sidecar sync as `READ-02`, including disconnect and stop-to-editable.
-- Shared contracts: no persisted provider secrets; Yike 10s deadline; Fox and Tencent 20s connect and 25s read; at most three retries after the initial attempt, and only for idempotent transient reads; ignore stale results; preserve last-good board on failure.
+- `PROV-01`–`PROV-07` shared contracts: Yike 10s deadline; Fox and Tencent 20s connect and 25s read; at most three retries after the initial attempt, and only for idempotent transient reads; provider writes never automatically retry; ignore stale results; preserve last-good board on failure. `PROV-01`–`PROV-06` persist no provider user secret. Deferred `PROV-07` may persist one provider-issued authorization only in the System Credential Store; Deferred `RCOMP-01` owns its separate confirmed System Credential Store/session-only contract.
+- `PROV-01`–`PROV-07`, plus Deferred `RCOMP-01` when admitted, resolve process-environment override, Windows/macOS platform proxy including system-owned PAC/WPAD, or Linux proxy environment variables on every Next-owned remote HTTP(S)/WebSocket(S) request; honor `NO_PROXY` and redirect destinations; and exclude system-browser traffic, local readboard, inbound WebBoard, SSH, and updates.
+- Proxy authentication and TLS trust are system-managed. Next stores no proxy credentials, adds no custom-CA or certificate bypass, never falls back direct, and preserves provider state while sanitized source/`host:port` diagnostics offer Retry.
 
 **Exit when:**
 
 - `PROV-01` through `PROV-04` and `READ-01` through `READ-03` are accepted.
-- Repository evidence names concrete non-zero focused tests for parsers, URL families, atomic import/sync transitions through `SGF-07`, cancellation, stale-result suppression, timeout/retry classification, last-good recovery, and stop-to-editable.
-- Live evidence is separate per mode and records public Yike categories, every accepted Yike URL family, Play & Sync handoff, Fox and Tencent lookup plus pagination, upstream failure and latency, and readboard ready/sync/disconnect/restart.
+- Repository evidence names concrete non-zero focused tests for parsers, URL families, atomic import/sync transitions through `SGF-07`, cancellation, stale-result suppression, timeout/retry classification, last-good recovery, and stop-to-editable. Shared Provider Network Policy fixtures prove precedence, `NO_PROXY`, per-target/redirect resolution, HTTP(S) routing, platform-resolved PAC, no-direct fallback, system trust, and sanitization; WebSocket evidence becomes due with the first admitted WebSocket provider item.
+- Live evidence is separate per mode and records public Yike categories, every accepted Yike URL family, Play & Sync handoff, Fox and Tencent lookup plus pagination, upstream failure and latency, and readboard ready/sync/disconnect/restart. Before a Shipped Platform accepts its first remote-provider path, installed live evidence also records its platform proxy source, `NO_PROXY`, a real HTTPS provider operation, and an operator-installed enterprise CA; Windows/macOS additionally cover fixed system proxy and PAC. WebSocket live evidence becomes due with its provider item.
 
-`PROV-05` and `PUB-01` do not block this exit. Existing Partial plumbing is evidence toward these items, not completion.
+`PROV-05`–`PROV-07`, `RCOMP-01`, `PUB-01`, and `GAME-10` do not block this exit. Deferred provider items require no current live evidence and inherit Provider Network Policy when admitted. `PROV-06` promotion first proves guest Personal semantics; `PROV-07` promotion requires its official authorization plus per-family read/write, System Credential Store, sole-Match, and Installed Live Evidence contracts. Deferred `GAME-10` requires no current engine play-back evidence and does not expand `READ-02`; promotion requires its own repository and Installed Live Evidence. Existing Partial plumbing is evidence toward the numbered R10 items, not completion.
 
 ### R11 — Release
 
@@ -646,9 +668,9 @@ Fixture-only backend evidence cannot mark a GAME item Accepted.
 
 **Owns:** `REL-01` through `REL-10` and final `APP-01` acceptance.
 
-**Start gate:** `REL-01` may proceed at any time as a maintainer gate. `REL-06` requires `REL-03`, `REL-05`, and `APP-03`. `APP-01` final acceptance requires the R5 semantic gate plus `REL-04` association evidence.
+**Migration Phase Gate:** `REL-01` may proceed at any time as a maintainer gate. `REL-06` requires `REL-03`, `REL-05`, and `APP-03`. `APP-01` final acceptance requires the R5 semantic gate plus `REL-04` association evidence.
 
-**Order:**
+**Delivery Order:**
 
 1. `REL-01` preflight/dry-run.
 2. `REL-02` trusted production artifacts, then `REL-03` discovery/offer and `REL-05` managed installed components.
@@ -688,7 +710,7 @@ flowchart LR
 - Signed envelopes and verified payloads on stable/beta feeds. Windows production artifacts are Authenticode-signed and timestamped; macOS artifacts are signed, notarized, and stapled. Unsigned public-validation prereleases are labeled as such and never enter an updater feed.
 - Help-triggered manual discovery: stable/beta, official/GitHub, persisted valid choices, SemVer comparison, OS proxy, and typed no-update/no-package/network/signature failures without mutating the install.
 - Independent Installed Live Evidence for Windows NSIS, Windows portable, macOS DMG, and Linux AppImage, including declared runtime, data location, upgrade, and uninstall/delete. Installed removal preserves app-data by default. Portable launch covers present and absent WebView2.
-- Installed manifest of `app-core` plus acquired KataGo backend/default-model components. No-engine launch works without optional components.
+- Installed manifest of `app-core` plus acquired KataGo backend/default-model components. No-engine launch works without optional components. Later domain-owned components, including an admitted `CONTRIB-01` client, join only after their owner is Accepted and do not retroactively expand the R11 exit.
 - Windows NSIS and portable component apply with resume/cancel/fallback, helper elevation when required, shutdown only after successful helper launch, manifest update, and restart without changing user data.
 - macOS/Linux verified full-package download and DMG/folder handoff without overwriting the running tree.
 - Windows reverse rollback, result journal, restored-version restart, and incomplete-restoration repair path. Maintainer GitHub-release withdrawal is not this item.
@@ -706,28 +728,36 @@ Linux may publish an AppImage without a repository/package-manager signature onl
 
 ### Deferred Queue
 
-These items are stable and unnumbered. Each has an owner and admission conditions. None is an R3–R11 exit criterion until a later plan revision starts it.
+These items are stable and unnumbered. Each has an owner and a Plan-owned Promotion Gate in addition to its Matrix-owned Item Start Prerequisites; `—` means no additional promotion condition. None is an R3–R11 exit criterion until a later plan revision starts it.
 
-| ID | Owner | Depends on | Admission |
+| ID | Owner | Promotion Gate | Admission |
 | --- | --- | --- | --- |
 | `I18N-01` | Preferences surface | `PREF-01` | After functional migration. Complete resources for every supported locale, persisted locale, deterministic fallback, no mixed partial-language state. |
-| `SGF-15` | SGF authoring | `SGF-07`, `SGF-11`, `SGF-12` | Explicit setup/move semantics, bounds/occupancy validation, reversible edits, non-mutating rejection, save/reopen. |
-| `SGF-16` | SGF authoring | `SGF-11`, `SGF-14` | Whole-tree color swap, rotate, and mirror with consistent coordinate-bearing properties. |
+| `GUIDE-01` | Guidance | `PREF-01` | Leave Deferred only after a later disposition names a Guidance Producer whose owner is in a numbered phase (`Missing`/`Partial`/`Accepted`). The same ticket may admit the owner and name the producer. Persist dismissals only for named Educational Tips; dedicated Reset Guidance re-enables those tips; Safety Confirmations stay non-dismissible. `SET-HINT-AUTOANALYZE` is excluded with `CAP-04-ANA-08`. `ANA-06` ponder-limit and Ticket 25 GMA/readboard notices do not auto-start this item; later naming is allowed after those owners are in a numbered phase. Unnamed persist-dismiss stays with the producing capability. Empty Reset Guidance is not acceptance-sized. |
+| `SGF-15` | SGF authoring | `SGF-07` | Explicit setup/move semantics, bounds/occupancy validation, reversible edits, non-mutating rejection, save/reopen. |
+| `SGF-16` | SGF authoring | — | Whole-tree color swap, rotate, and mirror with consistent coordinate-bearing properties. |
 | `REVIEW-04` | Review | `REVIEW-01` | Deterministic branch traversal to matching moves; no-match is non-mutating. |
 | `REVIEW-05` | Review | accepted `UI-05` toggle | Validated persisted main-board interval only. Does not reopen `UI-05` history. |
-| `REVIEW-06` | Review | `REVIEW-01`, `RULE-01` | Reproducible ladder predicate; failure does not partially mutate the tree. |
+| `REVIEW-06` | Review | — | Reproducible ladder predicate; failure does not partially mutate the tree. |
 | `EXPORT-01` | SGF authoring | current-game owner | Selected root-to-leaf branch as standalone SGF without mutating tree order, source, cursor, or dirty state. |
-| `EXPORT-02` | Review | `UI-01` | Current main-board review view to a documented image format without changing current-game or review state. |
+| `EXPORT-02` | Review | `UI-01` | Current main-board review view to a documented image format without changing current-game or review state; successful image writes share the Recent Image Export Directory with `EXPORT-03`. |
+| `EXPORT-03` | Analysis export | `ANA-11`, `APP-05` | At least one identity-valid selected-line point; invocation-time frozen `ANA-11` encoding; deterministic 1600 × 600 PNG with fixed perspective/series labels and no hover or application chrome; File → 更多保存 and registry-owned `Shift+Alt+S`; native default name; shared Recent Image Export Directory updated only on success; confirmed atomic overwrite; cancel/failure preserves target and all application state. |
 | `ENG-08` | Engine catalog | `ENG-01`, `ENG-09` | User-directed catalog reorder persists identities without changing Settings selection, Autoload Default, active run, pending edits, or job binding. |
-| `ANA-06` | Analysis | `ENG-05`, `ANA-01`, `ANA-03` | Explicit default-off, run-scoped continuous current-node analysis. Never starts on launch, ready, restart, or switch. |
-| `ANA-07` | Analysis | `ANA-02`, `APP-02` | Session-only SGF queue. Must not replace or dirty the current game. Queue state is not restored after restart. |
+| `SSH-01` | SSH engine execution | `ENG-02`, `ENG-06`, `ENG-07`, `ENG-09`, admitted adapter | One shared catalog; non-secret SSH profile fields plus System Credential Store/session-only fallback; every admitted stdio adapter preserves its declared capabilities; explicit Autoload Default marking; standard run, typed failure, explicit Restart, no local fallback or restart recovery; bounded deadlines fixed on promotion; repository and per-Shipped-Platform live evidence. |
+| `CONTRIB-01` | Contribution service | `ENG-02`, `PREF-01`, `APP-03`, `REL-05` | Promote only for official `katagotraining.org` with a separate signed client component built from an admitted KataGo tag for Windows/Linux CUDA and macOS Metal. Require versioned consent, System Credential Store/session-only fallback, argv-safe ephemeral config, Contribution Network Policy, curated backend/device and 1–16 games (default 1), one globally exclusive typed run, terminal auth/config/version failures, one cancellable 60-second reconnect window, explicit Retry, 30-second graceful-to-force Stop, no respawn/recovery, explicit component repair, default-off user-directory per-game auto-save, narrow local-data clearing, sanitized repository evidence, and a real production upload plus lifecycle/component/proxy/credential/save evidence on every Shipped Platform. Other services, custom commands/SSH, ONNX, `+bs50`, ROCm, OpenCL, raw config, and raw console require a successor or remain excluded. Service actions appear only after acceptance. |
+| `ANA-06` | Analysis | — | Explicit default-off, run-scoped continuous current-node analysis. Never starts on launch, ready, restart, or switch. |
+| `ANA-07` | Analysis | `APP-02` | Session-only SGF queue. Must not replace or dirty the current game. Queue state is not restored after restart. |
 | `ANA-08` | Analysis | `ANA-04`, `SGF-01`, `SGF-05`; not `ANA-05` | Frozen Java analysis-header import and Next export/reopen. No false SQLite↔SGF sync claim. |
-| `ANA-09` | Engine adapters | `ENG-09` | Named engine/version fixtures into the existing analysis model. Missing fields stay unavailable. Interface existence does not start this item. |
+| `ANA-09` | Engine adapters | Named engine/version product evidence | Named engine/version fixtures into the existing analysis model. Missing fields stay unavailable. Interface existence does not start this item. |
 | `GAME-06` | Game modes | `GAME-03`, `GAME-05` | Session-only PK batch with durable completed-game output. Restart does not restore an unfinished queue. |
 | `GAME-07` | Game modes | `GAME-02`, `GAME-03`, plus a separate clock policy | Application-owned remaining-time model. A Compute Budget timeout is not this item. |
 | `GAME-08` | Game modes | `GAME-01`, `GAME-02`, `GAME-05`, HumanSL-compatible profile | Independent AI Coach Match Session, not a hidden option of `GAME-02`. |
-| `GAME-09` | Game modes plus providers | domain-06 supported service, credentials, privacy, teardown | Board occupancy and global match exclusion only. Does not duplicate provider/network claims. |
-| `PROV-05` | Providers | `SGF-07`; not `PROV-04` | Non-Yike Tencent/huanle live protocols as a separate item from kifu import. |
+| `GAME-09` | Game modes plus contribution service | accepted `GAME-01`, accepted `CONTRIB-01` | Promote only as an explicitly opened watcher for an active Contribution Run. A transient tree selects active contributed games, navigates moves, and follows the latest move without replacing or dirtying the authoritative current game. Close Watch restores the exact prior game/cursor while contribution continues; Pause retains an open watcher; Stop Contribution, failure, or exit closes and restores; restart restores neither run nor watcher. Automatic rotation/next-game playback, non-19 filtering, result/rules/console controls, manual batch Save All, and service/network/auto-save ownership stay outside this item. No disabled watcher entry appears before acceptance. Repository fixtures and real-service Installed Live Evidence on every Shipped Platform prove exact preservation, stale-game rejection, navigation, Pause, Close, Stop/failure restoration, and restart. |
+| `GAME-10` | Game modes plus readboard | `GAME-01`, `GAME-05`, `READ-01`, `READ-02`, `ENG-02`, `ENG-09`, `APP-03` | Promote as one External-board Engine Match item only after active external-authoritative sync, target and per-mode engine capabilities, Match ownership, SGF handoff, and teardown are accepted. Final-decision and Leading-candidate modes share one Armed/Pending lifecycle and authoritative-snapshot commit rule. Promotion fixes bounded deadlines, adds the item to a numbered phase without expanding R10, and requires deterministic repository evidence plus real sidecar/target Installed Live Evidence for both modes on every admitted platform. |
+| `PROV-05` | Providers | —; `PROV-04` is an exclusion, not a gate | Non-Yike Tencent/huanle live protocols as a separate item from kifu import. |
+| `PROV-06` | Providers | `PROV-01`, `PROV-03` | Keep Recommend as default and category/page session-only. Promote only after real guest Personal semantics, pagination/filter/outcome fixtures, and explicit public-locator handoff are proven. If authentication is required, remain Deferred until a later plan revision adds `PROV-07`; never absorb account auth or duplicate import/sync. |
+| `PROV-07` | Providers plus game modes | `PROV-03`, `GAME-01`, `GAME-05`, `PREF-01`, `APP-03` | Promote only with one documented provider-supported Yike account authorization, System Credential Store persistence, bounded clearable locator recents, and an explicitly named initial locator-family set. Transactional Start and session switch prove account/side/exact-position/turn admission, visible provider-authoritative clock gating, sole Match ownership, one Pending Provider Move, Move/Pass/non-dismissible-confirmed Resign, exact readback commit, alternate-successor authority, no write retry, bounded read retry, Error/Reconcile reservation, warned Stop/Disconnect, authoritative terminal `RE`, and no live-session recovery. Repository evidence and per-Shipped-Platform live evidence cover every admitted family, credential lifecycle, Provider Network Policy, timeout/auth expiry, conflict, and restart. |
+| `RCOMP-01` | Remote compute providers | `ENG-02`, `ENG-07`, `ANA-01`, `ANA-03`, `PREF-01` | Separate provider configuration with both Zhizi and Custom `ws/wss` modes; explicit start into a standard run; System Credential Store/session-only fallback; Provider Network Policy; typed failure, explicit Restart, no session rebuild/local fallback/restart recovery; per-mode repository and per-Shipped-Platform live evidence; bounded deadlines fixed on promotion. |
 | `PUB-01` | Providers | shutdown/teardown owner | LAN board publish start/stop and copy-access URL. Trial internals stay excluded. |
 
 ## Next Executable Batch
@@ -786,7 +816,7 @@ When a slice is parallelized:
 - Parent integration owns focused validation; workers do not run repository-wide suites while sibling changes are incomplete.
 - Reviewers may inspect all areas but do not silently rewrite another owner's files.
 
-After R3 exits, R4, R5, and R8 may be assigned in parallel when their start gates are satisfied. R10 and R11 may overlap after theirs. R9 waits for the GAME admission gate.
+After R3 exits, R4, R5, and R8 may be assigned in parallel when their Migration Phase Gates are satisfied. R10 and R11 may overlap after theirs. R9 waits for the GAME Migration Phase Gate.
 
 ## Migration Principle
 

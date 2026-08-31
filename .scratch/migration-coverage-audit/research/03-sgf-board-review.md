@@ -301,13 +301,13 @@ Frozen **UI-05** inventory (Ticket 07): candidate keys 1–9, `C`/`M`/`H`/`T`, a
 | --- | --- |
 | Name | Save raw SGF, raw+comments, current branch flattened, board/sub-board/winrate images |
 | Entry Points | File → 更多保存 (`Menu.java` 247–325); shortcuts Ctrl+Shift+S, Ctrl+Alt+S, Alt+S, Shift+S, Shift+Alt+S (`Input` 506–529) |
-| Frozen baseline | `saveFile(true)` / `isSavingRaw`; `saveRawFileComment` sets `isSavingRawComment`; `saveCurrentBranch` flattens via `setMoveListWithFlatten` then raw save; images via `saveMainBoardPicture` / `saveSubBoardPicture` / `saveImage` PNG/JPG/GIF/BMP, exists confirm, `last-image-folder` |
-| Defaults | Same timestamp naming as Save As |
-| Persistence | last-image-folder |
-| Failure / recovery | Write/format unsupported dialogs |
-| Java evidence | `Menu.java` 247–325; `LizzieFrame.java` 4042–4112, 4256–4330, 10652–10755 |
-| Next mapping | `AppChrome.tsx` 106–112 all disabled `尚未接入`. Authoritative Save remains SGF-06 only |
-| Parity Item | None |
+| Frozen baseline | `saveFile(true)` / `isSavingRaw`; `saveRawFileComment` sets `isSavingRawComment`; `saveCurrentBranch` flattens via `setMoveListWithFlatten` then raw save; image actions call `saveMainBoardPicture` / `saveSubBoardPicture` / `saveImage` with PNG/JPG/GIF/BMP filters and one shared `last-image-folder` |
+| Defaults | Image chooser starts at `last-image-folder` (fallback `last-folder`) and does not prefill a filename |
+| Persistence | Java writes `last-image-folder` on chooser approval before overwrite confirmation and before the encode/write outcome |
+| Failure / recovery | Existing-file confirmation; unsupported-format dialog; some IO failures are swallowed or only logged after the directory changed |
+| Java evidence | `Menu.java` 247–325; `Input.java` 506–529; `LizzieFrame.java` 4042–4112, 4256–4330, 10652–10918 |
+| Next mapping | `AppChrome.tsx` 106–112 has disabled extra-save chrome. Authoritative Save remains `SGF-06`; Ticket 27 excludes Sub-Board Image Export and keeps Winrate Chart Image Export Deferred |
+| Parity Item | `EXPORT-01` current-branch SGF, `EXPORT-02` Review-board Image Export, `EXPORT-03` Winrate Chart Image Export; Sub-Board Image Export is Abandoned |
 
 ### SGF-03-ADJ-TEMP — Temp slots, autosave-on-exit, resume-previous
 
