@@ -310,6 +310,9 @@ The only product coupling between R10 and R11 is whether domain 06 later accepts
 | Coordinates default on, move numbers default off | `REVIEW-07` | R6 |
 | Review move sound, default on | `REVIEW-08` | R6 |
 | HUD player names from root `PB`/`PW` | `REVIEW-09` | R6 |
+| Draggable workspace proportions | `LAYOUT-01` | R7 |
+| Persisted workspace proportions | `LAYOUT-02` | R7 |
+| Restore panel sizes | `LAYOUT-03` | R7 |
 | Rail visibility | `LAYOUT-04` | R7 |
 | Window geometry and reset | `WINDOW-01` | R7 |
 | Main window always-on-top | `WINDOW-02` | R7 |
@@ -732,8 +735,8 @@ These items are stable and unnumbered. Each has an owner and a Plan-owned Promot
 
 | ID | Owner | Promotion Gate | Admission |
 | --- | --- | --- | --- |
-| `I18N-01` | Preferences surface | `PREF-01` | After functional migration. Complete resources for every supported locale, persisted locale, deterministic fallback, no mixed partial-language state. |
-| `GUIDE-01` | Guidance | `PREF-01` | Leave Deferred only after a later disposition names a Guidance Producer whose owner is in a numbered phase (`Missing`/`Partial`/`Accepted`). The same ticket may admit the owner and name the producer. Persist dismissals only for named Educational Tips; dedicated Reset Guidance re-enables those tips; Safety Confirmations stay non-dismissible. `SET-HINT-AUTOANALYZE` is excluded with `CAP-04-ANA-08`. `ANA-06` ponder-limit and Ticket 25 GMA/readboard notices do not auto-start this item; later naming is allowed after those owners are in a numbered phase. Unnamed persist-dismiss stays with the producing capability. Empty Reset Guidance is not acceptance-sized. |
+| `I18N-01` | Preferences surface | After functional migration | Complete resources for every supported locale, persisted locale, deterministic fallback, no mixed partial-language state. |
+| `GUIDE-01` | Guidance | Later disposition names a Guidance Producer whose owner is in a numbered phase | Leave Deferred only after a later disposition names a Guidance Producer whose owner is in a numbered phase (`Missing`/`Partial`/`Accepted`). The same ticket may admit the owner and name the producer. Persist dismissals only for named Educational Tips; dedicated Reset Guidance re-enables those tips; Safety Confirmations stay non-dismissible. `SET-HINT-AUTOANALYZE` is excluded with `CAP-04-ANA-08`. `ANA-06` ponder-limit and Ticket 25 GMA/readboard notices do not auto-start this item; later naming is allowed after those owners are in a numbered phase. Unnamed persist-dismiss stays with the producing capability. Empty Reset Guidance is not acceptance-sized. |
 | `SGF-15` | SGF authoring | `SGF-07` | Explicit setup/move semantics, bounds/occupancy validation, reversible edits, non-mutating rejection, save/reopen. |
 | `SGF-16` | SGF authoring | — | Whole-tree color swap, rotate, and mirror with consistent coordinate-bearing properties. |
 | `REVIEW-04` | Review | `REVIEW-01` | Deterministic branch traversal to matching moves; no-match is non-mutating. |
