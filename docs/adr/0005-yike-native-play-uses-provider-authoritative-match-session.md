@@ -1,0 +1,3 @@
+# Yike native play uses a provider-authoritative Match Session
+
+Deferred `PROV-07` uses only provider-supported authorization and reuses the sole `GAME-01` Match Session: a human Move, Pass, or Resign stays pending until an authenticated Yike read confirms the exact authoritative successor. This avoids copying browser credentials or creating a second current-game turn owner, at the cost of visible network-confirmation latency and remaining Deferred until Yike exposes a supportable auth/read/write contract. Public `PROV-03` Play & Sync remains the separate system-browser-write plus Next-read-only path.
