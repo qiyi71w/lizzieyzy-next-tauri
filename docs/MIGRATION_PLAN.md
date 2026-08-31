@@ -125,7 +125,7 @@ Candidate and PV state is scoped to the selected `NodePath` and analysis job ide
 
 Tauri remains a command/event adapter. React observes lifecycle and job snapshots; it does not infer process identity from the selected profile. Engine Settings edits the catalog and Autoload Default without starting or switching a run. The main-workspace Engine Switcher starts or switches the run.
 
-R3 must at least prove the `KataGoAnalysis` path. `ENG-09` and `ENG-10` extend the catalog and Generic GTP game adapter in R8; their interfaces must not pull that work into R3.
+R3 must at least prove the `KataGoAnalysis` path. `ENG-09` and `ENG-10` extend the catalog and Generic GTP game adapter in R8; their interfaces must not pull that work into R3. Deferred `SSH-01` and `RCOMP-01` create standard Foreground Engine Runs and do not expand `ENG-01` or `ENG-09`.
 
 For A → B switching:
 
@@ -470,7 +470,7 @@ R3 acceptance is the `KataGoAnalysis` run lifecycle. `ENG-09`, `ENG-10`, analysi
 - Controlled or real KataGo evidence covers response validation, timeout, stderr error, cancellation, stale results, Graded marker, a branching current line with and without score-lead, and an active PV whose statistics and move sequence update independently.
 - Native smoke exercises one-shot and whole-game analysis against a branching edited SGF, plus marker, chart, Sub-Board Mode, synchronized main-board/Sub-Board Variation Replay, Raw suppression, and restart persistence.
 
-`ANA-05` variation-aware expansion, Java in-tree cache semantics, and SGF analysis exchange stay outside this exit.
+`ANA-05` variation-aware expansion, Java in-tree cache semantics, and SGF analysis exchange stay outside this exit. Personal `C` mutation/persistence and `EXPORT-01`/`EXPORT-02` remain Ticket 03.
 
 Engine Continuation, the full-variation-first pause, Java's separate replay threads, and dual interval fields are explicit Ticket 28 exclusions, not R4 deliverables.
 
