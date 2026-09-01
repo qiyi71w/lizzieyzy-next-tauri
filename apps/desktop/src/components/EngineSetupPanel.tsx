@@ -20,6 +20,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
   const [maxVisits, setMaxVisits] = useState("800");
   const [profileStatus, setProfileStatus] = useState("Loading profile...");
   const [assetChecks, setAssetChecks] = useState<AssetCheckDto[]>([]);
+  const [autoloadProfileId, setAutoloadProfileId] = useState<string | null>(null);
 
   const visits = Number(maxVisits);
   const canSave = profileName.trim().length > 0 && Number.isFinite(visits) && visits > 0;
@@ -37,6 +38,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
         const selected = settings.profiles.find((profile) => profile.id === settings.selected_profile_id) ?? settings.profiles[0];
         setProfiles(settings.profiles);
         setSelectedProfileId(selected?.id ?? "default");
+        setAutoloadProfileId(settings.autoload_profile_id ?? null);
         if (!selected) {
           setProfileStatus("Default profile ready.");
           return;
@@ -91,11 +93,21 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
     }
   }
 
-  async function persistProfiles(nextProfiles: EngineProfileRecordDto[], selectedId: string, successMessage: string) {
-    const saved = await saveEngineProfilesSettings({ selected_profile_id: selectedId, profiles: nextProfiles });
+  async function persistProfiles(
+    nextProfiles: EngineProfileRecordDto[],
+    selectedId: string,
+    autoloadId: string | null,
+    successMessage: string
+  ) {
+    const saved = await saveEngineProfilesSettings({
+      selected_profile_id: selectedId,
+      autoload_profile_id: autoloadId,
+      profiles: nextProfiles
+    });
     const selected = saved.profiles.find((profile) => profile.id === saved.selected_profile_id) ?? saved.profiles[0];
     setProfiles(saved.profiles);
     setSelectedProfileId(saved.selected_profile_id);
+    setAutoloadProfileId(saved.autoload_profile_id ?? null);
     if (selected) applyProfileRecord(selected);
     setProfileStatus(successMessage);
   }
@@ -107,7 +119,11 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
     applyProfileRecord(profile);
     setProfileStatus(`Selected ${profile.profile.name}.`);
     try {
-      await saveEngineProfilesSettings({ selected_profile_id: profileId, profiles });
+      await saveEngineProfilesSettings({
+        selected_profile_id: profileId,
+        autoload_profile_id: autoloadProfileId,
+        profiles
+      });
     } catch (error) {
       setProfileStatus(`Select saved locally but persistence failed: ${errorMessage(error)}`);
     }
@@ -123,7 +139,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
       }
     };
     try {
-      await persistProfiles([...profiles.map((profile) => profile.id === selectedProfileId ? buildProfileRecord(profile.id) : profile), nextProfile], id, "Profile added.");
+      await persistProfiles([...profiles.map((profile) => profile.id === selectedProfileId ? buildProfileRecord(profile.id) : profile), nextProfile], id, autoloadProfileId, "Profile added.");
     } catch (error) {
       setProfileStatus(`Add failed: ${errorMessage(error)}`);
     }
@@ -134,9 +150,28 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
     const nextProfiles = profiles.filter((profile) => profile.id !== selectedProfileId);
     const nextSelected = nextProfiles.find((profile) => profile.id === "default")?.id ?? nextProfiles[0]?.id ?? "default";
     try {
-      await persistProfiles(nextProfiles, nextSelected, "Profile deleted.");
+      await persistProfiles(nextProfiles, nextSelected, autoloadProfileId === selectedProfileId ? null : autoloadProfileId, "Profile deleted.");
     } catch (error) {
       setProfileStatus(`Delete failed: ${errorMessage(error)}`);
+    }
+  }
+
+  async function handleAutoloadToggle(checked: boolean) {
+    if (profiles.length === 0) return;
+    const nextAutoload = checked
+      ? selectedProfileId
+      : autoloadProfileId === selectedProfileId
+        ? null
+        : autoloadProfileId;
+    try {
+      await persistProfiles(
+        profiles,
+        selectedProfileId,
+        nextAutoload,
+        checked ? "Autoload Default saved." : "Autoload Default cleared."
+      );
+    } catch (error) {
+      setProfileStatus(`Autoload Default failed: ${errorMessage(error)}`);
     }
   }
 
@@ -166,7 +201,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
       const nextProfiles = profiles.some((profile) => profile.id === selectedProfileId)
         ? profiles.map((profile) => profile.id === selectedProfileId ? currentRecord : profile)
         : [...profiles, currentRecord];
-      await persistProfiles(nextProfiles, selectedProfileId, "Profile saved.");
+      await persistProfiles(nextProfiles, selectedProfileId, autoloadProfileId, "Profile saved.");
       setProfileStatus("Profile saved.");
     } catch (error) {
       setProfileStatus(`Save failed: ${errorMessage(error)}`);
@@ -200,6 +235,16 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
         </label>
         <button type="button" onClick={() => void handleAddProfile()} disabled={!canSave}>新增</button>
         <button type="button" onClick={() => void handleDeleteProfile()} disabled={!canDeleteProfile}>删除</button>
+        <label>
+          <input
+            type="checkbox"
+            aria-label="Autoload Default"
+            checked={autoloadProfileId === selectedProfileId}
+            disabled={profiles.length === 0}
+            onChange={(event) => void handleAutoloadToggle(event.target.checked)}
+          />
+          <span>启动时自动加载</span>
+        </label>
       </div>
       <div className="engine-grid">
         <label>

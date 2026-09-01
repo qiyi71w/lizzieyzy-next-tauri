@@ -356,6 +356,7 @@ function saveBrowserEngineProfileSettings(settings: EngineProfileSettingsDto) {
   if (typeof window === "undefined") return;
   saveBrowserEngineProfilesSettings({
     selected_profile_id: defaultEngineProfileId,
+    autoload_profile_id: null,
     profiles: [{ id: defaultEngineProfileId, profile: settings.profile, max_visits: settings.max_visits }]
   });
 }
@@ -384,10 +385,14 @@ function normalizeBrowserEngineProfilesSettings(settings: EngineProfilesSettings
     const selected = normalizedProfiles.some((profile) => profile.id === settings.selected_profile_id)
       ? settings.selected_profile_id
       : defaultEngineProfileId;
-    return { selected_profile_id: selected, profiles: normalizedProfiles };
+    const autoload = typeof settings.autoload_profile_id === "string" && normalizedProfiles.some((profile) => profile.id === settings.autoload_profile_id)
+      ? settings.autoload_profile_id
+      : null;
+    return { selected_profile_id: selected, autoload_profile_id: autoload, profiles: normalizedProfiles };
   }
   return {
     selected_profile_id: defaultEngineProfileId,
+    autoload_profile_id: null,
     profiles: [{ id: defaultEngineProfileId, profile: settings.profile, max_visits: settings.max_visits }]
   };
 }
@@ -397,7 +402,7 @@ function isEngineProfilesSettings(settings: EngineProfilesSettingsDto | EnginePr
 }
 
 function defaultBrowserEngineProfilesSettings(): EngineProfilesSettingsDto {
-  return { selected_profile_id: defaultEngineProfileId, profiles: [defaultBrowserEngineProfileRecord()] };
+  return { selected_profile_id: defaultEngineProfileId, autoload_profile_id: null, profiles: [defaultBrowserEngineProfileRecord()] };
 }
 
 function defaultBrowserEngineProfileRecord(): EngineProfileRecordDto {

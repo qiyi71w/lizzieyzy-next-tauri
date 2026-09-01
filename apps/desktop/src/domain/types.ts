@@ -49,7 +49,7 @@ export type EngineBackendDto = "kata_go_analysis";
 export type EngineProfileDto = { name: string; engine_path: string; model_path?: string | null; config_path?: string | null; working_dir?: string | null; backend: EngineBackendDto };
 export type EngineProfileSettingsDto = { profile: EngineProfileDto; max_visits: number };
 export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto; max_visits: number };
-export type EngineProfilesSettingsDto = { selected_profile_id: string; profiles: EngineProfileRecordDto[] };
+export type EngineProfilesSettingsDto = { selected_profile_id: string; autoload_profile_id?: string | null; profiles: EngineProfileRecordDto[] };
 export type AssetCheckDto = { path: string; exists: boolean; required: boolean; label: string };
 export type AppHealthDto = { app: string; architecture: string; rust_backend_ready: boolean; notes: string[] };
 
