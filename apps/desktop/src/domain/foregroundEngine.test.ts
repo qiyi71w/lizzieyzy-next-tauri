@@ -103,4 +103,60 @@ describe("foreground engine failure presentation", () => {
     expect(displayedEngineFailure(empty, asset)).toEqual(asset);
     expect(shouldAcceptFailureEvent(empty, asset, crash)).toBe(false);
   });
+
+  it("shows a switch failure on Ready A without replacing the primary", () => {
+    const readyA = snapshot(4, { state: "ready", run });
+    const switchFail: EngineFailureDto = {
+      operation: "switch",
+      run_id: "run-b",
+      switch_id: "7",
+      profile_id: "profile-b",
+      kind: "asset",
+      message: "required engine assets are missing"
+    };
+    expect(shouldAcceptFailureEvent(readyA, null, switchFail, "7")).toBe(true);
+    expect(displayedEngineFailure(readyA, switchFail, "7")).toEqual(switchFail);
+  });
+
+  it("rejects a stale switch failure after a later switch identity", () => {
+    const readyC = snapshot(8, { state: "ready", run: { ...run, run_id: "run-c", profile_id: "profile-c" } });
+    const staleB: EngineFailureDto = {
+      operation: "switch",
+      run_id: "run-b",
+      switch_id: "7",
+      profile_id: "profile-b",
+      kind: "asset",
+      message: "required engine assets are missing"
+    };
+    expect(shouldAcceptFailureEvent(readyC, null, staleB, "8")).toBe(false);
+    expect(displayedEngineFailure(readyC, staleB, "8")).toBeNull();
+  });
+
+  it("rejects a switch failure once the primary has entered Error", () => {
+    const error = snapshot(5, { state: "error", run, failure: crash });
+    const switchFail: EngineFailureDto = {
+      operation: "switch",
+      run_id: "run-b",
+      switch_id: "7",
+      profile_id: "profile-b",
+      kind: "timeout",
+      message: "engine readiness probe timed out"
+    };
+    expect(shouldAcceptFailureEvent(error, crash, switchFail, "7")).toBe(false);
+    expect(displayedEngineFailure(error, switchFail, "7")).toEqual(crash);
+  });
+
+  it("rejects a switch failure whose run identity is already the Ready primary", () => {
+    const readyC = snapshot(8, { state: "ready", run: { ...run, run_id: "run-c", profile_id: "profile-c" } });
+    const latePromoted: EngineFailureDto = {
+      operation: "switch",
+      run_id: "run-c",
+      switch_id: "8",
+      profile_id: "profile-c",
+      kind: "timeout",
+      message: "engine readiness probe timed out"
+    };
+    expect(shouldAcceptFailureEvent(readyC, null, latePromoted, "8")).toBe(false);
+    expect(displayedEngineFailure(readyC, latePromoted, "8")).toBeNull();
+  });
 });

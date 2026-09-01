@@ -117,7 +117,12 @@ export function App() {
   engineSnapshotRef.current = engineSnapshot;
   const engineFailureRef = useRef(engineFailure);
   engineFailureRef.current = engineFailure;
-  const visibleEngineFailure = displayedEngineFailure(engineSnapshot, engineFailure);
+  const lastSwitchIdRef = useRef<string | null>(null);
+  const visibleEngineFailure = displayedEngineFailure(
+    engineSnapshot,
+    engineFailure,
+    lastSwitchIdRef.current
+  );
   const engineLabel = engineStatusLabel(engineSnapshot);
   const engineReady = admitsForegroundEngineJobs(engineSnapshot);
   const [showCoordinates, setShowCoordinates] = useState(true);
@@ -414,17 +419,33 @@ export function App() {
         if (cancelled) return;
         engineSnapshotRef.current = snapshot;
         setEngineSnapshot(snapshot);
+        if (snapshot.lifecycle.state === "switching") {
+          lastSwitchIdRef.current = snapshot.lifecycle.switch_id;
+        } else if (snapshot.lifecycle.state === "no_engine") {
+          lastSwitchIdRef.current = null;
+        }
         if (snapshot.lifecycle.state === "error") {
           engineFailureRef.current = snapshot.lifecycle.failure;
           setEngineFailure(snapshot.lifecycle.failure);
-        } else {
+        } else if (!(
+          snapshot.lifecycle.state === "ready"
+          && engineFailureRef.current?.operation === "switch"
+          && engineFailureRef.current.switch_id
+          && engineFailureRef.current.switch_id === lastSwitchIdRef.current
+          && engineFailureRef.current.run_id !== snapshot.lifecycle.run.run_id
+        )) {
           engineFailureRef.current = null;
           setEngineFailure(null);
         }
       },
       (failure) => {
         if (cancelled) return;
-        if (!shouldAcceptFailureEvent(engineSnapshotRef.current, engineFailureRef.current, failure)) return;
+        if (!shouldAcceptFailureEvent(
+          engineSnapshotRef.current,
+          engineFailureRef.current,
+          failure,
+          lastSwitchIdRef.current
+        )) return;
         engineFailureRef.current = failure;
         setEngineFailure(failure);
         setMessage(failure.message);
@@ -453,7 +474,7 @@ export function App() {
     const run = runFromSnapshot(engineSnapshot);
     if (run?.profile_id === profileId) return;
     const state = engineSnapshot.lifecycle.state;
-    if (state !== "no_engine" && state !== "ready") return;
+    if (state !== "no_engine" && state !== "ready" && state !== "switching") return;
     setEngineFailure(null);
     try {
       if (state === "no_engine") await startForegroundEngine(profileId);

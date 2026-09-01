@@ -373,6 +373,7 @@ impl ForegroundEngineManager {
                 let _ = kill_timed_out_child(&mut previous.child);
             }
             state.operation += 1;
+            state.operation_kind = EngineOperationDto::Switch;
             state.switch_seq += 1;
             let switch_id = state.switch_seq.to_string();
             let candidate = starting_run(&saved);
@@ -1202,6 +1203,7 @@ impl Inner {
             return;
         }
         let primary = primary.clone();
+        let published = published.with_switch_id(switch_id);
         if let Some(mut live) = state.candidate.take() {
             close_live_stdin(&live);
             let _ = kill_timed_out_child(&mut live.child);
@@ -1301,16 +1303,17 @@ impl Inner {
 
     fn handle_unexpected_exit(&self, operation: u64, run_id: &str, process_id: u32, exit_code: Option<i32>) {
         let mut state = self.lock();
-        if state.operation != operation {
+        let Some(live) = state.live.as_ref() else {
             return;
-        }
-        if let Some(live) = state.live.as_ref() {
-            if live.run_id != run_id || live.process_id != process_id {
-                return;
-            }
+        };
+        if live.run_id != run_id || live.process_id != process_id {
+            return;
         }
         match &state.phase {
             Phase::Starting(run) if run.run_id == run_id => {
+                if state.operation != operation {
+                    return;
+                }
                 let profile_id = run.profile_id.clone();
                 let operation_kind = state.operation_kind;
                 drop(state);
@@ -1331,14 +1334,25 @@ impl Inner {
                 );
                 return;
             }
-            Phase::Ready(run) if run.run_id == run_id => {}
-            _ => return,
+            Phase::Ready(run) if run.run_id == run_id => {
+                let run = run.clone();
+                self.enter_primary_error(&mut state, run, exit_code);
+            }
+            Phase::Switching { primary, .. } if primary.run_id == run_id => {
+                let run = primary.clone();
+                state.operation += 1;
+                if let Some(mut candidate) = state.candidate.take() {
+                    close_live_stdin(&candidate);
+                    let _ = kill_timed_out_child(&mut candidate.child);
+                }
+                self.enter_primary_error(&mut state, run, exit_code);
+            }
+            _ => {}
         }
-        let run = match &state.phase {
-            Phase::Ready(run) => run.clone(),
-            _ => return,
-        };
-        cancel_jobs_for_current(&mut state);
+    }
+
+    fn enter_primary_error(&self, state: &mut ManagerState, run: EngineRunDto, exit_code: Option<i32>) {
+        cancel_jobs_for_current(state);
         if let Some(mut live) = state.live.take() {
             let _ = live.child.wait();
         }
@@ -1346,7 +1360,7 @@ impl Inner {
             EngineOperationDto::UnexpectedExit,
             EngineFailureKind::NonzeroExit,
             format!("engine process exited unexpectedly; exit_code={exit_code:?}"),
-            Some(run_id),
+            Some(run.run_id.as_str()),
             Some(run.profile_id.as_str()),
             None,
         );
@@ -1354,11 +1368,8 @@ impl Inner {
             run,
             failure: published.clone(),
         };
-        publish_snapshot(&mut state);
-        publish_event(
-            &mut state,
-            ForegroundEngineEventDto::Failure { failure: published },
-        );
+        publish_snapshot(state);
+        publish_event(state, ForegroundEngineEventDto::Failure { failure: published });
     }
     fn pump_stdout(
         self: Arc<Self>,

@@ -6,6 +6,11 @@ impl EngineFailureDto {
         self.job_id = Some(job_id.into());
         self
     }
+
+    pub fn with_switch_id(mut self, switch_id: impl Into<String>) -> Self {
+        self.switch_id = Some(switch_id.into());
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

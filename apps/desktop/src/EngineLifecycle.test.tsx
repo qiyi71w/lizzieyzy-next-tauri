@@ -125,6 +125,19 @@ const savedProfileB = {
   }
 };
 
+const savedProfileC = {
+  id: "profile-3",
+  max_visits: 200,
+  profile: {
+    name: "Third KataGo",
+    engine_path: "/bin/katago-c",
+    model_path: "/models/c.bin",
+    config_path: "/configs/c.cfg",
+    working_dir: "/tmp",
+    backend: "kata_go_analysis" as const
+  }
+};
+
 const capability = {
   adapter_kind: "kata_go_analysis" as const,
   selected_node_analysis: true,
@@ -732,6 +745,262 @@ describe("foreground engine lifecycle UI", () => {
       await backend.saveEngineProfilesSettings.mock.results.at(-1)?.value;
     });
     expect(Array.from(settingsSelect.options).map((option) => option.value)).toEqual(["profile-2"]);
+  });
+
+  it("keeps A available after a failed switch and shows B's typed failure", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    const switcher = host.querySelector('select[aria-label="Foreground Engine Profile"]') as HTMLSelectElement;
+    await act(async () => {
+      switcher.value = "profile-2";
+      switcher.dispatchEvent(new Event("change", { bubbles: true }));
+      await backend.switchForegroundEngine.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 3,
+        lifecycle: {
+          state: "switching",
+          primary: readyRun("run-1", savedProfile),
+          candidate: {
+            ...readyRun("run-b", savedProfileB),
+            capability_snapshot: null
+          },
+          switch_id: "7"
+        }
+      });
+    });
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 4,
+        lifecycle: { state: "ready", run: readyRun("run-1", savedProfile) }
+      });
+      listeners.onFailure?.({
+        operation: "switch",
+        run_id: "run-b",
+        switch_id: "7",
+        profile_id: "profile-2",
+        kind: "asset",
+        message: "required engine assets are missing"
+      });
+    });
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("Local KataGo");
+    expect(switcher.value).toBe("profile-1");
+    const failure = host.querySelector(".engine-failure") as HTMLElement;
+    expect(failure.dataset.failureKind).toBe("asset");
+    expect(failure.textContent).toContain("required engine assets are missing");
+    backend.startSelectedNodeAnalysis.mockClear();
+    await act(async () => {
+      buttonNamed(host, "继续分析").click();
+      await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
+    });
+    expect(backend.startSelectedNodeAnalysis).toHaveBeenCalledWith({
+      runId: "run-1",
+      generation: 1,
+      nodePath: { indices: [] },
+      maxVisits: 800
+    });
+    analysisCache.saveAnalysisCache.mockClear();
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-b",
+        job_id: "job-b",
+        lane: "selected_node",
+        generation: 1,
+        node_path: { indices: [] },
+        outcome: "completed",
+        frame: {
+          job_id: "job-b",
+          turn: 0,
+          visits: 8,
+          winrate_black: 0.9,
+          score_mean_black: 4,
+          candidates: [{ vertex: { point: { x: 1, y: 1 } }, visits: 8, winrate_black: 0.9, score_mean_black: 4, pv: [] }]
+        }
+      });
+      analysisListeners.onComplete?.({
+        run_id: "run-b",
+        job_id: "job-b",
+        frames: [{
+          job_id: "job-b",
+          turn: 0,
+          visits: 8,
+          winrate_black: 0.9,
+          score_mean_black: 4,
+          candidates: []
+        }]
+      });
+    });
+    expect(host.querySelector(".cand-row")).toBeNull();
+    expect(analysisCache.saveAnalysisCache).not.toHaveBeenCalled();
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("Local KataGo");
+    expect((host.querySelector(".engine-failure") as HTMLElement).dataset.failureKind).toBe("asset");
+  });
+
+  it("lets a later switch win and ignores a superseded B failure", async () => {
+    backend.loadEngineProfilesSettings.mockResolvedValue({
+      selected_profile_id: "profile-1",
+      autoload_profile_id: null,
+      profiles: [savedProfile, savedProfileB, savedProfileC]
+    });
+    const host = await renderApp();
+    await readyEngine(host);
+    const switcher = host.querySelector('select[aria-label="Foreground Engine Profile"]') as HTMLSelectElement;
+    await act(async () => {
+      switcher.value = "profile-2";
+      switcher.dispatchEvent(new Event("change", { bubbles: true }));
+      await backend.switchForegroundEngine.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 3,
+        lifecycle: {
+          state: "switching",
+          primary: readyRun("run-1", savedProfile),
+          candidate: {
+            ...readyRun("run-b", savedProfileB),
+            capability_snapshot: null
+          },
+          switch_id: "7"
+        }
+      });
+    });
+    backend.switchForegroundEngine.mockClear();
+    await act(async () => {
+      switcher.value = "profile-3";
+      switcher.dispatchEvent(new Event("change", { bubbles: true }));
+      await backend.switchForegroundEngine.mock.results.at(-1)?.value;
+    });
+    expect(backend.switchForegroundEngine).toHaveBeenCalledWith("profile-3");
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 5,
+        lifecycle: {
+          state: "switching",
+          primary: readyRun("run-1", savedProfile),
+          candidate: {
+            ...readyRun("run-c", savedProfileC),
+            capability_snapshot: null
+          },
+          switch_id: "8"
+        }
+      });
+    });
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 6,
+        lifecycle: { state: "ready", run: readyRun("run-c", savedProfileC) }
+      });
+      listeners.onFailure?.({
+        operation: "switch",
+        run_id: "run-b",
+        switch_id: "7",
+        profile_id: "profile-2",
+        kind: "timeout",
+        message: "engine readiness probe timed out"
+      });
+    });
+    expect(host.querySelector(".engine-failure")).toBeNull();
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("Third KataGo");
+    expect(switcher.value).toBe("profile-3");
+    backend.startSelectedNodeAnalysis.mockClear();
+    await act(async () => {
+      buttonNamed(host, "继续分析").click();
+      await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
+    });
+    expect(backend.startSelectedNodeAnalysis).toHaveBeenCalledWith({
+      runId: "run-c",
+      generation: 1,
+      nodePath: { indices: [] },
+      maxVisits: 200
+    });
+  });
+
+  it("keeps B's typed failure when Ready A arrives after the switch failure event", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 3,
+        lifecycle: {
+          state: "switching",
+          primary: readyRun("run-1", savedProfile),
+          candidate: {
+            ...readyRun("run-b", savedProfileB),
+            capability_snapshot: null
+          },
+          switch_id: "7"
+        }
+      });
+    });
+    await act(async () => {
+      listeners.onFailure?.({
+        operation: "switch",
+        run_id: "run-b",
+        switch_id: "7",
+        profile_id: "profile-2",
+        kind: "asset",
+        message: "required engine assets are missing"
+      });
+    });
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 4,
+        lifecycle: { state: "ready", run: readyRun("run-1", savedProfile) }
+      });
+    });
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("Local KataGo");
+    const failure = host.querySelector(".engine-failure") as HTMLElement;
+    expect(failure.dataset.failureKind).toBe("asset");
+    expect(failure.textContent).toContain("required engine assets are missing");
+  });
+
+  it("enters Error when A crashes during switch and ignores B's failure", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 3,
+        lifecycle: {
+          state: "switching",
+          primary: readyRun("run-1", savedProfile),
+          candidate: {
+            ...readyRun("run-b", savedProfileB),
+            capability_snapshot: null
+          },
+          switch_id: "7"
+        }
+      });
+    });
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 4,
+        lifecycle: {
+          state: "error",
+          run: readyRun("run-1", savedProfile),
+          failure: crashFailure
+        }
+      });
+      listeners.onFailure?.({
+        operation: "switch",
+        run_id: "run-b",
+        switch_id: "7",
+        profile_id: "profile-2",
+        kind: "timeout",
+        message: "engine readiness probe timed out"
+      });
+    });
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("引擎错误");
+    const failure = host.querySelector(".engine-failure") as HTMLElement;
+    expect(failure.dataset.failureKind).toBe("nonzero_exit");
+    expect(failure.textContent).toContain("engine process exited unexpectedly");
+    expect(buttonNamed(host, "停止").disabled).toBe(false);
+    expect(buttonNamed(host, "重启").disabled).toBe(false);
+    backend.startSelectedNodeAnalysis.mockClear();
+    await act(async () => {
+      buttonNamed(host, "继续分析").click();
+    });
+    expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
   });
 
   it("saves Autoload Default from Engine Settings without changing the current Run", async () => {

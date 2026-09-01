@@ -77,9 +77,22 @@ export function profileHasPendingChanges(
 
 export function shouldAcceptFailureEvent(
   snapshot: ForegroundEngineSnapshotDto,
-  currentFailure: { run_id?: string | null } | null,
-  incoming: { run_id?: string | null }
+  currentFailure: { run_id?: string | null; switch_id?: string | null } | null,
+  incoming: { run_id?: string | null; switch_id?: string | null; operation?: string },
+  lastSwitchId?: string | null
 ): boolean {
+  if (snapshot.lifecycle.state === "error") {
+    return incoming.run_id === snapshot.lifecycle.run.run_id;
+  }
+  const switchId = snapshot.lifecycle.state === "switching"
+    ? snapshot.lifecycle.switch_id
+    : lastSwitchId ?? null;
+  if (incoming.operation === "switch" && incoming.switch_id) {
+    if (incoming.switch_id !== switchId) return false;
+    const primaryRunId = runFromSnapshot(snapshot)?.run_id ?? null;
+    if (primaryRunId && incoming.run_id === primaryRunId) return false;
+    return true;
+  }
   const currentRunId = runFromSnapshot(snapshot)?.run_id ?? currentFailure?.run_id ?? null;
   if (!incoming.run_id) return snapshot.lifecycle.state === "no_engine";
   if (!currentRunId) return snapshot.lifecycle.state === "no_engine";
@@ -88,9 +101,19 @@ export function shouldAcceptFailureEvent(
 
 export function displayedEngineFailure(
   snapshot: ForegroundEngineSnapshotDto,
-  eventFailure: EngineFailureDto | null
+  eventFailure: EngineFailureDto | null,
+  lastSwitchId?: string | null
 ): EngineFailureDto | null {
   if (snapshot.lifecycle.state === "error") return snapshot.lifecycle.failure;
   if (snapshot.lifecycle.state === "no_engine") return eventFailure;
+  if (
+    snapshot.lifecycle.state === "ready"
+    && eventFailure?.operation === "switch"
+    && eventFailure.switch_id
+    && eventFailure.switch_id === lastSwitchId
+    && eventFailure.run_id !== snapshot.lifecycle.run.run_id
+  ) {
+    return eventFailure;
+  }
   return null;
 }

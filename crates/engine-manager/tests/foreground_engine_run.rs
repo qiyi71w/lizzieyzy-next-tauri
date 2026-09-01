@@ -1106,6 +1106,77 @@ fn unsupported_whole_game_capability_is_rejected_before_protocol_io() {
 }
 
 #[cfg(unix)]
+#[cfg(unix)]
+fn missing_assets_profile(name: &str, temp: &TestTempDir) -> EngineProfileDto {
+    EngineProfileDto {
+        name: name.into(),
+        engine_path: format!("/definitely/missing/{name}-katago"),
+        model_path: Some(format!("/definitely/missing/{name}-model.bin")),
+        config_path: Some(format!("/definitely/missing/{name}.cfg")),
+        working_dir: Some(temp.path().to_string_lossy().into_owned()),
+        backend: EngineBackend::KataGoAnalysis,
+    }
+}
+
+#[cfg(unix)]
+fn spawn_fail_profile(temp: &TestTempDir, stem: &str) -> EngineProfileDto {
+    let not_binary = temp.path().join(format!("{stem}-not-a-binary"));
+    std::fs::create_dir_all(&not_binary).unwrap();
+    let model_path = temp.path().join(format!("{stem}.bin"));
+    let config_path = temp.path().join(format!("{stem}.cfg"));
+    std::fs::write(&model_path, "").unwrap();
+    std::fs::write(&config_path, "").unwrap();
+    EngineProfileDto {
+        name: stem.into(),
+        engine_path: not_binary.to_string_lossy().into_owned(),
+        model_path: Some(model_path.to_string_lossy().into_owned()),
+        config_path: Some(config_path.to_string_lossy().into_owned()),
+        working_dir: Some(temp.path().to_string_lossy().into_owned()),
+        backend: EngineBackend::KataGoAnalysis,
+    }
+}
+
+#[cfg(unix)]
+fn exit_when_file_exists_script(kill_path: &Path) -> String {
+    format!(
+        r#"
+killfile='{kill}'
+( while [ ! -f "$killfile" ]; do sleep 0.02; done; kill $$ ) &
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  [ -z "$id" ] && id="ok"
+  printf '{{"id":"%s","turnNumber":0}}\n' "$id"
+done
+"#,
+        kill = kill_path.display()
+    )
+}
+
+#[cfg(unix)]
+fn protocol_fail_script() -> String {
+    r#"
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  printf 'not-json %s\n' "$id"
+done
+"#
+    .into()
+}
+
+#[cfg(unix)]
+fn assert_ready_a(lifecycle: &ForegroundEngineLifecycleDto, run_a: &str, before: &app_model::EngineRunDto) {
+    match lifecycle {
+        ForegroundEngineLifecycleDto::Ready { run } => {
+            assert_eq!(run.run_id, run_a);
+            assert_eq!(run.profile_id, "profile-a");
+            assert_eq!(run.profile_snapshot, before.profile_snapshot);
+            assert_eq!(run.capability_snapshot, before.capability_snapshot);
+        }
+        other => panic!("expected Ready A, got {other:?}"),
+    }
+}
+
+#[cfg(unix)]
 fn setup_named_profile(temp: &TestTempDir, stem: &str, script: &str) -> EngineProfileDto {
     let engine_path = temp.path().join(format!("{stem}.sh"));
     write_executable(&engine_path, script);
@@ -1463,6 +1534,369 @@ fn switch_rebinding_covers_whole_game_jobs() {
         .start_whole_game_analysis(&run_a, &whole_game_query_jsonl(), 2)
         .unwrap_err();
     assert_eq!(err.kind, EngineFailureKind::InvalidState);
+}
+
+#[cfg(unix)]
+#[test]
+fn switch_asset_failure_keeps_ready_a_and_publishes_switch_scoped_failure() {
+    let temp = TestTempDir::new("switch-asset");
+    let (manager, catalog, events, run_a) =
+        ready_two_profiles(&temp, &resident_echo_script(), &resident_echo_script());
+    catalog.set_autoload_profile_id(Some("profile-a".into()));
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-b".into(),
+        profile: EngineProfileDto {
+            name: "Broken B".into(),
+            engine_path: "/definitely/missing/katago-b".into(),
+            model_path: Some("/definitely/missing/model-b.bin".into()),
+            config_path: Some("/definitely/missing/b.cfg".into()),
+            working_dir: Some(temp.path().to_string_lossy().into_owned()),
+            backend: EngineBackend::KataGoAnalysis,
+        },
+    });
+    let before = manager.snapshot();
+    let before_run = run_from_ready(&before.lifecycle).clone();
+    manager.switch_to("profile-b").unwrap();
+    let switching = wait_snapshot(&events, Duration::from_secs(2), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Switching { .. })
+    });
+    let ForegroundEngineLifecycleDto::Switching {
+        primary,
+        candidate,
+        switch_id,
+    } = switching.lifecycle
+    else {
+        panic!("expected switching snapshot");
+    };
+    assert_eq!(primary.run_id, run_a);
+    assert_eq!(primary.profile_snapshot, before_run.profile_snapshot);
+    assert_eq!(primary.capability_snapshot, before_run.capability_snapshot);
+    let failure = wait_failure(&events, Duration::from_secs(2), |failure| {
+        failure.kind == EngineFailureKind::Asset
+    });
+    assert_eq!(failure.operation, EngineOperationDto::Switch);
+    assert_eq!(failure.profile_id.as_deref(), Some("profile-b"));
+    assert_eq!(failure.run_id.as_deref(), Some(candidate.run_id.as_str()));
+    assert_eq!(failure.switch_id.as_deref(), Some(switch_id.as_str()));
+    let after_snapshot = manager.snapshot();
+    let after = run_from_ready(&after_snapshot.lifecycle);
+    assert_eq!(after.run_id, run_a);
+    assert_eq!(after.profile_id, "profile-a");
+    assert_eq!(after.profile_snapshot, before_run.profile_snapshot);
+    assert_eq!(after.capability_snapshot, before_run.capability_snapshot);
+    manager.assert_profile_deletable("profile-a").unwrap_err();
+    manager.assert_profile_deletable("profile-b").unwrap();
+    assert_eq!(catalog.autoload_profile_id().as_deref(), Some("profile-a"));
+    let started = manager
+        .start_selected_node_job(selected_request(&run_a, 11, vec![]))
+        .unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn switch_spawn_failure_keeps_ready_a_with_start_kind() {
+    let temp = TestTempDir::new("switch-spawn");
+    let (manager, catalog, events, run_a) =
+        ready_two_profiles(&temp, &resident_echo_script(), &resident_echo_script());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-b".into(),
+        profile: spawn_fail_profile(&temp, "engine-b-spawn"),
+    });
+    let before_run = run_from_ready(&manager.snapshot().lifecycle).clone();
+    manager.switch_to("profile-b").unwrap();
+    let switching = wait_snapshot(&events, Duration::from_secs(2), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Switching { .. })
+    });
+    let ForegroundEngineLifecycleDto::Switching {
+        candidate, switch_id, ..
+    } = switching.lifecycle
+    else {
+        panic!("expected switching snapshot");
+    };
+    let failure = wait_failure(&events, Duration::from_secs(2), |failure| {
+        failure.kind == EngineFailureKind::Start
+    });
+    assert_eq!(failure.operation, EngineOperationDto::Switch);
+    assert_eq!(failure.profile_id.as_deref(), Some("profile-b"));
+    assert_eq!(failure.run_id.as_deref(), Some(candidate.run_id.as_str()));
+    assert_eq!(failure.switch_id.as_deref(), Some(switch_id.as_str()));
+    assert_ready_a(&manager.snapshot().lifecycle, &run_a, &before_run);
+}
+
+#[cfg(unix)]
+#[test]
+fn switch_protocol_failure_keeps_ready_a() {
+    let temp = TestTempDir::new("switch-protocol");
+    let (manager, catalog, events, run_a) =
+        ready_two_profiles(&temp, &resident_echo_script(), &resident_echo_script());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-b".into(),
+        profile: setup_named_profile(&temp, "engine-b-protocol", &protocol_fail_script()),
+    });
+    let before_run = run_from_ready(&manager.snapshot().lifecycle).clone();
+    manager.switch_to("profile-b").unwrap();
+    let switching = wait_snapshot(&events, Duration::from_secs(2), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Switching { .. })
+    });
+    let ForegroundEngineLifecycleDto::Switching {
+        candidate, switch_id, ..
+    } = switching.lifecycle
+    else {
+        panic!("expected switching snapshot");
+    };
+    let failure = wait_failure(&events, Duration::from_secs(3), |failure| {
+        failure.kind == EngineFailureKind::Protocol
+    });
+    assert_eq!(failure.operation, EngineOperationDto::Switch);
+    assert_eq!(failure.run_id.as_deref(), Some(candidate.run_id.as_str()));
+    assert_eq!(failure.switch_id.as_deref(), Some(switch_id.as_str()));
+    assert_ready_a(&manager.snapshot().lifecycle, &run_a, &before_run);
+}
+
+#[cfg(unix)]
+#[test]
+fn switch_readiness_exit_keeps_ready_a() {
+    let temp = TestTempDir::new("switch-exit");
+    let (manager, catalog, events, run_a) =
+        ready_two_profiles(&temp, &resident_echo_script(), &resident_echo_script());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-b".into(),
+        profile: setup_named_profile(&temp, "engine-b-exit", "read line\nexit 7"),
+    });
+    let before_run = run_from_ready(&manager.snapshot().lifecycle).clone();
+    manager.switch_to("profile-b").unwrap();
+    let switching = wait_snapshot(&events, Duration::from_secs(2), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Switching { .. })
+    });
+    let ForegroundEngineLifecycleDto::Switching {
+        candidate, switch_id, ..
+    } = switching.lifecycle
+    else {
+        panic!("expected switching snapshot");
+    };
+    let failure = wait_failure(&events, Duration::from_secs(3), |failure| {
+        matches!(
+            failure.kind,
+            EngineFailureKind::Readiness | EngineFailureKind::NonzeroExit | EngineFailureKind::Start
+        )
+    });
+    assert_eq!(failure.operation, EngineOperationDto::Switch);
+    assert_eq!(failure.profile_id.as_deref(), Some("profile-b"));
+    assert_eq!(failure.run_id.as_deref(), Some(candidate.run_id.as_str()));
+    assert_eq!(failure.switch_id.as_deref(), Some(switch_id.as_str()));
+    assert_ready_a(&manager.snapshot().lifecycle, &run_a, &before_run);
+}
+
+#[cfg(unix)]
+#[test]
+fn switch_timeout_keeps_ready_a() {
+    let temp = TestTempDir::new("switch-timeout");
+    let release = temp.path().join("never-release-b");
+    let (manager, _, events, run_a) = ready_two_profiles(
+        &temp,
+        &resident_echo_script(),
+        &hold_probe_until_release_script(&release),
+    );
+    let before_run = run_from_ready(&manager.snapshot().lifecycle).clone();
+    manager.switch_to("profile-b").unwrap();
+    let switching = wait_snapshot(&events, Duration::from_secs(2), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Switching { .. })
+    });
+    let ForegroundEngineLifecycleDto::Switching {
+        switch_id, candidate, ..
+    } = switching.lifecycle
+    else {
+        panic!("expected switching snapshot");
+    };
+    let failure = wait_failure(&events, Duration::from_secs(4), |failure| {
+        failure.kind == EngineFailureKind::Timeout
+    });
+    assert_eq!(failure.operation, EngineOperationDto::Switch);
+    assert_eq!(failure.run_id.as_deref(), Some(candidate.run_id.as_str()));
+    assert_eq!(failure.switch_id.as_deref(), Some(switch_id.as_str()));
+    assert_ready_a(&manager.snapshot().lifecycle, &run_a, &before_run);
+}
+
+#[cfg(unix)]
+#[test]
+fn later_switch_to_c_wins_and_rejects_superseded_b() {
+    let temp = TestTempDir::new("switch-b-then-c");
+    let release_b = temp.path().join("release-b");
+    let (manager, catalog, events, run_a) = ready_two_profiles(
+        &temp,
+        &resident_echo_script(),
+        &hold_probe_until_release_script(&release_b),
+    );
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-c".into(),
+        profile: setup_named_profile(&temp, "engine-c", &resident_echo_script()),
+    });
+    manager.switch_to("profile-b").unwrap();
+    let switching_b = wait_snapshot(
+        &events,
+        Duration::from_secs(2),
+        |lifecycle| matches!(lifecycle, ForegroundEngineLifecycleDto::Switching { candidate, .. } if candidate.profile_id == "profile-b"),
+    );
+    let ForegroundEngineLifecycleDto::Switching {
+        switch_id: switch_b,
+        candidate: b,
+        ..
+    } = switching_b.lifecycle
+    else {
+        panic!("expected switching B");
+    };
+    manager.switch_to("profile-c").unwrap();
+    let promoted = wait_snapshot(
+        &events,
+        Duration::from_secs(3),
+        |lifecycle| matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "profile-c"),
+    );
+    let run_c = run_from_ready(&promoted.lifecycle).clone();
+    std::fs::write(&release_b, b"go").unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    let current = manager.snapshot();
+    match current.lifecycle {
+        ForegroundEngineLifecycleDto::Ready { run } => {
+            assert_eq!(run.run_id, run_c.run_id);
+            assert_eq!(run.profile_id, "profile-c");
+        }
+        other => panic!("superseded B must not change primary C, got {other:?}"),
+    }
+    let mut late_b_failure = false;
+    let deadline = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < deadline {
+        if let Ok(ForegroundEngineEventDto::Failure { failure }) =
+            events.recv_timeout(Duration::from_millis(50))
+        {
+            if failure.switch_id.as_deref() == Some(switch_b.as_str())
+                || failure.run_id.as_deref() == Some(b.run_id.as_str())
+            {
+                late_b_failure = true;
+            }
+        }
+    }
+    assert!(!late_b_failure, "superseded B completion must stay private");
+    manager
+        .start_selected_node_job(selected_request(&run_a, 12, vec![]))
+        .unwrap_err();
+    let started = manager
+        .start_selected_node_job(selected_request(&run_c.run_id, 13, vec![]))
+        .unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn stop_during_switch_then_b_failure_is_no_engine_without_promoting_b() {
+    let temp = TestTempDir::new("switch-stop-a");
+    let release_b = temp.path().join("release-b");
+    let (manager, catalog, events, _run_a) = ready_two_profiles(
+        &temp,
+        &resident_echo_script(),
+        &hold_probe_until_release_script(&release_b),
+    );
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-b".into(),
+        profile: setup_named_profile(
+            &temp,
+            "engine-b-stop",
+            &hold_probe_until_release_script(&release_b),
+        ),
+    });
+    manager.switch_to("profile-b").unwrap();
+    wait_snapshot(&events, Duration::from_secs(2), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Switching { .. })
+    });
+    manager.stop().unwrap();
+    wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine)
+    });
+    std::fs::write(&release_b, b"go").unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn primary_crash_during_switch_enters_error_and_cleans_candidate() {
+    let temp = TestTempDir::new("switch-a-crash");
+    let kill_a = temp.path().join("kill-a");
+    let release_b = temp.path().join("release-b");
+    let (manager, _, events, run_a) = ready_two_profiles(
+        &temp,
+        &exit_when_file_exists_script(&kill_a),
+        &hold_probe_until_release_script(&release_b),
+    );
+    manager.switch_to("profile-b").unwrap();
+    wait_snapshot(&events, Duration::from_secs(2), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Switching { .. })
+    });
+    std::fs::write(&kill_a, b"die").unwrap();
+    let snapshot = wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Error { .. })
+    });
+    match snapshot.lifecycle {
+        ForegroundEngineLifecycleDto::Error { run, failure } => {
+            assert_eq!(run.run_id, run_a);
+            assert_eq!(run.profile_id, "profile-a");
+            assert!(run.capability_snapshot.is_some());
+            assert_eq!(failure.kind, EngineFailureKind::NonzeroExit);
+            assert_eq!(failure.operation, EngineOperationDto::UnexpectedExit);
+            assert_eq!(failure.run_id.as_deref(), Some(run_a.as_str()));
+        }
+        other => panic!("expected Error from A crash, got {other:?}"),
+    }
+    std::fs::write(&release_b, b"go").unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    match manager.snapshot().lifecycle {
+        ForegroundEngineLifecycleDto::Error { run, .. } => {
+            assert_eq!(run.run_id, run_a);
+        }
+        other => panic!("B must not promote after A crash, got {other:?}"),
+    }
+    manager.assert_profile_deletable("profile-a").unwrap_err();
+}
+
+#[cfg(unix)]
+#[test]
+fn stale_a_job_after_failed_switch_does_not_bind_to_b() {
+    let temp = TestTempDir::new("switch-stale-job");
+    let (manager, catalog, events, run_a) =
+        ready_two_profiles(&temp, &resident_echo_script(), &resident_echo_script());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-b".into(),
+        profile: missing_assets_profile("Broken B", &temp),
+    });
+    manager.switch_to("profile-b").unwrap();
+    let switching = wait_snapshot(&events, Duration::from_secs(2), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Switching { .. })
+    });
+    let ForegroundEngineLifecycleDto::Switching { candidate, .. } = switching.lifecycle else {
+        panic!("expected switching");
+    };
+    wait_failure(&events, Duration::from_secs(2), |failure| {
+        failure.kind == EngineFailureKind::Asset
+    });
+    manager
+        .start_selected_node_job(selected_request(&candidate.run_id, 14, vec![]))
+        .unwrap_err();
+    manager
+        .start_whole_game_analysis(&candidate.run_id, &whole_game_query_jsonl(), 2)
+        .unwrap_err();
+    let started = manager
+        .start_selected_node_job(selected_request(&run_a, 14, vec![]))
+        .unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
 }
 
 #[cfg(unix)]
