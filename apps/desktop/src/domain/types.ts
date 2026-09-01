@@ -109,6 +109,38 @@ export type ForegroundEngineSnapshotDto = {
   revision: number;
   lifecycle: ForegroundEngineLifecycleDto;
 };
+export type AnalysisJobLaneDto = "selected_node" | "whole_game";
+export type AnalysisJobOutcomeDto =
+  | "started"
+  | "completed"
+  | "cancelled"
+  | "superseded"
+  | "timeout"
+  | "failed";
+export type AnalysisJobStartedDto = {
+  run_id: string;
+  job_id: string;
+  lane: AnalysisJobLaneDto;
+  generation: number;
+  node_path: NodePath;
+};
+export type AnalysisPublicationScopeDto = {
+  run_id: string;
+  job_id: string;
+  generation: number;
+  node_path: NodePath;
+};
+export type AnalysisJobEventDto = {
+  run_id: string;
+  job_id: string;
+  lane: AnalysisJobLaneDto;
+  generation: number;
+  node_path: NodePath;
+  outcome: AnalysisJobOutcomeDto;
+  frame?: AnalysisFrameDto | null;
+  failure?: EngineFailureDto | null;
+};
 export type ForegroundEngineEventDto =
   | { type: "snapshot"; snapshot: ForegroundEngineSnapshotDto }
-  | { type: "failure"; failure: EngineFailureDto };
+  | { type: "failure"; failure: EngineFailureDto }
+  | { type: "job"; job: AnalysisJobEventDto };

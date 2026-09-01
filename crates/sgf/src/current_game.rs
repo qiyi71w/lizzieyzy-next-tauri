@@ -63,6 +63,14 @@ impl CurrentSgfDocument {
         to_game_dto(self.document.clone())
     }
 
+    pub fn komi(&self) -> f32 {
+        self.document.komi
+    }
+
+    pub fn board_size(&self) -> u8 {
+        self.document.board_size
+    }
+
     pub fn tree(&self) -> Result<SgfTreeNodeDto, CurrentGameError> {
         Ok(tree_dto(self.root()?))
     }

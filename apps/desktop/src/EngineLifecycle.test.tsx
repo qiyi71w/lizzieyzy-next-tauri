@@ -5,7 +5,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CurrentGameResultDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
 
-const listeners: { onSnapshot?: (snapshot: ForegroundEngineSnapshotDto) => void } = {};
+const listeners: {
+  onSnapshot?: (snapshot: ForegroundEngineSnapshotDto) => void;
+  onJob?: (job: unknown) => void;
+} = {};
 
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
@@ -15,6 +18,8 @@ const backend = vi.hoisted(() => ({
   playCurrentGame: vi.fn(),
   selectCurrentGameNode: vi.fn(),
   analyzeKataGoOnce: vi.fn(),
+  startSelectedNodeAnalysis: vi.fn(),
+  cancelSelectedNodeAnalysis: vi.fn(),
   cancelKataGoAnalysis: vi.fn(),
   classifyProblems: vi.fn(),
   fakeAnalyze: vi.fn(),
@@ -140,8 +145,17 @@ beforeEach(() => {
   });
   backend.saveEngineProfilesSettings.mockImplementation(async (settings) => settings);
   backend.getForegroundEngineSnapshot.mockResolvedValue({ revision: 0, lifecycle: { state: "no_engine" } });
-  backend.subscribeForegroundEngine.mockImplementation(async (onSnapshot) => {
+  backend.startSelectedNodeAnalysis.mockResolvedValue({
+    run_id: "run-1",
+    job_id: "job-1",
+    lane: "selected_node",
+    generation: 1,
+    node_path: { indices: [] }
+  });
+  backend.classifyProblems.mockResolvedValue([]);
+  backend.subscribeForegroundEngine.mockImplementation(async (onSnapshot, _onFailure, onJob) => {
     listeners.onSnapshot = onSnapshot;
+    listeners.onJob = onJob;
     onSnapshot({ revision: 0, lifecycle: { state: "no_engine" } });
     return () => undefined;
   });
@@ -263,5 +277,143 @@ describe("foreground engine lifecycle UI", () => {
     });
     expect(backend.startForegroundEngine).not.toHaveBeenCalled();
     expect(backend.restartForegroundEngine).not.toHaveBeenCalled();
+  });
+
+  it("starts selected-node analysis with run, generation, and NodePath identities", async () => {
+    const host = await renderApp();
+    const switcher = host.querySelector('select[aria-label="Foreground Engine Profile"]') as HTMLSelectElement;
+    await act(async () => {
+      switcher.value = "profile-1";
+      switcher.dispatchEvent(new Event("change", { bubbles: true }));
+      await backend.startForegroundEngine.mock.results[0]?.value;
+    });
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 2,
+        lifecycle: {
+          state: "ready",
+          run: {
+            run_id: "run-1",
+            profile_id: "profile-1",
+            adapter_kind: "kata_go_analysis",
+            profile_snapshot: savedProfile.profile,
+            capability_snapshot: {
+              adapter_kind: "kata_go_analysis",
+              selected_node_analysis: true,
+              whole_game_analysis: true,
+              protocol_cancel: true
+            }
+          }
+        }
+      });
+    });
+    const analyzeOnce = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "继续分析") as HTMLButtonElement;
+    expect(analyzeOnce.disabled).toBe(false);
+    await act(async () => {
+      analyzeOnce.click();
+      await backend.startSelectedNodeAnalysis.mock.results[0]?.value;
+    });
+    expect(backend.startSelectedNodeAnalysis).toHaveBeenCalledWith({
+      runId: "run-1",
+      generation: 1,
+      nodePath: { indices: [] },
+      maxVisits: 800
+    });
+    expect(backend.analyzeKataGoOnce).not.toHaveBeenCalled();
+  });
+
+  it("does not revive analysis presentation from a stale job event", async () => {
+    const host = await renderApp();
+    const switcher = host.querySelector('select[aria-label="Foreground Engine Profile"]') as HTMLSelectElement;
+    await act(async () => {
+      switcher.value = "profile-1";
+      switcher.dispatchEvent(new Event("change", { bubbles: true }));
+      await backend.startForegroundEngine.mock.results[0]?.value;
+    });
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 2,
+        lifecycle: {
+          state: "ready",
+          run: {
+            run_id: "run-1",
+            profile_id: "profile-1",
+            adapter_kind: "kata_go_analysis",
+            profile_snapshot: savedProfile.profile,
+            capability_snapshot: {
+              adapter_kind: "kata_go_analysis",
+              selected_node_analysis: true,
+              whole_game_analysis: true,
+              protocol_cancel: true
+            }
+          }
+        }
+      });
+    });
+    backend.startSelectedNodeAnalysis
+      .mockResolvedValueOnce({
+        run_id: "run-1",
+        job_id: "job-old",
+        lane: "selected_node",
+        generation: 1,
+        node_path: { indices: [] }
+      })
+      .mockResolvedValueOnce({
+        run_id: "run-1",
+        job_id: "job-new",
+        lane: "selected_node",
+        generation: 1,
+        node_path: { indices: [] }
+      });
+    const analyzeOnce = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "继续分析") as HTMLButtonElement;
+    expect(analyzeOnce.disabled).toBe(false);
+    await act(async () => {
+      analyzeOnce.click();
+      await backend.startSelectedNodeAnalysis.mock.results[0]?.value;
+    });
+    await act(async () => {
+      analyzeOnce.click();
+      await backend.startSelectedNodeAnalysis.mock.results[1]?.value;
+    });
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-1",
+        job_id: "job-old",
+        lane: "selected_node",
+        generation: 1,
+        node_path: { indices: [] },
+        outcome: "completed",
+        frame: {
+          job_id: "job-old",
+          turn: 0,
+          visits: 64,
+          winrate_black: 0.11,
+          score_mean_black: -9,
+          candidates: [{ vertex: { point: { x: 0, y: 0 } }, visits: 64, winrate_black: 0.11, score_mean_black: -9, pv: [] }]
+        }
+      });
+    });
+    expect(host.querySelector(".cand-row")).toBeNull();
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-1",
+        job_id: "job-new",
+        lane: "selected_node",
+        generation: 1,
+        node_path: { indices: [] },
+        outcome: "completed",
+        frame: {
+          job_id: "job-new",
+          turn: 0,
+          visits: 32,
+          winrate_black: 0.71,
+          score_mean_black: 4,
+          candidates: [{ vertex: { point: { x: 2, y: 3 } }, visits: 32, winrate_black: 0.71, score_mean_black: 4, pv: [] }]
+        }
+      });
+      await backend.classifyProblems.mock.results.at(-1)?.value;
+    });
+    const coords = Array.from(host.querySelectorAll(".cand-coord")).map((node) => node.textContent);
+    expect(coords).toEqual(["C6"]);
   });
 });

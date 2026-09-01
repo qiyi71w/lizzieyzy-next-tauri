@@ -149,6 +149,55 @@ pub fn analysis_query_from_game(
     })
 }
 
+pub fn analysis_query_from_position(
+    board_size: u8,
+    komi: f32,
+    stones: &[app_model::StoneDto],
+    to_play: PlayerColor,
+    options: AnalysisQueryOptions,
+) -> Result<AnalysisQuery, ProtocolError> {
+    let initial_stones = stones
+        .iter()
+        .map(|stone| {
+            Ok::<KataMove, ProtocolError>((
+                player_color_to_kata(stone.color).to_string(),
+                point_to_kata_coordinate(
+                    &PointDto {
+                        x: stone.x,
+                        y: stone.y,
+                    },
+                    board_size,
+                )?,
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let moves = if to_play == PlayerColor::White {
+        vec![("B".to_string(), "pass".to_string())]
+    } else {
+        Vec::new()
+    };
+    let turn = u32::try_from(moves.len()).expect("move count fits u32");
+    Ok(AnalysisQuery {
+        id: options.id,
+        moves,
+        initial_stones,
+        rules: options.rules,
+        komi,
+        board_x_size: board_size,
+        board_y_size: board_size,
+        analyze_turns: Some(vec![turn]),
+        max_visits: options.max_visits,
+        include_ownership: options.include_ownership,
+        include_policy: options.include_policy,
+    })
+}
+
+pub fn terminate_action_jsonl(id: &str) -> String {
+    let mut line = serde_json::json!({ "id": id, "action": "terminate" }).to_string();
+    line.push('\n');
+    line
+}
+
 pub fn analysis_batch_query_from_game(
     game: &GameDto,
     options: AnalysisBatchQueryOptions,
@@ -541,5 +590,44 @@ mod tests {
 
         assert_eq!(frame.ownership, Some(vec![0.1, -0.2, 0.3]));
         assert_eq!(frame.policy, Some(vec![0.01, 0.02, 0.03]));
+    }
+
+    #[test]
+    fn terminate_action_jsonl_uses_protocol_id_and_action() {
+        let line = terminate_action_jsonl("job-42");
+        assert!(line.ends_with('\n'));
+        let value: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(value["id"], "job-42");
+        assert_eq!(value["action"], "terminate");
+    }
+
+    #[test]
+    fn analysis_query_from_position_uses_initial_stones_and_white_to_play_pass() {
+        let stones = vec![app_model::StoneDto {
+            x: 3,
+            y: 3,
+            color: PlayerColor::Black,
+        }];
+        let query = analysis_query_from_position(
+            9,
+            6.5,
+            &stones,
+            PlayerColor::White,
+            AnalysisQueryOptions {
+                id: "job-1".into(),
+                rules: "chinese".into(),
+                turn: 0,
+                max_visits: Some(8),
+                include_ownership: Some(true),
+                include_policy: Some(true),
+            },
+        )
+        .unwrap();
+        assert_eq!(query.id, "job-1");
+        assert_eq!(query.komi, 6.5);
+        assert_eq!(query.board_x_size, 9);
+        assert_eq!(query.initial_stones, vec![("B".to_string(), "D6".to_string())]);
+        assert_eq!(query.moves, vec![("B".to_string(), "pass".to_string())]);
+        assert_eq!(query.analyze_turns, Some(vec![1]));
     }
 }

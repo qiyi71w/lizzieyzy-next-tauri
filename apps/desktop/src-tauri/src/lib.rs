@@ -1,18 +1,19 @@
 use app_model::{
-    AnalysisFrameDto, AppHealthDto, CandidateMoveDto, CurrentGameError, CurrentGameResultDto, EngineBackend,
-    EngineFailureDto, EngineProfileDto, ForegroundEngineEventDto, ForegroundEngineSnapshotDto, MoveVertex,
-    NodePath, PointDto, PositionDto, ProviderError, ProviderErrorKind, ProviderFetchMethod,
-    ProviderFetchRequest, ProviderFetchResult, ProviderGameMetadata, ProviderImportRequest,
-    ProviderImportResult, ProviderKind, ReadboardSidecarProbeRequest, ReadboardSidecarProbeResult,
-    ReadboardSidecarSyncSnapshotRequest, ReadboardSidecarSyncSnapshotResult,
+    AnalysisFrameDto, AnalysisJobStartedDto, AppHealthDto, CandidateMoveDto, CurrentGameError,
+    CurrentGameResultDto, EngineBackend, EngineFailureDto, EngineFailureKind, EngineOperationDto,
+    EngineProfileDto, ForegroundEngineEventDto, ForegroundEngineSnapshotDto, MoveVertex, NodePath, PointDto,
+    PositionDto, ProviderError, ProviderErrorKind, ProviderFetchMethod, ProviderFetchRequest,
+    ProviderFetchResult, ProviderGameMetadata, ProviderImportRequest, ProviderImportResult, ProviderKind,
+    ReadboardSidecarProbeRequest, ReadboardSidecarProbeResult, ReadboardSidecarSyncSnapshotRequest,
+    ReadboardSidecarSyncSnapshotResult,
 };
 use engine_manager::{
     build_command_spec, check_assets, AnalysisBatchRunOptions, AnalysisCancelToken, AssetCheck, CommandSpec,
     EngineManagerError, EngineProfileCatalog, ForegroundEngineConfig, ForegroundEngineManager,
-    SavedEngineProfile,
+    SavedEngineProfile, SelectedNodeJobRequest,
 };
 use go_core::ReadBoardLocalContext;
-use katago_protocol::{AnalysisBatchQueryOptions, AnalysisQueryOptions};
+use katago_protocol::{analysis_query_from_position, AnalysisBatchQueryOptions, AnalysisQueryOptions};
 use provider_core::{
     invalid_payload, invalid_request, invalid_url, timeout, transport_failed, ProviderResult,
     ProviderTransport,
@@ -2050,6 +2051,70 @@ fn foreground_engine_restart(manager: State<'_, ForegroundEngineManager>) -> Res
     manager.restart()
 }
 
+#[tauri::command]
+fn foreground_engine_start_selected_node(
+    manager: State<'_, ForegroundEngineManager>,
+    current_game: State<'_, CurrentGameState>,
+    run_id: String,
+    generation: u64,
+    node_path: NodePath,
+    max_visits: u32,
+) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+    let (snapshot, board_size, komi) =
+        current_game
+            .admit_selected_node(generation, &node_path)
+            .map_err(|error| EngineFailureDto {
+                operation: EngineOperationDto::Job,
+                run_id: Some(run_id.clone()),
+                switch_id: None,
+                job_id: None,
+                profile_id: None,
+                kind: EngineFailureKind::InvalidState,
+                message: error.message,
+                diagnostic_summary: None,
+            })?;
+    let query = analysis_query_from_position(
+        board_size,
+        komi,
+        &snapshot.position.stones,
+        snapshot.position.to_play,
+        AnalysisQueryOptions {
+            id: "pending".to_string(),
+            rules: "chinese".to_string(),
+            turn: snapshot.position.move_number,
+            max_visits: Some(max_visits),
+            include_ownership: Some(true),
+            include_policy: Some(true),
+        },
+    )
+    .map_err(|error| EngineFailureDto {
+        operation: EngineOperationDto::Job,
+        run_id: Some(run_id.clone()),
+        switch_id: None,
+        job_id: None,
+        profile_id: None,
+        kind: EngineFailureKind::Protocol,
+        message: error.to_string(),
+        diagnostic_summary: None,
+    })?;
+    manager.start_selected_node_job(SelectedNodeJobRequest {
+        run_id,
+        generation,
+        node_path,
+        query,
+        board_size,
+    })
+}
+
+#[tauri::command]
+fn foreground_engine_cancel_job(
+    manager: State<'_, ForegroundEngineManager>,
+    run_id: String,
+    job_id: String,
+) -> Result<(), EngineFailureDto> {
+    manager.cancel_job(&run_id, &job_id)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(AnalysisJobRegistry::default())
@@ -2069,6 +2134,9 @@ pub fn run() {
                         }
                         ForegroundEngineEventDto::Failure { failure } => {
                             let _ = emit_handle.emit("foreground-engine://failure", failure);
+                        }
+                        ForegroundEngineEventDto::Job { job } => {
+                            let _ = emit_handle.emit("foreground-engine://job", job);
                         }
                     }
                 }
@@ -2119,7 +2187,9 @@ pub fn run() {
             foreground_engine_snapshot,
             foreground_engine_start,
             foreground_engine_stop,
-            foreground_engine_restart
+            foreground_engine_restart,
+            foreground_engine_start_selected_node,
+            foreground_engine_cancel_job
         ])
         .build(tauri::generate_context!())
         .expect("failed to build LizzieYzy Next")

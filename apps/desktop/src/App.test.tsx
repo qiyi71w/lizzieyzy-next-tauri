@@ -13,6 +13,8 @@ const backend = vi.hoisted(() => ({
   playCurrentGame: vi.fn(),
   selectCurrentGameNode: vi.fn(),
   analyzeKataGoOnce: vi.fn(),
+  startSelectedNodeAnalysis: vi.fn(),
+  cancelSelectedNodeAnalysis: vi.fn(),
   cancelKataGoAnalysis: vi.fn(),
   classifyProblems: vi.fn(),
   fakeAnalyze: vi.fn(),
@@ -984,10 +986,12 @@ describe("App focus-safe review controls", () => {
     expect(pass.disabled).toBe(false);
 
     backend.analyzeKataGoOnce.mockClear();
+    backend.startSelectedNodeAnalysis.mockClear();
     backend.startKataGoGameAnalysis.mockClear();
     pressKey(buttonNamed(host, "坐标"), "a");
     pressKey(buttonNamed(host, "坐标"), " ");
     expect(backend.analyzeKataGoOnce).not.toHaveBeenCalled();
+    expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
     expect(backend.startKataGoGameAnalysis).not.toHaveBeenCalled();
   });
 });

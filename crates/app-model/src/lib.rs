@@ -2,6 +2,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
+mod analysis_job;
+pub use analysis_job::{
+    admits_analysis_publication, AnalysisJobEventDto, AnalysisJobLaneDto, AnalysisJobOutcomeDto,
+    AnalysisJobStartedDto, AnalysisPublicationScopeDto,
+};
+
 pub type GameId = Uuid;
 pub type NodeId = Uuid;
 pub type AnalysisJobId = Uuid;
@@ -142,7 +148,7 @@ impl std::fmt::Display for CurrentGameError {
 
 impl std::error::Error for CurrentGameError {}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CandidateMoveDto {
     pub vertex: MoveVertex,
     pub visits: u32,
@@ -152,7 +158,7 @@ pub struct CandidateMoveDto {
     pub pv: Vec<MoveVertex>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnalysisFrameDto {
     pub job_id: AnalysisJobId,
     pub game_id: Option<GameId>,
@@ -313,6 +319,7 @@ pub enum ForegroundEngineLifecycleDto {
 pub enum ForegroundEngineEventDto {
     Snapshot { snapshot: ForegroundEngineSnapshotDto },
     Failure { failure: EngineFailureDto },
+    Job { job: AnalysisJobEventDto },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
