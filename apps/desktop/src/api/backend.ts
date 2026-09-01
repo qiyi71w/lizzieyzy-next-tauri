@@ -34,6 +34,7 @@ export type SgfDocument = {
 };
 
 export type AnalysisProgressPayload = {
+  run_id: string;
   job_id: string;
   completed: number;
   expected: number;
@@ -42,11 +43,13 @@ export type AnalysisProgressPayload = {
 };
 
 export type AnalysisCompletePayload = {
+  run_id: string;
   job_id: string;
   frames: AnalysisFrameDto[];
 };
 
 export type AnalysisErrorPayload = {
+  run_id: string;
   job_id: string;
   message: string;
 };
@@ -188,16 +191,16 @@ export async function analyzeKataGoGame(profile: EngineProfileDto, sgfText: stri
   return await invoke<AnalysisFrameDto[]>("katago_analyze_game", { profile, sgfText, maxVisits });
 }
 
-export async function startKataGoGameAnalysis(profile: EngineProfileDto, sgfText: string, maxVisits: number): Promise<string> {
+export async function startKataGoGameAnalysis(runId: string, sgfText: string, maxVisits: number): Promise<string> {
   if (!isTauriRuntime()) {
     throw new Error("Full-game KataGo analysis requires the Tauri desktop backend. Browser preview cannot run real KataGo; use Run review for fake analysis.");
   }
-  return await invoke<string>("katago_start_analyze_game", { profile, sgfText, maxVisits });
+  return await invoke<string>("katago_start_analyze_game", { runId, sgfText, maxVisits });
 }
 
-export async function cancelKataGoAnalysis(jobId: string): Promise<void> {
+export async function cancelKataGoAnalysis(runId: string, jobId: string): Promise<void> {
   if (!isTauriRuntime()) return;
-  await invoke<void>("katago_cancel_analysis", { jobId });
+  await invoke<void>("katago_cancel_analysis", { runId, jobId });
 }
 
 export async function listenToKataGoAnalysisEvents(handlers: KataGoAnalysisEventHandlers): Promise<() => void> {

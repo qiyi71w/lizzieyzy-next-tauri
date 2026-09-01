@@ -118,6 +118,7 @@ export function App() {
   const [autoPlaying, setAutoPlaying] = useState(false);
   const jumpRef = useRef<HTMLInputElement | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
+  const activeRunIdRef = useRef<string | null>(null);
   const requestSerialRef = useRef(0);
   const [activeRequestToken, setActiveRequestToken] = useState("idle:0");
   const activeRequestTokenRef = useRef("idle:0");
@@ -419,7 +420,7 @@ export function App() {
     const record = engineProfiles.find((profile) => profile.id === run.profile_id);
     const maxVisits = record?.max_visits ?? 800;
     if (kind === "once") void handleRunKataGo(run.profile_snapshot, maxVisits);
-    else void handleAnalyzeKataGoGame(run.profile_snapshot, maxVisits);
+    else void handleAnalyzeKataGoGame(run.run_id, maxVisits);
   }
 
   async function handleSelectSwitcherProfile(profileId: string) {
@@ -732,7 +733,7 @@ export function App() {
     }
   }
 
-  async function handleAnalyzeKataGoGame(profile: EngineProfileDto, maxVisits: number) {
+  async function handleAnalyzeKataGoGame(runId: string, maxVisits: number) {
     if (activeJobIdRef.current || startingAnalysisRef.current) return;
     const visits = resolveAnalysisMaxVisits(maxVisits, preferences);
     let captured = beginReviewRequest();
@@ -765,7 +766,7 @@ export function App() {
             });
             return;
           }
-          if (!isCurrentAnalysisJob(payload.job_id) || !isCurrentDocumentGeneration(generation)) return;
+          if (!isCurrentAnalysisJob(payload.job_id, payload.run_id) || !isCurrentDocumentGeneration(generation)) return;
           setAnalysisProgress({
             jobId: payload.job_id,
             completed: payload.completed,
@@ -781,8 +782,8 @@ export function App() {
             pendingAnalysisTerminalEventsRef.current.set(payload.job_id, { kind: "complete", frames: payload.frames });
             return;
           }
-          if (!isCurrentAnalysisJob(payload.job_id) || !shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) {
-            if (isCurrentAnalysisJob(payload.job_id)) finishStoppedAnalysis(payload.job_id);
+          if (!isCurrentAnalysisJob(payload.job_id, payload.run_id) || !shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) {
+            if (isCurrentAnalysisJob(payload.job_id, payload.run_id)) finishStoppedAnalysis(payload.job_id);
             return;
           }
           void finishCompletedAnalysis(payload.job_id, payload.frames, parsed, replayed, captured);
@@ -792,7 +793,7 @@ export function App() {
             pendingAnalysisTerminalEventsRef.current.set(payload.job_id, { kind: "error", message: payload.message });
             return;
           }
-          if (!isCurrentAnalysisJob(payload.job_id)) return;
+          if (!isCurrentAnalysisJob(payload.job_id, payload.run_id)) return;
           finishStoppedAnalysis(payload.job_id);
           setMessage(`Full-game KataGo analysis failed: ${payload.message}`);
         },
@@ -801,7 +802,7 @@ export function App() {
             pendingAnalysisTerminalEventsRef.current.set(payload.job_id, { kind: "cancelled", message: payload.message });
             return;
           }
-          if (!isCurrentAnalysisJob(payload.job_id)) return;
+          if (!isCurrentAnalysisJob(payload.job_id, payload.run_id)) return;
           finishStoppedAnalysis(payload.job_id);
           setAnalysisProgress(null);
           setMessage(payload.message || "Full-game KataGo analysis cancelled.");
@@ -809,7 +810,8 @@ export function App() {
       });
       cleanupAnalysisListeners();
       analysisCleanupRef.current = cleanup;
-      const jobId = await startKataGoGameAnalysis(profile, artifacts.serialized, visits);
+      const jobId = await startKataGoGameAnalysis(runId, artifacts.serialized, visits);
+      activeRunIdRef.current = runId;
       captured = adoptRequestToken(captured, jobId);
       const pendingTerminalEvent = pendingAnalysisTerminalEventsRef.current.get(jobId);
       const pendingProgress = pendingAnalysisProgressRef.current.get(jobId);
@@ -831,6 +833,7 @@ export function App() {
       pendingAnalysisProgressRef.current.clear();
       pendingAnalysisTerminalEventsRef.current.clear();
       activeJobIdRef.current = null;
+      activeRunIdRef.current = null;
       setActiveJobId(null);
       setAnalysisProgress(null);
       setIsKataGoRunning(false);
@@ -840,10 +843,11 @@ export function App() {
 
   async function handleCancelKataGoAnalysis() {
     const jobId = activeJobIdRef.current;
-    if (!jobId) return;
+    const runId = activeRunIdRef.current;
+    if (!jobId || !runId) return;
     try {
       setMessage("Cancelling full-game KataGo analysis...");
-      await cancelKataGoAnalysis(jobId);
+      await cancelKataGoAnalysis(runId, jobId);
     } catch (error) {
       setMessage(`Cancel failed: ${errorMessage(error)}`);
     }
@@ -1076,8 +1080,10 @@ export function App() {
     analysisCleanupRef.current = null;
   }
 
-  function isCurrentAnalysisJob(jobId: string): boolean {
-    return activeJobIdRef.current === jobId;
+  function isCurrentAnalysisJob(jobId: string, runId?: string): boolean {
+    if (activeJobIdRef.current !== jobId) return false;
+    if (runId && activeRunIdRef.current && runId !== activeRunIdRef.current) return false;
+    return true;
   }
 
   async function finishPendingAnalysisTerminalEvent(jobId: string, event: PendingAnalysisTerminalEvent, parsed: GameDto, replayed: PositionDto[], captured: ReviewPresentationScope) {
@@ -1125,6 +1131,7 @@ export function App() {
   function finishStoppedAnalysis(jobId: string) {
     if (activeJobIdRef.current !== null && activeJobIdRef.current !== jobId) return;
     activeJobIdRef.current = null;
+    activeRunIdRef.current = null;
     setActiveJobId(null);
     setIsKataGoRunning(false);
     cleanupAnalysisListeners();

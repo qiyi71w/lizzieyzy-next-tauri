@@ -6,6 +6,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CurrentGameResultDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
 
 const listeners: { onSnapshot?: (snapshot: ForegroundEngineSnapshotDto) => void } = {};
+const analysisListeners: {
+  onProgress?: (payload: { run_id: string; job_id: string; completed: number; expected: number; turn: number; response_jsonl: string }) => void;
+  onComplete?: (payload: { run_id: string; job_id: string; frames: unknown[] }) => void;
+  onError?: (payload: { run_id: string; job_id: string; message: string }) => void;
+  onCancelled?: (payload: { run_id: string; job_id: string; message: string }) => void;
+} = {};
+const analysisCache = vi.hoisted(() => ({
+  computeGameCacheKey: vi.fn(() => Promise.resolve({ gameKey: "game", sgfHash: "hash" })),
+  loadAnalysisCache: vi.fn(() => Promise.resolve({ status: "miss" })),
+  saveAnalysisCache: vi.fn(() => Promise.resolve({ id: "c1", gameKey: "game", updatedAt: "now" }))
+}));
 
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
@@ -42,11 +53,7 @@ vi.mock("./api/backend", () => ({
   nativeCurrentGameUnavailable: "Native current-game commands require the Tauri desktop runtime."
 }));
 
-vi.mock("./api/analysisCache", () => ({
-  computeGameCacheKey: vi.fn(() => Promise.resolve({ gameKey: "game", sgfHash: "hash" })),
-  loadAnalysisCache: vi.fn(() => Promise.resolve({ status: "miss" })),
-  saveAnalysisCache: vi.fn()
-}));
+vi.mock("./api/analysisCache", () => analysisCache);
 
 vi.mock("./api/preferences", () => ({
   loadAppPreferences: vi.fn(() => Promise.reject(new Error("preferences unavailable in test"))),
@@ -145,6 +152,17 @@ beforeEach(() => {
     onSnapshot({ revision: 0, lifecycle: { state: "no_engine" } });
     return () => undefined;
   });
+  backend.listenToKataGoAnalysisEvents.mockImplementation(async (handlers) => {
+    analysisListeners.onProgress = handlers.onProgress;
+    analysisListeners.onComplete = handlers.onComplete;
+    analysisListeners.onError = handlers.onError;
+    analysisListeners.onCancelled = handlers.onCancelled;
+    return () => undefined;
+  });
+  backend.startKataGoGameAnalysis.mockResolvedValue("job-1");
+  backend.cancelKataGoAnalysis.mockResolvedValue(undefined);
+  backend.classifyProblems.mockResolvedValue([]);
+  backend.serializeCurrentGame.mockResolvedValue("(;SZ[9])");
 });
 
 afterEach(() => {
@@ -153,6 +171,10 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.clearAllMocks();
   vi.restoreAllMocks();
+  analysisListeners.onProgress = undefined;
+  analysisListeners.onComplete = undefined;
+  analysisListeners.onError = undefined;
+  analysisListeners.onCancelled = undefined;
 });
 
 async function renderApp() {
@@ -166,6 +188,40 @@ async function renderApp() {
     await backend.subscribeForegroundEngine.mock.results[0]?.value;
   });
   return host;
+}
+
+
+async function readyEngine(host: HTMLElement) {
+  const switcher = host.querySelector('select[aria-label="Foreground Engine Profile"]') as HTMLSelectElement;
+  await act(async () => {
+    switcher.value = "profile-1";
+    switcher.dispatchEvent(new Event("change", { bubbles: true }));
+    await backend.startForegroundEngine.mock.results[0]?.value;
+  });
+  await act(async () => {
+    listeners.onSnapshot?.({
+      revision: 2,
+      lifecycle: {
+        state: "ready",
+        run: {
+          run_id: "run-1",
+          profile_id: "profile-1",
+          adapter_kind: "kata_go_analysis",
+          profile_snapshot: savedProfile.profile,
+          capability_snapshot: {
+            adapter_kind: "kata_go_analysis",
+            selected_node_analysis: true,
+            whole_game_analysis: true,
+            protocol_cancel: true
+          }
+        }
+      }
+    });
+  });
+}
+
+function buttonNamed(host: HTMLElement, label: string) {
+  return Array.from(host.querySelectorAll("button")).find((button) => button.textContent === label) as HTMLButtonElement;
 }
 
 describe("foreground engine lifecycle UI", () => {
@@ -263,5 +319,89 @@ describe("foreground engine lifecycle UI", () => {
     });
     expect(backend.startForegroundEngine).not.toHaveBeenCalled();
     expect(backend.restartForegroundEngine).not.toHaveBeenCalled();
+  });
+
+  it("starts whole-game analysis with the Ready Run identity and keeps cancel from stopping the engine", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => {
+      buttonNamed(host, "自动分析").click();
+      await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
+    });
+    expect(backend.startKataGoGameAnalysis).toHaveBeenCalledWith("run-1", "(;SZ[9])", 800);
+    await act(async () => {
+      analysisListeners.onProgress?.({
+        run_id: "run-1",
+        job_id: "job-1",
+        completed: 1,
+        expected: 2,
+        turn: 0,
+        response_jsonl: "{}"
+      });
+    });
+    expect(host.querySelector(".nav-progress")?.textContent).toContain("1/2");
+    expect(host.textContent).toContain("Analyzing move 0");
+    await act(async () => {
+      buttonNamed(host, "取消").click();
+      await backend.cancelKataGoAnalysis.mock.results.at(-1)?.value;
+    });
+    expect(backend.cancelKataGoAnalysis).toHaveBeenCalledWith("run-1", "job-1");
+    expect(backend.stopForegroundEngine).not.toHaveBeenCalled();
+    await act(async () => {
+      analysisListeners.onCancelled?.({
+        run_id: "run-1",
+        job_id: "job-1",
+        message: "analysis job was cancelled"
+      });
+    });
+    expect(host.textContent).toContain("analysis job was cancelled");
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("Local KataGo");
+  });
+
+  it("does not restore presentation or cache from a stale whole-game completion", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => {
+      buttonNamed(host, "自动分析").click();
+      await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonNamed(host, "取消").click();
+      await backend.cancelKataGoAnalysis.mock.results.at(-1)?.value;
+      analysisListeners.onCancelled?.({
+        run_id: "run-1",
+        job_id: "job-1",
+        message: "analysis job was cancelled"
+      });
+    });
+    analysisCache.saveAnalysisCache.mockClear();
+    await act(async () => {
+      analysisListeners.onComplete?.({
+        run_id: "run-1",
+        job_id: "job-1",
+        frames: [{
+          job_id: "job-1",
+          turn: 0,
+          visits: 8,
+          winrate_black: 0.5,
+          score_mean_black: 0,
+          candidates: []
+        }]
+      });
+      analysisListeners.onComplete?.({
+        run_id: "run-old",
+        job_id: "job-1",
+        frames: [{
+          job_id: "job-1",
+          turn: 1,
+          visits: 8,
+          winrate_black: 0.9,
+          score_mean_black: 4,
+          candidates: []
+        }]
+      });
+    });
+    expect(analysisCache.saveAnalysisCache).not.toHaveBeenCalled();
+    expect(host.textContent).not.toContain("Full-game KataGo analysis completed");
   });
 });

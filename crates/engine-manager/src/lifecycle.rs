@@ -38,6 +38,7 @@ impl AnalysisJobCancel for AnalysisCancelToken {
 pub struct ForegroundEngineConfig {
     pub readiness_timeout: Duration,
     pub stop_drain_timeout: Duration,
+    pub admit_whole_game_analysis: bool,
 }
 
 impl Default for ForegroundEngineConfig {
@@ -45,6 +46,7 @@ impl Default for ForegroundEngineConfig {
         Self {
             readiness_timeout: Duration::from_secs(30),
             stop_drain_timeout: Duration::from_secs(2),
+            admit_whole_game_analysis: true,
         }
     }
 }
@@ -54,23 +56,56 @@ impl ForegroundEngineConfig {
         Self {
             readiness_timeout: Duration::from_secs(2),
             stop_drain_timeout: Duration::from_millis(400),
+            admit_whole_game_analysis: true,
         }
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AnalysisJobEventDto {
+    Progress {
+        run_id: String,
+        job_id: String,
+        lane: AnalysisJobLane,
+        completed: usize,
+        expected: usize,
+        response_jsonl_line: String,
+    },
+    Completed {
+        run_id: String,
+        job_id: String,
+        lane: AnalysisJobLane,
+        response_jsonl_lines: Vec<String>,
+    },
+    Cancelled {
+        run_id: String,
+        job_id: String,
+        lane: AnalysisJobLane,
+    },
+    Failed {
+        run_id: String,
+        job_id: String,
+        lane: AnalysisJobLane,
+        failure: EngineFailureDto,
+    },
+}
+
 struct RegisteredJob {
-    #[allow(dead_code)]
     job_id: String,
     run_id: String,
-    #[allow(dead_code)]
     lane: AnalysisJobLane,
     cancel: Arc<dyn AnalysisJobCancel>,
+    expected: Option<usize>,
+    received_lines: Vec<String>,
+    events: Option<Sender<AnalysisJobEventDto>>,
+    terminal: bool,
 }
 
 struct LiveEngine {
     child: Child,
-    stdin: Option<ChildStdin>,
-    stdout_rx: Receiver<io::Result<Option<String>>>,
+    stdin: Arc<Mutex<Option<ChildStdin>>>,
+    stdout_rx: Option<Receiver<io::Result<Option<String>>>>,
     #[allow(dead_code)]
     stderr_rx: Receiver<io::Result<String>>,
     run_id: String,
@@ -268,8 +303,210 @@ impl ForegroundEngineManager {
             run_id: run_id.to_string(),
             lane,
             cancel,
+            expected: None,
+            received_lines: Vec::new(),
+            events: None,
+            terminal: false,
         });
         Ok(job_id)
+    }
+
+    pub fn start_whole_game_analysis(
+        &self,
+        run_id: &str,
+        query_jsonl: &str,
+        expected_responses: usize,
+    ) -> Result<(String, Receiver<AnalysisJobEventDto>), EngineFailureDto> {
+        let bound_query = {
+            let state = self.lock();
+            let run = match &state.phase {
+                Phase::Ready(run) if run.run_id == run_id => run.clone(),
+                _ => {
+                    return Err(failure(
+                        EngineOperationDto::Job,
+                        EngineFailureKind::InvalidState,
+                        "Analysis Job admission requires a Ready Foreground Engine Run".into(),
+                        Some(run_id),
+                        None,
+                        None,
+                    ));
+                }
+            };
+            let supported = run
+                .capability_snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.whole_game_analysis);
+            if !supported {
+                return Err(failure(
+                    EngineOperationDto::Job,
+                    EngineFailureKind::UnsupportedCapability,
+                    "current Ready Run does not admit whole-game analysis".into(),
+                    Some(run_id),
+                    Some(run.profile_id.as_str()),
+                    None,
+                ));
+            }
+            drop(state);
+            let job_id = Uuid::new_v4().to_string();
+            bind_query_id(query_jsonl, &job_id).map(|query| (job_id, query))?
+        };
+        let (job_id, bound_query) = bound_query;
+        let rx = {
+            let mut state = self.lock();
+            let admitted = matches!(
+                &state.phase,
+                Phase::Ready(run) if run.run_id == run_id && run.capability_snapshot.as_ref().is_some_and(|c| c.whole_game_analysis)
+            );
+            if !admitted {
+                return Err(failure(
+                    EngineOperationDto::Job,
+                    EngineFailureKind::InvalidState,
+                    "Analysis Job admission requires a Ready Foreground Engine Run".into(),
+                    Some(run_id),
+                    None,
+                    None,
+                ));
+            }
+            let (tx, rx) = mpsc::channel();
+            state.jobs.push(RegisteredJob {
+                job_id: job_id.clone(),
+                run_id: run_id.to_string(),
+                lane: AnalysisJobLane::WholeGame,
+                cancel: Arc::new(AnalysisCancelToken::new()),
+                expected: Some(expected_responses),
+                received_lines: Vec::new(),
+                events: Some(tx),
+                terminal: false,
+            });
+            rx
+        };
+        if let Err(error) = self.write_live_jsonl(run_id, &bound_query) {
+            self.abandon_job(run_id, &job_id, error.clone());
+            return Err(error);
+        }
+        Ok((job_id, rx))
+    }
+
+    pub fn cancel_job(&self, run_id: &str, job_id: &str) -> Result<(), EngineFailureDto> {
+        {
+            let mut state = self.lock();
+            let Some(job) = state
+                .jobs
+                .iter_mut()
+                .find(|job| job.job_id == job_id && job.run_id == run_id)
+            else {
+                return Err(failure(
+                    EngineOperationDto::Job,
+                    EngineFailureKind::InvalidState,
+                    format!("analysis job not found: {job_id}"),
+                    Some(run_id),
+                    None,
+                    None,
+                ));
+            };
+            if !job.terminal {
+                job.cancel.cancel();
+                mark_job_cancelled(job);
+            }
+        }
+        self.write_terminate(run_id, job_id);
+        Ok(())
+    }
+
+    fn abandon_job(&self, run_id: &str, job_id: &str, failure: EngineFailureDto) {
+        let mut state = self.lock();
+        if let Some(job) = state
+            .jobs
+            .iter_mut()
+            .find(|job| job.job_id == job_id && job.run_id == run_id && !job.terminal)
+        {
+            if let Some(events) = job.events.take() {
+                let _ = events.send(AnalysisJobEventDto::Failed {
+                    run_id: job.run_id.clone(),
+                    job_id: job.job_id.clone(),
+                    lane: job.lane,
+                    failure,
+                });
+            }
+            job.terminal = true;
+        }
+        state.jobs.retain(|job| !(job.job_id == job_id && job.run_id == run_id));
+    }
+
+    fn write_live_jsonl(&self, run_id: &str, jsonl: &str) -> Result<(), EngineFailureDto> {
+        let stdin = {
+            let state = self.lock();
+            let Some(live) = state.live.as_ref() else {
+                return Err(failure(
+                    EngineOperationDto::Job,
+                    EngineFailureKind::InvalidState,
+                    "Foreground Engine Run process is not available".into(),
+                    Some(run_id),
+                    None,
+                    None,
+                ));
+            };
+            if live.run_id != run_id {
+                return Err(failure(
+                    EngineOperationDto::Job,
+                    EngineFailureKind::InvalidState,
+                    "Analysis Job admission requires a Ready Foreground Engine Run".into(),
+                    Some(run_id),
+                    None,
+                    None,
+                ));
+            }
+            live.stdin.clone()
+        };
+        let mut guard = stdin.lock().map_err(|_| {
+            failure(
+                EngineOperationDto::Job,
+                EngineFailureKind::Protocol,
+                "engine stdin lock was poisoned".into(),
+                Some(run_id),
+                None,
+                None,
+            )
+        })?;
+        let stdin = guard.as_mut().ok_or_else(|| {
+            failure(
+                EngineOperationDto::Job,
+                EngineFailureKind::Protocol,
+                "engine process stdin was already closed".into(),
+                Some(run_id),
+                None,
+                None,
+            )
+        })?;
+        write_jsonl(stdin, jsonl).map_err(|error| {
+            failure(
+                EngineOperationDto::Job,
+                EngineFailureKind::Protocol,
+                format!("failed to write analysis query: {error}"),
+                Some(run_id),
+                None,
+                None,
+            )
+        })
+    }
+
+    fn write_terminate(&self, run_id: &str, job_id: &str) {
+        let stdin = {
+            let state = self.lock();
+            let Some(live) = state.live.as_ref() else {
+                return;
+            };
+            if live.run_id != run_id {
+                return;
+            }
+            live.stdin.clone()
+        };
+        if let Ok(mut guard) = stdin.lock() {
+            if let Some(stdin) = guard.as_mut() {
+                let payload = format!(r#"{{"id":"{job_id}","action":"terminate"}}"#);
+                let _ = write_jsonl(stdin, &payload);
+            }
+        };
     }
 
     pub fn assert_profile_deletable(&self, profile_id: &str) -> Result<(), EngineFailureDto> {
@@ -458,8 +695,8 @@ impl Inner {
             }
             state.live = Some(LiveEngine {
                 child,
-                stdin: Some(stdin),
-                stdout_rx,
+                stdin: Arc::new(Mutex::new(Some(stdin))),
+                stdout_rx: Some(stdout_rx),
                 stderr_rx,
                 run_id: run.run_id.clone(),
             });
@@ -504,7 +741,17 @@ impl Inner {
                         None,
                     ));
                 };
-                match live.stdout_rx.try_recv() {
+                let Some(stdout_rx) = live.stdout_rx.as_ref() else {
+                    return Err(failure(
+                        EngineOperationDto::Start,
+                        EngineFailureKind::Start,
+                        "engine process was lost before readiness".into(),
+                        Some(run.run_id.as_str()),
+                        Some(run.profile_id.as_str()),
+                        None,
+                    ));
+                };
+                match stdout_rx.try_recv() {
                     Ok(Ok(Some(line))) => Some(line),
                     Ok(Ok(None)) => {
                         return Err(failure(
@@ -570,15 +817,21 @@ impl Inner {
         ready.capability_snapshot = Some(EngineCapabilitySnapshotDto {
             adapter_kind: EngineBackend::KataGoAnalysis,
             selected_node_analysis: true,
-            whole_game_analysis: true,
+            whole_game_analysis: self.config.admit_whole_game_analysis,
             protocol_cancel: true,
         });
         state.phase = Phase::Ready(ready);
         publish_snapshot(&mut state);
+        let stdout_rx = state.live.as_mut().and_then(|live| live.stdout_rx.take());
         drop(state);
         let inner = self.clone();
         let run_id = run.run_id.clone();
         thread::spawn(move || inner.watch_exit(operation, run_id));
+        if let Some(stdout_rx) = stdout_rx {
+            let inner = self.clone();
+            let run_id = run.run_id.clone();
+            thread::spawn(move || inner.pump_stdout(operation, run_id, stdout_rx));
+        }
     }
 
     fn fail_attempt(&self, operation: u64, published: EngineFailureDto) {
@@ -587,7 +840,7 @@ impl Inner {
             return;
         }
         if let Some(mut live) = state.live.take() {
-            drop(live.stdin.take());
+            close_live_stdin(&live);
             let _ = kill_timed_out_child(&mut live.child);
         }
         state.jobs.clear();
@@ -614,7 +867,7 @@ impl Inner {
             return;
         }
         if let Some(mut live) = state.live.take() {
-            drop(live.stdin.take());
+            close_live_stdin(&live);
             let _ = kill_timed_out_child(&mut live.child);
         }
     }
@@ -711,6 +964,68 @@ impl Inner {
             ForegroundEngineEventDto::Failure { failure: published },
         );
     }
+    fn pump_stdout(
+        self: Arc<Self>,
+        operation: u64,
+        run_id: String,
+        stdout_rx: Receiver<io::Result<Option<String>>>,
+    ) {
+        loop {
+            if self.current_operation() != operation {
+                return;
+            }
+            match stdout_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(Ok(Some(line))) => self.route_stdout_line(&run_id, line),
+                Ok(Ok(None)) | Ok(Err(_)) => return,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+        }
+    }
+
+    fn route_stdout_line(&self, run_id: &str, line: String) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let Some(response_id) = extract_response_id(trimmed) else {
+            return;
+        };
+        let mut state = self.lock();
+        let Some(job) = state
+            .jobs
+            .iter_mut()
+            .find(|job| job.job_id == response_id && job.run_id == run_id && !job.terminal)
+        else {
+            return;
+        };
+        let Some(expected) = job.expected else {
+            return;
+        };
+        job.received_lines.push(trimmed.to_string());
+        let completed = job.received_lines.len();
+        if let Some(events) = &job.events {
+            let _ = events.send(AnalysisJobEventDto::Progress {
+                run_id: job.run_id.clone(),
+                job_id: job.job_id.clone(),
+                lane: job.lane,
+                completed,
+                expected,
+                response_jsonl_line: trimmed.to_string(),
+            });
+        }
+        if completed >= expected {
+            job.terminal = true;
+            if let Some(events) = job.events.take() {
+                let _ = events.send(AnalysisJobEventDto::Completed {
+                    run_id: job.run_id.clone(),
+                    job_id: job.job_id.clone(),
+                    lane: job.lane,
+                    response_jsonl_lines: job.received_lines.clone(),
+                });
+            }
+        }
+    }
 }
 
 fn snapshot_from(state: &ManagerState) -> ForegroundEngineSnapshotDto {
@@ -746,15 +1061,93 @@ fn cancel_jobs_for_current(state: &mut ManagerState) {
     let Some(run_id) = current_run_id(&state.phase) else {
         return;
     };
-    let mut remaining = Vec::new();
-    for job in state.jobs.drain(..) {
-        if job.run_id == run_id {
+    let job_ids: Vec<String> = state
+        .jobs
+        .iter()
+        .filter(|job| job.run_id == run_id && !job.terminal)
+        .map(|job| job.job_id.clone())
+        .collect();
+    for job in &mut state.jobs {
+        if job.run_id == run_id && !job.terminal {
             job.cancel.cancel();
-        } else {
-            remaining.push(job);
+            mark_job_cancelled(job);
         }
     }
-    state.jobs = remaining;
+    if let Some(live) = state.live.as_ref() {
+        for job_id in job_ids {
+            write_terminate_to_live(live, &job_id);
+        }
+    }
+    state.jobs.retain(|job| job.run_id != run_id);
+}
+
+fn mark_job_cancelled(job: &mut RegisteredJob) {
+    job.terminal = true;
+    if let Some(events) = job.events.take() {
+        let _ = events.send(AnalysisJobEventDto::Cancelled {
+            run_id: job.run_id.clone(),
+            job_id: job.job_id.clone(),
+            lane: job.lane,
+        });
+    }
+}
+
+fn close_live_stdin(live: &LiveEngine) {
+    if let Ok(mut guard) = live.stdin.lock() {
+        drop(guard.take());
+    }
+}
+
+fn write_terminate_to_live(live: &LiveEngine, job_id: &str) {
+    if let Ok(mut guard) = live.stdin.lock() {
+        if let Some(stdin) = guard.as_mut() {
+            let payload = format!(r#"{{"id":"{job_id}","action":"terminate"}}"#);
+            let _ = write_jsonl(stdin, &payload);
+        }
+    }
+}
+
+fn bind_query_id(query_jsonl: &str, job_id: &str) -> Result<String, EngineFailureDto> {
+    let mut value: serde_json::Value = serde_json::from_str(query_jsonl.trim()).map_err(|error| {
+        failure(
+            EngineOperationDto::Job,
+            EngineFailureKind::Protocol,
+            format!("analysis query was not valid JSON: {error}"),
+            None,
+            None,
+            None,
+        )
+    })?;
+    let Some(object) = value.as_object_mut() else {
+        return Err(failure(
+            EngineOperationDto::Job,
+            EngineFailureKind::Protocol,
+            "analysis query must be a JSON object".into(),
+            None,
+            None,
+            None,
+        ));
+    };
+    object.insert("id".into(), serde_json::Value::String(job_id.to_string()));
+    let encoded = serde_json::to_string(&value).map_err(|error| {
+        failure(
+            EngineOperationDto::Job,
+            EngineFailureKind::Protocol,
+            format!("failed to bind analysis job identity: {error}"),
+            None,
+            None,
+            None,
+        )
+    })?;
+    Ok(format!("{encoded}\n"))
+}
+
+fn extract_response_id(line: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()?
+        .get("id")?
+        .as_str()
+        .map(str::to_string)
 }
 
 fn current_run_id(phase: &Phase) -> Option<String> {

@@ -16,7 +16,9 @@ mod catalog;
 mod lifecycle;
 
 pub use catalog::{EngineProfileCatalog, InMemoryEngineProfileCatalog, SavedEngineProfile};
-pub use lifecycle::{AnalysisJobCancel, AnalysisJobLane, ForegroundEngineConfig, ForegroundEngineManager};
+pub use lifecycle::{
+    AnalysisJobCancel, AnalysisJobEventDto, AnalysisJobLane, ForegroundEngineConfig, ForegroundEngineManager,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandSpec {
