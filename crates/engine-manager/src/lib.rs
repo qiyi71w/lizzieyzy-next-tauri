@@ -17,7 +17,7 @@ mod lifecycle;
 
 pub use catalog::{EngineProfileCatalog, InMemoryEngineProfileCatalog, SavedEngineProfile};
 pub use lifecycle::{
-    AnalysisJobCancel, AnalysisJobLane, ForegroundEngineConfig, ForegroundEngineManager,
+    AnalysisJobCancel, AnalysisJobEventDto, AnalysisJobLane, ForegroundEngineConfig, ForegroundEngineManager,
     SelectedNodeJobRequest,
 };
 

@@ -4,8 +4,9 @@ use app_model::{
     ForegroundEngineEventDto, ForegroundEngineLifecycleDto, NodePath,
 };
 use engine_manager::{
-    AnalysisCancelToken, AnalysisJobCancel, AnalysisJobLane, EngineProfileCatalog, ForegroundEngineConfig,
-    ForegroundEngineManager, InMemoryEngineProfileCatalog, SavedEngineProfile, SelectedNodeJobRequest,
+    AnalysisCancelToken, AnalysisJobCancel, AnalysisJobEventDto as WholeGameJobEventDto, AnalysisJobLane,
+    EngineProfileCatalog, ForegroundEngineConfig, ForegroundEngineManager, InMemoryEngineProfileCatalog,
+    SavedEngineProfile, SelectedNodeJobRequest,
 };
 use katago_protocol::AnalysisQuery;
 use std::path::{Path, PathBuf};
@@ -761,4 +762,334 @@ fn stop_and_restart_make_selected_node_job_terminal_without_late_completion() {
         }
     }
     assert!(!saw_completed);
+}
+
+#[test]
+fn whole_game_job_event_keeps_snake_case_run_and_job_identities() {
+    let event = WholeGameJobEventDto::Progress {
+        run_id: "run-1".into(),
+        job_id: "job-9".into(),
+        lane: AnalysisJobLane::WholeGame,
+        completed: 1,
+        expected: 2,
+        response_jsonl_line: r#"{"id":"job-9"}"#.into(),
+    };
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["type"], "progress");
+    assert_eq!(json["run_id"], "run-1");
+    assert_eq!(json["job_id"], "job-9");
+    assert_eq!(json["lane"], "whole_game");
+    assert_eq!(json["completed"], 1);
+    assert_eq!(json["expected"], 2);
+}
+
+fn whole_game_query_jsonl() -> String {
+    r#"{"id":"caller","rules":"chinese","komi":7.5,"boardXSize":19,"boardYSize":19,"moves":[],"analyzeTurns":[0,1]}"#.into()
+}
+
+#[cfg(unix)]
+fn resident_whole_game_script() -> String {
+    r#"
+while IFS= read -r line; do
+  if [ -n "$ENGINE_LOG" ]; then
+    printf '%s\n' "$line" >> "$ENGINE_LOG"
+  fi
+  printf '%s' "$line" | grep -q '"action":"terminate"' && continue
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  [ -z "$id" ] && id="ok"
+  case "$id" in
+    lifecycle-readiness-*)
+      printf '{"id":"%s","turnNumber":0}\n' "$id"
+      ;;
+    *)
+      printf '{"id":"%s","turnNumber":0}\n' "$id"
+      printf '{"id":"%s","turnNumber":1}\n' "$id"
+      ;;
+  esac
+done
+"#
+    .into()
+}
+
+#[cfg(unix)]
+fn wait_job_event(
+    events: &Receiver<WholeGameJobEventDto>,
+    timeout: Duration,
+    mut predicate: impl FnMut(&WholeGameJobEventDto) -> bool,
+) -> WholeGameJobEventDto {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let event = events
+            .recv_timeout(remaining)
+            .expect("timed out waiting for analysis job event");
+        if predicate(&event) {
+            return event;
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn whole_game_job_completes_on_ready_run_without_spawning_another_process() {
+    let temp = TestTempDir::new("whole-game-complete");
+    let log = temp.path().join("engine.log");
+    let mut script = format!("ENGINE_LOG='{}'\n", log.display());
+    script.push_str(&resident_whole_game_script());
+    let (manager, _, _, run_id) = ready_manager(&temp, &script);
+    let (job_id, events) = manager
+        .start_whole_game_analysis(&run_id, &whole_game_query_jsonl(), 2)
+        .unwrap();
+    let progress = wait_job_event(&events, Duration::from_secs(2), |event| {
+        matches!(event, WholeGameJobEventDto::Progress { completed: 1, .. })
+    });
+    match progress {
+        WholeGameJobEventDto::Progress {
+            run_id: event_run,
+            job_id: event_job,
+            lane,
+            expected,
+            ..
+        } => {
+            assert_eq!(event_run, run_id);
+            assert_eq!(event_job, job_id);
+            assert_eq!(lane, AnalysisJobLane::WholeGame);
+            assert_eq!(expected, 2);
+        }
+        other => panic!("expected progress, got {other:?}"),
+    }
+    let completed = wait_job_event(&events, Duration::from_secs(2), |event| {
+        matches!(event, WholeGameJobEventDto::Completed { .. })
+    });
+    match completed {
+        WholeGameJobEventDto::Completed {
+            run_id: event_run,
+            job_id: event_job,
+            response_jsonl_lines,
+            ..
+        } => {
+            assert_eq!(event_run, run_id);
+            assert_eq!(event_job, job_id);
+            assert_eq!(response_jsonl_lines.len(), 2);
+        }
+        other => panic!("expected completed, got {other:?}"),
+    }
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+    let logged = std::fs::read_to_string(&log).unwrap();
+    assert!(logged.contains("lifecycle-readiness-"));
+    assert!(logged.contains(&job_id));
+    assert!(!logged.contains("\"id\":\"caller\""));
+}
+
+#[cfg(unix)]
+#[test]
+fn whole_game_user_cancel_keeps_run_ready_and_does_not_cancel_selected_node() {
+    let temp = TestTempDir::new("whole-game-cancel");
+    let log = temp.path().join("engine.log");
+    let release = temp.path().join("release");
+    let selected_cancelled = temp.path().join("selected-cancelled");
+    let script = format!(
+        r#"
+ENGINE_LOG='{log}'
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$ENGINE_LOG"
+  printf '%s' "$line" | grep -q '"action":"terminate"' && continue
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  [ -z "$id" ] && id="ok"
+  case "$id" in
+    lifecycle-readiness-*)
+      printf '{{"id":"%s","turnNumber":0}}\n' "$id"
+      ;;
+    *)
+      printf '{{"id":"%s","turnNumber":0}}\n' "$id"
+      while [ ! -f '{release}' ]; do sleep 0.01; done
+      printf '{{"id":"%s","turnNumber":1}}\n' "$id"
+      ;;
+  esac
+done
+"#,
+        log = log.display(),
+        release = release.display(),
+    );
+    let (manager, _, _events, run_id) = ready_manager(&temp, &script);
+    struct FileCancel(std::path::PathBuf);
+    impl AnalysisJobCancel for FileCancel {
+        fn cancel(&self) {
+            std::fs::write(&self.0, "cancelled").unwrap();
+        }
+    }
+    manager
+        .register_job(
+            &run_id,
+            AnalysisJobLane::SelectedNode,
+            Arc::new(FileCancel(selected_cancelled.clone())),
+        )
+        .unwrap();
+    let (job_id, job_events) = manager
+        .start_whole_game_analysis(&run_id, &whole_game_query_jsonl(), 2)
+        .unwrap();
+    wait_job_event(&job_events, Duration::from_secs(2), |event| {
+        matches!(event, WholeGameJobEventDto::Progress { completed: 1, .. })
+    });
+    manager.cancel_job(&run_id, &job_id).unwrap();
+    wait_job_event(&job_events, Duration::from_secs(2), |event| {
+        matches!(event, WholeGameJobEventDto::Cancelled { .. })
+    });
+    std::fs::write(&release, "go").unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(job_events
+        .try_recv()
+        .ok()
+        .is_none_or(|event| !matches!(event, WholeGameJobEventDto::Completed { .. })));
+    assert!(!selected_cancelled.exists());
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+    let logged = std::fs::read_to_string(&log).unwrap();
+    assert!(logged.contains("\"action\":\"terminate\""));
+}
+
+#[cfg(unix)]
+#[test]
+fn stop_cancels_whole_game_and_rejects_stale_completion() {
+    let temp = TestTempDir::new("whole-game-stop");
+    let release = temp.path().join("release");
+    let script = format!(
+        r#"
+while IFS= read -r line; do
+  printf '%s' "$line" | grep -q '"action":"terminate"' && continue
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  [ -z "$id" ] && id="ok"
+  case "$id" in
+    lifecycle-readiness-*)
+      printf '{{"id":"%s","turnNumber":0}}\n' "$id"
+      ;;
+    *)
+      printf '{{"id":"%s","turnNumber":0}}\n' "$id"
+      while [ ! -f '{release}' ]; do sleep 0.01; done
+      printf '{{"id":"%s","turnNumber":1}}\n' "$id"
+      ;;
+  esac
+done
+"#,
+        release = release.display(),
+    );
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let (_, job_events) = manager
+        .start_whole_game_analysis(&run_id, &whole_game_query_jsonl(), 2)
+        .unwrap();
+    wait_job_event(&job_events, Duration::from_secs(2), |event| {
+        matches!(event, WholeGameJobEventDto::Progress { completed: 1, .. })
+    });
+    manager.stop().unwrap();
+    wait_job_event(&job_events, Duration::from_secs(2), |event| {
+        matches!(event, WholeGameJobEventDto::Cancelled { .. })
+    });
+    std::fs::write(&release, "go").unwrap();
+    wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine)
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(job_events
+        .try_recv()
+        .ok()
+        .is_none_or(|event| !matches!(event, WholeGameJobEventDto::Completed { .. })));
+}
+
+#[cfg(unix)]
+#[test]
+fn process_loss_cancels_whole_game_and_keeps_run_in_error() {
+    let temp = TestTempDir::new("whole-game-crash");
+    let crash = temp.path().join("crash");
+    let script = format!(
+        r#"
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  [ -z "$id" ] && id="ok"
+  case "$id" in
+    lifecycle-readiness-*)
+      printf '{{"id":"%s","turnNumber":0}}\n' "$id"
+      ;;
+    *)
+      printf '{{"id":"%s","turnNumber":0}}\n' "$id"
+      while [ ! -f '{crash}' ]; do sleep 0.01; done
+      exit 9
+      ;;
+  esac
+done
+"#,
+        crash = crash.display(),
+    );
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let (_, job_events) = manager
+        .start_whole_game_analysis(&run_id, &whole_game_query_jsonl(), 2)
+        .unwrap();
+    wait_job_event(&job_events, Duration::from_secs(2), |event| {
+        matches!(event, WholeGameJobEventDto::Progress { completed: 1, .. })
+    });
+    std::fs::write(&crash, "now").unwrap();
+    wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Error { .. })
+    });
+    let terminal = wait_job_event(&job_events, Duration::from_secs(2), |event| {
+        matches!(
+            event,
+            WholeGameJobEventDto::Cancelled { .. } | WholeGameJobEventDto::Failed { .. }
+        )
+    });
+    assert!(!matches!(terminal, WholeGameJobEventDto::Completed { .. }));
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Error { .. }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn unsupported_whole_game_capability_is_rejected_before_protocol_io() {
+    let temp = TestTempDir::new("whole-game-unsupported");
+    let log = temp.path().join("engine.log");
+    let mut script = format!("ENGINE_LOG='{}'\n", log.display());
+    script.push_str(&resident_echo_script());
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-1".into(),
+        profile: setup_profile(&temp, &script),
+    });
+    let manager = ForegroundEngineManager::new(
+        catalog,
+        ForegroundEngineConfig {
+            admit_whole_game_analysis: false,
+            ..ForegroundEngineConfig::for_tests()
+        },
+    );
+    let events = manager.subscribe();
+    manager.start("profile-1").unwrap();
+    let ready = wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    let run_id = run_from_ready(&ready.lifecycle).run_id.clone();
+    assert_eq!(
+        run_from_ready(&ready.lifecycle)
+            .capability_snapshot
+            .as_ref()
+            .unwrap()
+            .whole_game_analysis,
+        false
+    );
+    let logged_before = std::fs::read_to_string(&log).unwrap();
+    let err = manager
+        .start_whole_game_analysis(&run_id, &whole_game_query_jsonl(), 2)
+        .unwrap_err();
+    assert_eq!(err.kind, EngineFailureKind::UnsupportedCapability);
+    assert_eq!(err.operation, app_model::EngineOperationDto::Job);
+    assert_eq!(err.run_id.as_deref(), Some(run_id.as_str()));
+    std::thread::sleep(Duration::from_millis(100));
+    let logged_after = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(logged_before, logged_after);
 }
