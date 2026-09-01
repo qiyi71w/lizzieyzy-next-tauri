@@ -8,8 +8,8 @@ import { AppChrome, BottomBar, type OverlayMode, type SheetId } from "./componen
 import { PreferencesPanel } from "./components/PreferencesPanel";
 import { ProviderPanel } from "./components/ProviderPanel";
 import {
-  analyzeKataGoOnce,
   cancelKataGoAnalysis,
+  cancelSelectedNodeAnalysis,
   classifyProblems,
   fakeAnalyze,
   getHealth,
@@ -28,18 +28,20 @@ import {
   setCurrentGamePersonalComment,
   removeCurrentGameVariation,
   startKataGoGameAnalysis,
+  startSelectedNodeAnalysis,
   subscribeForegroundEngine,
   startForegroundEngine,
   stopForegroundEngine,
   restartForegroundEngine,
+  switchForegroundEngine,
   loadEngineProfilesSettings
 } from "./api/backend";
 import {
+  admitsForegroundEngineJobs,
   canRestartForegroundEngine,
   canStopForegroundEngine,
   emptyForegroundEngineSnapshot,
   engineStatusLabel,
-  isForegroundEngineReady,
   runFromSnapshot
 } from "./domain/foregroundEngine";
 import { computeGameCacheKey, loadAnalysisCache, saveAnalysisCache } from "./api/analysisCache";
@@ -48,12 +50,13 @@ import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, select
 import type { AnalysisCacheRecord, CacheStatus, GameCacheKey, JsonValue } from "./domain/cache";
 import { defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "./domain/preferences";
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
+import { admitsAnalysisPublication } from "./domain/analysisJob";
 import {
   createLocalRequestToken,
   shouldPublishReviewPresentation,
   type ReviewPresentationScope
 } from "./domain/reviewPresentation";
-import type { AnalysisFrameDto, AppHealthDto, CurrentGameResultDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, SgfTreeNodeDto } from "./domain/types";
+import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AppHealthDto, CurrentGameResultDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, SgfTreeNodeDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
@@ -109,7 +112,7 @@ export function App() {
   const [engineProfiles, setEngineProfiles] = useState<EngineProfileRecordDto[]>([]);
   const [engineFailure, setEngineFailure] = useState<EngineFailureDto | null>(null);
   const engineLabel = engineStatusLabel(engineSnapshot);
-  const engineReady = isForegroundEngineReady(engineSnapshot);
+  const engineReady = admitsForegroundEngineJobs(engineSnapshot);
   const [showCoordinates, setShowCoordinates] = useState(true);
   const [showMoveNumbers, setShowMoveNumbers] = useState(false);
   const [showBlackCandidates, setShowBlackCandidates] = useState(true);
@@ -118,6 +121,7 @@ export function App() {
   const [autoPlaying, setAutoPlaying] = useState(false);
   const jumpRef = useRef<HTMLInputElement | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
+  const activeRunIdRef = useRef<string | null>(null);
   const requestSerialRef = useRef(0);
   const [activeRequestToken, setActiveRequestToken] = useState("idle:0");
   const activeRequestTokenRef = useRef("idle:0");
@@ -131,6 +135,8 @@ export function App() {
   const pendingAnalysisTerminalEventsRef = useRef<Map<string, PendingAnalysisTerminalEvent>>(new Map());
   const analysisCleanupRef = useRef<(() => void) | null>(null);
   const currentGameRef = useRef<CurrentGameResultDto | null>(null);
+  const selectedNodeJobRef = useRef<AnalysisJobStartedDto | null>(null);
+  const handleSelectedNodeJobRef = useRef<(job: AnalysisJobEventDto) => void>(() => undefined);
 
   useEffect(() => {
     getHealth()
@@ -405,6 +411,9 @@ export function App() {
           setEngineFailure(failure);
           setMessage(failure.message);
         }
+      },
+      (job) => {
+        if (!cancelled) handleSelectedNodeJobRef.current(job);
       }
     );
     return () => {
@@ -419,17 +428,19 @@ export function App() {
     const record = engineProfiles.find((profile) => profile.id === run.profile_id);
     const maxVisits = record?.max_visits ?? 800;
     if (kind === "once") void handleRunKataGo(run.profile_snapshot, maxVisits);
-    else void handleAnalyzeKataGoGame(run.profile_snapshot, maxVisits);
+    else void handleAnalyzeKataGoGame(run.run_id, maxVisits);
   }
 
   async function handleSelectSwitcherProfile(profileId: string) {
     if (!profileId) return;
     const run = runFromSnapshot(engineSnapshot);
     if (run?.profile_id === profileId) return;
-    if (engineSnapshot.lifecycle.state !== "no_engine") return;
+    const state = engineSnapshot.lifecycle.state;
+    if (state !== "no_engine" && state !== "ready") return;
     setEngineFailure(null);
     try {
-      await startForegroundEngine(profileId);
+      if (state === "no_engine") await startForegroundEngine(profileId);
+      else await switchForegroundEngine(profileId);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     }
@@ -702,37 +713,84 @@ export function App() {
     }
   }
 
-  async function handleRunKataGo(profile: EngineProfileDto, maxVisits: number) {
-    const captured = beginReviewRequest();
-    const targetTurn = currentMove;
-    const visits = resolveAnalysisMaxVisits(maxVisits, preferences);
-    setIsKataGoRunning(true);
-    setMessage(`Running KataGo analysis for move ${targetTurn}...`);
-    try {
-      const artifacts = nativeRuntime
-        ? await artifactsFromCurrentGame()
-        : { serialized: sgfText, projection: await parseSgfSummary(sgfText) };
-      if (!nativeRuntime) setMessage(nativeCurrentGameUnavailable);
-      const replayed = nativeRuntime ? [] : await replaySgfPositions(sgfText);
-      const turn = nativeRuntime
-        ? (currentGameRef.current?.snapshot.position.move_number ?? Math.min(targetTurn, artifacts.projection.moves.length))
-        : clampMoveNumberToPositions(replayed, Math.min(targetTurn, replayed.at(-1)?.move_number ?? artifacts.projection.moves.length));
-      const frame = await analyzeKataGoOnce(profile, artifacts.serialized, turn, visits);
-      const mergedFrames = mergeAnalysisFrame([], frame);
-      const classified = await classifyProblems(mergedFrames);
-      if (!publishReviewPresentation(captured, mergedFrames, classified)) return;
-      setGame(artifacts.projection);
-      if (!nativeRuntime) setPositions(replayed);
-      setCurrentMove(frame.turn);
-      setMessage(`KataGo analysis completed for move ${frame.turn} with ${frame.visits} visits.`);
-    } catch (error) {
-      setMessage(`KataGo analysis failed: ${errorMessage(error)}`);
-    } finally {
+  function clearSelectedNodeRunning(jobId: string) {
+    if (selectedNodeJobRef.current?.job_id === jobId) selectedNodeJobRef.current = null;
+    if (activeJobIdRef.current === jobId) {
+      activeJobIdRef.current = null;
+      setActiveJobId(null);
       setIsKataGoRunning(false);
     }
   }
 
-  async function handleAnalyzeKataGoGame(profile: EngineProfileDto, maxVisits: number) {
+  handleSelectedNodeJobRef.current = (job: AnalysisJobEventDto) => {
+    const pending = selectedNodeJobRef.current;
+    if (!pending || pending.job_id !== job.job_id) return;
+    const publication = {
+      run_id: pending.run_id,
+      job_id: pending.job_id,
+      generation: pending.generation,
+      node_path: pending.node_path
+    };
+    if (job.outcome === "completed") {
+      const captured: ReviewPresentationScope = {
+        generation: job.generation,
+        selectedPath: [...job.node_path.indices],
+        requestToken: job.job_id
+      };
+      if (!admitsAnalysisPublication(job, publication) || !job.frame || !shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) {
+        clearSelectedNodeRunning(job.job_id);
+        return;
+      }
+      const frame = job.frame;
+      void (async () => {
+        try {
+          const classified = await classifyProblems([frame]);
+          if (!publishReviewPresentation(captured, [frame], classified)) return;
+          setMessage(`KataGo analysis completed for move ${frame.turn} with ${frame.visits} visits.`);
+        } catch (error) {
+          setMessage(`KataGo analysis failed: ${errorMessage(error)}`);
+        } finally {
+          clearSelectedNodeRunning(job.job_id);
+        }
+      })();
+      return;
+    }
+    if (job.outcome === "cancelled" || job.outcome === "superseded" || job.outcome === "timeout" || job.outcome === "failed") {
+      if (job.outcome === "failed") setMessage(job.failure?.message ?? "Selected-node analysis failed.");
+      else if (job.outcome === "timeout") setMessage("Selected-node analysis timed out.");
+      else if (job.outcome === "cancelled") setMessage("Selected-node analysis cancelled.");
+      clearSelectedNodeRunning(job.job_id);
+    }
+  };
+
+  async function handleRunKataGo(_profile: EngineProfileDto, maxVisits: number) {
+    const run = runFromSnapshot(engineSnapshot);
+    const game = currentGameRef.current;
+    if (!run || !game) {
+      setMessage("Selected-node analysis requires a Ready Foreground Engine Run and current game.");
+      return;
+    }
+    const visits = resolveAnalysisMaxVisits(maxVisits, preferences);
+    setIsKataGoRunning(true);
+    try {
+      const started = await startSelectedNodeAnalysis({
+        runId: run.run_id,
+        generation: game.generation,
+        nodePath: game.selected_path,
+        maxVisits: visits
+      });
+      beginReviewRequest(started.job_id);
+      selectedNodeJobRef.current = started;
+      activeJobIdRef.current = started.job_id;
+      setActiveJobId(started.job_id);
+      setMessage(`Running KataGo analysis (${started.job_id})...`);
+    } catch (error) {
+      setIsKataGoRunning(false);
+      setMessage(`KataGo analysis failed: ${errorMessage(error)}`);
+    }
+  }
+
+  async function handleAnalyzeKataGoGame(runId: string, maxVisits: number) {
     if (activeJobIdRef.current || startingAnalysisRef.current) return;
     const visits = resolveAnalysisMaxVisits(maxVisits, preferences);
     let captured = beginReviewRequest();
@@ -765,7 +823,7 @@ export function App() {
             });
             return;
           }
-          if (!isCurrentAnalysisJob(payload.job_id) || !isCurrentDocumentGeneration(generation)) return;
+          if (!isCurrentAnalysisJob(payload.job_id, payload.run_id) || !isCurrentDocumentGeneration(generation)) return;
           setAnalysisProgress({
             jobId: payload.job_id,
             completed: payload.completed,
@@ -781,8 +839,8 @@ export function App() {
             pendingAnalysisTerminalEventsRef.current.set(payload.job_id, { kind: "complete", frames: payload.frames });
             return;
           }
-          if (!isCurrentAnalysisJob(payload.job_id) || !shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) {
-            if (isCurrentAnalysisJob(payload.job_id)) finishStoppedAnalysis(payload.job_id);
+          if (!isCurrentAnalysisJob(payload.job_id, payload.run_id) || !shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) {
+            if (isCurrentAnalysisJob(payload.job_id, payload.run_id)) finishStoppedAnalysis(payload.job_id);
             return;
           }
           void finishCompletedAnalysis(payload.job_id, payload.frames, parsed, replayed, captured);
@@ -792,7 +850,7 @@ export function App() {
             pendingAnalysisTerminalEventsRef.current.set(payload.job_id, { kind: "error", message: payload.message });
             return;
           }
-          if (!isCurrentAnalysisJob(payload.job_id)) return;
+          if (!isCurrentAnalysisJob(payload.job_id, payload.run_id)) return;
           finishStoppedAnalysis(payload.job_id);
           setMessage(`Full-game KataGo analysis failed: ${payload.message}`);
         },
@@ -801,7 +859,7 @@ export function App() {
             pendingAnalysisTerminalEventsRef.current.set(payload.job_id, { kind: "cancelled", message: payload.message });
             return;
           }
-          if (!isCurrentAnalysisJob(payload.job_id)) return;
+          if (!isCurrentAnalysisJob(payload.job_id, payload.run_id)) return;
           finishStoppedAnalysis(payload.job_id);
           setAnalysisProgress(null);
           setMessage(payload.message || "Full-game KataGo analysis cancelled.");
@@ -809,7 +867,8 @@ export function App() {
       });
       cleanupAnalysisListeners();
       analysisCleanupRef.current = cleanup;
-      const jobId = await startKataGoGameAnalysis(profile, artifacts.serialized, visits);
+      const jobId = await startKataGoGameAnalysis(runId, artifacts.serialized, visits);
+      activeRunIdRef.current = runId;
       captured = adoptRequestToken(captured, jobId);
       const pendingTerminalEvent = pendingAnalysisTerminalEventsRef.current.get(jobId);
       const pendingProgress = pendingAnalysisProgressRef.current.get(jobId);
@@ -831,6 +890,7 @@ export function App() {
       pendingAnalysisProgressRef.current.clear();
       pendingAnalysisTerminalEventsRef.current.clear();
       activeJobIdRef.current = null;
+      activeRunIdRef.current = null;
       setActiveJobId(null);
       setAnalysisProgress(null);
       setIsKataGoRunning(false);
@@ -839,11 +899,22 @@ export function App() {
   }
 
   async function handleCancelKataGoAnalysis() {
+    const selected = selectedNodeJobRef.current;
+    if (selected) {
+      try {
+        setMessage("Cancelling selected-node KataGo analysis...");
+        await cancelSelectedNodeAnalysis({ runId: selected.run_id, jobId: selected.job_id });
+      } catch (error) {
+        setMessage(`Cancel failed: ${errorMessage(error)}`);
+      }
+      return;
+    }
     const jobId = activeJobIdRef.current;
-    if (!jobId) return;
+    const runId = activeRunIdRef.current;
+    if (!jobId || !runId) return;
     try {
       setMessage("Cancelling full-game KataGo analysis...");
-      await cancelKataGoAnalysis(jobId);
+      await cancelKataGoAnalysis(runId, jobId);
     } catch (error) {
       setMessage(`Cancel failed: ${errorMessage(error)}`);
     }
@@ -1076,8 +1147,10 @@ export function App() {
     analysisCleanupRef.current = null;
   }
 
-  function isCurrentAnalysisJob(jobId: string): boolean {
-    return activeJobIdRef.current === jobId;
+  function isCurrentAnalysisJob(jobId: string, runId?: string): boolean {
+    if (activeJobIdRef.current !== jobId) return false;
+    if (runId && activeRunIdRef.current && runId !== activeRunIdRef.current) return false;
+    return true;
   }
 
   async function finishPendingAnalysisTerminalEvent(jobId: string, event: PendingAnalysisTerminalEvent, parsed: GameDto, replayed: PositionDto[], captured: ReviewPresentationScope) {
@@ -1125,6 +1198,7 @@ export function App() {
   function finishStoppedAnalysis(jobId: string) {
     if (activeJobIdRef.current !== null && activeJobIdRef.current !== jobId) return;
     activeJobIdRef.current = null;
+    activeRunIdRef.current = null;
     setActiveJobId(null);
     setIsKataGoRunning(false);
     cleanupAnalysisListeners();

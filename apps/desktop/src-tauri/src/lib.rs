@@ -7,12 +7,12 @@ use app_model::{
     ReadboardSidecarSyncSnapshotRequest, ReadboardSidecarSyncSnapshotResult,
 };
 use engine_manager::{
-    build_command_spec, check_assets, AnalysisBatchRunOptions, AnalysisCancelToken, AssetCheck, CommandSpec,
-    EngineManagerError, EngineProfileCatalog, ForegroundEngineConfig, ForegroundEngineManager,
-    SavedEngineProfile,
+    build_command_spec, check_assets, AnalysisBatchRunOptions, AnalysisCancelToken, AnalysisJobEventDto,
+    AssetCheck, CommandSpec, EngineManagerError, EngineProfileCatalog, ForegroundEngineConfig,
+    ForegroundEngineManager, SavedEngineProfile, SelectedNodeJobRequest,
 };
 use go_core::ReadBoardLocalContext;
-use katago_protocol::{AnalysisBatchQueryOptions, AnalysisQueryOptions};
+use katago_protocol::{analysis_query_from_position, AnalysisBatchQueryOptions, AnalysisQueryOptions};
 use provider_core::{
     invalid_payload, invalid_request, invalid_url, timeout, transport_failed, ProviderResult,
     ProviderTransport,
@@ -221,6 +221,7 @@ fn is_http_url(url: &str) -> bool {
 }
 
 #[derive(Default)]
+#[allow(dead_code)]
 struct AnalysisJobRegistry {
     jobs: Mutex<HashMap<String, AnalysisCancelToken>>,
 }
@@ -299,6 +300,7 @@ struct PreparedBatchAnalysis {
 
 #[derive(Debug, Clone, Serialize)]
 struct AnalysisProgressPayload {
+    run_id: String,
     job_id: String,
     completed: usize,
     expected: usize,
@@ -308,12 +310,14 @@ struct AnalysisProgressPayload {
 
 #[derive(Debug, Clone, Serialize)]
 struct AnalysisCompletePayload {
+    run_id: String,
     job_id: String,
     frames: Vec<AnalysisFrameDto>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct AnalysisMessagePayload {
+    run_id: String,
     job_id: String,
     message: String,
 }
@@ -841,53 +845,162 @@ fn katago_analyze_game(
 }
 
 #[tauri::command]
-fn katago_start_analyze_game(
-    app_handle: AppHandle,
-    registry: State<'_, AnalysisJobRegistry>,
-    profile: EngineProfileDto,
-    sgf_text: String,
+fn foreground_engine_start_selected_node(
+    manager: State<'_, ForegroundEngineManager>,
+    current_game: State<'_, CurrentGameState>,
+    run_id: String,
+    generation: u64,
+    node_path: NodePath,
     max_visits: u32,
-) -> Result<String, String> {
-    let job_id = Uuid::new_v4();
-    let job_id_string = job_id.to_string();
-    let prepared = prepare_katago_batch_analysis(&sgf_text, job_id, max_visits)?;
-    let spec = build_command_spec(&profile).map_err(|err| err.to_string())?;
-    let cancel_token = AnalysisCancelToken::new();
-
-    {
-        let mut jobs = registry
-            .jobs
-            .lock()
-            .map_err(|_| "analysis job registry is unavailable".to_string())?;
-        jobs.insert(job_id_string.clone(), cancel_token.clone());
-    }
-
-    std::thread::spawn({
-        let job_id_string = job_id_string.clone();
-        move || {
-            run_katago_analysis_job(app_handle, job_id, job_id_string, spec, prepared, cancel_token);
-        }
-    });
-
-    Ok(job_id_string)
+) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+    let (snapshot, board_size, komi) =
+        current_game
+            .admit_selected_node(generation, &node_path)
+            .map_err(|error| EngineFailureDto {
+                operation: EngineOperationDto::Job,
+                run_id: Some(run_id.clone()),
+                switch_id: None,
+                job_id: None,
+                profile_id: None,
+                kind: EngineFailureKind::InvalidState,
+                message: error.message,
+                diagnostic_summary: None,
+            })?;
+    let query = analysis_query_from_position(
+        board_size,
+        komi,
+        &snapshot.position.stones,
+        snapshot.position.to_play,
+        AnalysisQueryOptions {
+            id: "pending".to_string(),
+            rules: "chinese".to_string(),
+            turn: snapshot.position.move_number,
+            max_visits: Some(max_visits),
+            include_ownership: Some(true),
+            include_policy: Some(true),
+        },
+    )
+    .map_err(|error| EngineFailureDto {
+        operation: EngineOperationDto::Job,
+        run_id: Some(run_id.clone()),
+        switch_id: None,
+        job_id: None,
+        profile_id: None,
+        kind: EngineFailureKind::Protocol,
+        message: error.to_string(),
+        diagnostic_summary: None,
+    })?;
+    manager.start_selected_node_job(SelectedNodeJobRequest {
+        run_id,
+        generation,
+        node_path,
+        query,
+        board_size,
+    })
 }
 
 #[tauri::command]
-fn katago_cancel_analysis(registry: State<'_, AnalysisJobRegistry>, job_id: String) -> Result<(), String> {
-    let cancel_token = {
-        let jobs = registry
-            .jobs
-            .lock()
-            .map_err(|_| "analysis job registry is unavailable".to_string())?;
-        jobs.get(&job_id).cloned()
-    };
+fn foreground_engine_cancel_job(
+    manager: State<'_, ForegroundEngineManager>,
+    run_id: String,
+    job_id: String,
+) -> Result<(), EngineFailureDto> {
+    manager.cancel_job(&run_id, &job_id)
+}
 
-    match cancel_token {
-        Some(cancel_token) => {
-            cancel_token.cancel();
-            Ok(())
+#[tauri::command]
+fn katago_start_analyze_game(
+    app_handle: AppHandle,
+    manager: State<'_, ForegroundEngineManager>,
+    run_id: String,
+    sgf_text: String,
+    max_visits: u32,
+) -> Result<String, EngineFailureDto> {
+    let prepared = prepare_katago_batch_analysis(&sgf_text, Uuid::nil(), max_visits).map_err(|message| {
+        EngineFailureDto {
+            operation: app_model::EngineOperationDto::Job,
+            run_id: Some(run_id.clone()),
+            switch_id: None,
+            job_id: None,
+            profile_id: None,
+            kind: app_model::EngineFailureKind::Start,
+            message,
+            diagnostic_summary: None,
         }
-        None => Err(format!("analysis job not found: {job_id}")),
+    })?;
+    let (job_id, events) =
+        manager.start_whole_game_analysis(&run_id, &prepared.query_jsonl, prepared.expected)?;
+    std::thread::spawn(move || {
+        forward_whole_game_job_events(app_handle, run_id, job_id.clone(), prepared, events);
+    });
+    Ok(job_id)
+}
+
+#[tauri::command]
+fn katago_cancel_analysis(
+    manager: State<'_, ForegroundEngineManager>,
+    run_id: String,
+    job_id: String,
+) -> Result<(), EngineFailureDto> {
+    manager.cancel_job(&run_id, &job_id)
+}
+
+fn forward_whole_game_job_events(
+    app_handle: AppHandle,
+    run_id: String,
+    job_id: String,
+    prepared: PreparedBatchAnalysis,
+    events: std::sync::mpsc::Receiver<AnalysisJobEventDto>,
+) {
+    while let Ok(event) = events.recv() {
+        match event {
+            AnalysisJobEventDto::Progress {
+                completed,
+                expected,
+                response_jsonl_line,
+                ..
+            } => {
+                let turn = katago_protocol::parse_response_line(&response_jsonl_line)
+                    .map(|response| response.turn_number)
+                    .ok();
+                let _ = app_handle.emit(
+                    "katago://analysis-progress",
+                    AnalysisProgressPayload {
+                        run_id: run_id.clone(),
+                        job_id: job_id.clone(),
+                        completed,
+                        expected,
+                        turn,
+                        response_jsonl: response_jsonl_line,
+                    },
+                );
+            }
+            AnalysisJobEventDto::Completed {
+                response_jsonl_lines, ..
+            } => {
+                emit_katago_analysis_complete(&app_handle, &run_id, &job_id, &prepared, response_jsonl_lines);
+            }
+            AnalysisJobEventDto::Cancelled { .. } => {
+                let _ = app_handle.emit(
+                    "katago://analysis-cancelled",
+                    AnalysisMessagePayload {
+                        run_id: run_id.clone(),
+                        job_id: job_id.clone(),
+                        message: "analysis job was cancelled".to_string(),
+                    },
+                );
+            }
+            AnalysisJobEventDto::Failed { failure, .. } => {
+                let _ = app_handle.emit(
+                    "katago://analysis-error",
+                    AnalysisMessagePayload {
+                        run_id: run_id.clone(),
+                        job_id: job_id.clone(),
+                        message: failure.message,
+                    },
+                );
+            }
+        }
     }
 }
 
@@ -927,6 +1040,7 @@ fn prepare_katago_batch_analysis(
     })
 }
 
+#[allow(dead_code)]
 fn run_katago_analysis_job(
     app_handle: AppHandle,
     job_id: Uuid,
@@ -943,6 +1057,7 @@ fn run_katago_analysis_job(
                 .map(|response| response.turn_number)
                 .ok();
             let payload = AnalysisProgressPayload {
+                run_id: String::new(),
                 job_id: job_id_string.clone(),
                 completed: progress.response_index,
                 expected: progress.expected_responses,
@@ -965,11 +1080,18 @@ fn run_katago_analysis_job(
     );
 
     match result {
-        Ok(result) => emit_katago_analysis_complete(&app_handle, job_id, &job_id_string, prepared, result),
+        Ok(result) => emit_katago_analysis_complete(
+            &app_handle,
+            "",
+            &job_id_string,
+            &prepared,
+            result.response_jsonl_lines,
+        ),
         Err(EngineManagerError::Cancelled { .. }) => {
             let _ = app_handle.emit(
                 "katago://analysis-cancelled",
                 AnalysisMessagePayload {
+                    run_id: String::new(),
                     job_id: job_id_string.clone(),
                     message: "analysis job was cancelled".to_string(),
                 },
@@ -979,6 +1101,7 @@ fn run_katago_analysis_job(
             let _ = app_handle.emit(
                 "katago://analysis-error",
                 AnalysisMessagePayload {
+                    run_id: String::new(),
                     job_id: job_id_string.clone(),
                     message: err.to_string(),
                 },
@@ -991,13 +1114,13 @@ fn run_katago_analysis_job(
 
 fn emit_katago_analysis_complete(
     app_handle: &AppHandle,
-    job_id: Uuid,
+    run_id: &str,
     job_id_string: &str,
-    prepared: PreparedBatchAnalysis,
-    result: engine_manager::AnalysisBatchRunResult,
+    prepared: &PreparedBatchAnalysis,
+    response_jsonl_lines: Vec<String>,
 ) {
-    let responses = result
-        .response_jsonl_lines
+    let job_id = Uuid::parse_str(job_id_string).unwrap_or_else(|_| Uuid::nil());
+    let responses = response_jsonl_lines
         .iter()
         .map(|line| katago_protocol::parse_response_line(line).map_err(|err| err.to_string()))
         .collect::<Result<Vec<_>, _>>();
@@ -1017,6 +1140,7 @@ fn emit_katago_analysis_complete(
             let _ = app_handle.emit(
                 "katago://analysis-complete",
                 AnalysisCompletePayload {
+                    run_id: run_id.to_string(),
                     job_id: job_id_string.to_string(),
                     frames,
                 },
@@ -1026,6 +1150,7 @@ fn emit_katago_analysis_complete(
             let _ = app_handle.emit(
                 "katago://analysis-error",
                 AnalysisMessagePayload {
+                    run_id: run_id.to_string(),
                     job_id: job_id_string.to_string(),
                     message,
                 },
@@ -1034,6 +1159,7 @@ fn emit_katago_analysis_complete(
     }
 }
 
+#[allow(dead_code)]
 fn remove_analysis_job(app_handle: &AppHandle, job_id: &str) {
     let Some(registry) = app_handle.try_state::<AnalysisJobRegistry>() else {
         return;
@@ -2050,6 +2176,14 @@ fn foreground_engine_restart(manager: State<'_, ForegroundEngineManager>) -> Res
     manager.restart()
 }
 
+#[tauri::command]
+fn foreground_engine_switch(
+    manager: State<'_, ForegroundEngineManager>,
+    profile_id: String,
+) -> Result<(), EngineFailureDto> {
+    manager.switch_to(&profile_id)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(AnalysisJobRegistry::default())
@@ -2119,7 +2253,10 @@ pub fn run() {
             foreground_engine_snapshot,
             foreground_engine_start,
             foreground_engine_stop,
-            foreground_engine_restart
+            foreground_engine_restart,
+            foreground_engine_switch,
+            foreground_engine_start_selected_node,
+            foreground_engine_cancel_job
         ])
         .build(tauri::generate_context!())
         .expect("failed to build LizzieYzy Next")
@@ -2147,6 +2284,24 @@ mod tests {
         assert_eq!(query["includeOwnership"], true);
         assert_eq!(query["includePolicy"], true);
         assert_eq!(query["analyzeTurns"], serde_json::json!([0, 1, 2]));
+    }
+
+    #[test]
+    fn whole_game_progress_payload_keeps_run_and_job_identities() {
+        let payload = AnalysisProgressPayload {
+            run_id: "run-1".into(),
+            job_id: "job-9".into(),
+            completed: 1,
+            expected: 2,
+            turn: Some(3),
+            response_jsonl: r#"{"id":"job-9"}"#.into(),
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["run_id"], "run-1");
+        assert_eq!(json["job_id"], "job-9");
+        assert_eq!(json["completed"], 1);
+        assert_eq!(json["expected"], 2);
+        assert_eq!(json["turn"], 3);
     }
 
     #[test]

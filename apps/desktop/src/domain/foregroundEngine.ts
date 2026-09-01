@@ -46,8 +46,13 @@ export function isForegroundEngineReady(snapshot: ForegroundEngineSnapshotDto): 
   return snapshot.lifecycle.state === "ready";
 }
 
+export function admitsForegroundEngineJobs(snapshot: ForegroundEngineSnapshotDto): boolean {
+  return snapshot.lifecycle.state === "ready" || snapshot.lifecycle.state === "switching";
+}
+
 export function canStopForegroundEngine(snapshot: ForegroundEngineSnapshotDto): boolean {
   return snapshot.lifecycle.state === "ready"
+    || snapshot.lifecycle.state === "switching"
     || snapshot.lifecycle.state === "error"
     || snapshot.lifecycle.state === "starting";
 }

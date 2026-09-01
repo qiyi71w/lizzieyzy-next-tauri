@@ -3,6 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AnalysisFrameDto,
+  AnalysisJobEventDto,
+  AnalysisJobStartedDto,
   AppHealthDto,
   AssetCheckDto,
   CandidateMoveDto,
@@ -34,6 +36,7 @@ export type SgfDocument = {
 };
 
 export type AnalysisProgressPayload = {
+  run_id: string;
   job_id: string;
   completed: number;
   expected: number;
@@ -42,11 +45,13 @@ export type AnalysisProgressPayload = {
 };
 
 export type AnalysisCompletePayload = {
+  run_id: string;
   job_id: string;
   frames: AnalysisFrameDto[];
 };
 
 export type AnalysisErrorPayload = {
+  run_id: string;
   job_id: string;
   message: string;
 };
@@ -188,16 +193,16 @@ export async function analyzeKataGoGame(profile: EngineProfileDto, sgfText: stri
   return await invoke<AnalysisFrameDto[]>("katago_analyze_game", { profile, sgfText, maxVisits });
 }
 
-export async function startKataGoGameAnalysis(profile: EngineProfileDto, sgfText: string, maxVisits: number): Promise<string> {
+export async function startKataGoGameAnalysis(runId: string, sgfText: string, maxVisits: number): Promise<string> {
   if (!isTauriRuntime()) {
     throw new Error("Full-game KataGo analysis requires the Tauri desktop backend. Browser preview cannot run real KataGo; use Run review for fake analysis.");
   }
-  return await invoke<string>("katago_start_analyze_game", { profile, sgfText, maxVisits });
+  return await invoke<string>("katago_start_analyze_game", { runId, sgfText, maxVisits });
 }
 
-export async function cancelKataGoAnalysis(jobId: string): Promise<void> {
+export async function cancelKataGoAnalysis(runId: string, jobId: string): Promise<void> {
   if (!isTauriRuntime()) return;
-  await invoke<void>("katago_cancel_analysis", { jobId });
+  await invoke<void>("katago_cancel_analysis", { runId, jobId });
 }
 
 export async function listenToKataGoAnalysisEvents(handlers: KataGoAnalysisEventHandlers): Promise<() => void> {
@@ -244,7 +249,30 @@ export async function saveEngineProfilesSettings(settings: EngineProfilesSetting
 export type ForegroundEngineEventHandlers = {
   onSnapshot?: (snapshot: ForegroundEngineSnapshotDto) => void;
   onFailure?: (failure: EngineFailureDto) => void;
+  onJob?: (job: AnalysisJobEventDto) => void;
 };
+
+export async function startSelectedNodeAnalysis(input: {
+  runId: string;
+  generation: number;
+  nodePath: NodePath;
+  maxVisits: number;
+}): Promise<AnalysisJobStartedDto> {
+  if (!isTauriRuntime()) {
+    throw new Error("Selected-node analysis requires a Ready Foreground Engine Run on the Tauri desktop backend.");
+  }
+  return await invoke<AnalysisJobStartedDto>("foreground_engine_start_selected_node", {
+    runId: input.runId,
+    generation: input.generation,
+    nodePath: input.nodePath,
+    maxVisits: input.maxVisits
+  });
+}
+
+export async function cancelSelectedNodeAnalysis(input: { runId: string; jobId: string }): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await invoke<void>("foreground_engine_cancel_job", { runId: input.runId, jobId: input.jobId });
+}
 
 export async function getForegroundEngineSnapshot(): Promise<ForegroundEngineSnapshotDto> {
   if (!isTauriRuntime()) return emptyForegroundEngineSnapshot();
@@ -270,13 +298,21 @@ export async function restartForegroundEngine(): Promise<void> {
   await invoke<void>("foreground_engine_restart");
 }
 
+export async function switchForegroundEngine(profileId: string): Promise<void> {
+  if (!isTauriRuntime()) {
+    throw new Error("Switching a Foreground Engine Run requires the Tauri desktop backend.");
+  }
+  await invoke<void>("foreground_engine_switch", { profileId });
+}
+
 export async function listenToForegroundEngineEvents(
   handlers: ForegroundEngineEventHandlers
 ): Promise<() => void> {
   if (!isTauriRuntime()) return () => undefined;
   const unlisteners = await Promise.all([
     listen<ForegroundEngineSnapshotDto>("foreground-engine://snapshot", (event) => handlers.onSnapshot?.(event.payload)),
-    listen<EngineFailureDto>("foreground-engine://failure", (event) => handlers.onFailure?.(event.payload))
+    listen<EngineFailureDto>("foreground-engine://failure", (event) => handlers.onFailure?.(event.payload)),
+    listen<AnalysisJobEventDto>("foreground-engine://job", (event) => handlers.onJob?.(event.payload))
   ]);
   return () => {
     for (const unlisten of unlisteners) unlisten();
@@ -285,7 +321,8 @@ export async function listenToForegroundEngineEvents(
 
 export async function subscribeForegroundEngine(
   onSnapshot: (snapshot: ForegroundEngineSnapshotDto) => void,
-  onFailure?: (failure: EngineFailureDto) => void
+  onFailure?: (failure: EngineFailureDto) => void,
+  onJob?: (job: AnalysisJobEventDto) => void
 ): Promise<() => void> {
   let current = emptyForegroundEngineSnapshot();
   const apply = (incoming: ForegroundEngineSnapshotDto) => {
@@ -294,7 +331,8 @@ export async function subscribeForegroundEngine(
   };
   const unlisten = await listenToForegroundEngineEvents({
     onSnapshot: apply,
-    onFailure
+    onFailure,
+    onJob
   });
   try {
     apply(await getForegroundEngineSnapshot());
