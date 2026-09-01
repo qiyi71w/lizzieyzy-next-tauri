@@ -52,6 +52,8 @@ Frozen baselines: Java `7b4027531c2b26062d0bfc27a040cc550cfbea4d`; Next inventor
 
 R3 is the next executable phase and exits on `ENG-02` through `ENG-07`. The R3 path must prove the `KataGoAnalysis` adapter. `ENG-06` Autoload Default is off at first use and persists with that item.
 
+Ticket 10 rebuilt Plan membership, Promotion Gates, Delivery Order, and Phase Gates from this corpus. This map follows Plan membership. Matrix `Depends on` remains the only Item Start Prerequisite set.
+
 ## Ticket 16 Disposition-To-Item Closure
 
 Ticket 16 identified thirteen final owner-route or conflict records without supported Parity Item IDs from Tickets 08–14. Tickets 17–27 assigned twelve records to supported IDs or explicit exclusions without expanding Accepted history. Ticket 28 closes the final autoplay remainder through Missing R4 `ANA-13` Variation Replay and an explicit Engine Continuation exclusion.
