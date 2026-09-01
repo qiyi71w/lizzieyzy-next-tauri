@@ -48,6 +48,7 @@ const backend = vi.hoisted(() => ({
   startForegroundEngine: vi.fn(() => Promise.resolve()),
   stopForegroundEngine: vi.fn(() => Promise.resolve()),
   restartForegroundEngine: vi.fn(() => Promise.resolve()),
+  switchForegroundEngine: vi.fn(() => Promise.resolve()),
   getForegroundEngineSnapshot: vi.fn(),
   subscribeForegroundEngine: vi.fn()
 }));
@@ -111,6 +112,36 @@ const savedProfile = {
   }
 };
 
+const savedProfileB = {
+  id: "profile-2",
+  max_visits: 400,
+  profile: {
+    name: "Other KataGo",
+    engine_path: "/bin/katago-b",
+    model_path: "/models/b.bin",
+    config_path: "/configs/b.cfg",
+    working_dir: "/tmp",
+    backend: "kata_go_analysis" as const
+  }
+};
+
+const capability = {
+  adapter_kind: "kata_go_analysis" as const,
+  selected_node_analysis: true,
+  whole_game_analysis: true,
+  protocol_cancel: true
+};
+
+function readyRun(runId: string, profile: typeof savedProfile) {
+  return {
+    run_id: runId,
+    profile_id: profile.id,
+    adapter_kind: "kata_go_analysis" as const,
+    profile_snapshot: profile.profile,
+    capability_snapshot: capability
+  };
+}
+
 let root: Root | null = null;
 
 beforeEach(() => {
@@ -148,7 +179,7 @@ beforeEach(() => {
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
   backend.loadEngineProfilesSettings.mockResolvedValue({
     selected_profile_id: "profile-1",
-    profiles: [savedProfile]
+    profiles: [savedProfile, savedProfileB]
   });
   backend.saveEngineProfilesSettings.mockImplementation(async (settings) => settings);
   backend.getForegroundEngineSnapshot.mockResolvedValue({ revision: 0, lifecycle: { state: "no_engine" } });
@@ -552,5 +583,135 @@ describe("foreground engine lifecycle UI", () => {
     });
     expect(analysisCache.saveAnalysisCache).not.toHaveBeenCalled();
     expect(host.textContent).not.toContain("Full-game KataGo analysis completed");
+  });
+
+  it("keeps A analysis available while Switching and does not bind jobs to B", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    const switcher = host.querySelector('select[aria-label="Foreground Engine Profile"]') as HTMLSelectElement;
+    backend.startForegroundEngine.mockClear();
+    backend.switchForegroundEngine.mockClear();
+    await act(async () => {
+      switcher.value = "profile-2";
+      switcher.dispatchEvent(new Event("change", { bubbles: true }));
+      await backend.switchForegroundEngine.mock.results[0]?.value;
+    });
+    expect(backend.switchForegroundEngine).toHaveBeenCalledWith("profile-2");
+    expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 3,
+        lifecycle: {
+          state: "switching",
+          primary: readyRun("run-1", savedProfile),
+          candidate: {
+            ...readyRun("run-b", savedProfileB),
+            capability_snapshot: null
+          },
+          switch_id: "7"
+        }
+      });
+    });
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("正在切换 Other KataGo");
+    expect(switcher.value).toBe("profile-1");
+    const analyzeOnce = buttonNamed(host, "继续分析");
+    expect(analyzeOnce.disabled).toBe(false);
+    await act(async () => {
+      analyzeOnce.click();
+      await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
+    });
+    expect(backend.startSelectedNodeAnalysis).toHaveBeenCalledWith({
+      runId: "run-1",
+      generation: 1,
+      nodePath: { indices: [] },
+      maxVisits: 800
+    });
+  });
+
+  it("rebinds operations to B after promotion without changing Settings selection or unsaved form", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => {
+      Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "设置")?.click();
+      await backend.loadEngineProfilesSettings.mock.results.at(-1)?.value;
+    });
+    const settingsSelect = host.querySelector(".engine-setup-panel select") as HTMLSelectElement;
+    const nameInput = host.querySelector('.engine-setup-panel input[placeholder="本地 KataGo"]') as HTMLInputElement;
+    expect(settingsSelect.value).toBe("profile-1");
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(nameInput, "Unsaved draft");
+      nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    backend.saveEngineProfilesSettings.mockClear();
+    backend.startForegroundEngine.mockClear();
+    const switcher = host.querySelector('select[aria-label="Foreground Engine Profile"]') as HTMLSelectElement;
+    await act(async () => {
+      switcher.value = "profile-2";
+      switcher.dispatchEvent(new Event("change", { bubbles: true }));
+      await backend.switchForegroundEngine.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 4,
+        lifecycle: {
+          state: "ready",
+          run: readyRun("run-b", savedProfileB)
+        }
+      });
+    });
+    expect(backend.switchForegroundEngine).toHaveBeenCalledWith("profile-2");
+    expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+    expect(backend.saveEngineProfilesSettings).not.toHaveBeenCalled();
+    expect(settingsSelect.value).toBe("profile-1");
+    expect(nameInput.value).toBe("Unsaved draft");
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("Other KataGo");
+    expect(switcher.value).toBe("profile-2");
+    backend.startSelectedNodeAnalysis.mockClear();
+    await act(async () => {
+      buttonNamed(host, "继续分析").click();
+      await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
+    });
+    expect(backend.startSelectedNodeAnalysis).toHaveBeenCalledWith({
+      runId: "run-b",
+      generation: 1,
+      nodePath: { indices: [] },
+      maxVisits: 400
+    });
+    expect(buttonNamed(host, "停止").disabled).toBe(false);
+
+    const activeProfileId = "profile-2";
+    backend.saveEngineProfilesSettings.mockImplementation(async (settings) => {
+      const removed = [savedProfile.id, savedProfileB.id].filter(
+        (id) => !settings.profiles.some((profile) => profile.id === id)
+      );
+      if (removed.includes(activeProfileId)) {
+        throw new Error("an active Foreground Engine Run still holds this profile identity");
+      }
+      return settings;
+    });
+    const deleteProfile = () => Array.from(host.querySelectorAll(".engine-setup-panel button")).find((button) => button.textContent === "删除") as HTMLButtonElement;
+    await act(async () => {
+      settingsSelect.value = "profile-2";
+      settingsSelect.dispatchEvent(new Event("change", { bubbles: true }));
+      await backend.saveEngineProfilesSettings.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      deleteProfile().click();
+      await backend.saveEngineProfilesSettings.mock.results.at(-1)?.value.catch(() => undefined);
+    });
+    expect(host.textContent).toContain("Delete failed");
+    expect(host.textContent).toContain("an active Foreground Engine Run still holds this profile identity");
+    expect(Array.from(settingsSelect.options).map((option) => option.value)).toEqual(["profile-1", "profile-2"]);
+    await act(async () => {
+      settingsSelect.value = "profile-1";
+      settingsSelect.dispatchEvent(new Event("change", { bubbles: true }));
+      await backend.saveEngineProfilesSettings.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      deleteProfile().click();
+      await backend.saveEngineProfilesSettings.mock.results.at(-1)?.value;
+    });
+    expect(Array.from(settingsSelect.options).map((option) => option.value)).toEqual(["profile-2"]);
   });
 });

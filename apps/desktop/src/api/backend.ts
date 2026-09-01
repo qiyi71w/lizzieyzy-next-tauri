@@ -298,6 +298,13 @@ export async function restartForegroundEngine(): Promise<void> {
   await invoke<void>("foreground_engine_restart");
 }
 
+export async function switchForegroundEngine(profileId: string): Promise<void> {
+  if (!isTauriRuntime()) {
+    throw new Error("Switching a Foreground Engine Run requires the Tauri desktop backend.");
+  }
+  await invoke<void>("foreground_engine_switch", { profileId });
+}
+
 export async function listenToForegroundEngineEvents(
   handlers: ForegroundEngineEventHandlers
 ): Promise<() => void> {

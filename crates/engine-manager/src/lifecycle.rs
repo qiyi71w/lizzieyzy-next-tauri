@@ -10,7 +10,7 @@ use app_model::{
     EngineOperationDto, EngineRunDto, ForegroundEngineEventDto, ForegroundEngineLifecycleDto,
     ForegroundEngineSnapshotDto, NodePath,
 };
-use katago_protocol::{normalize_response, parse_response_line, terminate_action_jsonl, AnalysisQuery};
+use katago_protocol::{normalize_response, parse_response_line, AnalysisQuery};
 use std::io;
 use std::process::{Child, ChildStdin};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -134,6 +134,11 @@ enum Phase {
     NoEngine,
     Starting(EngineRunDto),
     Ready(EngineRunDto),
+    Switching {
+        primary: EngineRunDto,
+        candidate: EngineRunDto,
+        switch_id: String,
+    },
     Stopping(EngineRunDto),
     Error {
         run: EngineRunDto,
@@ -146,6 +151,8 @@ struct ManagerState {
     phase: Phase,
     operation: u64,
     live: Option<LiveEngine>,
+    candidate: Option<LiveEngine>,
+    switch_seq: u64,
     jobs: Vec<RegisteredJob>,
     subscribers: Vec<Sender<ForegroundEngineEventDto>>,
 }
@@ -172,6 +179,8 @@ impl ForegroundEngineManager {
                     phase: Phase::NoEngine,
                     operation: 0,
                     live: None,
+                    candidate: None,
+                    switch_seq: 0,
                     jobs: Vec::new(),
                     subscribers: Vec::new(),
                 }),
@@ -295,6 +304,67 @@ impl ForegroundEngineManager {
         Ok(())
     }
 
+    pub fn switch_to(&self, profile_id: &str) -> Result<(), EngineFailureDto> {
+        let saved = self.inner.catalog.get(profile_id).ok_or_else(|| {
+            failure(
+                EngineOperationDto::Switch,
+                EngineFailureKind::ProfileNotFound,
+                format!("saved engine profile was not found: {profile_id}"),
+                None,
+                Some(profile_id),
+                None,
+            )
+        })?;
+        if saved.profile.backend != EngineBackend::KataGoAnalysis {
+            return Err(failure(
+                EngineOperationDto::Switch,
+                EngineFailureKind::UnsupportedCapability,
+                "R3 Foreground Engine Run only proves KataGoAnalysis".into(),
+                None,
+                Some(saved.profile_id.as_str()),
+                None,
+            ));
+        }
+        let (operation, candidate, switch_id) = {
+            let mut state = self.lock();
+            let primary = match &state.phase {
+                Phase::Ready(run) => run.clone(),
+                Phase::Switching { primary, .. } => primary.clone(),
+                _ => {
+                    return Err(failure(
+                        EngineOperationDto::Switch,
+                        EngineFailureKind::InvalidState,
+                        "Switch requires a Ready Foreground Engine Run".into(),
+                        current_run_id(&state.phase).as_deref(),
+                        Some(profile_id),
+                        None,
+                    ));
+                }
+            };
+            if primary.profile_id == profile_id {
+                return Ok(());
+            }
+            if let Some(mut previous) = state.candidate.take() {
+                close_live_stdin(&previous);
+                let _ = kill_timed_out_child(&mut previous.child);
+            }
+            state.operation += 1;
+            state.switch_seq += 1;
+            let switch_id = state.switch_seq.to_string();
+            let candidate = starting_run(&saved);
+            state.phase = Phase::Switching {
+                primary,
+                candidate: candidate.clone(),
+                switch_id: switch_id.clone(),
+            };
+            publish_snapshot(&mut state);
+            (state.operation, candidate, switch_id)
+        };
+        let inner = self.inner.clone();
+        thread::spawn(move || inner.run_switch_candidate(operation, candidate, switch_id));
+        Ok(())
+    }
+
     pub fn register_job(
         &self,
         run_id: &str,
@@ -302,10 +372,8 @@ impl ForegroundEngineManager {
         cancel: Arc<dyn AnalysisJobCancel>,
     ) -> Result<String, EngineFailureDto> {
         let mut state = self.lock();
-        let admitted = matches!(
-            &state.phase,
-            Phase::Ready(run) if run.run_id == run_id && run.capability_snapshot.is_some()
-        );
+        let admitted =
+            admitting_run(&state.phase, run_id).is_some_and(|run| run.capability_snapshot.is_some());
         if !admitted {
             return Err(failure(
                 EngineOperationDto::Job,
@@ -434,9 +502,9 @@ impl ForegroundEngineManager {
     ) -> Result<(String, Receiver<AnalysisJobEventDto>), EngineFailureDto> {
         let bound_query = {
             let state = self.lock();
-            let run = match &state.phase {
-                Phase::Ready(run) if run.run_id == run_id => run.clone(),
-                _ => {
+            let run = match admitting_run(&state.phase, run_id) {
+                Some(run) => run,
+                None => {
                     return Err(failure(
                         EngineOperationDto::Job,
                         EngineFailureKind::InvalidState,
@@ -468,10 +536,9 @@ impl ForegroundEngineManager {
         let (job_id, bound_query) = bound_query;
         let rx = {
             let mut state = self.lock();
-            let admitted = matches!(
-                &state.phase,
-                Phase::Ready(run) if run.run_id == run_id && run.capability_snapshot.as_ref().is_some_and(|c| c.whole_game_analysis)
-            );
+            let admitted = admitting_run(&state.phase, run_id)
+                .and_then(|run| run.capability_snapshot)
+                .is_some_and(|snapshot| snapshot.whole_game_analysis);
             if !admitted {
                 return Err(failure(
                     EngineOperationDto::Job,
@@ -595,33 +662,24 @@ impl ForegroundEngineManager {
             }
             job.terminal = true;
         }
-        state.jobs.retain(|job| !(job.job_id == job_id && job.run_id == run_id));
+        state
+            .jobs
+            .retain(|job| !(job.job_id == job_id && job.run_id == run_id));
     }
 
     fn write_live_jsonl(&self, run_id: &str, jsonl: &str) -> Result<(), EngineFailureDto> {
         let stdin = {
             let state = self.lock();
-            let Some(live) = state.live.as_ref() else {
-                return Err(failure(
+            engine_stdin(&state, run_id).ok_or_else(|| {
+                failure(
                     EngineOperationDto::Job,
                     EngineFailureKind::InvalidState,
                     "Foreground Engine Run process is not available".into(),
                     Some(run_id),
                     None,
                     None,
-                ));
-            };
-            if live.run_id != run_id {
-                return Err(failure(
-                    EngineOperationDto::Job,
-                    EngineFailureKind::InvalidState,
-                    "Analysis Job admission requires a Ready Foreground Engine Run".into(),
-                    Some(run_id),
-                    None,
-                    None,
-                ));
-            }
-            live.stdin.clone()
+                )
+            })?
         };
         let mut guard = stdin.lock().map_err(|_| {
             failure(
@@ -658,13 +716,10 @@ impl ForegroundEngineManager {
     fn write_terminate(&self, run_id: &str, job_id: &str) {
         let stdin = {
             let state = self.lock();
-            let Some(live) = state.live.as_ref() else {
+            let Some(stdin) = engine_stdin(&state, run_id) else {
                 return;
             };
-            if live.run_id != run_id {
-                return;
-            }
-            live.stdin.clone()
+            stdin
         };
         if let Ok(mut guard) = stdin.lock() {
             if let Some(stdin) = guard.as_mut() {
@@ -678,6 +733,7 @@ impl ForegroundEngineManager {
         let state = self.lock();
         let blocked = match &state.phase {
             Phase::Starting(run) | Phase::Ready(run) | Phase::Stopping(run) => Some(run),
+            Phase::Switching { primary, .. } => Some(primary),
             Phase::Error { run, .. } => Some(run),
             Phase::NoEngine => None,
         };
@@ -701,6 +757,7 @@ impl ForegroundEngineManager {
         let run = match &state.phase {
             Phase::NoEngine => return Ok(None),
             Phase::Starting(run) | Phase::Ready(run) | Phase::Stopping(run) => run.clone(),
+            Phase::Switching { primary, .. } => primary.clone(),
             Phase::Error { run, .. } => run.clone(),
         };
         state.operation += 1;
@@ -728,12 +785,26 @@ impl Inner {
         if self.current_operation() != operation {
             return;
         }
-        if let Err(published) = self.start_resident(operation, &run) {
+        if let Err(published) = self.start_resident(operation, &run, false) {
             self.fail_attempt(operation, published);
         }
     }
 
-    fn start_resident(self: &Arc<Self>, operation: u64, run: &EngineRunDto) -> Result<(), EngineFailureDto> {
+    fn run_switch_candidate(self: Arc<Self>, operation: u64, run: EngineRunDto, switch_id: String) {
+        if self.current_operation() != operation {
+            return;
+        }
+        if let Err(published) = self.start_resident(operation, &run, true) {
+            self.fail_switch_candidate(operation, &run, &switch_id, published);
+        }
+    }
+
+    fn start_resident(
+        self: &Arc<Self>,
+        operation: u64,
+        run: &EngineRunDto,
+        as_candidate: bool,
+    ) -> Result<(), EngineFailureDto> {
         let missing: Vec<_> = check_assets(&run.profile_snapshot)
             .into_iter()
             .filter(|check| check.required && !check.exists)
@@ -858,17 +929,26 @@ impl Inner {
                 let _ = kill_timed_out_child(&mut child);
                 return Ok(());
             }
-            state.live = Some(LiveEngine {
+            let engine = LiveEngine {
                 child,
                 stdin: Arc::new(Mutex::new(Some(stdin))),
                 stdout_rx: Some(stdout_rx),
                 stderr_rx,
                 run_id: run.run_id.clone(),
-            });
+            };
+            if as_candidate {
+                state.candidate = Some(engine);
+            } else {
+                state.live = Some(engine);
+            }
         }
 
-        self.await_readiness(operation, run, &probe_id)?;
-        self.admit_ready(operation, run);
+        self.await_readiness(operation, run, &probe_id, as_candidate)?;
+        if as_candidate {
+            self.promote_candidate(operation, run);
+        } else {
+            self.admit_ready(operation, run);
+        }
         Ok(())
     }
 
@@ -877,6 +957,7 @@ impl Inner {
         operation: u64,
         run: &EngineRunDto,
         probe_id: &str,
+        as_candidate: bool,
     ) -> Result<(), EngineFailureDto> {
         let deadline = Instant::now() + self.config.readiness_timeout;
         loop {
@@ -896,7 +977,12 @@ impl Inner {
             }
             let line = {
                 let state = self.lock();
-                let Some(live) = state.live.as_ref() else {
+                let live = if as_candidate {
+                    state.candidate.as_ref()
+                } else {
+                    state.live.as_ref()
+                };
+                let Some(live) = live else {
                     return Err(failure(
                         EngineOperationDto::Start,
                         EngineFailureKind::Start,
@@ -999,12 +1085,100 @@ impl Inner {
         }
     }
 
+    fn promote_candidate(self: &Arc<Self>, operation: u64, run: &EngineRunDto) {
+        let retiring = {
+            let mut state = self.lock();
+            if state.operation != operation {
+                return;
+            }
+            let Phase::Switching {
+                primary,
+                candidate,
+                switch_id: _,
+            } = &state.phase
+            else {
+                return;
+            };
+            if candidate.run_id != run.run_id {
+                return;
+            }
+            let primary_run_id = primary.run_id.clone();
+            let mut ready = run.clone();
+            ready.capability_snapshot = Some(EngineCapabilitySnapshotDto {
+                adapter_kind: EngineBackend::KataGoAnalysis,
+                selected_node_analysis: true,
+                whole_game_analysis: self.config.admit_whole_game_analysis,
+                protocol_cancel: true,
+            });
+            cancel_jobs_for_run(&mut state, &primary_run_id);
+            let retiring = state.live.take();
+            state.live = state.candidate.take();
+            state.phase = Phase::Ready(ready);
+            publish_snapshot(&mut state);
+            let stdout_rx = state.live.as_mut().and_then(|live| live.stdout_rx.take());
+            drop(state);
+            if let Some(stdout_rx) = stdout_rx {
+                let inner = self.clone();
+                let run_id = run.run_id.clone();
+                thread::spawn(move || inner.pump_stdout(operation, run_id, stdout_rx));
+            }
+            let inner = self.clone();
+            let run_id = run.run_id.clone();
+            thread::spawn(move || inner.watch_exit(operation, run_id));
+            retiring
+        };
+        if let Some(mut live) = retiring {
+            thread::sleep(self.config.stop_drain_timeout);
+            close_live_stdin(&live);
+            let _ = kill_timed_out_child(&mut live.child);
+        }
+    }
+
+    fn fail_switch_candidate(
+        &self,
+        operation: u64,
+        run: &EngineRunDto,
+        switch_id: &str,
+        published: EngineFailureDto,
+    ) {
+        let mut state = self.lock();
+        if state.operation != operation {
+            return;
+        }
+        let Phase::Switching {
+            primary,
+            candidate,
+            switch_id: current_switch,
+        } = &state.phase
+        else {
+            return;
+        };
+        if candidate.run_id != run.run_id || current_switch != switch_id {
+            return;
+        }
+        let primary = primary.clone();
+        if let Some(mut live) = state.candidate.take() {
+            close_live_stdin(&live);
+            let _ = kill_timed_out_child(&mut live.child);
+        }
+        state.phase = Phase::Ready(primary);
+        publish_snapshot(&mut state);
+        publish_event(
+            &mut state,
+            ForegroundEngineEventDto::Failure { failure: published },
+        );
+    }
+
     fn fail_attempt(&self, operation: u64, published: EngineFailureDto) {
         let mut state = self.lock();
         if state.operation != operation {
             return;
         }
         if let Some(mut live) = state.live.take() {
+            close_live_stdin(&live);
+            let _ = kill_timed_out_child(&mut live.child);
+        }
+        if let Some(mut live) = state.candidate.take() {
             close_live_stdin(&live);
             let _ = kill_timed_out_child(&mut live.child);
         }
@@ -1035,12 +1209,20 @@ impl Inner {
             close_live_stdin(&live);
             let _ = kill_timed_out_child(&mut live.child);
         }
+        if let Some(mut live) = state.candidate.take() {
+            close_live_stdin(&live);
+            let _ = kill_timed_out_child(&mut live.child);
+        }
     }
 
     fn force_no_engine(&self, operation: u64) {
         let mut state = self.lock();
         if state.operation != operation {
             return;
+        }
+        if let Some(mut live) = state.candidate.take() {
+            close_live_stdin(&live);
+            let _ = kill_timed_out_child(&mut live.child);
         }
         state.jobs.clear();
         state.phase = Phase::NoEngine;
@@ -1052,9 +1234,6 @@ impl Inner {
             thread::sleep(Duration::from_millis(30));
             let status = {
                 let mut state = self.lock();
-                if state.operation != operation {
-                    return;
-                }
                 let Some(live) = state.live.as_mut() else {
                     return;
                 };
@@ -1131,12 +1310,17 @@ impl Inner {
     }
     fn pump_stdout(
         self: Arc<Self>,
-        operation: u64,
+        _operation: u64,
         run_id: String,
         stdout_rx: Receiver<io::Result<Option<String>>>,
     ) {
         loop {
-            if self.current_operation() != operation {
+            let owned = {
+                let state = self.lock();
+                state.live.as_ref().is_some_and(|live| live.run_id == run_id)
+                    || state.candidate.as_ref().is_some_and(|live| live.run_id == run_id)
+            };
+            if !owned {
                 return;
             }
             match stdout_rx.recv_timeout(Duration::from_millis(50)) {
@@ -1277,6 +1461,15 @@ fn snapshot_from(state: &ManagerState) -> ForegroundEngineSnapshotDto {
         Phase::NoEngine => ForegroundEngineLifecycleDto::NoEngine,
         Phase::Starting(run) => ForegroundEngineLifecycleDto::Starting { run: run.clone() },
         Phase::Ready(run) => ForegroundEngineLifecycleDto::Ready { run: run.clone() },
+        Phase::Switching {
+            primary,
+            candidate,
+            switch_id,
+        } => ForegroundEngineLifecycleDto::Switching {
+            primary: primary.clone(),
+            candidate: candidate.clone(),
+            switch_id: switch_id.clone(),
+        },
         Phase::Stopping(run) => ForegroundEngineLifecycleDto::Stopping { run: run.clone() },
         Phase::Error { run, failure } => ForegroundEngineLifecycleDto::Error {
             run: run.clone(),
@@ -1305,22 +1498,54 @@ fn cancel_jobs_for_current(state: &mut ManagerState) {
     let Some(run_id) = current_run_id(&state.phase) else {
         return;
     };
+    cancel_jobs_for_run(state, &run_id);
+}
+
+fn cancel_jobs_for_run(state: &mut ManagerState, run_id: &str) {
     let job_ids: Vec<String> = state
         .jobs
         .iter()
         .filter(|job| job.run_id == run_id && !job.terminal)
         .map(|job| job.job_id.clone())
         .collect();
+    let mut selected = Vec::new();
     for job in &mut state.jobs {
         if job.run_id == run_id && !job.terminal {
             job.cancel.cancel();
+            if job.lane == AnalysisJobLane::SelectedNode {
+                selected.push(AnalysisJobStartedDto {
+                    run_id: job.run_id.clone(),
+                    job_id: job.job_id.clone(),
+                    lane: job.lane,
+                    generation: job.generation,
+                    node_path: job.node_path.clone(),
+                });
+            }
             mark_job_cancelled(job);
         }
     }
     if let Some(live) = state.live.as_ref() {
-        for job_id in job_ids {
-            write_terminate_to_live(live, &job_id);
+        if live.run_id == run_id {
+            for job_id in &job_ids {
+                write_terminate_to_live(live, job_id);
+            }
         }
+    }
+    if let Some(live) = state.candidate.as_ref() {
+        if live.run_id == run_id {
+            for job_id in &job_ids {
+                write_terminate_to_live(live, job_id);
+            }
+        }
+    }
+    for started in selected {
+        finish_selected_node_job(
+            state,
+            &started,
+            Some(AnalysisJobOutcomeDto::Cancelled),
+            None,
+            None,
+        );
     }
     state.jobs.retain(|job| job.run_id != run_id);
 }
@@ -1413,11 +1638,26 @@ fn finish_selected_node_job(
     );
 }
 
-fn admitting_run<'a>(phase: &'a Phase, run_id: &str) -> Option<EngineRunDto> {
+fn admitting_run(phase: &Phase, run_id: &str) -> Option<EngineRunDto> {
     match phase {
         Phase::Ready(run) if run.run_id == run_id => Some(run.clone()),
+        Phase::Switching { primary, .. } if primary.run_id == run_id => Some(primary.clone()),
         _ => None,
     }
+}
+
+fn engine_stdin(state: &ManagerState, run_id: &str) -> Option<Arc<Mutex<Option<ChildStdin>>>> {
+    if let Some(live) = state.live.as_ref() {
+        if live.run_id == run_id {
+            return Some(live.stdin.clone());
+        }
+    }
+    if let Some(live) = state.candidate.as_ref() {
+        if live.run_id == run_id {
+            return Some(live.stdin.clone());
+        }
+    }
+    None
 }
 
 fn close_live_stdin(live: &LiveEngine) {
@@ -1482,6 +1722,7 @@ fn current_run_id(phase: &Phase) -> Option<String> {
     match phase {
         Phase::NoEngine => None,
         Phase::Starting(run) | Phase::Ready(run) | Phase::Stopping(run) => Some(run.run_id.clone()),
+        Phase::Switching { primary, .. } => Some(primary.run_id.clone()),
         Phase::Error { run, .. } => Some(run.run_id.clone()),
     }
 }

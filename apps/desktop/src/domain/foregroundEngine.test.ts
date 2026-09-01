@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  admitsForegroundEngineJobs,
+  canStopForegroundEngine,
   emptyForegroundEngineSnapshot,
   engineStatusLabel,
   isForegroundEngineReady,
@@ -44,6 +46,15 @@ describe("foreground engine snapshot merge", () => {
     const empty = emptyForegroundEngineSnapshot();
     expect(engineStatusLabel(empty)).toBe("未加载引擎");
     expect(isForegroundEngineReady(empty)).toBe(false);
+  });
+
+  it("keeps A job admission and stop available during Switching", () => {
+    const candidate = { ...run, run_id: "run-b", profile_id: "profile-b", capability_snapshot: null };
+    const switching = snapshot(3, { state: "switching", primary: run, candidate, switch_id: "1" });
+    expect(isForegroundEngineReady(switching)).toBe(false);
+    expect(admitsForegroundEngineJobs(switching)).toBe(true);
+    expect(canStopForegroundEngine(switching)).toBe(true);
+    expect(engineStatusLabel(switching)).toBe("正在切换 Local KataGo");
   });
 
   it("reports pending changes against the immutable run snapshot", () => {

@@ -31,6 +31,7 @@ const backend = vi.hoisted(() => ({
   startForegroundEngine: vi.fn(),
   stopForegroundEngine: vi.fn(),
   restartForegroundEngine: vi.fn(),
+  switchForegroundEngine: vi.fn(),
   getForegroundEngineSnapshot: vi.fn(() => Promise.resolve({ revision: 0, lifecycle: { state: "no_engine" } }))
 }));
 

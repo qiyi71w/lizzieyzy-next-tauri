@@ -101,6 +101,7 @@ fn lifecycle_run(lifecycle: &ForegroundEngineLifecycleDto) -> Option<&app_model:
         | ForegroundEngineLifecycleDto::Ready { run }
         | ForegroundEngineLifecycleDto::Stopping { run }
         | ForegroundEngineLifecycleDto::Error { run, .. } => Some(run),
+        ForegroundEngineLifecycleDto::Switching { primary, .. } => Some(primary),
         _ => None,
     }
 }
@@ -1092,4 +1093,276 @@ fn unsupported_whole_game_capability_is_rejected_before_protocol_io() {
     std::thread::sleep(Duration::from_millis(100));
     let logged_after = std::fs::read_to_string(&log).unwrap();
     assert_eq!(logged_before, logged_after);
+}
+
+#[cfg(unix)]
+fn setup_named_profile(temp: &TestTempDir, stem: &str, script: &str) -> EngineProfileDto {
+    let engine_path = temp.path().join(format!("{stem}.sh"));
+    write_executable(&engine_path, script);
+    let model_path = temp.path().join(format!("{stem}.bin"));
+    let config_path = temp.path().join(format!("{stem}.cfg"));
+    std::fs::write(&model_path, "").unwrap();
+    std::fs::write(&config_path, "").unwrap();
+    EngineProfileDto {
+        name: stem.into(),
+        engine_path: engine_path.to_string_lossy().into_owned(),
+        model_path: Some(model_path.to_string_lossy().into_owned()),
+        config_path: Some(config_path.to_string_lossy().into_owned()),
+        working_dir: Some(temp.path().to_string_lossy().into_owned()),
+        backend: EngineBackend::KataGoAnalysis,
+    }
+}
+
+#[cfg(unix)]
+fn hold_probe_until_release_script(release_path: &Path) -> String {
+    format!(
+        r#"
+release='{release}'
+first=1
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  [ -z "$id" ] && id="ok"
+  if printf '%s' "$line" | grep -q '"action":"terminate"'; then
+    continue
+  fi
+  if [ "$first" = 1 ]; then
+    while [ ! -f "$release" ]; do
+      sleep 0.02
+    done
+    first=0
+    printf '{{"id":"%s","turnNumber":0}}\n' "$id"
+    continue
+  fi
+  printf '{{"id":"%s","turnNumber":0}}\n' "$id"
+  printf '{{"id":"%s","turnNumber":1}}\n' "$id"
+done
+"#,
+        release = release_path.display()
+    )
+}
+
+#[cfg(unix)]
+fn ready_two_profiles(
+    temp: &TestTempDir,
+    profile_a_script: &str,
+    profile_b_script: &str,
+) -> (
+    ForegroundEngineManager,
+    Arc<InMemoryEngineProfileCatalog>,
+    Receiver<ForegroundEngineEventDto>,
+    String,
+) {
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-a".into(),
+        profile: setup_named_profile(temp, "engine-a", profile_a_script),
+    });
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-b".into(),
+        profile: setup_named_profile(temp, "engine-b", profile_b_script),
+    });
+    let manager = ForegroundEngineManager::new(catalog.clone(), ForegroundEngineConfig::for_tests());
+    let events = manager.subscribe();
+    manager.start("profile-a").unwrap();
+    let ready = wait_snapshot(
+        &events,
+        Duration::from_secs(3),
+        |lifecycle| matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "profile-a"),
+    );
+    let run_id = run_from_ready(&ready.lifecycle).run_id.clone();
+    (manager, catalog, events, run_id)
+}
+
+#[cfg(unix)]
+#[test]
+fn selecting_current_primary_does_not_switch_or_restart() {
+    let temp = TestTempDir::new("switch-same");
+    let (manager, _, events, run_id) =
+        ready_two_profiles(&temp, &resident_echo_script(), &resident_echo_script());
+    let before = manager.snapshot();
+    manager.switch_to("profile-a").unwrap();
+    assert_eq!(manager.snapshot().revision, before.revision);
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { ref run } if run.run_id == run_id && run.profile_id == "profile-a"
+    ));
+    assert!(events.try_recv().is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn switch_keeps_primary_a_until_ready_b_promotes() {
+    let temp = TestTempDir::new("switch-success");
+    let release = temp.path().join("release-b");
+    let (manager, _, events, run_a) = ready_two_profiles(
+        &temp,
+        &resident_echo_script(),
+        &hold_probe_until_release_script(&release),
+    );
+    manager.assert_profile_deletable("profile-a").unwrap_err();
+    manager.assert_profile_deletable("profile-b").unwrap();
+
+    manager.switch_to("profile-b").unwrap();
+    let switching = wait_snapshot(&events, Duration::from_secs(2), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Switching { .. })
+    });
+    let ForegroundEngineLifecycleDto::Switching {
+        primary,
+        candidate,
+        switch_id,
+    } = switching.lifecycle
+    else {
+        panic!("expected switching snapshot");
+    };
+    assert_eq!(primary.run_id, run_a);
+    assert_eq!(primary.profile_id, "profile-a");
+    assert!(primary.capability_snapshot.is_some());
+    assert_eq!(candidate.profile_id, "profile-b");
+    assert_ne!(candidate.run_id, run_a);
+    assert!(candidate.capability_snapshot.is_none());
+    assert!(!switch_id.is_empty());
+    manager.assert_profile_deletable("profile-a").unwrap_err();
+    manager.assert_profile_deletable("profile-b").unwrap();
+
+    let rejected_b = manager
+        .start_selected_node_job(selected_request(&candidate.run_id, 9, vec![]))
+        .unwrap_err();
+    assert_eq!(rejected_b.kind, EngineFailureKind::InvalidState);
+
+    let started_on_a = manager
+        .start_selected_node_job(selected_request(&run_a, 3, vec![0]))
+        .unwrap();
+    assert_eq!(started_on_a.run_id, run_a);
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started_on_a.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+
+    std::fs::write(&release, b"go").unwrap();
+    let promoted = wait_snapshot(
+        &events,
+        Duration::from_secs(3),
+        |lifecycle| matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "profile-b"),
+    );
+    let run_b = run_from_ready(&promoted.lifecycle);
+    assert_eq!(run_b.profile_id, "profile-b");
+    assert_ne!(run_b.run_id, run_a);
+    assert!(run_b.capability_snapshot.is_some());
+    manager.assert_profile_deletable("profile-a").unwrap();
+    manager.assert_profile_deletable("profile-b").unwrap_err();
+
+    let started_on_b = manager
+        .start_selected_node_job(selected_request(&run_b.run_id, 4, vec![]))
+        .unwrap();
+    assert_eq!(started_on_b.run_id, run_b.run_id);
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started_on_b.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+    let rejected = manager
+        .start_selected_node_job(selected_request(&run_a, 5, vec![]))
+        .unwrap_err();
+    assert_eq!(rejected.kind, EngineFailureKind::InvalidState);
+}
+
+#[cfg(unix)]
+#[test]
+fn promotion_cancels_a_jobs_before_stopping_a_and_rejects_late_a_results() {
+    let temp = TestTempDir::new("switch-cancel-a");
+    let a_log = temp.path().join("engine-a.log");
+    let mut a_script = format!("ENGINE_LOG='{}'\n", a_log.display());
+    a_script.push_str(&hold_after_probe_script());
+    let (manager, _, events, run_a) = ready_two_profiles(&temp, &a_script, &resident_echo_script());
+    let started = manager
+        .start_selected_node_job(selected_request(&run_a, 8, vec![]))
+        .unwrap();
+    manager.switch_to("profile-b").unwrap();
+    let mut saw_cancel = false;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let event = events
+            .recv_timeout(remaining)
+            .expect("timed out waiting for promotion snapshot");
+        match event {
+            ForegroundEngineEventDto::Job { job }
+                if job.job_id == started.job_id
+                    && matches!(
+                        job.outcome,
+                        AnalysisJobOutcomeDto::Cancelled | AnalysisJobOutcomeDto::Superseded
+                    ) =>
+            {
+                saw_cancel = true;
+            }
+            ForegroundEngineEventDto::Snapshot { ref snapshot }
+                if matches!(
+                    snapshot.lifecycle,
+                    ForegroundEngineLifecycleDto::Ready { ref run } if run.profile_id == "profile-b"
+                ) =>
+            {
+                assert!(
+                    saw_cancel,
+                    "A-owned jobs must be cancelled before the Ready B snapshot is observable"
+                );
+                break;
+            }
+            _ => {}
+        }
+    }
+    let log = std::fs::read_to_string(&a_log).unwrap();
+    assert!(
+        log.contains(r#""action":"terminate""#),
+        "A must receive protocol cancel before stop: {log}"
+    );
+    let mut saw_completed = false;
+    let deadline = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < deadline {
+        if let Ok(ForegroundEngineEventDto::Job { job }) = events.recv_timeout(Duration::from_millis(50)) {
+            if job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Completed {
+                saw_completed = true;
+            }
+        }
+    }
+    assert!(!saw_completed);
+}
+
+#[cfg(unix)]
+#[test]
+fn switch_rebinding_covers_whole_game_jobs() {
+    let temp = TestTempDir::new("switch-whole-game");
+    let release = temp.path().join("release-b");
+    let (manager, _, events, run_a) = ready_two_profiles(
+        &temp,
+        &resident_whole_game_script(),
+        &hold_probe_until_release_script(&release),
+    );
+    let (job_a, rx_a) = manager
+        .start_whole_game_analysis(&run_a, &whole_game_query_jsonl(), 2)
+        .unwrap();
+    manager.switch_to("profile-b").unwrap();
+    wait_snapshot(&events, Duration::from_secs(2), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Switching { .. })
+    });
+    wait_job_event(
+        &rx_a,
+        Duration::from_secs(2),
+        |event| matches!(event, WholeGameJobEventDto::Completed { job_id, .. } if job_id == &job_a),
+    );
+    std::fs::write(&release, b"go").unwrap();
+    let promoted = wait_snapshot(
+        &events,
+        Duration::from_secs(3),
+        |lifecycle| matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "profile-b"),
+    );
+    let run_b = run_from_ready(&promoted.lifecycle).run_id.clone();
+    let (job_b, rx_b) = manager
+        .start_whole_game_analysis(&run_b, &whole_game_query_jsonl(), 2)
+        .unwrap();
+    wait_job_event(
+        &rx_b,
+        Duration::from_secs(2),
+        |event| matches!(event, WholeGameJobEventDto::Completed { job_id, .. } if job_id == &job_b),
+    );
+    let err = manager
+        .start_whole_game_analysis(&run_a, &whole_game_query_jsonl(), 2)
+        .unwrap_err();
+    assert_eq!(err.kind, EngineFailureKind::InvalidState);
 }

@@ -2176,6 +2176,14 @@ fn foreground_engine_restart(manager: State<'_, ForegroundEngineManager>) -> Res
     manager.restart()
 }
 
+#[tauri::command]
+fn foreground_engine_switch(
+    manager: State<'_, ForegroundEngineManager>,
+    profile_id: String,
+) -> Result<(), EngineFailureDto> {
+    manager.switch_to(&profile_id)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(AnalysisJobRegistry::default())
@@ -2246,6 +2254,7 @@ pub fn run() {
             foreground_engine_start,
             foreground_engine_stop,
             foreground_engine_restart,
+            foreground_engine_switch,
             foreground_engine_start_selected_node,
             foreground_engine_cancel_job
         ])

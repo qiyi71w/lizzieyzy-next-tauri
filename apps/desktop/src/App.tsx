@@ -33,14 +33,15 @@ import {
   startForegroundEngine,
   stopForegroundEngine,
   restartForegroundEngine,
+  switchForegroundEngine,
   loadEngineProfilesSettings
 } from "./api/backend";
 import {
+  admitsForegroundEngineJobs,
   canRestartForegroundEngine,
   canStopForegroundEngine,
   emptyForegroundEngineSnapshot,
   engineStatusLabel,
-  isForegroundEngineReady,
   runFromSnapshot
 } from "./domain/foregroundEngine";
 import { computeGameCacheKey, loadAnalysisCache, saveAnalysisCache } from "./api/analysisCache";
@@ -111,7 +112,7 @@ export function App() {
   const [engineProfiles, setEngineProfiles] = useState<EngineProfileRecordDto[]>([]);
   const [engineFailure, setEngineFailure] = useState<EngineFailureDto | null>(null);
   const engineLabel = engineStatusLabel(engineSnapshot);
-  const engineReady = isForegroundEngineReady(engineSnapshot);
+  const engineReady = admitsForegroundEngineJobs(engineSnapshot);
   const [showCoordinates, setShowCoordinates] = useState(true);
   const [showMoveNumbers, setShowMoveNumbers] = useState(false);
   const [showBlackCandidates, setShowBlackCandidates] = useState(true);
@@ -434,10 +435,12 @@ export function App() {
     if (!profileId) return;
     const run = runFromSnapshot(engineSnapshot);
     if (run?.profile_id === profileId) return;
-    if (engineSnapshot.lifecycle.state !== "no_engine") return;
+    const state = engineSnapshot.lifecycle.state;
+    if (state !== "no_engine" && state !== "ready") return;
     setEngineFailure(null);
     try {
-      await startForegroundEngine(profileId);
+      if (state === "no_engine") await startForegroundEngine(profileId);
+      else await switchForegroundEngine(profileId);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     }
