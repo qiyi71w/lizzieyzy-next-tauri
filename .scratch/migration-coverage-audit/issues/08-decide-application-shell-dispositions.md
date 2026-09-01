@@ -37,4 +37,3 @@ Given [Inventory Application Shell, Startup, Exit, and Interaction Entry Points]
 - `APP-05` — **Shortcut Registry and Reference**: one registry feeds focus-safe dispatch, conflict detection, tests, labels, and the Help / `?` reference. Next has one primary key per action; supported Java aliases are visible and cannot conflict.
 
 Existing Accepted items keep their original scope and evidence. File parsing/current-game replacement remains domain 03; multi-file analysis and engine startup remain domain 04; layout persistence remains domain 02; external-resource shutdown remains with domains 04/06/07. These edges do not create duplicate Parity Items.
-
