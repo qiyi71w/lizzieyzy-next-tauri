@@ -3,10 +3,11 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CurrentGameResultDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
+import type { CurrentGameResultDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
 
 const listeners: {
   onSnapshot?: (snapshot: ForegroundEngineSnapshotDto) => void;
+  onFailure?: (failure: EngineFailureDto) => void;
   onJob?: (job: unknown) => void;
 } = {};
 const analysisListeners: {
@@ -132,6 +133,14 @@ const capability = {
   protocol_cancel: true
 };
 
+const crashFailure: EngineFailureDto = {
+  operation: "unexpected_exit",
+  run_id: "run-1",
+  profile_id: "profile-1",
+  kind: "nonzero_exit",
+  message: "engine process exited unexpectedly"
+};
+
 function readyRun(runId: string, profile: typeof savedProfile) {
   return {
     run_id: runId,
@@ -192,8 +201,9 @@ beforeEach(() => {
     node_path: { indices: [] }
   });
   backend.classifyProblems.mockResolvedValue([]);
-  backend.subscribeForegroundEngine.mockImplementation(async (onSnapshot, _onFailure, onJob) => {
+  backend.subscribeForegroundEngine.mockImplementation(async (onSnapshot, onFailure, onJob) => {
     listeners.onSnapshot = onSnapshot;
+    listeners.onFailure = onFailure;
     listeners.onJob = onJob;
     onSnapshot({ revision: 0, lifecycle: { state: "no_engine" } });
     return () => undefined;
@@ -694,7 +704,7 @@ describe("foreground engine lifecycle UI", () => {
     const activeProfileId = "profile-2";
     backend.saveEngineProfilesSettings.mockImplementation(async (settings) => {
       const removed = [savedProfile.id, savedProfileB.id].filter(
-        (id) => !settings.profiles.some((profile) => profile.id === id)
+        (id) => !settings.profiles.some((profile: { id: string }) => profile.id === id)
       );
       if (removed.includes(activeProfileId)) {
         throw new Error("an active Foreground Engine Run still holds this profile identity");
@@ -781,5 +791,124 @@ describe("foreground engine lifecycle UI", () => {
     });
     expect(backend.startForegroundEngine).toHaveBeenCalledWith("profile-1");
     expect(backend.saveEngineProfilesSettings).not.toHaveBeenCalled();
+  });
+
+  it("shows typed Error recovery with Restart, Stop, and Open Settings", async () => {
+    const host = await renderApp();
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 3,
+        lifecycle: {
+          state: "error",
+          run: readyRun("run-1", savedProfile),
+          failure: crashFailure
+        }
+      });
+    });
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("引擎错误");
+    const failure = host.querySelector(".engine-failure") as HTMLElement;
+    expect(failure.dataset.failureKind).toBe("nonzero_exit");
+    expect(failure.textContent).toContain("nonzero_exit");
+    const stop = buttonNamed(host, "停止");
+    const restart = buttonNamed(host, "重启");
+    const settings = buttonNamed(host, "设置");
+    expect(stop.disabled).toBe(false);
+    expect(restart.disabled).toBe(false);
+    expect(settings).toBeTruthy();
+    await act(async () => {
+      restart.click();
+      stop.click();
+      settings.click();
+    });
+    expect(backend.restartForegroundEngine).toHaveBeenCalledOnce();
+    expect(backend.stopForegroundEngine).toHaveBeenCalledOnce();
+    expect(host.querySelector(".engine-setup-panel")).not.toBeNull();
+  });
+
+  it("applies a repaired saved record as a new Run identity after Restart", async () => {
+    const host = await renderApp();
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 3,
+        lifecycle: { state: "error", run: readyRun("run-1", savedProfile), failure: crashFailure }
+      });
+    });
+    await act(async () => {
+      buttonNamed(host, "重启").click();
+    });
+    expect(backend.restartForegroundEngine).toHaveBeenCalledOnce();
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 6,
+        lifecycle: {
+          state: "ready",
+          run: {
+            ...readyRun("run-2", savedProfile),
+            profile_snapshot: { ...savedProfile.profile, name: "Repaired KataGo" }
+          }
+        }
+      });
+    });
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("Repaired KataGo");
+    expect(host.querySelector(".engine-failure")).toBeNull();
+  });
+
+  it("keeps a typed failure after a failed recovery Restart and ignores a stale crash", async () => {
+    const host = await renderApp();
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 3,
+        lifecycle: { state: "error", run: readyRun("run-1", savedProfile), failure: crashFailure }
+      });
+    });
+    await act(async () => {
+      buttonNamed(host, "重启").click();
+    });
+    expect(backend.restartForegroundEngine).toHaveBeenCalledOnce();
+    await act(async () => {
+      listeners.onSnapshot?.({ revision: 5, lifecycle: { state: "no_engine" } });
+      listeners.onFailure?.({
+        operation: "start",
+        run_id: "run-2",
+        profile_id: "profile-1",
+        kind: "asset",
+        message: "required engine assets are missing"
+      });
+    });
+    const failure = host.querySelector(".engine-failure") as HTMLElement;
+    expect(failure.dataset.failureKind).toBe("asset");
+    await act(async () => {
+      listeners.onFailure?.(crashFailure);
+    });
+    expect((host.querySelector(".engine-failure") as HTMLElement).dataset.failureKind).toBe("asset");
+  });
+
+  it("rejects deleting the Error profile until Stop", async () => {
+    backend.loadEngineProfilesSettings.mockResolvedValue({
+      selected_profile_id: "profile-1",
+      autoload_profile_id: null,
+      profiles: [savedProfile, savedProfileB]
+    });
+    backend.saveEngineProfilesSettings.mockImplementation(async (settings) => {
+      if (!settings.profiles.some((profile: { id: string }) => profile.id === "profile-1")) {
+        throw new Error("an active Foreground Engine Run still holds this profile identity");
+      }
+      return settings;
+    });
+    const host = await renderApp();
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 3,
+        lifecycle: { state: "error", run: readyRun("run-1", savedProfile), failure: crashFailure }
+      });
+    });
+    const panel = await openEngineSettings(host);
+    const deleteButton = Array.from(panel.querySelectorAll("button")).find((button) => button.textContent === "删除") as HTMLButtonElement;
+    expect(deleteButton.disabled).toBe(false);
+    await act(async () => {
+      deleteButton.click();
+      await backend.saveEngineProfilesSettings.mock.results.at(-1)?.value.catch(() => undefined);
+    });
+    expect(panel.querySelector(".message")?.textContent).toContain("Delete failed");
   });
 });

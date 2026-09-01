@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   admitsForegroundEngineJobs,
+  canRestartForegroundEngine,
   canStopForegroundEngine,
+  displayedEngineFailure,
   emptyForegroundEngineSnapshot,
   engineStatusLabel,
   isForegroundEngineReady,
   mergeForegroundEngineSnapshot,
-  profileHasPendingChanges
+  profileHasPendingChanges,
+  shouldAcceptFailureEvent
 } from "./foregroundEngine";
-import type { EngineRunDto, ForegroundEngineSnapshotDto } from "./types";
+import type { EngineFailureDto, EngineRunDto, ForegroundEngineSnapshotDto } from "./types";
 
 const run: EngineRunDto = {
   run_id: "run-1",
@@ -61,5 +64,43 @@ describe("foreground engine snapshot merge", () => {
     const ready = snapshot(1, { state: "ready", run });
     expect(profileHasPendingChanges(run.profile_snapshot, ready)).toBe(false);
     expect(profileHasPendingChanges({ ...run.profile_snapshot, engine_path: "/other/katago" }, ready)).toBe(true);
+  });
+});
+
+const crash: EngineFailureDto = {
+  operation: "unexpected_exit",
+  run_id: "run-1",
+  profile_id: "profile-1",
+  kind: "nonzero_exit",
+  message: "engine process exited unexpectedly"
+};
+
+describe("foreground engine failure presentation", () => {
+  it("keeps Error recovery actions available and classifies the snapshot failure", () => {
+    const error = snapshot(3, { state: "error", run, failure: crash });
+    expect(engineStatusLabel(error)).toBe("引擎错误");
+    expect(canStopForegroundEngine(error)).toBe(true);
+    expect(canRestartForegroundEngine(error)).toBe(true);
+    expect(displayedEngineFailure(error, null)).toEqual(crash);
+  });
+
+  it("rejects a stale failure after a newer Ready run identity", () => {
+    const ready = snapshot(5, { state: "ready", run: { ...run, run_id: "run-2" } });
+    expect(shouldAcceptFailureEvent(ready, null, crash)).toBe(false);
+    expect(displayedEngineFailure(ready, crash)).toBeNull();
+  });
+
+  it("keeps an attempt-scoped failure on No-engine", () => {
+    const empty = emptyForegroundEngineSnapshot();
+    const asset: EngineFailureDto = {
+      operation: "start",
+      run_id: "attempt-1",
+      profile_id: "profile-1",
+      kind: "asset",
+      message: "required engine assets are missing"
+    };
+    expect(shouldAcceptFailureEvent(empty, null, asset)).toBe(true);
+    expect(displayedEngineFailure(empty, asset)).toEqual(asset);
+    expect(shouldAcceptFailureEvent(empty, asset, crash)).toBe(false);
   });
 });

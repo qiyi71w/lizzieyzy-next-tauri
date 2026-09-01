@@ -128,6 +128,7 @@ struct LiveEngine {
     #[allow(dead_code)]
     stderr_rx: Receiver<io::Result<String>>,
     run_id: String,
+    process_id: u32,
 }
 
 enum Phase {
@@ -216,7 +217,6 @@ impl ForegroundEngineManager {
             self.inner.publish_failure(failure.clone());
         })
     }
-
     fn begin_start(
         &self,
         operation_kind: EngineOperationDto,
@@ -954,12 +954,14 @@ impl Inner {
                 let _ = kill_timed_out_child(&mut child);
                 return Ok(());
             }
+            let process_id = child.id();
             let engine = LiveEngine {
                 child,
                 stdin: Arc::new(Mutex::new(Some(stdin))),
                 stdout_rx: Some(stdout_rx),
                 stderr_rx,
                 run_id: run.run_id.clone(),
+                process_id,
             };
             if as_candidate {
                 state.candidate = Some(engine);
@@ -1020,7 +1022,7 @@ impl Inner {
                 };
                 let Some(stdout_rx) = live.stdout_rx.as_ref() else {
                     return Err(failure(
-                        EngineOperationDto::Start,
+                        kind,
                         EngineFailureKind::Start,
                         "engine process was lost before readiness".into(),
                         Some(run.run_id.as_str()),
@@ -1050,7 +1052,17 @@ impl Inner {
                             None,
                         ));
                     }
-                    Err(_) => None,
+                    Err(mpsc::TryRecvError::Empty) => None,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        return Err(failure(
+                            kind,
+                            EngineFailureKind::Readiness,
+                            "engine closed stdout before answering the readiness probe".into(),
+                            Some(run.run_id.as_str()),
+                            Some(run.profile_id.as_str()),
+                            None,
+                        ));
+                    }
                 }
             };
             if line.is_none() {
@@ -1099,11 +1111,15 @@ impl Inner {
         });
         state.phase = Phase::Ready(ready);
         publish_snapshot(&mut state);
+        let process_id = state.live.as_ref().map(|live| live.process_id);
         let stdout_rx = state.live.as_mut().and_then(|live| live.stdout_rx.take());
         drop(state);
+        let Some(process_id) = process_id else {
+            return;
+        };
         let inner = self.clone();
         let run_id = run.run_id.clone();
-        thread::spawn(move || inner.watch_exit(operation, run_id));
+        thread::spawn(move || inner.watch_exit(operation, run_id, process_id));
         if let Some(stdout_rx) = stdout_rx {
             let inner = self.clone();
             let run_id = run.run_id.clone();
@@ -1141,6 +1157,7 @@ impl Inner {
             state.live = state.candidate.take();
             state.phase = Phase::Ready(ready);
             publish_snapshot(&mut state);
+            let process_id = state.live.as_ref().map(|live| live.process_id);
             let stdout_rx = state.live.as_mut().and_then(|live| live.stdout_rx.take());
             drop(state);
             if let Some(stdout_rx) = stdout_rx {
@@ -1148,9 +1165,11 @@ impl Inner {
                 let run_id = run.run_id.clone();
                 thread::spawn(move || inner.pump_stdout(operation, run_id, stdout_rx));
             }
-            let inner = self.clone();
-            let run_id = run.run_id.clone();
-            thread::spawn(move || inner.watch_exit(operation, run_id));
+            if let Some(process_id) = process_id {
+                let inner = self.clone();
+                let run_id = run.run_id.clone();
+                thread::spawn(move || inner.watch_exit(operation, run_id, process_id));
+            }
             retiring
         };
         if let Some(mut live) = retiring {
@@ -1208,6 +1227,7 @@ impl Inner {
             close_live_stdin(&live);
             let _ = kill_timed_out_child(&mut live.child);
         }
+        cancel_jobs_for_current(&mut state);
         state.jobs.clear();
         state.phase = Phase::NoEngine;
         publish_snapshot(&mut state);
@@ -1255,7 +1275,7 @@ impl Inner {
         publish_snapshot(&mut state);
     }
 
-    fn watch_exit(self: Arc<Self>, operation: u64, run_id: String) {
+    fn watch_exit(self: Arc<Self>, operation: u64, run_id: String, process_id: u32) {
         loop {
             thread::sleep(Duration::from_millis(30));
             let status = {
@@ -1263,7 +1283,7 @@ impl Inner {
                 let Some(live) = state.live.as_mut() else {
                     return;
                 };
-                if live.run_id != run_id {
+                if live.run_id != run_id || live.process_id != process_id {
                     return;
                 }
                 match live.child.try_wait() {
@@ -1273,16 +1293,21 @@ impl Inner {
                 }
             };
             if let Some(exit_code) = status {
-                self.handle_unexpected_exit(operation, &run_id, exit_code);
+                self.handle_unexpected_exit(operation, &run_id, process_id, exit_code);
                 return;
             }
         }
     }
 
-    fn handle_unexpected_exit(&self, operation: u64, run_id: &str, exit_code: Option<i32>) {
+    fn handle_unexpected_exit(&self, operation: u64, run_id: &str, process_id: u32, exit_code: Option<i32>) {
         let mut state = self.lock();
         if state.operation != operation {
             return;
+        }
+        if let Some(live) = state.live.as_ref() {
+            if live.run_id != run_id || live.process_id != process_id {
+                return;
+            }
         }
         match &state.phase {
             Phase::Starting(run) if run.run_id == run_id => {

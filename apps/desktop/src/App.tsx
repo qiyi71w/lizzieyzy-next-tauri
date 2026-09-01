@@ -40,9 +40,11 @@ import {
   admitsForegroundEngineJobs,
   canRestartForegroundEngine,
   canStopForegroundEngine,
+  displayedEngineFailure,
   emptyForegroundEngineSnapshot,
   engineStatusLabel,
-  runFromSnapshot
+  runFromSnapshot,
+  shouldAcceptFailureEvent
 } from "./domain/foregroundEngine";
 import { computeGameCacheKey, loadAnalysisCache, saveAnalysisCache } from "./api/analysisCache";
 import { loadAppPreferences, saveAppPreferences } from "./api/preferences";
@@ -111,6 +113,11 @@ export function App() {
   const [engineSnapshot, setEngineSnapshot] = useState<ForegroundEngineSnapshotDto>(() => emptyForegroundEngineSnapshot());
   const [engineProfiles, setEngineProfiles] = useState<EngineProfileRecordDto[]>([]);
   const [engineFailure, setEngineFailure] = useState<EngineFailureDto | null>(null);
+  const engineSnapshotRef = useRef(engineSnapshot);
+  engineSnapshotRef.current = engineSnapshot;
+  const engineFailureRef = useRef(engineFailure);
+  engineFailureRef.current = engineFailure;
+  const visibleEngineFailure = displayedEngineFailure(engineSnapshot, engineFailure);
   const engineLabel = engineStatusLabel(engineSnapshot);
   const engineReady = admitsForegroundEngineJobs(engineSnapshot);
   const [showCoordinates, setShowCoordinates] = useState(true);
@@ -404,13 +411,23 @@ export function App() {
       .catch(() => undefined);
     const unlistenPromise = subscribeForegroundEngine(
       (snapshot) => {
-        if (!cancelled) setEngineSnapshot(snapshot);
+        if (cancelled) return;
+        engineSnapshotRef.current = snapshot;
+        setEngineSnapshot(snapshot);
+        if (snapshot.lifecycle.state === "error") {
+          engineFailureRef.current = snapshot.lifecycle.failure;
+          setEngineFailure(snapshot.lifecycle.failure);
+        } else {
+          engineFailureRef.current = null;
+          setEngineFailure(null);
+        }
       },
       (failure) => {
-        if (!cancelled) {
-          setEngineFailure(failure);
-          setMessage(failure.message);
-        }
+        if (cancelled) return;
+        if (!shouldAcceptFailureEvent(engineSnapshotRef.current, engineFailureRef.current, failure)) return;
+        engineFailureRef.current = failure;
+        setEngineFailure(failure);
+        setMessage(failure.message);
       },
       (job) => {
         if (!cancelled) handleSelectedNodeJobRef.current(job);
@@ -1360,7 +1377,8 @@ export function App() {
           ?? (engineSnapshot.lifecycle.state === "no_engine" ? "" : ""),
         canStop: canStopForegroundEngine(engineSnapshot),
         canRestart: canRestartForegroundEngine(engineSnapshot),
-        failureMessage: engineFailure?.message ?? null,
+        failureMessage: visibleEngineFailure?.message ?? null,
+        failureKind: visibleEngineFailure?.kind ?? null,
         onSelectProfile: (profileId) => void handleSelectSwitcherProfile(profileId),
         onStop: () => {
           void stopForegroundEngine().catch((error) => {
