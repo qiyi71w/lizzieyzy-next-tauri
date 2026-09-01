@@ -2,7 +2,7 @@
 
 This matrix is the item-level source of truth for migration progress against [Migration Baseline v1](JAVA_BASELINE.md). It owns each item's observable gap, acceptance condition, and intrinsic Item Start Prerequisites. The roadmap in [MIGRATION_PLAN.md](MIGRATION_PLAN.md) owns Deferred Promotion Gates, Delivery Order, and Migration Phase Gates.
 
-Frozen baselines: Java `7b4027531c2b26062d0bfc27a040cc550cfbea4d`; Next inventory `18c6d189b8b01069975c4c40ead63a010249cb8c`. Tickets 08–14 and the post-audit decision tickets are the disposition source for R3+, Deferred, and newly closed Ticket 16 gaps. Recording a contract here is not implementation and does not mark an item Accepted.
+Frozen baselines: Java `7b4027531c2b26062d0bfc27a040cc550cfbea4d`; Next inventory `18c6d189b8b01069975c4c40ead63a010249cb8c`. Tickets 08–14 and the post-audit decision tickets are the disposition source for R3+, Deferred, and newly closed Ticket 16 gaps. Ticket 09 reconstructed this corpus from Inventory mappings and current item rows; the 108 / 16 / 19 / 46 / 27 totals are observations, not targets. Recording a contract here is not implementation and does not mark an item Accepted.
 
 ## Status And Evidence Rules
 
@@ -254,3 +254,43 @@ These items are stable, unnumbered, and stay `Deferred` until explicitly started
 | PROV-07 | Deferred | Yike Authenticated Read and Play | Yike code is GET-only with `usertoken=-1`; no provider-supported user authorization, System Credential Store reference, authenticated room state, native move command, pending-provider-move state, or provider Match Session exists. | Not required until admitted. No official Yike auth/read/write provider-live or credential-store evidence exists. | The complete single-account authorization, account-authorized live-room read, provider-authoritative human Move/Pass/Resign, credential, failure, recovery, and per-family admission contract remains unscheduled. | One provider-supported account stores its secret only in the System Credential Store and bounded non-secret locator recents through `PREF-01`. Explicit Start for each independently admitted locator family transactionally reuses `PROV-03`, `GAME-01`, and `GAME-05`; exact account/side/position/turn and visible provider clock admit writes. Move/Pass/confirmed Resign create one Pending Provider Move and commit only on exact authoritative readback; writes never auto-retry, transient reads retry at most three times, an alternate legal successor wins, and Error/Reconcile retains the reservation until read-only recovery or warned Stop. Yike owns terminal `RE`; restart restores the account reference and last-confirmed review state, never the live session. Repository and per-Shipped-Platform live evidence cover authorization/credential lifecycle, every admitted family, switch rollback, conflicts, timeout/expiry, Stop/Disconnect, and Provider Network Policy. | PROV-03, GAME-01, GAME-05, PREF-01, APP-03 | Deferred |
 | RCOMP-01 | Deferred | Remote Compute Providers | Next has no Zhizi account/catalog, Custom compute endpoint, remote provider transport, or System Credential Store integration; analysis spawns local processes. | Not required until admitted. | Separate provider configuration plus Zhizi and Custom `ws/wss` modes remain unscheduled. | Provider/account/endpoint configuration stays outside the Engine Profile catalog and never creates synthetic profiles or an Autoload Default. Both Zhizi account/catalog and Custom `ws/wss` modes require separate repository and Installed Live Evidence. Start is explicit and creates a standard Foreground Engine Run. Non-secret provider/endpoint/catalog choices persist through `PREF-01`; remembered secrets use System Credential Store with visible session-only fallback. HTTP(S)/WebSocket(S) inherits Provider Network Policy. Auth/catalog/connect/readiness/protocol/disconnect/timeout/cancellation outcomes are typed; disconnect cancels jobs and waits for explicit Restart, with no session rebuild, local fallback, or restart recovery. A promotion disposition fixes bounded cancellable deadlines. Installed Live Evidence covers both modes on every Shipped Platform. | ENG-02, ENG-07, ANA-01, ANA-03, PREF-01 | Deferred |
 | PUB-01 | Deferred | WebBoard LAN publishing | None. | Not required until admitted. Current live evidence is not required. | Start/stop LAN publish and copy-access URL remain unscheduled. Trial counters and internal trial mechanics stay excluded. Inbound LAN is excluded from Provider Network Policy. | Start/stop LAN publish and copy-access URL. No credentials. Trial counters/internal trial mechanics are out of scope. Inbound LAN is excluded from Provider Network Policy. | APP-03 | Deferred |
+
+## Corpus reconciliation (Ticket 09)
+
+Independent reconstruction: [research 09](../.scratch/migration-baseline-v1-capability-audit/research/09-reconcile-matrix-accepted-contracts.md). This file owns status, repository and live evidence, remaining gap, acceptance, and `Depends on`. Inventory mappings and Plan sequencing were not edited.
+
+**Computed unique Parity Items: 108.** Duplicate IDs: none. Reference 108. Extra/missing item rows: none. Status split: 16 Accepted, 19 Partial, 46 Missing, 27 Deferred. 108 and 16, 19, 46, 27 were compared afterward and were not stop conditions.
+
+Every Inventory supported mapping target exists exactly once in this matrix. Mapping Parity IDs absent from this file: none. `SET-FIRST-LAUNCH` names Frozen `SHELL-06` as a Domain 01 link, not a Matrix target.
+
+Matrix IDs without an Inventory Capability mapping, each with an implementation-gate rationale:
+
+| ID | Rationale |
+| --- | --- |
+| `BASE-01`, `BASE-02` | R0 meta-inventory, not Java user-reachable Capabilities |
+| `REL-01` | Maintainer preflight/dry-run; not an end-user Capability |
+| `ANA-09` | Deferred named rich-analysis adapters; census `CAP-04-ANA-09` maps to `ANA-07` |
+
+R0–R2 keep historical columns and omit `Depends on`. Every R3+ and Deferred row has status, both evidence columns, remaining gap, acceptance, and `Depends on`.
+
+The original sixteen Accepted contracts at `18c6d189b8b01069975c4c40ead63a010249cb8c` remain Accepted at original ID, observable scope, status, evidence, remaining gap, and acceptance. `BASE-02` repository evidence only adds historical successor-inventory context. `READ-03` only moves from R7 to R10 under permitted R4+ reordering. No extra item is Accepted. Materially new behavior uses Successor Items.
+
+## Item completeness index
+
+Rebuilt from the computed item set. **108** unique IDs; each appears once.
+
+### Accepted (16)
+
+`BASE-01` `BASE-02` `SGF-01` `SGF-02` `SGF-03` `SGF-04` `SGF-05` `SGF-06` `RULE-01` `UI-01` `UI-03` `UI-04` `UI-05` `ENG-01` `ANA-05` `READ-03`
+
+### Partial (19)
+
+`UI-02` `ENG-05` `ANA-01` `ANA-02` `ANA-03` `ANA-04` `PREF-01` `SGF-07` `SGF-10` `REVIEW-01` `REVIEW-07` `APPEAR-01` `PROV-01` `PROV-02` `READ-01` `READ-02` `REL-01` `REL-05` `REL-10`
+
+### Missing (46)
+
+`ENG-02` `ENG-03` `ENG-04` `ENG-06` `ENG-07` `ANA-10` `ANA-11` `ANA-12` `ANA-13` `APP-01` `APP-02` `APP-03` `APP-04` `APP-05` `SGF-08` `SGF-09` `SGF-11` `SGF-12` `SGF-13` `SGF-14` `REVIEW-02` `REVIEW-03` `REVIEW-08` `REVIEW-09` `LAYOUT-01` `LAYOUT-02` `LAYOUT-03` `LAYOUT-04` `WINDOW-01` `WINDOW-02` `ENG-09` `ENG-10` `GAME-01` `GAME-02` `GAME-03` `GAME-04` `GAME-05` `PROV-03` `PROV-04` `REL-02` `REL-03` `REL-04` `REL-06` `REL-07` `REL-08` `REL-09`
+
+### Deferred (27)
+
+`I18N-01` `GUIDE-01` `SGF-15` `SGF-16` `REVIEW-04` `REVIEW-05` `REVIEW-06` `EXPORT-01` `EXPORT-02` `EXPORT-03` `ENG-08` `SSH-01` `CONTRIB-01` `ANA-06` `ANA-07` `ANA-08` `ANA-09` `GAME-06` `GAME-07` `GAME-08` `GAME-09` `GAME-10` `PROV-05` `PROV-06` `PROV-07` `RCOMP-01` `PUB-01`
