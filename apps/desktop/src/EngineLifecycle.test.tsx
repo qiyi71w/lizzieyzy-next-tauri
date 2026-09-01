@@ -29,7 +29,6 @@ const backend = vi.hoisted(() => ({
   projectCurrentGameMainline: vi.fn(),
   playCurrentGame: vi.fn(),
   selectCurrentGameNode: vi.fn(),
-  analyzeKataGoOnce: vi.fn(),
   startSelectedNodeAnalysis: vi.fn(),
   cancelSelectedNodeAnalysis: vi.fn(),
   cancelKataGoAnalysis: vi.fn(),
@@ -425,7 +424,6 @@ describe("foreground engine lifecycle UI", () => {
       nodePath: { indices: [] },
       maxVisits: 800
     });
-    expect(backend.analyzeKataGoOnce).not.toHaveBeenCalled();
   });
 
   it("does not revive analysis presentation from a stale job event", async () => {

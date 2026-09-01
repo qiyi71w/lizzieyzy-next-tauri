@@ -179,20 +179,6 @@ export async function saveCurrentGame(
   return invoke<CurrentGameResultDto | null>("save_current_game_as", { selectedPath, defaultFileName });
 }
 
-export async function analyzeKataGoOnce(profile: EngineProfileDto, sgfText: string, turn: number, maxVisits: number): Promise<AnalysisFrameDto> {
-  if (!isTauriRuntime()) {
-    throw new Error("Real KataGo analysis requires the Tauri desktop backend. Browser preview can still use Run review for fake analysis.");
-  }
-  return await invoke<AnalysisFrameDto>("katago_analyze_once", { profile, sgfText, turn, maxVisits });
-}
-
-export async function analyzeKataGoGame(profile: EngineProfileDto, sgfText: string, maxVisits: number): Promise<AnalysisFrameDto[]> {
-  if (!isTauriRuntime()) {
-    throw new Error("Full-game KataGo analysis requires the Tauri desktop backend. Browser preview cannot run real KataGo; use Run review for fake analysis.");
-  }
-  return await invoke<AnalysisFrameDto[]>("katago_analyze_game", { profile, sgfText, maxVisits });
-}
-
 export async function startKataGoGameAnalysis(runId: string, sgfText: string, maxVisits: number): Promise<string> {
   if (!isTauriRuntime()) {
     throw new Error("Full-game KataGo analysis requires the Tauri desktop backend. Browser preview cannot run real KataGo; use Run review for fake analysis.");
@@ -244,7 +230,6 @@ export async function saveEngineProfilesSettings(settings: EngineProfilesSetting
   }
   return await invoke<EngineProfilesSettingsDto>("save_engine_profiles_settings", { settings });
 }
-
 
 export type ForegroundEngineEventHandlers = {
   onSnapshot?: (snapshot: ForegroundEngineSnapshotDto) => void;

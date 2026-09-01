@@ -1,16 +1,16 @@
 use app_model::{
-    AnalysisFrameDto, AppHealthDto, CandidateMoveDto, CurrentGameError, CurrentGameResultDto, EngineBackend,
-    EngineFailureDto, EngineProfileDto, ForegroundEngineEventDto, ForegroundEngineSnapshotDto, MoveVertex,
-    NodePath, PointDto, PositionDto, ProviderError, ProviderErrorKind, ProviderFetchMethod,
-    ProviderFetchRequest, ProviderFetchResult, ProviderGameMetadata, ProviderImportRequest,
-    ProviderImportResult, ProviderKind, ReadboardSidecarProbeRequest, ReadboardSidecarProbeResult,
-    ReadboardSidecarSyncSnapshotRequest, ReadboardSidecarSyncSnapshotResult,
+    AnalysisFrameDto, AnalysisJobStartedDto, AppHealthDto, CandidateMoveDto, CurrentGameError,
+    CurrentGameResultDto, EngineBackend, EngineFailureDto, EngineFailureKind, EngineOperationDto,
+    EngineProfileDto, ForegroundEngineEventDto, ForegroundEngineSnapshotDto, MoveVertex, NodePath, PointDto,
+    PositionDto, ProviderError, ProviderErrorKind, ProviderFetchMethod, ProviderFetchRequest,
+    ProviderFetchResult, ProviderGameMetadata, ProviderImportRequest, ProviderImportResult, ProviderKind,
+    ReadboardSidecarProbeRequest, ReadboardSidecarProbeResult, ReadboardSidecarSyncSnapshotRequest,
+    ReadboardSidecarSyncSnapshotResult,
 };
 use engine_manager::{
     build_command_spec, check_assets, default_engine_profiles_settings, normalize_engine_profiles,
-    parse_engine_profiles, save_engine_profiles as persist_engine_profiles, AnalysisBatchRunOptions,
-    AnalysisCancelToken, AnalysisJobEventDto, AssetCheck, CommandSpec, EngineManagerError,
-    EngineProfileCatalog, EngineProfileRecord as EngineProfileRecordDto,
+    parse_engine_profiles, save_engine_profiles as persist_engine_profiles, AnalysisJobEventDto, AssetCheck,
+    CommandSpec, EngineProfileCatalog, EngineProfileRecord as EngineProfileRecordDto,
     EngineProfilesSettings as EngineProfilesSettingsDto, ForegroundEngineConfig, ForegroundEngineManager,
     SavedEngineProfile, SelectedNodeJobRequest, DEFAULT_ENGINE_PROFILE_ID,
 };
@@ -23,11 +23,10 @@ use provider_core::{
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -222,12 +221,6 @@ fn is_http_url(url: &str) -> bool {
         .unwrap_or(false)
 }
 
-#[derive(Default)]
-#[allow(dead_code)]
-struct AnalysisJobRegistry {
-    jobs: Mutex<HashMap<String, AnalysisCancelToken>>,
-}
-
 struct DiskEngineCatalog {
     handle: AppHandle,
 }
@@ -290,7 +283,6 @@ struct PreparedBatchAnalysis {
     turns: Vec<u32>,
     board_size: u8,
     expected: usize,
-    timeout: Duration,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -773,72 +765,6 @@ fn delete_analysis_cache(
 }
 
 #[tauri::command]
-fn katago_analyze_once(
-    profile: EngineProfileDto,
-    sgf_text: String,
-    turn: u32,
-    max_visits: u32,
-) -> Result<AnalysisFrameDto, String> {
-    let document = sgf::parse_sgf(&sgf_text).map_err(|err| err.to_string())?;
-    let game = sgf::to_game_dto(document);
-    let job_id = Uuid::new_v4();
-    let query = katago_protocol::analysis_query_from_game(
-        &game,
-        AnalysisQueryOptions {
-            id: job_id.to_string(),
-            rules: "chinese".to_string(),
-            turn,
-            max_visits: Some(max_visits),
-            include_ownership: Some(true),
-            include_policy: Some(true),
-        },
-    )
-    .map_err(|err| err.to_string())?;
-    let query_jsonl = query.to_jsonl().map_err(|err| err.to_string())?;
-    let spec = engine_manager::build_command_spec(&profile).map_err(|err| err.to_string())?;
-    let result = engine_manager::run_katago_analysis_once(&spec, &query_jsonl, Duration::from_secs(60))
-        .map_err(|err| err.to_string())?;
-    let response =
-        katago_protocol::parse_response_line(&result.response_jsonl).map_err(|err| err.to_string())?;
-    Ok(katago_protocol::normalize_response(
-        job_id,
-        response,
-        game.summary.board_size,
-    ))
-}
-
-#[tauri::command]
-fn katago_analyze_game(
-    profile: EngineProfileDto,
-    sgf_text: String,
-    max_visits: u32,
-) -> Result<Vec<AnalysisFrameDto>, String> {
-    let job_id = Uuid::new_v4();
-    let prepared = prepare_katago_batch_analysis(&sgf_text, job_id, max_visits)?;
-    let spec = build_command_spec(&profile).map_err(|err| err.to_string())?;
-    let result = engine_manager::run_katago_analysis_batch(
-        &spec,
-        &prepared.query_jsonl,
-        prepared.expected,
-        prepared.timeout,
-    )
-    .map_err(|err| err.to_string())?;
-    let responses = result
-        .response_jsonl_lines
-        .iter()
-        .map(|line| katago_protocol::parse_response_line(line).map_err(|err| err.to_string()))
-        .collect::<Result<Vec<_>, _>>()?;
-    validate_batch_response_turns(&prepared.turns, &responses)?;
-
-    Ok(katago_protocol::normalize_responses_for_turns(
-        job_id,
-        responses,
-        prepared.board_size,
-        &prepared.turns,
-    ))
-}
-
-#[tauri::command]
 fn foreground_engine_start_selected_node(
     manager: State<'_, ForegroundEngineManager>,
     current_game: State<'_, CurrentGameState>,
@@ -1024,86 +950,12 @@ fn prepare_katago_batch_analysis(
 
     let query_jsonl = query.to_jsonl().map_err(|err| err.to_string())?;
     let expected = turns.len();
-    let timeout_secs = 60u64.max((expected as u64).saturating_mul(15)).min(600);
     Ok(PreparedBatchAnalysis {
         query_jsonl,
         turns,
         board_size: game.summary.board_size,
         expected,
-        timeout: Duration::from_secs(timeout_secs),
     })
-}
-
-#[allow(dead_code)]
-fn run_katago_analysis_job(
-    app_handle: AppHandle,
-    job_id: Uuid,
-    job_id_string: String,
-    spec: CommandSpec,
-    prepared: PreparedBatchAnalysis,
-    cancel_token: AnalysisCancelToken,
-) {
-    let mut on_progress = {
-        let app_handle = app_handle.clone();
-        let job_id_string = job_id_string.clone();
-        move |progress: engine_manager::AnalysisBatchProgress| {
-            let turn = katago_protocol::parse_response_line(&progress.response_jsonl_line)
-                .map(|response| response.turn_number)
-                .ok();
-            let payload = AnalysisProgressPayload {
-                run_id: String::new(),
-                job_id: job_id_string.clone(),
-                completed: progress.response_index,
-                expected: progress.expected_responses,
-                turn,
-                response_jsonl: progress.response_jsonl_line,
-            };
-            let _ = app_handle.emit("katago://analysis-progress", payload);
-        }
-    };
-
-    let result = engine_manager::run_katago_analysis_batch_with_options(
-        &spec,
-        &prepared.query_jsonl,
-        AnalysisBatchRunOptions {
-            expected_responses: prepared.expected,
-            timeout: prepared.timeout,
-            cancel_token: Some(&cancel_token),
-            on_progress: Some(&mut on_progress),
-        },
-    );
-
-    match result {
-        Ok(result) => emit_katago_analysis_complete(
-            &app_handle,
-            "",
-            &job_id_string,
-            &prepared,
-            result.response_jsonl_lines,
-        ),
-        Err(EngineManagerError::Cancelled { .. }) => {
-            let _ = app_handle.emit(
-                "katago://analysis-cancelled",
-                AnalysisMessagePayload {
-                    run_id: String::new(),
-                    job_id: job_id_string.clone(),
-                    message: "analysis job was cancelled".to_string(),
-                },
-            );
-        }
-        Err(err) => {
-            let _ = app_handle.emit(
-                "katago://analysis-error",
-                AnalysisMessagePayload {
-                    run_id: String::new(),
-                    job_id: job_id_string.clone(),
-                    message: err.to_string(),
-                },
-            );
-        }
-    }
-
-    remove_analysis_job(&app_handle, &job_id_string);
 }
 
 fn emit_katago_analysis_complete(
@@ -1151,16 +1003,6 @@ fn emit_katago_analysis_complete(
             );
         }
     }
-}
-
-#[allow(dead_code)]
-fn remove_analysis_job(app_handle: &AppHandle, job_id: &str) {
-    let Some(registry) = app_handle.try_state::<AnalysisJobRegistry>() else {
-        return;
-    };
-    if let Ok(mut jobs) = registry.jobs.lock() {
-        jobs.remove(job_id);
-    };
 }
 
 fn validate_batch_response_turns(
@@ -2103,7 +1945,6 @@ fn foreground_engine_switch(
 
 pub fn run() {
     tauri::Builder::default()
-        .manage(AnalysisJobRegistry::default())
         .manage(CurrentGameState::default())
         .setup(|app| {
             let _ = load_engine_profiles_from_disk(app.handle());
@@ -2121,6 +1962,9 @@ pub fn run() {
                         }
                         ForegroundEngineEventDto::Failure { failure } => {
                             let _ = emit_handle.emit("foreground-engine://failure", failure);
+                        }
+                        ForegroundEngineEventDto::Job { job } => {
+                            let _ = emit_handle.emit("foreground-engine://job", job);
                         }
                     }
                 }
@@ -2165,8 +2009,6 @@ pub fn run() {
             get_analysis_cache,
             save_analysis_cache,
             delete_analysis_cache,
-            katago_analyze_once,
-            katago_analyze_game,
             katago_start_analyze_game,
             katago_cancel_analysis,
             foreground_engine_snapshot,
@@ -2203,6 +2045,45 @@ mod tests {
         assert_eq!(query["includeOwnership"], true);
         assert_eq!(query["includePolicy"], true);
         assert_eq!(query["analyzeTurns"], serde_json::json!([0, 1, 2]));
+    }
+
+    fn registered_tauri_commands(source: &str) -> Vec<&str> {
+        let list = source
+            .split("tauri::generate_handler![")
+            .nth(1)
+            .and_then(|rest| rest.split(']').next())
+            .expect("tauri invoke handler list");
+        list.lines()
+            .map(str::trim)
+            .map(|line| line.trim_end_matches(','))
+            .filter(|line| !line.is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn obsolete_profile_to_process_commands_are_not_registered() {
+        let commands =
+            registered_tauri_commands(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs")));
+        assert!(
+            commands.iter().all(|command| *command != "katago_analyze_once"),
+            "legacy one-shot command must not remain registered: {commands:?}"
+        );
+        assert!(
+            commands.iter().all(|command| *command != "katago_analyze_game"),
+            "legacy batch command must not remain registered: {commands:?}"
+        );
+        assert!(
+            commands.contains(&"katago_start_analyze_game"),
+            "whole-game analysis must stay on the manager-owned run command"
+        );
+        assert!(
+            commands.contains(&"foreground_engine_start_selected_node"),
+            "selected-node analysis must stay on the manager-owned run command"
+        );
+        assert!(
+            commands.contains(&"fake_analyze"),
+            "browser/native fake analysis remains available and non-authoritative"
+        );
     }
 
     #[test]
