@@ -1,5 +1,5 @@
 use app_model::{
-    EngineBackend, EngineFailureKind, EngineProfileDto, ForegroundEngineEventDto,
+    EngineBackend, EngineFailureKind, EngineOperationDto, EngineProfileDto, ForegroundEngineEventDto,
     ForegroundEngineLifecycleDto,
 };
 use engine_manager::{
@@ -236,7 +236,9 @@ fn start_failure_without_assets_stays_no_engine_with_typed_failure() {
     let failure = wait_failure(&events, Duration::from_secs(2), |failure| {
         failure.kind == EngineFailureKind::Asset
     });
+    assert_eq!(failure.operation, EngineOperationDto::Start);
     assert_eq!(failure.profile_id.as_deref(), Some("missing"));
+    assert!(failure.run_id.is_some());
     assert!(matches!(
         manager.snapshot().lifecycle,
         ForegroundEngineLifecycleDto::NoEngine
@@ -261,7 +263,9 @@ fn spawn_without_probe_response_does_not_become_ready() {
     let failure = wait_failure(&events, Duration::from_secs(4), |failure| {
         failure.kind == EngineFailureKind::Timeout
     });
+    assert_eq!(failure.operation, EngineOperationDto::Start);
     assert_eq!(failure.profile_id.as_deref(), Some("profile-1"));
+    assert!(failure.run_id.is_some());
     assert!(matches!(
         manager.snapshot().lifecycle,
         ForegroundEngineLifecycleDto::NoEngine
@@ -359,7 +363,10 @@ exit 9
             assert_eq!(run.run_id, run_id);
             assert!(run.capability_snapshot.is_some());
             assert_eq!(failure.kind, EngineFailureKind::NonzeroExit);
+            assert_eq!(failure.operation, EngineOperationDto::UnexpectedExit);
             assert_eq!(failure.run_id.as_deref(), Some(run_id.as_str()));
+            assert_eq!(failure.profile_id.as_deref(), Some("profile-1"));
+            assert_ne!(failure.kind, EngineFailureKind::Cancellation);
         }
         other => panic!("expected Error, got {other:?}"),
     }
@@ -404,4 +411,335 @@ fn teardown_from_ready_reaches_no_engine_and_lifts_delete_guard() {
     manager
         .assert_profile_deletable("profile-1")
         .expect("teardown should release the profile delete guard");
+}
+
+#[cfg(unix)]
+struct FileCancel(PathBuf);
+
+#[cfg(unix)]
+impl AnalysisJobCancel for FileCancel {
+    fn cancel(&self) {
+        std::fs::write(&self.0, "cancelled").unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn unsupported_backend_stays_no_engine_with_typed_failure() {
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "gtp".into(),
+        profile: EngineProfileDto {
+            name: "GTP".into(),
+            engine_path: "/bin/katago".into(),
+            model_path: None,
+            config_path: None,
+            working_dir: None,
+            backend: EngineBackend::KataGoGtp,
+        },
+    });
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    let failure = manager.start("gtp").unwrap_err();
+    assert_eq!(failure.kind, EngineFailureKind::UnsupportedCapability);
+    assert_eq!(failure.operation, EngineOperationDto::Start);
+    assert_eq!(failure.profile_id.as_deref(), Some("gtp"));
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn spawn_failure_stays_no_engine_with_start_kind() {
+    let temp = TestTempDir::new("spawn-start");
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    let mut profile = setup_profile(&temp, &resident_echo_script());
+    let not_binary = temp.path().join("not-a-binary");
+    std::fs::create_dir_all(&not_binary).unwrap();
+    profile.engine_path = not_binary.to_string_lossy().into_owned();
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-1".into(),
+        profile,
+    });
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    let events = manager.subscribe();
+    manager.start("profile-1").unwrap();
+    let failure = wait_failure(&events, Duration::from_secs(2), |failure| {
+        failure.kind == EngineFailureKind::Start
+    });
+    assert_eq!(failure.operation, EngineOperationDto::Start);
+    assert_eq!(failure.profile_id.as_deref(), Some("profile-1"));
+    assert!(failure.run_id.is_some());
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn unparseable_readiness_probe_stays_no_engine_with_protocol_kind() {
+    let temp = TestTempDir::new("protocol");
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-1".into(),
+        profile: setup_profile(
+            &temp,
+            r#"
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  printf 'not-json %s\n' "$id"
+done
+"#,
+        ),
+    });
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    let events = manager.subscribe();
+    manager.start("profile-1").unwrap();
+    let failure = wait_failure(&events, Duration::from_secs(3), |failure| {
+        failure.kind == EngineFailureKind::Protocol
+    });
+    assert_eq!(failure.operation, EngineOperationDto::Start);
+    assert_eq!(failure.profile_id.as_deref(), Some("profile-1"));
+    assert!(failure.run_id.is_some());
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn stdout_close_before_probe_stays_no_engine_with_readiness_kind() {
+    let temp = TestTempDir::new("readiness");
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-1".into(),
+        profile: setup_profile(&temp, "exit 0"),
+    });
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    let events = manager.subscribe();
+    manager.start("profile-1").unwrap();
+    let failure = wait_failure(&events, Duration::from_secs(3), |failure| {
+        failure.kind == EngineFailureKind::Readiness
+    });
+    assert_eq!(failure.operation, EngineOperationDto::Start);
+    assert_eq!(failure.profile_id.as_deref(), Some("profile-1"));
+    assert!(failure.run_id.is_some());
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine
+    ));
+    assert_ne!(failure.kind, EngineFailureKind::Cancellation);
+}
+
+#[cfg(unix)]
+#[test]
+fn autoload_asset_failure_stays_no_engine_without_falling_back() {
+    let temp = TestTempDir::new("autoload-fail");
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "good".into(),
+        profile: setup_profile(&temp, &resident_echo_script()),
+    });
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "bad".into(),
+        profile: EngineProfileDto {
+            name: "Broken".into(),
+            engine_path: "/definitely/missing/katago".into(),
+            model_path: Some("/definitely/missing/model.bin".into()),
+            config_path: Some("/definitely/missing/analysis.cfg".into()),
+            working_dir: None,
+            backend: EngineBackend::KataGoAnalysis,
+        },
+    });
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    let events = manager.subscribe();
+    manager.autoload("bad").unwrap();
+    let failure = wait_failure(&events, Duration::from_secs(2), |failure| {
+        failure.kind == EngineFailureKind::Asset
+    });
+    assert_eq!(failure.operation, EngineOperationDto::Autoload);
+    assert_eq!(failure.profile_id.as_deref(), Some("bad"));
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn unexpected_exit_cancels_run_owned_jobs_before_error() {
+    let temp = TestTempDir::new("crash-cancel");
+    let cancel_marker = temp.path().join("cancelled");
+    let script = r#"
+read line
+id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","turnNumber":0}\n' "$id"
+exit 9
+"#;
+    let (manager, _, events, run_id) = ready_manager(&temp, script);
+    manager
+        .register_job(
+            &run_id,
+            AnalysisJobLane::SelectedNode,
+            Arc::new(FileCancel(cancel_marker.clone())),
+        )
+        .unwrap();
+    let snapshot = wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Error { .. })
+    });
+    match snapshot.lifecycle {
+        ForegroundEngineLifecycleDto::Error { run, failure } => {
+            assert_eq!(run.run_id, run_id);
+            assert_eq!(failure.kind, EngineFailureKind::NonzeroExit);
+            assert_eq!(failure.operation, EngineOperationDto::UnexpectedExit);
+            assert!(run.capability_snapshot.is_some());
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+    assert!(cancel_marker.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn stop_does_not_publish_crash_failure() {
+    let temp = TestTempDir::new("stop-not-crash");
+    let (manager, _, events, _) = ready_manager(&temp, &resident_echo_script());
+    manager.stop().unwrap();
+    wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine)
+    });
+    let deadline = Instant::now() + Duration::from_millis(200);
+    while let Ok(event) = events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        if let ForegroundEngineEventDto::Failure { failure } = event {
+            panic!("Stop must not publish a crash failure, got {failure:?}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_after_error_uses_saved_record_and_new_run_identity() {
+    let temp = TestTempDir::new("repair-restart");
+    let script = r#"
+read line
+id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","turnNumber":0}\n' "$id"
+exit 9
+"#;
+    let (manager, catalog, events, old_run_id) = ready_manager(&temp, script);
+    wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Error { .. })
+    });
+    let mut repaired = catalog.get("profile-1").unwrap();
+    repaired.profile = setup_profile(&temp, &resident_echo_script());
+    repaired.profile.name = "Repaired KataGo".into();
+    catalog.upsert(repaired);
+    manager.restart().unwrap();
+    let ready = wait_snapshot(&events, Duration::from_secs(4), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    let run = run_from_ready(&ready.lifecycle);
+    assert_ne!(run.run_id, old_run_id);
+    assert_eq!(run.profile_snapshot.name, "Repaired KataGo");
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_recovery_restart_stays_operable_and_does_not_fallback() {
+    let temp = TestTempDir::new("failed-restart");
+    let script = r#"
+read line
+id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","turnNumber":0}\n' "$id"
+exit 9
+"#;
+    let (manager, catalog, events, _) = ready_manager(&temp, script);
+    wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Error { .. })
+    });
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "other".into(),
+        profile: setup_profile(&temp, &resident_echo_script()),
+    });
+    let mut broken = catalog.get("profile-1").unwrap();
+    broken.profile.engine_path = "/definitely/missing/katago".into();
+    broken.profile.model_path = Some("/definitely/missing/model.bin".into());
+    broken.profile.config_path = Some("/definitely/missing/analysis.cfg".into());
+    catalog.upsert(broken);
+    manager.restart().unwrap();
+    let failure = wait_failure(&events, Duration::from_secs(4), |failure| {
+        failure.kind == EngineFailureKind::Asset
+    });
+    assert_eq!(failure.profile_id.as_deref(), Some("profile-1"));
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine
+    ));
+    manager
+        .assert_profile_deletable("profile-1")
+        .expect("failed recovery Restart must leave an operable No-engine boundary");
+    manager.start("other").unwrap();
+    let ready = wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    assert_eq!(run_from_ready(&ready.lifecycle).profile_id, "other");
+}
+
+#[cfg(unix)]
+#[test]
+fn restart_does_not_enter_error_from_the_replaced_process() {
+    let temp = TestTempDir::new("stale-exit");
+    let (manager, _, events, old_run_id) = ready_manager(&temp, &resident_echo_script());
+    manager.restart().unwrap();
+    let ready = wait_snapshot(&events, Duration::from_secs(4), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    let run = run_from_ready(&ready.lifecycle);
+    assert_ne!(run.run_id, old_run_id);
+    std::thread::sleep(Duration::from_millis(300));
+    match manager.snapshot().lifecycle {
+        ForegroundEngineLifecycleDto::Ready { run: current } => {
+            assert_eq!(current.run_id, run.run_id);
+        }
+        other => panic!("replaced process exit must not overwrite the current Ready run, got {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn new_manager_does_not_restore_error_run_or_jobs() {
+    let temp = TestTempDir::new("session-only");
+    let script = r#"
+read line
+id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '{"id":"%s","turnNumber":0}\n' "$id"
+exit 9
+"#;
+    let (first, catalog, events, old_run_id) = ready_manager(&temp, script);
+    wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Error { .. })
+    });
+    first
+        .register_job(
+            &old_run_id,
+            AnalysisJobLane::SelectedNode,
+            Arc::new(FileCancel(temp.path().join("unused"))),
+        )
+        .expect_err("Error must refuse new Analysis Job admission");
+    first.teardown().unwrap();
+    let second = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    assert!(matches!(
+        second.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine
+    ));
+    second
+        .register_job(
+            &old_run_id,
+            AnalysisJobLane::SelectedNode,
+            Arc::new(AnalysisCancelToken::new()),
+        )
+        .expect_err("a new session must not restore the previous Error Run identity");
 }

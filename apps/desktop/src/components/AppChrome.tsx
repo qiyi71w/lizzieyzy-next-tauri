@@ -18,6 +18,7 @@ export type EngineSwitcherProps = {
   canStop: boolean;
   canRestart: boolean;
   failureMessage?: string | null;
+  failureKind?: string | null;
   onSelectProfile: (profileId: string) => void;
   onStop: () => void;
   onRestart: () => void;
@@ -262,7 +263,15 @@ export function AppChrome(props: Props) {
             设置
           </button>
         </div>
-        {props.engineSwitcher.failureMessage ? <span className="engine-failure" role="status">{props.engineSwitcher.failureMessage}</span> : null}
+        {props.engineSwitcher.failureMessage ? (
+          <span
+            className="engine-failure"
+            role="status"
+            data-failure-kind={props.engineSwitcher.failureKind ?? undefined}
+          >
+            {props.engineSwitcher.failureKind ? `${props.engineSwitcher.failureKind}: ${props.engineSwitcher.failureMessage}` : props.engineSwitcher.failureMessage}
+          </span>
+        ) : null}
         <span className="spacer" />
         <button type="button" className="ai-comment" onClick={props.onFakeAnalyze} disabled={props.busy} title="生成 AI 解说">
           AI 解说

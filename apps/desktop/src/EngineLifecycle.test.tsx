@@ -3,9 +3,12 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CurrentGameResultDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
+import type { CurrentGameResultDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
 
-const listeners: { onSnapshot?: (snapshot: ForegroundEngineSnapshotDto) => void } = {};
+const listeners: {
+  onSnapshot?: (snapshot: ForegroundEngineSnapshotDto) => void;
+  onFailure?: (failure: EngineFailureDto) => void;
+} = {};
 
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
@@ -140,8 +143,9 @@ beforeEach(() => {
   });
   backend.saveEngineProfilesSettings.mockImplementation(async (settings) => settings);
   backend.getForegroundEngineSnapshot.mockResolvedValue({ revision: 0, lifecycle: { state: "no_engine" } });
-  backend.subscribeForegroundEngine.mockImplementation(async (onSnapshot) => {
+  backend.subscribeForegroundEngine.mockImplementation(async (onSnapshot, onFailure) => {
     listeners.onSnapshot = onSnapshot;
+    listeners.onFailure = onFailure;
     onSnapshot({ revision: 0, lifecycle: { state: "no_engine" } });
     return () => undefined;
   });
@@ -263,5 +267,183 @@ describe("foreground engine lifecycle UI", () => {
     });
     expect(backend.startForegroundEngine).not.toHaveBeenCalled();
     expect(backend.restartForegroundEngine).not.toHaveBeenCalled();
+  });
+
+  const capability = {
+    adapter_kind: "kata_go_analysis" as const,
+    selected_node_analysis: true,
+    whole_game_analysis: true,
+    protocol_cancel: true
+  };
+
+  const crashFailure: EngineFailureDto = {
+    operation: "unexpected_exit",
+    run_id: "run-1",
+    profile_id: "profile-1",
+    kind: "nonzero_exit",
+    message: "engine process exited unexpectedly"
+  };
+
+  it("shows typed Error recovery with Restart, Stop, and Open Settings", async () => {
+    const host = await renderApp();
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 3,
+        lifecycle: {
+          state: "error",
+          run: {
+            run_id: "run-1",
+            profile_id: "profile-1",
+            adapter_kind: "kata_go_analysis",
+            profile_snapshot: savedProfile.profile,
+            capability_snapshot: capability
+          },
+          failure: crashFailure
+        }
+      });
+    });
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("引擎错误");
+    const failure = host.querySelector(".engine-failure") as HTMLElement;
+    expect(failure.dataset.failureKind).toBe("nonzero_exit");
+    expect(failure.textContent).toContain("nonzero_exit");
+    const stop = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "停止") as HTMLButtonElement;
+    const restart = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "重启") as HTMLButtonElement;
+    const settings = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "设置") as HTMLButtonElement;
+    expect(stop.disabled).toBe(false);
+    expect(restart.disabled).toBe(false);
+    expect(settings).toBeTruthy();
+    await act(async () => {
+      restart.click();
+      stop.click();
+      settings.click();
+    });
+    expect(backend.restartForegroundEngine).toHaveBeenCalledOnce();
+    expect(backend.stopForegroundEngine).toHaveBeenCalledOnce();
+    expect(host.querySelector(".engine-setup-panel")).not.toBeNull();
+  });
+
+  it("applies a repaired saved record as a new Run identity after Restart", async () => {
+    const host = await renderApp();
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 3,
+        lifecycle: {
+          state: "error",
+          run: {
+            run_id: "run-1",
+            profile_id: "profile-1",
+            adapter_kind: "kata_go_analysis",
+            profile_snapshot: savedProfile.profile,
+            capability_snapshot: capability
+          },
+          failure: crashFailure
+        }
+      });
+    });
+    await act(async () => {
+      Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "重启")?.click();
+    });
+    expect(backend.restartForegroundEngine).toHaveBeenCalledOnce();
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 6,
+        lifecycle: {
+          state: "ready",
+          run: {
+            run_id: "run-2",
+            profile_id: "profile-1",
+            adapter_kind: "kata_go_analysis",
+            profile_snapshot: { ...savedProfile.profile, name: "Repaired KataGo" },
+            capability_snapshot: capability
+          }
+        }
+      });
+    });
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("Repaired KataGo");
+    expect(host.querySelector(".engine-failure")).toBeNull();
+  });
+
+  it("keeps a typed failure after a failed recovery Restart and ignores a stale crash", async () => {
+    const host = await renderApp();
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 3,
+        lifecycle: {
+          state: "error",
+          run: {
+            run_id: "run-1",
+            profile_id: "profile-1",
+            adapter_kind: "kata_go_analysis",
+            profile_snapshot: savedProfile.profile,
+            capability_snapshot: capability
+          },
+          failure: crashFailure
+        }
+      });
+    });
+    await act(async () => {
+      Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "重启")?.click();
+    });
+    expect(backend.restartForegroundEngine).toHaveBeenCalledOnce();
+    await act(async () => {
+      listeners.onSnapshot?.({ revision: 5, lifecycle: { state: "no_engine" } });
+      listeners.onFailure?.({
+        operation: "start",
+        run_id: "run-2",
+        profile_id: "profile-1",
+        kind: "asset",
+        message: "required engine assets are missing"
+      });
+    });
+    const failure = host.querySelector(".engine-failure") as HTMLElement;
+    expect(failure.dataset.failureKind).toBe("asset");
+    await act(async () => {
+      listeners.onFailure?.(crashFailure);
+    });
+    expect((host.querySelector(".engine-failure") as HTMLElement).dataset.failureKind).toBe("asset");
+  });
+
+  it("rejects deleting the Error profile until Stop", async () => {
+    const extraProfile = {
+      id: "profile-2",
+      max_visits: 400,
+      profile: { ...savedProfile.profile, name: "Other KataGo" }
+    };
+    backend.loadEngineProfilesSettings.mockResolvedValue({
+      selected_profile_id: "profile-1",
+      profiles: [savedProfile, extraProfile]
+    });
+    backend.saveEngineProfilesSettings.mockImplementation(async (settings) => {
+      if (!settings.profiles.some((profile: { id: string }) => profile.id === "profile-1")) {
+        throw new Error("an active Foreground Engine Run still holds this profile identity");
+      }
+      return settings;
+    });
+    const host = await renderApp();
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 3,
+        lifecycle: {
+          state: "error",
+          run: {
+            run_id: "run-1",
+            profile_id: "profile-1",
+            adapter_kind: "kata_go_analysis",
+            profile_snapshot: savedProfile.profile,
+            capability_snapshot: capability
+          },
+          failure: crashFailure
+        }
+      });
+    });
+    act(() => {
+      Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "设置")?.click();
+    });
+    const deleteButton = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "删除") as HTMLButtonElement;
+    expect(deleteButton.disabled).toBe(false);
+    await act(async () => {
+      deleteButton.click();
+    });
+    expect(host.querySelector(".engine-setup-panel .message")?.textContent).toContain("Delete failed");
   });
 });

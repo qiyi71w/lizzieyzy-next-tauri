@@ -74,6 +74,7 @@ struct LiveEngine {
     #[allow(dead_code)]
     stderr_rx: Receiver<io::Result<String>>,
     run_id: String,
+    process_id: u32,
 }
 
 enum Phase {
@@ -91,6 +92,7 @@ struct ManagerState {
     revision: u64,
     phase: Phase,
     operation: u64,
+    operation_kind: EngineOperationDto,
     live: Option<LiveEngine>,
     jobs: Vec<RegisteredJob>,
     subscribers: Vec<Sender<ForegroundEngineEventDto>>,
@@ -117,6 +119,7 @@ impl ForegroundEngineManager {
                     revision: 0,
                     phase: Phase::NoEngine,
                     operation: 0,
+                    operation_kind: EngineOperationDto::Start,
                     live: None,
                     jobs: Vec::new(),
                     subscribers: Vec::new(),
@@ -136,9 +139,21 @@ impl ForegroundEngineManager {
     }
 
     pub fn start(&self, profile_id: &str) -> Result<(), EngineFailureDto> {
+        self.begin_start(EngineOperationDto::Start, profile_id)
+    }
+
+    pub fn autoload(&self, profile_id: &str) -> Result<(), EngineFailureDto> {
+        self.begin_start(EngineOperationDto::Autoload, profile_id)
+    }
+
+    fn begin_start(
+        &self,
+        operation_kind: EngineOperationDto,
+        profile_id: &str,
+    ) -> Result<(), EngineFailureDto> {
         let saved = self.inner.catalog.get(profile_id).ok_or_else(|| {
             failure(
-                EngineOperationDto::Start,
+                operation_kind,
                 EngineFailureKind::ProfileNotFound,
                 format!("saved engine profile was not found: {profile_id}"),
                 None,
@@ -148,7 +163,7 @@ impl ForegroundEngineManager {
         })?;
         if saved.profile.backend != EngineBackend::KataGoAnalysis {
             return Err(failure(
-                EngineOperationDto::Start,
+                operation_kind,
                 EngineFailureKind::UnsupportedCapability,
                 "R3 Foreground Engine Run only proves KataGoAnalysis".into(),
                 None,
@@ -161,7 +176,7 @@ impl ForegroundEngineManager {
             let mut state = self.lock();
             if !matches!(state.phase, Phase::NoEngine) {
                 return Err(failure(
-                    EngineOperationDto::Start,
+                    operation_kind,
                     EngineFailureKind::InvalidState,
                     "Start requires an authoritative No-engine snapshot".into(),
                     current_run_id(&state.phase).as_deref(),
@@ -170,6 +185,7 @@ impl ForegroundEngineManager {
                 ));
             }
             state.operation += 1;
+            state.operation_kind = operation_kind;
             let run = starting_run(&saved);
             state.phase = Phase::Starting(run.clone());
             publish_snapshot(&mut state);
@@ -332,6 +348,7 @@ impl Inner {
     }
 
     fn start_resident(self: &Arc<Self>, operation: u64, run: &EngineRunDto) -> Result<(), EngineFailureDto> {
+        let kind = self.lock().operation_kind;
         let missing: Vec<_> = check_assets(&run.profile_snapshot)
             .into_iter()
             .filter(|check| check.required && !check.exists)
@@ -349,7 +366,7 @@ impl Inner {
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(failure(
-                EngineOperationDto::Start,
+                kind,
                 EngineFailureKind::Asset,
                 format!("required engine assets are missing: {summary}"),
                 Some(run.run_id.as_str()),
@@ -363,7 +380,7 @@ impl Inner {
 
         let spec = build_command_spec(&run.profile_snapshot).map_err(|error| {
             failure(
-                EngineOperationDto::Start,
+                kind,
                 EngineFailureKind::Start,
                 error.to_string(),
                 Some(run.run_id.as_str()),
@@ -373,7 +390,7 @@ impl Inner {
         })?;
         let mut child = build_process_command(&spec).spawn().map_err(|error| {
             failure(
-                EngineOperationDto::Start,
+                kind,
                 EngineFailureKind::Start,
                 format!("failed to spawn engine process: {error}"),
                 Some(run.run_id.as_str()),
@@ -383,7 +400,7 @@ impl Inner {
         })?;
         let mut stdin = child.stdin.take().ok_or_else(|| {
             failure(
-                EngineOperationDto::Start,
+                kind,
                 EngineFailureKind::Start,
                 "engine process stdin was not piped".into(),
                 Some(run.run_id.as_str()),
@@ -393,7 +410,7 @@ impl Inner {
         })?;
         let stdout = child.stdout.take().ok_or_else(|| {
             failure(
-                EngineOperationDto::Start,
+                kind,
                 EngineFailureKind::Start,
                 "engine process stdout was not piped".into(),
                 Some(run.run_id.as_str()),
@@ -403,7 +420,7 @@ impl Inner {
         })?;
         let stderr = child.stderr.take().ok_or_else(|| {
             failure(
-                EngineOperationDto::Start,
+                kind,
                 EngineFailureKind::Start,
                 "engine process stderr was not piped".into(),
                 Some(run.run_id.as_str()),
@@ -430,7 +447,7 @@ impl Inner {
         };
         let query_jsonl = query.to_jsonl().map_err(|error| {
             failure(
-                EngineOperationDto::Start,
+                kind,
                 EngineFailureKind::Protocol,
                 format!("failed to serialize readiness probe: {error}"),
                 Some(run.run_id.as_str()),
@@ -440,7 +457,7 @@ impl Inner {
         })?;
         write_jsonl(&mut stdin, &query_jsonl).map_err(|error| {
             failure(
-                EngineOperationDto::Start,
+                kind,
                 EngineFailureKind::Protocol,
                 format!("failed to write readiness probe: {error}"),
                 Some(run.run_id.as_str()),
@@ -456,12 +473,14 @@ impl Inner {
                 let _ = kill_timed_out_child(&mut child);
                 return Ok(());
             }
+            let process_id = child.id();
             state.live = Some(LiveEngine {
                 child,
                 stdin: Some(stdin),
                 stdout_rx,
                 stderr_rx,
                 run_id: run.run_id.clone(),
+                process_id,
             });
         }
 
@@ -476,6 +495,7 @@ impl Inner {
         run: &EngineRunDto,
         probe_id: &str,
     ) -> Result<(), EngineFailureDto> {
+        let kind = self.lock().operation_kind;
         let deadline = Instant::now() + self.config.readiness_timeout;
         loop {
             if self.current_operation() != operation {
@@ -484,7 +504,7 @@ impl Inner {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(failure(
-                    EngineOperationDto::Start,
+                    kind,
                     EngineFailureKind::Timeout,
                     "engine readiness probe timed out".into(),
                     Some(run.run_id.as_str()),
@@ -496,7 +516,7 @@ impl Inner {
                 let state = self.lock();
                 let Some(live) = state.live.as_ref() else {
                     return Err(failure(
-                        EngineOperationDto::Start,
+                        kind,
                         EngineFailureKind::Start,
                         "engine process was lost before readiness".into(),
                         Some(run.run_id.as_str()),
@@ -508,7 +528,7 @@ impl Inner {
                     Ok(Ok(Some(line))) => Some(line),
                     Ok(Ok(None)) => {
                         return Err(failure(
-                            EngineOperationDto::Start,
+                            kind,
                             EngineFailureKind::Readiness,
                             "engine closed stdout before answering the readiness probe".into(),
                             Some(run.run_id.as_str()),
@@ -518,7 +538,7 @@ impl Inner {
                     }
                     Ok(Err(error)) => {
                         return Err(failure(
-                            EngineOperationDto::Start,
+                            kind,
                             EngineFailureKind::Protocol,
                             format!("failed to read engine stdout: {error}"),
                             Some(run.run_id.as_str()),
@@ -545,7 +565,7 @@ impl Inner {
                 Err(error) => {
                     if trimmed.contains(probe_id) {
                         return Err(failure(
-                            EngineOperationDto::Start,
+                            kind,
                             EngineFailureKind::Protocol,
                             format!("readiness probe response was not parseable: {error}"),
                             Some(run.run_id.as_str()),
@@ -575,10 +595,14 @@ impl Inner {
         });
         state.phase = Phase::Ready(ready);
         publish_snapshot(&mut state);
+        let process_id = state.live.as_ref().map(|live| live.process_id);
         drop(state);
+        let Some(process_id) = process_id else {
+            return;
+        };
         let inner = self.clone();
         let run_id = run.run_id.clone();
-        thread::spawn(move || inner.watch_exit(operation, run_id));
+        thread::spawn(move || inner.watch_exit(operation, run_id, process_id));
     }
 
     fn fail_attempt(&self, operation: u64, published: EngineFailureDto) {
@@ -590,6 +614,7 @@ impl Inner {
             drop(live.stdin.take());
             let _ = kill_timed_out_child(&mut live.child);
         }
+        cancel_jobs_for_current(&mut state);
         state.jobs.clear();
         state.phase = Phase::NoEngine;
         publish_snapshot(&mut state);
@@ -629,7 +654,7 @@ impl Inner {
         publish_snapshot(&mut state);
     }
 
-    fn watch_exit(self: Arc<Self>, operation: u64, run_id: String) {
+    fn watch_exit(self: Arc<Self>, operation: u64, run_id: String, process_id: u32) {
         loop {
             thread::sleep(Duration::from_millis(30));
             let status = {
@@ -640,7 +665,7 @@ impl Inner {
                 let Some(live) = state.live.as_mut() else {
                     return;
                 };
-                if live.run_id != run_id {
+                if live.run_id != run_id || live.process_id != process_id {
                     return;
                 }
                 match live.child.try_wait() {
@@ -650,25 +675,31 @@ impl Inner {
                 }
             };
             if let Some(exit_code) = status {
-                self.handle_unexpected_exit(operation, &run_id, exit_code);
+                self.handle_unexpected_exit(operation, &run_id, process_id, exit_code);
                 return;
             }
         }
     }
 
-    fn handle_unexpected_exit(&self, operation: u64, run_id: &str, exit_code: Option<i32>) {
+    fn handle_unexpected_exit(&self, operation: u64, run_id: &str, process_id: u32, exit_code: Option<i32>) {
         let mut state = self.lock();
         if state.operation != operation {
             return;
         }
+        if let Some(live) = state.live.as_ref() {
+            if live.run_id != run_id || live.process_id != process_id {
+                return;
+            }
+        }
         match &state.phase {
             Phase::Starting(run) if run.run_id == run_id => {
+                let kind = state.operation_kind;
                 let profile_id = run.profile_id.clone();
                 drop(state);
                 self.fail_attempt(
                     operation,
                     failure(
-                        EngineOperationDto::Start,
+                        kind,
                         if exit_code.unwrap_or(0) == 0 {
                             EngineFailureKind::Readiness
                         } else {
