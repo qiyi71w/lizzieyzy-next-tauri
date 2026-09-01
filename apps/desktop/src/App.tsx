@@ -4,7 +4,7 @@ import { WinrateChart } from "./components/WinrateChart";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import { EngineSetupPanel } from "./components/EngineSetupPanel";
 import { CacheStatusBadge } from "./components/CacheStatusBadge";
-import { AppChrome, BottomBar, type EngineCommands, type OverlayMode, type SheetId } from "./components/AppChrome";
+import { AppChrome, BottomBar, type OverlayMode, type SheetId } from "./components/AppChrome";
 import { PreferencesPanel } from "./components/PreferencesPanel";
 import { ProviderPanel } from "./components/ProviderPanel";
 import {
@@ -27,8 +27,21 @@ import {
   selectCurrentGameNode,
   setCurrentGamePersonalComment,
   removeCurrentGameVariation,
-  startKataGoGameAnalysis
+  startKataGoGameAnalysis,
+  subscribeForegroundEngine,
+  startForegroundEngine,
+  stopForegroundEngine,
+  restartForegroundEngine,
+  loadEngineProfilesSettings
 } from "./api/backend";
+import {
+  canRestartForegroundEngine,
+  canStopForegroundEngine,
+  emptyForegroundEngineSnapshot,
+  engineStatusLabel,
+  isForegroundEngineReady,
+  runFromSnapshot
+} from "./domain/foregroundEngine";
 import { computeGameCacheKey, loadAnalysisCache, saveAnalysisCache } from "./api/analysisCache";
 import { loadAppPreferences, saveAppPreferences } from "./api/preferences";
 import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition } from "./domain/board";
@@ -40,7 +53,7 @@ import {
   shouldPublishReviewPresentation,
   type ReviewPresentationScope
 } from "./domain/reviewPresentation";
-import type { AnalysisFrameDto, AppHealthDto, CurrentGameResultDto, EngineProfileDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, SgfTreeNodeDto } from "./domain/types";
+import type { AnalysisFrameDto, AppHealthDto, CurrentGameResultDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, SgfTreeNodeDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
@@ -92,9 +105,11 @@ export function App() {
   const [preferences, setPreferences] = useState<AppPreferences>(() => defaultAppPreferences);
   const [preferencesStatus, setPreferencesStatus] = useState("正在载入设置…");
   const [sheet, setSheet] = useState<"none" | SheetId>("none");
-  const engineCommandsRef = useRef<EngineCommands | null>(null);
-  const [engineLabel, setEngineLabel] = useState("未加载引擎");
-  const [engineReady, setEngineReady] = useState(false);
+  const [engineSnapshot, setEngineSnapshot] = useState<ForegroundEngineSnapshotDto>(() => emptyForegroundEngineSnapshot());
+  const [engineProfiles, setEngineProfiles] = useState<EngineProfileRecordDto[]>([]);
+  const [engineFailure, setEngineFailure] = useState<EngineFailureDto | null>(null);
+  const engineLabel = engineStatusLabel(engineSnapshot);
+  const engineReady = isForegroundEngineReady(engineSnapshot);
   const [showCoordinates, setShowCoordinates] = useState(true);
   const [showMoveNumbers, setShowMoveNumbers] = useState(false);
   const [showBlackCandidates, setShowBlackCandidates] = useState(true);
@@ -374,16 +389,52 @@ export function App() {
     setSheet((current) => current === next ? "none" : next);
   }
 
-  function bindEngineCommands(commands: EngineCommands) {
-    engineCommandsRef.current = commands;
-    setEngineLabel((current) => current === commands.engineLabel ? current : commands.engineLabel);
-    setEngineReady((current) => current === commands.canRun ? current : commands.canRun);
-  }
+  useEffect(() => {
+    let cancelled = false;
+    void loadEngineProfilesSettings()
+      .then((settings) => {
+        if (!cancelled) setEngineProfiles(settings.profiles);
+      })
+      .catch(() => undefined);
+    const unlistenPromise = subscribeForegroundEngine(
+      (snapshot) => {
+        if (!cancelled) setEngineSnapshot(snapshot);
+      },
+      (failure) => {
+        if (!cancelled) {
+          setEngineFailure(failure);
+          setMessage(failure.message);
+        }
+      }
+    );
+    return () => {
+      cancelled = true;
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
 
   function handleEngineCommand(kind: "once" | "game") {
-    if (kind === "once") engineCommandsRef.current?.analyzeOnce();
-    else engineCommandsRef.current?.analyzeGame();
+    const run = runFromSnapshot(engineSnapshot);
+    if (!run || !engineReady) return;
+    const record = engineProfiles.find((profile) => profile.id === run.profile_id);
+    const maxVisits = record?.max_visits ?? 800;
+    if (kind === "once") void handleRunKataGo(run.profile_snapshot, maxVisits);
+    else void handleAnalyzeKataGoGame(run.profile_snapshot, maxVisits);
   }
+
+  async function handleSelectSwitcherProfile(profileId: string) {
+    if (!profileId) return;
+    const run = runFromSnapshot(engineSnapshot);
+    if (run?.profile_id === profileId) return;
+    if (engineSnapshot.lifecycle.state !== "no_engine") return;
+    setEngineFailure(null);
+    try {
+      await startForegroundEngine(profileId);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
 
   function handlePreferencesChange(nextPreferences: AppPreferences) {
     const normalized = normalizeAppPreferences(nextPreferences);
@@ -1229,6 +1280,25 @@ export function App() {
       documentName={documentName}
       engineLabel={engineLabel}
       engineReady={engineReady}
+      engineSwitcher={{
+        profiles: engineProfiles.map((profile) => ({ id: profile.id, name: profile.profile.name })),
+        selectedProfileId: runFromSnapshot(engineSnapshot)?.profile_id
+          ?? (engineSnapshot.lifecycle.state === "no_engine" ? "" : ""),
+        canStop: canStopForegroundEngine(engineSnapshot),
+        canRestart: canRestartForegroundEngine(engineSnapshot),
+        failureMessage: engineFailure?.message ?? null,
+        onSelectProfile: (profileId) => void handleSelectSwitcherProfile(profileId),
+        onStop: () => {
+          void stopForegroundEngine().catch((error) => {
+            setMessage(error instanceof Error ? error.message : String(error));
+          });
+        },
+        onRestart: () => {
+          void restartForegroundEngine().catch((error) => {
+            setMessage(error instanceof Error ? error.message : String(error));
+          });
+        }
+      }}
       onEngineCommand={handleEngineCommand}
       preferences={preferences}
       onPreferencesChange={(next) => void handlePreferencesChange(next)}
@@ -1391,12 +1461,7 @@ export function App() {
       <div hidden={sheet !== "engine"}>
         <EngineSetupPanel
           disabled={isKataGoRunning}
-          onRun={handleRunKataGo}
-          onAnalyzeGame={handleAnalyzeKataGoGame}
-          onCancelAnalysis={handleCancelKataGoAnalysis}
-          analysisProgress={analysisProgress}
-          activeJobId={activeJobId}
-          onBindCommands={bindEngineCommands}
+          engineSnapshot={engineSnapshot}
         />
       </div>
       {sheet === "prefs" ? <PreferencesPanel

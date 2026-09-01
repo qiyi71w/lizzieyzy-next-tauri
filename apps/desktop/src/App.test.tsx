@@ -23,7 +23,13 @@ const backend = vi.hoisted(() => ({
   saveCurrentGame: vi.fn(),
   setCurrentGamePersonalComment: vi.fn(),
   removeCurrentGameVariation: vi.fn(),
-  startKataGoGameAnalysis: vi.fn()
+  startKataGoGameAnalysis: vi.fn(),
+  loadEngineProfilesSettings: vi.fn(() => Promise.resolve({ selected_profile_id: "default", profiles: [] })),
+  subscribeForegroundEngine: vi.fn(() => Promise.resolve(() => undefined)),
+  startForegroundEngine: vi.fn(),
+  stopForegroundEngine: vi.fn(),
+  restartForegroundEngine: vi.fn(),
+  getForegroundEngineSnapshot: vi.fn(() => Promise.resolve({ revision: 0, lifecycle: { state: "no_engine" } }))
 }));
 
 vi.mock("./api/backend", () => ({

@@ -254,6 +254,32 @@ button[aria-pressed="true"] {
 .menu-sub:hover > .menu-sub-pop,
 .menu-sub:focus-within > .menu-sub-pop { display: block; }
 
+.engine-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  font-size: 11px;
+}
+.engine-switcher select {
+  height: 22px;
+  font-size: 11px;
+  max-width: 140px;
+}
+.engine-chip-label {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.engine-failure {
+  font-size: 11px;
+  color: #b91c1c;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .engine-chip {
   display: inline-flex;
   align-items: center;

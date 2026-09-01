@@ -185,7 +185,7 @@ pub enum ProblemSeverity {
     Blunder,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineProfileDto {
     pub name: String,
     pub engine_path: String,
@@ -202,6 +202,117 @@ pub enum EngineBackend {
     KataGoGtp,
     GenericGtp,
     ReadboardSidecar,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineOperationDto {
+    Start,
+    Stop,
+    Restart,
+    Switch,
+    Autoload,
+    Teardown,
+    Job,
+    DeleteProfile,
+    UnexpectedExit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineFailureKind {
+    Start,
+    Asset,
+    Readiness,
+    Protocol,
+    NonzeroExit,
+    Timeout,
+    Cancellation,
+    UnsupportedCapability,
+    InvalidState,
+    ProfileNotFound,
+    ProfileInUse,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineFailureDto {
+    pub operation: EngineOperationDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub switch_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
+    pub kind: EngineFailureKind,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic_summary: Option<String>,
+}
+
+impl std::fmt::Display for EngineFailureDto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for EngineFailureDto {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineCapabilitySnapshotDto {
+    pub adapter_kind: EngineBackend,
+    pub selected_node_analysis: bool,
+    pub whole_game_analysis: bool,
+    pub protocol_cancel: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineRunDto {
+    pub run_id: String,
+    pub profile_id: String,
+    pub adapter_kind: EngineBackend,
+    pub profile_snapshot: EngineProfileDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_snapshot: Option<EngineCapabilitySnapshotDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ForegroundEngineSnapshotDto {
+    pub revision: u64,
+    pub lifecycle: ForegroundEngineLifecycleDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ForegroundEngineLifecycleDto {
+    NoEngine,
+    Starting {
+        run: EngineRunDto,
+    },
+    Ready {
+        run: EngineRunDto,
+    },
+    Switching {
+        primary: EngineRunDto,
+        candidate: EngineRunDto,
+        switch_id: String,
+    },
+    Stopping {
+        run: EngineRunDto,
+    },
+    Error {
+        run: EngineRunDto,
+        failure: EngineFailureDto,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ForegroundEngineEventDto {
+    Snapshot { snapshot: ForegroundEngineSnapshotDto },
+    Failure { failure: EngineFailureDto },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -589,5 +700,118 @@ mod current_game_wire {
             let decoded: CurrentGameError = serde_json::from_value(json).unwrap();
             assert_eq!(decoded.kind, kind);
         }
+    }
+}
+
+#[cfg(test)]
+mod foreground_engine_wire {
+    use super::*;
+
+    fn sample_profile() -> EngineProfileDto {
+        EngineProfileDto {
+            name: "Local KataGo".into(),
+            engine_path: "/bin/katago".into(),
+            model_path: Some("/models/model.bin".into()),
+            config_path: Some("/configs/analysis.cfg".into()),
+            working_dir: Some("/tmp/engine".into()),
+            backend: EngineBackend::KataGoAnalysis,
+        }
+    }
+
+    #[test]
+    fn foreground_engine_snapshot_and_failure_keep_snake_case_identities() {
+        let snapshot = ForegroundEngineSnapshotDto {
+            revision: 4,
+            lifecycle: ForegroundEngineLifecycleDto::Ready {
+                run: EngineRunDto {
+                    run_id: "run-1".into(),
+                    profile_id: "profile-1".into(),
+                    adapter_kind: EngineBackend::KataGoAnalysis,
+                    profile_snapshot: sample_profile(),
+                    capability_snapshot: Some(EngineCapabilitySnapshotDto {
+                        adapter_kind: EngineBackend::KataGoAnalysis,
+                        selected_node_analysis: true,
+                        whole_game_analysis: true,
+                        protocol_cancel: true,
+                    }),
+                },
+            },
+        };
+        let failure = EngineFailureDto {
+            operation: EngineOperationDto::Start,
+            run_id: Some("run-2".into()),
+            switch_id: None,
+            job_id: Some("job-9".into()),
+            profile_id: Some("profile-1".into()),
+            kind: EngineFailureKind::Readiness,
+            message: "readiness probe failed".into(),
+            diagnostic_summary: Some("stderr trimmed".into()),
+        };
+        let event = ForegroundEngineEventDto::Failure {
+            failure: failure.clone(),
+        };
+
+        let snapshot_json = serde_json::to_value(&snapshot).unwrap();
+        let failure_json = serde_json::to_value(&failure).unwrap();
+        let event_json = serde_json::to_value(&event).unwrap();
+
+        assert_eq!(snapshot_json["revision"], 4);
+        assert_eq!(snapshot_json["lifecycle"]["state"], "ready");
+        assert_eq!(snapshot_json["lifecycle"]["run"]["run_id"], "run-1");
+        assert_eq!(snapshot_json["lifecycle"]["run"]["profile_id"], "profile-1");
+        assert_eq!(
+            snapshot_json["lifecycle"]["run"]["adapter_kind"],
+            "kata_go_analysis"
+        );
+        assert_eq!(
+            snapshot_json["lifecycle"]["run"]["profile_snapshot"]["backend"],
+            "kata_go_analysis"
+        );
+        assert_eq!(
+            snapshot_json["lifecycle"]["run"]["capability_snapshot"]["protocol_cancel"],
+            true
+        );
+        assert_eq!(failure_json["operation"], "start");
+        assert_eq!(failure_json["run_id"], "run-2");
+        assert_eq!(failure_json["job_id"], "job-9");
+        assert_eq!(failure_json["profile_id"], "profile-1");
+        assert_eq!(failure_json["kind"], "readiness");
+        assert!(failure_json.get("switch_id").is_none());
+        assert_eq!(event_json["type"], "failure");
+        assert_eq!(event_json["failure"]["kind"], "readiness");
+
+        let decoded_snapshot: ForegroundEngineSnapshotDto = serde_json::from_value(snapshot_json).unwrap();
+        let decoded_failure: EngineFailureDto = serde_json::from_value(failure_json).unwrap();
+        assert_eq!(decoded_snapshot, snapshot);
+        assert_eq!(decoded_failure, failure);
+    }
+
+    #[test]
+    fn foreground_engine_lifecycle_tagged_union_includes_switching_variant() {
+        let run = EngineRunDto {
+            run_id: "run-b".into(),
+            profile_id: "profile-b".into(),
+            adapter_kind: EngineBackend::KataGoAnalysis,
+            profile_snapshot: sample_profile(),
+            capability_snapshot: None,
+        };
+        let snapshot = ForegroundEngineSnapshotDto {
+            revision: 1,
+            lifecycle: ForegroundEngineLifecycleDto::Switching {
+                primary: run.clone(),
+                candidate: EngineRunDto {
+                    run_id: "run-c".into(),
+                    ..run
+                },
+                switch_id: "switch-1".into(),
+            },
+        };
+
+        let json = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(json["lifecycle"]["state"], "switching");
+        assert_eq!(json["lifecycle"]["switch_id"], "switch-1");
+        assert_eq!(json["lifecycle"]["candidate"]["run_id"], "run-c");
+        let decoded: ForegroundEngineSnapshotDto = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded, snapshot);
     }
 }

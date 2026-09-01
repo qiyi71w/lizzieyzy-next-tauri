@@ -1,13 +1,15 @@
 use app_model::{
     AnalysisFrameDto, AppHealthDto, CandidateMoveDto, CurrentGameError, CurrentGameResultDto, EngineBackend,
-    EngineProfileDto, MoveVertex, NodePath, PointDto, PositionDto, ProviderError, ProviderErrorKind,
-    ProviderFetchMethod, ProviderFetchRequest, ProviderFetchResult, ProviderGameMetadata,
-    ProviderImportRequest, ProviderImportResult, ProviderKind, ReadboardSidecarProbeRequest,
-    ReadboardSidecarProbeResult, ReadboardSidecarSyncSnapshotRequest, ReadboardSidecarSyncSnapshotResult,
+    EngineFailureDto, EngineProfileDto, ForegroundEngineEventDto, ForegroundEngineSnapshotDto, MoveVertex,
+    NodePath, PointDto, PositionDto, ProviderError, ProviderErrorKind, ProviderFetchMethod,
+    ProviderFetchRequest, ProviderFetchResult, ProviderGameMetadata, ProviderImportRequest,
+    ProviderImportResult, ProviderKind, ReadboardSidecarProbeRequest, ReadboardSidecarProbeResult,
+    ReadboardSidecarSyncSnapshotRequest, ReadboardSidecarSyncSnapshotResult,
 };
 use engine_manager::{
     build_command_spec, check_assets, AnalysisBatchRunOptions, AnalysisCancelToken, AssetCheck, CommandSpec,
-    EngineManagerError,
+    EngineManagerError, EngineProfileCatalog, ForegroundEngineConfig, ForegroundEngineManager,
+    SavedEngineProfile,
 };
 use go_core::ReadBoardLocalContext;
 use katago_protocol::{AnalysisBatchQueryOptions, AnalysisQueryOptions};
@@ -221,6 +223,28 @@ fn is_http_url(url: &str) -> bool {
 #[derive(Default)]
 struct AnalysisJobRegistry {
     jobs: Mutex<HashMap<String, AnalysisCancelToken>>,
+}
+
+struct DiskEngineCatalog {
+    handle: AppHandle,
+}
+
+impl EngineProfileCatalog for DiskEngineCatalog {
+    fn get(&self, profile_id: &str) -> Option<SavedEngineProfile> {
+        let settings = load_engine_profiles_from_disk(&self.handle).ok()?;
+        settings
+            .profiles
+            .into_iter()
+            .find(|record| record.id == profile_id)
+            .map(|record| SavedEngineProfile {
+                profile_id: record.id,
+                profile: record.profile,
+            })
+    }
+}
+
+fn map_engine_failure(failure: EngineFailureDto) -> String {
+    failure.message
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -626,6 +650,7 @@ fn load_engine_profile_settings(app_handle: AppHandle) -> Result<Option<EnginePr
 #[tauri::command]
 fn save_engine_profile_settings(
     app_handle: AppHandle,
+    manager: State<'_, ForegroundEngineManager>,
     settings: EngineProfileSettingsDto,
 ) -> Result<EngineProfileSettingsDto, String> {
     validate_engine_profile_settings(&settings)?;
@@ -637,7 +662,7 @@ fn save_engine_profile_settings(
             max_visits: settings.max_visits,
         }],
     };
-    let saved = save_engine_profiles_settings(app_handle, collection)?;
+    let saved = save_engine_profiles_settings(app_handle, manager, collection)?;
     let selected = selected_engine_profile_record(&saved)
         .ok_or_else(|| "saved engine profile collection did not include the selected profile".to_string())?;
     Ok(EngineProfileSettingsDto {
@@ -648,10 +673,14 @@ fn save_engine_profile_settings(
 
 #[tauri::command]
 fn load_engine_profiles_settings(app_handle: AppHandle) -> Result<EngineProfilesSettingsDto, String> {
-    let path = engine_profile_path(&app_handle)?;
+    load_engine_profiles_from_disk(&app_handle)
+}
+
+fn load_engine_profiles_from_disk(app_handle: &AppHandle) -> Result<EngineProfilesSettingsDto, String> {
+    let path = engine_profile_path(app_handle)?;
     match fs::read_to_string(&path) {
         Ok(contents) => parse_engine_profiles_settings(&contents, &path),
-        Err(err) if err.kind() == ErrorKind::NotFound => load_legacy_engine_profile_settings(&app_handle),
+        Err(err) if err.kind() == ErrorKind::NotFound => load_legacy_engine_profile_settings(app_handle),
         Err(err) => Err(format!("failed to read {}: {err}", path.display())),
     }
 }
@@ -659,9 +688,18 @@ fn load_engine_profiles_settings(app_handle: AppHandle) -> Result<EngineProfiles
 #[tauri::command]
 fn save_engine_profiles_settings(
     app_handle: AppHandle,
+    manager: State<'_, ForegroundEngineManager>,
     settings: EngineProfilesSettingsDto,
 ) -> Result<EngineProfilesSettingsDto, String> {
+    let current = load_engine_profiles_from_disk(&app_handle)?;
     let settings = normalize_engine_profiles_settings(settings)?;
+    for record in &current.profiles {
+        if !settings.profiles.iter().any(|next| next.id == record.id) {
+            manager
+                .assert_profile_deletable(&record.id)
+                .map_err(map_engine_failure)?;
+        }
+    }
     let path = engine_profile_path(&app_handle)?;
     let json = serde_json::to_string_pretty(&settings)
         .map_err(|err| format!("failed to serialize engine profiles: {err}"))?;
@@ -1989,10 +2027,55 @@ fn demo_candidates(turn: u32, board_size: u8) -> Vec<CandidateMoveDto> {
         .collect()
 }
 
+#[tauri::command]
+fn foreground_engine_snapshot(manager: State<'_, ForegroundEngineManager>) -> ForegroundEngineSnapshotDto {
+    manager.snapshot()
+}
+
+#[tauri::command]
+fn foreground_engine_start(
+    manager: State<'_, ForegroundEngineManager>,
+    profile_id: String,
+) -> Result<(), EngineFailureDto> {
+    manager.start(&profile_id)
+}
+
+#[tauri::command]
+fn foreground_engine_stop(manager: State<'_, ForegroundEngineManager>) -> Result<(), EngineFailureDto> {
+    manager.stop()
+}
+
+#[tauri::command]
+fn foreground_engine_restart(manager: State<'_, ForegroundEngineManager>) -> Result<(), EngineFailureDto> {
+    manager.restart()
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(AnalysisJobRegistry::default())
         .manage(CurrentGameState::default())
+        .setup(|app| {
+            let catalog = std::sync::Arc::new(DiskEngineCatalog {
+                handle: app.handle().clone(),
+            });
+            let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::default());
+            let events = manager.subscribe();
+            let emit_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                while let Ok(event) = events.recv() {
+                    match event {
+                        ForegroundEngineEventDto::Snapshot { snapshot } => {
+                            let _ = emit_handle.emit("foreground-engine://snapshot", snapshot);
+                        }
+                        ForegroundEngineEventDto::Failure { failure } => {
+                            let _ = emit_handle.emit("foreground-engine://failure", failure);
+                        }
+                    }
+                }
+            });
+            app.manage(manager);
+            Ok(())
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
@@ -2032,10 +2115,21 @@ pub fn run() {
             katago_analyze_once,
             katago_analyze_game,
             katago_start_analyze_game,
-            katago_cancel_analysis
+            katago_cancel_analysis,
+            foreground_engine_snapshot,
+            foreground_engine_start,
+            foreground_engine_stop,
+            foreground_engine_restart
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run LizzieYzy Next");
+        .build(tauri::generate_context!())
+        .expect("failed to build LizzieYzy Next")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(manager) = app.try_state::<ForegroundEngineManager>() {
+                    let _ = manager.teardown();
+                }
+            }
+        });
 }
 
 #[cfg(test)]

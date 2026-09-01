@@ -2,7 +2,7 @@ use app_model::{EngineBackend, EngineProfileDto};
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver},
@@ -11,6 +11,12 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 use thiserror::Error;
+
+mod catalog;
+mod lifecycle;
+
+pub use catalog::{EngineProfileCatalog, InMemoryEngineProfileCatalog, SavedEngineProfile};
+pub use lifecycle::{AnalysisJobCancel, AnalysisJobLane, ForegroundEngineConfig, ForegroundEngineManager};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandSpec {
@@ -694,7 +700,7 @@ fn should_preflight_program_path(program: &str) -> bool {
     path.is_absolute() || program.contains('/') || program.contains('\\')
 }
 
-fn build_process_command(spec: &CommandSpec) -> Command {
+pub(crate) fn build_process_command(spec: &CommandSpec) -> Command {
     let mut command = Command::new(&spec.program);
     command
         .args(&spec.args)
@@ -710,6 +716,15 @@ fn build_process_command(spec: &CommandSpec) -> Command {
     }
 
     command
+}
+
+pub(crate) fn write_jsonl(stdin: &mut ChildStdin, query_jsonl: &str) -> io::Result<()> {
+    stdin.write_all(query_jsonl.as_bytes())?;
+    if !query_jsonl.ends_with('\n') {
+        stdin.write_all(b"\n")?;
+    }
+    stdin.flush()?;
+    Ok(())
 }
 
 fn write_query(child: &mut Child, query_jsonl: &str) -> io::Result<()> {
@@ -740,7 +755,9 @@ fn spawn_stdout_reader(stdout: std::process::ChildStdout) -> Receiver<io::Result
     rx
 }
 
-fn spawn_stdout_lines_reader(stdout: std::process::ChildStdout) -> Receiver<io::Result<Option<String>>> {
+pub(crate) fn spawn_stdout_lines_reader(
+    stdout: std::process::ChildStdout,
+) -> Receiver<io::Result<Option<String>>> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
@@ -766,7 +783,7 @@ fn spawn_stdout_lines_reader(stdout: std::process::ChildStdout) -> Receiver<io::
     rx
 }
 
-fn spawn_stderr_reader(stderr: std::process::ChildStderr) -> Receiver<io::Result<String>> {
+pub(crate) fn spawn_stderr_reader(stderr: std::process::ChildStderr) -> Receiver<io::Result<String>> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let mut reader = BufReader::new(stderr);
@@ -917,7 +934,7 @@ fn push_batch_response_line(
     response_lines.push(line);
 }
 
-fn kill_timed_out_child(child: &mut Child) -> io::Result<ExitStatus> {
+pub(crate) fn kill_timed_out_child(child: &mut Child) -> io::Result<ExitStatus> {
     match child.kill() {
         Ok(()) => child.wait(),
         Err(error) if error.kind() == io::ErrorKind::InvalidInput => child.wait(),

@@ -52,3 +52,63 @@ export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto; ma
 export type EngineProfilesSettingsDto = { selected_profile_id: string; profiles: EngineProfileRecordDto[] };
 export type AssetCheckDto = { path: string; exists: boolean; required: boolean; label: string };
 export type AppHealthDto = { app: string; architecture: string; rust_backend_ready: boolean; notes: string[] };
+
+export type EngineOperationDto =
+  | "start"
+  | "stop"
+  | "restart"
+  | "switch"
+  | "autoload"
+  | "teardown"
+  | "job"
+  | "delete_profile"
+  | "unexpected_exit";
+export type EngineFailureKind =
+  | "start"
+  | "asset"
+  | "readiness"
+  | "protocol"
+  | "nonzero_exit"
+  | "timeout"
+  | "cancellation"
+  | "unsupported_capability"
+  | "invalid_state"
+  | "profile_not_found"
+  | "profile_in_use";
+export type EngineFailureDto = {
+  operation: EngineOperationDto;
+  run_id?: string | null;
+  switch_id?: string | null;
+  job_id?: string | null;
+  profile_id?: string | null;
+  kind: EngineFailureKind;
+  message: string;
+  diagnostic_summary?: string | null;
+};
+export type EngineCapabilitySnapshotDto = {
+  adapter_kind: EngineBackendDto;
+  selected_node_analysis: boolean;
+  whole_game_analysis: boolean;
+  protocol_cancel: boolean;
+};
+export type EngineRunDto = {
+  run_id: string;
+  profile_id: string;
+  adapter_kind: EngineBackendDto;
+  profile_snapshot: EngineProfileDto;
+  capability_snapshot?: EngineCapabilitySnapshotDto | null;
+};
+export type ForegroundEngineLifecycleDto =
+  | { state: "no_engine" }
+  | { state: "starting"; run: EngineRunDto }
+  | { state: "ready"; run: EngineRunDto }
+  | { state: "switching"; primary: EngineRunDto; candidate: EngineRunDto; switch_id: string }
+  | { state: "stopping"; run: EngineRunDto }
+  | { state: "error"; run: EngineRunDto; failure: EngineFailureDto };
+export type ForegroundEngineSnapshotDto = {
+  revision: number;
+  lifecycle: ForegroundEngineLifecycleDto;
+};
+export type ForegroundEngineEventDto =
+  | { type: "snapshot"; snapshot: ForegroundEngineSnapshotDto }
+  | { type: "failure"; failure: EngineFailureDto };

@@ -12,6 +12,8 @@ import type {
   EngineProfileDto,
   EngineProfilesSettingsDto,
   EngineProfileSettingsDto,
+  EngineFailureDto,
+  ForegroundEngineSnapshotDto,
   GameDto,
   MoveDto,
   MoveVertex,
@@ -19,6 +21,7 @@ import type {
   PositionDto,
   ProblemMarkerDto
 } from "../domain/types";
+import { emptyForegroundEngineSnapshot, mergeForegroundEngineSnapshot } from "../domain/foregroundEngine";
 import { ensureInitialPosition, replayGamePositions } from "../domain/board";
 
 const letters = "abcdefghijklmnopqrstuvwxyz";
@@ -235,6 +238,71 @@ export async function saveEngineProfilesSettings(settings: EngineProfilesSetting
     return normalized;
   }
   return await invoke<EngineProfilesSettingsDto>("save_engine_profiles_settings", { settings });
+}
+
+
+export type ForegroundEngineEventHandlers = {
+  onSnapshot?: (snapshot: ForegroundEngineSnapshotDto) => void;
+  onFailure?: (failure: EngineFailureDto) => void;
+};
+
+export async function getForegroundEngineSnapshot(): Promise<ForegroundEngineSnapshotDto> {
+  if (!isTauriRuntime()) return emptyForegroundEngineSnapshot();
+  return await invoke<ForegroundEngineSnapshotDto>("foreground_engine_snapshot");
+}
+
+export async function startForegroundEngine(profileId: string): Promise<void> {
+  if (!isTauriRuntime()) {
+    throw new Error("Starting a Foreground Engine Run requires the Tauri desktop backend.");
+  }
+  await invoke<void>("foreground_engine_start", { profileId });
+}
+
+export async function stopForegroundEngine(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await invoke<void>("foreground_engine_stop");
+}
+
+export async function restartForegroundEngine(): Promise<void> {
+  if (!isTauriRuntime()) {
+    throw new Error("Restarting a Foreground Engine Run requires the Tauri desktop backend.");
+  }
+  await invoke<void>("foreground_engine_restart");
+}
+
+export async function listenToForegroundEngineEvents(
+  handlers: ForegroundEngineEventHandlers
+): Promise<() => void> {
+  if (!isTauriRuntime()) return () => undefined;
+  const unlisteners = await Promise.all([
+    listen<ForegroundEngineSnapshotDto>("foreground-engine://snapshot", (event) => handlers.onSnapshot?.(event.payload)),
+    listen<EngineFailureDto>("foreground-engine://failure", (event) => handlers.onFailure?.(event.payload))
+  ]);
+  return () => {
+    for (const unlisten of unlisteners) unlisten();
+  };
+}
+
+export async function subscribeForegroundEngine(
+  onSnapshot: (snapshot: ForegroundEngineSnapshotDto) => void,
+  onFailure?: (failure: EngineFailureDto) => void
+): Promise<() => void> {
+  let current = emptyForegroundEngineSnapshot();
+  const apply = (incoming: ForegroundEngineSnapshotDto) => {
+    current = mergeForegroundEngineSnapshot(current, incoming);
+    onSnapshot(current);
+  };
+  const unlisten = await listenToForegroundEngineEvents({
+    onSnapshot: apply,
+    onFailure
+  });
+  try {
+    apply(await getForegroundEngineSnapshot());
+  } catch (error) {
+    unlisten();
+    throw error;
+  }
+  return unlisten;
 }
 
 export async function checkEngineAssets(profile: EngineProfileDto): Promise<AssetCheckDto[]> {
