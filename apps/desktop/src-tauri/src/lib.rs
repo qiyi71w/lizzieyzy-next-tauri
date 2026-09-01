@@ -850,8 +850,9 @@ fn katago_start_analyze_game(
     })?;
     let (job_id, events) =
         manager.start_whole_game_analysis(&run_id, &prepared.query_jsonl, prepared.expected)?;
+    let forwarded_job_id = job_id.clone();
     std::thread::spawn(move || {
-        forward_whole_game_job_events(app_handle, run_id, job_id.clone(), prepared, events);
+        forward_whole_game_job_events(app_handle, run_id, forwarded_job_id, prepared, events);
     });
     Ok(job_id)
 }
