@@ -1,6 +1,6 @@
 use app_model::{
     admits_analysis_publication, AnalysisJobEventDto, AnalysisJobOutcomeDto, AnalysisPublicationScopeDto,
-    EngineBackend, EngineCapabilitySnapshotDto, EngineFailureKind, EngineProfileDto,
+    EngineBackend, EngineCapabilitySnapshotDto, EngineFailureKind, EngineOperationDto, EngineProfileDto,
     ForegroundEngineEventDto, ForegroundEngineLifecycleDto, NodePath,
 };
 use engine_manager::{
@@ -665,8 +665,18 @@ fn selected_node_timeout_is_terminal_and_keeps_ready() {
         job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Timeout
     });
     assert!(timed_out.frame.is_none());
-    let logged = std::fs::read_to_string(&log).unwrap();
-    assert!(logged.contains(r#""action":"terminate"#), "{logged}");
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let logged = loop {
+        let logged = std::fs::read_to_string(&log).unwrap_or_default();
+        if logged.contains(r#""action":"terminate""#) {
+            break logged;
+        }
+        if Instant::now() >= deadline {
+            panic!("engine log never recorded protocol terminate: {logged}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(logged.contains(r#""action":"terminate""#), "{logged}");
     assert!(matches!(
         manager.snapshot().lifecycle,
         ForegroundEngineLifecycleDto::Ready { .. }
@@ -1189,6 +1199,88 @@ fn selecting_current_primary_does_not_switch_or_restart() {
     assert!(events.try_recv().is_err());
 }
 
+#[test]
+fn apply_autoload_without_mark_stays_no_engine() {
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-1".into(),
+        profile: EngineProfileDto {
+            name: "Unused".into(),
+            engine_path: "/bin/unused".into(),
+            model_path: None,
+            config_path: None,
+            working_dir: None,
+            backend: EngineBackend::KataGoAnalysis,
+        },
+    });
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    manager.apply_autoload().unwrap();
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_autoload_starts_only_the_marked_profile_with_a_new_run_identity() {
+    let temp = TestTempDir::new("autoload-ready");
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "other".into(),
+        profile: setup_profile(&temp, "exit 1"),
+    });
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "marked".into(),
+        profile: setup_profile(&temp, &resident_echo_script()),
+    });
+    catalog.set_autoload_profile_id(Some("marked".into()));
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    let events = manager.subscribe();
+    manager.apply_autoload().unwrap();
+    let ready = wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    let run = run_from_ready(&ready.lifecycle);
+    assert_eq!(run.profile_id, "marked");
+    assert!(!run.run_id.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn autoload_asset_failure_stays_no_engine_without_falling_back() {
+    let temp = TestTempDir::new("autoload-fail");
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "good".into(),
+        profile: setup_profile(&temp, &resident_echo_script()),
+    });
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "bad".into(),
+        profile: EngineProfileDto {
+            name: "Broken".into(),
+            engine_path: "/definitely/missing/katago".into(),
+            model_path: Some("/definitely/missing/model.bin".into()),
+            config_path: Some("/definitely/missing/analysis.cfg".into()),
+            working_dir: None,
+            backend: EngineBackend::KataGoAnalysis,
+        },
+    });
+    catalog.set_autoload_profile_id(Some("bad".into()));
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    let events = manager.subscribe();
+    manager.apply_autoload().unwrap();
+    let failure = wait_failure(&events, Duration::from_secs(2), |failure| {
+        failure.kind == EngineFailureKind::Asset
+    });
+    assert_eq!(failure.operation, EngineOperationDto::Autoload);
+    assert_eq!(failure.profile_id.as_deref(), Some("bad"));
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine
+    ));
+}
+
 #[cfg(unix)]
 #[test]
 fn switch_keeps_primary_a_until_ready_b_promotes() {
@@ -1307,11 +1399,17 @@ fn promotion_cancels_a_jobs_before_stopping_a_and_rejects_late_a_results() {
             _ => {}
         }
     }
-    let log = std::fs::read_to_string(&a_log).unwrap();
-    assert!(
-        log.contains(r#""action":"terminate""#),
-        "A must receive protocol cancel before stop: {log}"
-    );
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let _log = loop {
+        let log = std::fs::read_to_string(&a_log).unwrap_or_default();
+        if log.contains(r#""action":"terminate""#) {
+            break log;
+        }
+        if Instant::now() >= deadline {
+            panic!("A must receive protocol cancel before stop: {log}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
     let mut saw_completed = false;
     let deadline = Instant::now() + Duration::from_millis(300);
     while Instant::now() < deadline {
@@ -1365,4 +1463,56 @@ fn switch_rebinding_covers_whole_game_jobs() {
         .start_whole_game_analysis(&run_a, &whole_game_query_jsonl(), 2)
         .unwrap_err();
     assert_eq!(err.kind, EngineFailureKind::InvalidState);
+}
+
+#[cfg(unix)]
+#[test]
+fn autoload_after_teardown_does_not_restore_old_run_snapshot_or_jobs() {
+    let temp = TestTempDir::new("autoload-session");
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "marked".into(),
+        profile: setup_profile(&temp, &resident_echo_script()),
+    });
+    catalog.set_autoload_profile_id(Some("marked".into()));
+    let first = ForegroundEngineManager::new(catalog.clone(), ForegroundEngineConfig::for_tests());
+    let first_events = first.subscribe();
+    first.start("marked").unwrap();
+    let first_ready = wait_snapshot(&first_events, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    let old_run_id = run_from_ready(&first_ready.lifecycle).run_id.clone();
+    first
+        .register_job(&old_run_id, AnalysisJobLane::SelectedNode, Arc::new(NoopCancel))
+        .unwrap();
+    first.teardown().unwrap();
+    assert!(matches!(
+        first.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine
+    ));
+
+    let second = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    assert!(matches!(
+        second.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine
+    ));
+    let second_events = second.subscribe();
+    second.apply_autoload().unwrap();
+    let second_ready = wait_snapshot(&second_events, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    let new_run = run_from_ready(&second_ready.lifecycle);
+    assert_ne!(new_run.run_id, old_run_id);
+    assert_eq!(new_run.profile_id, "marked");
+    second
+        .register_job(&old_run_id, AnalysisJobLane::SelectedNode, Arc::new(NoopCancel))
+        .expect_err("old run identity must not admit jobs on a new session");
+}
+
+#[cfg(unix)]
+struct NoopCancel;
+
+#[cfg(unix)]
+impl AnalysisJobCancel for NoopCancel {
+    fn cancel(&self) {}
 }

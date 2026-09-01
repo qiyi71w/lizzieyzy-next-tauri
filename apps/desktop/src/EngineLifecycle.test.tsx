@@ -179,6 +179,7 @@ beforeEach(() => {
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
   backend.loadEngineProfilesSettings.mockResolvedValue({
     selected_profile_id: "profile-1",
+    autoload_profile_id: null,
     profiles: [savedProfile, savedProfileB]
   });
   backend.saveEngineProfilesSettings.mockImplementation(async (settings) => settings);
@@ -265,6 +266,16 @@ async function readyEngine(host: HTMLElement) {
 
 function buttonNamed(host: HTMLElement, label: string) {
   return Array.from(host.querySelectorAll("button")).find((button) => button.textContent === label) as HTMLButtonElement;
+}
+
+async function openEngineSettings(host: HTMLElement) {
+  act(() => {
+    Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "设置")?.click();
+  });
+  await act(async () => {
+    await Promise.resolve();
+  });
+  return host.querySelector(".engine-setup-panel") as HTMLElement;
 }
 
 describe("foreground engine lifecycle UI", () => {
@@ -713,5 +724,62 @@ describe("foreground engine lifecycle UI", () => {
       await backend.saveEngineProfilesSettings.mock.results.at(-1)?.value;
     });
     expect(Array.from(settingsSelect.options).map((option) => option.value)).toEqual(["profile-2"]);
+  });
+
+  it("saves Autoload Default from Engine Settings without changing the current Run", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    const panel = await openEngineSettings(host);
+    const checkbox = panel.querySelector('input[aria-label="Autoload Default"]') as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    backend.startForegroundEngine.mockClear();
+    backend.stopForegroundEngine.mockClear();
+    backend.restartForegroundEngine.mockClear();
+    await act(async () => {
+      checkbox.click();
+      await backend.saveEngineProfilesSettings.mock.results.at(-1)?.value;
+    });
+    expect(backend.saveEngineProfilesSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ autoload_profile_id: "profile-1", selected_profile_id: "profile-1" })
+    );
+    expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+    expect(backend.stopForegroundEngine).not.toHaveBeenCalled();
+    expect(backend.restartForegroundEngine).not.toHaveBeenCalled();
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("Local KataGo");
+    expect(checkbox.checked).toBe(true);
+  });
+
+  it("rolls back Autoload Default when persistence fails and leaves the current Run unchanged", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    const panel = await openEngineSettings(host);
+    const checkbox = panel.querySelector('input[aria-label="Autoload Default"]') as HTMLInputElement;
+    backend.saveEngineProfilesSettings.mockRejectedValueOnce(new Error("disk full"));
+    backend.startForegroundEngine.mockClear();
+    backend.stopForegroundEngine.mockClear();
+    backend.restartForegroundEngine.mockClear();
+    await act(async () => {
+      checkbox.click();
+      await Promise.resolve();
+    });
+    expect(checkbox.checked).toBe(false);
+    expect(panel.textContent).toContain("disk full");
+    expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+    expect(backend.stopForegroundEngine).not.toHaveBeenCalled();
+    expect(backend.restartForegroundEngine).not.toHaveBeenCalled();
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("Local KataGo");
+  });
+
+  it("does not rewrite Autoload Default when the Engine Switcher starts a profile", async () => {
+    backend.saveEngineProfilesSettings.mockClear();
+    const host = await renderApp();
+    const switcher = host.querySelector('select[aria-label="Foreground Engine Profile"]') as HTMLSelectElement;
+    await act(async () => {
+      switcher.value = "profile-1";
+      switcher.dispatchEvent(new Event("change", { bubbles: true }));
+      await backend.startForegroundEngine.mock.results[0]?.value;
+    });
+    expect(backend.startForegroundEngine).toHaveBeenCalledWith("profile-1");
+    expect(backend.saveEngineProfilesSettings).not.toHaveBeenCalled();
   });
 });

@@ -7,9 +7,12 @@ use app_model::{
     ReadboardSidecarSyncSnapshotRequest, ReadboardSidecarSyncSnapshotResult,
 };
 use engine_manager::{
-    build_command_spec, check_assets, AnalysisBatchRunOptions, AnalysisCancelToken, AnalysisJobEventDto,
-    AssetCheck, CommandSpec, EngineManagerError, EngineProfileCatalog, ForegroundEngineConfig,
-    ForegroundEngineManager, SavedEngineProfile, SelectedNodeJobRequest,
+    build_command_spec, check_assets, default_engine_profiles_settings, normalize_engine_profiles,
+    parse_engine_profiles, save_engine_profiles as persist_engine_profiles, AnalysisBatchRunOptions,
+    AnalysisCancelToken, AnalysisJobEventDto, AssetCheck, CommandSpec, EngineManagerError,
+    EngineProfileCatalog, EngineProfileRecord as EngineProfileRecordDto,
+    EngineProfilesSettings as EngineProfilesSettingsDto, ForegroundEngineConfig, ForegroundEngineManager,
+    SavedEngineProfile, SelectedNodeJobRequest, DEFAULT_ENGINE_PROFILE_ID,
 };
 use go_core::ReadBoardLocalContext;
 use katago_protocol::{analysis_query_from_position, AnalysisBatchQueryOptions, AnalysisQueryOptions};
@@ -38,7 +41,6 @@ use uuid::Uuid;
 const ENGINE_PROFILE_FILE: &str = "lizzieyzy-next-engine-profile.json";
 const APP_PREFERENCES_FILE: &str = "lizzieyzy-next-app-preferences.json";
 const ANALYSIS_CACHE_DB_FILE: &str = "analysis-cache.sqlite3";
-const DEFAULT_ENGINE_PROFILE_ID: &str = "default";
 const DEFAULT_PROVIDER_HTTP_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Debug, Default)]
@@ -242,6 +244,12 @@ impl EngineProfileCatalog for DiskEngineCatalog {
                 profile: record.profile,
             })
     }
+
+    fn autoload_profile_id(&self) -> Option<String> {
+        load_engine_profiles_from_disk(&self.handle)
+            .ok()
+            .and_then(|settings| settings.autoload_profile_id)
+    }
 }
 
 fn map_engine_failure(failure: EngineFailureDto) -> String {
@@ -252,19 +260,6 @@ fn map_engine_failure(failure: EngineFailureDto) -> String {
 struct EngineProfileSettingsDto {
     profile: EngineProfileDto,
     max_visits: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct EngineProfileRecordDto {
-    id: String,
-    profile: EngineProfileDto,
-    max_visits: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct EngineProfilesSettingsDto {
-    selected_profile_id: String,
-    profiles: Vec<EngineProfileRecordDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -658,8 +653,10 @@ fn save_engine_profile_settings(
     settings: EngineProfileSettingsDto,
 ) -> Result<EngineProfileSettingsDto, String> {
     validate_engine_profile_settings(&settings)?;
+    let current = load_engine_profiles_from_disk(&app_handle).ok();
     let collection = EngineProfilesSettingsDto {
         selected_profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
+        autoload_profile_id: current.and_then(|settings| settings.autoload_profile_id),
         profiles: vec![EngineProfileRecordDto {
             id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
             profile: settings.profile.clone(),
@@ -696,7 +693,7 @@ fn save_engine_profiles_settings(
     settings: EngineProfilesSettingsDto,
 ) -> Result<EngineProfilesSettingsDto, String> {
     let current = load_engine_profiles_from_disk(&app_handle)?;
-    let settings = normalize_engine_profiles_settings(settings)?;
+    let settings = normalize_engine_profiles(settings)?;
     for record in &current.profiles {
         if !settings.profiles.iter().any(|next| next.id == record.id) {
             manager
@@ -705,10 +702,7 @@ fn save_engine_profiles_settings(
         }
     }
     let path = engine_profile_path(&app_handle)?;
-    let json = serde_json::to_string_pretty(&settings)
-        .map_err(|err| format!("failed to serialize engine profiles: {err}"))?;
-    fs::write(&path, json).map_err(|err| format!("failed to write {}: {err}", path.display()))?;
-    Ok(settings)
+    persist_engine_profiles(&path, settings)
 }
 
 #[tauri::command]
@@ -1302,21 +1296,7 @@ fn selected_engine_profile_record(settings: &EngineProfilesSettingsDto) -> Optio
 }
 
 fn parse_engine_profiles_settings(contents: &str, path: &Path) -> Result<EngineProfilesSettingsDto, String> {
-    serde_json::from_str::<EngineProfilesSettingsDto>(contents)
-        .or_else(|_| {
-            serde_json::from_str::<EngineProfileSettingsDto>(contents).map(|settings| {
-                EngineProfilesSettingsDto {
-                    selected_profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
-                    profiles: vec![EngineProfileRecordDto {
-                        id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
-                        profile: settings.profile,
-                        max_visits: settings.max_visits,
-                    }],
-                }
-            })
-        })
-        .map_err(|err| format!("failed to parse {}: {err}", path.display()))
-        .and_then(normalize_engine_profiles_settings)
+    parse_engine_profiles(contents).map_err(|err| format!("failed to parse {}: {err}", path.display()))
 }
 
 fn load_legacy_engine_profile_settings(app_handle: &AppHandle) -> Result<EngineProfilesSettingsDto, String> {
@@ -1325,9 +1305,7 @@ fn load_legacy_engine_profile_settings(app_handle: &AppHandle) -> Result<EngineP
         Ok(contents) => {
             let settings = parse_engine_profiles_settings(&contents, &legacy_path)?;
             let path = engine_profile_path(app_handle)?;
-            let json = serde_json::to_string_pretty(&settings)
-                .map_err(|err| format!("failed to serialize migrated engine profiles: {err}"))?;
-            fs::write(&path, json).map_err(|err| {
+            persist_engine_profiles(&path, settings.clone()).map_err(|err| {
                 format!(
                     "failed to migrate engine profiles from {} to {}: {err}",
                     legacy_path.display(),
@@ -1336,48 +1314,9 @@ fn load_legacy_engine_profile_settings(app_handle: &AppHandle) -> Result<EngineP
             })?;
             Ok(settings)
         }
-        Err(err) if err.kind() == ErrorKind::NotFound => {
-            normalize_engine_profiles_settings(default_engine_profiles_settings())
-        }
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(default_engine_profiles_settings()),
         Err(err) => Err(format!("failed to read {}: {err}", legacy_path.display())),
     }
-}
-
-fn normalize_engine_profiles_settings(
-    mut settings: EngineProfilesSettingsDto,
-) -> Result<EngineProfilesSettingsDto, String> {
-    if settings.profiles.is_empty() {
-        settings.profiles.push(default_engine_profile_record());
-    }
-
-    let mut seen_ids = HashSet::new();
-    let mut normalized_profiles = Vec::new();
-    for mut record in settings.profiles {
-        record.id = record.id.trim().to_string();
-        if record.id.is_empty() {
-            return Err("engine profile id is required".to_string());
-        }
-        if !seen_ids.insert(record.id.clone()) {
-            return Err(format!("duplicate engine profile id: {}", record.id));
-        }
-        validate_engine_profile_settings(&EngineProfileSettingsDto {
-            profile: record.profile.clone(),
-            max_visits: record.max_visits,
-        })?;
-        normalized_profiles.push(record);
-    }
-
-    if !seen_ids.contains(DEFAULT_ENGINE_PROFILE_ID) {
-        normalized_profiles.insert(0, default_engine_profile_record());
-        seen_ids.insert(DEFAULT_ENGINE_PROFILE_ID.to_string());
-    }
-
-    settings.selected_profile_id = settings.selected_profile_id.trim().to_string();
-    if !seen_ids.contains(&settings.selected_profile_id) {
-        settings.selected_profile_id = DEFAULT_ENGINE_PROFILE_ID.to_string();
-    }
-    settings.profiles = normalized_profiles;
-    Ok(settings)
 }
 
 fn validate_engine_profile_settings(settings: &EngineProfileSettingsDto) -> Result<(), String> {
@@ -1388,28 +1327,6 @@ fn validate_engine_profile_settings(settings: &EngineProfileSettingsDto) -> Resu
         return Err("engine profile name is required".to_string());
     }
     Ok(())
-}
-
-fn default_engine_profiles_settings() -> EngineProfilesSettingsDto {
-    EngineProfilesSettingsDto {
-        selected_profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
-        profiles: vec![default_engine_profile_record()],
-    }
-}
-
-fn default_engine_profile_record() -> EngineProfileRecordDto {
-    EngineProfileRecordDto {
-        id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
-        profile: EngineProfileDto {
-            name: "Local KataGo".to_string(),
-            engine_path: String::new(),
-            model_path: None,
-            config_path: None,
-            working_dir: None,
-            backend: EngineBackend::KataGoAnalysis,
-        },
-        max_visits: 800,
-    }
 }
 
 fn engine_profile_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
@@ -2189,6 +2106,7 @@ pub fn run() {
         .manage(AnalysisJobRegistry::default())
         .manage(CurrentGameState::default())
         .setup(|app| {
+            let _ = load_engine_profiles_from_disk(app.handle());
             let catalog = std::sync::Arc::new(DiskEngineCatalog {
                 handle: app.handle().clone(),
             });
@@ -2207,6 +2125,7 @@ pub fn run() {
                     }
                 }
             });
+            let _ = manager.apply_autoload();
             app.manage(manager);
             Ok(())
         })
