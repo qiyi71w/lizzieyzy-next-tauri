@@ -298,5 +298,3 @@ All Ticket 11 checks pass on the current working-tree destination documents.
 - Original 16 Accepted contracts preserved against `18c6d189b8b01069975c4c40ead63a010249cb8c`; `BASE-02` evidence adds historical successor context; `READ-03` phase move is named.
 - Ticket 29 authorities hold for the nine Matrix/Plan comparisons. Phase Gates, exits, Promotion Gates, and Delivery Order sit on the Plan; Item Start Prerequisites sit on Matrix `Depends on`.
 - Evidence classes stay unmixed.
-
-[Showing lines 1-300 of 304. Use :301 to continue]
