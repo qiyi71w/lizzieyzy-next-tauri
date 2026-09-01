@@ -38,6 +38,8 @@ Provider and readboard work in this batch should be treated as offline contract/
 
 [The parity matrix](docs/PARITY_MATRIX.md) is the item-level source of truth. This table is a compact roll-up, not a second status tracker.
 
+The completed [Migration Baseline v1 traceability audit](docs/MIGRATION_TRACEABILITY_AUDIT.md) reconstructed 139 Frozen IDs, 108 Parity Items, and no unresolved mapping remainder. The [capability inventory](docs/JAVA_CAPABILITY_INVENTORY.md) records the frozen user-reachable surface, and R3 Foreground Engine Lifecycle is the next executable phase.
+
 Status and evidence are separate. The evidence ladder is `Not started` → `Scaffolded` → `Behavior implemented` → `Repository tested` → `Native/live verified`. Environment-independent behavior can be accepted at `Repository tested`; native/live evidence is not required for those items.
 
 | Capability | Parity items | Status | Highest completed evidence stage | Main remaining gap |
@@ -49,7 +51,7 @@ Status and evidence are separate. The evidence ladder is `Not started` → `Scaf
 | Core review presentation and interaction | `UI-01`–`UI-03`, `UI-05` | Accepted / Partial | Native/live verified | `UI-02` still lacks engine-event delivery evidence while a board mutation promise is pending. |
 | No-engine desktop workflow | `UI-04` | Accepted | Native/live verified | None. |
 | Engine profiles and asset checks | `ENG-01` | Accepted | Repository tested | None within this item. |
-| Foreground engine lifecycle, switching, rollback, and jobs | `ENG-02`–`ENG-05` | Missing / Partial | Scaffolded | Authoritative lifecycle/job identity, controlled tests, and real KataGo smoke. |
+| Foreground engine lifecycle, switching, rollback, jobs, autoload, and recovery | `ENG-02`–`ENG-07` | Missing / Partial | Scaffolded | Authoritative lifecycle/job identity, controlled tests, and real KataGo smoke. |
 | Interactive and whole-game analysis | `ANA-01`–`ANA-04` | Partial | Repository tested | Manager-owned lifecycle binding and controlled/native KataGo evidence. |
 | Analysis cache basics | `ANA-05` | Accepted | Repository tested | Branch-aware cache decisions remain in later R4 work. |
 | Preferences | `PREF-01` | Partial | Repository tested | Complete settings inventory and native restart evidence. |
@@ -84,8 +86,10 @@ Status and evidence are separate. The evidence ladder is `Not started` → `Scaf
 - `crates/storage`: SQLite storage/cache schema helpers.
 - `docs/ARCHITECTURE_NEXT.md`: Current Next architecture and module boundaries.
 - `docs/JAVA_BASELINE.md`: Frozen Java behavior reference and successor policy.
+- `docs/JAVA_CAPABILITY_INVENTORY.md`: Exhaustive Migration Baseline v1 Capability and Entry Point census.
 - `docs/PARITY_MATRIX.md`: Stable parity items, status, evidence, gaps, and acceptance.
 - `docs/MIGRATION_PLAN.md`: Migration phase order and next executable slices.
+- `docs/MIGRATION_TRACEABILITY_AUDIT.md`: Reproducible corpus-wide traceability audit and verdict.
 - `docs/DEVELOPMENT.md`: Local development and smoke validation commands.
 - `docs/RELEASE_CHECKLIST.md`: Release-readiness checklist and manual acceptance flow.
 
@@ -178,8 +182,10 @@ The production release workflow is `.github/workflows/release.yml`. It runs on `
 
 - [Next architecture](docs/ARCHITECTURE_NEXT.md)
 - [Java behavior baseline](docs/JAVA_BASELINE.md)
+- [Java capability inventory](docs/JAVA_CAPABILITY_INVENTORY.md)
 - [Parity matrix](docs/PARITY_MATRIX.md)
 - [Migration plan](docs/MIGRATION_PLAN.md)
+- [Migration traceability audit](docs/MIGRATION_TRACEABILITY_AUDIT.md)
 - [Development guide](docs/DEVELOPMENT.md)
 - [Release checklist](docs/RELEASE_CHECKLIST.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
