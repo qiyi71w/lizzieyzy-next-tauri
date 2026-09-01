@@ -100,7 +100,7 @@ Other View children (panel/toolbar/appearance/winrate graph/layout modes) are **
 ### 1.5 Right-click (`this.add`)
 
 **Empty-point menu** `RightClickMenu.java` 267–287 — all listed items are added:
-    
+
     | Control | Handler | Bucket |
     | --- | --- | --- |
     | `previousMove` | `undoForRightClick()` 317–322 | `SGF-03-NAV` |
@@ -111,11 +111,11 @@ Other View children (panel/toolbar/appearance/winrate graph/layout modes) are **
     | `priority` / `clearPriority` | KataGo `setmaxpolicy` / `clearpolicy` 297–315 | **04** |
     | `trackPoint` / `untrackPoint` / `clearAllTracked` | tracking points 447–449 | **04** |
     | `addSuggestionAsBranch` | `addSuggestionAsBranch()` 325–337 | **04** route (engine PV → tree); not an extra 03 Capability |
-    
+
 Popup `setVisible` toggles hide analysis/insert items during match play (115–184). Hidden-but-added remains an Entry Point with dynamic visibility.
 
 **Occupied-stone menu** `RightClickMenu2.java` 110–117 — all added:
-    
+
     | Control | Handler | Bucket |
     | --- | --- | --- |
     | `moveStone` | `setDragStartInfo(coords, true)` 150–156 | `SGF-03-ADJ-INSERT` |
@@ -124,7 +124,7 @@ Popup `setVisible` toggles hide analysis/insert items during match play (115–1
     | `review` | `setPressStoneInfo(coords, true)` 159–166 | `SGF-03-ADJ-INSERT` (click-review) |
     | `previousMove` | `undoForRightClick()` 126–132 | `SGF-03-NAV` |
     | `findStone` | `findMove(coords)` 118–124 | `SGF-03-ADJ-INSERT` |
-    
+
 ### 1.6 Bottom toolbar (`BottomToolbar` constructor 600–752)
 
 `this.add(buttonPane)` 713; Domain 03 icons `buttonPane.add` 726–751.
@@ -151,7 +151,7 @@ Overflow `moreActionsButton` 752 re-invokes the same `doClick` handlers (525–5
 ### 1.7 Top strip (`Menu.doubleMenu`, shown when `showDoubleMenu`)
 
 `doubleMenu` 7783+ rebuilds `topPanel`. Load/save/new/nav/edit icons are added only inside `if (Lizzie.config.showBasicBtn)` 7794–8200:
-    
+
     | Control | Added | Handler | Bucket |
     | --- | --- | --- | --- |
     | `btnNewFile` | `leftArea.add` 8174 | `newEmptyBoard()` 7840–7844 | `SGF-03-ADJ-NEW` |
@@ -164,7 +164,7 @@ Overflow `moreActionsButton` 752 re-invokes the same `doClick` handlers (525–5
     | `saveLoad` | `toolPanel.add` 9709; visible if `showSaveLoadMenu` 9732–9735 | `showTempGamePanel()` 6118–6124 | `SGF-03-ADJ-TEMP` |
     | `setBoardSize` button | `toolPanel.add` 9708; visible if `showGobanMenu` 9727–9730 | `SetBoardSize` 6108–6115 | `SGF-03-ADJ-META` |
     | `doubleMenuNewGame` | `topPanel.add` 8695 if `showDoubleMenuGameControl` | popup → `startNewGame` / analyze / engine game 8602–8644 | **05** |
-    
+
 `toggleShowEditbar` 10381–10387 only changes visibility of already-added color/pass buttons.
 
 ### 1.8 Pointer / wheel / comment (not menus, still registered)
@@ -181,7 +181,7 @@ Overflow `moreActionsButton` 752 re-invokes the same `doClick` handlers (525–5
 ### 1.9 Accepted buckets with no extra File/Edit/Game/View identity
 
 These are Domain 03 Capabilities whose Entry Points are the same registered controls above, or non-menu contracts:
-    
+
     | Heading | How it is reached from this census |
     | --- | --- |
     | `SGF-03-RT` | Open/Save/clipboard serialize through `SGFParser` |
@@ -196,7 +196,7 @@ These are Domain 03 Capabilities whose Entry Points are the same registered cont
     | `SGF-03-HOVER` | Pointer over candidates |
     | `SGF-03-NOENGINE` | Same File/board/review controls with engine absent |
     | `SGF-03-ACTIONS` | Claimed shortcut subset of `Input.keyPressed` 312–823 |
-    
+
 ---
 
 ## 2. Constructed-not-added / commented (non-rows)
