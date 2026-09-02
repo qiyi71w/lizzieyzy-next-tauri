@@ -107,7 +107,10 @@ fn wait_current(
             return snapshot;
         }
         if Instant::now() >= deadline {
-            panic!("timed out waiting for current snapshot after {timeout:?}: {:?}", snapshot.lifecycle);
+            panic!(
+                "timed out waiting for current snapshot after {timeout:?}: {:?}",
+                snapshot.lifecycle
+            );
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -225,10 +228,7 @@ fn katago_pids() -> Vec<u32> {
 
 fn kill_new_katago(before: &[u32]) {
     let after = katago_pids();
-    let targets: Vec<u32> = after
-        .into_iter()
-        .filter(|pid| !before.contains(pid))
-        .collect();
+    let targets: Vec<u32> = after.into_iter().filter(|pid| !before.contains(pid)).collect();
     assert!(
         !targets.is_empty(),
         "expected a live KataGo process to kill after Ready"
@@ -264,7 +264,7 @@ fn real_katago_ready_job_stop_restart_and_switch() {
     let (manager, events) = manager_with(catalog.clone());
     assert!(matches!(
         manager.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine
+        ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
 
     manager.start("profile-a").unwrap();
@@ -320,7 +320,7 @@ fn real_katago_ready_job_stop_restart_and_switch() {
         matches!(lifecycle, ForegroundEngineLifecycleDto::Stopping { .. })
     });
     wait_snapshot(&events, Duration::from_secs(30), |lifecycle| {
-        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine)
+        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. })
     });
 
     manager.start("profile-a").unwrap();
@@ -375,7 +375,7 @@ fn real_katago_ready_job_stop_restart_and_switch() {
 
     manager.stop().unwrap();
     wait_current(&manager, Duration::from_secs(30), |lifecycle| {
-        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine)
+        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. })
     });
 }
 
@@ -406,7 +406,7 @@ fn real_katago_failed_start_failed_switch_crash_and_autoload() {
     eprintln!("autoload failure {}", autoload_failure.message);
     assert!(matches!(
         manager.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine
+        ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
 
     manager.start("profile-bad").unwrap();
@@ -419,7 +419,7 @@ fn real_katago_failed_start_failed_switch_crash_and_autoload() {
     eprintln!("start failure {}", start_failure.message);
     assert!(matches!(
         manager.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine
+        ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
 
     catalog.set_autoload_profile_id(Some("profile-good".into()));
@@ -474,6 +474,6 @@ fn real_katago_failed_start_failed_switch_crash_and_autoload() {
 
     manager.stop().unwrap();
     wait_snapshot(&events, Duration::from_secs(30), |lifecycle| {
-        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine)
+        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. })
     });
 }

@@ -91,17 +91,29 @@ describe("foreground engine failure presentation", () => {
   });
 
   it("keeps an attempt-scoped failure on No-engine", () => {
-    const empty = emptyForegroundEngineSnapshot();
     const asset: EngineFailureDto = {
-      operation: "start",
+      operation: "autoload",
       run_id: "attempt-1",
       profile_id: "profile-1",
       kind: "asset",
       message: "required engine assets are missing"
     };
-    expect(shouldAcceptFailureEvent(empty, null, asset)).toBe(true);
-    expect(displayedEngineFailure(empty, asset)).toEqual(asset);
-    expect(shouldAcceptFailureEvent(empty, asset, crash)).toBe(false);
+    const missed = snapshot(2, { state: "no_engine", failure: asset });
+    expect(shouldAcceptFailureEvent(missed, null, asset)).toBe(true);
+    expect(displayedEngineFailure(missed, null)).toEqual(asset);
+    expect(displayedEngineFailure(missed, crash)).toEqual(asset);
+    expect(shouldAcceptFailureEvent(missed, asset, crash)).toBe(false);
+  });
+
+  it("does not revive a stale event failure on a clean No-engine snapshot", () => {
+    const empty = emptyForegroundEngineSnapshot();
+    const asset: EngineFailureDto = {
+      operation: "start",
+      profile_id: "profile-1",
+      kind: "asset",
+      message: "required engine assets are missing"
+    };
+    expect(displayedEngineFailure(empty, asset)).toBeNull();
   });
 
   it("shows a switch failure on Ready A without replacing the primary", () => {

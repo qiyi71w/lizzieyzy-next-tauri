@@ -292,7 +292,10 @@ pub struct ForegroundEngineSnapshotDto {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum ForegroundEngineLifecycleDto {
-    NoEngine,
+    NoEngine {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure: Option<EngineFailureDto>,
+    },
     Starting {
         run: EngineRunDto,
     },
@@ -820,5 +823,49 @@ mod foreground_engine_wire {
         assert_eq!(json["lifecycle"]["candidate"]["run_id"], "run-c");
         let decoded: ForegroundEngineSnapshotDto = serde_json::from_value(json).unwrap();
         assert_eq!(decoded, snapshot);
+    }
+
+    #[test]
+    fn no_engine_omits_clean_failure_and_keeps_attempt_scoped_payload() {
+        let clean = ForegroundEngineSnapshotDto {
+            revision: 1,
+            lifecycle: ForegroundEngineLifecycleDto::NoEngine { failure: None },
+        };
+        let clean_json = serde_json::to_value(&clean).unwrap();
+        assert_eq!(clean_json["lifecycle"]["state"], "no_engine");
+        assert!(clean_json["lifecycle"].get("failure").is_none());
+        let decoded_clean: ForegroundEngineSnapshotDto = serde_json::from_value(
+            serde_json::json!({ "revision": 1, "lifecycle": { "state": "no_engine" } }),
+        )
+        .unwrap();
+        assert_eq!(decoded_clean, clean);
+
+        let failure = EngineFailureDto {
+            operation: EngineOperationDto::Autoload,
+            run_id: Some("run-attempt".into()),
+            switch_id: None,
+            job_id: None,
+            profile_id: Some("profile-bad".into()),
+            kind: EngineFailureKind::Asset,
+            message: "required engine assets are missing".into(),
+            diagnostic_summary: None,
+        };
+        let failed = ForegroundEngineSnapshotDto {
+            revision: 3,
+            lifecycle: ForegroundEngineLifecycleDto::NoEngine {
+                failure: Some(failure.clone()),
+            },
+        };
+        let failed_json = serde_json::to_value(&failed).unwrap();
+        assert_eq!(failed_json["lifecycle"]["state"], "no_engine");
+        assert_eq!(failed_json["lifecycle"]["failure"]["operation"], "autoload");
+        assert_eq!(failed_json["lifecycle"]["failure"]["kind"], "asset");
+        assert_eq!(
+            failed_json["lifecycle"]["failure"]["message"],
+            "required engine assets are missing"
+        );
+        assert_eq!(failed_json["lifecycle"]["failure"]["profile_id"], "profile-bad");
+        let decoded_failed: ForegroundEngineSnapshotDto = serde_json::from_value(failed_json).unwrap();
+        assert_eq!(decoded_failed, failed);
     }
 }

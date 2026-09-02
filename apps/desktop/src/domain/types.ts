@@ -99,7 +99,7 @@ export type EngineRunDto = {
   capability_snapshot?: EngineCapabilitySnapshotDto | null;
 };
 export type ForegroundEngineLifecycleDto =
-  | { state: "no_engine" }
+  | { state: "no_engine"; failure?: EngineFailureDto }
   | { state: "starting"; run: EngineRunDto }
   | { state: "ready"; run: EngineRunDto }
   | { state: "switching"; primary: EngineRunDto; candidate: EngineRunDto; switch_id: string }

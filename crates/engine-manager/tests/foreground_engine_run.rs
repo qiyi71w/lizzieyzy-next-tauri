@@ -88,6 +88,34 @@ fn wait_failure(
     }
 }
 
+fn wait_lifecycle(
+    manager: &ForegroundEngineManager,
+    timeout: Duration,
+    mut predicate: impl FnMut(&ForegroundEngineLifecycleDto) -> bool,
+) -> app_model::ForegroundEngineSnapshotDto {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let snapshot = manager.snapshot();
+        if predicate(&snapshot.lifecycle) {
+            return snapshot;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out waiting for foreground engine snapshot, last={:?}",
+                snapshot.lifecycle
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn no_engine_failure(lifecycle: &ForegroundEngineLifecycleDto) -> Option<&app_model::EngineFailureDto> {
+    match lifecycle {
+        ForegroundEngineLifecycleDto::NoEngine { failure } => failure.as_ref(),
+        _ => None,
+    }
+}
+
 fn run_from_ready(lifecycle: &ForegroundEngineLifecycleDto) -> &app_model::EngineRunDto {
     match lifecycle {
         ForegroundEngineLifecycleDto::Ready { run } => run,
@@ -219,7 +247,7 @@ fn initial_snapshot_is_no_engine() {
     assert_eq!(snapshot.revision, 0);
     assert!(matches!(
         snapshot.lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine
+        ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
 }
 
@@ -342,14 +370,15 @@ fn start_failure_without_assets_stays_no_engine_with_typed_failure() {
     wait_snapshot(&events, Duration::from_secs(2), |lifecycle| {
         matches!(lifecycle, ForegroundEngineLifecycleDto::Starting { .. })
     });
-    let failure = wait_failure(&events, Duration::from_secs(2), |failure| {
-        failure.kind == EngineFailureKind::Asset
+    wait_snapshot(&events, Duration::from_secs(2), |lifecycle| {
+        no_engine_failure(lifecycle).is_some_and(|failure| failure.kind == EngineFailureKind::Asset)
     });
+    let snapshot = manager.snapshot();
+    let failure = no_engine_failure(&snapshot.lifecycle).expect("start miss must publish snapshot failure");
+    assert_eq!(failure.operation, EngineOperationDto::Start);
+    assert_eq!(failure.kind, EngineFailureKind::Asset);
     assert_eq!(failure.profile_id.as_deref(), Some("missing"));
-    assert!(matches!(
-        manager.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine
-    ));
+    assert!(!failure.message.is_empty());
 }
 
 #[cfg(unix)]
@@ -373,7 +402,7 @@ fn spawn_without_probe_response_does_not_become_ready() {
     assert_eq!(failure.profile_id.as_deref(), Some("profile-1"));
     assert!(matches!(
         manager.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine
+        ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
 }
 
@@ -409,7 +438,7 @@ fn stop_cancels_run_owned_jobs_then_returns_no_engine() {
         matches!(lifecycle, ForegroundEngineLifecycleDto::Stopping { .. })
     });
     wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
-        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine)
+        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. })
     });
     assert!(saw_cancel.exists());
     assert!(!survived.exists());
@@ -508,7 +537,7 @@ fn teardown_from_ready_reaches_no_engine_and_lifts_delete_guard() {
     manager.teardown().unwrap();
     assert!(matches!(
         manager.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine
+        ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
     manager
         .assert_profile_deletable("profile-1")
@@ -739,7 +768,7 @@ fn stop_and_restart_make_selected_node_job_terminal_without_late_completion() {
         .unwrap();
     manager.stop().unwrap();
     wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
-        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine)
+        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. })
     });
     let mut saw_completed = false;
     let deadline = Instant::now() + Duration::from_millis(300);
@@ -1002,7 +1031,7 @@ done
     });
     std::fs::write(&release, "go").unwrap();
     wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
-        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine)
+        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. })
     });
     std::thread::sleep(Duration::from_millis(200));
     assert!(job_events
@@ -1288,7 +1317,7 @@ fn apply_autoload_without_mark_stays_no_engine() {
     manager.apply_autoload().unwrap();
     assert!(matches!(
         manager.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine
+        ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
 }
 
@@ -1339,17 +1368,134 @@ fn autoload_asset_failure_stays_no_engine_without_falling_back() {
     });
     catalog.set_autoload_profile_id(Some("bad".into()));
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
-    let events = manager.subscribe();
     manager.apply_autoload().unwrap();
-    let failure = wait_failure(&events, Duration::from_secs(2), |failure| {
-        failure.kind == EngineFailureKind::Asset
+    let snapshot = wait_lifecycle(&manager, Duration::from_secs(2), |lifecycle| {
+        no_engine_failure(lifecycle).is_some_and(|failure| failure.kind == EngineFailureKind::Asset)
     });
+    let failure =
+        no_engine_failure(&snapshot.lifecycle).expect("autoload miss must publish snapshot failure");
     assert_eq!(failure.operation, EngineOperationDto::Autoload);
+    assert_eq!(failure.kind, EngineFailureKind::Asset);
     assert_eq!(failure.profile_id.as_deref(), Some("bad"));
-    assert!(matches!(
-        manager.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine
-    ));
+    assert!(!failure.message.is_empty());
+    let events = manager.subscribe();
+    let after_subscribe = manager.snapshot();
+    let persisted = no_engine_failure(&after_subscribe.lifecycle)
+        .expect("subscribe-after-miss must read snapshot payload");
+    assert_eq!(persisted.operation, EngineOperationDto::Autoload);
+    assert_eq!(persisted.kind, EngineFailureKind::Asset);
+    assert_eq!(persisted.message, failure.message);
+    assert!(
+        events.try_recv().is_err(),
+        "banner must not depend on a post-subscribe failure event"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn successful_start_after_autoload_miss_then_stop_does_not_revive_failure() {
+    let temp = TestTempDir::new("autoload-then-stop");
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "good".into(),
+        profile: setup_profile(&temp, &resident_echo_script()),
+    });
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "bad".into(),
+        profile: EngineProfileDto {
+            name: "Broken".into(),
+            engine_path: "/definitely/missing/katago".into(),
+            model_path: Some("/definitely/missing/model.bin".into()),
+            config_path: Some("/definitely/missing/analysis.cfg".into()),
+            working_dir: None,
+            backend: EngineBackend::KataGoAnalysis,
+        },
+    });
+    catalog.set_autoload_profile_id(Some("bad".into()));
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    manager.apply_autoload().unwrap();
+    wait_lifecycle(&manager, Duration::from_secs(2), |lifecycle| {
+        no_engine_failure(lifecycle).is_some_and(|failure| failure.operation == EngineOperationDto::Autoload)
+    });
+    manager.start("good").unwrap();
+    wait_lifecycle(&manager, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    assert!(no_engine_failure(&manager.snapshot().lifecycle).is_none());
+    manager.stop().unwrap();
+    let stopped = wait_lifecycle(&manager, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. })
+    });
+    assert!(no_engine_failure(&stopped.lifecycle).is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn later_start_miss_replaces_autoload_snapshot_failure() {
+    let _temp = TestTempDir::new("last-attempt-wins");
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "bad-autoload".into(),
+        profile: EngineProfileDto {
+            name: "Broken Autoload".into(),
+            engine_path: "/definitely/missing/katago".into(),
+            model_path: Some("/definitely/missing/model.bin".into()),
+            config_path: Some("/definitely/missing/analysis.cfg".into()),
+            working_dir: None,
+            backend: EngineBackend::KataGoAnalysis,
+        },
+    });
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "bad-start".into(),
+        profile: EngineProfileDto {
+            name: "Broken Start".into(),
+            engine_path: "/definitely/missing/katago-2".into(),
+            model_path: Some("/definitely/missing/model-2.bin".into()),
+            config_path: Some("/definitely/missing/analysis-2.cfg".into()),
+            working_dir: None,
+            backend: EngineBackend::KataGoAnalysis,
+        },
+    });
+    catalog.set_autoload_profile_id(Some("bad-autoload".into()));
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    manager.apply_autoload().unwrap();
+    wait_lifecycle(&manager, Duration::from_secs(2), |lifecycle| {
+        no_engine_failure(lifecycle).is_some_and(|failure| failure.operation == EngineOperationDto::Autoload)
+    });
+    manager.start("bad-start").unwrap();
+    let snapshot = wait_lifecycle(&manager, Duration::from_secs(2), |lifecycle| {
+        no_engine_failure(lifecycle).is_some_and(|failure| failure.operation == EngineOperationDto::Start)
+    });
+    let failure = no_engine_failure(&snapshot.lifecycle).unwrap();
+    assert_eq!(failure.kind, EngineFailureKind::Asset);
+    assert_eq!(failure.profile_id.as_deref(), Some("bad-start"));
+}
+
+#[test]
+fn start_unsupported_from_no_engine_publishes_snapshot_failure() {
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "gtp".into(),
+        profile: EngineProfileDto {
+            name: "GTP".into(),
+            engine_path: "/bin/gtp".into(),
+            model_path: None,
+            config_path: None,
+            working_dir: None,
+            backend: EngineBackend::KataGoGtp,
+        },
+    });
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    let failure = manager.start("gtp").unwrap_err();
+    assert_eq!(failure.kind, EngineFailureKind::UnsupportedCapability);
+    assert_eq!(failure.operation, EngineOperationDto::Start);
+    let snapshot = manager.snapshot();
+    let published =
+        no_engine_failure(&snapshot.lifecycle).expect("sync start miss must publish snapshot failure");
+    assert_eq!(published.kind, EngineFailureKind::UnsupportedCapability);
+    assert_eq!(published.operation, EngineOperationDto::Start);
+    assert_eq!(published.profile_id.as_deref(), Some("gtp"));
+    assert_eq!(published.message, failure.message);
 }
 
 #[cfg(unix)]
@@ -1814,13 +1960,13 @@ fn stop_during_switch_then_b_failure_is_no_engine_without_promoting_b() {
     });
     manager.stop().unwrap();
     wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
-        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine)
+        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. })
     });
     std::fs::write(&release_b, b"go").unwrap();
     std::thread::sleep(Duration::from_millis(400));
     assert!(matches!(
         manager.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine
+        ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
 }
 
@@ -1922,13 +2068,13 @@ fn autoload_after_teardown_does_not_restore_old_run_snapshot_or_jobs() {
     first.teardown().unwrap();
     assert!(matches!(
         first.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine
+        ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
 
     let second = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
     assert!(matches!(
         second.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine
+        ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
     let second_events = second.subscribe();
     second.apply_autoload().unwrap();
@@ -1983,7 +2129,7 @@ fn unsupported_backend_stays_no_engine_with_typed_failure() {
     assert_eq!(failure.profile_id.as_deref(), Some("gtp"));
     assert!(matches!(
         manager.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine
+        ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
 }
 
@@ -2011,7 +2157,7 @@ fn spawn_failure_stays_no_engine_with_start_kind() {
     assert!(failure.run_id.is_some());
     assert!(matches!(
         manager.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine
+        ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
 }
 
@@ -2043,7 +2189,7 @@ done
     assert!(failure.run_id.is_some());
     assert!(matches!(
         manager.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine
+        ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
 }
 
@@ -2066,7 +2212,7 @@ fn stdout_close_before_probe_stays_no_engine_with_readiness_kind() {
     assert!(failure.run_id.is_some());
     assert!(matches!(
         manager.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine
+        ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
     assert_ne!(failure.kind, EngineFailureKind::Cancellation);
 }
@@ -2112,7 +2258,7 @@ fn stop_does_not_publish_crash_failure() {
     let (manager, _, events, _) = ready_manager(&temp, &resident_echo_script());
     manager.stop().unwrap();
     wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
-        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine)
+        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. })
     });
     let deadline = Instant::now() + Duration::from_millis(200);
     while let Ok(event) = events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
@@ -2173,14 +2319,14 @@ exit 9
     broken.profile.config_path = Some("/definitely/missing/analysis.cfg".into());
     catalog.upsert(broken);
     manager.restart().unwrap();
-    let failure = wait_failure(&events, Duration::from_secs(4), |failure| {
-        failure.kind == EngineFailureKind::Asset
+    wait_snapshot(&events, Duration::from_secs(4), |lifecycle| {
+        no_engine_failure(lifecycle).is_some_and(|failure| failure.kind == EngineFailureKind::Asset)
     });
+    let snapshot = manager.snapshot();
+    let failure = no_engine_failure(&snapshot.lifecycle)
+        .expect("failed recovery Restart must publish snapshot failure");
+    assert_eq!(failure.operation, EngineOperationDto::Start);
     assert_eq!(failure.profile_id.as_deref(), Some("profile-1"));
-    assert!(matches!(
-        manager.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine
-    ));
     manager
         .assert_profile_deletable("profile-1")
         .expect("failed recovery Restart must leave an operable No-engine boundary");
@@ -2236,7 +2382,7 @@ exit 9
     let second = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
     assert!(matches!(
         second.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine
+        ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
     second
         .register_job(

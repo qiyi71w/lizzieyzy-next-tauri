@@ -105,7 +105,7 @@ export function displayedEngineFailure(
   lastSwitchId?: string | null
 ): EngineFailureDto | null {
   if (snapshot.lifecycle.state === "error") return snapshot.lifecycle.failure;
-  if (snapshot.lifecycle.state === "no_engine") return eventFailure;
+  if (snapshot.lifecycle.state === "no_engine") return snapshot.lifecycle.failure ?? null;
   if (
     snapshot.lifecycle.state === "ready"
     && eventFailure?.operation === "switch"

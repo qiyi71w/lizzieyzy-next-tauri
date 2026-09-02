@@ -19,6 +19,7 @@ export type EngineSwitcherProps = {
   canRestart: boolean;
   failureMessage?: string | null;
   failureKind?: string | null;
+  failureOperation?: string | null;
   onSelectProfile: (profileId: string) => void;
   onStop: () => void;
   onRestart: () => void;
@@ -268,8 +269,11 @@ export function AppChrome(props: Props) {
             className="engine-failure"
             role="status"
             data-failure-kind={props.engineSwitcher.failureKind ?? undefined}
+            data-failure-operation={props.engineSwitcher.failureOperation ?? undefined}
           >
-            {props.engineSwitcher.failureKind ? `${props.engineSwitcher.failureKind}: ${props.engineSwitcher.failureMessage}` : props.engineSwitcher.failureMessage}
+            {props.engineSwitcher.failureKind
+              ? `${props.engineSwitcher.failureKind}${props.engineSwitcher.failureOperation ? ` (${props.engineSwitcher.failureOperation})` : ""}: ${props.engineSwitcher.failureMessage}`
+              : props.engineSwitcher.failureMessage}
           </span>
         ) : null}
         <span className="spacer" />

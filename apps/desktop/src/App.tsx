@@ -1400,6 +1400,7 @@ export function App() {
         canRestart: canRestartForegroundEngine(engineSnapshot),
         failureMessage: visibleEngineFailure?.message ?? null,
         failureKind: visibleEngineFailure?.kind ?? null,
+        failureOperation: visibleEngineFailure?.operation ?? null,
         onSelectProfile: (profileId) => void handleSelectSwitcherProfile(profileId),
         onStop: () => {
           void stopForegroundEngine().catch((error) => {

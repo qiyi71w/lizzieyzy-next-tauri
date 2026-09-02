@@ -1003,6 +1003,61 @@ describe("foreground engine lifecycle UI", () => {
     expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
   });
 
+  it("shows a typed Autoload failure from the first No-engine snapshot without a Failure event", async () => {
+    const host = await renderApp();
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 2,
+        lifecycle: {
+          state: "no_engine",
+          failure: {
+            operation: "autoload",
+            run_id: "attempt-1",
+            profile_id: "profile-1",
+            kind: "asset",
+            message: "required engine assets are missing"
+          }
+        }
+      });
+    });
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("未加载引擎");
+    const failure = host.querySelector(".engine-failure") as HTMLElement;
+    expect(failure.dataset.failureKind).toBe("asset");
+    expect(failure.dataset.failureOperation).toBe("autoload");
+    expect(failure.textContent).toContain("autoload");
+    expect(failure.textContent).toContain("required engine assets are missing");
+    expect((buttonNamed(host, "重启") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("does not revive a stale event failure after Stop returns to clean No-engine", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => {
+      listeners.onFailure?.({
+        operation: "autoload",
+        run_id: "attempt-1",
+        profile_id: "profile-1",
+        kind: "asset",
+        message: "required engine assets are missing"
+      });
+    });
+    await act(async () => {
+      listeners.onSnapshot?.({ revision: 9, lifecycle: { state: "no_engine" } });
+    });
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("未加载引擎");
+    expect(host.querySelector(".engine-failure")).toBeNull();
+    await act(async () => {
+      listeners.onFailure?.({
+        operation: "autoload",
+        run_id: "attempt-1",
+        profile_id: "profile-1",
+        kind: "asset",
+        message: "required engine assets are missing"
+      });
+    });
+    expect(host.querySelector(".engine-failure")).toBeNull();
+  });
+
   it("saves Autoload Default from Engine Settings without changing the current Run", async () => {
     const host = await renderApp();
     await readyEngine(host);
@@ -1133,17 +1188,24 @@ describe("foreground engine lifecycle UI", () => {
     });
     expect(backend.restartForegroundEngine).toHaveBeenCalledOnce();
     await act(async () => {
-      listeners.onSnapshot?.({ revision: 5, lifecycle: { state: "no_engine" } });
-      listeners.onFailure?.({
-        operation: "start",
-        run_id: "run-2",
-        profile_id: "profile-1",
-        kind: "asset",
-        message: "required engine assets are missing"
+      listeners.onSnapshot?.({
+        revision: 5,
+        lifecycle: {
+          state: "no_engine",
+          failure: {
+            operation: "start",
+            run_id: "run-2",
+            profile_id: "profile-1",
+            kind: "asset",
+            message: "required engine assets are missing"
+          }
+        }
       });
     });
     const failure = host.querySelector(".engine-failure") as HTMLElement;
     expect(failure.dataset.failureKind).toBe("asset");
+    expect(failure.dataset.failureOperation).toBe("start");
+    expect((buttonNamed(host, "重启") as HTMLButtonElement).disabled).toBe(true);
     await act(async () => {
       listeners.onFailure?.(crashFailure);
     });

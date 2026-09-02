@@ -132,7 +132,9 @@ struct LiveEngine {
 }
 
 enum Phase {
-    NoEngine,
+    NoEngine {
+        failure: Option<EngineFailureDto>,
+    },
     Starting(EngineRunDto),
     Ready(EngineRunDto),
     Switching {
@@ -178,7 +180,7 @@ impl ForegroundEngineManager {
                 config,
                 state: Mutex::new(ManagerState {
                     revision: 0,
-                    phase: Phase::NoEngine,
+                    phase: Phase::NoEngine { failure: None },
                     operation: 0,
                     operation_kind: EngineOperationDto::Start,
                     live: None,
@@ -213,39 +215,44 @@ impl ForegroundEngineManager {
         let Some(profile_id) = self.inner.catalog.autoload_profile_id() else {
             return Ok(());
         };
-        self.autoload(&profile_id).inspect_err(|failure| {
-            self.inner.publish_failure(failure.clone());
-        })
+        self.autoload(&profile_id)
     }
     fn begin_start(
         &self,
         operation_kind: EngineOperationDto,
         profile_id: &str,
     ) -> Result<(), EngineFailureDto> {
-        let saved = self.inner.catalog.get(profile_id).ok_or_else(|| {
-            failure(
-                operation_kind,
-                EngineFailureKind::ProfileNotFound,
-                format!("saved engine profile was not found: {profile_id}"),
-                None,
-                Some(profile_id),
-                None,
-            )
-        })?;
+        let saved = match self.inner.catalog.get(profile_id) {
+            Some(saved) => saved,
+            None => {
+                let published = failure(
+                    operation_kind,
+                    EngineFailureKind::ProfileNotFound,
+                    format!("saved engine profile was not found: {profile_id}"),
+                    None,
+                    Some(profile_id),
+                    None,
+                );
+                self.inner.record_no_engine_failure(published.clone());
+                return Err(published);
+            }
+        };
         if saved.profile.backend != EngineBackend::KataGoAnalysis {
-            return Err(failure(
+            let published = failure(
                 operation_kind,
                 EngineFailureKind::UnsupportedCapability,
                 "R3 Foreground Engine Run only proves KataGoAnalysis".into(),
                 None,
                 Some(saved.profile_id.as_str()),
                 None,
-            ));
+            );
+            self.inner.record_no_engine_failure(published.clone());
+            return Err(published);
         }
 
         let (operation, run) = {
             let mut state = self.lock();
-            if !matches!(state.phase, Phase::NoEngine) {
+            if !matches!(state.phase, Phase::NoEngine { .. }) {
                 return Err(failure(
                     operation_kind,
                     EngineFailureKind::InvalidState,
@@ -321,9 +328,7 @@ impl ForegroundEngineManager {
             if manager.inner.current_operation() != operation {
                 return;
             }
-            if let Err(published) = manager.start(&profile_id) {
-                manager.inner.publish_failure(published);
-            }
+            let _ = manager.start(&profile_id);
         });
         Ok(())
     }
@@ -760,7 +765,7 @@ impl ForegroundEngineManager {
             Phase::Starting(run) | Phase::Ready(run) | Phase::Stopping(run) => Some(run),
             Phase::Switching { primary, .. } => Some(primary),
             Phase::Error { run, .. } => Some(run),
-            Phase::NoEngine => None,
+            Phase::NoEngine { .. } => None,
         };
         if let Some(run) = blocked {
             if run.profile_id == profile_id {
@@ -780,7 +785,7 @@ impl ForegroundEngineManager {
     fn begin_stop(&self, _operation_kind: EngineOperationDto) -> Result<Option<u64>, EngineFailureDto> {
         let mut state = self.lock();
         let run = match &state.phase {
-            Phase::NoEngine => return Ok(None),
+            Phase::NoEngine { .. } => return Ok(None),
             Phase::Starting(run) | Phase::Ready(run) | Phase::Stopping(run) => run.clone(),
             Phase::Switching { primary, .. } => primary.clone(),
             Phase::Error { run, .. } => run.clone(),
@@ -1231,7 +1236,9 @@ impl Inner {
         }
         cancel_jobs_for_current(&mut state);
         state.jobs.clear();
-        state.phase = Phase::NoEngine;
+        state.phase = Phase::NoEngine {
+            failure: Some(published.clone()),
+        };
         publish_snapshot(&mut state);
         publish_event(
             &mut state,
@@ -1239,8 +1246,15 @@ impl Inner {
         );
     }
 
-    fn publish_failure(&self, published: EngineFailureDto) {
+    fn record_no_engine_failure(&self, published: EngineFailureDto) {
         let mut state = self.lock();
+        if !matches!(state.phase, Phase::NoEngine { .. }) {
+            return;
+        }
+        state.phase = Phase::NoEngine {
+            failure: Some(published.clone()),
+        };
+        publish_snapshot(&mut state);
         publish_event(
             &mut state,
             ForegroundEngineEventDto::Failure { failure: published },
@@ -1273,7 +1287,7 @@ impl Inner {
             let _ = kill_timed_out_child(&mut live.child);
         }
         state.jobs.clear();
-        state.phase = Phase::NoEngine;
+        state.phase = Phase::NoEngine { failure: None };
         publish_snapshot(&mut state);
     }
 
@@ -1521,7 +1535,9 @@ impl Inner {
 
 fn snapshot_from(state: &ManagerState) -> ForegroundEngineSnapshotDto {
     let lifecycle = match &state.phase {
-        Phase::NoEngine => ForegroundEngineLifecycleDto::NoEngine,
+        Phase::NoEngine { failure } => ForegroundEngineLifecycleDto::NoEngine {
+            failure: failure.clone(),
+        },
         Phase::Starting(run) => ForegroundEngineLifecycleDto::Starting { run: run.clone() },
         Phase::Ready(run) => ForegroundEngineLifecycleDto::Ready { run: run.clone() },
         Phase::Switching {
@@ -1783,7 +1799,7 @@ fn extract_response_id(line: &str) -> Option<String> {
 
 fn current_run_id(phase: &Phase) -> Option<String> {
     match phase {
-        Phase::NoEngine => None,
+        Phase::NoEngine { .. } => None,
         Phase::Starting(run) | Phase::Ready(run) | Phase::Stopping(run) => Some(run.run_id.clone()),
         Phase::Switching { primary, .. } => Some(primary.run_id.clone()),
         Phase::Error { run, .. } => Some(run.run_id.clone()),
