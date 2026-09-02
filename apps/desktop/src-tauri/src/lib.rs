@@ -9,10 +9,10 @@ use app_model::{
 };
 use engine_manager::{
     build_command_spec, check_assets, default_engine_profiles_settings, normalize_engine_profiles,
-    parse_engine_profiles, save_engine_profiles as persist_engine_profiles, AnalysisJobEventDto, AssetCheck,
-    CommandSpec, EngineProfileCatalog, EngineProfileRecord as EngineProfileRecordDto,
+    parse_engine_profiles, save_engine_profiles as persist_engine_profiles, AssetCheck, CommandSpec,
+    EngineProfileCatalog, EngineProfileRecord as EngineProfileRecordDto,
     EngineProfilesSettings as EngineProfilesSettingsDto, ForegroundEngineConfig, ForegroundEngineManager,
-    SavedEngineProfile, SelectedNodeJobRequest, DEFAULT_ENGINE_PROFILE_ID,
+    SavedEngineProfile, SelectedNodeJobRequest, WholeGameJobRequest, DEFAULT_ENGINE_PROFILE_ID,
 };
 use go_core::ReadBoardLocalContext;
 use katago_protocol::{analysis_query_from_position, AnalysisBatchQueryOptions, AnalysisQueryOptions};
@@ -280,33 +280,7 @@ struct AppPreferencesDto {
 
 struct PreparedBatchAnalysis {
     query_jsonl: String,
-    turns: Vec<u32>,
-    board_size: u8,
     expected: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct AnalysisProgressPayload {
-    run_id: String,
-    job_id: String,
-    completed: usize,
-    expected: usize,
-    turn: Option<u32>,
-    response_jsonl: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct AnalysisCompletePayload {
-    run_id: String,
-    job_id: String,
-    frames: Vec<AnalysisFrameDto>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct AnalysisMessagePayload {
-    run_id: String,
-    job_id: String,
-    message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -828,33 +802,47 @@ fn foreground_engine_cancel_job(
     manager.cancel_job(&run_id, &job_id)
 }
 
+fn whole_game_node_path() -> NodePath {
+    NodePath { indices: Vec::new() }
+}
+
 #[tauri::command]
 fn katago_start_analyze_game(
-    app_handle: AppHandle,
     manager: State<'_, ForegroundEngineManager>,
+    current_game: State<'_, CurrentGameState>,
     run_id: String,
     sgf_text: String,
     max_visits: u32,
-) -> Result<String, EngineFailureDto> {
+) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+    let generation = current_game.generation().map_err(|error| EngineFailureDto {
+        operation: EngineOperationDto::Job,
+        run_id: Some(run_id.clone()),
+        switch_id: None,
+        job_id: None,
+        profile_id: None,
+        kind: EngineFailureKind::InvalidState,
+        message: error.message,
+        diagnostic_summary: None,
+    })?;
     let prepared = prepare_katago_batch_analysis(&sgf_text, Uuid::nil(), max_visits).map_err(|message| {
         EngineFailureDto {
-            operation: app_model::EngineOperationDto::Job,
+            operation: EngineOperationDto::Job,
             run_id: Some(run_id.clone()),
             switch_id: None,
             job_id: None,
             profile_id: None,
-            kind: app_model::EngineFailureKind::Start,
+            kind: EngineFailureKind::Start,
             message,
             diagnostic_summary: None,
         }
     })?;
-    let (job_id, events) =
-        manager.start_whole_game_analysis(&run_id, &prepared.query_jsonl, prepared.expected)?;
-    let forwarded_job_id = job_id.clone();
-    std::thread::spawn(move || {
-        forward_whole_game_job_events(app_handle, run_id, forwarded_job_id, prepared, events);
-    });
-    Ok(job_id)
+    manager.start_whole_game_analysis(WholeGameJobRequest {
+        run_id,
+        generation,
+        node_path: whole_game_node_path(),
+        query_jsonl: prepared.query_jsonl,
+        expected_responses: prepared.expected,
+    })
 }
 
 #[tauri::command]
@@ -864,65 +852,6 @@ fn katago_cancel_analysis(
     job_id: String,
 ) -> Result<(), EngineFailureDto> {
     manager.cancel_job(&run_id, &job_id)
-}
-
-fn forward_whole_game_job_events(
-    app_handle: AppHandle,
-    run_id: String,
-    job_id: String,
-    prepared: PreparedBatchAnalysis,
-    events: std::sync::mpsc::Receiver<AnalysisJobEventDto>,
-) {
-    while let Ok(event) = events.recv() {
-        match event {
-            AnalysisJobEventDto::Progress {
-                completed,
-                expected,
-                response_jsonl_line,
-                ..
-            } => {
-                let turn = katago_protocol::parse_response_line(&response_jsonl_line)
-                    .map(|response| response.turn_number)
-                    .ok();
-                let _ = app_handle.emit(
-                    "katago://analysis-progress",
-                    AnalysisProgressPayload {
-                        run_id: run_id.clone(),
-                        job_id: job_id.clone(),
-                        completed,
-                        expected,
-                        turn,
-                        response_jsonl: response_jsonl_line,
-                    },
-                );
-            }
-            AnalysisJobEventDto::Completed {
-                response_jsonl_lines, ..
-            } => {
-                emit_katago_analysis_complete(&app_handle, &run_id, &job_id, &prepared, response_jsonl_lines);
-            }
-            AnalysisJobEventDto::Cancelled { .. } => {
-                let _ = app_handle.emit(
-                    "katago://analysis-cancelled",
-                    AnalysisMessagePayload {
-                        run_id: run_id.clone(),
-                        job_id: job_id.clone(),
-                        message: "analysis job was cancelled".to_string(),
-                    },
-                );
-            }
-            AnalysisJobEventDto::Failed { failure, .. } => {
-                let _ = app_handle.emit(
-                    "katago://analysis-error",
-                    AnalysisMessagePayload {
-                        run_id: run_id.clone(),
-                        job_id: job_id.clone(),
-                        message: failure.message,
-                    },
-                );
-            }
-        }
-    }
 }
 
 fn prepare_katago_batch_analysis(
@@ -953,108 +882,8 @@ fn prepare_katago_batch_analysis(
     let expected = turns.len();
     Ok(PreparedBatchAnalysis {
         query_jsonl,
-        turns,
-        board_size: game.summary.board_size,
         expected,
     })
-}
-
-fn emit_katago_analysis_complete(
-    app_handle: &AppHandle,
-    run_id: &str,
-    job_id_string: &str,
-    prepared: &PreparedBatchAnalysis,
-    response_jsonl_lines: Vec<String>,
-) {
-    let job_id = Uuid::parse_str(job_id_string).unwrap_or_else(|_| Uuid::nil());
-    let responses = response_jsonl_lines
-        .iter()
-        .map(|line| katago_protocol::parse_response_line(line).map_err(|err| err.to_string()))
-        .collect::<Result<Vec<_>, _>>();
-
-    let frames = responses.and_then(|responses| {
-        validate_batch_response_turns(&prepared.turns, &responses)?;
-        Ok(katago_protocol::normalize_responses_for_turns(
-            job_id,
-            responses,
-            prepared.board_size,
-            &prepared.turns,
-        ))
-    });
-
-    match frames {
-        Ok(frames) => {
-            let _ = app_handle.emit(
-                "katago://analysis-complete",
-                AnalysisCompletePayload {
-                    run_id: run_id.to_string(),
-                    job_id: job_id_string.to_string(),
-                    frames,
-                },
-            );
-        }
-        Err(message) => {
-            let _ = app_handle.emit(
-                "katago://analysis-error",
-                AnalysisMessagePayload {
-                    run_id: run_id.to_string(),
-                    job_id: job_id_string.to_string(),
-                    message,
-                },
-            );
-        }
-    }
-}
-
-fn validate_batch_response_turns(
-    expected_turns: &[u32],
-    responses: &[katago_protocol::AnalysisResponse],
-) -> Result<(), String> {
-    let expected = sorted_unique_turns(expected_turns);
-    let received_raw = responses
-        .iter()
-        .map(|response| response.turn_number)
-        .collect::<Vec<_>>();
-    let received = sorted_unique_turns(&received_raw);
-    let duplicates = duplicate_turns(&received_raw);
-
-    if expected == received && duplicates.is_empty() {
-        return Ok(());
-    }
-
-    let missing = expected
-        .iter()
-        .copied()
-        .filter(|turn| received.binary_search(turn).is_err())
-        .collect::<Vec<_>>();
-    let unexpected = received
-        .iter()
-        .copied()
-        .filter(|turn| expected.binary_search(turn).is_err())
-        .collect::<Vec<_>>();
-
-    Err(format!(
-        "KataGo batch response turns did not match request; expected={expected:?}; received={received:?}; missing={missing:?}; unexpected={unexpected:?}; duplicates={duplicates:?}"
-    ))
-}
-
-fn sorted_unique_turns(turns: &[u32]) -> Vec<u32> {
-    let mut values = turns.to_vec();
-    values.sort_unstable();
-    values.dedup();
-    values
-}
-
-fn duplicate_turns(turns: &[u32]) -> Vec<u32> {
-    let mut values = turns.to_vec();
-    values.sort_unstable();
-    let mut duplicates = Vec::new();
-    for pair in values.windows(2) {
-        if pair[0] == pair[1] && duplicates.last().copied() != Some(pair[0]) {
-            duplicates.push(pair[0]);
-        }
-    }
-    duplicates
 }
 
 fn ensure_asset_check(checks: &mut Vec<AssetCheck>, path: &Option<String>, label: &str) {
@@ -2088,21 +1917,30 @@ mod tests {
     }
 
     #[test]
-    fn whole_game_progress_payload_keeps_run_and_job_identities() {
-        let payload = AnalysisProgressPayload {
-            run_id: "run-1".into(),
-            job_id: "job-9".into(),
-            completed: 1,
-            expected: 2,
-            turn: Some(3),
-            response_jsonl: r#"{"id":"job-9"}"#.into(),
-        };
-        let json = serde_json::to_value(&payload).unwrap();
-        assert_eq!(json["run_id"], "run-1");
-        assert_eq!(json["job_id"], "job-9");
-        assert_eq!(json["completed"], 1);
-        assert_eq!(json["expected"], 2);
-        assert_eq!(json["turn"], 3);
+    fn whole_game_gateway_drops_legacy_event_bus_and_stays_registered() {
+        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+        for forbidden in [
+            concat!("katago://", "analysis-progress"),
+            concat!("katago://", "analysis-complete"),
+            concat!("katago://", "analysis-error"),
+            concat!("katago://", "analysis-cancelled"),
+            concat!("forward_whole_game_job", "_events"),
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "legacy whole-game event bus must not remain: {forbidden}"
+            );
+        }
+        let commands = registered_tauri_commands(source);
+        assert!(
+            commands.contains(&"katago_start_analyze_game"),
+            "whole-game analysis must stay on the manager-owned run command"
+        );
+    }
+
+    #[test]
+    fn whole_game_request_uses_empty_root_node_path() {
+        assert!(whole_game_node_path().indices.is_empty());
     }
 
     #[test]

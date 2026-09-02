@@ -103,6 +103,14 @@ impl CurrentGameState {
         Ok((snapshot, document.board_size(), document.komi()))
     }
 
+    pub fn generation(&self) -> Result<u64, CurrentGameError> {
+        let holder = self.holder.lock().expect("current game state");
+        if holder.document.is_none() {
+            return Err(no_current_game());
+        }
+        Ok(holder.generation)
+    }
+
     #[allow(dead_code)]
     pub fn discard_confirmation_required(&self) -> bool {
         self.holder.lock().expect("current game state").dirty
@@ -338,6 +346,23 @@ mod current_game_replacement {
             state.mainline_projection().unwrap_err().kind,
             CurrentGameErrorKind::NoCurrentGame
         );
+        assert_eq!(
+            state.generation().unwrap_err().kind,
+            CurrentGameErrorKind::NoCurrentGame
+        );
+    }
+
+    #[test]
+    fn generation_requires_current_game_and_returns_holder_generation() {
+        let state = CurrentGameState::default();
+        assert_eq!(
+            state.generation().unwrap_err().kind,
+            CurrentGameErrorKind::NoCurrentGame
+        );
+
+        let opened = state.replace(EMPTY, None).unwrap();
+        assert_eq!(state.generation().unwrap(), opened.generation);
+        assert_eq!(state.generation().unwrap(), 1);
     }
 
     #[test]

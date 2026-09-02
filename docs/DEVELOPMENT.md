@@ -136,20 +136,22 @@ Expected result: selected-node analysis runs on the current Ready Foreground Eng
 ### 5. Run Full-Game Analysis
 
 - With a Ready run, click `自动分析`.
-- Watch progress update with completed/expected positions and current move.
-- Confirm winrate/candidate data accumulates across the game.
+- Watch the whole-game lane show `整局 completed/expected` progress. Do not treat turn as job identity.
+- Optionally click `分析此手` / `继续分析` on the same Ready run and confirm both lanes stay active together.
+- A second `自动分析` while that lane is occupied must be rejected without cancelling the selected-node lane.
 
-Expected result: whole-game analysis occupies the Ready Run's whole-game lane and stores analysis in the cache.
+Expected result: whole-game analysis occupies only the Ready Run's whole-game lane. Selected-node can run concurrently. Per-node incremental attachment is not part of this smoke.
 
 ### 6. Cancel Analysis
 
-- Start a full-game analysis with enough visits to observe progress.
-- Click `Cancel`.
-- Confirm progress stops and the status message reports cancellation.
+- On one resident Ready run, start both `分析此手` and `自动分析`.
+- Click `取消此手` and confirm the whole-game lane continues.
+- Click `取消整局` and confirm selected-node (if restarted) is unaffected.
 - Confirm the Engine Switcher is still Ready (`停止` / `重启` enabled).
+- Confirm ordinary `保存` / `另存为` stay enabled while analysis is running.
 - Start another analysis afterwards to ensure the job registry recovered.
 
-Expected result: a cancelled job does not Stop the run, does not keep the UI locked, and does not prevent a later run.
+Expected result: each cancel is lane-local, does not Stop the run, does not lock Save/Save As, and does not prevent a later start on that lane.
 
 ### 7. Verify Cache Hit
 

@@ -73,6 +73,7 @@ export type EngineFailureKind =
   | "cancellation"
   | "unsupported_capability"
   | "invalid_state"
+  | "occupied"
   | "profile_not_found"
   | "profile_in_use";
 export type EngineFailureDto = {
@@ -108,10 +109,13 @@ export type ForegroundEngineLifecycleDto =
 export type ForegroundEngineSnapshotDto = {
   revision: number;
   lifecycle: ForegroundEngineLifecycleDto;
+  selected_node_job?: AnalysisJobStartedDto | null;
+  whole_game_job?: AnalysisJobStartedDto | null;
 };
 export type AnalysisJobLaneDto = "selected_node" | "whole_game";
 export type AnalysisJobOutcomeDto =
   | "started"
+  | "progress"
   | "completed"
   | "cancelled"
   | "superseded"
@@ -137,6 +141,8 @@ export type AnalysisJobEventDto = {
   generation: number;
   node_path: NodePath;
   outcome: AnalysisJobOutcomeDto;
+  completed?: number | null;
+  expected?: number | null;
   frame?: AnalysisFrameDto | null;
   failure?: EngineFailureDto | null;
 };
