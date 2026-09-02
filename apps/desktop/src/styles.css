@@ -1236,3 +1236,78 @@ textarea {
   color: var(--muted);
   white-space: nowrap;
 }
+
+/* =========================================================
+   Shortcut Reference
+   ========================================================= */
+.shortcut-reference-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  background: rgba(23, 24, 27, 0.35);
+}
+
+.shortcut-reference {
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(72vh, 640px);
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(23, 24, 27, 0.18);
+}
+
+.shortcut-reference-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.shortcut-reference-header h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.shortcut-reference input {
+  width: 100%;
+  height: var(--control);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0 8px;
+  background: #fff;
+}
+
+.shortcut-reference-body {
+  min-height: 0;
+  overflow: auto;
+}
+
+.shortcut-reference-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.shortcut-reference-table th,
+.shortcut-reference-table td {
+  text-align: left;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.shortcut-reference-table th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.shortcut-reference-table td:last-child {
+  font-family: var(--mono);
+  white-space: nowrap;
+}

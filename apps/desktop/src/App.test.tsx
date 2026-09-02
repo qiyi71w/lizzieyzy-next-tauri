@@ -992,6 +992,43 @@ describe("App focus-safe review controls", () => {
     expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
     expect(backend.startKataGoGameAnalysis).not.toHaveBeenCalled();
   });
+
+  it("opens the same searchable Shortcut Reference from Help and focus-safe ?", async () => {
+    const host = await renderApp();
+    pressKey(buttonNamed(host, "坐标"), "?", { shiftKey: true });
+    const dialog = requiredElement(host, '[role="dialog"][aria-label="快捷键参考"]');
+    expect(dialog.textContent).toContain("自动播放");
+    expect(dialog.textContent).toContain("Ctrl+A");
+    expect(dialog.textContent).toContain("快捷键参考");
+    expect(dialog.textContent).toContain("?");
+
+    const search = requiredElement<HTMLInputElement>(dialog, 'input[aria-label="搜索快捷键"]');
+    act(() => {
+      const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      valueSetter?.call(search, "自动");
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(dialog.textContent).toContain("自动播放");
+    expect(dialog.textContent).not.toContain("打开棋谱");
+
+    pressKey(dialog, "Escape");
+    expect(host.querySelector('[role="dialog"][aria-label="快捷键参考"]')).toBeNull();
+
+    act(() => buttonNamed(host, "帮助").click());
+    act(() => buttonNamed(host, "快捷键参考(?)").click());
+    const fromHelp = requiredElement(host, '[role="dialog"][aria-label="快捷键参考"]');
+    expect(fromHelp.textContent).toContain("自动播放");
+    expect(fromHelp.textContent).toContain("Ctrl+A");
+  });
+
+  it("keeps typed ? in editable controls instead of opening Shortcut Reference", async () => {
+    const host = await renderApp();
+    const editor = requiredElement<HTMLTextAreaElement>(host, 'textarea[aria-label="个人评论"]');
+    act(() => editor.focus());
+    pressKey(editor, "?", { shiftKey: true });
+    expect(host.querySelector('[role="dialog"][aria-label="快捷键参考"]')).toBeNull();
+    expect(buttonNamed(host, "坐标").getAttribute("aria-pressed")).toBe("true");
+  });
 });
 
 async function renderApp(): Promise<HTMLElement> {

@@ -6,6 +6,7 @@ import { EngineSetupPanel } from "./components/EngineSetupPanel";
 import { CacheStatusBadge } from "./components/CacheStatusBadge";
 import { AppChrome, BottomBar, type OverlayMode, type SheetId } from "./components/AppChrome";
 import { PreferencesPanel } from "./components/PreferencesPanel";
+import { ShortcutReference } from "./components/ShortcutReference";
 import { ProviderPanel } from "./components/ProviderPanel";
 import {
   cancelKataGoAnalysis,
@@ -53,6 +54,7 @@ import type { AnalysisCacheRecord, CacheStatus, GameCacheKey, JsonValue } from "
 import { defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "./domain/preferences";
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
 import { admitsAnalysisPublication } from "./domain/analysisJob";
+import { createShortcutRegistry } from "./domain/shortcuts";
 import {
   createLocalRequestToken,
   shouldPublishReviewPresentation,
@@ -131,6 +133,8 @@ export function App() {
   const [showWhiteCandidates, setShowWhiteCandidates] = useState(true);
   const [overlayMode, setOverlayMode] = useState<OverlayMode>("candidates");
   const [autoPlaying, setAutoPlaying] = useState(false);
+  const [shortcutReferenceOpen, setShortcutReferenceOpen] = useState(false);
+  const shortcutRegistry = useMemo(() => createShortcutRegistry(), []);
   const jumpRef = useRef<HTMLInputElement | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
@@ -245,124 +249,81 @@ export function App() {
   }, [preferences.showCandidates, preferences.candidateLimit, selectedCandidateIndex]);
 
   useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (shouldIgnoreApplicationShortcut(event.target)) return;
-      const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
-      const ctrl = event.ctrlKey || event.metaKey;
-      const plain = !ctrl && !event.shiftKey && !event.altKey;
-      const onlyCtrl = ctrl && !event.shiftKey && !event.altKey;
-      const openEnabled = !isKataGoRunning && nativeRuntime;
-      const saveEnabled = openEnabled && documentDirty;
-      const passEnabled = openEnabled;
+    const openEnabled = (isKataGoRunning === false) && nativeRuntime;
+    const saveEnabled = openEnabled && documentDirty;
+    const passEnabled = openEnabled;
 
-      if (plain && key >= "1" && key <= "9") {
-        const index = Number(key) - 1;
-        if (visibleCurrentFrame?.candidates[index]) setSelectedCandidateIndex(index);
-        return;
-      }
-      if (plain && key === "ArrowLeft") {
-        event.preventDefault();
-        if (currentGame) handleParent();
-        else setCurrentMove((move) => clampMoveNumberToPositions(positions, move - 1));
-        return;
-      }
-      if (plain && key === "ArrowRight") {
-        event.preventDefault();
-        if (currentGame) handleNextChild();
-        else setCurrentMove((move) => clampMoveNumberToPositions(positions, move + 1));
-        return;
-      }
-      if (plain && key === "ArrowUp") {
-        event.preventDefault();
-        handlePrevSibling();
-        return;
-      }
-      if (plain && key === "ArrowDown") {
-        event.preventDefault();
-        handleNextSibling();
-        return;
-      }
-      if (plain && key === "Home") {
-        event.preventDefault();
-        handleMoveSelect(0);
-        return;
-      }
-      if (onlyCtrl && key === "Home") {
-        event.preventDefault();
-        if (!isKataGoRunning) void handleNewGame();
-        return;
-      }
-      if (plain && key === "End") {
-        event.preventDefault();
-        handleMoveSelect(reviewMax);
-        return;
-      }
-      if (plain && key === "PageUp") {
-        event.preventDefault();
-        handleMoveSelect(reviewIndex - 10);
-        return;
-      }
-      if (plain && key === "PageDown") {
-        event.preventDefault();
-        handleMoveSelect(reviewIndex + 10);
-        return;
-      }
-      if (event.shiftKey && !ctrl && !event.altKey && key === "Delete") {
-        event.preventDefault();
-        void handleRemoveVariation();
-        return;
-      }
-      if (plain && key === "p") {
-        if (passEnabled) void playAt("pass");
-        return;
-      }
-      if (plain && key === "o") {
-        if (openEnabled) void handleOpenSgfDocument();
-        return;
-      }
-      if (plain && key === "s") {
-        if (openEnabled) void handleSaveSgfDocument(true);
-        return;
-      }
-      if (onlyCtrl && key === "s") {
-        event.preventDefault();
-        if (saveEnabled) void handleSaveSgfDocument(false);
-        return;
-      }
-      if (onlyCtrl && key === "c") {
-        event.preventDefault();
-        void handleCopySgf();
-        return;
-      }
-      if (onlyCtrl && key === "v") {
-        event.preventDefault();
-        if (!isKataGoRunning) void handlePasteSgf();
-        return;
-      }
-      if (onlyCtrl && key === "a") {
-        event.preventDefault();
-        setAutoPlaying((value) => !value);
-        return;
-      }
-      if (plain && key === "n") {
-        if (!isKataGoRunning) void handleNewGame();
-        return;
-      }
-      if (plain && key === "c") {
-        setShowCoordinates((value) => !value);
-        return;
-      }
-      if (plain && key === "m") {
-        setShowMoveNumbers((value) => !value);
-        return;
-      }
-      if (plain && key === "t") {
-        void handlePreferencesChange({ ...preferences, showPolicy: !preferences.showPolicy });
-        return;
-      }
-      if (plain && key === "h") {
-        setOverlayMode("policy");
-      }
+    shortcutRegistry.bind("file.new", () => {
+      if ((isKataGoRunning === false)) void handleNewGame();
+    });
+    shortcutRegistry.bind("file.open", () => {
+      if (openEnabled) void handleOpenSgfDocument();
+    });
+    shortcutRegistry.bind("file.save", () => {
+      if (saveEnabled) void handleSaveSgfDocument(false);
+    });
+    shortcutRegistry.bind("file.save-as", () => {
+      if (openEnabled) void handleSaveSgfDocument(true);
+    });
+    shortcutRegistry.bind("file.copy-sgf", () => {
+      void handleCopySgf();
+    });
+    shortcutRegistry.bind("file.paste-sgf", () => {
+      if ((isKataGoRunning === false)) void handlePasteSgf();
+    });
+    shortcutRegistry.bind("review.pass", () => {
+      if (passEnabled) void playAt("pass");
+    });
+    shortcutRegistry.bind("review.remove-variation", () => {
+      void handleRemoveVariation();
+    });
+    shortcutRegistry.bind("review.parent", () => {
+      if (currentGame) handleParent();
+      else setCurrentMove((move) => clampMoveNumberToPositions(positions, move - 1));
+    });
+    shortcutRegistry.bind("review.next-child", () => {
+      if (currentGame) handleNextChild();
+      else setCurrentMove((move) => clampMoveNumberToPositions(positions, move + 1));
+    });
+    shortcutRegistry.bind("review.prev-sibling", handlePrevSibling);
+    shortcutRegistry.bind("review.next-sibling", handleNextSibling);
+    shortcutRegistry.bind("review.first", () => {
+      handleMoveSelect(0);
+    });
+    shortcutRegistry.bind("review.last", () => {
+      handleMoveSelect(reviewMax);
+    });
+    shortcutRegistry.bind("review.back-10", () => {
+      handleMoveSelect(reviewIndex - 10);
+    });
+    shortcutRegistry.bind("review.forward-10", () => {
+      handleMoveSelect(reviewIndex + 10);
+    });
+    shortcutRegistry.bind("review.select-candidate", (event) => {
+      const index = Number(event.key) - 1;
+      if (visibleCurrentFrame?.candidates[index]) setSelectedCandidateIndex(index);
+    });
+    shortcutRegistry.bind("view.coordinates", () => {
+      setShowCoordinates((value) => !value);
+    });
+    shortcutRegistry.bind("view.move-numbers", () => {
+      setShowMoveNumbers((value) => !value);
+    });
+    shortcutRegistry.bind("view.policy", () => {
+      void handlePreferencesChange({ ...preferences, showPolicy: !preferences.showPolicy });
+    });
+    shortcutRegistry.bind("view.policy-overlay", () => {
+      setOverlayMode("policy");
+    });
+    shortcutRegistry.bind("review.autoplay", () => {
+      setAutoPlaying((value) => !value);
+    });
+    shortcutRegistry.bind("help.shortcut-reference", () => {
+      setShortcutReferenceOpen((value) => !value);
+    });
+
+    function onKey(event: KeyboardEvent) {
+      shortcutRegistry.dispatch(event);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -376,6 +337,7 @@ export function App() {
     preferences,
     reviewIndex,
     reviewMax,
+    shortcutRegistry,
     visibleCurrentFrame
   ]);
 
@@ -1445,6 +1407,7 @@ export function App() {
       onFakeAnalyze={() => void handleFakeAnalyze()}
       onCancel={() => void handleCancelKataGoAnalysis()}
       onAbout={() => setMessage("LizzieYzy Next 0.1.0 · 桌面复盘工作区")}
+      onOpenShortcutReference={() => setShortcutReferenceOpen(true)}
       onCopySgf={() => void handleCopySgf()}
       onPasteSgf={() => void handlePasteSgf()}
       onClearBoard={() => void handleNewGame()}
@@ -1592,6 +1555,12 @@ export function App() {
         onChange={(nextPreferences) => void handlePreferencesChange(nextPreferences)}
       /> : null}
     </section>
+    {shortcutReferenceOpen ? (
+      <ShortcutReference
+        entries={shortcutRegistry.referenceEntries()}
+        onClose={() => setShortcutReferenceOpen(false)}
+      />
+    ) : null}
   </main>;
 }
 
@@ -1659,15 +1628,6 @@ function samePath(left: NodePath, right: NodePath): boolean {
   return left.indices.length === right.indices.length && left.indices.every((index, offset) => index === right.indices[offset]);
 }
 
-
-function shouldIgnoreApplicationShortcut(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
-  if (target.isContentEditable) return true;
-  const editable = target.getAttribute("contenteditable");
-  if (editable !== null && editable !== "false") return true;
-  return target.getAttribute("aria-label") === "棋盘";
-}
 
 function parentPath(path: NodePath): NodePath | null {
   if (path.indices.length === 0) return null;
