@@ -70,8 +70,8 @@ The existing Tauri implementation is the migration starting point and must be pr
 
 ### Known Workflow Gaps
 
-- `UI-02` remains Partial: there is still no evidence that engine events are delivered while a board mutation promise is pending. That residual does not block R3.
-- Selecting an engine profile does not create an authoritative Foreground Engine Run, Autoload Default, transactional switch, or typed manual recovery.
+- `UI-02` remains Partial: there is still no evidence that engine events are delivered while a board mutation promise is pending. That residual does not block R4.
+- Analysis product contracts remain R4: exact-position admission, lane presentation, Next-move Review Marker, chart encoding, Sub-Board Mode, and Variation Replay are not claimed by the R3 lifecycle exit.
 - Safe current-game replacement, native file activation, window file-drop dispatch, graceful shutdown, and current-game session recovery are not yet the R5 seams.
 - Layout rails are fixed at `228px` and `260px`; splitters, rail visibility, window-geometry reset, and narrow Restore Default are absent.
 - Review HUD player labels are hardcoded 黑棋/白棋 rather than root `PB`/`PW` (`REVIEW-09`). Main-window always-on-top is absent (`WINDOW-02`).
@@ -533,7 +533,7 @@ Engine Continuation, the full-variation-first pause, Java's separate replay thre
 
 **Owns:** `PREF-01`, `SGF-07`, `APP-02`, `APP-03`, `APP-04`, `APP-05`, and the `APP-01` semantic gate.
 
-**Migration Phase Gate:** R1 and R2 have exited. This phase is dependency-legal beside R3, but the named next batch remains R3-A.
+**Migration Phase Gate:** R1, R2, and R3 have exited. This phase is dependency-legal beside R4, but the named next batch remains R4 Analysis (`ANA-03` first).
 
 **Delivery Order:**
 
@@ -815,7 +815,9 @@ These items are stable and unnumbered. Each has an owner and a Plan-owned Promot
 
 ## Next Executable Batch
 
-R2 desktop review is closed except the `UI-02` residual (engine events during a pending board mutation). Start R3 foreground engine lifecycle. Do not mix R4–R11 integration work into this batch, do not accept `ENG-09` / `ENG-10` here, and do not treat the `UI-02` residual as the next slice.
+R3 Foreground Engine Lifecycle has exited (`ENG-02` through `ENG-07` Accepted on `KataGoAnalysis`). The `UI-02` residual (engine events during a pending board mutation) is not the next slice. Start R4 Analysis at `ANA-03` independent selected-node and whole-game lanes. Do not mix R5–R11 integration work into this batch, do not accept `ENG-09` / `ENG-10` here, and do not treat the `UI-02` residual as the next slice.
+
+Slice R3-A (Foreground engine identity and lifecycle) is complete. The historical scope below is audit record, not the current batch.
 
 ### Slice R3-A — Foreground engine identity and lifecycle
 
