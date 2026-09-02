@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toolbarIcons } from "../assets/toolbar";
 import type { AppPreferences } from "../domain/preferences";
+import { claimedShortcutCatalog, formatShortcutChord } from "../domain/shortcuts";
 
 export type SheetId = "sgf" | "engine" | "sync" | "prefs";
 export type OverlayMode = "candidates" | "ownership" | "policy";
@@ -59,6 +60,7 @@ type Props = {
   onFakeAnalyze: () => void;
   onCancel: () => void;
   onAbout: () => void;
+  onOpenShortcutReference: () => void;
   onCopySgf: () => void;
   onPasteSgf: () => void;
   onClearBoard: () => void;
@@ -79,6 +81,10 @@ export function AppChrome(props: Props) {
   const [openMenu, setOpenMenu] = useState<MenuKey>(null);
   const barRef = useRef<HTMLElement | null>(null);
   const later = "尚未接入";
+  const shortcutReference = claimedShortcutCatalog().find((item) => item.id === "help.shortcut-reference");
+  const shortcutReferenceLabel = shortcutReference
+    ? `${shortcutReference.label}(${formatShortcutChord(shortcutReference.primary)})`
+    : "快捷键参考";
   const nativeAvailable = props.nativeRuntime !== false;
   const nativeUnavailable = props.nativeUnavailable ?? "Native current-game, edit, and authoritative Save require the Tauri desktop backend. Browser preview is non-authoritative.";
   const openDisabled = props.busy || !nativeAvailable;
@@ -219,6 +225,7 @@ export function AppChrome(props: Props) {
         <span className="menu-div" />
         <div className="menu-cluster">
           <ChromeMenu label="帮助" open={openMenu === "help"} onToggle={() => setOpenMenu(openMenu === "help" ? null : "help")}>
+            <MenuItem label={shortcutReferenceLabel} onClick={() => run(props.onOpenShortcutReference)} />
             <MenuItem label="关于" onClick={() => run(props.onAbout)} />
             <MenuItem label="检查更新" disabled title={later} />
             <MenuItem label="简介" disabled title={later} />
