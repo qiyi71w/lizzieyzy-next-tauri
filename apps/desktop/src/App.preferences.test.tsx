@@ -299,6 +299,63 @@ describe("durable preferences surface", () => {
     });
   });
 
+  it("keeps a successful write when a later in-flight save fails", async () => {
+    let resolveFirstSave: ((preferences: AppPreferences) => void) | undefined;
+    let rejectSecondSave: ((error: Error) => void) | undefined;
+    let saveCount = 0;
+    preferencesApi.saveAppPreferences.mockImplementation((preferences: AppPreferences) => {
+      saveCount += 1;
+      if (saveCount === 1) {
+        return new Promise((resolve) => {
+          resolveFirstSave = resolve;
+        });
+      }
+      if (saveCount === 2) {
+        return new Promise((_, reject) => {
+          rejectSecondSave = reject;
+        });
+      }
+      return Promise.resolve(preferences);
+    });
+    const host = await renderApp();
+
+    act(() => buttonNamed(host, "显示").click());
+    act(() => menuCheck(host, "候选").click());
+    expect(preferencesApi.saveAppPreferences).toHaveBeenCalledTimes(1);
+
+    act(() => buttonNamed(host, "显示").click());
+    act(() => menuCheck(host, "领地").click());
+    expect(preferencesApi.saveAppPreferences).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFirstSave?.(preferencesApi.saveAppPreferences.mock.calls[0][0] as AppPreferences);
+      await preferencesApi.saveAppPreferences.mock.results[0]?.value;
+    });
+    expect(preferencesApi.saveAppPreferences).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      rejectSecondSave?.(new Error("disk full"));
+      await preferencesApi.saveAppPreferences.mock.results[1]?.value.catch(() => undefined);
+    });
+
+    openPreferences(host);
+    expect(labeledCheckbox(host, "候选").checked).toBe(false);
+    expect(labeledCheckbox(host, "领地").checked).toBe(true);
+    expect(preferencesStatus(host)).toBe("Save failed: disk full");
+
+    act(() => buttonNamed(host, "显示").click());
+    expect(menuCheck(host, "候选").getAttribute("aria-checked")).toBe("false");
+    expect(menuCheck(host, "领地").getAttribute("aria-checked")).toBe("true");
+
+    act(() => menuCheck(host, "策略").click());
+    await flushLast(preferencesApi.saveAppPreferences);
+    expect(preferencesApi.saveAppPreferences).toHaveBeenLastCalledWith({
+      ...defaultAppPreferences,
+      showCandidates: false,
+      showPolicy: false
+    });
+  });
+
   it("does not use a failed write as the next persist base", async () => {
     let rejectFirstSave!: (error: Error) => void;
     let firstStarted = false;

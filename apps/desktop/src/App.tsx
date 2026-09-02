@@ -518,10 +518,10 @@ export function App() {
         const pending = pendingPreferencesSaveRef.current;
         try {
           const saved = await saveAppPreferences(pending.preferences);
+          committedPreferencesRef.current = saved;
+          setPreferences(saved);
           if (pendingPreferencesSaveRef.current?.version === pending.version) {
             pendingPreferencesSaveRef.current = null;
-            committedPreferencesRef.current = saved;
-            setPreferences(saved);
             setPreferencesStatus("Preferences saved.");
             return;
           }
