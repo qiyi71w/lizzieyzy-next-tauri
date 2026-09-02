@@ -1508,21 +1508,26 @@ impl Inner {
     }
 
     fn timeout_selected_node_job(&self, started: &AnalysisJobStartedDto) {
+        let mut state = self.lock();
+        if admitting_run(&state.phase, &started.run_id).is_none() {
+            return;
+        }
         {
-            let mut state = self.lock();
             let Some(job) = state.jobs.iter_mut().find(|job| {
-                job.job_id == started.job_id && job.disposition == JobDisposition::Running && !job.terminal
+                job.job_id == started.job_id
+                    && job.run_id == started.run_id
+                    && job.disposition == JobDisposition::Running
+                    && !job.terminal
             }) else {
                 return;
             };
             job.disposition = JobDisposition::Cancelled;
             job.cancel.cancel();
             mark_job_cancelled(job);
-            if let Some(live) = state.live.as_ref() {
-                write_terminate_to_live(live, &started.job_id);
-            }
         }
-        let mut state = self.lock();
+        if let Some(live) = state.live.as_ref() {
+            write_terminate_to_live(live, &started.job_id);
+        }
         finish_selected_node_job(
             &mut state,
             started,
@@ -1705,6 +1710,13 @@ fn finish_selected_node_job(
     frame: Option<app_model::AnalysisFrameDto>,
     failure: Option<EngineFailureDto>,
 ) {
+    let owned = state
+        .jobs
+        .iter()
+        .any(|job| job.job_id == started.job_id && job.run_id == started.run_id);
+    if !owned {
+        return;
+    }
     state.jobs.retain(|job| job.job_id != started.job_id);
     let Some(outcome) = outcome else {
         return;

@@ -794,8 +794,15 @@ export function App() {
       return;
     }
     if (job.outcome === "cancelled" || job.outcome === "superseded" || job.outcome === "timeout" || job.outcome === "failed") {
-      if (job.outcome === "failed") setMessage(job.failure?.message ?? "Selected-node analysis failed.");
-      else if (job.outcome === "timeout") setMessage("Selected-node analysis timed out.");
+      if (job.outcome === "timeout") {
+        const snapshot = engineSnapshotRef.current;
+        const run = runFromSnapshot(snapshot);
+        if (!admitsForegroundEngineJobs(snapshot) || run?.run_id !== pending.run_id) {
+          clearSelectedNodeRunning(job.job_id);
+          return;
+        }
+        setMessage("Selected-node analysis timed out.");
+      } else if (job.outcome === "failed") setMessage(job.failure?.message ?? "Selected-node analysis failed.");
       else if (job.outcome === "cancelled") setMessage("Selected-node analysis cancelled.");
       clearSelectedNodeRunning(job.job_id);
     }

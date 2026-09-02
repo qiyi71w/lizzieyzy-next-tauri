@@ -804,6 +804,107 @@ fn stop_and_restart_make_selected_node_job_terminal_without_late_completion() {
     assert!(!saw_completed);
 }
 
+#[cfg(unix)]
+fn job_was_torn_down(lifecycle: &ForegroundEngineLifecycleDto, started_run_id: &str) -> bool {
+    match lifecycle {
+        ForegroundEngineLifecycleDto::NoEngine { .. } | ForegroundEngineLifecycleDto::Stopping { .. } => true,
+        ForegroundEngineLifecycleDto::Ready { run } if run.run_id != started_run_id => true,
+        ForegroundEngineLifecycleDto::Switching { primary, .. } if primary.run_id != started_run_id => true,
+        _ => false,
+    }
+}
+
+#[cfg(unix)]
+fn timeout_must_not_follow_teardown(
+    events: &Receiver<ForegroundEngineEventDto>,
+    job_id: &str,
+    started_run_id: &str,
+    until: Instant,
+) -> Vec<AnalysisJobOutcomeDto> {
+    let mut outcomes = Vec::new();
+    let mut torn_down = false;
+    let mut timeout_after_teardown = false;
+    while Instant::now() < until {
+        let remaining = until
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_millis(50));
+        match events.recv_timeout(remaining) {
+            Ok(ForegroundEngineEventDto::Job { job }) if job.job_id == job_id => {
+                if job.outcome == AnalysisJobOutcomeDto::Cancelled
+                    || job.outcome == AnalysisJobOutcomeDto::Superseded
+                {
+                    torn_down = true;
+                }
+                if job.outcome == AnalysisJobOutcomeDto::Timeout && torn_down {
+                    timeout_after_teardown = true;
+                }
+                outcomes.push(job.outcome);
+            }
+            Ok(ForegroundEngineEventDto::Snapshot { snapshot }) => {
+                if job_was_torn_down(&snapshot.lifecycle, started_run_id) {
+                    torn_down = true;
+                }
+            }
+            Ok(_) => {}
+            Err(_) => {}
+        }
+    }
+    assert!(
+        timeout_after_teardown == false,
+        "selected-node Timeout must not publish after Stop/Switch teardown: {outcomes:?}"
+    );
+    outcomes
+}
+
+#[cfg(unix)]
+#[test]
+fn stop_before_selected_node_timeout_never_publishes_timeout() {
+    let temp = TestTempDir::new("selected-stop-before-timeout");
+    let (manager, _, events, run_id) = ready_manager(&temp, &hold_after_probe_script());
+    let started = manager
+        .start_selected_node_job(selected_request(&run_id, 1, vec![]))
+        .unwrap();
+    manager.stop().unwrap();
+    let outcomes = timeout_must_not_follow_teardown(
+        &events,
+        &started.job_id,
+        &started.run_id,
+        Instant::now() + Duration::from_millis(1200),
+    );
+    assert!(
+        outcomes
+            .iter()
+            .any(|outcome| *outcome == AnalysisJobOutcomeDto::Cancelled),
+        "Stop should publish Cancelled for the live selected-node job: {outcomes:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn switch_before_selected_node_timeout_never_publishes_timeout() {
+    let temp = TestTempDir::new("selected-switch-before-timeout");
+    let (manager, _, events, run_id) =
+        ready_two_profiles(&temp, &hold_after_probe_script(), &resident_echo_script());
+    let started = manager
+        .start_selected_node_job(selected_request(&run_id, 1, vec![]))
+        .unwrap();
+    manager.switch_to("profile-b").unwrap();
+    timeout_must_not_follow_teardown(
+        &events,
+        &started.job_id,
+        &started.run_id,
+        Instant::now() + Duration::from_secs(4),
+    );
+    let ready = manager.snapshot().lifecycle;
+    assert!(
+        matches!(
+            ready,
+            ForegroundEngineLifecycleDto::Ready { ref run } if run.profile_id == "profile-b"
+        ),
+        "expected Ready B after switch: {ready:?}"
+    );
+}
+
 #[test]
 fn whole_game_job_event_keeps_snake_case_run_and_job_identities() {
     let event = WholeGameJobEventDto::Progress {

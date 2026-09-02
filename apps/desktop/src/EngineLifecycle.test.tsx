@@ -533,6 +533,87 @@ describe("foreground engine lifecycle UI", () => {
     const coords = Array.from(host.querySelectorAll(".cand-coord")).map((node) => node.textContent);
     expect(coords).toEqual(["C6"]);
   });
+
+  it("shows selected-node timeout while the Ready Run still owns the job", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => {
+      buttonNamed(host, "继续分析").click();
+      await backend.startSelectedNodeAnalysis.mock.results[0]?.value;
+    });
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-1",
+        job_id: "job-1",
+        lane: "selected_node",
+        generation: 1,
+        node_path: { indices: [] },
+        outcome: "timeout"
+      });
+    });
+    expect(host.textContent).toContain("Selected-node analysis timed out.");
+  });
+
+  it("does not show selected-node timeout after Stop or Switch leaves the job's Run", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => {
+      buttonNamed(host, "继续分析").click();
+      await backend.startSelectedNodeAnalysis.mock.results[0]?.value;
+    });
+    await act(async () => {
+      buttonNamed(host, "停止").click();
+      await backend.stopForegroundEngine.mock.results[0]?.value;
+    });
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 3,
+        lifecycle: { state: "no_engine" }
+      });
+    });
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-1",
+        job_id: "job-1",
+        lane: "selected_node",
+        generation: 1,
+        node_path: { indices: [] },
+        outcome: "timeout"
+      });
+    });
+    expect(host.textContent).not.toContain("Selected-node analysis timed out.");
+
+    await readyEngine(host);
+    backend.startSelectedNodeAnalysis.mockResolvedValueOnce({
+      run_id: "run-1",
+      job_id: "job-2",
+      lane: "selected_node",
+      generation: 1,
+      node_path: { indices: [] }
+    });
+    await act(async () => {
+      buttonNamed(host, "继续分析").click();
+      await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 4,
+        lifecycle: { state: "ready", run: readyRun("run-b", savedProfileB) }
+      });
+    });
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-1",
+        job_id: "job-2",
+        lane: "selected_node",
+        generation: 1,
+        node_path: { indices: [] },
+        outcome: "timeout"
+      });
+    });
+    expect(host.textContent).not.toContain("Selected-node analysis timed out.");
+  });
+
   it("starts whole-game analysis with the Ready Run identity and keeps cancel from stopping the engine", async () => {
     const host = await renderApp();
     await readyEngine(host);
