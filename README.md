@@ -17,6 +17,7 @@ Implemented in the Next workspace:
 - KataGo one-position analysis and full-game batch analysis through analysis JSONL.
 - Analysis progress events, cancellation, candidate moves, ownership, policy, and winrate/progress overlays.
 - Engine path/model/config pickers, asset checks, and multiple engine profiles persisted in app data.
+- A manager-owned Foreground Engine Run: Engine Switcher Start/Stop/Restart, Autoload Default, transactional A→B switch with failed-B rollback, typed failure, and manual recovery on a real `KataGoAnalysis` path.
 - SQLite analysis cache with cache key computation, lookup, save, and delete commands.
 - Scaffold validation, Rust tests, and frontend build checks wired for local and CI use.
 - Release preflight validation for Tauri metadata and the safe dry-run workflow.
@@ -38,7 +39,7 @@ Provider and readboard work in this batch should be treated as offline contract/
 
 [The parity matrix](docs/PARITY_MATRIX.md) is the item-level source of truth. This table is a compact roll-up, not a second status tracker.
 
-The completed [Migration Baseline v1 traceability audit](docs/MIGRATION_TRACEABILITY_AUDIT.md) reconstructed 139 Frozen IDs, 108 Parity Items, and no unresolved mapping remainder. The [capability inventory](docs/JAVA_CAPABILITY_INVENTORY.md) records the frozen user-reachable surface, and R3 Foreground Engine Lifecycle is the next executable phase.
+The completed [Migration Baseline v1 traceability audit](docs/MIGRATION_TRACEABILITY_AUDIT.md) reconstructed 139 Frozen IDs, 108 Parity Items, and no unresolved mapping remainder. The [capability inventory](docs/JAVA_CAPABILITY_INVENTORY.md) records the frozen user-reachable surface. R3 Foreground Engine Lifecycle has exited. R4 Analysis is the next executable phase.
 
 Status and evidence are separate. The evidence ladder is `Not started` → `Scaffolded` → `Behavior implemented` → `Repository tested` → `Native/live verified`. Environment-independent behavior can be accepted at `Repository tested`; native/live evidence is not required for those items.
 
@@ -51,7 +52,7 @@ Status and evidence are separate. The evidence ladder is `Not started` → `Scaf
 | Core review presentation and interaction | `UI-01`–`UI-03`, `UI-05` | Accepted / Partial | Native/live verified | `UI-02` still lacks engine-event delivery evidence while a board mutation promise is pending. |
 | No-engine desktop workflow | `UI-04` | Accepted | Native/live verified | None. |
 | Engine profiles and asset checks | `ENG-01` | Accepted | Repository tested | None within this item. |
-| Foreground engine lifecycle, switching, rollback, jobs, autoload, and recovery | `ENG-02`–`ENG-07` | Missing / Partial | Scaffolded | Authoritative lifecycle/job identity, controlled tests, and real KataGo smoke. |
+| Foreground engine lifecycle, switching, rollback, jobs, autoload, and recovery | `ENG-02`–`ENG-07` | Accepted | Native/live verified | None for the R3 `KataGoAnalysis` lifecycle. Analysis product contracts remain R4. |
 | Interactive and whole-game analysis | `ANA-01`–`ANA-04` | Partial | Repository tested | Manager-owned lifecycle binding and controlled/native KataGo evidence. |
 | Analysis cache basics | `ANA-05` | Accepted | Repository tested | Branch-aware cache decisions remain in later R4 work. |
 | Preferences | `PREF-01` | Partial | Repository tested | Complete settings inventory and native restart evidence. |
@@ -82,7 +83,7 @@ Status and evidence are separate. The evidence ladder is `Not started` → `Scaf
 - `crates/save-as-dialog`: Platform-neutral Save As outcome and state-transition rules.
 - `crates/katago-protocol`: KataGo analysis query/response models.
 - `crates/analysis-core`: Candidate/problem classification helpers.
-- `crates/engine-manager`: Engine command specs, asset checks, process execution, and cancellation.
+- `crates/engine-manager`: Engine profiles, asset checks, Foreground Engine Run lifecycle, process execution, and cancellation.
 - `crates/storage`: SQLite storage/cache schema helpers.
 - `docs/ARCHITECTURE_NEXT.md`: Current Next architecture and module boundaries.
 - `docs/JAVA_BASELINE.md`: Frozen Java behavior reference and successor policy.

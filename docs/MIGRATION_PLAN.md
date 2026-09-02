@@ -448,7 +448,7 @@ Current state: Ticket 07 closeout on native Windows candidate `66c906f` / PID 51
 
 ### R3 — Foreground Engine Lifecycle
 
-**Goal:** Replace profile-as-selection with one adapter-backed Foreground Engine Run. R3 is the next executable phase.
+**Goal:** Replace profile-as-selection with one adapter-backed Foreground Engine Run.
 
 **Owns:** `ENG-02`, `ENG-03`, `ENG-04`, `ENG-05`, `ENG-06`, `ENG-07`. Accepted `ENG-01` remains the KataGo analysis profile and asset-check foundation and is not reopened.
 
@@ -483,9 +483,11 @@ R3 acceptance is the `KataGoAnalysis` run lifecycle. `ENG-09`, `ENG-10`, analysi
 - Real KataGo smoke proves ready, Stop, Restart, and two-profile switch.
 - Native smoke proves no-engine, one-engine, and two-profile switch behavior with real KataGo assets.
 
+Current state: Ticket 09 closeout on `90508df` accepted `ENG-02` through `ENG-07`. Native Autoload-failure banner evidence is Ticket 10 candidate SHA256 `54a66f7e956bd89c2fef8664d494c2dba0b87fa9b6bc3e96030f7b2877365a98`. R3 has exited. Recorded non-blockers (`ENG-04` delayed/stale fixture, `ENG-07` timeout fixture, native Restart-from-Error, real timeout) are not R3 reopenings.
+
 ### R4 — Analysis
 
-**Goal:** Bind interactive and whole-game analysis to the selected SGF node and the R3 run/job identity, expose the independent Next-move Review Marker, encode the winrate chart, persist Sub-Board Content Mode, and replay one active PV coherently across eligible analysis surfaces.
+**Goal:** Bind interactive and whole-game analysis to the selected SGF node and the R3 run/job identity, expose the independent Next-move Review Marker, encode the winrate chart, persist Sub-Board Content Mode, and replay one active PV coherently across eligible analysis surfaces. R4 is the next executable phase.
 
 **Owns:** `ANA-01`, `ANA-02`, `ANA-03`, `ANA-04`, `ANA-10`, `ANA-11`, `ANA-12`, `ANA-13`. Accepted `ANA-05` remains the SQLite cache foundation and is not reopened.
 

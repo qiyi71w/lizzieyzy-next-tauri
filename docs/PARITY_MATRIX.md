@@ -50,7 +50,7 @@ Frozen baselines: Java `7b4027531c2b26062d0bfc27a040cc550cfbea4d`; Next inventor
 | R11 | Release | `REL-01`–`REL-10`; final `APP-01` acceptance |
 | Deferred | Unnumbered queue | `I18N-01`; `GUIDE-01`; `SGF-15`, `SGF-16`; `REVIEW-04`–`REVIEW-06`; `EXPORT-01`–`EXPORT-03`; `ENG-08`; `SSH-01`; `CONTRIB-01`; `ANA-06`–`ANA-09`; `GAME-06`–`GAME-10`; `PROV-05`–`PROV-07`; `RCOMP-01`; `PUB-01` |
 
-R3 is the next executable phase and exits on `ENG-02` through `ENG-07`. The R3 path must prove the `KataGoAnalysis` adapter. `ENG-06` Autoload Default is off at first use and persists with that item.
+R3 has exited on `ENG-02` through `ENG-07`. The R3 path proved the `KataGoAnalysis` adapter. `ENG-06` Autoload Default is off at first use and persists with that item. R4 Analysis is the next executable phase.
 
 Ticket 10 rebuilt Plan membership, Promotion Gates, Delivery Order, and Phase Gates from this corpus. This map follows Plan membership. Matrix `Depends on` remains the only Item Start Prerequisite set.
 
