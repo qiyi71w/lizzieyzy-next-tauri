@@ -5,6 +5,7 @@ describe("frontend analysis API ownership", () => {
   it("does not export profile-to-process analysis wrappers", () => {
     expect("analyzeKataGoOnce" in backend).toBe(false);
     expect("analyzeKataGoGame" in backend).toBe(false);
+    expect("listenToKataGoAnalysisEvents" in backend).toBe(false);
   });
 
   it("keeps manager-owned analysis entry points and non-authoritative fake analysis", () => {

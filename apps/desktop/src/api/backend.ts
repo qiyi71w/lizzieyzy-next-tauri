@@ -34,35 +34,6 @@ export type SgfDocument = {
   path: string | null;
   sgfText: string;
 };
-
-export type AnalysisProgressPayload = {
-  run_id: string;
-  job_id: string;
-  completed: number;
-  expected: number;
-  turn: number;
-  response_jsonl: string;
-};
-
-export type AnalysisCompletePayload = {
-  run_id: string;
-  job_id: string;
-  frames: AnalysisFrameDto[];
-};
-
-export type AnalysisErrorPayload = {
-  run_id: string;
-  job_id: string;
-  message: string;
-};
-
-export type KataGoAnalysisEventHandlers = {
-  onProgress?: (payload: AnalysisProgressPayload) => void;
-  onComplete?: (payload: AnalysisCompletePayload) => void;
-  onError?: (payload: AnalysisErrorPayload) => void;
-  onCancelled?: (payload: AnalysisErrorPayload) => void;
-};
-
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
@@ -179,11 +150,11 @@ export async function saveCurrentGame(
   return invoke<CurrentGameResultDto | null>("save_current_game_as", { selectedPath, defaultFileName });
 }
 
-export async function startKataGoGameAnalysis(runId: string, sgfText: string, maxVisits: number): Promise<string> {
+export async function startKataGoGameAnalysis(runId: string, sgfText: string, maxVisits: number): Promise<AnalysisJobStartedDto> {
   if (!isTauriRuntime()) {
     throw new Error("Full-game KataGo analysis requires the Tauri desktop backend. Browser preview cannot run real KataGo; use Run review for fake analysis.");
   }
-  return await invoke<string>("katago_start_analyze_game", { runId, sgfText, maxVisits });
+  return await invoke<AnalysisJobStartedDto>("katago_start_analyze_game", { runId, sgfText, maxVisits });
 }
 
 export async function cancelKataGoAnalysis(runId: string, jobId: string): Promise<void> {
@@ -191,18 +162,6 @@ export async function cancelKataGoAnalysis(runId: string, jobId: string): Promis
   await invoke<void>("katago_cancel_analysis", { runId, jobId });
 }
 
-export async function listenToKataGoAnalysisEvents(handlers: KataGoAnalysisEventHandlers): Promise<() => void> {
-  if (!isTauriRuntime()) return () => undefined;
-  const unlisteners = await Promise.all([
-    listen<AnalysisProgressPayload>("katago://analysis-progress", (event) => handlers.onProgress?.(event.payload)),
-    listen<AnalysisCompletePayload>("katago://analysis-complete", (event) => handlers.onComplete?.(event.payload)),
-    listen<AnalysisErrorPayload>("katago://analysis-error", (event) => handlers.onError?.(event.payload)),
-    listen<AnalysisErrorPayload>("katago://analysis-cancelled", (event) => handlers.onCancelled?.(event.payload))
-  ]);
-  return () => {
-    for (const unlisten of unlisteners) unlisten();
-  };
-}
 
 export async function loadEngineProfileSettings(): Promise<EngineProfileSettingsDto | null> {
   if (!isTauriRuntime()) return loadBrowserEngineProfileSettings();

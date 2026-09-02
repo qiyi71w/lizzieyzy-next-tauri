@@ -17,7 +17,6 @@ const backend = vi.hoisted(() => ({
   cancelKataGoAnalysis: vi.fn(),
   classifyProblems: vi.fn(),
   fakeAnalyze: vi.fn(),
-  listenToKataGoAnalysisEvents: vi.fn(),
   openSgfDocument: vi.fn(),
   parseSgfSummary: vi.fn(),
   replaySgfPositions: vi.fn(),

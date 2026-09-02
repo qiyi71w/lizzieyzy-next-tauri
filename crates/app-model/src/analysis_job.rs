@@ -24,6 +24,7 @@ pub enum AnalysisJobLaneDto {
 #[serde(rename_all = "snake_case")]
 pub enum AnalysisJobOutcomeDto {
     Started,
+    Progress,
     Completed,
     Cancelled,
     Superseded,
@@ -56,6 +57,10 @@ pub struct AnalysisJobEventDto {
     pub generation: u64,
     pub node_path: NodePath,
     pub outcome: AnalysisJobOutcomeDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame: Option<AnalysisFrameDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -120,6 +125,8 @@ mod tests {
             generation,
             node_path: NodePath { indices },
             outcome,
+            completed: None,
+            expected: None,
             frame: with_frame.then(|| AnalysisFrameDto {
                 job_id: Uuid::nil(),
                 game_id: None,
@@ -167,7 +174,11 @@ mod tests {
         assert_eq!(event_json["type"], "job");
         assert_eq!(event_json["job"]["run_id"], "run-1");
         assert_eq!(event_json["job"]["job_id"], "job-1");
+        assert_eq!(event_json["job"]["lane"], "selected_node");
+        assert_eq!(event_json["job"]["generation"], 7);
         assert_eq!(event_json["job"]["outcome"], "completed");
+        assert!(event_json["job"].get("completed").is_none());
+        assert!(event_json["job"].get("expected").is_none());
         assert_eq!(
             event_json["job"]["node_path"]["indices"],
             serde_json::json!([0, 1])
@@ -272,5 +283,38 @@ mod tests {
             ),
             &current
         ));
+    }
+
+    #[test]
+    fn unified_job_progress_keeps_lane_generation_path_and_counts() {
+        let event = AnalysisJobEventDto {
+            run_id: "run-1".into(),
+            job_id: "job-9".into(),
+            lane: AnalysisJobLaneDto::WholeGame,
+            generation: 4,
+            node_path: NodePath { indices: vec![] },
+            outcome: AnalysisJobOutcomeDto::Progress,
+            completed: Some(1),
+            expected: Some(3),
+            frame: None,
+            failure: None,
+        };
+        let wrapped = ForegroundEngineEventDto::Job { job: event.clone() };
+        let json = serde_json::to_value(&wrapped).unwrap();
+        assert_eq!(json["type"], "job");
+        assert_eq!(json["job"]["lane"], "whole_game");
+        assert_eq!(json["job"]["run_id"], "run-1");
+        assert_eq!(json["job"]["job_id"], "job-9");
+        assert_eq!(json["job"]["generation"], 4);
+        assert_eq!(json["job"]["node_path"]["indices"], serde_json::json!([]));
+        assert_eq!(json["job"]["outcome"], "progress");
+        assert_eq!(json["job"]["completed"], 1);
+        assert_eq!(json["job"]["expected"], 3);
+        let decoded: ForegroundEngineEventDto = serde_json::from_value(json).unwrap();
+        match decoded {
+            ForegroundEngineEventDto::Job { job } => assert_eq!(job, event),
+            other => panic!("expected job event, got {other:?}"),
+        }
+        assert!(!admits_analysis_publication(&event, &event.publication_scope()));
     }
 }

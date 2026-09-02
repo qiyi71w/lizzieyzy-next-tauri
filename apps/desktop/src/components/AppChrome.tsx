@@ -46,7 +46,8 @@ type Props = {
   showWhiteCandidates: boolean;
   onShowBlackCandidates: (value: boolean) => void;
   onShowWhiteCandidates: (value: boolean) => void;
-  isKataGoRunning: boolean;
+  selectedNodeRunning: boolean;
+  wholeGameRunning: boolean;
   autoPlaying: boolean;
   komi: number;
   onNew: () => void;
@@ -58,7 +59,8 @@ type Props = {
   onLoadSample: () => void;
   onParse: () => void;
   onFakeAnalyze: () => void;
-  onCancel: () => void;
+  onCancelSelectedNode: () => void;
+  onCancelWholeGame: () => void;
   onAbout: () => void;
   onOpenShortcutReference: () => void;
   onCopySgf: () => void;
@@ -88,8 +90,8 @@ export function AppChrome(props: Props) {
   const nativeAvailable = props.nativeRuntime !== false;
   const nativeUnavailable = props.nativeUnavailable ?? "Native current-game, edit, and authoritative Save require the Tauri desktop backend. Browser preview is non-authoritative.";
   const openDisabled = props.busy || !nativeAvailable;
-  const saveDisabled = props.busy || !nativeAvailable || !props.dirty;
-  const saveAsDisabled = props.busy || !nativeAvailable;
+  const saveDisabled = !nativeAvailable || !props.dirty;
+  const saveAsDisabled = !nativeAvailable;
 
   useEffect(() => {
     function onPointerDown(event: PointerEvent) {
@@ -177,7 +179,7 @@ export function AppChrome(props: Props) {
         <span className="menu-div" />
         <div className="menu-cluster">
           <ChromeMenu label="分析" open={openMenu === "analyze"} onToggle={() => setOpenMenu(openMenu === "analyze" ? null : "analyze")}>
-            <MenuItem label="开始/停止 分析" onClick={() => run(props.isKataGoRunning ? props.onCancel : () => props.onEngineCommand("once"))} />
+            <MenuItem label="开始/停止 分析" onClick={() => run(props.selectedNodeRunning ? props.onCancelSelectedNode : () => props.onEngineCommand("once"))} />
             <MenuItem label="AI 解说" onClick={() => run(props.onFakeAnalyze)} disabled={props.busy} />
             <div className="menu-sep" role="separator" />
             <MenuItem label="超级鹰眼" disabled title={later} />
@@ -189,7 +191,8 @@ export function AppChrome(props: Props) {
             <MenuItem label="纯网络(H)" onClick={() => run(() => props.onOverlayMode("policy"))} />
             <MenuItem label="形势判断" onClick={() => run(() => props.onOverlayMode("ownership"))} />
             <div className="menu-sep" role="separator" />
-            <MenuItem label="取消分析" onClick={() => run(props.onCancel)} disabled={!props.isKataGoRunning} />
+            <MenuItem label="取消此手分析" onClick={() => run(props.onCancelSelectedNode)} disabled={!props.selectedNodeRunning} />
+            <MenuItem label="取消整局分析" onClick={() => run(props.onCancelWholeGame)} disabled={!props.wholeGameRunning} />
             <MenuItem label="清除分析信息(此手)" disabled title={later} />
             <MenuItem label="清除 Lizzie 缓存" disabled title={later} />
           </ChromeMenu>
@@ -328,7 +331,7 @@ export function AppChrome(props: Props) {
 
       <div className="param-strip">
         <button type="button" className="chrome-btn chrome-btn-primary" onClick={props.onNew} disabled={props.busy}>新对局</button>
-        <button type="button" className="chrome-btn" onClick={props.onCancel} disabled={!props.isKataGoRunning}>暂停</button>
+        <button type="button" className="chrome-btn" onClick={props.onCancelSelectedNode} disabled={!props.selectedNodeRunning}>暂停</button>
         <span className="tool-sep" />
         <label className="param-label">
           贴目:
@@ -383,11 +386,13 @@ export function BottomBar(props: {
   onNextSibling: () => void;
   onRemoveVariation: () => void;
   engineReady: boolean;
-  isKataGoRunning: boolean;
-  analysisProgress: { completed: number; expected: number; turn: number } | null;
+  selectedNodeRunning: boolean;
+  wholeGameRunning: boolean;
+  wholeGameProgress: { completed: number; expected: number } | null;
   onAnalyzeOnce: () => void;
   onAnalyzeGame: () => void;
-  onCancel: () => void;
+  onCancelSelectedNode: () => void;
+  onCancelWholeGame: () => void;
   onSync: () => void;
   onFlashAnalyze: () => void;
   onHeatmap: () => void;
@@ -404,12 +409,15 @@ export function BottomBar(props: {
   message: string;
   toPlay: "black" | "white";
 }) {
-  const progress = props.analysisProgress;
-  const progressText = progress
-    ? `${progress.completed}/${progress.expected || "?"} · 第 ${progress.turn} 手`
-    : props.isKataGoRunning
-      ? "正在分析…"
-      : null;
+  const progressParts = [
+    props.selectedNodeRunning ? "此手分析中" : null,
+    props.wholeGameProgress
+      ? `整局 ${props.wholeGameProgress.completed}/${props.wholeGameProgress.expected}`
+      : props.wholeGameRunning
+        ? "整局分析中"
+        : null
+  ].filter((part): part is string => part != null);
+  const progressText = progressParts.length > 0 ? progressParts.join(" · ") : null;
 
   return (
     <nav className="folio-nav" aria-label="复盘导航">
@@ -423,8 +431,11 @@ export function BottomBar(props: {
       <button type="button" className="chrome-btn" disabled title="尚未接入">设为主分支</button>
       <button type="button" className="chrome-btn" onClick={props.onClearBoard}>清空棋盘</button>
       <button type="button" className="chrome-btn" onClick={() => props.jumpRef.current?.focus()}>跳转</button>
-      {props.isKataGoRunning ? (
-        <button type="button" className="chrome-btn" onClick={props.onCancel}>取消</button>
+      {props.selectedNodeRunning ? (
+        <button type="button" className="chrome-btn" onClick={props.onCancelSelectedNode}>取消此手</button>
+      ) : null}
+      {props.wholeGameRunning ? (
+        <button type="button" className="chrome-btn" onClick={props.onCancelWholeGame}>取消整局</button>
       ) : null}
       {progressText ? <span className="nav-progress">{progressText}</span> : null}
       <span className="spacer" />

@@ -23,7 +23,7 @@ pub use catalog::{
 };
 pub use lifecycle::{
     AnalysisJobCancel, AnalysisJobEventDto, AnalysisJobLane, ForegroundEngineConfig, ForegroundEngineManager,
-    SelectedNodeJobRequest,
+    SelectedNodeJobRequest, WholeGameJobRequest,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
