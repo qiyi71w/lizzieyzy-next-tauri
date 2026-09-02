@@ -12,6 +12,7 @@ members = [
   "crates/katago-protocol",
   "crates/analysis-core",
   "crates/engine-manager",
+  "crates/app-preferences",
   "crates/storage",
   "crates/save-as-dialog",
 ]

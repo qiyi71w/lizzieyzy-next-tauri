@@ -139,7 +139,8 @@ export function App() {
   const activeRequestTokenRef = useRef("idle:0");
   const [publishedScope, setPublishedScope] = useState<ReviewPresentationScope | null>(null);
   const startingAnalysisRef = useRef(false);
-  const userChangedPreferencesRef = useRef(false);
+  const preferencesLoadSettledRef = useRef(false);
+  const committedPreferencesRef = useRef<AppPreferences>(defaultAppPreferences);
   const preferencesSaveInFlightRef = useRef(false);
   const preferencesSaveVersionRef = useRef(0);
   const pendingPreferencesSaveRef = useRef<PendingPreferencesSave | null>(null);
@@ -170,12 +171,12 @@ export function App() {
     let isMounted = true;
     loadAppPreferences()
       .then((loaded) => {
-        if (!isMounted || userChangedPreferencesRef.current) return;
-        setPreferences(loaded);
-        setPreferencesStatus("Preferences loaded.");
+        if (!isMounted) return;
+        settleLoadedPreferences(loaded.preferences, loaded.recovery?.message ?? "Preferences loaded.");
       })
       .catch((error: unknown) => {
-        if (isMounted && !userChangedPreferencesRef.current) setPreferencesStatus(`Load failed: ${errorMessage(error)}`);
+        if (!isMounted) return;
+        settleLoadedPreferences(defaultAppPreferences, `Load failed: ${errorMessage(error)}`);
       });
     return () => {
       isMounted = false;
@@ -486,14 +487,25 @@ export function App() {
 
 
   function handlePreferencesChange(nextPreferences: AppPreferences) {
-    const normalized = normalizeAppPreferences(nextPreferences);
-    userChangedPreferencesRef.current = true;
+    if (!preferencesLoadSettledRef.current) return;
+    const patch = preferencePatch(preferences, normalizeAppPreferences(nextPreferences));
+    if (Object.keys(patch).length === 0) return;
+    queuePreferencesSave(pendingPreferencesSaveRef.current?.preferences ?? committedPreferencesRef.current, patch);
+  }
+
+  function settleLoadedPreferences(loaded: AppPreferences, status: string) {
+    preferencesLoadSettledRef.current = true;
+    committedPreferencesRef.current = loaded;
+    setPreferences(loaded);
+    setPreferencesStatus(status);
+  }
+
+  function queuePreferencesSave(base: AppPreferences, ...patches: Array<Partial<AppPreferences>>) {
     pendingPreferencesSaveRef.current = {
       version: preferencesSaveVersionRef.current + 1,
-      preferences: normalized
+      preferences: applyPreferencePatches(base, patches)
     };
     preferencesSaveVersionRef.current = pendingPreferencesSaveRef.current.version;
-    setPreferences(normalized);
     setPreferencesStatus("Saving preferences...");
     void runPreferencesSaveLoop();
   }
@@ -505,22 +517,23 @@ export function App() {
       while (pendingPreferencesSaveRef.current) {
         const pending = pendingPreferencesSaveRef.current;
         try {
-          await saveAppPreferences(pending.preferences);
+          const saved = await saveAppPreferences(pending.preferences);
+          committedPreferencesRef.current = saved;
+          setPreferences(saved);
+          if (pendingPreferencesSaveRef.current?.version === pending.version) {
+            pendingPreferencesSaveRef.current = null;
+            setPreferencesStatus("Preferences saved.");
+            return;
+          }
+          setPreferencesStatus("Saving preferences...");
         } catch (error) {
           if (pendingPreferencesSaveRef.current?.version === pending.version) {
+            pendingPreferencesSaveRef.current = null;
             setPreferencesStatus(`Save failed: ${errorMessage(error)}`);
             return;
           }
           setPreferencesStatus("Saving preferences...");
-          continue;
         }
-
-        if (pendingPreferencesSaveRef.current?.version === pending.version) {
-          pendingPreferencesSaveRef.current = null;
-          setPreferencesStatus("Preferences saved.");
-          return;
-        }
-        setPreferencesStatus("Saving preferences...");
       }
     } finally {
       preferencesSaveInFlightRef.current = false;
@@ -534,6 +547,7 @@ export function App() {
 
   function adoptCurrentGame(result: CurrentGameResultDto) {
     documentGenerationRef.current = result.generation;
+    currentGameRef.current = result;
     setCurrentGame(result);
   }
 
@@ -1593,6 +1607,23 @@ export function App() {
       /> : null}
     </section>
   </main>;
+}
+
+function preferencePatch(from: AppPreferences, to: AppPreferences): Partial<AppPreferences> {
+  const patch: Partial<AppPreferences> = {};
+  (Object.keys(to) as Array<keyof AppPreferences>).forEach((key) => {
+    if (from[key] !== to[key]) {
+      Object.assign(patch, { [key]: to[key] });
+    }
+  });
+  return patch;
+}
+
+function applyPreferencePatches(base: AppPreferences, patches: Array<Partial<AppPreferences>>): AppPreferences {
+  return patches.reduce<AppPreferences>(
+    (current, patch) => normalizeAppPreferences({ ...current, ...patch }),
+    base
+  );
 }
 
 function applyPreferencesToFrame(frame: AnalysisFrameDto | undefined, preferences: AppPreferences): AnalysisFrameDto | undefined {
