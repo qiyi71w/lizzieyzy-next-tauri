@@ -48,10 +48,12 @@ const analysisCache = vi.hoisted(() => ({
 
 vi.mock("./api/analysisCache", () => analysisCache);
 
-vi.mock("./api/preferences", () => ({
+const preferencesApi = vi.hoisted(() => ({
   loadAppPreferences: vi.fn(() => Promise.reject(new Error("preferences unavailable in test"))),
-  saveAppPreferences: vi.fn()
+  saveAppPreferences: vi.fn(async (preferences: unknown) => preferences)
 }));
+
+vi.mock("./api/preferences", () => preferencesApi);
 
 vi.mock("./components/CacheStatusBadge", () => ({ CacheStatusBadge: () => null }));
 vi.mock("./components/EngineSetupPanel", () => ({ EngineSetupPanel: () => null }));
@@ -813,6 +815,7 @@ describe("App focus-safe review controls", () => {
     const policyItem = [...host.querySelectorAll("button")].find((candidate) => candidate.textContent?.includes("策略网络(T)"));
     expect(policyItem?.getAttribute("aria-checked")).toBe("true");
     pressKey(buttonNamed(host, "坐标"), "t");
+    await flushLast(preferencesApi.saveAppPreferences);
     act(() => buttonNamed(host, "显示").click());
     act(() => buttonNamed(host, "显示").click());
     const policyItemAfter = [...host.querySelectorAll("button")].find((candidate) => candidate.textContent?.includes("策略网络(T)"));
@@ -947,9 +950,11 @@ describe("App focus-safe review controls", () => {
     expect(candidatePref.getAttribute("aria-checked")).toBe("true");
     expect(ownershipPref.getAttribute("aria-checked")).toBe("true");
     act(() => candidatePref.click());
+    await flushLast(preferencesApi.saveAppPreferences);
     act(() => buttonNamed(host, "显示").click());
     expect(menuCheck(host, "候选").getAttribute("aria-checked")).toBe("false");
     act(() => menuCheck(host, "领地").click());
+    await flushLast(preferencesApi.saveAppPreferences);
     act(() => buttonNamed(host, "显示").click());
     expect(menuCheck(host, "领地").getAttribute("aria-checked")).toBe("false");
 
@@ -1004,6 +1009,7 @@ async function renderApp(): Promise<HTMLElement> {
   await act(async () => {
     await backend.replaceCurrentGame.mock.results.at(-1)?.value;
     await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    await preferencesApi.loadAppPreferences.mock.results.at(-1)?.value.catch(() => undefined);
   });
   return host;
 }

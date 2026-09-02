@@ -78,6 +78,10 @@ Analysis-derived helpers such as candidate sorting and problem marker classifica
 
 Engine profile catalog, Autoload Default, asset checks, and the manager-owned Foreground Engine Run: lifecycle snapshot, Start/Stop/Restart/Switch, selected-node and whole-game Analysis Jobs, process execution, cancellation, and typed failure.
 
+### `crates/app-preferences`
+
+Durable app preference storage for the categorized Preferences surface. Missing files load owner defaults. Unreadable files are isolated beside the original path and recovered to defaults with a user-visible report. Explicit writes use replace-safe persist; serialize/write/replace failures keep the previous durable value. This crate owns the preference mechanism only. It does not absorb analysis, shortcut, layout, scoring, window, or engine-domain semantics.
+
 ### Provider crates
 
 Provider crates own provider-specific URL parsing, request construction, payload parsing, and normalization. Yike live fetch must remain behind the Yike provider boundary. Fox fetch must support the documented `chessid`, `uid`, and `user_name` command shapes through the Fox provider boundary. The UI should not hand-roll provider HTTP behavior.
@@ -107,6 +111,7 @@ SQLite schema and storage helpers. The current user-visible cache commands live 
 Current app-data persistence includes:
 
 - `lizzieyzy-next-engine-profile.json` for multiple engine profile settings.
+- `lizzieyzy-next-app-preferences.json` for categorized durable app preferences.
 - `analysis-cache.sqlite3` for cached analysis records.
 
 The cache key is derived from parsed SGF content and the raw SGF hash. Cache records can be filtered by profile and engine kind. This is an MVP cache contract, not a complete replacement for all legacy storage.

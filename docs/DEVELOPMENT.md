@@ -10,7 +10,7 @@ Use this guide when changing:
 - scaffold validation and smoke documentation,
 - the Tauri desktop app under `apps/desktop`,
 - Rust crates under `crates/*`,
-- SGF, KataGo, Foreground Engine Run, engine profile, Autoload Default, and cache behavior.
+- SGF, KataGo, Foreground Engine Run, engine profile, Autoload Default, durable preferences, and cache behavior.
 
 Do not treat a passing Next smoke run as full legacy parity. Provider/readboard work in this batch may provide offline contracts and runtime path plumbing, but live Fox/Yike network behavior, live readboard sidecar operation, and Tauri production release packaging still require environment-specific validation.
 
@@ -80,6 +80,7 @@ The browser preview is useful for layout and fallback checks. Real KataGo execut
 - `crates/katago-protocol`: KataGo analysis JSONL query/response modeling.
 - `crates/analysis-core`: derived analysis markers.
 - `crates/engine-manager`: engine profiles, Autoload Default, Foreground Engine Run lifecycle, Analysis Jobs, process execution, and cancellation.
+- `crates/app-preferences`: durable app preference load/save, unreadable isolation, and replace-safe persist.
 - `crates/storage`: SQLite storage/cache helpers.
 - `tests/golden`: SGF fixtures for migration and regression checks.
 
@@ -167,6 +168,18 @@ Expected result: repeated loading of the same SGF can reuse cached analysis inst
 - Confirm parse/replay still succeeds and move count remains stable.
 
 Expected result: SGF write validates parseability and can round-trip through native open.
+
+### 9. Durable Preferences
+
+- Open Preferences from `参数`, `棋盘`, Settings → `首选项…`, or Settings → `综合设置(Shift+X)`.
+- Confirm the sheet is categorized (`分析呈现`, `复盘`, `棋盘`, `缓存`) and that View-menu `候选` / `领地` edit the same values as the sheet.
+- Change a visible preference (for example uncheck `候选`) and wait until the sheet reports that it is saved.
+- Quit the Tauri app and start `npm run tauri:dev` again.
+- Confirm the saved value is still applied after restart.
+
+Repository equivalent: `cargo test -p app-preferences successful_write_is_reloadable_as_restart`.
+
+Expected result: missing preference storage loads owner defaults; a successful write survives native restart; View-menu and Preferences-sheet edits share one durable store.
 
 ## Provider And Sidecar Smoke Flow
 

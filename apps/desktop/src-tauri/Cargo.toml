@@ -16,6 +16,7 @@ tauri-build.workspace = true
 [dependencies]
 analysis-core = { path = "../../../crates/analysis-core" }
 app-model = { path = "../../../crates/app-model" }
+app-preferences = { path = "../../../crates/app-preferences" }
 engine-manager = { path = "../../../crates/engine-manager" }
 katago-protocol = { path = "../../../crates/katago-protocol" }
 provider-fox = { path = "../../../crates/provider-fox" }

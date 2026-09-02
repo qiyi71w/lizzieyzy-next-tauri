@@ -34,11 +34,14 @@ mod current_game_state;
 mod save_as;
 #[cfg(windows)]
 extern crate windows_core;
+use app_preferences::{
+    load_from_path as load_app_preferences_from_path, save_to_path, AppPreferencesDto,
+    AppPreferencesLoadResultDto, APP_PREFERENCES_FILE,
+};
 use current_game_state::CurrentGameState;
 use uuid::Uuid;
 
 const ENGINE_PROFILE_FILE: &str = "lizzieyzy-next-engine-profile.json";
-const APP_PREFERENCES_FILE: &str = "lizzieyzy-next-app-preferences.json";
 const ANALYSIS_CACHE_DB_FILE: &str = "analysis-cache.sqlite3";
 const DEFAULT_PROVIDER_HTTP_TIMEOUT_MS: u64 = 30_000;
 
@@ -253,29 +256,6 @@ fn map_engine_failure(failure: EngineFailureDto) -> String {
 struct EngineProfileSettingsDto {
     profile: EngineProfileDto,
     max_visits: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AppPreferencesDto {
-    #[serde(default = "default_show_ownership")]
-    show_ownership: bool,
-    #[serde(default = "default_show_policy")]
-    show_policy: bool,
-    #[serde(default = "default_show_candidates")]
-    show_candidates: bool,
-    #[serde(default = "default_candidate_limit")]
-    candidate_limit: u32,
-    #[serde(default = "default_auto_load_cache")]
-    auto_load_cache: bool,
-    #[serde(default = "default_auto_save_analysis")]
-    auto_save_analysis: bool,
-    #[serde(default = "default_max_visits")]
-    default_max_visits: u32,
-    #[serde(default = "default_review_mode")]
-    review_mode: String,
-    #[serde(default = "default_board_theme")]
-    board_theme: String,
 }
 
 struct PreparedBatchAnalysis {
@@ -602,15 +582,9 @@ fn engine_asset_checks(profile: EngineProfileDto) -> Vec<AssetCheck> {
 }
 
 #[tauri::command]
-fn load_app_preferences(app_handle: AppHandle) -> Result<AppPreferencesDto, String> {
+fn load_app_preferences(app_handle: AppHandle) -> Result<AppPreferencesLoadResultDto, String> {
     let path = app_preferences_path(&app_handle)?;
-    match fs::read_to_string(&path) {
-        Ok(contents) => serde_json::from_str::<AppPreferencesDto>(&contents)
-            .map_err(|err| format!("failed to parse {}: {err}", path.display()))
-            .map(normalize_app_preferences),
-        Err(err) if err.kind() == ErrorKind::NotFound => Ok(default_app_preferences()),
-        Err(err) => Err(format!("failed to read {}: {err}", path.display())),
-    }
+    load_app_preferences_from_path(&path)
 }
 
 #[tauri::command]
@@ -618,12 +592,8 @@ fn save_app_preferences(
     app_handle: AppHandle,
     preferences: AppPreferencesDto,
 ) -> Result<AppPreferencesDto, String> {
-    let preferences = normalize_app_preferences(preferences);
     let path = app_preferences_path(&app_handle)?;
-    let json = serde_json::to_string_pretty(&preferences)
-        .map_err(|err| format!("failed to serialize app preferences: {err}"))?;
-    fs::write(&path, json).map_err(|err| format!("failed to write {}: {err}", path.display()))?;
-    Ok(preferences)
+    save_to_path(&path, preferences)
 }
 
 #[tauri::command]
@@ -1067,68 +1037,6 @@ fn ensure_asset_check(checks: &mut Vec<AssetCheck>, path: &Option<String>, label
         required: true,
         label: label.to_string(),
     });
-}
-
-fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPreferencesDto {
-    preferences.candidate_limit = preferences.candidate_limit.clamp(1, 20);
-    preferences.default_max_visits = preferences.default_max_visits.clamp(1, 1_000_000);
-    if preferences.review_mode != "deep" {
-        preferences.review_mode = default_review_mode();
-    }
-    if preferences.board_theme != "high-contrast" {
-        preferences.board_theme = default_board_theme();
-    }
-    preferences
-}
-
-fn default_app_preferences() -> AppPreferencesDto {
-    AppPreferencesDto {
-        show_ownership: default_show_ownership(),
-        show_policy: default_show_policy(),
-        show_candidates: default_show_candidates(),
-        candidate_limit: default_candidate_limit(),
-        auto_load_cache: default_auto_load_cache(),
-        auto_save_analysis: default_auto_save_analysis(),
-        default_max_visits: default_max_visits(),
-        review_mode: default_review_mode(),
-        board_theme: default_board_theme(),
-    }
-}
-
-fn default_show_ownership() -> bool {
-    true
-}
-
-fn default_show_policy() -> bool {
-    true
-}
-
-fn default_show_candidates() -> bool {
-    true
-}
-
-fn default_candidate_limit() -> u32 {
-    8
-}
-
-fn default_auto_load_cache() -> bool {
-    true
-}
-
-fn default_auto_save_analysis() -> bool {
-    true
-}
-
-fn default_max_visits() -> u32 {
-    800
-}
-
-fn default_review_mode() -> String {
-    "quick".to_string()
-}
-
-fn default_board_theme() -> String {
-    "classic".to_string()
 }
 
 fn selected_engine_profile_record(settings: &EngineProfilesSettingsDto) -> Option<&EngineProfileRecordDto> {

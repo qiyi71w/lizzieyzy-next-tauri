@@ -18,12 +18,11 @@ export function PreferencesPanel({ preferences, status, disabled = false, onChan
         <h2>设置</h2>
         <span>{status}</span>
       </div>
-      <div className="preferences-grid">
+      <fieldset className="preferences-grid">
+        <legend>分析呈现</legend>
         <Toggle label="候选" checked={preferences.showCandidates} disabled={disabled} onChange={(checked) => update({ showCandidates: checked })} />
         <Toggle label="领地" checked={preferences.showOwnership} disabled={disabled} onChange={(checked) => update({ showOwnership: checked })} />
         <Toggle label="策略" checked={preferences.showPolicy} disabled={disabled} onChange={(checked) => update({ showPolicy: checked })} />
-        <Toggle label="自动载入缓存" checked={preferences.autoLoadCache} disabled={disabled} onChange={(checked) => update({ autoLoadCache: checked })} />
-        <Toggle label="自动保存分析" checked={preferences.autoSaveAnalysis} disabled={disabled} onChange={(checked) => update({ autoSaveAnalysis: checked })} />
         <label>
           <span>显示候选数</span>
           <input
@@ -36,6 +35,9 @@ export function PreferencesPanel({ preferences, status, disabled = false, onChan
             onChange={(event) => update({ candidateLimit: Number(event.target.value) })}
           />
         </label>
+      </fieldset>
+      <fieldset className="preferences-grid">
+        <legend>复盘</legend>
         <label>
           <span>默认计算量</span>
           <input
@@ -54,6 +56,9 @@ export function PreferencesPanel({ preferences, status, disabled = false, onChan
             <option value="deep">深复</option>
           </select>
         </label>
+      </fieldset>
+      <fieldset className="preferences-grid">
+        <legend>棋盘</legend>
         <label>
           <span>棋盘对比</span>
           <select value={preferences.boardTheme} disabled={disabled} onChange={(event) => update({ boardTheme: event.target.value as BoardTheme })}>
@@ -61,7 +66,12 @@ export function PreferencesPanel({ preferences, status, disabled = false, onChan
             <option value="high-contrast">高对比</option>
           </select>
         </label>
-      </div>
+      </fieldset>
+      <fieldset className="preferences-grid">
+        <legend>缓存</legend>
+        <Toggle label="自动载入缓存" checked={preferences.autoLoadCache} disabled={disabled} onChange={(checked) => update({ autoLoadCache: checked })} />
+        <Toggle label="自动保存分析" checked={preferences.autoSaveAnalysis} disabled={disabled} onChange={(checked) => update({ autoSaveAnalysis: checked })} />
+      </fieldset>
     </section>
   );
 }
