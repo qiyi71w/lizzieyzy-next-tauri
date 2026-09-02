@@ -12,6 +12,19 @@ export type EngineCommands = {
   engineLabel: string;
 };
 
+export type EngineSwitcherProps = {
+  profiles: Array<{ id: string; name: string }>;
+  selectedProfileId: string;
+  canStop: boolean;
+  canRestart: boolean;
+  failureMessage?: string | null;
+  failureKind?: string | null;
+  failureOperation?: string | null;
+  onSelectProfile: (profileId: string) => void;
+  onStop: () => void;
+  onRestart: () => void;
+};
+
 type Props = {
   sheet: "none" | SheetId;
   onToggleSheet: (sheet: SheetId) => void;
@@ -20,6 +33,7 @@ type Props = {
   documentName: string;
   engineLabel: string;
   engineReady: boolean;
+  engineSwitcher: EngineSwitcherProps;
   onEngineCommand: (kind: "once" | "game") => void;
   preferences: AppPreferences;
   onPreferencesChange: (next: AppPreferences) => void;
@@ -225,16 +239,43 @@ export function AppChrome(props: Props) {
           <MenuItem label="KataGo训练设置" disabled title={later} />
           <MenuItem label="KataGo官方网站" disabled title={later} />
         </ChromeMenu>
-        <button
-          type="button"
-          className="engine-chip"
-          aria-current={props.sheet === "engine" ? "page" : undefined}
-          onClick={() => props.onToggleSheet("engine")}
-          title="打开引擎配置"
-        >
+        <div className="engine-switcher" aria-label="Engine Switcher">
           <span className="engine-dot" data-ready={props.engineReady} />
-          {props.engineLabel}
-        </button>
+          <span className="engine-chip-label">{props.engineLabel}</span>
+          <select
+            aria-label="Foreground Engine Profile"
+            value={props.engineSwitcher.selectedProfileId}
+            onChange={(event) => props.engineSwitcher.onSelectProfile(event.target.value)}
+          >
+            <option value="">选择引擎</option>
+            {props.engineSwitcher.profiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>{profile.name}</option>
+            ))}
+          </select>
+          <button type="button" className="chrome-btn" onClick={props.engineSwitcher.onStop} disabled={!props.engineSwitcher.canStop}>停止</button>
+          <button type="button" className="chrome-btn" onClick={props.engineSwitcher.onRestart} disabled={!props.engineSwitcher.canRestart}>重启</button>
+          <button
+            type="button"
+            className="engine-chip"
+            aria-current={props.sheet === "engine" ? "page" : undefined}
+            onClick={() => props.onToggleSheet("engine")}
+            title="打开引擎设置"
+          >
+            设置
+          </button>
+        </div>
+        {props.engineSwitcher.failureMessage ? (
+          <span
+            className="engine-failure"
+            role="status"
+            data-failure-kind={props.engineSwitcher.failureKind ?? undefined}
+            data-failure-operation={props.engineSwitcher.failureOperation ?? undefined}
+          >
+            {props.engineSwitcher.failureKind
+              ? `${props.engineSwitcher.failureKind}${props.engineSwitcher.failureOperation ? ` (${props.engineSwitcher.failureOperation})` : ""}: ${props.engineSwitcher.failureMessage}`
+              : props.engineSwitcher.failureMessage}
+          </span>
+        ) : null}
         <span className="spacer" />
         <button type="button" className="ai-comment" onClick={props.onFakeAnalyze} disabled={props.busy} title="生成 AI 解说">
           AI 解说

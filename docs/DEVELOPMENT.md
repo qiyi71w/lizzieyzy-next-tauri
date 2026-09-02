@@ -10,7 +10,7 @@ Use this guide when changing:
 - scaffold validation and smoke documentation,
 - the Tauri desktop app under `apps/desktop`,
 - Rust crates under `crates/*`,
-- SGF, KataGo, engine profile, asset check, and cache behavior.
+- SGF, KataGo, Foreground Engine Run, engine profile, Autoload Default, and cache behavior.
 
 Do not treat a passing Next smoke run as full legacy parity. Provider/readboard work in this batch may provide offline contracts and runtime path plumbing, but live Fox/Yike network behavior, live readboard sidecar operation, and Tauri production release packaging still require environment-specific validation.
 
@@ -72,14 +72,14 @@ The browser preview is useful for layout and fallback checks. Real KataGo execut
 
 - `apps/desktop`: React + TypeScript frontend.
 - `apps/desktop/src/api`: frontend wrappers around Tauri commands and browser fallbacks.
-- `apps/desktop/src/components`: board, analysis, chart, cache, and engine setup UI.
+- `apps/desktop/src/components`: board, analysis, chart, cache, Engine Switcher, and Engine Settings UI.
 - `apps/desktop/src-tauri`: Tauri 2 command gateway and native app integration.
 - `crates/app-model`: shared DTOs.
 - `crates/go-core`: board/rules logic.
 - `crates/sgf`: SGF parsing, replay, and serialization.
 - `crates/katago-protocol`: KataGo analysis JSONL query/response modeling.
 - `crates/analysis-core`: derived analysis markers.
-- `crates/engine-manager`: engine command specs, asset checks, process execution, progress, timeout, and cancellation.
+- `crates/engine-manager`: engine profiles, Autoload Default, Foreground Engine Run lifecycle, Analysis Jobs, process execution, and cancellation.
 - `crates/storage`: SQLite storage/cache helpers.
 - `tests/golden`: SGF fixtures for migration and regression checks.
 
@@ -102,49 +102,54 @@ Expected result: the status message reports a loaded/opened game and the board c
 
 ### 2. Configure Engine Profile
 
-- In the engine setup panel, set a profile name.
+- Open Engine Settings (`引擎设置`). Settings only edit the catalog; they do not Start or Switch a run.
+- Set a profile name.
 - Pick or type the KataGo engine binary path.
 - Pick or type the model path.
 - Pick or type the analysis config path.
 - Optionally set a working directory.
 - Set a positive max visits value.
 - Save the profile.
-- Add a second profile and switch between profiles if profile persistence is part of the change.
+- Add a second profile if Autoload or Switch coverage is part of the change.
 
-Expected result: profiles reload after app restart and the selected profile remains selected.
+Expected result: profiles reload after app restart. Saving Autoload Default or Settings selection does not change the current Foreground Engine Run.
 
-### 3. Check Assets
+### 3. Start From The Engine Switcher
 
-- Click `Check assets`.
-- Confirm required engine, model, and config checks report `OK`.
-- If testing an error path, temporarily point one required path at a missing file and confirm the UI blocks analysis and reports the missing asset.
+- In the main-workspace Engine Switcher, choose the saved profile (`选择引擎` starts it).
+- Confirm the chip leaves `未加载引擎` and `停止` / `重启` become enabled.
+- Optional diagnostic: in Engine Settings click `检查资源`. Asset existence is not a Start gate; Start still validates assets and adapter readiness.
+- Optional Autoload: mark `启动时自动加载`, restart the desktop app, and confirm only that profile is started. A missing model stays No-engine with a typed Autoload/asset banner and no fallback.
+- Click `停止` and confirm the chip returns to `未加载引擎` with `停止` / `重启` disabled.
+- Start again, then click `重启` and confirm a new Ready run.
 
-Expected result: analysis buttons only become usable when required assets are known to exist.
+Expected result: analysis actions stay disabled until a Ready run exists. Check Assets does not start a process.
 
 ### 4. Run One-Position Analysis
 
-- Select a move on the board.
-- Click `Run KataGo`.
+- With a Ready run, select a move on the board.
+- Click `分析此手`.
 - Confirm candidates, PV, winrate/score data, ownership/policy-backed overlays, and problem markers update for that move.
 
-Expected result: the status message reports completed KataGo analysis for the selected move.
+Expected result: selected-node analysis runs on the current Ready Foreground Engine Run, not a one-shot profile process.
 
 ### 5. Run Full-Game Analysis
 
-- Click `Analyze game`.
+- With a Ready run, click `自动分析`.
 - Watch progress update with completed/expected positions and current move.
 - Confirm winrate/candidate data accumulates across the game.
 
-Expected result: completion produces frames for the requested turns and stores analysis in the cache.
+Expected result: whole-game analysis occupies the Ready Run's whole-game lane and stores analysis in the cache.
 
 ### 6. Cancel Analysis
 
 - Start a full-game analysis with enough visits to observe progress.
 - Click `Cancel`.
 - Confirm progress stops and the status message reports cancellation.
+- Confirm the Engine Switcher is still Ready (`停止` / `重启` enabled).
 - Start another analysis afterwards to ensure the job registry recovered.
 
-Expected result: a cancelled job does not keep the UI locked and does not prevent a later run.
+Expected result: a cancelled job does not Stop the run, does not keep the UI locked, and does not prevent a later run.
 
 ### 7. Verify Cache Hit
 

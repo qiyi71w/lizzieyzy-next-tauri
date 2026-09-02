@@ -1,16 +1,21 @@
 use app_model::{
-    AnalysisFrameDto, AppHealthDto, CandidateMoveDto, CurrentGameError, CurrentGameResultDto, EngineBackend,
-    EngineProfileDto, MoveVertex, NodePath, PointDto, PositionDto, ProviderError, ProviderErrorKind,
-    ProviderFetchMethod, ProviderFetchRequest, ProviderFetchResult, ProviderGameMetadata,
-    ProviderImportRequest, ProviderImportResult, ProviderKind, ReadboardSidecarProbeRequest,
-    ReadboardSidecarProbeResult, ReadboardSidecarSyncSnapshotRequest, ReadboardSidecarSyncSnapshotResult,
+    AnalysisFrameDto, AnalysisJobStartedDto, AppHealthDto, CandidateMoveDto, CurrentGameError,
+    CurrentGameResultDto, EngineBackend, EngineFailureDto, EngineFailureKind, EngineOperationDto,
+    EngineProfileDto, ForegroundEngineEventDto, ForegroundEngineSnapshotDto, MoveVertex, NodePath, PointDto,
+    PositionDto, ProviderError, ProviderErrorKind, ProviderFetchMethod, ProviderFetchRequest,
+    ProviderFetchResult, ProviderGameMetadata, ProviderImportRequest, ProviderImportResult, ProviderKind,
+    ReadboardSidecarProbeRequest, ReadboardSidecarProbeResult, ReadboardSidecarSyncSnapshotRequest,
+    ReadboardSidecarSyncSnapshotResult,
 };
 use engine_manager::{
-    build_command_spec, check_assets, AnalysisBatchRunOptions, AnalysisCancelToken, AssetCheck, CommandSpec,
-    EngineManagerError,
+    build_command_spec, check_assets, default_engine_profiles_settings, normalize_engine_profiles,
+    parse_engine_profiles, save_engine_profiles as persist_engine_profiles, AnalysisJobEventDto, AssetCheck,
+    CommandSpec, EngineProfileCatalog, EngineProfileRecord as EngineProfileRecordDto,
+    EngineProfilesSettings as EngineProfilesSettingsDto, ForegroundEngineConfig, ForegroundEngineManager,
+    SavedEngineProfile, SelectedNodeJobRequest, DEFAULT_ENGINE_PROFILE_ID,
 };
 use go_core::ReadBoardLocalContext;
-use katago_protocol::{AnalysisBatchQueryOptions, AnalysisQueryOptions};
+use katago_protocol::{analysis_query_from_position, AnalysisBatchQueryOptions, AnalysisQueryOptions};
 use provider_core::{
     invalid_payload, invalid_request, invalid_url, timeout, transport_failed, ProviderResult,
     ProviderTransport,
@@ -18,11 +23,10 @@ use provider_core::{
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -36,7 +40,6 @@ use uuid::Uuid;
 const ENGINE_PROFILE_FILE: &str = "lizzieyzy-next-engine-profile.json";
 const APP_PREFERENCES_FILE: &str = "lizzieyzy-next-app-preferences.json";
 const ANALYSIS_CACHE_DB_FILE: &str = "analysis-cache.sqlite3";
-const DEFAULT_ENGINE_PROFILE_ID: &str = "default";
 const DEFAULT_PROVIDER_HTTP_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Debug, Default)]
@@ -218,28 +221,38 @@ fn is_http_url(url: &str) -> bool {
         .unwrap_or(false)
 }
 
-#[derive(Default)]
-struct AnalysisJobRegistry {
-    jobs: Mutex<HashMap<String, AnalysisCancelToken>>,
+struct DiskEngineCatalog {
+    handle: AppHandle,
+}
+
+impl EngineProfileCatalog for DiskEngineCatalog {
+    fn get(&self, profile_id: &str) -> Option<SavedEngineProfile> {
+        let settings = load_engine_profiles_from_disk(&self.handle).ok()?;
+        settings
+            .profiles
+            .into_iter()
+            .find(|record| record.id == profile_id)
+            .map(|record| SavedEngineProfile {
+                profile_id: record.id,
+                profile: record.profile,
+            })
+    }
+
+    fn autoload_profile_id(&self) -> Option<String> {
+        load_engine_profiles_from_disk(&self.handle)
+            .ok()
+            .and_then(|settings| settings.autoload_profile_id)
+    }
+}
+
+fn map_engine_failure(failure: EngineFailureDto) -> String {
+    failure.message
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct EngineProfileSettingsDto {
     profile: EngineProfileDto,
     max_visits: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct EngineProfileRecordDto {
-    id: String,
-    profile: EngineProfileDto,
-    max_visits: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct EngineProfilesSettingsDto {
-    selected_profile_id: String,
-    profiles: Vec<EngineProfileRecordDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -270,11 +283,11 @@ struct PreparedBatchAnalysis {
     turns: Vec<u32>,
     board_size: u8,
     expected: usize,
-    timeout: Duration,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct AnalysisProgressPayload {
+    run_id: String,
     job_id: String,
     completed: usize,
     expected: usize,
@@ -284,12 +297,14 @@ struct AnalysisProgressPayload {
 
 #[derive(Debug, Clone, Serialize)]
 struct AnalysisCompletePayload {
+    run_id: String,
     job_id: String,
     frames: Vec<AnalysisFrameDto>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct AnalysisMessagePayload {
+    run_id: String,
     job_id: String,
     message: String,
 }
@@ -626,18 +641,21 @@ fn load_engine_profile_settings(app_handle: AppHandle) -> Result<Option<EnginePr
 #[tauri::command]
 fn save_engine_profile_settings(
     app_handle: AppHandle,
+    manager: State<'_, ForegroundEngineManager>,
     settings: EngineProfileSettingsDto,
 ) -> Result<EngineProfileSettingsDto, String> {
     validate_engine_profile_settings(&settings)?;
+    let current = load_engine_profiles_from_disk(&app_handle).ok();
     let collection = EngineProfilesSettingsDto {
         selected_profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
+        autoload_profile_id: current.and_then(|settings| settings.autoload_profile_id),
         profiles: vec![EngineProfileRecordDto {
             id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
             profile: settings.profile.clone(),
             max_visits: settings.max_visits,
         }],
     };
-    let saved = save_engine_profiles_settings(app_handle, collection)?;
+    let saved = save_engine_profiles_settings(app_handle, manager, collection)?;
     let selected = selected_engine_profile_record(&saved)
         .ok_or_else(|| "saved engine profile collection did not include the selected profile".to_string())?;
     Ok(EngineProfileSettingsDto {
@@ -648,10 +666,14 @@ fn save_engine_profile_settings(
 
 #[tauri::command]
 fn load_engine_profiles_settings(app_handle: AppHandle) -> Result<EngineProfilesSettingsDto, String> {
-    let path = engine_profile_path(&app_handle)?;
+    load_engine_profiles_from_disk(&app_handle)
+}
+
+fn load_engine_profiles_from_disk(app_handle: &AppHandle) -> Result<EngineProfilesSettingsDto, String> {
+    let path = engine_profile_path(app_handle)?;
     match fs::read_to_string(&path) {
         Ok(contents) => parse_engine_profiles_settings(&contents, &path),
-        Err(err) if err.kind() == ErrorKind::NotFound => load_legacy_engine_profile_settings(&app_handle),
+        Err(err) if err.kind() == ErrorKind::NotFound => load_legacy_engine_profile_settings(app_handle),
         Err(err) => Err(format!("failed to read {}: {err}", path.display())),
     }
 }
@@ -659,14 +681,20 @@ fn load_engine_profiles_settings(app_handle: AppHandle) -> Result<EngineProfiles
 #[tauri::command]
 fn save_engine_profiles_settings(
     app_handle: AppHandle,
+    manager: State<'_, ForegroundEngineManager>,
     settings: EngineProfilesSettingsDto,
 ) -> Result<EngineProfilesSettingsDto, String> {
-    let settings = normalize_engine_profiles_settings(settings)?;
+    let current = load_engine_profiles_from_disk(&app_handle)?;
+    let settings = normalize_engine_profiles(settings)?;
+    for record in &current.profiles {
+        if !settings.profiles.iter().any(|next| next.id == record.id) {
+            manager
+                .assert_profile_deletable(&record.id)
+                .map_err(map_engine_failure)?;
+        }
+    }
     let path = engine_profile_path(&app_handle)?;
-    let json = serde_json::to_string_pretty(&settings)
-        .map_err(|err| format!("failed to serialize engine profiles: {err}"))?;
-    fs::write(&path, json).map_err(|err| format!("failed to write {}: {err}", path.display()))?;
-    Ok(settings)
+    persist_engine_profiles(&path, settings)
 }
 
 #[tauri::command]
@@ -737,119 +765,163 @@ fn delete_analysis_cache(
 }
 
 #[tauri::command]
-fn katago_analyze_once(
-    profile: EngineProfileDto,
-    sgf_text: String,
-    turn: u32,
+fn foreground_engine_start_selected_node(
+    manager: State<'_, ForegroundEngineManager>,
+    current_game: State<'_, CurrentGameState>,
+    run_id: String,
+    generation: u64,
+    node_path: NodePath,
     max_visits: u32,
-) -> Result<AnalysisFrameDto, String> {
-    let document = sgf::parse_sgf(&sgf_text).map_err(|err| err.to_string())?;
-    let game = sgf::to_game_dto(document);
-    let job_id = Uuid::new_v4();
-    let query = katago_protocol::analysis_query_from_game(
-        &game,
+) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+    let (snapshot, board_size, komi) =
+        current_game
+            .admit_selected_node(generation, &node_path)
+            .map_err(|error| EngineFailureDto {
+                operation: EngineOperationDto::Job,
+                run_id: Some(run_id.clone()),
+                switch_id: None,
+                job_id: None,
+                profile_id: None,
+                kind: EngineFailureKind::InvalidState,
+                message: error.message,
+                diagnostic_summary: None,
+            })?;
+    let query = analysis_query_from_position(
+        board_size,
+        komi,
+        &snapshot.position.stones,
+        snapshot.position.to_play,
         AnalysisQueryOptions {
-            id: job_id.to_string(),
+            id: "pending".to_string(),
             rules: "chinese".to_string(),
-            turn,
+            turn: snapshot.position.move_number,
             max_visits: Some(max_visits),
             include_ownership: Some(true),
             include_policy: Some(true),
         },
     )
-    .map_err(|err| err.to_string())?;
-    let query_jsonl = query.to_jsonl().map_err(|err| err.to_string())?;
-    let spec = engine_manager::build_command_spec(&profile).map_err(|err| err.to_string())?;
-    let result = engine_manager::run_katago_analysis_once(&spec, &query_jsonl, Duration::from_secs(60))
-        .map_err(|err| err.to_string())?;
-    let response =
-        katago_protocol::parse_response_line(&result.response_jsonl).map_err(|err| err.to_string())?;
-    Ok(katago_protocol::normalize_response(
-        job_id,
-        response,
-        game.summary.board_size,
-    ))
+    .map_err(|error| EngineFailureDto {
+        operation: EngineOperationDto::Job,
+        run_id: Some(run_id.clone()),
+        switch_id: None,
+        job_id: None,
+        profile_id: None,
+        kind: EngineFailureKind::Protocol,
+        message: error.to_string(),
+        diagnostic_summary: None,
+    })?;
+    manager.start_selected_node_job(SelectedNodeJobRequest {
+        run_id,
+        generation,
+        node_path,
+        query,
+        board_size,
+    })
 }
 
 #[tauri::command]
-fn katago_analyze_game(
-    profile: EngineProfileDto,
-    sgf_text: String,
-    max_visits: u32,
-) -> Result<Vec<AnalysisFrameDto>, String> {
-    let job_id = Uuid::new_v4();
-    let prepared = prepare_katago_batch_analysis(&sgf_text, job_id, max_visits)?;
-    let spec = build_command_spec(&profile).map_err(|err| err.to_string())?;
-    let result = engine_manager::run_katago_analysis_batch(
-        &spec,
-        &prepared.query_jsonl,
-        prepared.expected,
-        prepared.timeout,
-    )
-    .map_err(|err| err.to_string())?;
-    let responses = result
-        .response_jsonl_lines
-        .iter()
-        .map(|line| katago_protocol::parse_response_line(line).map_err(|err| err.to_string()))
-        .collect::<Result<Vec<_>, _>>()?;
-    validate_batch_response_turns(&prepared.turns, &responses)?;
-
-    Ok(katago_protocol::normalize_responses_for_turns(
-        job_id,
-        responses,
-        prepared.board_size,
-        &prepared.turns,
-    ))
+fn foreground_engine_cancel_job(
+    manager: State<'_, ForegroundEngineManager>,
+    run_id: String,
+    job_id: String,
+) -> Result<(), EngineFailureDto> {
+    manager.cancel_job(&run_id, &job_id)
 }
 
 #[tauri::command]
 fn katago_start_analyze_game(
     app_handle: AppHandle,
-    registry: State<'_, AnalysisJobRegistry>,
-    profile: EngineProfileDto,
+    manager: State<'_, ForegroundEngineManager>,
+    run_id: String,
     sgf_text: String,
     max_visits: u32,
-) -> Result<String, String> {
-    let job_id = Uuid::new_v4();
-    let job_id_string = job_id.to_string();
-    let prepared = prepare_katago_batch_analysis(&sgf_text, job_id, max_visits)?;
-    let spec = build_command_spec(&profile).map_err(|err| err.to_string())?;
-    let cancel_token = AnalysisCancelToken::new();
-
-    {
-        let mut jobs = registry
-            .jobs
-            .lock()
-            .map_err(|_| "analysis job registry is unavailable".to_string())?;
-        jobs.insert(job_id_string.clone(), cancel_token.clone());
-    }
-
-    std::thread::spawn({
-        let job_id_string = job_id_string.clone();
-        move || {
-            run_katago_analysis_job(app_handle, job_id, job_id_string, spec, prepared, cancel_token);
+) -> Result<String, EngineFailureDto> {
+    let prepared = prepare_katago_batch_analysis(&sgf_text, Uuid::nil(), max_visits).map_err(|message| {
+        EngineFailureDto {
+            operation: app_model::EngineOperationDto::Job,
+            run_id: Some(run_id.clone()),
+            switch_id: None,
+            job_id: None,
+            profile_id: None,
+            kind: app_model::EngineFailureKind::Start,
+            message,
+            diagnostic_summary: None,
         }
+    })?;
+    let (job_id, events) =
+        manager.start_whole_game_analysis(&run_id, &prepared.query_jsonl, prepared.expected)?;
+    let forwarded_job_id = job_id.clone();
+    std::thread::spawn(move || {
+        forward_whole_game_job_events(app_handle, run_id, forwarded_job_id, prepared, events);
     });
-
-    Ok(job_id_string)
+    Ok(job_id)
 }
 
 #[tauri::command]
-fn katago_cancel_analysis(registry: State<'_, AnalysisJobRegistry>, job_id: String) -> Result<(), String> {
-    let cancel_token = {
-        let jobs = registry
-            .jobs
-            .lock()
-            .map_err(|_| "analysis job registry is unavailable".to_string())?;
-        jobs.get(&job_id).cloned()
-    };
+fn katago_cancel_analysis(
+    manager: State<'_, ForegroundEngineManager>,
+    run_id: String,
+    job_id: String,
+) -> Result<(), EngineFailureDto> {
+    manager.cancel_job(&run_id, &job_id)
+}
 
-    match cancel_token {
-        Some(cancel_token) => {
-            cancel_token.cancel();
-            Ok(())
+fn forward_whole_game_job_events(
+    app_handle: AppHandle,
+    run_id: String,
+    job_id: String,
+    prepared: PreparedBatchAnalysis,
+    events: std::sync::mpsc::Receiver<AnalysisJobEventDto>,
+) {
+    while let Ok(event) = events.recv() {
+        match event {
+            AnalysisJobEventDto::Progress {
+                completed,
+                expected,
+                response_jsonl_line,
+                ..
+            } => {
+                let turn = katago_protocol::parse_response_line(&response_jsonl_line)
+                    .map(|response| response.turn_number)
+                    .ok();
+                let _ = app_handle.emit(
+                    "katago://analysis-progress",
+                    AnalysisProgressPayload {
+                        run_id: run_id.clone(),
+                        job_id: job_id.clone(),
+                        completed,
+                        expected,
+                        turn,
+                        response_jsonl: response_jsonl_line,
+                    },
+                );
+            }
+            AnalysisJobEventDto::Completed {
+                response_jsonl_lines, ..
+            } => {
+                emit_katago_analysis_complete(&app_handle, &run_id, &job_id, &prepared, response_jsonl_lines);
+            }
+            AnalysisJobEventDto::Cancelled { .. } => {
+                let _ = app_handle.emit(
+                    "katago://analysis-cancelled",
+                    AnalysisMessagePayload {
+                        run_id: run_id.clone(),
+                        job_id: job_id.clone(),
+                        message: "analysis job was cancelled".to_string(),
+                    },
+                );
+            }
+            AnalysisJobEventDto::Failed { failure, .. } => {
+                let _ = app_handle.emit(
+                    "katago://analysis-error",
+                    AnalysisMessagePayload {
+                        run_id: run_id.clone(),
+                        job_id: job_id.clone(),
+                        message: failure.message,
+                    },
+                );
+            }
         }
-        None => Err(format!("analysis job not found: {job_id}")),
     }
 }
 
@@ -879,87 +951,23 @@ fn prepare_katago_batch_analysis(
 
     let query_jsonl = query.to_jsonl().map_err(|err| err.to_string())?;
     let expected = turns.len();
-    let timeout_secs = 60u64.max((expected as u64).saturating_mul(15)).min(600);
     Ok(PreparedBatchAnalysis {
         query_jsonl,
         turns,
         board_size: game.summary.board_size,
         expected,
-        timeout: Duration::from_secs(timeout_secs),
     })
-}
-
-fn run_katago_analysis_job(
-    app_handle: AppHandle,
-    job_id: Uuid,
-    job_id_string: String,
-    spec: CommandSpec,
-    prepared: PreparedBatchAnalysis,
-    cancel_token: AnalysisCancelToken,
-) {
-    let mut on_progress = {
-        let app_handle = app_handle.clone();
-        let job_id_string = job_id_string.clone();
-        move |progress: engine_manager::AnalysisBatchProgress| {
-            let turn = katago_protocol::parse_response_line(&progress.response_jsonl_line)
-                .map(|response| response.turn_number)
-                .ok();
-            let payload = AnalysisProgressPayload {
-                job_id: job_id_string.clone(),
-                completed: progress.response_index,
-                expected: progress.expected_responses,
-                turn,
-                response_jsonl: progress.response_jsonl_line,
-            };
-            let _ = app_handle.emit("katago://analysis-progress", payload);
-        }
-    };
-
-    let result = engine_manager::run_katago_analysis_batch_with_options(
-        &spec,
-        &prepared.query_jsonl,
-        AnalysisBatchRunOptions {
-            expected_responses: prepared.expected,
-            timeout: prepared.timeout,
-            cancel_token: Some(&cancel_token),
-            on_progress: Some(&mut on_progress),
-        },
-    );
-
-    match result {
-        Ok(result) => emit_katago_analysis_complete(&app_handle, job_id, &job_id_string, prepared, result),
-        Err(EngineManagerError::Cancelled { .. }) => {
-            let _ = app_handle.emit(
-                "katago://analysis-cancelled",
-                AnalysisMessagePayload {
-                    job_id: job_id_string.clone(),
-                    message: "analysis job was cancelled".to_string(),
-                },
-            );
-        }
-        Err(err) => {
-            let _ = app_handle.emit(
-                "katago://analysis-error",
-                AnalysisMessagePayload {
-                    job_id: job_id_string.clone(),
-                    message: err.to_string(),
-                },
-            );
-        }
-    }
-
-    remove_analysis_job(&app_handle, &job_id_string);
 }
 
 fn emit_katago_analysis_complete(
     app_handle: &AppHandle,
-    job_id: Uuid,
+    run_id: &str,
     job_id_string: &str,
-    prepared: PreparedBatchAnalysis,
-    result: engine_manager::AnalysisBatchRunResult,
+    prepared: &PreparedBatchAnalysis,
+    response_jsonl_lines: Vec<String>,
 ) {
-    let responses = result
-        .response_jsonl_lines
+    let job_id = Uuid::parse_str(job_id_string).unwrap_or_else(|_| Uuid::nil());
+    let responses = response_jsonl_lines
         .iter()
         .map(|line| katago_protocol::parse_response_line(line).map_err(|err| err.to_string()))
         .collect::<Result<Vec<_>, _>>();
@@ -979,6 +987,7 @@ fn emit_katago_analysis_complete(
             let _ = app_handle.emit(
                 "katago://analysis-complete",
                 AnalysisCompletePayload {
+                    run_id: run_id.to_string(),
                     job_id: job_id_string.to_string(),
                     frames,
                 },
@@ -988,21 +997,13 @@ fn emit_katago_analysis_complete(
             let _ = app_handle.emit(
                 "katago://analysis-error",
                 AnalysisMessagePayload {
+                    run_id: run_id.to_string(),
                     job_id: job_id_string.to_string(),
                     message,
                 },
             );
         }
     }
-}
-
-fn remove_analysis_job(app_handle: &AppHandle, job_id: &str) {
-    let Some(registry) = app_handle.try_state::<AnalysisJobRegistry>() else {
-        return;
-    };
-    if let Ok(mut jobs) = registry.jobs.lock() {
-        jobs.remove(job_id);
-    };
 }
 
 fn validate_batch_response_turns(
@@ -1138,21 +1139,7 @@ fn selected_engine_profile_record(settings: &EngineProfilesSettingsDto) -> Optio
 }
 
 fn parse_engine_profiles_settings(contents: &str, path: &Path) -> Result<EngineProfilesSettingsDto, String> {
-    serde_json::from_str::<EngineProfilesSettingsDto>(contents)
-        .or_else(|_| {
-            serde_json::from_str::<EngineProfileSettingsDto>(contents).map(|settings| {
-                EngineProfilesSettingsDto {
-                    selected_profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
-                    profiles: vec![EngineProfileRecordDto {
-                        id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
-                        profile: settings.profile,
-                        max_visits: settings.max_visits,
-                    }],
-                }
-            })
-        })
-        .map_err(|err| format!("failed to parse {}: {err}", path.display()))
-        .and_then(normalize_engine_profiles_settings)
+    parse_engine_profiles(contents).map_err(|err| format!("failed to parse {}: {err}", path.display()))
 }
 
 fn load_legacy_engine_profile_settings(app_handle: &AppHandle) -> Result<EngineProfilesSettingsDto, String> {
@@ -1161,9 +1148,7 @@ fn load_legacy_engine_profile_settings(app_handle: &AppHandle) -> Result<EngineP
         Ok(contents) => {
             let settings = parse_engine_profiles_settings(&contents, &legacy_path)?;
             let path = engine_profile_path(app_handle)?;
-            let json = serde_json::to_string_pretty(&settings)
-                .map_err(|err| format!("failed to serialize migrated engine profiles: {err}"))?;
-            fs::write(&path, json).map_err(|err| {
+            persist_engine_profiles(&path, settings.clone()).map_err(|err| {
                 format!(
                     "failed to migrate engine profiles from {} to {}: {err}",
                     legacy_path.display(),
@@ -1172,48 +1157,9 @@ fn load_legacy_engine_profile_settings(app_handle: &AppHandle) -> Result<EngineP
             })?;
             Ok(settings)
         }
-        Err(err) if err.kind() == ErrorKind::NotFound => {
-            normalize_engine_profiles_settings(default_engine_profiles_settings())
-        }
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(default_engine_profiles_settings()),
         Err(err) => Err(format!("failed to read {}: {err}", legacy_path.display())),
     }
-}
-
-fn normalize_engine_profiles_settings(
-    mut settings: EngineProfilesSettingsDto,
-) -> Result<EngineProfilesSettingsDto, String> {
-    if settings.profiles.is_empty() {
-        settings.profiles.push(default_engine_profile_record());
-    }
-
-    let mut seen_ids = HashSet::new();
-    let mut normalized_profiles = Vec::new();
-    for mut record in settings.profiles {
-        record.id = record.id.trim().to_string();
-        if record.id.is_empty() {
-            return Err("engine profile id is required".to_string());
-        }
-        if !seen_ids.insert(record.id.clone()) {
-            return Err(format!("duplicate engine profile id: {}", record.id));
-        }
-        validate_engine_profile_settings(&EngineProfileSettingsDto {
-            profile: record.profile.clone(),
-            max_visits: record.max_visits,
-        })?;
-        normalized_profiles.push(record);
-    }
-
-    if !seen_ids.contains(DEFAULT_ENGINE_PROFILE_ID) {
-        normalized_profiles.insert(0, default_engine_profile_record());
-        seen_ids.insert(DEFAULT_ENGINE_PROFILE_ID.to_string());
-    }
-
-    settings.selected_profile_id = settings.selected_profile_id.trim().to_string();
-    if !seen_ids.contains(&settings.selected_profile_id) {
-        settings.selected_profile_id = DEFAULT_ENGINE_PROFILE_ID.to_string();
-    }
-    settings.profiles = normalized_profiles;
-    Ok(settings)
 }
 
 fn validate_engine_profile_settings(settings: &EngineProfileSettingsDto) -> Result<(), String> {
@@ -1224,28 +1170,6 @@ fn validate_engine_profile_settings(settings: &EngineProfileSettingsDto) -> Resu
         return Err("engine profile name is required".to_string());
     }
     Ok(())
-}
-
-fn default_engine_profiles_settings() -> EngineProfilesSettingsDto {
-    EngineProfilesSettingsDto {
-        selected_profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
-        profiles: vec![default_engine_profile_record()],
-    }
-}
-
-fn default_engine_profile_record() -> EngineProfileRecordDto {
-    EngineProfileRecordDto {
-        id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
-        profile: EngineProfileDto {
-            name: "Local KataGo".to_string(),
-            engine_path: String::new(),
-            model_path: None,
-            config_path: None,
-            working_dir: None,
-            backend: EngineBackend::KataGoAnalysis,
-        },
-        max_visits: 800,
-    }
 }
 
 fn engine_profile_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
@@ -1989,10 +1913,67 @@ fn demo_candidates(turn: u32, board_size: u8) -> Vec<CandidateMoveDto> {
         .collect()
 }
 
+#[tauri::command]
+fn foreground_engine_snapshot(manager: State<'_, ForegroundEngineManager>) -> ForegroundEngineSnapshotDto {
+    manager.snapshot()
+}
+
+#[tauri::command]
+fn foreground_engine_start(
+    manager: State<'_, ForegroundEngineManager>,
+    profile_id: String,
+) -> Result<(), EngineFailureDto> {
+    manager.start(&profile_id)
+}
+
+#[tauri::command]
+fn foreground_engine_stop(manager: State<'_, ForegroundEngineManager>) -> Result<(), EngineFailureDto> {
+    manager.stop()
+}
+
+#[tauri::command]
+fn foreground_engine_restart(manager: State<'_, ForegroundEngineManager>) -> Result<(), EngineFailureDto> {
+    manager.restart()
+}
+
+#[tauri::command]
+fn foreground_engine_switch(
+    manager: State<'_, ForegroundEngineManager>,
+    profile_id: String,
+) -> Result<(), EngineFailureDto> {
+    manager.switch_to(&profile_id)
+}
+
 pub fn run() {
     tauri::Builder::default()
-        .manage(AnalysisJobRegistry::default())
         .manage(CurrentGameState::default())
+        .setup(|app| {
+            let _ = load_engine_profiles_from_disk(app.handle());
+            let catalog = std::sync::Arc::new(DiskEngineCatalog {
+                handle: app.handle().clone(),
+            });
+            let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::default());
+            let events = manager.subscribe();
+            let emit_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                while let Ok(event) = events.recv() {
+                    match event {
+                        ForegroundEngineEventDto::Snapshot { snapshot } => {
+                            let _ = emit_handle.emit("foreground-engine://snapshot", snapshot);
+                        }
+                        ForegroundEngineEventDto::Failure { failure } => {
+                            let _ = emit_handle.emit("foreground-engine://failure", failure);
+                        }
+                        ForegroundEngineEventDto::Job { job } => {
+                            let _ = emit_handle.emit("foreground-engine://job", job);
+                        }
+                    }
+                }
+            });
+            let _ = manager.apply_autoload();
+            app.manage(manager);
+            Ok(())
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
@@ -2029,13 +2010,25 @@ pub fn run() {
             get_analysis_cache,
             save_analysis_cache,
             delete_analysis_cache,
-            katago_analyze_once,
-            katago_analyze_game,
             katago_start_analyze_game,
-            katago_cancel_analysis
+            katago_cancel_analysis,
+            foreground_engine_snapshot,
+            foreground_engine_start,
+            foreground_engine_stop,
+            foreground_engine_restart,
+            foreground_engine_switch,
+            foreground_engine_start_selected_node,
+            foreground_engine_cancel_job
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run LizzieYzy Next");
+        .build(tauri::generate_context!())
+        .expect("failed to build LizzieYzy Next")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(manager) = app.try_state::<ForegroundEngineManager>() {
+                    let _ = manager.teardown();
+                }
+            }
+        });
 }
 
 #[cfg(test)]
@@ -2053,6 +2046,63 @@ mod tests {
         assert_eq!(query["includeOwnership"], true);
         assert_eq!(query["includePolicy"], true);
         assert_eq!(query["analyzeTurns"], serde_json::json!([0, 1, 2]));
+    }
+
+    fn registered_tauri_commands(source: &str) -> Vec<&str> {
+        let list = source
+            .split("tauri::generate_handler![")
+            .nth(1)
+            .and_then(|rest| rest.split(']').next())
+            .expect("tauri invoke handler list");
+        list.lines()
+            .map(str::trim)
+            .map(|line| line.trim_end_matches(','))
+            .filter(|line| !line.is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn obsolete_profile_to_process_commands_are_not_registered() {
+        let commands =
+            registered_tauri_commands(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs")));
+        assert!(
+            commands.iter().all(|command| *command != "katago_analyze_once"),
+            "legacy one-shot command must not remain registered: {commands:?}"
+        );
+        assert!(
+            commands.iter().all(|command| *command != "katago_analyze_game"),
+            "legacy batch command must not remain registered: {commands:?}"
+        );
+        assert!(
+            commands.contains(&"katago_start_analyze_game"),
+            "whole-game analysis must stay on the manager-owned run command"
+        );
+        assert!(
+            commands.contains(&"foreground_engine_start_selected_node"),
+            "selected-node analysis must stay on the manager-owned run command"
+        );
+        assert!(
+            commands.contains(&"fake_analyze"),
+            "browser/native fake analysis remains available and non-authoritative"
+        );
+    }
+
+    #[test]
+    fn whole_game_progress_payload_keeps_run_and_job_identities() {
+        let payload = AnalysisProgressPayload {
+            run_id: "run-1".into(),
+            job_id: "job-9".into(),
+            completed: 1,
+            expected: 2,
+            turn: Some(3),
+            response_jsonl: r#"{"id":"job-9"}"#.into(),
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["run_id"], "run-1");
+        assert_eq!(json["job_id"], "job-9");
+        assert_eq!(json["completed"], 1);
+        assert_eq!(json["expected"], 2);
+        assert_eq!(json["turn"], 3);
     }
 
     #[test]

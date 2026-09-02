@@ -3,6 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AnalysisFrameDto,
+  AnalysisJobEventDto,
+  AnalysisJobStartedDto,
   AppHealthDto,
   AssetCheckDto,
   CandidateMoveDto,
@@ -12,6 +14,8 @@ import type {
   EngineProfileDto,
   EngineProfilesSettingsDto,
   EngineProfileSettingsDto,
+  EngineFailureDto,
+  ForegroundEngineSnapshotDto,
   GameDto,
   MoveDto,
   MoveVertex,
@@ -19,6 +23,7 @@ import type {
   PositionDto,
   ProblemMarkerDto
 } from "../domain/types";
+import { emptyForegroundEngineSnapshot, mergeForegroundEngineSnapshot } from "../domain/foregroundEngine";
 import { ensureInitialPosition, replayGamePositions } from "../domain/board";
 
 const letters = "abcdefghijklmnopqrstuvwxyz";
@@ -31,6 +36,7 @@ export type SgfDocument = {
 };
 
 export type AnalysisProgressPayload = {
+  run_id: string;
   job_id: string;
   completed: number;
   expected: number;
@@ -39,11 +45,13 @@ export type AnalysisProgressPayload = {
 };
 
 export type AnalysisCompletePayload = {
+  run_id: string;
   job_id: string;
   frames: AnalysisFrameDto[];
 };
 
 export type AnalysisErrorPayload = {
+  run_id: string;
   job_id: string;
   message: string;
 };
@@ -171,30 +179,16 @@ export async function saveCurrentGame(
   return invoke<CurrentGameResultDto | null>("save_current_game_as", { selectedPath, defaultFileName });
 }
 
-export async function analyzeKataGoOnce(profile: EngineProfileDto, sgfText: string, turn: number, maxVisits: number): Promise<AnalysisFrameDto> {
-  if (!isTauriRuntime()) {
-    throw new Error("Real KataGo analysis requires the Tauri desktop backend. Browser preview can still use Run review for fake analysis.");
-  }
-  return await invoke<AnalysisFrameDto>("katago_analyze_once", { profile, sgfText, turn, maxVisits });
-}
-
-export async function analyzeKataGoGame(profile: EngineProfileDto, sgfText: string, maxVisits: number): Promise<AnalysisFrameDto[]> {
+export async function startKataGoGameAnalysis(runId: string, sgfText: string, maxVisits: number): Promise<string> {
   if (!isTauriRuntime()) {
     throw new Error("Full-game KataGo analysis requires the Tauri desktop backend. Browser preview cannot run real KataGo; use Run review for fake analysis.");
   }
-  return await invoke<AnalysisFrameDto[]>("katago_analyze_game", { profile, sgfText, maxVisits });
+  return await invoke<string>("katago_start_analyze_game", { runId, sgfText, maxVisits });
 }
 
-export async function startKataGoGameAnalysis(profile: EngineProfileDto, sgfText: string, maxVisits: number): Promise<string> {
-  if (!isTauriRuntime()) {
-    throw new Error("Full-game KataGo analysis requires the Tauri desktop backend. Browser preview cannot run real KataGo; use Run review for fake analysis.");
-  }
-  return await invoke<string>("katago_start_analyze_game", { profile, sgfText, maxVisits });
-}
-
-export async function cancelKataGoAnalysis(jobId: string): Promise<void> {
+export async function cancelKataGoAnalysis(runId: string, jobId: string): Promise<void> {
   if (!isTauriRuntime()) return;
-  await invoke<void>("katago_cancel_analysis", { jobId });
+  await invoke<void>("katago_cancel_analysis", { runId, jobId });
 }
 
 export async function listenToKataGoAnalysisEvents(handlers: KataGoAnalysisEventHandlers): Promise<() => void> {
@@ -235,6 +229,103 @@ export async function saveEngineProfilesSettings(settings: EngineProfilesSetting
     return normalized;
   }
   return await invoke<EngineProfilesSettingsDto>("save_engine_profiles_settings", { settings });
+}
+
+export type ForegroundEngineEventHandlers = {
+  onSnapshot?: (snapshot: ForegroundEngineSnapshotDto) => void;
+  onFailure?: (failure: EngineFailureDto) => void;
+  onJob?: (job: AnalysisJobEventDto) => void;
+};
+
+export async function startSelectedNodeAnalysis(input: {
+  runId: string;
+  generation: number;
+  nodePath: NodePath;
+  maxVisits: number;
+}): Promise<AnalysisJobStartedDto> {
+  if (!isTauriRuntime()) {
+    throw new Error("Selected-node analysis requires a Ready Foreground Engine Run on the Tauri desktop backend.");
+  }
+  return await invoke<AnalysisJobStartedDto>("foreground_engine_start_selected_node", {
+    runId: input.runId,
+    generation: input.generation,
+    nodePath: input.nodePath,
+    maxVisits: input.maxVisits
+  });
+}
+
+export async function cancelSelectedNodeAnalysis(input: { runId: string; jobId: string }): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await invoke<void>("foreground_engine_cancel_job", { runId: input.runId, jobId: input.jobId });
+}
+
+export async function getForegroundEngineSnapshot(): Promise<ForegroundEngineSnapshotDto> {
+  if (!isTauriRuntime()) return emptyForegroundEngineSnapshot();
+  return await invoke<ForegroundEngineSnapshotDto>("foreground_engine_snapshot");
+}
+
+export async function startForegroundEngine(profileId: string): Promise<void> {
+  if (!isTauriRuntime()) {
+    throw new Error("Starting a Foreground Engine Run requires the Tauri desktop backend.");
+  }
+  await invoke<void>("foreground_engine_start", { profileId });
+}
+
+export async function stopForegroundEngine(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await invoke<void>("foreground_engine_stop");
+}
+
+export async function restartForegroundEngine(): Promise<void> {
+  if (!isTauriRuntime()) {
+    throw new Error("Restarting a Foreground Engine Run requires the Tauri desktop backend.");
+  }
+  await invoke<void>("foreground_engine_restart");
+}
+
+export async function switchForegroundEngine(profileId: string): Promise<void> {
+  if (!isTauriRuntime()) {
+    throw new Error("Switching a Foreground Engine Run requires the Tauri desktop backend.");
+  }
+  await invoke<void>("foreground_engine_switch", { profileId });
+}
+
+export async function listenToForegroundEngineEvents(
+  handlers: ForegroundEngineEventHandlers
+): Promise<() => void> {
+  if (!isTauriRuntime()) return () => undefined;
+  const unlisteners = await Promise.all([
+    listen<ForegroundEngineSnapshotDto>("foreground-engine://snapshot", (event) => handlers.onSnapshot?.(event.payload)),
+    listen<EngineFailureDto>("foreground-engine://failure", (event) => handlers.onFailure?.(event.payload)),
+    listen<AnalysisJobEventDto>("foreground-engine://job", (event) => handlers.onJob?.(event.payload))
+  ]);
+  return () => {
+    for (const unlisten of unlisteners) unlisten();
+  };
+}
+
+export async function subscribeForegroundEngine(
+  onSnapshot: (snapshot: ForegroundEngineSnapshotDto) => void,
+  onFailure?: (failure: EngineFailureDto) => void,
+  onJob?: (job: AnalysisJobEventDto) => void
+): Promise<() => void> {
+  let current = emptyForegroundEngineSnapshot();
+  const apply = (incoming: ForegroundEngineSnapshotDto) => {
+    current = mergeForegroundEngineSnapshot(current, incoming);
+    onSnapshot(current);
+  };
+  const unlisten = await listenToForegroundEngineEvents({
+    onSnapshot: apply,
+    onFailure,
+    onJob
+  });
+  try {
+    apply(await getForegroundEngineSnapshot());
+  } catch (error) {
+    unlisten();
+    throw error;
+  }
+  return unlisten;
 }
 
 export async function checkEngineAssets(profile: EngineProfileDto): Promise<AssetCheckDto[]> {
@@ -288,6 +379,7 @@ function saveBrowserEngineProfileSettings(settings: EngineProfileSettingsDto) {
   if (typeof window === "undefined") return;
   saveBrowserEngineProfilesSettings({
     selected_profile_id: defaultEngineProfileId,
+    autoload_profile_id: null,
     profiles: [{ id: defaultEngineProfileId, profile: settings.profile, max_visits: settings.max_visits }]
   });
 }
@@ -316,10 +408,14 @@ function normalizeBrowserEngineProfilesSettings(settings: EngineProfilesSettings
     const selected = normalizedProfiles.some((profile) => profile.id === settings.selected_profile_id)
       ? settings.selected_profile_id
       : defaultEngineProfileId;
-    return { selected_profile_id: selected, profiles: normalizedProfiles };
+    const autoload = typeof settings.autoload_profile_id === "string" && normalizedProfiles.some((profile) => profile.id === settings.autoload_profile_id)
+      ? settings.autoload_profile_id
+      : null;
+    return { selected_profile_id: selected, autoload_profile_id: autoload, profiles: normalizedProfiles };
   }
   return {
     selected_profile_id: defaultEngineProfileId,
+    autoload_profile_id: null,
     profiles: [{ id: defaultEngineProfileId, profile: settings.profile, max_visits: settings.max_visits }]
   };
 }
@@ -329,7 +425,7 @@ function isEngineProfilesSettings(settings: EngineProfilesSettingsDto | EnginePr
 }
 
 function defaultBrowserEngineProfilesSettings(): EngineProfilesSettingsDto {
-  return { selected_profile_id: defaultEngineProfileId, profiles: [defaultBrowserEngineProfileRecord()] };
+  return { selected_profile_id: defaultEngineProfileId, autoload_profile_id: null, profiles: [defaultBrowserEngineProfileRecord()] };
 }
 
 function defaultBrowserEngineProfileRecord(): EngineProfileRecordDto {

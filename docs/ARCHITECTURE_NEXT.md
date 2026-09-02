@@ -12,14 +12,14 @@ flowchart LR
   Tauri --> SGF["sgf\nparse / replay / serialize"]
   Tauri --> Go["go-core\nboard rules"]
   Tauri --> Kata["katago-protocol\nanalysis JSONL"]
-  Tauri --> Engine["engine-manager\nprofiles / assets / process"]
+  Tauri --> Engine["engine-manager\nrun / jobs / process"]
   Tauri --> Analysis["analysis-core\nmarkers / sorting"]
   Tauri --> Cache["storage + rusqlite\nanalysis cache"]
   Engine --> KataGo["Local KataGo process"]
   Cache --> AppData["Tauri app data"]
 ```
 
-The UI consumes DTOs and view models. It does not consume raw KataGo JSON and does not own long-running engine processes. Rust owns file I/O, SGF parsing, process execution, cancellation, app-data persistence, and SQLite.
+The UI consumes DTOs and view models. It does not consume raw KataGo JSON and does not own long-running engine processes. `engine-manager` owns the Foreground Engine Run, Analysis Jobs, and process lifetime. Rust owns file I/O, SGF parsing, process execution, cancellation, app-data persistence, and SQLite.
 
 Provider and readboard live paths follow the same boundary rule. The React UI should enter these paths through frontend API wrappers and Tauri commands; provider HTTP parsing, readboard sidecar probing, protocol parsing, and DTO normalization belong behind Rust crate boundaries. A wired command path is repository evidence only. It is not evidence that the external Yike/Fox services, accounts, network, or a local readboard sidecar have been validated.
 
@@ -33,7 +33,7 @@ The browser preview can exercise UI fallback paths and fake analysis, but it can
 
 ### `apps/desktop/src-tauri`
 
-Tauri 2 command gateway. It exposes health, SGF parse/replay, native SGF read/write, fake analysis, KataGo one-shot analysis, full-game batch analysis, progress/cancel events, engine profile persistence, asset checks, and analysis cache commands.
+Tauri 2 command gateway. It exposes health, SGF parse/replay, native SGF read/write, fake analysis, engine profile persistence, asset checks, analysis cache commands, and manager-owned Foreground Engine Run commands (`foreground_engine_snapshot`, `foreground_engine_start`, `foreground_engine_stop`, `foreground_engine_restart`, `foreground_engine_switch`, `foreground_engine_start_selected_node`, `foreground_engine_cancel_job`). Whole-game analysis on a Ready Run uses `katago_start_analyze_game` / `katago_cancel_analysis`. Removed profile-to-process commands `katago_analyze_once` and `katago_analyze_game` are not registered. Fake analysis remains non-authoritative and does not create a Foreground Engine Run.
 
 This layer should stay a gateway. Domain behavior belongs in crates unless it is directly about Tauri lifecycle, app data paths, command shape, or event emission.
 
@@ -76,7 +76,7 @@ Analysis-derived helpers such as candidate sorting and problem marker classifica
 
 ### `crates/engine-manager`
 
-Engine profile validation, command construction, asset checks, supervised KataGo execution, batch progress, timeouts, and cancellation.
+Engine profile catalog, Autoload Default, asset checks, and the manager-owned Foreground Engine Run: lifecycle snapshot, Start/Stop/Restart/Switch, selected-node and whole-game Analysis Jobs, process execution, cancellation, and typed failure.
 
 ### Provider crates
 
@@ -95,9 +95,9 @@ SQLite schema and storage helpers. The current user-visible cache commands live 
 1. The user opens or edits SGF in the React UI.
 2. The frontend calls Tauri commands through API wrapper functions.
 3. Rust parses SGF into DTOs and replays positions through `sgf` and `go-core`.
-4. The user configures engine profiles and runs asset checks through `engine-manager`.
-5. KataGo analysis requests are generated through `katago-protocol`.
-6. `engine-manager` launches KataGo, reads analysis JSONL, emits progress, and supports cancellation.
+4. The user edits saved engine profiles and Autoload Default in Engine Settings. Manual Check Assets is diagnostic, not a Start gate.
+5. The Engine Switcher starts, stops, restarts, or switches a manager-owned Foreground Engine Run. `engine-manager` validates assets, spawns KataGo, and publishes Ready only after adapter readiness.
+6. Selected-node and whole-game analysis jobs occupy that Ready Run. `katago-protocol` builds JSONL; `engine-manager` writes it to the resident process, emits progress, and cancels by run/job identity.
 7. Responses are normalized into `AnalysisFrameDto` and classified by `analysis-core`.
 8. Analysis results can be persisted and reused through the SQLite cache.
 9. The UI renders board state, winrate, candidates, PVs, ownership, policy, problem markers, and cache status from DTOs.

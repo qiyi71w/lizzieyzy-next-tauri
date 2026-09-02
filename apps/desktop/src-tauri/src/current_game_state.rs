@@ -1,5 +1,6 @@
 use app_model::{
     CurrentGameError, CurrentGameErrorKind, CurrentGameResultDto, GameDto, MoveVertex, NodePath,
+    SelectedNodeSnapshotDto,
 };
 use sgf::CurrentSgfDocument;
 use std::sync::Mutex;
@@ -83,6 +84,23 @@ impl CurrentGameState {
 
     pub fn mainline_projection(&self) -> Result<GameDto, CurrentGameError> {
         self.with_document(|document| Ok(document.mainline_projection()))
+    }
+
+    pub fn admit_selected_node(
+        &self,
+        generation: u64,
+        path: &NodePath,
+    ) -> Result<(SelectedNodeSnapshotDto, u8, f32), CurrentGameError> {
+        let holder = self.holder.lock().expect("current game state");
+        let document = holder.document.as_ref().ok_or_else(no_current_game)?;
+        if holder.generation != generation {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::NoCurrentGame,
+                message: "current game generation does not match".to_string(),
+            });
+        }
+        let snapshot = document.snapshot(path)?;
+        Ok((snapshot, document.board_size(), document.komi()))
     }
 
     #[allow(dead_code)]
@@ -355,6 +373,28 @@ mod current_game_replacement {
             before
         );
         assert_eq!(opened.selected_path.indices, vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn admit_selected_node_requires_matching_generation_and_existing_path() {
+        let state = CurrentGameState::default();
+        let opened = state.replace(EMPTY, None).unwrap();
+        let (snapshot, board_size, komi) = state
+            .admit_selected_node(opened.generation, &opened.selected_path)
+            .unwrap();
+        assert_eq!(snapshot.path, opened.selected_path);
+        assert_eq!(board_size, 19);
+        assert_eq!(komi, 7.5);
+
+        let stale = state
+            .admit_selected_node(opened.generation + 1, &opened.selected_path)
+            .unwrap_err();
+        assert_eq!(stale.message, "current game generation does not match");
+
+        let missing = state
+            .admit_selected_node(opened.generation, &NodePath { indices: vec![9] })
+            .unwrap_err();
+        assert_eq!(missing.kind, CurrentGameErrorKind::InvalidNodePath);
     }
 }
 

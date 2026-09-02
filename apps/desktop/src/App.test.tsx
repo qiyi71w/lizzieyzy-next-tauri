@@ -12,7 +12,8 @@ const backend = vi.hoisted(() => ({
   projectCurrentGameMainline: vi.fn(),
   playCurrentGame: vi.fn(),
   selectCurrentGameNode: vi.fn(),
-  analyzeKataGoOnce: vi.fn(),
+  startSelectedNodeAnalysis: vi.fn(),
+  cancelSelectedNodeAnalysis: vi.fn(),
   cancelKataGoAnalysis: vi.fn(),
   classifyProblems: vi.fn(),
   fakeAnalyze: vi.fn(),
@@ -23,7 +24,14 @@ const backend = vi.hoisted(() => ({
   saveCurrentGame: vi.fn(),
   setCurrentGamePersonalComment: vi.fn(),
   removeCurrentGameVariation: vi.fn(),
-  startKataGoGameAnalysis: vi.fn()
+  startKataGoGameAnalysis: vi.fn(),
+  loadEngineProfilesSettings: vi.fn(() => Promise.resolve({ selected_profile_id: "default", profiles: [] })),
+  subscribeForegroundEngine: vi.fn(() => Promise.resolve(() => undefined)),
+  startForegroundEngine: vi.fn(),
+  stopForegroundEngine: vi.fn(),
+  restartForegroundEngine: vi.fn(),
+  switchForegroundEngine: vi.fn(),
+  getForegroundEngineSnapshot: vi.fn(() => Promise.resolve({ revision: 0, lifecycle: { state: "no_engine" } }))
 }));
 
 vi.mock("./api/backend", () => ({
@@ -977,11 +985,11 @@ describe("App focus-safe review controls", () => {
     const pass = buttonNamed(host, "停一手(P)");
     expect(pass.disabled).toBe(false);
 
-    backend.analyzeKataGoOnce.mockClear();
+    backend.startSelectedNodeAnalysis.mockClear();
     backend.startKataGoGameAnalysis.mockClear();
     pressKey(buttonNamed(host, "坐标"), "a");
     pressKey(buttonNamed(host, "坐标"), " ");
-    expect(backend.analyzeKataGoOnce).not.toHaveBeenCalled();
+    expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
     expect(backend.startKataGoGameAnalysis).not.toHaveBeenCalled();
   });
 });

@@ -1,28 +1,15 @@
 import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { checkEngineAssets, loadEngineProfilesSettings, saveEngineProfilesSettings } from "../api/backend";
-import type { AssetCheckDto, EngineProfileDto, EngineProfileRecordDto } from "../domain/types";
-
-type EngineCommands = {
-  analyzeOnce: () => void;
-  analyzeGame: () => void;
-  canRun: boolean;
-  engineLabel: string;
-};
+import type { AssetCheckDto, EngineProfileDto, EngineProfileRecordDto, ForegroundEngineSnapshotDto } from "../domain/types";
+import { profileHasPendingChanges, runFromSnapshot } from "../domain/foregroundEngine";
 
 type Props = {
   disabled?: boolean;
-  onRun: (profile: EngineProfileDto, maxVisits: number) => void | Promise<void>;
-  onAnalyzeGame: (profile: EngineProfileDto, maxVisits: number) => void | Promise<void>;
-  onCancelAnalysis?: () => void | Promise<void>;
-  analysisProgress?: { completed: number; expected: number; turn: number; responseJsonl: string } | null;
-  activeJobId?: string | null;
-  toolbarTarget?: HTMLElement | null;
-  onBindCommands?: (commands: EngineCommands) => void;
+  engineSnapshot?: ForegroundEngineSnapshotDto | null;
 };
 
-export function EngineSetupPanel({ disabled = false, onRun, onAnalyzeGame, onCancelAnalysis, analysisProgress = null, activeJobId = null, toolbarTarget = null, onBindCommands }: Props) {
+export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Props) {
   const [profiles, setProfiles] = useState<EngineProfileRecordDto[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState("default");
   const [profileName, setProfileName] = useState("Local KataGo");
@@ -33,38 +20,15 @@ export function EngineSetupPanel({ disabled = false, onRun, onAnalyzeGame, onCan
   const [maxVisits, setMaxVisits] = useState("800");
   const [profileStatus, setProfileStatus] = useState("Loading profile...");
   const [assetChecks, setAssetChecks] = useState<AssetCheckDto[]>([]);
+  const [autoloadProfileId, setAutoloadProfileId] = useState<string | null>(null);
 
   const visits = Number(maxVisits);
-  const isAnalysisActive = activeJobId !== null;
-  const missingRequiredAssets = assetChecks.filter((check) => check.required && !check.exists);
-  const hasKnownMissingRequiredAssets = missingRequiredAssets.length > 0;
-  const progressLabel = analysisProgress
-    ? `${analysisProgress.completed}/${analysisProgress.expected || "?"} 个局面，第 ${analysisProgress.turn} 手`
-    : isAnalysisActive
-      ? "正在起分析…"
-      : "";
-  const progressPercent = analysisProgress && analysisProgress.expected > 0
-    ? Math.min(100, Math.round((analysisProgress.completed / analysisProgress.expected) * 100))
-    : 0;
-  const canRun =
-    !disabled &&
-    enginePath.trim().length > 0 &&
-    modelPath.trim().length > 0 &&
-    configPath.trim().length > 0 &&
-    Number.isFinite(visits) &&
-    visits > 0 &&
-    !hasKnownMissingRequiredAssets;
   const canSave = profileName.trim().length > 0 && Number.isFinite(visits) && visits > 0;
-
-  useEffect(() => {
-    onBindCommands?.({
-      analyzeOnce: handleRun,
-      analyzeGame: handleAnalyzeGame,
-      canRun,
-      engineLabel: enginePath.trim() ? (profileName.trim() || "已加载引擎") : "未加载引擎"
-    });
-  }, [canRun, enginePath, profileName, onBindCommands, visits, disabled, hasKnownMissingRequiredAssets]);
   const canDeleteProfile = selectedProfileId !== "default" && profiles.length > 1;
+  const snapshot = engineSnapshot ?? { revision: 0, lifecycle: { state: "no_engine" as const } };
+  const run = runFromSnapshot(snapshot);
+  const savedRecord = profiles.find((profile) => profile.id === run?.profile_id)?.profile;
+  const pendingChanges = Boolean(savedRecord && run && profileHasPendingChanges(savedRecord, snapshot));
 
   useEffect(() => {
     let isMounted = true;
@@ -74,6 +38,7 @@ export function EngineSetupPanel({ disabled = false, onRun, onAnalyzeGame, onCan
         const selected = settings.profiles.find((profile) => profile.id === settings.selected_profile_id) ?? settings.profiles[0];
         setProfiles(settings.profiles);
         setSelectedProfileId(selected?.id ?? "default");
+        setAutoloadProfileId(settings.autoload_profile_id ?? null);
         if (!selected) {
           setProfileStatus("Default profile ready.");
           return;
@@ -128,11 +93,21 @@ export function EngineSetupPanel({ disabled = false, onRun, onAnalyzeGame, onCan
     }
   }
 
-  async function persistProfiles(nextProfiles: EngineProfileRecordDto[], selectedId: string, successMessage: string) {
-    const saved = await saveEngineProfilesSettings({ selected_profile_id: selectedId, profiles: nextProfiles });
+  async function persistProfiles(
+    nextProfiles: EngineProfileRecordDto[],
+    selectedId: string,
+    autoloadId: string | null,
+    successMessage: string
+  ) {
+    const saved = await saveEngineProfilesSettings({
+      selected_profile_id: selectedId,
+      autoload_profile_id: autoloadId,
+      profiles: nextProfiles
+    });
     const selected = saved.profiles.find((profile) => profile.id === saved.selected_profile_id) ?? saved.profiles[0];
     setProfiles(saved.profiles);
     setSelectedProfileId(saved.selected_profile_id);
+    setAutoloadProfileId(saved.autoload_profile_id ?? null);
     if (selected) applyProfileRecord(selected);
     setProfileStatus(successMessage);
   }
@@ -144,7 +119,11 @@ export function EngineSetupPanel({ disabled = false, onRun, onAnalyzeGame, onCan
     applyProfileRecord(profile);
     setProfileStatus(`Selected ${profile.profile.name}.`);
     try {
-      await saveEngineProfilesSettings({ selected_profile_id: profileId, profiles });
+      await saveEngineProfilesSettings({
+        selected_profile_id: profileId,
+        autoload_profile_id: autoloadProfileId,
+        profiles
+      });
     } catch (error) {
       setProfileStatus(`Select saved locally but persistence failed: ${errorMessage(error)}`);
     }
@@ -160,7 +139,7 @@ export function EngineSetupPanel({ disabled = false, onRun, onAnalyzeGame, onCan
       }
     };
     try {
-      await persistProfiles([...profiles.map((profile) => profile.id === selectedProfileId ? buildProfileRecord(profile.id) : profile), nextProfile], id, "Profile added.");
+      await persistProfiles([...profiles.map((profile) => profile.id === selectedProfileId ? buildProfileRecord(profile.id) : profile), nextProfile], id, autoloadProfileId, "Profile added.");
     } catch (error) {
       setProfileStatus(`Add failed: ${errorMessage(error)}`);
     }
@@ -171,9 +150,28 @@ export function EngineSetupPanel({ disabled = false, onRun, onAnalyzeGame, onCan
     const nextProfiles = profiles.filter((profile) => profile.id !== selectedProfileId);
     const nextSelected = nextProfiles.find((profile) => profile.id === "default")?.id ?? nextProfiles[0]?.id ?? "default";
     try {
-      await persistProfiles(nextProfiles, nextSelected, "Profile deleted.");
+      await persistProfiles(nextProfiles, nextSelected, autoloadProfileId === selectedProfileId ? null : autoloadProfileId, "Profile deleted.");
     } catch (error) {
       setProfileStatus(`Delete failed: ${errorMessage(error)}`);
+    }
+  }
+
+  async function handleAutoloadToggle(checked: boolean) {
+    if (profiles.length === 0) return;
+    const nextAutoload = checked
+      ? selectedProfileId
+      : autoloadProfileId === selectedProfileId
+        ? null
+        : autoloadProfileId;
+    try {
+      await persistProfiles(
+        profiles,
+        selectedProfileId,
+        nextAutoload,
+        checked ? "Autoload Default saved." : "Autoload Default cleared."
+      );
+    } catch (error) {
+      setProfileStatus(`Autoload Default failed: ${errorMessage(error)}`);
     }
   }
 
@@ -196,24 +194,6 @@ export function EngineSetupPanel({ disabled = false, onRun, onAnalyzeGame, onCan
     }
   }
 
-  function handleRun() {
-    if (hasKnownMissingRequiredAssets) {
-      setProfileStatus(assetStatus(assetChecks));
-      return;
-    }
-    if (!canRun) return;
-    void onRun(buildProfile(), Math.floor(visits));
-  }
-
-  function handleAnalyzeGame() {
-    if (hasKnownMissingRequiredAssets) {
-      setProfileStatus(assetStatus(assetChecks));
-      return;
-    }
-    if (!canRun) return;
-    void onAnalyzeGame(buildProfile(), Math.floor(visits));
-  }
-
   async function handleSaveProfile() {
     if (!canSave) return;
     try {
@@ -221,7 +201,7 @@ export function EngineSetupPanel({ disabled = false, onRun, onAnalyzeGame, onCan
       const nextProfiles = profiles.some((profile) => profile.id === selectedProfileId)
         ? profiles.map((profile) => profile.id === selectedProfileId ? currentRecord : profile)
         : [...profiles, currentRecord];
-      await persistProfiles(nextProfiles, selectedProfileId, "Profile saved.");
+      await persistProfiles(nextProfiles, selectedProfileId, autoloadProfileId, "Profile saved.");
       setProfileStatus("Profile saved.");
     } catch (error) {
       setProfileStatus(`Save failed: ${errorMessage(error)}`);
@@ -238,25 +218,8 @@ export function EngineSetupPanel({ disabled = false, onRun, onAnalyzeGame, onCan
     }
   }
 
-  const runActions = (
-    <>
-      <button className="primary" onClick={handleRun} disabled={!canRun}>{disabled ? "分析中…" : "分析此手"}</button>
-      <button onClick={handleAnalyzeGame} disabled={!canRun}>{disabled ? "分析中…" : "分析全局"}</button>
-      {isAnalysisActive && <button onClick={() => void onCancelAnalysis?.()} disabled={!onCancelAnalysis}>取消</button>}
-      {(isAnalysisActive || analysisProgress) && (
-        <div className="analysis-progress" aria-live="polite">
-          <div className="analysis-progress-track">
-            <span style={{ width: `${progressPercent}%` }} />
-          </div>
-          <span>{progressLabel}</span>
-        </div>
-      )}
-    </>
-  );
-
   return (
-    <section className="engine-setup-panel" aria-label="KataGo 引擎">
-      {toolbarTarget ? createPortal(runActions, toolbarTarget) : <div className="engine-run-row">{runActions}</div>}
+    <section className="engine-setup-panel" aria-label="引擎设置">
       <div className="engine-run-row">
         <label>
           <span>配置</span>
@@ -272,6 +235,16 @@ export function EngineSetupPanel({ disabled = false, onRun, onAnalyzeGame, onCan
         </label>
         <button type="button" onClick={() => void handleAddProfile()} disabled={!canSave}>新增</button>
         <button type="button" onClick={() => void handleDeleteProfile()} disabled={!canDeleteProfile}>删除</button>
+        <label>
+          <input
+            type="checkbox"
+            aria-label="Autoload Default"
+            checked={autoloadProfileId === selectedProfileId}
+            disabled={profiles.length === 0}
+            onChange={(event) => void handleAutoloadToggle(event.target.checked)}
+          />
+          <span>启动时自动加载</span>
+        </label>
       </div>
       <div className="engine-grid">
         <label>
@@ -311,6 +284,7 @@ export function EngineSetupPanel({ disabled = false, onRun, onAnalyzeGame, onCan
         <button onClick={() => void handleSaveProfile()} disabled={!canSave}>保存配置</button>
         <button onClick={() => void handleCheckAssets()} disabled={disabled}>检查资源</button>
       </div>
+      {pendingChanges ? <p className="message" role="status">存在待应用更改。只有显式 Restart 才会替换当前 Foreground Engine Run。</p> : null}
       <p className="message">{profileStatus}</p>
       {assetChecks.length > 0 && (
         <p className="message">
@@ -354,5 +328,9 @@ function nextProfileName(profiles: EngineProfileRecordDto[]): string {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object" && "message" in error && typeof (error as { message: unknown }).message === "string") {
+    return (error as { message: string }).message;
+  }
+  return String(error);
 }

@@ -897,8 +897,11 @@ name = "engine-manager"
 version = "0.1.0"
 dependencies = [
  "app-model",
+ "katago-protocol",
  "serde",
+ "serde_json",
  "thiserror 1.0.69",
+ "uuid",
 ]
 
 [[package]]
