@@ -708,28 +708,25 @@ fn delete_analysis_cache(
     delete_analysis_cache_at_path(&path, game_key, profile_id, engine_kind)
 }
 
-#[tauri::command]
-fn foreground_engine_start_selected_node(
-    manager: State<'_, ForegroundEngineManager>,
-    current_game: State<'_, CurrentGameState>,
+fn bind_selected_node_job(
+    current_game: &CurrentGameState,
     run_id: String,
     generation: u64,
     node_path: NodePath,
     max_visits: u32,
-) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
-    let (snapshot, board_size, komi) =
-        current_game
-            .admit_selected_node(generation, &node_path)
-            .map_err(|error| EngineFailureDto {
-                operation: EngineOperationDto::Job,
-                run_id: Some(run_id.clone()),
-                switch_id: None,
-                job_id: None,
-                profile_id: None,
-                kind: EngineFailureKind::InvalidState,
-                message: error.message,
-                diagnostic_summary: None,
-            })?;
+) -> Result<SelectedNodeJobRequest, EngineFailureDto> {
+    let (snapshot, board_size, komi, rules) = current_game
+        .admit_selected_node(generation, &node_path)
+        .map_err(|error| EngineFailureDto {
+            operation: EngineOperationDto::Job,
+            run_id: Some(run_id.clone()),
+            switch_id: None,
+            job_id: None,
+            profile_id: None,
+            kind: EngineFailureKind::InvalidState,
+            message: error.message,
+            diagnostic_summary: None,
+        })?;
     let query = analysis_query_from_position(
         board_size,
         komi,
@@ -737,7 +734,7 @@ fn foreground_engine_start_selected_node(
         snapshot.position.to_play,
         AnalysisQueryOptions {
             id: "pending".to_string(),
-            rules: "chinese".to_string(),
+            rules,
             turn: snapshot.position.move_number,
             max_visits: Some(max_visits),
             include_ownership: Some(true),
@@ -754,13 +751,31 @@ fn foreground_engine_start_selected_node(
         message: error.to_string(),
         diagnostic_summary: None,
     })?;
-    manager.start_selected_node_job(SelectedNodeJobRequest {
+    Ok(SelectedNodeJobRequest {
         run_id,
         generation,
         node_path,
         query,
         board_size,
     })
+}
+
+#[tauri::command]
+fn foreground_engine_start_selected_node(
+    manager: State<'_, ForegroundEngineManager>,
+    current_game: State<'_, CurrentGameState>,
+    run_id: String,
+    generation: u64,
+    node_path: NodePath,
+    max_visits: u32,
+) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+    manager.start_selected_node_job(bind_selected_node_job(
+        &current_game,
+        run_id,
+        generation,
+        node_path,
+        max_visits,
+    )?)
 }
 
 #[tauri::command]
@@ -1849,6 +1864,90 @@ mod tests {
     #[test]
     fn whole_game_request_uses_empty_root_node_path() {
         assert!(whole_game_node_path().indices.is_empty());
+    }
+
+    #[test]
+    fn selected_node_request_captures_exact_position_turn_rules_and_komi_before_protocol() {
+        let state = CurrentGameState::default();
+        let opened = state
+            .replace("(;GM[1]FF[4]SZ[5]KM[6.5]RU[Japanese];B[cc];W[ee])", None)
+            .unwrap();
+        let path = NodePath { indices: vec![0, 0] };
+        let selected = state.select_path(path.clone()).unwrap();
+        assert_eq!(selected.snapshot.position.move_number, 2);
+        assert_eq!(selected.snapshot.position.to_play, app_model::PlayerColor::Black);
+
+        let request = bind_selected_node_job(
+            &state,
+            "run-ready".to_string(),
+            opened.generation,
+            path.clone(),
+            64,
+        )
+        .unwrap();
+
+        assert_eq!(request.run_id, "run-ready");
+        assert_eq!(request.generation, opened.generation);
+        assert_eq!(request.node_path, path);
+        assert_eq!(request.board_size, 5);
+        assert_eq!(request.query.komi, 6.5);
+        assert_eq!(request.query.rules, "japanese");
+        assert_eq!(request.query.include_ownership, Some(true));
+        assert_eq!(request.query.include_policy, Some(true));
+        assert_eq!(request.query.max_visits, Some(64));
+        assert_eq!(
+            request.query.initial_stones,
+            vec![
+                ("B".to_string(), "C3".to_string()),
+                ("W".to_string(), "E1".to_string()),
+            ]
+        );
+        assert!(request.query.moves.is_empty());
+        assert_eq!(request.query.analyze_turns, Some(vec![0]));
+    }
+
+    #[test]
+    fn selected_node_illegal_path_is_typed_invalid_state_before_protocol() {
+        let state = CurrentGameState::default();
+        let opened = state
+            .replace("(;GM[1]FF[4]SZ[5]KM[6.5]RU[Japanese];B[cc])", None)
+            .unwrap();
+        let error = match bind_selected_node_job(
+            &state,
+            "run-ready".to_string(),
+            opened.generation,
+            NodePath { indices: vec![9] },
+            8,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("illegal path must fail before protocol"),
+        };
+        assert_eq!(error.kind, EngineFailureKind::InvalidState);
+        assert_eq!(error.operation, EngineOperationDto::Job);
+        assert_eq!(error.run_id.as_deref(), Some("run-ready"));
+        assert!(error.job_id.is_none());
+        assert_eq!(error.message, "invalid node path");
+    }
+
+    #[test]
+    fn selected_node_stale_generation_is_typed_invalid_state_before_protocol() {
+        let state = CurrentGameState::default();
+        let opened = state
+            .replace("(;GM[1]FF[4]SZ[5]KM[6.5]RU[Japanese];B[cc])", None)
+            .unwrap();
+        let error = match bind_selected_node_job(
+            &state,
+            "run-ready".to_string(),
+            opened.generation + 1,
+            opened.selected_path,
+            8,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("stale generation must fail before protocol"),
+        };
+        assert_eq!(error.kind, EngineFailureKind::InvalidState);
+        assert_eq!(error.message, "current game generation does not match");
+        assert!(error.job_id.is_none());
     }
 
     #[test]

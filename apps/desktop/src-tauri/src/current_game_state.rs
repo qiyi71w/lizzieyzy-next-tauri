@@ -90,7 +90,7 @@ impl CurrentGameState {
         &self,
         generation: u64,
         path: &NodePath,
-    ) -> Result<(SelectedNodeSnapshotDto, u8, f32), CurrentGameError> {
+    ) -> Result<(SelectedNodeSnapshotDto, u8, f32, String), CurrentGameError> {
         let holder = self.holder.lock().expect("current game state");
         let document = holder.document.as_ref().ok_or_else(no_current_game)?;
         if holder.generation != generation {
@@ -100,7 +100,7 @@ impl CurrentGameState {
             });
         }
         let snapshot = document.snapshot(path)?;
-        Ok((snapshot, document.board_size(), document.komi()))
+        Ok((snapshot, document.board_size(), document.komi(), document.rules()))
     }
 
     pub fn generation(&self) -> Result<u64, CurrentGameError> {
@@ -404,12 +404,13 @@ mod current_game_replacement {
     fn admit_selected_node_requires_matching_generation_and_existing_path() {
         let state = CurrentGameState::default();
         let opened = state.replace(EMPTY, None).unwrap();
-        let (snapshot, board_size, komi) = state
+        let (snapshot, board_size, komi, rules) = state
             .admit_selected_node(opened.generation, &opened.selected_path)
             .unwrap();
         assert_eq!(snapshot.path, opened.selected_path);
         assert_eq!(board_size, 19);
         assert_eq!(komi, 7.5);
+        assert_eq!(rules, "chinese");
 
         let stale = state
             .admit_selected_node(opened.generation + 1, &opened.selected_path)

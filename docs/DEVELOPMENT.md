@@ -128,11 +128,30 @@ Expected result: analysis actions stay disabled until a Ready run exists. Check 
 
 ### 4. Run One-Position Analysis
 
-- With a Ready run, select a move on the board.
+- With a Ready run, select a node on the board (or keep the current selected node).
 - Click `分析此手`.
-- Confirm candidates, PV, winrate/score data, ownership/policy-backed overlays, and problem markers update for that move.
+- Confirm the job stays on that Ready run, the current-game generation, and the selected `NodePath`.
+- Confirm candidates, PV, winrate/score, ownership overlay (`领地`), and policy overlay (`策略`) update for that node only.
+- Click `取消此手` while the job is still running. Confirm the Engine Switcher stays Ready and whole-game (if running) continues.
+- Start a second `分析此手` and confirm only the latest matching identity publishes.
+- Confirm a timeout or protocol failure does not leave candidates or overlays, and does not write SQLite analysis cache.
 
-Expected result: selected-node analysis runs on the current Ready Foreground Engine Run, not a one-shot profile process.
+Expected result: selected-node analysis runs on the current Ready Foreground Engine Run, not a one-shot profile process. Publication is identity-bound to run/job/generation/`NodePath`.
+
+Repository evidence (does not substitute for native GUI or live KataGo):
+
+```bash
+cargo test -p sgf selected_node --offline
+cargo test -p lizzieyzy-next-desktop selected_node --offline
+cargo test -p engine-manager --test foreground_engine_run selected_node_ --offline -- --test-threads=1
+cd apps/desktop && npx vitest run src/EngineLifecycle.test.tsx src/SelectedNodeAnalysis.test.tsx
+```
+
+Optional real KataGo on a resident Run (ignored by default):
+
+```bash
+LIZZIEYZY_REAL_KATAGO=1 cargo test -p engine-manager --test real_katago_lifecycle_smoke -- --ignored --test-threads=1
+```
 
 ### 5. Run Full-Game Analysis
 

@@ -71,6 +71,20 @@ impl CurrentSgfDocument {
         self.document.board_size
     }
 
+    pub fn rules(&self) -> String {
+        let raw = self
+            .root()
+            .ok()
+            .and_then(|root| property_values(root, "RU"))
+            .and_then(|values| values.first())
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty());
+        match raw {
+            Some(value) => value.to_ascii_lowercase().replace(' ', "-"),
+            None => "chinese".to_string(),
+        }
+    }
+
     pub fn tree(&self) -> Result<SgfTreeNodeDto, CurrentGameError> {
         Ok(tree_dto(self.root()?))
     }
@@ -1100,5 +1114,46 @@ mod editable_workspace_mutation_edit {
 
     fn serialized_omits(document: &CurrentSgfDocument, needle: &str) -> bool {
         !serialized_contains(document, needle)
+    }
+}
+
+#[cfg(test)]
+mod selected_node_analysis_capture {
+    use super::*;
+    use app_model::NodePath;
+
+    #[test]
+    fn selected_node_rules_come_from_ru_or_default_chinese() {
+        let japanese = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[5]KM[6.5]RU[Japanese];B[cc])").unwrap();
+        assert_eq!(japanese.rules(), "japanese");
+        assert_eq!(japanese.komi(), 6.5);
+        assert_eq!(japanese.board_size(), 5);
+
+        let defaulted = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[9]KM[7.5];B[cc])").unwrap();
+        assert_eq!(defaulted.rules(), "chinese");
+
+        let spaced = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[9]KM[7.5]RU[New Zealand])").unwrap();
+        assert_eq!(spaced.rules(), "new-zealand");
+    }
+
+    #[test]
+    fn selected_node_snapshot_captures_exact_path_board_and_turn() {
+        let document = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[5]KM[6.5]RU[Japanese];B[cc];W[ee])").unwrap();
+        let path = NodePath { indices: vec![0, 0] };
+        let snapshot = document.snapshot(&path).unwrap();
+        assert_eq!(snapshot.path.indices, vec![0, 0]);
+        assert_eq!(snapshot.position.move_number, 2);
+        assert_eq!(snapshot.position.to_play, PlayerColor::Black);
+        assert_eq!(snapshot.position.stones.len(), 2);
+        assert!(snapshot
+            .position
+            .stones
+            .iter()
+            .any(|stone| { stone.x == 2 && stone.y == 2 && stone.color == PlayerColor::Black }));
+        assert!(snapshot
+            .position
+            .stones
+            .iter()
+            .any(|stone| { stone.x == 4 && stone.y == 4 && stone.color == PlayerColor::White }));
     }
 }
