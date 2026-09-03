@@ -55,6 +55,26 @@ impl CurrentSgfDocument {
         })
     }
 
+    pub fn first_child_mainline_snapshots(&self) -> Result<Vec<SelectedNodeSnapshotDto>, CurrentGameError> {
+        let mut snapshots = Vec::new();
+        let mut indices = Vec::new();
+        loop {
+            let path = NodePath {
+                indices: indices.clone(),
+            };
+            snapshots.push(self.snapshot(&path)?);
+            let node = *self
+                .nodes_on_path(&path)?
+                .last()
+                .expect("path walk includes the root");
+            if node.children.is_empty() {
+                break;
+            }
+            indices.push(0);
+        }
+        Ok(snapshots)
+    }
+
     pub fn serialize(&self) -> Result<String, CurrentGameError> {
         Ok(serialize_sgf_document(&self.document)?)
     }
@@ -65,6 +85,17 @@ impl CurrentSgfDocument {
 
     pub fn komi(&self) -> f32 {
         self.document.komi
+    }
+
+    pub fn rules(&self) -> String {
+        self.root()
+            .ok()
+            .and_then(|root| crate::property_values(root, "RU"))
+            .and_then(|values| values.first())
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_ascii_lowercase())
+            .unwrap_or_else(|| "chinese".to_string())
     }
 
     pub fn board_size(&self) -> u8 {
@@ -1100,5 +1131,88 @@ mod editable_workspace_mutation_edit {
 
     fn serialized_omits(document: &CurrentSgfDocument, needle: &str) -> bool {
         !serialized_contains(document, needle)
+    }
+}
+
+#[cfg(test)]
+mod first_child_mainline_worklist {
+    use super::*;
+    use app_model::{MoveVertex, PlayerColor, PointDto};
+
+    const BRANCHING: &str = include_str!("../../../tests/golden/editable-workspace-branching.sgf");
+
+    #[test]
+    fn first_child_mainline_includes_root_and_ignores_sibling_variations() {
+        let document = CurrentSgfDocument::open(BRANCHING).unwrap();
+        let snapshots = document.first_child_mainline_snapshots().unwrap();
+        let paths: Vec<Vec<u32>> = snapshots
+            .iter()
+            .map(|snapshot| snapshot.path.indices.clone())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![Vec::new(), vec![0], vec![0, 0], vec![0, 0, 0]],
+            "whole-game mainline is root plus recursive Primary Child, not the selected continuation or sibling variations"
+        );
+        assert_eq!(document.default_selected_path().indices, vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn first_child_mainline_captures_setup_pass_komi_and_rules() {
+        let document = CurrentSgfDocument::open(BRANCHING).unwrap();
+        let snapshots = document.first_child_mainline_snapshots().unwrap();
+        assert_eq!(snapshots.len(), 4);
+        assert_eq!(document.komi(), 0.5);
+        assert_eq!(document.board_size(), 5);
+        assert_eq!(document.rules(), "chinese");
+
+        let root = &snapshots[0];
+        assert!(root.path.indices.is_empty());
+        assert_eq!(root.position.move_number, 0);
+        assert_eq!(root.position.to_play, PlayerColor::White);
+        assert!(has_stone(&root.position, 0, 0, PlayerColor::Black));
+        assert!(has_stone(&root.position, 2, 2, PlayerColor::White));
+        assert!(!has_stone(&root.position, 1, 1, PlayerColor::Black));
+
+        let first = &snapshots[1];
+        assert_eq!(first.path.indices, vec![0]);
+        assert_eq!(first.position.move_number, 1);
+        assert_eq!(first.position.to_play, PlayerColor::Black);
+        assert_eq!(
+            first.position.last_move.as_ref().unwrap().vertex,
+            MoveVertex::Point(PointDto { x: 3, y: 3 })
+        );
+
+        let pass = &snapshots[3];
+        assert_eq!(pass.path.indices, vec![0, 0, 0]);
+        assert_eq!(pass.position.move_number, 3);
+        assert_eq!(pass.position.to_play, PlayerColor::Black);
+        assert_eq!(pass.position.last_move.as_ref().unwrap().vertex, MoveVertex::Pass);
+        assert_eq!(
+            pass.position.last_move.as_ref().unwrap().color,
+            PlayerColor::White
+        );
+    }
+
+    #[test]
+    fn first_child_mainline_uses_current_game_owned_rules() {
+        let document = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[9]KM[6.5]RU[Japanese];B[dd])").unwrap();
+        assert_eq!(document.rules(), "japanese");
+        assert_eq!(document.komi(), 6.5);
+        let snapshots = document.first_child_mainline_snapshots().unwrap();
+        assert_eq!(
+            snapshots
+                .iter()
+                .map(|snapshot| snapshot.path.indices.clone())
+                .collect::<Vec<_>>(),
+            vec![Vec::new(), vec![0]]
+        );
+    }
+
+    fn has_stone(position: &app_model::PositionDto, x: u8, y: u8, color: PlayerColor) -> bool {
+        position
+            .stones
+            .iter()
+            .any(|stone| stone.x == x && stone.y == y && stone.color == color)
     }
 }

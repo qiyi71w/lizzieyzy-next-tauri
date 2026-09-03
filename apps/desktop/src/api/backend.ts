@@ -150,11 +150,19 @@ export async function saveCurrentGame(
   return invoke<CurrentGameResultDto | null>("save_current_game_as", { selectedPath, defaultFileName });
 }
 
-export async function startKataGoGameAnalysis(runId: string, sgfText: string, maxVisits: number): Promise<AnalysisJobStartedDto> {
+export async function startKataGoGameAnalysis(input: {
+  runId: string;
+  generation: number;
+  maxVisits: number;
+}): Promise<AnalysisJobStartedDto> {
   if (!isTauriRuntime()) {
     throw new Error("Full-game KataGo analysis requires the Tauri desktop backend. Browser preview cannot run real KataGo; use Run review for fake analysis.");
   }
-  return await invoke<AnalysisJobStartedDto>("katago_start_analyze_game", { runId, sgfText, maxVisits });
+  return await invoke<AnalysisJobStartedDto>("katago_start_analyze_game", {
+    runId: input.runId,
+    generation: input.generation,
+    maxVisits: input.maxVisits
+  });
 }
 
 export async function cancelKataGoAnalysis(runId: string, jobId: string): Promise<void> {

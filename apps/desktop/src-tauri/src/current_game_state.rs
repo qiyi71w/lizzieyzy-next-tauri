@@ -8,6 +8,15 @@ use std::sync::Mutex;
 #[cfg(test)]
 mod current_game_save_write;
 
+#[derive(Debug, Clone)]
+pub struct WholeGameAdmission {
+    pub generation: u64,
+    pub board_size: u8,
+    pub komi: f32,
+    pub rules: String,
+    pub nodes: Vec<SelectedNodeSnapshotDto>,
+}
+
 #[derive(Default)]
 pub struct CurrentGameState {
     holder: Mutex<CurrentGameHolder>,
@@ -86,6 +95,24 @@ impl CurrentGameState {
         self.with_document(|document| Ok(document.mainline_projection()))
     }
 
+    pub fn admit_whole_game(&self, generation: u64) -> Result<WholeGameAdmission, CurrentGameError> {
+        let holder = self.holder.lock().expect("current game state");
+        let document = holder.document.as_ref().ok_or_else(no_current_game)?;
+        if holder.generation != generation {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::NoCurrentGame,
+                message: "current game generation does not match".to_string(),
+            });
+        }
+        Ok(WholeGameAdmission {
+            generation: holder.generation,
+            board_size: document.board_size(),
+            komi: document.komi(),
+            rules: document.rules(),
+            nodes: document.first_child_mainline_snapshots()?,
+        })
+    }
+
     pub fn admit_selected_node(
         &self,
         generation: u64,
@@ -101,14 +128,6 @@ impl CurrentGameState {
         }
         let snapshot = document.snapshot(path)?;
         Ok((snapshot, document.board_size(), document.komi()))
-    }
-
-    pub fn generation(&self) -> Result<u64, CurrentGameError> {
-        let holder = self.holder.lock().expect("current game state");
-        if holder.document.is_none() {
-            return Err(no_current_game());
-        }
-        Ok(holder.generation)
     }
 
     #[allow(dead_code)]
@@ -347,22 +366,9 @@ mod current_game_replacement {
             CurrentGameErrorKind::NoCurrentGame
         );
         assert_eq!(
-            state.generation().unwrap_err().kind,
+            state.admit_whole_game(1).unwrap_err().kind,
             CurrentGameErrorKind::NoCurrentGame
         );
-    }
-
-    #[test]
-    fn generation_requires_current_game_and_returns_holder_generation() {
-        let state = CurrentGameState::default();
-        assert_eq!(
-            state.generation().unwrap_err().kind,
-            CurrentGameErrorKind::NoCurrentGame
-        );
-
-        let opened = state.replace(EMPTY, None).unwrap();
-        assert_eq!(state.generation().unwrap(), opened.generation);
-        assert_eq!(state.generation().unwrap(), 1);
     }
 
     #[test]
@@ -420,6 +426,41 @@ mod current_game_replacement {
             .admit_selected_node(opened.generation, &NodePath { indices: vec![9] })
             .unwrap_err();
         assert_eq!(missing.kind, CurrentGameErrorKind::InvalidNodePath);
+    }
+
+    #[test]
+    fn admit_whole_game_captures_first_child_mainline_and_rejects_stale_generation() {
+        let state = CurrentGameState::default();
+        assert_eq!(
+            state.admit_whole_game(1).unwrap_err().kind,
+            CurrentGameErrorKind::NoCurrentGame
+        );
+
+        let opened = state
+            .replace(BRANCHING, Some("/tmp/branching.sgf".to_string()))
+            .unwrap();
+        let sibling = state.select_path(NodePath { indices: vec![0, 1] }).unwrap();
+        assert_eq!(sibling.generation, opened.generation);
+        assert_eq!(sibling.selected_path.indices, vec![0, 1]);
+
+        let admitted = state.admit_whole_game(opened.generation).unwrap();
+        assert_eq!(admitted.generation, opened.generation);
+        assert_eq!(admitted.board_size, 5);
+        assert_eq!(admitted.komi, 0.5);
+        assert_eq!(admitted.rules, "chinese");
+        let paths: Vec<Vec<u32>> = admitted
+            .nodes
+            .iter()
+            .map(|node| node.path.indices.clone())
+            .collect();
+        assert_eq!(paths, vec![Vec::new(), vec![0], vec![0, 0], vec![0, 0, 0]]);
+        assert_eq!(
+            admitted.nodes[3].position.last_move.as_ref().unwrap().vertex,
+            MoveVertex::Pass
+        );
+
+        let stale = state.admit_whole_game(opened.generation + 1).unwrap_err();
+        assert_eq!(stale.message, "current game generation does not match");
     }
 }
 

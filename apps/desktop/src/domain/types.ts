@@ -143,6 +143,7 @@ export type AnalysisJobEventDto = {
   outcome: AnalysisJobOutcomeDto;
   completed?: number | null;
   expected?: number | null;
+  remaining?: number | null;
   frame?: AnalysisFrameDto | null;
   failure?: EngineFailureDto | null;
 };
