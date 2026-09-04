@@ -57,9 +57,7 @@ vi.mock("./api/preferences", () => preferencesApi);
 vi.mock("./components/PreferencesPanel", () => ({ PreferencesPanel: () => null }));
 vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
 vi.mock("./components/WinrateChart", () => ({
-  WinrateChart: ({ frames }: { frames: AnalysisFrameDto[] }) => (
-    <canvas aria-label="胜率走势" data-frame-count={frames.length} />
-  )
+  WinrateChart: () => <canvas aria-label="胜率走势" />
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 

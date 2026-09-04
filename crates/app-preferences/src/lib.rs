@@ -25,6 +25,18 @@ pub struct AppPreferencesDto {
     pub review_mode: String,
     #[serde(default = "default_board_theme")]
     pub board_theme: String,
+    #[serde(default = "default_graph_perspective")]
+    pub graph_perspective: String,
+    #[serde(default = "default_winrate_line")]
+    pub winrate_line: bool,
+    #[serde(default = "default_score_lead_line")]
+    pub score_lead_line: bool,
+    #[serde(default = "default_blunder_bar")]
+    pub blunder_bar: bool,
+    #[serde(default = "default_graph_hover")]
+    pub graph_hover: bool,
+    #[serde(default = "default_score_lead_scale")]
+    pub score_lead_scale: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +63,12 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         default_max_visits: default_max_visits(),
         review_mode: default_review_mode(),
         board_theme: default_board_theme(),
+        graph_perspective: default_graph_perspective(),
+        winrate_line: default_winrate_line(),
+        score_lead_line: default_score_lead_line(),
+        blunder_bar: default_blunder_bar(),
+        graph_hover: default_graph_hover(),
+        score_lead_scale: default_score_lead_scale(),
     }
 }
 
@@ -62,6 +80,17 @@ pub fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPrefe
     }
     if preferences.board_theme != "high-contrast" {
         preferences.board_theme = default_board_theme();
+    }
+    if preferences.graph_perspective != "sideToPlay" {
+        preferences.graph_perspective = default_graph_perspective();
+    }
+    if !preferences.winrate_line && !preferences.score_lead_line {
+        preferences.winrate_line = true;
+    }
+    if preferences.score_lead_scale == 0 {
+        preferences.score_lead_scale = default_score_lead_scale();
+    } else {
+        preferences.score_lead_scale = preferences.score_lead_scale.clamp(1, 1000);
     }
     preferences
 }
@@ -191,6 +220,30 @@ fn default_board_theme() -> String {
     "classic".to_string()
 }
 
+fn default_graph_perspective() -> String {
+    "black".to_string()
+}
+
+fn default_winrate_line() -> bool {
+    true
+}
+
+fn default_score_lead_line() -> bool {
+    true
+}
+
+fn default_blunder_bar() -> bool {
+    false
+}
+
+fn default_graph_hover() -> bool {
+    true
+}
+
+fn default_score_lead_scale() -> u32 {
+    15
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,6 +280,12 @@ mod tests {
             default_max_visits: 200,
             review_mode: "deep".to_string(),
             board_theme: "high-contrast".to_string(),
+            graph_perspective: "sideToPlay".to_string(),
+            winrate_line: false,
+            score_lead_line: true,
+            blunder_bar: true,
+            graph_hover: false,
+            score_lead_scale: 20,
         }
     }
 

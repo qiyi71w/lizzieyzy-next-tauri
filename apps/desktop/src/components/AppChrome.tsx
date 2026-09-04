@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toolbarIcons } from "../assets/toolbar";
 import type { AppPreferences } from "../domain/preferences";
+import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
 import { claimedShortcutCatalog, formatShortcutChord } from "../domain/shortcuts";
 
 export type SheetId = "sgf" | "engine" | "sync" | "prefs";
@@ -38,6 +39,7 @@ type Props = {
   onEngineCommand: (kind: "once" | "game") => void;
   preferences: AppPreferences;
   onPreferencesChange: (next: AppPreferences) => void;
+  scoreLeadAvailable?: boolean;
   showCoordinates: boolean;
   showMoveNumbers: boolean;
   onShowCoordinates: (value: boolean) => void;
@@ -154,7 +156,59 @@ export function AppChrome(props: Props) {
             <MenuCheck label="策略网络(T)" checked={props.preferences.showPolicy} onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, showPolicy: !props.preferences.showPolicy }))} />
             <MenuItem label="落子评价标记(Alt+M)" disabled title={later} />
             <MenuItem label="自动播放(Ctrl+A)" onClick={() => run(props.onAutoPlay)} />
-            <MenuItem label="胜率图设置" disabled title={later} />
+            <SubMenu label="胜率图设置">
+              <MenuCheck
+                label="黑棋视角"
+                checked={props.preferences.graphPerspective !== "sideToPlay"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, graphPerspective: "black" }))}
+              />
+              <MenuCheck
+                label="当前行棋方视角"
+                checked={props.preferences.graphPerspective === "sideToPlay"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, graphPerspective: "sideToPlay" }))}
+              />
+              <MenuCheck
+                label="胜率线"
+                checked={props.preferences.winrateLine}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, winrateLine: !props.preferences.winrateLine }))}
+              />
+              <MenuCheck
+                label="目差线"
+                checked={props.preferences.scoreLeadLine}
+                disabled={props.scoreLeadAvailable === false}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, scoreLeadLine: !props.preferences.scoreLeadLine }))}
+              />
+              <MenuCheck
+                label="失误条"
+                checked={props.preferences.blunderBar}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, blunderBar: !props.preferences.blunderBar }))}
+              />
+              <MenuCheck
+                label="图表悬停"
+                checked={props.preferences.graphHover}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, graphHover: !props.preferences.graphHover }))}
+              />
+              <div className="menu-item menu-scale">
+                <span>目差刻度</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={1000}
+                  step={1}
+                  aria-label="目差刻度"
+                  value={props.preferences.scoreLeadScale}
+                  disabled={props.scoreLeadAvailable === false}
+                  onChange={(event) => {
+                    const parsed = parsePositiveScoreLeadScale(event.target.value);
+                    if (parsed == null) {
+                      event.currentTarget.value = String(props.preferences.scoreLeadScale);
+                      return;
+                    }
+                    props.onPreferencesChange({ ...props.preferences, scoreLeadScale: parsed });
+                  }}
+                />
+              </div>
+            </SubMenu>
             <MenuItem label="小棋盘设置" disabled title={later} />
             <MenuItem label="布局模式" disabled title={later} />
           </ChromeMenu>
@@ -518,9 +572,9 @@ function MenuItem({ label, onClick, disabled, title }: { label: string; onClick?
   );
 }
 
-function MenuCheck({ label, checked, onClick }: { label: string; checked: boolean; onClick: () => void }) {
+function MenuCheck({ label, checked, onClick, disabled }: { label: string; checked: boolean; onClick: () => void; disabled?: boolean }) {
   return (
-    <button type="button" role="menuitemcheckbox" className="menu-item" aria-checked={checked} onClick={onClick}>
+    <button type="button" role="menuitemcheckbox" className="menu-item" aria-checked={checked} disabled={disabled} onClick={onClick}>
       <span className="menu-check">{checked ? "✓" : ""}</span>
       {label}
     </button>

@@ -48,6 +48,7 @@ import {
 import { loadAppPreferences, saveAppPreferences } from "./api/preferences";
 import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition } from "./domain/board";
 import { defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "./domain/preferences";
+import { admitsChartSeriesChange, buildWinrateChartModel, displayedWinrate } from "./domain/winrateChart";
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
 import { admitsAnalysisAttachment, admitsAnalysisPublication, admitsWholeGameNodeResult, matchesWholeGameJobIdentity } from "./domain/analysisJob";
 import { createShortcutRegistry } from "./domain/shortcuts";
@@ -61,6 +62,7 @@ import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AppH
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
 const demoGame = createDemoGame();
+const emptyChartRoot: SgfTreeNodeDto = { properties: [], children: [] };
 type WholeGameProgress = { completed: number; expected: number; remaining: number };
 type PendingPreferencesSave = { version: number; preferences: AppPreferences };
 type CandidatePreview = { index: number; scope: ReviewPresentationScope };
@@ -217,6 +219,18 @@ export function App() {
   const reviewMax = currentGame
     ? chosenLeafPath(currentGame.tree, { indices: [] }, chosenChildren).indices.length
     : maxMove;
+  const chartModel = useMemo(() => buildWinrateChartModel({
+    root: currentGame?.tree ?? emptyChartRoot,
+    chosen: chosenChildren,
+    selectedPathLength: currentGame ? selectedPath.indices.length : currentMove,
+    selectedToPlay: currentPosition.to_play,
+    settings: preferences
+  }), [currentGame, chosenChildren, selectedPath.indices.length, currentMove, currentPosition.to_play, preferences]);
+  const currentChartPoint = chartModel.points.find((point) => point.moveNumber === chartModel.currentMove);
+  const chartWinrate = currentChartPoint
+    ? displayedWinrate(currentChartPoint, chartModel.perspective, chartModel.selectedToPlay)
+    : null;
+  const chartTitleSide = chartModel.perspective === "sideToPlay" && chartModel.selectedToPlay === "white" ? "白" : "黑";
   const documentDirty = currentGame?.dirty ?? dirty;
   const documentPath = currentGame?.native_path ?? currentFilePath;
   const documentName = useMemo(() => documentPath ? fileNameFromPath(documentPath) : fallbackFileName ?? "未命名棋谱", [documentPath, fallbackFileName]);
@@ -453,7 +467,16 @@ export function App() {
 
   function handlePreferencesChange(nextPreferences: AppPreferences) {
     if (!preferencesLoadSettledRef.current) return;
-    const patch = preferencePatch(preferences, normalizeAppPreferences(nextPreferences));
+    const normalized = normalizeAppPreferences(nextPreferences);
+    const seriesChanged = normalized.winrateLine !== preferences.winrateLine
+      || normalized.scoreLeadLine !== preferences.scoreLeadLine;
+    if (seriesChanged && !admitsChartSeriesChange(preferences, {
+      winrateLine: normalized.winrateLine,
+      scoreLeadLine: normalized.scoreLeadLine
+    }, chartModel.scoreAvailable)) {
+      return;
+    }
+    const patch = preferencePatch(preferences, normalized);
     if (Object.keys(patch).length === 0) return;
     queuePreferencesSave(pendingPreferencesSaveRef.current?.preferences ?? committedPreferencesRef.current, patch);
   }
@@ -1226,6 +1249,7 @@ export function App() {
       onEngineCommand={handleEngineCommand}
       preferences={preferences}
       onPreferencesChange={(next) => void handlePreferencesChange(next)}
+      scoreLeadAvailable={chartModel.scoreAvailable}
       showCoordinates={showCoordinates}
       showMoveNumbers={showMoveNumbers}
       onShowCoordinates={setShowCoordinates}
@@ -1267,12 +1291,12 @@ export function App() {
       <aside className="rail">
         <div className="rail-block">
           <h2>
-            <span>胜率走势 (黑)</span>
+            <span>胜率走势 ({chartTitleSide})</span>
             <span style={{ color: "#60a5fa", fontFamily: "var(--mono)" }}>
-              {visibleCurrentFrame ? `${(visibleCurrentFrame.winrate_black * 100).toFixed(1)}%` : "50.0%"}
+              {`${((chartWinrate ?? 0.5) * 100).toFixed(1)}%`}
             </span>
           </h2>
-          <WinrateChart frames={visibleFrames} currentMove={currentMove} />
+          <WinrateChart model={chartModel} />
           <div id="board-layers" />
         </div>
         <AnalysisPanel
@@ -1396,6 +1420,7 @@ export function App() {
         preferences={preferences}
         status={preferencesStatus}
         disabled={false}
+        scoreLeadAvailable={chartModel.scoreAvailable}
         onChange={(nextPreferences) => void handlePreferencesChange(nextPreferences)}
       /> : null}
     </section>

@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AnalysisFrameDto, CurrentGameResultDto, GameDto } from "./domain/types";
+import type { CurrentGameResultDto, GameDto } from "./domain/types";
 import { defaultAppPreferences, type AppPreferences } from "./domain/preferences";
 import { UNREADABLE_PREFERENCES_RECOVERY_MESSAGE } from "./api/preferences";
 
@@ -59,9 +59,7 @@ vi.mock("./api/preferences", async (importOriginal) => {
 vi.mock("./components/EngineSetupPanel", () => ({ EngineSetupPanel: () => null }));
 vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
 vi.mock("./components/WinrateChart", () => ({
-  WinrateChart: ({ frames }: { frames: AnalysisFrameDto[] }) => (
-    <canvas aria-label="胜率走势" data-frame-count={frames.length} />
-  )
+  WinrateChart: () => <canvas aria-label="胜率走势" />
 }));
 
 import { App } from "./App";
@@ -117,7 +115,7 @@ describe("durable preferences surface", () => {
     const host = await renderApp();
     openPreferences(host);
 
-    expect(categoryLegends(host)).toEqual(["分析呈现", "复盘", "棋盘"]);
+    expect(categoryLegends(host)).toEqual(["分析呈现", "复盘", "棋盘", "胜率图"]);
     expect(labeledCheckbox(host, "候选").checked).toBe(true);
     expect(labeledCheckbox(host, "领地").checked).toBe(true);
     expect(labeledCheckbox(host, "策略").checked).toBe(true);

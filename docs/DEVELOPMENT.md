@@ -248,7 +248,7 @@ Expected result: SGF write validates parseability and can round-trip through nat
 ### 9. Durable Preferences
 
 - Open Preferences from `参数`, `棋盘`, Settings → `首选项…`, or Settings → `综合设置(Shift+X)`.
-- Confirm the sheet is categorized (`分析呈现`, `复盘`, `棋盘`) and that View-menu `候选` / `领地` edit the same values as the sheet.
+- Confirm the sheet is categorized (`分析呈现`, `复盘`, `棋盘`, `胜率图`) and that View-menu `候选` / `领地` / 胜率图设置 edit the same values as the sheet.
 - Change a visible preference (for example uncheck `候选`) and wait until the sheet reports that it is saved.
 - Quit the Tauri app and start `npm run tauri:dev` again.
 - Confirm the saved value is still applied after restart.
@@ -256,6 +256,25 @@ Expected result: SGF write validates parseability and can round-trip through nat
 Repository equivalent: `cargo test -p app-preferences successful_write_is_reloadable_as_restart`.
 
 Expected result: missing preference storage loads owner defaults; a successful write survives native restart; View-menu and Preferences-sheet edits share one durable store.
+
+### 10. Winrate Chart Encoding And Move Rank
+
+- Open a branching SGF whose selected line has `LZ` / `LZOP` on some nodes, including at least one node with `scoreMean` and one without (or a missing payload).
+- Confirm the chart follows `下一变化` / `下一分支` rather than a hardcoded mainline, missing analysis stays a gap, and the current-move marker tracks the selected node.
+- Toggle `显示` → `胜率图设置` and `参数` → `胜率图`: Black vs selected-node-side-to-play, winrate/score/both, Blunder Bar, Graph Hover, and Score Lead Scale. Confirm they share the PREF-01 keys and that a restart after a successful write keeps them.
+- On a score-less line, `目差线` and `目差刻度` are unavailable. A persisted score-only choice still presents as winrate without rewriting the stored `scoreLeadLine`. Invalid scale input is ignored; a larger current-line peak may grow the axis for the session only.
+- Enable Blunder Bar and confirm only Inaccuracy / Mistake / Blunder bars appear between adjacent displayed analyses. Hover shows move number and visible values and does not navigate; hover off is inert.
+
+Native KataGo/GTK: required for the GUI branching selected-line steps above. When that environment is unavailable, record the smoke as not run.
+
+Repository evidence (does not substitute for native GUI or live KataGo):
+
+```bash
+cargo test -p analysis-core -p app-preferences --offline
+cd apps/desktop && npx vitest run src/domain/moveRank.test.ts src/domain/winrateChart.test.ts src/WinrateChartEncoding.test.tsx src/App.preferences.test.tsx
+```
+
+Expected result: first-use defaults are Black perspective, both series on, Blunder Bar off, Graph Hover on, and Score Lead Scale 15. The chart encodes the selected root-to-leaf variation with Java Auto Move Rank bars.
 
 ## Provider And Sidecar Smoke Flow
 

@@ -50,9 +50,7 @@ vi.mock("./components/EngineSetupPanel", () => ({ EngineSetupPanel: () => null }
 vi.mock("./components/PreferencesPanel", () => ({ PreferencesPanel: () => null }));
 vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
 vi.mock("./components/WinrateChart", () => ({
-  WinrateChart: ({ frames }: { frames: AnalysisFrameDto[] }) => (
-    <canvas aria-label="胜率走势" data-frame-count={frames.length} />
-  )
+  WinrateChart: () => <canvas aria-label="胜率走势" />
 }));
 
 import { App } from "./App";
@@ -348,7 +346,6 @@ describe("App stale review presentation", () => {
     const host = await renderApp();
     await runFakeAnalyze(host);
     expect(candidateCoords(host)).toEqual(["C6", "G4"]);
-    expect(requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="胜率走势"]').dataset.frameCount).toBe("1");
     expect(buttonNamed(host, "问题手 (1)")).toBeTruthy();
 
     const board = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
@@ -373,7 +370,6 @@ describe("App stale review presentation", () => {
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
     expect(candidateCoords(host)).toEqual([]);
     expect(host.querySelector(".cand-row.is-selected")).toBeNull();
-    expect(requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="胜率走势"]').dataset.frameCount).toBe("0");
     expect(buttonNamed(host, "问题手 (0)")).toBeTruthy();
   });
 

@@ -1,6 +1,11 @@
 use app_model::{AnalysisFrameDto, ProblemMarkerDto, ProblemSeverity};
 use std::cmp::Reverse;
 
+mod move_rank;
+pub use move_rank::{
+    classify_auto_move_rank, classify_played_move, is_blunder_bar_rank, DisplayedAnalysis, MoveRank,
+};
+
 pub fn sort_candidates_by_visits(frame: &mut AnalysisFrameDto) {
     frame
         .candidates

@@ -1,13 +1,15 @@
-import type { AppPreferences, BoardTheme, ReviewMode } from "../domain/preferences";
+import type { AppPreferences, BoardTheme, GraphPerspective, ReviewMode } from "../domain/preferences";
+import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
 
 type Props = {
   preferences: AppPreferences;
   status: string;
   disabled?: boolean;
+  scoreLeadAvailable?: boolean;
   onChange: (preferences: AppPreferences) => void;
 };
 
-export function PreferencesPanel({ preferences, status, disabled = false, onChange }: Props) {
+export function PreferencesPanel({ preferences, status, disabled = false, scoreLeadAvailable = true, onChange }: Props) {
   function update(patch: Partial<AppPreferences>) {
     onChange({ ...preferences, ...patch });
   }
@@ -65,6 +67,53 @@ export function PreferencesPanel({ preferences, status, disabled = false, onChan
             <option value="classic">浅色</option>
             <option value="high-contrast">高对比</option>
           </select>
+        </label>
+      </fieldset>
+      <fieldset className="preferences-grid">
+        <legend>胜率图</legend>
+        <label>
+          <span>图表视角</span>
+          <select
+            value={preferences.graphPerspective}
+            disabled={disabled}
+            onChange={(event) => update({ graphPerspective: event.target.value as GraphPerspective })}
+          >
+            <option value="black">黑棋</option>
+            <option value="sideToPlay">当前行棋方</option>
+          </select>
+        </label>
+        <Toggle
+          label="胜率线"
+          checked={preferences.winrateLine}
+          disabled={disabled}
+          onChange={(checked) => update({ winrateLine: checked })}
+        />
+        <Toggle
+          label="目差线"
+          checked={preferences.scoreLeadLine}
+          disabled={disabled || !scoreLeadAvailable}
+          onChange={(checked) => update({ scoreLeadLine: checked })}
+        />
+        <Toggle label="失误条" checked={preferences.blunderBar} disabled={disabled} onChange={(checked) => update({ blunderBar: checked })} />
+        <Toggle label="图表悬停" checked={preferences.graphHover} disabled={disabled} onChange={(checked) => update({ graphHover: checked })} />
+        <label>
+          <span>目差刻度</span>
+          <input
+            type="number"
+            min={1}
+            max={1000}
+            step={1}
+            value={preferences.scoreLeadScale}
+            disabled={disabled || !scoreLeadAvailable}
+            onChange={(event) => {
+              const parsed = parsePositiveScoreLeadScale(event.target.value);
+              if (parsed == null) {
+                event.currentTarget.value = String(preferences.scoreLeadScale);
+                return;
+              }
+              update({ scoreLeadScale: parsed });
+            }}
+          />
         </label>
       </fieldset>
     </section>
