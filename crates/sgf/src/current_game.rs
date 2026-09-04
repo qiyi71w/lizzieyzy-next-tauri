@@ -1179,6 +1179,7 @@ mod selected_node_analysis_capture {
     }
 }
 
+#[cfg(test)]
 mod first_child_mainline_worklist {
     use super::*;
     use app_model::{MoveVertex, PlayerColor, PointDto};
