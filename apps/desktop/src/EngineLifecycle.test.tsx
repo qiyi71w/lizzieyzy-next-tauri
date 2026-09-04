@@ -10,12 +10,6 @@ const listeners: {
   onFailure?: (failure: EngineFailureDto) => void;
   onJob?: (job: unknown) => void;
 } = {};
-const analysisCache = vi.hoisted(() => ({
-  computeGameCacheKey: vi.fn(() => Promise.resolve({ gameKey: "game", sgfHash: "hash" })),
-  loadAnalysisCache: vi.fn(() => Promise.resolve({ status: "miss" })),
-  saveAnalysisCache: vi.fn(() => Promise.resolve({ id: "c1", gameKey: "game", updatedAt: "now" }))
-}));
-
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
   replaceCurrentGame: vi.fn(),
@@ -52,14 +46,11 @@ vi.mock("./api/backend", () => ({
   nativeCurrentGameUnavailable: "Native current-game commands require the Tauri desktop runtime."
 }));
 
-vi.mock("./api/analysisCache", () => analysisCache);
-
 vi.mock("./api/preferences", () => ({
   loadAppPreferences: vi.fn(() => Promise.reject(new Error("preferences unavailable in test"))),
   saveAppPreferences: vi.fn()
 }));
 
-vi.mock("./components/CacheStatusBadge", () => ({ CacheStatusBadge: () => null }));
 vi.mock("./components/PreferencesPanel", () => ({ PreferencesPanel: () => null }));
 vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
 vi.mock("./components/WinrateChart", () => ({ WinrateChart: () => <canvas aria-label="胜率走势" /> }));
@@ -658,6 +649,7 @@ describe("foreground engine lifecycle UI", () => {
           candidates: [{ vertex: { point: { x: 0, y: 0 } }, visits: 8, winrate_black: 0.61, score_mean_black: 1.5, pv: [] }]
         }
       });
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
     });
     expect(host.querySelector(".nav-progress")?.textContent).toContain("整局 1/2");
     expect(host.querySelector(".nav-progress")?.textContent).toContain("剩余 1");
@@ -716,6 +708,7 @@ describe("foreground engine lifecycle UI", () => {
           candidates: [{ vertex: { point: { x: 0, y: 0 } }, visits: 8, winrate_black: 0.61, score_mean_black: 1.5, pv: [] }]
         }
       });
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
     });
     expect(host.textContent).toContain("61.0%");
     expect(nextMove.disabled).toBe(false);
@@ -777,6 +770,7 @@ describe("foreground engine lifecycle UI", () => {
           candidates: [{ vertex: { point: { x: 0, y: 0 } }, visits: 8, winrate_black: 0.61, score_mean_black: 1.5, pv: [] }]
         }
       });
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
     });
     expect(host.textContent).toContain("61.0%");
 
@@ -828,7 +822,6 @@ describe("foreground engine lifecycle UI", () => {
         failure: { operation: "job", kind: "cancellation", message: "analysis job was cancelled" }
       });
     });
-    analysisCache.saveAnalysisCache.mockClear();
     await act(async () => {
       listeners.onJob?.({
         run_id: "run-1",
@@ -881,7 +874,6 @@ describe("foreground engine lifecycle UI", () => {
         expected: 2
       });
     });
-    expect(analysisCache.saveAnalysisCache).not.toHaveBeenCalled();
     expect(host.textContent).not.toContain("整局分析完成");
   });
 
@@ -1278,7 +1270,6 @@ describe("foreground engine lifecycle UI", () => {
       nodePath: { indices: [] },
       maxVisits: 800
     });
-    analysisCache.saveAnalysisCache.mockClear();
     await act(async () => {
       listeners.onJob?.({
         run_id: "run-b",
@@ -1298,7 +1289,6 @@ describe("foreground engine lifecycle UI", () => {
       });
     });
     expect(host.querySelector(".cand-row")).toBeNull();
-    expect(analysisCache.saveAnalysisCache).not.toHaveBeenCalled();
     expect(host.querySelector(".engine-chip-label")?.textContent).toBe("Local KataGo");
     expect((host.querySelector(".engine-failure") as HTMLElement).dataset.failureKind).toBe("asset");
   });

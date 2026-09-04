@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AnalysisFrameDto, CurrentGameResultDto, GameDto } from "./domain/types";
+import type { CurrentGameResultDto, GameDto } from "./domain/types";
 import { defaultAppPreferences, type AppPreferences } from "./domain/preferences";
 import { UNREADABLE_PREFERENCES_RECOVERY_MESSAGE } from "./api/preferences";
 
@@ -42,14 +42,6 @@ vi.mock("./api/backend", () => ({
   nativeCurrentGameUnavailable: "Native current-game commands require the Tauri desktop runtime."
 }));
 
-const analysisCache = vi.hoisted(() => ({
-  computeGameCacheKey: vi.fn(() => Promise.resolve({ gameKey: "game", sgfHash: "hash" })),
-  loadAnalysisCache: vi.fn(),
-  saveAnalysisCache: vi.fn()
-}));
-
-vi.mock("./api/analysisCache", () => analysisCache);
-
 const preferencesApi = vi.hoisted(() => ({
   loadAppPreferences: vi.fn(),
   saveAppPreferences: vi.fn()
@@ -64,13 +56,10 @@ vi.mock("./api/preferences", async (importOriginal) => {
   };
 });
 
-vi.mock("./components/CacheStatusBadge", () => ({ CacheStatusBadge: () => null }));
 vi.mock("./components/EngineSetupPanel", () => ({ EngineSetupPanel: () => null }));
 vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
 vi.mock("./components/WinrateChart", () => ({
-  WinrateChart: ({ frames }: { frames: AnalysisFrameDto[] }) => (
-    <canvas aria-label="胜率走势" data-frame-count={frames.length} />
-  )
+  WinrateChart: () => <canvas aria-label="胜率走势" />
 }));
 
 import { App } from "./App";
@@ -109,7 +98,6 @@ beforeEach(() => {
   });
   backend.replaceCurrentGame.mockResolvedValue(initialGame);
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
-  analysisCache.loadAnalysisCache.mockResolvedValue({ status: "miss" });
   preferencesApi.loadAppPreferences.mockResolvedValue({ preferences: defaultAppPreferences });
   preferencesApi.saveAppPreferences.mockImplementation(async (preferences: AppPreferences) => preferences);
 });
@@ -127,7 +115,7 @@ describe("durable preferences surface", () => {
     const host = await renderApp();
     openPreferences(host);
 
-    expect(categoryLegends(host)).toEqual(["分析呈现", "复盘", "棋盘", "缓存"]);
+    expect(categoryLegends(host)).toEqual(["分析呈现", "复盘", "棋盘", "胜率图"]);
     expect(labeledCheckbox(host, "候选").checked).toBe(true);
     expect(labeledCheckbox(host, "领地").checked).toBe(true);
     expect(labeledCheckbox(host, "策略").checked).toBe(true);
@@ -135,8 +123,13 @@ describe("durable preferences surface", () => {
     expect(labeledNumber(host, "默认计算量").value).toBe("800");
     expect(labeledSelect(host, "复盘深度").value).toBe("quick");
     expect(labeledSelect(host, "棋盘对比").value).toBe("classic");
-    expect(labeledCheckbox(host, "自动载入缓存").checked).toBe(true);
-    expect(labeledCheckbox(host, "自动保存分析").checked).toBe(true);
+    expect(labeledSelect(host, "下一手标记").value).toBe("variations");
+    expect(host.textContent).not.toContain("自动载入缓存");
+    expect(host.textContent).not.toContain("自动保存分析");
+    expect(host.textContent).not.toContain("缓存未用");
+    expect(host.textContent).not.toContain("命中缓存");
+    act(() => buttonNamed(host, "分析").click());
+    expect(host.textContent).not.toContain("清除 Lizzie 缓存");
     expect(preferencesStatus(host)).toBe("Preferences loaded.");
   });
 

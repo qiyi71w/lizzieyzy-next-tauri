@@ -1,13 +1,15 @@
-import type { AppPreferences, BoardTheme, ReviewMode } from "../domain/preferences";
+import type { AppPreferences, BoardTheme, GraphPerspective, NextMoveReviewMarkerMode, ReviewMode } from "../domain/preferences";
+import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
 
 type Props = {
   preferences: AppPreferences;
   status: string;
   disabled?: boolean;
+  scoreLeadAvailable?: boolean;
   onChange: (preferences: AppPreferences) => void;
 };
 
-export function PreferencesPanel({ preferences, status, disabled = false, onChange }: Props) {
+export function PreferencesPanel({ preferences, status, disabled = false, scoreLeadAvailable = true, onChange }: Props) {
   function update(patch: Partial<AppPreferences>) {
     onChange({ ...preferences, ...patch });
   }
@@ -23,6 +25,18 @@ export function PreferencesPanel({ preferences, status, disabled = false, onChan
         <Toggle label="候选" checked={preferences.showCandidates} disabled={disabled} onChange={(checked) => update({ showCandidates: checked })} />
         <Toggle label="领地" checked={preferences.showOwnership} disabled={disabled} onChange={(checked) => update({ showOwnership: checked })} />
         <Toggle label="策略" checked={preferences.showPolicy} disabled={disabled} onChange={(checked) => update({ showPolicy: checked })} />
+        <label>
+          <span>下一手标记</span>
+          <select
+            value={preferences.nextMoveReviewMarker}
+            disabled={disabled}
+            onChange={(event) => update({ nextMoveReviewMarker: event.target.value as NextMoveReviewMarkerMode })}
+          >
+            <option value="off">关闭</option>
+            <option value="variations">变化</option>
+            <option value="graded">分级</option>
+          </select>
+        </label>
         <label>
           <span>显示候选数</span>
           <input
@@ -68,9 +82,51 @@ export function PreferencesPanel({ preferences, status, disabled = false, onChan
         </label>
       </fieldset>
       <fieldset className="preferences-grid">
-        <legend>缓存</legend>
-        <Toggle label="自动载入缓存" checked={preferences.autoLoadCache} disabled={disabled} onChange={(checked) => update({ autoLoadCache: checked })} />
-        <Toggle label="自动保存分析" checked={preferences.autoSaveAnalysis} disabled={disabled} onChange={(checked) => update({ autoSaveAnalysis: checked })} />
+        <legend>胜率图</legend>
+        <label>
+          <span>图表视角</span>
+          <select
+            value={preferences.graphPerspective}
+            disabled={disabled}
+            onChange={(event) => update({ graphPerspective: event.target.value as GraphPerspective })}
+          >
+            <option value="black">黑棋</option>
+            <option value="sideToPlay">当前行棋方</option>
+          </select>
+        </label>
+        <Toggle
+          label="胜率线"
+          checked={preferences.winrateLine}
+          disabled={disabled}
+          onChange={(checked) => update({ winrateLine: checked })}
+        />
+        <Toggle
+          label="目差线"
+          checked={preferences.scoreLeadLine}
+          disabled={disabled || !scoreLeadAvailable}
+          onChange={(checked) => update({ scoreLeadLine: checked })}
+        />
+        <Toggle label="失误条" checked={preferences.blunderBar} disabled={disabled} onChange={(checked) => update({ blunderBar: checked })} />
+        <Toggle label="图表悬停" checked={preferences.graphHover} disabled={disabled} onChange={(checked) => update({ graphHover: checked })} />
+        <label>
+          <span>目差刻度</span>
+          <input
+            type="number"
+            min={1}
+            max={1000}
+            step={1}
+            value={preferences.scoreLeadScale}
+            disabled={disabled || !scoreLeadAvailable}
+            onChange={(event) => {
+              const parsed = parsePositiveScoreLeadScale(event.target.value);
+              if (parsed == null) {
+                event.currentTarget.value = String(preferences.scoreLeadScale);
+                return;
+              }
+              update({ scoreLeadScale: parsed });
+            }}
+          />
+        </label>
       </fieldset>
     </section>
   );

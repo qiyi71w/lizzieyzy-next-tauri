@@ -1,16 +1,25 @@
+import type { NextMoveReviewMarkerMode } from "./nextMoveReviewMarker";
+
 export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
+export type GraphPerspective = "black" | "sideToPlay";
+export type { NextMoveReviewMarkerMode };
 
 export type AppPreferences = {
   showOwnership: boolean;
   showPolicy: boolean;
   showCandidates: boolean;
   candidateLimit: number;
-  autoLoadCache: boolean;
-  autoSaveAnalysis: boolean;
   defaultMaxVisits: number;
   reviewMode: ReviewMode;
   boardTheme: BoardTheme;
+  graphPerspective: GraphPerspective;
+  winrateLine: boolean;
+  scoreLeadLine: boolean;
+  blunderBar: boolean;
+  graphHover: boolean;
+  scoreLeadScale: number;
+  nextMoveReviewMarker: NextMoveReviewMarkerMode;
 };
 
 export const defaultAppPreferences: AppPreferences = {
@@ -18,25 +27,41 @@ export const defaultAppPreferences: AppPreferences = {
   showPolicy: true,
   showCandidates: true,
   candidateLimit: 8,
-  autoLoadCache: true,
-  autoSaveAnalysis: true,
   defaultMaxVisits: 800,
   reviewMode: "quick",
-  boardTheme: "classic"
+  boardTheme: "classic",
+  graphPerspective: "black",
+  winrateLine: true,
+  scoreLeadLine: true,
+  blunderBar: false,
+  graphHover: true,
+  scoreLeadScale: 15,
+  nextMoveReviewMarker: "variations"
 };
 
 export function normalizeAppPreferences(value: Partial<AppPreferences> | null | undefined): AppPreferences {
+  const winrateLine = booleanValue(value?.winrateLine, defaultAppPreferences.winrateLine);
+  const scoreLeadLine = booleanValue(value?.scoreLeadLine, defaultAppPreferences.scoreLeadLine);
   return {
     showOwnership: booleanValue(value?.showOwnership, defaultAppPreferences.showOwnership),
     showPolicy: booleanValue(value?.showPolicy, defaultAppPreferences.showPolicy),
     showCandidates: booleanValue(value?.showCandidates, defaultAppPreferences.showCandidates),
     candidateLimit: integerValue(value?.candidateLimit, defaultAppPreferences.candidateLimit, 1, 20),
-    autoLoadCache: booleanValue(value?.autoLoadCache, defaultAppPreferences.autoLoadCache),
-    autoSaveAnalysis: booleanValue(value?.autoSaveAnalysis, defaultAppPreferences.autoSaveAnalysis),
     defaultMaxVisits: integerValue(value?.defaultMaxVisits, defaultAppPreferences.defaultMaxVisits, 1, 1_000_000),
     reviewMode: value?.reviewMode === "deep" ? "deep" : "quick",
-    boardTheme: value?.boardTheme === "high-contrast" ? "high-contrast" : "classic"
+    boardTheme: value?.boardTheme === "high-contrast" ? "high-contrast" : "classic",
+    graphPerspective: value?.graphPerspective === "sideToPlay" ? "sideToPlay" : "black",
+    winrateLine: winrateLine || !scoreLeadLine,
+    scoreLeadLine,
+    blunderBar: booleanValue(value?.blunderBar, defaultAppPreferences.blunderBar),
+    graphHover: booleanValue(value?.graphHover, defaultAppPreferences.graphHover),
+    scoreLeadScale: positiveFloor(value?.scoreLeadScale, defaultAppPreferences.scoreLeadScale, 1, 1000),
+    nextMoveReviewMarker: nextMoveReviewMarkerValue(value?.nextMoveReviewMarker)
   };
+}
+
+function nextMoveReviewMarkerValue(value: unknown): NextMoveReviewMarkerMode {
+  return value === "off" || value === "graded" ? value : "variations";
 }
 
 function booleanValue(value: unknown, fallback: boolean): boolean {
@@ -46,5 +71,11 @@ function booleanValue(value: unknown, fallback: boolean): boolean {
 function integerValue(value: unknown, fallback: number, min: number, max: number): number {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(parsed)));
+}
+
+function positiveFloor(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
   return Math.min(max, Math.max(min, Math.floor(parsed)));
 }

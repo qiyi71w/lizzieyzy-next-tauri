@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toolbarIcons } from "../assets/toolbar";
 import type { AppPreferences } from "../domain/preferences";
+import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
 import { claimedShortcutCatalog, formatShortcutChord } from "../domain/shortcuts";
 
 export type SheetId = "sgf" | "engine" | "sync" | "prefs";
@@ -38,6 +39,7 @@ type Props = {
   onEngineCommand: (kind: "once" | "game") => void;
   preferences: AppPreferences;
   onPreferencesChange: (next: AppPreferences) => void;
+  scoreLeadAvailable?: boolean;
   showCoordinates: boolean;
   showMoveNumbers: boolean;
   onShowCoordinates: (value: boolean) => void;
@@ -72,7 +74,6 @@ type Props = {
   onFirstMove?: () => void;
   onAutoPlay: () => void;
   onOverlayMode: (mode: OverlayMode) => void;
-  cacheBadge: ReactNode;
   message: string;
   toPlay: "black" | "white";
 };
@@ -153,9 +154,78 @@ export function AppChrome(props: Props) {
             <MenuCheck label="候选" checked={props.preferences.showCandidates} onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, showCandidates: !props.preferences.showCandidates }))} />
             <MenuCheck label="领地" checked={props.preferences.showOwnership} onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, showOwnership: !props.preferences.showOwnership }))} />
             <MenuCheck label="策略网络(T)" checked={props.preferences.showPolicy} onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, showPolicy: !props.preferences.showPolicy }))} />
+            <SubMenu label="下一手标记(J)">
+              <MenuCheck
+                label="关闭"
+                checked={props.preferences.nextMoveReviewMarker === "off"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, nextMoveReviewMarker: "off" }))}
+              />
+              <MenuCheck
+                label="变化"
+                checked={props.preferences.nextMoveReviewMarker === "variations"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, nextMoveReviewMarker: "variations" }))}
+              />
+              <MenuCheck
+                label="分级"
+                checked={props.preferences.nextMoveReviewMarker === "graded"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, nextMoveReviewMarker: "graded" }))}
+              />
+            </SubMenu>
             <MenuItem label="落子评价标记(Alt+M)" disabled title={later} />
             <MenuItem label="自动播放(Ctrl+A)" onClick={() => run(props.onAutoPlay)} />
-            <MenuItem label="胜率图设置" disabled title={later} />
+            <SubMenu label="胜率图设置">
+              <MenuCheck
+                label="黑棋视角"
+                checked={props.preferences.graphPerspective !== "sideToPlay"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, graphPerspective: "black" }))}
+              />
+              <MenuCheck
+                label="当前行棋方视角"
+                checked={props.preferences.graphPerspective === "sideToPlay"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, graphPerspective: "sideToPlay" }))}
+              />
+              <MenuCheck
+                label="胜率线"
+                checked={props.preferences.winrateLine}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, winrateLine: !props.preferences.winrateLine }))}
+              />
+              <MenuCheck
+                label="目差线"
+                checked={props.preferences.scoreLeadLine}
+                disabled={props.scoreLeadAvailable === false}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, scoreLeadLine: !props.preferences.scoreLeadLine }))}
+              />
+              <MenuCheck
+                label="失误条"
+                checked={props.preferences.blunderBar}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, blunderBar: !props.preferences.blunderBar }))}
+              />
+              <MenuCheck
+                label="图表悬停"
+                checked={props.preferences.graphHover}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, graphHover: !props.preferences.graphHover }))}
+              />
+              <div className="menu-item menu-scale">
+                <span>目差刻度</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={1000}
+                  step={1}
+                  aria-label="目差刻度"
+                  value={props.preferences.scoreLeadScale}
+                  disabled={props.scoreLeadAvailable === false}
+                  onChange={(event) => {
+                    const parsed = parsePositiveScoreLeadScale(event.target.value);
+                    if (parsed == null) {
+                      event.currentTarget.value = String(props.preferences.scoreLeadScale);
+                      return;
+                    }
+                    props.onPreferencesChange({ ...props.preferences, scoreLeadScale: parsed });
+                  }}
+                />
+              </div>
+            </SubMenu>
             <MenuItem label="小棋盘设置" disabled title={later} />
             <MenuItem label="布局模式" disabled title={later} />
           </ChromeMenu>
@@ -194,7 +264,6 @@ export function AppChrome(props: Props) {
             <MenuItem label="取消此手分析" onClick={() => run(props.onCancelSelectedNode)} disabled={!props.selectedNodeRunning} />
             <MenuItem label="取消整局分析" onClick={() => run(props.onCancelWholeGame)} disabled={!props.wholeGameRunning} />
             <MenuItem label="清除分析信息(此手)" disabled title={later} />
-            <MenuItem label="清除 Lizzie 缓存" disabled title={later} />
           </ChromeMenu>
           <ChromeMenu label="编辑" open={openMenu === "edit"} onToggle={() => setOpenMenu(openMenu === "edit" ? null : "edit")}>
             <MenuItem label="添加黑子" disabled title={later} />
@@ -362,7 +431,6 @@ export function AppChrome(props: Props) {
         <button type="button" className="chrome-btn" onClick={() => props.onToggleSheet("prefs")}>棋盘</button>
         <button type="button" className="chrome-btn" onClick={props.onSave} disabled={saveDisabled} title={!nativeAvailable ? nativeUnavailable : undefined}>存档</button>
         <span className="spacer" />
-        {props.cacheBadge}
         <span className="doc-name" title={props.message}>{props.documentName}{props.dirty ? " *" : ""}</span>
       </div>
     </>
@@ -521,9 +589,9 @@ function MenuItem({ label, onClick, disabled, title }: { label: string; onClick?
   );
 }
 
-function MenuCheck({ label, checked, onClick }: { label: string; checked: boolean; onClick: () => void }) {
+function MenuCheck({ label, checked, onClick, disabled }: { label: string; checked: boolean; onClick: () => void; disabled?: boolean }) {
   return (
-    <button type="button" role="menuitemcheckbox" className="menu-item" aria-checked={checked} onClick={onClick}>
+    <button type="button" role="menuitemcheckbox" className="menu-item" aria-checked={checked} disabled={disabled} onClick={onClick}>
       <span className="menu-check">{checked ? "✓" : ""}</span>
       {label}
     </button>

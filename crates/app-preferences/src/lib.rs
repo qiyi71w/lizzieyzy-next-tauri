@@ -19,16 +19,26 @@ pub struct AppPreferencesDto {
     pub show_candidates: bool,
     #[serde(default = "default_candidate_limit")]
     pub candidate_limit: u32,
-    #[serde(default = "default_auto_load_cache")]
-    pub auto_load_cache: bool,
-    #[serde(default = "default_auto_save_analysis")]
-    pub auto_save_analysis: bool,
     #[serde(default = "default_max_visits")]
     pub default_max_visits: u32,
     #[serde(default = "default_review_mode")]
     pub review_mode: String,
     #[serde(default = "default_board_theme")]
     pub board_theme: String,
+    #[serde(default = "default_graph_perspective")]
+    pub graph_perspective: String,
+    #[serde(default = "default_winrate_line")]
+    pub winrate_line: bool,
+    #[serde(default = "default_score_lead_line")]
+    pub score_lead_line: bool,
+    #[serde(default = "default_blunder_bar")]
+    pub blunder_bar: bool,
+    #[serde(default = "default_graph_hover")]
+    pub graph_hover: bool,
+    #[serde(default = "default_score_lead_scale")]
+    pub score_lead_scale: u32,
+    #[serde(default = "default_next_move_review_marker")]
+    pub next_move_review_marker: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,11 +62,16 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         show_policy: default_show_policy(),
         show_candidates: default_show_candidates(),
         candidate_limit: default_candidate_limit(),
-        auto_load_cache: default_auto_load_cache(),
-        auto_save_analysis: default_auto_save_analysis(),
         default_max_visits: default_max_visits(),
         review_mode: default_review_mode(),
         board_theme: default_board_theme(),
+        graph_perspective: default_graph_perspective(),
+        winrate_line: default_winrate_line(),
+        score_lead_line: default_score_lead_line(),
+        blunder_bar: default_blunder_bar(),
+        graph_hover: default_graph_hover(),
+        score_lead_scale: default_score_lead_scale(),
+        next_move_review_marker: default_next_move_review_marker(),
     }
 }
 
@@ -68,6 +83,20 @@ pub fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPrefe
     }
     if preferences.board_theme != "high-contrast" {
         preferences.board_theme = default_board_theme();
+    }
+    if preferences.graph_perspective != "sideToPlay" {
+        preferences.graph_perspective = default_graph_perspective();
+    }
+    if !preferences.winrate_line && !preferences.score_lead_line {
+        preferences.winrate_line = true;
+    }
+    if preferences.score_lead_scale == 0 {
+        preferences.score_lead_scale = default_score_lead_scale();
+    } else {
+        preferences.score_lead_scale = preferences.score_lead_scale.clamp(1, 1000);
+    }
+    if preferences.next_move_review_marker != "off" && preferences.next_move_review_marker != "graded" {
+        preferences.next_move_review_marker = default_next_move_review_marker();
     }
     preferences
 }
@@ -185,14 +214,6 @@ fn default_candidate_limit() -> u32 {
     8
 }
 
-fn default_auto_load_cache() -> bool {
-    true
-}
-
-fn default_auto_save_analysis() -> bool {
-    true
-}
-
 fn default_max_visits() -> u32 {
     800
 }
@@ -203,6 +224,34 @@ fn default_review_mode() -> String {
 
 fn default_board_theme() -> String {
     "classic".to_string()
+}
+
+fn default_graph_perspective() -> String {
+    "black".to_string()
+}
+
+fn default_winrate_line() -> bool {
+    true
+}
+
+fn default_score_lead_line() -> bool {
+    true
+}
+
+fn default_blunder_bar() -> bool {
+    false
+}
+
+fn default_graph_hover() -> bool {
+    true
+}
+
+fn default_score_lead_scale() -> u32 {
+    15
+}
+
+fn default_next_move_review_marker() -> String {
+    "variations".to_string()
 }
 
 #[cfg(test)]
@@ -238,11 +287,16 @@ mod tests {
             show_policy: false,
             show_candidates: false,
             candidate_limit: 3,
-            auto_load_cache: false,
-            auto_save_analysis: false,
             default_max_visits: 200,
             review_mode: "deep".to_string(),
             board_theme: "high-contrast".to_string(),
+            graph_perspective: "sideToPlay".to_string(),
+            winrate_line: false,
+            score_lead_line: true,
+            blunder_bar: true,
+            graph_hover: false,
+            score_lead_scale: 20,
+            next_move_review_marker: "graded".to_string(),
         }
     }
 
@@ -268,6 +322,7 @@ mod tests {
         assert!(loaded.preferences.show_policy);
         assert_eq!(loaded.preferences.review_mode, "quick");
         assert_eq!(loaded.preferences.board_theme, "classic");
+        assert_eq!(loaded.preferences.next_move_review_marker, "variations");
         assert!(loaded.recovery.is_none());
 
         let _ = fs::remove_dir_all(dir);
@@ -359,5 +414,28 @@ mod tests {
         assert!(!tmp_path(&path).exists());
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn analysis_cache_preferences_are_absent_from_dto_and_defaults() {
+        let defaults = serde_json::to_value(default_app_preferences()).unwrap();
+        let object = defaults.as_object().unwrap();
+        assert!(!object.contains_key("autoLoadCache"));
+        assert!(!object.contains_key("autoSaveAnalysis"));
+
+        let loaded: AppPreferencesDto = serde_json::from_value(serde_json::json!({
+            "autoLoadCache": false,
+            "autoSaveAnalysis": false,
+            "showCandidates": true
+        }))
+        .unwrap();
+        let roundtrip = serde_json::to_value(normalize_app_preferences(loaded)).unwrap();
+        let roundtrip_object = roundtrip.as_object().unwrap();
+        assert!(!roundtrip_object.contains_key("autoLoadCache"));
+        assert!(!roundtrip_object.contains_key("autoSaveAnalysis"));
+        assert_eq!(
+            roundtrip_object.get("showCandidates"),
+            Some(&serde_json::json!(true))
+        );
     }
 }

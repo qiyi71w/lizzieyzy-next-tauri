@@ -37,6 +37,7 @@ describe("shortcut registry catalog", () => {
       "view.move-numbers",
       "view.policy",
       "view.policy-overlay",
+      "review.next-move-marker",
       "review.autoplay",
       "help.shortcut-reference"
     ]);
@@ -56,11 +57,16 @@ describe("shortcut registry catalog", () => {
       aliases: [],
       focusRule: "focus-safe"
     });
+    expect(catalog.find((item) => item.id === "review.next-move-marker")).toEqual({
+      id: "review.next-move-marker",
+      label: "下一手标记",
+      primary: { key: "j" },
+      aliases: [],
+      focusRule: "focus-safe"
+    });
     expect(catalog.find((item) => item.id === "review.remove-variation")?.aliases).toEqual([
       { key: "Backspace", shift: true }
     ]);
-    expect(catalog.some((item) => item.id === "review.next-move-marker")).toBe(false);
-    expect(catalog.some((item) => occupiedKeys(item).includes("j"))).toBe(false);
   });
 
   it("rejects a duplicate primary key or alias with a deterministic conflict", () => {
@@ -87,16 +93,15 @@ describe("shortcut registry catalog", () => {
     );
   });
 
-  it("lets an owner register J once and rejects a second J", () => {
+  it("owns J for Next-move Review Marker and rejects a second J", () => {
     const registry = createShortcutRegistry();
-    registry.register({
+    expect(registry.get("review.next-move-marker")).toEqual({
       id: "review.next-move-marker",
-      label: "落子评价标记",
+      label: "下一手标记",
       primary: { key: "j" },
       aliases: [],
       focusRule: "focus-safe"
     });
-    expect(registry.get("review.next-move-marker").primary).toEqual({ key: "j" });
     expect(() => registry.register({
       id: "review.next-move-marker-duplicate",
       label: "另一标记",
@@ -134,9 +139,16 @@ describe("shortcut reference and dispatch", () => {
     expect(candidates).toEqual({ id: "review.select-candidate", label: "选择候选", keys: "1–9" });
     expect(remove).toEqual({ id: "review.remove-variation", label: "删除分支", keys: "Shift+Delete, Shift+Backspace" });
     expect(create).toEqual({ id: "file.new", label: "新建", keys: "N, Ctrl+Home" });
+    expect(entries.find((entry) => entry.id === "review.next-move-marker")).toEqual({
+      id: "review.next-move-marker",
+      label: "下一手标记",
+      keys: "J"
+    });
     expect(formatShortcutChord({ key: "s", ctrl: true })).toBe("Ctrl+S");
     expect(filterShortcutReference(entries, "自动").map((entry) => entry.id)).toEqual(["review.autoplay"]);
     expect(filterShortcutReference(entries, "ctrl+a").map((entry) => entry.id)).toEqual(["review.autoplay"]);
+    expect(filterShortcutReference(entries, "下一手标记").map((entry) => entry.id)).toEqual(["review.next-move-marker"]);
+    expect(filterShortcutReference(entries, "j").map((entry) => entry.id)).toEqual(["review.next-move-marker"]);
     expect(filterShortcutReference(entries, "zzz")).toEqual([]);
   });
 
@@ -175,9 +187,16 @@ describe("shortcut reference and dispatch", () => {
     Object.defineProperty(boardEvent, "target", { value: board });
     expect(registry.dispatch(boardEvent)).toBe(false);
     expect(autoplay).toHaveBeenCalledTimes(1);
+
+    const marker = vi.fn();
+    registry.bind("review.next-move-marker", marker);
+    const typedJ = new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true });
+    Object.defineProperty(typedJ, "target", { value: editor });
+    expect(registry.dispatch(typedJ)).toBe(false);
+    expect(marker).not.toHaveBeenCalled();
+    const globalJ = new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true });
+    Object.defineProperty(globalJ, "target", { value: host });
+    expect(registry.dispatch(globalJ)).toBe(true);
+    expect(marker).toHaveBeenCalledTimes(1);
   });
 });
-
-function occupiedKeys(item: { primary: { key: string }; aliases: Array<{ key: string }> }): string[] {
-  return [item.primary, ...item.aliases].map((chord) => chord.key.toLowerCase());
-}

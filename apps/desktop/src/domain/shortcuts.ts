@@ -71,6 +71,7 @@ const CLAIMED_SHORTCUTS: ShortcutDefinition[] = [
   { id: "view.move-numbers", label: "手数", primary: { key: "m" }, aliases: [], focusRule: "focus-safe" },
   { id: "view.policy", label: "策略网络", primary: { key: "t" }, aliases: [], focusRule: "focus-safe" },
   { id: "view.policy-overlay", label: "策略", primary: { key: "h" }, aliases: [], focusRule: "focus-safe" },
+  { id: "review.next-move-marker", label: "下一手标记", primary: { key: "j" }, aliases: [], focusRule: "focus-safe" },
   { id: "review.autoplay", label: "自动播放", primary: { key: "a", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "help.shortcut-reference", label: "快捷键参考", primary: { key: "?" }, aliases: [], focusRule: "focus-safe" }
 ];

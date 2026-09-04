@@ -47,11 +47,25 @@ impl CurrentSgfDocument {
     pub fn snapshot(&self, path: &NodePath) -> Result<SelectedNodeSnapshotDto, CurrentGameError> {
         let nodes = self.nodes_on_path(path)?;
         let selected = *nodes.last().expect("path walk includes the root");
+        let position = self.replay_nodes(&nodes)?;
+        let projected = crate::analysis::project_node_analysis(
+            selected,
+            self.document.board_size,
+            path.indices.is_empty(),
+        );
         Ok(SelectedNodeSnapshotDto {
             path: path.clone(),
-            position: self.replay_nodes(&nodes)?,
+            position: position.clone(),
             personal_comment: personal_comment(selected),
             generated_information: None,
+            primary_analysis: projected
+                .primary
+                .as_ref()
+                .map(|payload| payload.to_frame(position.move_number)),
+            secondary_analysis: projected
+                .secondary
+                .as_ref()
+                .map(|payload| payload.to_frame(position.move_number)),
         })
     }
 
@@ -86,7 +100,6 @@ impl CurrentSgfDocument {
     pub fn komi(&self) -> f32 {
         self.document.komi
     }
-
 
     pub fn board_size(&self) -> u8 {
         self.document.board_size
@@ -153,6 +166,18 @@ impl CurrentSgfDocument {
     ) -> Result<SelectedNodeSnapshotDto, CurrentGameError> {
         apply_personal_comment(self.node_mut(path)?, comment);
         self.snapshot(path)
+    }
+
+    pub fn replace_primary_analysis(
+        &mut self,
+        path: &NodePath,
+        payload: &crate::SgfAnalysisPayload,
+    ) -> Result<(SelectedNodeSnapshotDto, bool), CurrentGameError> {
+        let board_size = self.document.board_size;
+        let is_root = path.indices.is_empty();
+        let changed =
+            crate::analysis::replace_primary_analysis(self.node_mut(path)?, payload, board_size, is_root);
+        Ok((self.snapshot(path)?, changed))
     }
 
     pub fn remove_variation(&mut self, path: &NodePath) -> Result<NodePath, CurrentGameError> {

@@ -9,12 +9,6 @@ const listeners: {
   onSnapshot?: (snapshot: ForegroundEngineSnapshotDto) => void;
   onJob?: (job: unknown) => void;
 } = {};
-const analysisCache = vi.hoisted(() => ({
-  computeGameCacheKey: vi.fn(() => Promise.resolve({ gameKey: "game", sgfHash: "hash" })),
-  loadAnalysisCache: vi.fn(() => Promise.resolve({ status: "miss" })),
-  saveAnalysisCache: vi.fn(() => Promise.resolve({ id: "c1", gameKey: "game", updatedAt: "now" }))
-}));
-
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
   replaceCurrentGame: vi.fn(),
@@ -51,14 +45,11 @@ vi.mock("./api/backend", () => ({
   nativeCurrentGameUnavailable: "Native current-game commands require the Tauri desktop runtime."
 }));
 
-vi.mock("./api/analysisCache", () => analysisCache);
-
 vi.mock("./api/preferences", () => ({
   loadAppPreferences: vi.fn(() => Promise.reject(new Error("preferences unavailable in test"))),
   saveAppPreferences: vi.fn()
 }));
 
-vi.mock("./components/CacheStatusBadge", () => ({ CacheStatusBadge: () => null }));
 vi.mock("./components/PreferencesPanel", () => ({ PreferencesPanel: () => null }));
 vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
 vi.mock("./components/WinrateChart", () => ({ WinrateChart: () => <canvas aria-label="胜率走势" /> }));
@@ -255,7 +246,10 @@ describe("selected-node analysis presentation", () => {
           policy
         }
       });
-      await backend.classifyProblems.mock.results.at(-1)?.value;
+      await Promise.all([
+        backend.classifyProblems.mock.results.at(-1)?.value,
+        backend.selectCurrentGameNode.mock.results.at(-1)?.value
+      ]);
     });
     expect(Array.from(host.querySelectorAll(".cand-coord")).map((node) => node.textContent)).toEqual(["D6"]);
     expect(host.querySelector(".cand-winrate")?.textContent).toBe("62.0%");
@@ -267,7 +261,6 @@ describe("selected-node analysis presentation", () => {
     expect(host.textContent).toContain("领地已评估");
     expect(buttonNamed(host, "领地").disabled).toBe(false);
     expect(buttonNamed(host, "策略").disabled).toBe(false);
-    expect(analysisCache.saveAnalysisCache).not.toHaveBeenCalled();
   });
 
   it("does not publish selected-node candidates after a typed protocol failure", async () => {
@@ -296,6 +289,5 @@ describe("selected-node analysis presentation", () => {
     expect(buttonNamed(host, "领地").disabled).toBe(true);
     expect(buttonNamed(host, "策略").disabled).toBe(true);
     expect(host.textContent).toContain("stderr boom");
-    expect(analysisCache.saveAnalysisCache).not.toHaveBeenCalled();
   });
 });

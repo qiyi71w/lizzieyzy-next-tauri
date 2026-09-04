@@ -30,3 +30,10 @@ export function admitsWholeGameNodeResult(job: AnalysisJobEventDto): boolean {
     && job.outcome === "progress"
     && job.frame != null;
 }
+
+export function admitsAnalysisAttachment(event: AnalysisJobEventDto): boolean {
+  const frame = event.frame;
+  if (frame == null || frame.visits === 0 || frame.candidates.length === 0) return false;
+  if (event.lane === "selected_node") return event.outcome === "completed";
+  return event.lane === "whole_game" && event.outcome === "progress";
+}

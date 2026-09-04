@@ -11,12 +11,6 @@ const listeners: {
   onJob?: (job: unknown) => void;
 } = {};
 
-const analysisCache = vi.hoisted(() => ({
-  computeGameCacheKey: vi.fn(() => Promise.resolve({ gameKey: "game", sgfHash: "hash" })),
-  loadAnalysisCache: vi.fn(() => Promise.resolve({ status: "miss" })),
-  saveAnalysisCache: vi.fn(() => Promise.resolve({ id: "c1", gameKey: "game", updatedAt: "now" }))
-}));
-
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
   replaceCurrentGame: vi.fn(),
@@ -58,17 +52,12 @@ vi.mock("./api/backend", () => ({
   nativeCurrentGameUnavailable: "Native current-game commands require the Tauri desktop runtime."
 }));
 
-vi.mock("./api/analysisCache", () => analysisCache);
-
 vi.mock("./api/preferences", () => preferencesApi);
 
-vi.mock("./components/CacheStatusBadge", () => ({ CacheStatusBadge: () => null }));
 vi.mock("./components/PreferencesPanel", () => ({ PreferencesPanel: () => null }));
 vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
 vi.mock("./components/WinrateChart", () => ({
-  WinrateChart: ({ frames }: { frames: AnalysisFrameDto[] }) => (
-    <canvas aria-label="胜率走势" data-frame-count={frames.length} />
-  )
+  WinrateChart: () => <canvas aria-label="胜率走势" />
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
@@ -283,7 +272,10 @@ async function completeSelectedNode(jobId: string, path: NodePath, frame: Analys
       outcome: "completed",
       frame
     });
-    await backend.classifyProblems.mock.results.at(-1)?.value;
+    await Promise.all([
+      backend.classifyProblems.mock.results.at(-1)?.value,
+      backend.selectCurrentGameNode.mock.results.at(-1)?.value
+    ]);
   });
 }
 
@@ -299,6 +291,14 @@ async function emitWholeGameProgress(path: NodePath, frame: AnalysisFrameDto, pr
       ...progress,
       frame
     });
+    await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
+  });
+}
+
+async function startWholeGame(host: HTMLElement) {
+  await act(async () => {
+    buttonNamed(host, "自动分析").click();
+    await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
   });
 }
 
@@ -443,10 +443,7 @@ describe("analysis presentation bound to exact nodes", () => {
   it("shows a whole-game node result by NodePath while selected-node is running and does not cancel whole-game", async () => {
     const host = await renderApp();
     await readyEngine(host);
-    await act(async () => {
-      buttonNamed(host, "自动分析").click();
-      await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
-    });
+    await startWholeGame(host);
     await emitWholeGameProgress({ indices: [] }, analysisFrame({
       job_id: "job-wg",
       candidates: [candidate(0)]
@@ -498,6 +495,34 @@ describe("analysis presentation bound to exact nodes", () => {
     expect(host.textContent).toContain("胜率 61.0%");
   });
 
+  it("shows selected-node analysis from an opened Java SGF via the exact-node presentation path", async () => {
+    const javaRoot: CurrentGameResultDto = {
+      ...navigableRoot,
+      snapshot: {
+        ...navigableRoot.snapshot,
+        primary_analysis: analysisFrame({
+          candidates: [candidateAt(3, 3, [{ point: { x: 3, y: 3 } }, { point: { x: 2, y: 2 } }])]
+        })
+      }
+    };
+    backend.replaceCurrentGame.mockResolvedValue(javaRoot);
+    backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => {
+      if (path.indices.length === 0) {
+        return javaRoot;
+      }
+      return snapshotAt(path);
+    });
+    const host = await renderApp();
+    expect(candidateCoords(host)).toEqual(["D6"]);
+    expect(host.textContent).toContain("61.0%");
+
+    await selectPath(host, "下一变化");
+    expect(candidateCoords(host)).toEqual([]);
+
+    await selectPath(host, "父节点");
+    expect(candidateCoords(host)).toEqual(["D6"]);
+  });
+
   it("clears presentation when the Foreground Engine Run leaves Ready", async () => {
     const host = await renderApp();
     await readyEngine(host);
@@ -516,3 +541,103 @@ describe("analysis presentation bound to exact nodes", () => {
     expect(buttonNamed(host, "策略").disabled).toBe(true);
   });
 });
+
+describe("attached SGF analysis as the active persistence path", () => {
+  it("dirties on identity-valid whole-game progress, keeps Save enabled after a later node, and never writes SQLite", async () => {
+    let dirty = false;
+    backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => ({
+      ...snapshotAt(path),
+      dirty
+    }));
+    backend.saveCurrentGame.mockImplementation(async () => {
+      dirty = false;
+      return { ...snapshotAt({ indices: [] }), dirty: false, native_path: "/tmp/snapshot-a.sgf" };
+    });
+
+    const host = await renderApp();
+    await readyEngine(host);
+    await startWholeGame(host);
+    expect(buttonNamed(host, "存档").disabled).toBe(true);
+
+    dirty = true;
+    await emitWholeGameProgress({ indices: [] }, analysisFrame({ job_id: "job-wg" }));
+    expect(buttonNamed(host, "存档").disabled).toBe(false);
+    expect(host.querySelector(".doc-name")?.textContent).toContain("*");
+
+    await act(async () => {
+      buttonNamed(host, "存档").click();
+      await backend.saveCurrentGame.mock.results.at(-1)?.value;
+    });
+    expect(backend.saveCurrentGame).toHaveBeenCalledTimes(1);
+    expect(buttonNamed(host, "存档").disabled).toBe(true);
+
+    dirty = true;
+    await emitWholeGameProgress({ indices: [0] }, analysisFrame({
+      job_id: "job-wg",
+      turn: 1,
+      candidates: [candidate(1)]
+    }), { completed: 2, expected: 2, remaining: 0 });
+    expect(buttonNamed(host, "存档").disabled).toBe(false);
+  });
+
+  it("keeps dirty and in-memory analysis when Save fails", async () => {
+    backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => ({
+      ...snapshotAt(path),
+      dirty: true
+    }));
+    backend.saveCurrentGame.mockRejectedValue(new Error("disk full"));
+
+    const host = await renderApp();
+    await readyEngine(host);
+    await startWholeGame(host);
+    await emitWholeGameProgress({ indices: [] }, analysisFrame({ job_id: "job-wg" }));
+    expect(candidateCoords(host)).toEqual(["D6"]);
+    expect(buttonNamed(host, "存档").disabled).toBe(false);
+
+    await act(async () => {
+      buttonNamed(host, "存档").click();
+      await Promise.resolve();
+    });
+    expect(host.textContent).toContain("Save failed: disk full");
+    expect(buttonNamed(host, "存档").disabled).toBe(false);
+    expect(candidateCoords(host)).toEqual(["D6"]);
+  });
+
+  it("does not dirty or persist cancelled, failed, or non-projectable events", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await startSelectedNode(host);
+    const selectCalls = backend.selectCurrentGameNode.mock.calls.length;
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-1",
+        job_id: "job-1",
+        lane: "selected_node",
+        generation: 1,
+        node_path: { indices: [] },
+        outcome: "cancelled"
+      });
+      listeners.onJob?.({
+        run_id: "run-1",
+        job_id: "job-1",
+        lane: "selected_node",
+        generation: 1,
+        node_path: { indices: [] },
+        outcome: "failed",
+        failure: { operation: "job", kind: "protocol", message: "stderr boom" }
+      });
+      listeners.onJob?.({
+        run_id: "run-1",
+        job_id: "job-1",
+        lane: "selected_node",
+        generation: 1,
+        node_path: { indices: [] },
+        outcome: "completed",
+        frame: analysisFrame({ visits: 0, candidates: [] })
+      });
+    });
+    expect(backend.selectCurrentGameNode.mock.calls.length).toBe(selectCalls);
+    expect(buttonNamed(host, "存档").disabled).toBe(true);
+  });
+});
+
