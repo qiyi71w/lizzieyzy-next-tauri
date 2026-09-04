@@ -1780,11 +1780,19 @@ fn bind_query_id(query_jsonl: &str, job_id: &str) -> Result<String, EngineFailur
 }
 
 fn extract_response_id(line: &str) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(line)
-        .ok()?
-        .get("id")?
-        .as_str()
-        .map(str::to_string)
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+        return value.get("id").and_then(|id| id.as_str()).map(str::to_string);
+    }
+    let marker = "\"id\":\"";
+    let start = line.find(marker)? + marker.len();
+    let rest = &line[start..];
+    let end = rest.find('"')?;
+    let id = &rest[..end];
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.to_string())
+    }
 }
 
 fn current_run_id(phase: &Phase) -> Option<String> {

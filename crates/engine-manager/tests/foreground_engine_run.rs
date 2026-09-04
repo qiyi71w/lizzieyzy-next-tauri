@@ -1,7 +1,7 @@
 use app_model::{
     admits_analysis_publication, AnalysisJobEventDto, AnalysisJobOutcomeDto, AnalysisPublicationScopeDto,
     EngineBackend, EngineCapabilitySnapshotDto, EngineFailureKind, EngineOperationDto, EngineProfileDto,
-    ForegroundEngineEventDto, ForegroundEngineLifecycleDto, NodePath,
+    ForegroundEngineEventDto, ForegroundEngineLifecycleDto, MoveVertex, NodePath, PointDto,
 };
 use engine_manager::{
     AnalysisCancelToken, AnalysisJobCancel, AnalysisJobLane, EngineProfileCatalog, ForegroundEngineConfig,
@@ -301,6 +301,70 @@ while IFS= read -r line; do
   if [ "${EXIT_AFTER:-}" = "first" ]; then
     exit "${EXIT_CODE:-1}"
   fi
+done
+"#
+    .into()
+}
+
+#[cfg(unix)]
+fn resident_selected_node_result_script() -> String {
+    r#"
+first=1
+while IFS= read -r line; do
+  if [ -n "$ENGINE_LOG" ]; then
+    printf '%s\n' "$line" >> "$ENGINE_LOG"
+  fi
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  [ -z "$id" ] && id="ok"
+  if [ "$first" = 1 ]; then
+    printf '{"id":"%s","turnNumber":0}\n' "$id"
+    first=0
+    continue
+  fi
+  printf '{"id":"%s","turnNumber":2,"rootInfo":{"visits":8,"winrate":0.61,"scoreMean":2.5,"scoreStdev":4.0},"moveInfos":[{"move":"D6","visits":5,"winrate":0.62,"scoreMean":2.7,"prior":0.4,"pv":["D6","C7"]}],"ownership":[0.1,-0.2,0.3],"policy":[0.01,0.02,0.03]}\n' "$id"
+done
+"#
+    .into()
+}
+
+#[cfg(unix)]
+fn selected_node_protocol_error_script() -> String {
+    r#"
+first=1
+while IFS= read -r line; do
+  if [ -n "$ENGINE_LOG" ]; then
+    printf '%s\n' "$line" >> "$ENGINE_LOG"
+  fi
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  [ -z "$id" ] && id="ok"
+  if [ "$first" = 1 ]; then
+    printf '{"id":"%s","turnNumber":0}\n' "$id"
+    first=0
+    continue
+  fi
+  printf 'engine stderr failure for %s\n' "$id" >&2
+  printf '{"id":"%s","error":"stderr boom"}\n' "$id"
+done
+"#
+    .into()
+}
+
+#[cfg(unix)]
+fn selected_node_malformed_response_script() -> String {
+    r#"
+first=1
+while IFS= read -r line; do
+  if [ -n "$ENGINE_LOG" ]; then
+    printf '%s\n' "$line" >> "$ENGINE_LOG"
+  fi
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  [ -z "$id" ] && id="ok"
+  if [ "$first" = 1 ]; then
+    printf '{"id":"%s","turnNumber":0}\n' "$id"
+    first=0
+    continue
+  fi
+  printf '{"id":"%s","broken"\n' "$id"
 done
 "#
     .into()
@@ -614,6 +678,164 @@ fn selected_node_start_completes_with_identity_and_keeps_ready() {
             ..current
         }
     ));
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn selected_node_completion_publishes_normalized_candidates_pv_ownership_policy_and_score() {
+    let temp = TestTempDir::new("selected-normalized");
+    let log = temp.path().join("engine.log");
+    let mut script = format!(
+        "ENGINE_LOG='{}'
+",
+        log.display()
+    );
+    script.push_str(&resident_selected_node_result_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let mut query = sample_query();
+    query.rules = "japanese".into();
+    query.komi = 6.5;
+    query.include_ownership = Some(true);
+    query.include_policy = Some(true);
+    query.initial_stones = vec![("B".into(), "C3".into())];
+    let started = manager
+        .start_selected_node_job(SelectedNodeJobRequest {
+            run_id: run_id.clone(),
+            generation: 4,
+            node_path: NodePath { indices: vec![0, 1] },
+            query,
+            board_size: 9,
+        })
+        .unwrap();
+    let completed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+    let frame = completed.frame.as_ref().expect("normalized frame");
+    assert_eq!(completed.run_id, run_id);
+    assert_eq!(completed.generation, 4);
+    assert_eq!(completed.node_path.indices, vec![0, 1]);
+    assert_eq!(frame.visits, 8);
+    assert!((frame.winrate_black - 0.61).abs() < f32::EPSILON);
+    assert!((frame.score_mean_black - 2.5).abs() < f32::EPSILON);
+    assert_eq!(frame.score_stdev, Some(4.0));
+    assert_eq!(frame.candidates.len(), 1);
+    assert_eq!(
+        frame.candidates[0].vertex,
+        MoveVertex::Point(PointDto { x: 3, y: 3 })
+    );
+    assert_eq!(
+        frame.candidates[0].pv,
+        vec![
+            MoveVertex::Point(PointDto { x: 3, y: 3 }),
+            MoveVertex::Point(PointDto { x: 2, y: 2 }),
+        ]
+    );
+    assert_eq!(frame.candidates[0].policy_prior, Some(0.4));
+    assert_eq!(frame.ownership, Some(vec![0.1, -0.2, 0.3]));
+    assert_eq!(frame.policy, Some(vec![0.01, 0.02, 0.03]));
+    let current = started.publication_scope();
+    assert!(admits_analysis_publication(&completed, &current));
+    let logged = std::fs::read_to_string(&log).unwrap();
+    assert!(logged.contains(r#""rules":"japanese""#), "{logged}");
+    assert!(logged.contains(r#""komi":6.5"#), "{logged}");
+    assert!(logged.contains(r#""includeOwnership":true"#), "{logged}");
+    assert!(logged.contains(r#""includePolicy":true"#), "{logged}");
+    assert!(logged.contains(r#"["B","C3"]"#), "{logged}");
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn selected_node_protocol_stderr_failure_is_typed_and_publishes_no_frame() {
+    let temp = TestTempDir::new("selected-protocol");
+    let log = temp.path().join("engine.log");
+    let mut script = format!(
+        "ENGINE_LOG='{}'
+",
+        log.display()
+    );
+    script.push_str(&selected_node_protocol_error_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let started = manager
+        .start_selected_node_job(selected_request(&run_id, 3, vec![0]))
+        .unwrap();
+    let failed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    assert!(failed.frame.is_none());
+    let failure = failed.failure.as_ref().expect("typed protocol failure");
+    assert_eq!(failure.kind, EngineFailureKind::Protocol);
+    assert_eq!(failure.job_id.as_deref(), Some(started.job_id.as_str()));
+    assert!(failure.message.contains("stderr boom"), "{}", failure.message);
+    let current = started.publication_scope();
+    assert!(!admits_analysis_publication(&failed, &current));
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn selected_node_malformed_response_is_typed_failure_without_a_frame() {
+    let temp = TestTempDir::new("selected-malformed");
+    let mut script = String::new();
+    script.push_str(&selected_node_malformed_response_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let started = manager
+        .start_selected_node_job(selected_request(&run_id, 1, vec![]))
+        .unwrap();
+    let failed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    assert!(failed.frame.is_none());
+    let failure = failed.failure.as_ref().expect("typed protocol failure");
+    assert_eq!(failure.kind, EngineFailureKind::Protocol);
+    assert!(!admits_analysis_publication(
+        &failed,
+        &started.publication_scope()
+    ));
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn selected_node_protocol_failure_does_not_cancel_whole_game() {
+    let temp = TestTempDir::new("selected-fail-whole-game");
+    let cancel_marker = temp.path().join("whole-game-cancelled");
+    let script = selected_node_protocol_error_script();
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    struct FileCancel(PathBuf);
+    impl AnalysisJobCancel for FileCancel {
+        fn cancel(&self) {
+            std::fs::write(&self.0, "cancelled").unwrap();
+        }
+    }
+    manager
+        .register_job(
+            &run_id,
+            AnalysisJobLane::WholeGame,
+            Arc::new(FileCancel(cancel_marker.clone())),
+        )
+        .unwrap();
+    let started = manager
+        .start_selected_node_job(selected_request(&run_id, 2, vec![0]))
+        .unwrap();
+    let failed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    assert!(failed.frame.is_none());
+    assert!(!cancel_marker.exists());
     assert!(matches!(
         manager.snapshot().lifecycle,
         ForegroundEngineLifecycleDto::Ready { .. }

@@ -196,8 +196,8 @@ fn query(max_visits: u32) -> AnalysisQuery {
         board_y_size: 9,
         analyze_turns: Some(vec![0]),
         max_visits: Some(max_visits),
-        include_ownership: None,
-        include_policy: None,
+        include_ownership: Some(true),
+        include_policy: Some(true),
     }
 }
 
