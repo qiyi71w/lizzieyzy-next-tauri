@@ -802,6 +802,73 @@ describe("foreground engine lifecycle UI", () => {
     expect(host.textContent).not.toContain("取消整局");
   });
 
+  it("drops a selected-node session when Open replaces the document", async () => {
+    backend.replaceCurrentGame.mockResolvedValue(mainlineRoot);
+    backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => snapshotAt(path));
+    backend.openSgfDocument.mockResolvedValue({ sgfText: "(;SZ[9]B[fe])", path: "/tmp/other.sgf" });
+    const host = await renderApp();
+    await readyEngine(host);
+    const nextMove = host.querySelector('button[title="下一手"]') as HTMLButtonElement;
+    const prevMove = host.querySelector('button[title="上一手"]') as HTMLButtonElement;
+
+    await act(async () => {
+      buttonNamed(host, "继续分析").click();
+      await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
+    });
+
+    backend.replaceCurrentGame.mockResolvedValue({
+      ...mainlineRoot,
+      generation: 2,
+      native_path: "/tmp/other.sgf"
+    });
+    backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => ({
+      ...snapshotAt(path),
+      generation: 2,
+      native_path: "/tmp/other.sgf"
+    }));
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "打开棋谱(O)").click();
+      await backend.openSgfDocument.mock.results.at(-1)?.value;
+      await backend.replaceCurrentGame.mock.results.at(-1)?.value;
+    });
+    expect.soft(host.textContent).not.toContain("取消此手");
+    expect.soft(backend.cancelSelectedNodeAnalysis).toHaveBeenCalledWith({ runId: "run-1", jobId: "job-1" });
+
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-1",
+        job_id: "job-1",
+        lane: "selected_node",
+        generation: 1,
+        node_path: { indices: [] },
+        outcome: "completed",
+        frame: {
+          job_id: "job-1",
+          turn: 0,
+          visits: 8,
+          winrate_black: 0.61,
+          score_mean_black: 1.5,
+          candidates: [{ vertex: { point: { x: 0, y: 0 } }, visits: 8, winrate_black: 0.61, score_mean_black: 1.5, pv: [] }]
+        }
+      });
+      await backend.classifyProblems.mock.results.at(-1)?.value;
+    });
+    expect.soft(host.textContent).not.toContain("61.0%");
+
+    await act(async () => {
+      nextMove.click();
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      prevMove.click();
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
+    });
+    expect(host.textContent).not.toContain("61.0%");
+  });
+
   it("does not restore presentation or cache from a stale whole-game completion", async () => {
     const host = await renderApp();
     await readyEngine(host);

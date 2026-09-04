@@ -705,7 +705,7 @@ export function App() {
         setFrames([]);
         setProblems([]);
         setSelectedCandidateIndex(null);
-        await abandonWholeGameSession();
+        await abandonAnalysisSessions();
         const previewMessage = options.successMessage(parsed, options.fallbackName ?? "SGF");
         setMessage(`${nativeCurrentGameUnavailable} ${previewMessage}`);
         return true;
@@ -718,6 +718,7 @@ export function App() {
     try {
       const result = await replaceCurrentGame(sgfInput, nativePath);
       adoptCurrentGame(result);
+      await abandonAnalysisSessions();
       const artifacts = await artifactsFromCurrentGame();
       pendingSelectedPathRef.current = result.selected_path;
       setChosenChildren(chosenFromPath(result.selected_path));
@@ -730,7 +731,6 @@ export function App() {
       setFrames([]);
       setProblems([]);
       setSelectedCandidateIndex(null);
-      await abandonWholeGameSession();
       const fileName = fileNameFromPath(result.native_path ?? options.fallbackName ?? "SGF");
       const success = options.successMessage(artifacts.projection, fileName);
       setMessage(success);
@@ -762,6 +762,7 @@ export function App() {
       if (!document) return;
       const result = await replaceCurrentGame(document.sgfText, document.path);
       adoptCurrentGame(result);
+      await abandonAnalysisSessions();
       const artifacts = await artifactsFromCurrentGame();
       pendingSelectedPathRef.current = result.selected_path;
       setSgfText(document.sgfText);
@@ -773,7 +774,6 @@ export function App() {
       setFrames([]);
       setProblems([]);
       setSelectedCandidateIndex(null);
-      await abandonWholeGameSession();
       const openedMessage = `Opened ${fileNameFromPath(result.native_path ?? document.path ?? "SGF")}: ${artifacts.projection.summary.move_count} moves.`;
       setMessage(openedMessage);
     } catch (error) {
@@ -845,15 +845,19 @@ export function App() {
     setWholeGameProgress(null);
   }
 
-  async function abandonWholeGameSession() {
-    const pending = wholeGameJobRef.current;
+  async function abandonAnalysisSessions() {
+    const selected = selectedNodeJobRef.current;
+    const wholeGame = wholeGameJobRef.current;
+    selectedNodeJobRef.current = null;
+    setSelectedNodeRunning(false);
     resetWholeGameSession();
-    if (!pending) return;
-    try {
-      await cancelKataGoAnalysis(pending.run_id, pending.job_id);
-    } catch {
-      // Document identity already dropped; a failed cancel may leave the lane occupied.
-    }
+    const selectedCancellation = selected
+      ? cancelSelectedNodeAnalysis({ runId: selected.run_id, jobId: selected.job_id })
+      : Promise.resolve();
+    const wholeGameCancellation = wholeGame
+      ? cancelKataGoAnalysis(wholeGame.run_id, wholeGame.job_id)
+      : Promise.resolve();
+    await Promise.allSettled([selectedCancellation, wholeGameCancellation]);
   }
 
   function clearWholeGameRunning() {
@@ -907,7 +911,7 @@ export function App() {
         selectedPath: [...job.node_path.indices],
         requestToken: job.job_id
       };
-      if (!admitsAnalysisPublication(job, publication) || !job.frame) {
+      if (!admitsAnalysisPublication(job, publication) || !job.frame || !isCurrentDocumentGeneration(job.generation)) {
         clearSelectedNodeRunning(job.job_id);
         return;
       }
@@ -1137,10 +1141,10 @@ export function App() {
       }
       setDirty(result.dirty);
       if (result.generation === previousGeneration) return;
+      await abandonAnalysisSessions();
       const artifacts = await artifactsFromCurrentGame();
       setGame(artifacts.projection);
       clearReviewData();
-      await abandonWholeGameSession();
       setMessage("已更新选中节点的个人评论。");
     } catch (error) {
       setMessage(`评论更新失败: ${errorMessage(error)}`);
@@ -1235,7 +1239,7 @@ export function App() {
       setMessage("落子已接受。");
       if (result.generation !== previousGeneration) {
         clearReviewData();
-        await abandonWholeGameSession();
+        await abandonAnalysisSessions();
         const artifacts = await artifactsFromCurrentGame();
         if (documentGenerationRef.current !== result.generation) return;
         setGame(artifacts.projection);
@@ -1259,7 +1263,7 @@ export function App() {
       setDirty(result.dirty);
       setCurrentMove(result.snapshot.position.move_number);
       clearReviewData();
-      await abandonWholeGameSession();
+      await abandonAnalysisSessions();
       const artifacts = await artifactsFromCurrentGame();
       if (!isCurrentDocumentGeneration(result.generation)) return;
       setGame(artifacts.projection);

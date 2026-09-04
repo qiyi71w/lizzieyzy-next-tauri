@@ -125,7 +125,7 @@ const fourMovePv: AnalysisFrameDto["candidates"] = [
     visits: 40,
     winrate_black: 0.62,
     score_mean_black: 2.8,
-    pv: [{ point: { x: 2, y: 2 } }, { point: { x: 4, y: 4 } }, { point: { x: 5, y: 5 } }]
+    pv: [{ point: { x: 3, y: 3 } }, { point: { x: 2, y: 2 } }, { point: { x: 4, y: 4 } }, { point: { x: 5, y: 5 } }]
   }
 ];
 

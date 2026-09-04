@@ -10,8 +10,22 @@ export type VariationReplayIdentity = {
 export function variationReplayPointSteps(candidate: CandidateMoveDto | null | undefined): PointDto[] {
   if (!candidate) return [];
   const steps: PointDto[] = [];
-  if (isPoint(candidate.vertex)) steps.push(candidate.vertex.point);
-  for (const vertex of candidate.pv) {
+  let pvOffset = 0;
+  if (isPoint(candidate.vertex)) {
+    const candidatePoint = candidate.vertex.point;
+    steps.push(candidatePoint);
+    const firstPvVertex = candidate.pv[0];
+    if (
+      firstPvVertex
+      && isPoint(firstPvVertex)
+      && firstPvVertex.point.x === candidatePoint.x
+      && firstPvVertex.point.y === candidatePoint.y
+    ) {
+      pvOffset = 1;
+    }
+  }
+  for (let index = pvOffset; index < candidate.pv.length; index += 1) {
+    const vertex = candidate.pv[index];
     if (isPoint(vertex)) steps.push(vertex.point);
   }
   return steps;
