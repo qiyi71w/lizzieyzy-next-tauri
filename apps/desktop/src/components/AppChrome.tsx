@@ -156,7 +156,18 @@ export function AppChrome(props: Props) {
             <MenuItem label="落子评价标记(Alt+M)" disabled title={later} />
             <MenuItem label="自动播放(Ctrl+A)" onClick={() => run(props.onAutoPlay)} />
             <MenuItem label="胜率图设置" disabled title={later} />
-            <MenuItem label="小棋盘设置" disabled title={later} />
+            <SubMenu label="小棋盘设置">
+              <MenuCheck
+                label="变化图"
+                checked={props.preferences.subBoardContentMode !== "raw"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, subBoardContentMode: "variation" }))}
+              />
+              <MenuCheck
+                label="纯棋子"
+                checked={props.preferences.subBoardContentMode === "raw"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, subBoardContentMode: "raw" }))}
+              />
+            </SubMenu>
             <MenuItem label="布局模式" disabled title={later} />
           </ChromeMenu>
           <ChromeMenu label="棋局" open={openMenu === "game"} onToggle={() => setOpenMenu(openMenu === "game" ? null : "game")}>

@@ -1,4 +1,4 @@
-import type { AppPreferences, BoardTheme, ReviewMode } from "../domain/preferences";
+import type { AppPreferences, BoardTheme, ReviewMode, SubBoardContentMode } from "../domain/preferences";
 
 type Props = {
   preferences: AppPreferences;
@@ -34,6 +34,17 @@ export function PreferencesPanel({ preferences, status, disabled = false, onChan
             disabled={disabled}
             onChange={(event) => update({ candidateLimit: Number(event.target.value) })}
           />
+        </label>
+        <label>
+          <span>小棋盘内容</span>
+          <select
+            value={preferences.subBoardContentMode}
+            disabled={disabled}
+            onChange={(event) => update({ subBoardContentMode: event.target.value as SubBoardContentMode })}
+          >
+            <option value="variation">变化图</option>
+            <option value="raw">纯棋子</option>
+          </select>
         </label>
       </fieldset>
       <fieldset className="preferences-grid">

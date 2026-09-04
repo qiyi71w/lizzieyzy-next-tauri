@@ -29,6 +29,12 @@ describe("browser preference storage", () => {
     expect(loaded.recovery).toBeUndefined();
   });
 
+  it("fills missing Sub-Board content mode as Variation", async () => {
+    window.localStorage.setItem(storageKey, JSON.stringify({ showCandidates: false }));
+    const loaded = await loadAppPreferences();
+    expect(loaded.preferences.subBoardContentMode).toBe("variation");
+  });
+
   it("isolates unreadable storage, loads defaults, and reports recovery", async () => {
     window.localStorage.setItem(storageKey, "{not-json");
     const loaded = await loadAppPreferences();

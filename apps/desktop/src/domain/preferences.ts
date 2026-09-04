@@ -1,5 +1,6 @@
 export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
+export type SubBoardContentMode = "variation" | "raw";
 
 export type AppPreferences = {
   showOwnership: boolean;
@@ -11,6 +12,7 @@ export type AppPreferences = {
   defaultMaxVisits: number;
   reviewMode: ReviewMode;
   boardTheme: BoardTheme;
+  subBoardContentMode: SubBoardContentMode;
 };
 
 export const defaultAppPreferences: AppPreferences = {
@@ -22,7 +24,8 @@ export const defaultAppPreferences: AppPreferences = {
   autoSaveAnalysis: true,
   defaultMaxVisits: 800,
   reviewMode: "quick",
-  boardTheme: "classic"
+  boardTheme: "classic",
+  subBoardContentMode: "variation"
 };
 
 export function normalizeAppPreferences(value: Partial<AppPreferences> | null | undefined): AppPreferences {
@@ -35,7 +38,8 @@ export function normalizeAppPreferences(value: Partial<AppPreferences> | null | 
     autoSaveAnalysis: booleanValue(value?.autoSaveAnalysis, defaultAppPreferences.autoSaveAnalysis),
     defaultMaxVisits: integerValue(value?.defaultMaxVisits, defaultAppPreferences.defaultMaxVisits, 1, 1_000_000),
     reviewMode: value?.reviewMode === "deep" ? "deep" : "quick",
-    boardTheme: value?.boardTheme === "high-contrast" ? "high-contrast" : "classic"
+    boardTheme: value?.boardTheme === "high-contrast" ? "high-contrast" : "classic",
+    subBoardContentMode: value?.subBoardContentMode === "raw" ? "raw" : "variation"
   };
 }
 

@@ -179,6 +179,23 @@ Repository evidence (does not substitute for native GUI or live KataGo):
 cd apps/desktop && npx vitest run src/AnalysisPresentation.test.tsx src/EngineLifecycle.test.tsx src/SelectedNodeAnalysis.test.tsx
 ```
 
+### 5.2 Persisted Sub-Board Variation And Raw
+
+- Open `显示` → `小棋盘设置`. Confirm first-use is `变化图` and the Sub-Board aria-label is `参考图变化副棋盘`.
+- With a live selected-node candidate list, confirm Variation shows the numbered active PV. Switch to `纯棋子` and confirm the Sub-Board keeps current stones but drops PV, branch, and move numbers, including after hovering a main-board candidate.
+- Confirm `参数` / Preferences `小棋盘内容` edits the same durable mode, including while the analysis rail stays visible. Collapse/hide of the rail (if used) must not rewrite the mode and is not Raw.
+- Quit and start `npm run tauri:dev` again. Confirm the last successfully saved mode is restored.
+- A failed write must keep the previous visible mode and report the save failure.
+
+Repository equivalent:
+
+```bash
+cd apps/desktop && npx vitest run src/SubBoardContentMode.test.tsx src/components/AnalysisPanel.test.tsx src/App.preferences.test.tsx src/api/preferences.test.ts
+cargo test -p app-preferences
+```
+
+Expected result: Variation/Raw is one durable PREF-01 value, not an SGF field and not rail collapse. Missing storage loads Variation. Native KataGo/GTK is not required for this repository evidence. Native restart smoke of Raw and Variation remains a separate desktop column.
+
 ### 6. Cancel Analysis
 
 - On one resident Ready run, start both `分析此手` and `自动分析`.

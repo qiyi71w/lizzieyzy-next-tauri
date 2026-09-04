@@ -29,6 +29,8 @@ pub struct AppPreferencesDto {
     pub review_mode: String,
     #[serde(default = "default_board_theme")]
     pub board_theme: String,
+    #[serde(default = "default_sub_board_content_mode")]
+    pub sub_board_content_mode: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +59,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         default_max_visits: default_max_visits(),
         review_mode: default_review_mode(),
         board_theme: default_board_theme(),
+        sub_board_content_mode: default_sub_board_content_mode(),
     }
 }
 
@@ -68,6 +71,9 @@ pub fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPrefe
     }
     if preferences.board_theme != "high-contrast" {
         preferences.board_theme = default_board_theme();
+    }
+    if preferences.sub_board_content_mode != "raw" {
+        preferences.sub_board_content_mode = default_sub_board_content_mode();
     }
     preferences
 }
@@ -205,6 +211,10 @@ fn default_board_theme() -> String {
     "classic".to_string()
 }
 
+fn default_sub_board_content_mode() -> String {
+    "variation".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,6 +253,7 @@ mod tests {
             default_max_visits: 200,
             review_mode: "deep".to_string(),
             board_theme: "high-contrast".to_string(),
+            sub_board_content_mode: "raw".to_string(),
         }
     }
 
@@ -268,6 +279,19 @@ mod tests {
         assert!(loaded.preferences.show_policy);
         assert_eq!(loaded.preferences.review_mode, "quick");
         assert_eq!(loaded.preferences.board_theme, "classic");
+        assert_eq!(loaded.preferences.sub_board_content_mode, "variation");
+        assert!(loaded.recovery.is_none());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn missing_sub_board_content_mode_defaults_to_variation() {
+        let (dir, path) = temp_prefs();
+        fs::write(&path, r#"{"showCandidates":true}"#).unwrap();
+
+        let loaded = load_from_path(&path).unwrap();
+        assert_eq!(loaded.preferences.sub_board_content_mode, "variation");
         assert!(loaded.recovery.is_none());
 
         let _ = fs::remove_dir_all(dir);

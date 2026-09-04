@@ -1453,6 +1453,7 @@ export function App() {
           previewCandidateIndex={previewCandidateIndex}
           onSelectCandidate={selectCandidate}
           onSelectProblem={handleMoveSelect}
+          contentMode={preferences.subBoardContentMode}
         />
       </aside>
     </section>

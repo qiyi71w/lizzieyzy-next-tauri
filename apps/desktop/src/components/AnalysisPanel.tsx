@@ -4,6 +4,7 @@ import { isPoint, vertexLabel } from "../domain/board";
 
 type PolicyPoint = { x: number; y: number; value: number };
 type Pane = "commentary" | "reference";
+type SubBoardContentMode = "variation" | "raw";
 
 type Props = {
   frame?: AnalysisFrameDto;
@@ -21,6 +22,7 @@ type Props = {
   onSelectCandidate: (index: number) => void;
   onSelectProblem: (moveNumber: number) => void;
   pane?: Pane;
+  contentMode?: SubBoardContentMode;
 };
 
 const severityLabel: Record<ProblemMarkerDto["severity"], string> = {
@@ -45,7 +47,8 @@ export function AnalysisPanel({
   previewCandidateIndex = null,
   onSelectCandidate,
   onSelectProblem,
-  pane = "commentary"
+  pane = "commentary",
+  contentMode = "variation"
 }: Props) {
   const [leftTab, setLeftTab] = useState<"commentary" | "problems">("commentary");
   const [commentDraft, setCommentDraft] = useState(personalComment);
@@ -132,6 +135,7 @@ export function AnalysisPanel({
               boardSize={boardSize}
               position={currentPosition}
               candidate={activeCandidate}
+              contentMode={contentMode}
             />
           </div>
         </section>
@@ -265,11 +269,13 @@ export function AnalysisPanel({
 function SubBoardCanvas({
   boardSize,
   position,
-  candidate
+  candidate,
+  contentMode
 }: {
   boardSize: number;
   position?: PositionDto;
   candidate: CandidateMoveDto | null;
+  contentMode: SubBoardContentMode;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -326,7 +332,7 @@ function SubBoardCanvas({
     }
 
     // 5. PV 变化步骤绘制 (1, 2, 3, 4, 5...)
-    if (candidate) {
+    if (contentMode === "variation" && candidate) {
       const pvSteps: { x: number; y: number; step: number; color: "black" | "white" }[] = [];
       let turnColor: "black" | "white" = position?.to_play ?? "black";
 
@@ -376,9 +382,15 @@ function SubBoardCanvas({
         ctx.fillText(String(item.step), cx, cy);
       }
     }
-  }, [boardSize, position, candidate]);
+  }, [boardSize, position, candidate, contentMode]);
 
-  return <canvas ref={canvasRef} className="subboard-canvas" aria-label="参考图变化副棋盘" />;
+  return (
+    <canvas
+      ref={canvasRef}
+      className="subboard-canvas"
+      aria-label={contentMode === "raw" ? "纯棋子副棋盘" : "参考图变化副棋盘"}
+    />
+  );
 }
 
 function lastMoveLabel(position: PositionDto | undefined, boardSize: number): string {
