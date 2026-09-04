@@ -14,9 +14,10 @@ Implemented in the Next workspace:
 - One Rust-owned editable SGF workspace with complete-tree `NodePath` navigation, legal move/pass editing, variation removal, personal comments, setup/metadata preservation, and semantic save/reopen.
 - Native SGF Open, Save, and Save As through the Tauri desktop backend, including cancellation and failed-write state preservation.
 - A Windows-native no-engine workflow covering open, navigate, edit, comment, remove, save, reopen, and rejected ACL Save As.
-- KataGo one-position analysis and full-game batch analysis through analysis JSONL.
-- Analysis progress events, cancellation, candidate moves, ownership, policy, and winrate/progress overlays.
-- Attached analysis persists in the SGF through ordinary Save / Save As.
+- Manager-owned selected-node and first-child-mainline KataGo analysis with independent lane state, cancellation, progress, and exact `NodePath` publication.
+- Exact-node candidates, PV, ownership, policy, fixed six-level Move Rank, next-move markers, winrate/score charts, persisted Sub-Board modes, and synchronized Variation Replay.
+- Java-compatible `LZ` / `LZOP` / `LZ2` / `LZOP2` analysis exchange and SGF-only persistence through ordinary Save / Save As.
+- Durable categorized preferences plus a registry-owned, focus-safe shortcut reference.
 - Engine path/model/config pickers, asset checks, and multiple engine profiles persisted in app data.
 - A manager-owned Foreground Engine Run: Engine Switcher Start/Stop/Restart, Autoload Default, transactional A→B switch with failed-B rollback, typed failure, and manual recovery on a real `KataGoAnalysis` path.
 - Scaffold validation, Rust tests, and frontend build checks wired for local and CI use.
@@ -39,7 +40,7 @@ Provider and readboard work in this batch should be treated as offline contract/
 
 [The parity matrix](docs/PARITY_MATRIX.md) is the item-level source of truth. This table is a compact roll-up, not a second status tracker.
 
-The completed [Migration Baseline v1 traceability audit](docs/MIGRATION_TRACEABILITY_AUDIT.md) reconstructed 139 Frozen IDs, 108 Parity Items, and no unresolved mapping remainder. The [capability inventory](docs/JAVA_CAPABILITY_INVENTORY.md) records the frozen user-reachable surface. R3 Foreground Engine Lifecycle has exited. R4 Analysis is the next executable phase.
+The completed [Migration Baseline v1 traceability audit](docs/MIGRATION_TRACEABILITY_AUDIT.md) reconstructed 139 Frozen IDs and 108 baseline Parity Items with no unresolved mapping remainder. The [capability inventory](docs/JAVA_CAPABILITY_INVENTORY.md) records the frozen user-reachable surface. R3 Foreground Engine Lifecycle and R4 Analysis have exited. R5 Safe Current Game / Application Shell is the next executable phase, beginning with `SGF-07`.
 
 Status and evidence are separate. The evidence ladder is `Not started` → `Scaffolded` → `Behavior implemented` → `Repository tested` → `Native/live verified`. Environment-independent behavior can be accepted at `Repository tested`; native/live evidence is not required for those items.
 
@@ -52,10 +53,12 @@ Status and evidence are separate. The evidence ladder is `Not started` → `Scaf
 | Core review presentation and interaction | `UI-01`–`UI-03`, `UI-05` | Accepted / Partial | Native/live verified | `UI-02` still lacks engine-event delivery evidence while a board mutation promise is pending. |
 | No-engine desktop workflow | `UI-04` | Accepted | Native/live verified | None. |
 | Engine profiles and asset checks | `ENG-01` | Accepted | Repository tested | None within this item. |
-| Foreground engine lifecycle, switching, rollback, jobs, autoload, and recovery | `ENG-02`–`ENG-07` | Accepted | Native/live verified | None for the R3 `KataGoAnalysis` lifecycle. Analysis product contracts remain R4. |
-| Interactive and whole-game analysis | `ANA-01`–`ANA-04` | Partial | Repository tested | Manager-owned lifecycle binding and controlled/native KataGo evidence. |
-| Analysis cache basics | `ANA-05` | Accepted | Repository tested | Branch-aware cache decisions remain in later R4 work. |
-| Preferences | `PREF-01` | Partial | Repository tested | Complete settings inventory and native restart evidence. |
+| Foreground engine lifecycle, switching, rollback, jobs, autoload, and recovery | `ENG-02`–`ENG-07` | Accepted | Native/live verified | None for the R3 `KataGoAnalysis` lifecycle. |
+| Manager-owned selected-node and first-child-mainline analysis | `ANA-01`–`ANA-04` | Accepted | Native/live verified | None for R4. |
+| Java-compatible SGF analysis exchange and SGF-only persistence | `ANA-05`, `ANA-08`, `ANA-14` | Accepted | Native/live verified | `ANA-05` remains frozen historical evidence; `ANA-14` owns the current runtime. |
+| Analysis review presentation | `ANA-10`–`ANA-13` | Accepted | Native/live verified | None for fixed Move Rank, markers, charts, Sub-Board modes, and Variation Replay. |
+| Durable preferences mechanism and categorized surface | `PREF-01` | Accepted | Native/live verified | Later owner-domain preferences remain tracked by their own items. |
+| Shortcut registry and reference | `APP-05` | Accepted | Native/live verified | None. |
 | Adjustable and persisted layout | `LAYOUT-01`–`LAYOUT-03` | Missing | Not started | Splitters, persistence, and narrow reset behavior. |
 | Engine game modes | `GAME-01`–`GAME-03` | Missing | Not started | Session state, controls, batch revision, and SGF integration. |
 | Yike and Fox providers | `PROV-01`–`PROV-02` | Partial | Repository tested | Live sessions, network behavior, and recovery evidence. |
