@@ -24,6 +24,7 @@ pub enum AnalysisJobLaneDto {
 #[serde(rename_all = "snake_case")]
 pub enum AnalysisJobOutcomeDto {
     Started,
+    Progress,
     Completed,
     Cancelled,
     Superseded,
@@ -56,6 +57,12 @@ pub struct AnalysisJobEventDto {
     pub generation: u64,
     pub node_path: NodePath,
     pub outcome: AnalysisJobOutcomeDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame: Option<AnalysisFrameDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -96,12 +103,25 @@ pub fn admits_analysis_publication(
         && event.node_path == current.node_path
 }
 
+pub fn admits_analysis_attachment(event: &AnalysisJobEventDto) -> bool {
+    let Some(frame) = event.frame.as_ref() else {
+        return false;
+    };
+    if frame.visits == 0 || frame.candidates.is_empty() {
+        return false;
+    }
+    match event.lane {
+        AnalysisJobLaneDto::SelectedNode => event.outcome == AnalysisJobOutcomeDto::Completed,
+        AnalysisJobLaneDto::WholeGame => event.outcome == AnalysisJobOutcomeDto::Progress,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        AnalysisFrameDto, EngineFailureKind, EngineOperationDto, ForegroundEngineEventDto, MoveVertex,
-        PointDto,
+        AnalysisFrameDto, CandidateMoveDto, EngineFailureKind, EngineOperationDto, ForegroundEngineEventDto,
+        MoveVertex, PointDto,
     };
     use uuid::Uuid;
 
@@ -120,6 +140,9 @@ mod tests {
             generation,
             node_path: NodePath { indices },
             outcome,
+            completed: None,
+            expected: None,
+            remaining: None,
             frame: with_frame.then(|| AnalysisFrameDto {
                 job_id: Uuid::nil(),
                 game_id: None,
@@ -167,7 +190,11 @@ mod tests {
         assert_eq!(event_json["type"], "job");
         assert_eq!(event_json["job"]["run_id"], "run-1");
         assert_eq!(event_json["job"]["job_id"], "job-1");
+        assert_eq!(event_json["job"]["lane"], "selected_node");
+        assert_eq!(event_json["job"]["generation"], 7);
         assert_eq!(event_json["job"]["outcome"], "completed");
+        assert!(event_json["job"].get("completed").is_none());
+        assert!(event_json["job"].get("expected").is_none());
         assert_eq!(
             event_json["job"]["node_path"]["indices"],
             serde_json::json!([0, 1])
@@ -272,5 +299,98 @@ mod tests {
             ),
             &current
         ));
+    }
+
+    #[test]
+    fn unified_job_progress_keeps_lane_generation_path_and_counts() {
+        let event = AnalysisJobEventDto {
+            run_id: "run-1".into(),
+            job_id: "job-9".into(),
+            lane: AnalysisJobLaneDto::WholeGame,
+            generation: 4,
+            node_path: NodePath { indices: vec![] },
+            outcome: AnalysisJobOutcomeDto::Progress,
+            completed: Some(1),
+            expected: Some(3),
+            remaining: Some(2),
+            frame: None,
+            failure: None,
+        };
+        let wrapped = ForegroundEngineEventDto::Job { job: event.clone() };
+        let json = serde_json::to_value(&wrapped).unwrap();
+        assert_eq!(json["type"], "job");
+        assert_eq!(json["job"]["lane"], "whole_game");
+        assert_eq!(json["job"]["run_id"], "run-1");
+        assert_eq!(json["job"]["job_id"], "job-9");
+        assert_eq!(json["job"]["generation"], 4);
+        assert_eq!(json["job"]["node_path"]["indices"], serde_json::json!([]));
+        assert_eq!(json["job"]["outcome"], "progress");
+        assert_eq!(json["job"]["completed"], 1);
+        assert_eq!(json["job"]["expected"], 3);
+        assert_eq!(json["job"]["remaining"], 2);
+        let decoded: ForegroundEngineEventDto = serde_json::from_value(json).unwrap();
+        match decoded {
+            ForegroundEngineEventDto::Job { job } => assert_eq!(job, event),
+            other => panic!("expected job event, got {other:?}"),
+        }
+        assert!(!admits_analysis_publication(&event, &event.publication_scope()));
+    }
+
+    fn projectable_frame() -> AnalysisFrameDto {
+        AnalysisFrameDto {
+            job_id: Uuid::nil(),
+            game_id: None,
+            node_id: None,
+            turn: 0,
+            visits: 32,
+            winrate_black: 0.55,
+            score_mean_black: 1.5,
+            score_stdev: Some(0.2),
+            candidates: vec![CandidateMoveDto {
+                vertex: MoveVertex::Point(PointDto { x: 3, y: 3 }),
+                visits: 32,
+                winrate_black: 0.55,
+                score_mean_black: 1.5,
+                policy_prior: Some(0.4),
+                pv: vec![MoveVertex::Point(PointDto { x: 3, y: 3 })],
+            }],
+            ownership: None,
+            policy: None,
+        }
+    }
+
+    #[test]
+    fn admits_analysis_attachment_requires_projectable_lane_outcomes() {
+        let mut selected = sample_event(
+            "run-1",
+            "job-1",
+            7,
+            vec![],
+            AnalysisJobOutcomeDto::Completed,
+            true,
+        );
+        selected.frame = Some(projectable_frame());
+        assert!(admits_analysis_attachment(&selected));
+        selected.outcome = AnalysisJobOutcomeDto::Cancelled;
+        assert!(!admits_analysis_attachment(&selected));
+        selected.outcome = AnalysisJobOutcomeDto::Failed;
+        assert!(!admits_analysis_attachment(&selected));
+        selected.outcome = AnalysisJobOutcomeDto::Completed;
+        selected.frame = None;
+        assert!(!admits_analysis_attachment(&selected));
+
+        let mut whole = selected.clone();
+        whole.lane = AnalysisJobLaneDto::WholeGame;
+        whole.outcome = AnalysisJobOutcomeDto::Progress;
+        whole.frame = Some(projectable_frame());
+        assert!(admits_analysis_attachment(&whole));
+        whole.outcome = AnalysisJobOutcomeDto::Completed;
+        assert!(!admits_analysis_attachment(&whole));
+        let mut empty = projectable_frame();
+        empty.visits = 0;
+        empty.candidates.clear();
+        whole.outcome = AnalysisJobOutcomeDto::Progress;
+        whole.frame = Some(empty);
+        assert!(!admits_analysis_attachment(&whole));
     }
 }

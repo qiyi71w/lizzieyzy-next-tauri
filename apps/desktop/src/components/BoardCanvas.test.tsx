@@ -297,6 +297,61 @@ describe("BoardCanvas candidate preview", () => {
   });
 });
 
+
+describe("BoardCanvas next-move review markers", () => {
+  const variationMarkers = [
+    { point: { x: 3, y: 3 }, primary: true, rank: null },
+    { point: { x: 6, y: 5 }, primary: false, rank: null }
+  ];
+
+  it("draws nothing in Off", () => {
+    const { canvas, host, rerender } = renderBoard({
+      nextMoveMode: "off",
+      nextMoveMarkers: variationMarkers
+    });
+    paintAtCssSize(canvas, rerender);
+    expect(host.querySelector(".board-canvas")?.getAttribute("data-next-move-mode")).toBe("off");
+    expect(drawArc.mock.calls.some((call) => call[2] === 10.25 * 0.22 || call[2] === 10.25 * 0.16)).toBe(false);
+  });
+
+  it("marks all children and uses a thicker Primary Child ring", () => {
+    const { canvas, host, rerender } = renderBoard({
+      nextMoveMode: "variations",
+      nextMoveMarkers: variationMarkers
+    });
+    paintAtCssSize(canvas, rerender);
+    expect(host.querySelector(".board-canvas")?.getAttribute("data-next-move-mode")).toBe("variations");
+    const padding = 9;
+    const grid = 10.25;
+    expect(drawArc.mock.calls.some((call) => call[0] === padding + 3 * grid && call[1] === padding + 3 * grid && call[2] === grid * 0.22)).toBe(true);
+    expect(drawArc.mock.calls.some((call) => call[0] === padding + 6 * grid && call[1] === padding + 5 * grid && call[2] === grid * 0.16)).toBe(true);
+    expect(drawStroke.mock.calls.some((call) => call[0] === "#163f96" && call[1] === 2)).toBe(true);
+    expect(drawStroke.mock.calls.some((call) => call[0] === "rgba(33,86,199,.55)" && call[1] === 1)).toBe(true);
+  });
+
+  it("keeps the Primary Child grade visible in Graded", () => {
+    const graded = [
+      { point: { x: 3, y: 3 }, primary: true, rank: "blunder" as const },
+      { point: { x: 6, y: 5 }, primary: false, rank: null }
+    ];
+    const { host } = renderBoard({
+      nextMoveMode: "graded",
+      nextMoveMarkers: graded
+    });
+    expect(host.querySelector(".board-canvas")?.getAttribute("data-next-move-markers")).toBe(JSON.stringify(graded));
+  });
+
+  it("keeps next-move marks independent of candidate overlay mode", () => {
+    const { host } = renderBoard({
+      overlayMode: "ownership",
+      nextMoveMode: "variations",
+      nextMoveMarkers: variationMarkers
+    });
+    expect(host.querySelector(".board-canvas")?.getAttribute("data-next-move-mode")).toBe("variations");
+    expect(JSON.parse(host.querySelector(".board-canvas")?.getAttribute("data-next-move-markers") ?? "[]")).toEqual(variationMarkers);
+  });
+});
+
 function dispatchKey(canvas: HTMLCanvasElement, key: string) {
   act(() => {
     canvas.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
@@ -307,13 +362,19 @@ function renderBoard({
   onCandidatePreview,
   analysis: boardAnalysis,
   previewScope,
-  initialPosition = position
+  initialPosition = position,
+  overlayMode,
+  nextMoveMode,
+  nextMoveMarkers
 }: {
   onPointClick?: (point: PointDto) => void;
   onCandidatePreview?: (index: number | null) => void;
   analysis?: AnalysisFrameDto;
   previewScope?: ReviewPresentationScope;
   initialPosition?: PositionDto;
+  overlayMode?: "candidates" | "ownership" | "policy";
+  nextMoveMode?: "off" | "variations" | "graded";
+  nextMoveMarkers?: Array<{ point: { x: number; y: number }; primary: boolean; rank: "best" | "good" | "normal" | "inaccuracy" | "mistake" | "blunder" | null }>;
 }) {
   const host = document.createElement("div");
   document.body.append(host);
@@ -326,13 +387,24 @@ function renderBoard({
         onPointClick={onPointClick}
         onCandidatePreview={onCandidatePreview}
         previewScope={nextPreviewScope}
+        overlayMode={overlayMode}
+        nextMoveMode={nextMoveMode}
+        nextMoveMarkers={nextMoveMarkers}
       />
     ));
   };
   rerender(initialPosition);
   const canvas = host.querySelector("canvas");
   if (!canvas) throw new Error("BoardCanvas did not render a canvas");
-  return { canvas, rerender };
+  return { canvas, rerender, host };
+}
+
+function paintAtCssSize(canvas: HTMLCanvasElement, rerender: (position: PositionDto) => void) {
+  Object.defineProperties(canvas, {
+    clientWidth: { configurable: true, value: 100 },
+    clientHeight: { configurable: true, value: 100 }
+  });
+  rerender({ ...position });
 }
 
 function ScopeTransitionBoard({

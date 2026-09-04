@@ -9,37 +9,38 @@ use app_model::{
 };
 use engine_manager::{
     build_command_spec, check_assets, default_engine_profiles_settings, normalize_engine_profiles,
-    parse_engine_profiles, save_engine_profiles as persist_engine_profiles, AnalysisJobEventDto, AssetCheck,
-    CommandSpec, EngineProfileCatalog, EngineProfileRecord as EngineProfileRecordDto,
+    parse_engine_profiles, save_engine_profiles as persist_engine_profiles, AssetCheck, CommandSpec,
+    EngineProfileCatalog, EngineProfileRecord as EngineProfileRecordDto,
     EngineProfilesSettings as EngineProfilesSettingsDto, ForegroundEngineConfig, ForegroundEngineManager,
-    SavedEngineProfile, SelectedNodeJobRequest, DEFAULT_ENGINE_PROFILE_ID,
+    SavedEngineProfile, SelectedNodeJobRequest, WholeGameJobRequest, WholeGameWorkItem,
+    DEFAULT_ENGINE_PROFILE_ID,
 };
 use go_core::ReadBoardLocalContext;
-use katago_protocol::{analysis_query_from_position, AnalysisBatchQueryOptions, AnalysisQueryOptions};
+use katago_protocol::{analysis_query_from_position, AnalysisQueryOptions};
 use provider_core::{
     invalid_payload, invalid_request, invalid_url, timeout, transport_failed, ProviderResult,
     ProviderTransport,
 };
-use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod current_game_state;
 mod save_as;
 #[cfg(windows)]
 extern crate windows_core;
-use current_game_state::CurrentGameState;
+use app_preferences::{
+    load_from_path as load_app_preferences_from_path, save_to_path, AppPreferencesDto,
+    AppPreferencesLoadResultDto, APP_PREFERENCES_FILE,
+};
+use current_game_state::{CurrentGameState, WholeGameAdmission};
 use uuid::Uuid;
 
 const ENGINE_PROFILE_FILE: &str = "lizzieyzy-next-engine-profile.json";
-const APP_PREFERENCES_FILE: &str = "lizzieyzy-next-app-preferences.json";
-const ANALYSIS_CACHE_DB_FILE: &str = "analysis-cache.sqlite3";
 const DEFAULT_PROVIDER_HTTP_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Debug, Default)]
@@ -253,100 +254,6 @@ fn map_engine_failure(failure: EngineFailureDto) -> String {
 struct EngineProfileSettingsDto {
     profile: EngineProfileDto,
     max_visits: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AppPreferencesDto {
-    #[serde(default = "default_show_ownership")]
-    show_ownership: bool,
-    #[serde(default = "default_show_policy")]
-    show_policy: bool,
-    #[serde(default = "default_show_candidates")]
-    show_candidates: bool,
-    #[serde(default = "default_candidate_limit")]
-    candidate_limit: u32,
-    #[serde(default = "default_auto_load_cache")]
-    auto_load_cache: bool,
-    #[serde(default = "default_auto_save_analysis")]
-    auto_save_analysis: bool,
-    #[serde(default = "default_max_visits")]
-    default_max_visits: u32,
-    #[serde(default = "default_review_mode")]
-    review_mode: String,
-    #[serde(default = "default_board_theme")]
-    board_theme: String,
-}
-
-struct PreparedBatchAnalysis {
-    query_jsonl: String,
-    turns: Vec<u32>,
-    board_size: u8,
-    expected: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct AnalysisProgressPayload {
-    run_id: String,
-    job_id: String,
-    completed: usize,
-    expected: usize,
-    turn: Option<u32>,
-    response_jsonl: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct AnalysisCompletePayload {
-    run_id: String,
-    job_id: String,
-    frames: Vec<AnalysisFrameDto>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct AnalysisMessagePayload {
-    run_id: String,
-    job_id: String,
-    message: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct ComputeGameCacheKeyDto {
-    game_key: String,
-    sgf_hash: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AnalysisCacheRecordDto {
-    id: String,
-    game_key: String,
-    sgf_hash: String,
-    profile_id: Option<String>,
-    engine_kind: Option<String>,
-    source: String,
-    move_count: u32,
-    analyzed_move_count: u32,
-    payload: Value,
-    created_at: Option<String>,
-    updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct GetAnalysisCacheDto {
-    status: String,
-    record: Option<AnalysisCacheRecordDto>,
-    error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct SaveAnalysisCacheDto {
-    id: String,
-    game_key: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct DeleteAnalysisCacheDto {
-    deleted: usize,
 }
 
 #[tauri::command]
@@ -602,15 +509,9 @@ fn engine_asset_checks(profile: EngineProfileDto) -> Vec<AssetCheck> {
 }
 
 #[tauri::command]
-fn load_app_preferences(app_handle: AppHandle) -> Result<AppPreferencesDto, String> {
+fn load_app_preferences(app_handle: AppHandle) -> Result<AppPreferencesLoadResultDto, String> {
     let path = app_preferences_path(&app_handle)?;
-    match fs::read_to_string(&path) {
-        Ok(contents) => serde_json::from_str::<AppPreferencesDto>(&contents)
-            .map_err(|err| format!("failed to parse {}: {err}", path.display()))
-            .map(normalize_app_preferences),
-        Err(err) if err.kind() == ErrorKind::NotFound => Ok(default_app_preferences()),
-        Err(err) => Err(format!("failed to read {}: {err}", path.display())),
-    }
+    load_app_preferences_from_path(&path)
 }
 
 #[tauri::command]
@@ -618,12 +519,8 @@ fn save_app_preferences(
     app_handle: AppHandle,
     preferences: AppPreferencesDto,
 ) -> Result<AppPreferencesDto, String> {
-    let preferences = normalize_app_preferences(preferences);
     let path = app_preferences_path(&app_handle)?;
-    let json = serde_json::to_string_pretty(&preferences)
-        .map_err(|err| format!("failed to serialize app preferences: {err}"))?;
-    fs::write(&path, json).map_err(|err| format!("failed to write {}: {err}", path.display()))?;
-    Ok(preferences)
+    save_to_path(&path, preferences)
 }
 
 #[tauri::command]
@@ -697,95 +594,25 @@ fn save_engine_profiles_settings(
     persist_engine_profiles(&path, settings)
 }
 
-#[tauri::command]
-fn compute_game_cache_key(
-    sgf_text: String,
-    file_path: Option<String>,
-) -> Result<ComputeGameCacheKeyDto, String> {
-    let _ = file_path;
-    let document = sgf::parse_sgf(&sgf_text).map_err(|err| err.to_string())?;
-    let sgf_hash = stable_hash_hex(&sgf_text);
-    let canonical = serde_json::json!({
-        "document": document,
-        "raw_sgf_hash": sgf_hash,
-    });
-    let canonical_text = serde_json::to_string(&canonical)
-        .map_err(|err| format!("failed to serialize canonical SGF cache key: {err}"))?;
-    let game_key = format!("sgf:{}", stable_hash_hex(&canonical_text));
-    Ok(ComputeGameCacheKeyDto { game_key, sgf_hash })
-}
-
-#[tauri::command]
-fn get_analysis_cache(
-    app_handle: AppHandle,
-    game_key: String,
-    profile_id: Option<String>,
-    engine_kind: Option<String>,
-) -> Result<GetAnalysisCacheDto, String> {
-    let path = analysis_cache_db_path(&app_handle)?;
-    get_analysis_cache_at_path(&path, game_key, profile_id, engine_kind)
-}
-
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-fn save_analysis_cache(
-    app_handle: AppHandle,
-    game_key: String,
-    sgf_hash: String,
-    profile_id: Option<String>,
-    engine_kind: String,
-    source: String,
-    move_count: u32,
-    analyzed_move_count: u32,
-    payload: Value,
-) -> Result<SaveAnalysisCacheDto, String> {
-    let path = analysis_cache_db_path(&app_handle)?;
-    save_analysis_cache_at_path(
-        &path,
-        game_key,
-        sgf_hash,
-        profile_id,
-        engine_kind,
-        source,
-        move_count,
-        analyzed_move_count,
-        payload,
-    )
-}
-
-#[tauri::command]
-fn delete_analysis_cache(
-    app_handle: AppHandle,
-    game_key: String,
-    profile_id: Option<String>,
-    engine_kind: Option<String>,
-) -> Result<DeleteAnalysisCacheDto, String> {
-    let path = analysis_cache_db_path(&app_handle)?;
-    delete_analysis_cache_at_path(&path, game_key, profile_id, engine_kind)
-}
-
-#[tauri::command]
-fn foreground_engine_start_selected_node(
-    manager: State<'_, ForegroundEngineManager>,
-    current_game: State<'_, CurrentGameState>,
+fn bind_selected_node_job(
+    current_game: &CurrentGameState,
     run_id: String,
     generation: u64,
     node_path: NodePath,
     max_visits: u32,
-) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
-    let (snapshot, board_size, komi) =
-        current_game
-            .admit_selected_node(generation, &node_path)
-            .map_err(|error| EngineFailureDto {
-                operation: EngineOperationDto::Job,
-                run_id: Some(run_id.clone()),
-                switch_id: None,
-                job_id: None,
-                profile_id: None,
-                kind: EngineFailureKind::InvalidState,
-                message: error.message,
-                diagnostic_summary: None,
-            })?;
+) -> Result<SelectedNodeJobRequest, EngineFailureDto> {
+    let (snapshot, board_size, komi, rules) = current_game
+        .admit_selected_node(generation, &node_path)
+        .map_err(|error| EngineFailureDto {
+            operation: EngineOperationDto::Job,
+            run_id: Some(run_id.clone()),
+            switch_id: None,
+            job_id: None,
+            profile_id: None,
+            kind: EngineFailureKind::InvalidState,
+            message: error.message,
+            diagnostic_summary: None,
+        })?;
     let query = analysis_query_from_position(
         board_size,
         komi,
@@ -793,7 +620,7 @@ fn foreground_engine_start_selected_node(
         snapshot.position.to_play,
         AnalysisQueryOptions {
             id: "pending".to_string(),
-            rules: "chinese".to_string(),
+            rules,
             turn: snapshot.position.move_number,
             max_visits: Some(max_visits),
             include_ownership: Some(true),
@@ -810,13 +637,31 @@ fn foreground_engine_start_selected_node(
         message: error.to_string(),
         diagnostic_summary: None,
     })?;
-    manager.start_selected_node_job(SelectedNodeJobRequest {
+    Ok(SelectedNodeJobRequest {
         run_id,
         generation,
         node_path,
         query,
         board_size,
     })
+}
+
+#[tauri::command]
+fn foreground_engine_start_selected_node(
+    manager: State<'_, ForegroundEngineManager>,
+    current_game: State<'_, CurrentGameState>,
+    run_id: String,
+    generation: u64,
+    node_path: NodePath,
+    max_visits: u32,
+) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+    manager.start_selected_node_job(bind_selected_node_job(
+        &current_game,
+        run_id,
+        generation,
+        node_path,
+        max_visits,
+    )?)
 }
 
 #[tauri::command]
@@ -828,33 +673,70 @@ fn foreground_engine_cancel_job(
     manager.cancel_job(&run_id, &job_id)
 }
 
+fn job_failure(run_id: &str, kind: EngineFailureKind, message: String) -> EngineFailureDto {
+    EngineFailureDto {
+        operation: EngineOperationDto::Job,
+        run_id: Some(run_id.to_string()),
+        switch_id: None,
+        job_id: None,
+        profile_id: None,
+        kind,
+        message,
+        diagnostic_summary: None,
+    }
+}
+
+fn whole_game_work_items(
+    admitted: &WholeGameAdmission,
+    max_visits: u32,
+    run_id: &str,
+) -> Result<Vec<WholeGameWorkItem>, EngineFailureDto> {
+    admitted
+        .nodes
+        .iter()
+        .map(|snapshot| {
+            let query = analysis_query_from_position(
+                admitted.board_size,
+                admitted.komi,
+                &snapshot.position.stones,
+                snapshot.position.to_play,
+                AnalysisQueryOptions {
+                    id: "pending".to_string(),
+                    rules: admitted.rules.clone(),
+                    turn: snapshot.position.move_number,
+                    max_visits: Some(max_visits),
+                    include_ownership: Some(true),
+                    include_policy: Some(true),
+                },
+            )
+            .map_err(|error| job_failure(run_id, EngineFailureKind::Protocol, error.to_string()))?;
+            Ok(WholeGameWorkItem {
+                node_path: snapshot.path.clone(),
+                query,
+                board_size: admitted.board_size,
+                move_number: snapshot.position.move_number,
+            })
+        })
+        .collect()
+}
+
 #[tauri::command]
 fn katago_start_analyze_game(
-    app_handle: AppHandle,
     manager: State<'_, ForegroundEngineManager>,
+    current_game: State<'_, CurrentGameState>,
     run_id: String,
-    sgf_text: String,
+    generation: u64,
     max_visits: u32,
-) -> Result<String, EngineFailureDto> {
-    let prepared = prepare_katago_batch_analysis(&sgf_text, Uuid::nil(), max_visits).map_err(|message| {
-        EngineFailureDto {
-            operation: app_model::EngineOperationDto::Job,
-            run_id: Some(run_id.clone()),
-            switch_id: None,
-            job_id: None,
-            profile_id: None,
-            kind: app_model::EngineFailureKind::Start,
-            message,
-            diagnostic_summary: None,
-        }
-    })?;
-    let (job_id, events) =
-        manager.start_whole_game_analysis(&run_id, &prepared.query_jsonl, prepared.expected)?;
-    let forwarded_job_id = job_id.clone();
-    std::thread::spawn(move || {
-        forward_whole_game_job_events(app_handle, run_id, forwarded_job_id, prepared, events);
-    });
-    Ok(job_id)
+) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+    let admitted = current_game
+        .admit_whole_game(generation)
+        .map_err(|error| job_failure(&run_id, EngineFailureKind::InvalidState, error.message))?;
+    let work_items = whole_game_work_items(&admitted, max_visits, &run_id)?;
+    manager.start_whole_game_analysis(WholeGameJobRequest {
+        run_id,
+        generation: admitted.generation,
+        work_items,
+    })
 }
 
 #[tauri::command]
@@ -864,197 +746,6 @@ fn katago_cancel_analysis(
     job_id: String,
 ) -> Result<(), EngineFailureDto> {
     manager.cancel_job(&run_id, &job_id)
-}
-
-fn forward_whole_game_job_events(
-    app_handle: AppHandle,
-    run_id: String,
-    job_id: String,
-    prepared: PreparedBatchAnalysis,
-    events: std::sync::mpsc::Receiver<AnalysisJobEventDto>,
-) {
-    while let Ok(event) = events.recv() {
-        match event {
-            AnalysisJobEventDto::Progress {
-                completed,
-                expected,
-                response_jsonl_line,
-                ..
-            } => {
-                let turn = katago_protocol::parse_response_line(&response_jsonl_line)
-                    .map(|response| response.turn_number)
-                    .ok();
-                let _ = app_handle.emit(
-                    "katago://analysis-progress",
-                    AnalysisProgressPayload {
-                        run_id: run_id.clone(),
-                        job_id: job_id.clone(),
-                        completed,
-                        expected,
-                        turn,
-                        response_jsonl: response_jsonl_line,
-                    },
-                );
-            }
-            AnalysisJobEventDto::Completed {
-                response_jsonl_lines, ..
-            } => {
-                emit_katago_analysis_complete(&app_handle, &run_id, &job_id, &prepared, response_jsonl_lines);
-            }
-            AnalysisJobEventDto::Cancelled { .. } => {
-                let _ = app_handle.emit(
-                    "katago://analysis-cancelled",
-                    AnalysisMessagePayload {
-                        run_id: run_id.clone(),
-                        job_id: job_id.clone(),
-                        message: "analysis job was cancelled".to_string(),
-                    },
-                );
-            }
-            AnalysisJobEventDto::Failed { failure, .. } => {
-                let _ = app_handle.emit(
-                    "katago://analysis-error",
-                    AnalysisMessagePayload {
-                        run_id: run_id.clone(),
-                        job_id: job_id.clone(),
-                        message: failure.message,
-                    },
-                );
-            }
-        }
-    }
-}
-
-fn prepare_katago_batch_analysis(
-    sgf_text: &str,
-    job_id: Uuid,
-    max_visits: u32,
-) -> Result<PreparedBatchAnalysis, String> {
-    let document = sgf::parse_sgf(sgf_text).map_err(|err| err.to_string())?;
-    let game = sgf::to_game_dto(document);
-    let query = katago_protocol::analysis_batch_query_from_game(
-        &game,
-        AnalysisBatchQueryOptions {
-            id: job_id.to_string(),
-            rules: "chinese".to_string(),
-            analyze_turns: None,
-            max_visits: Some(max_visits),
-            include_ownership: Some(true),
-            include_policy: Some(true),
-        },
-    )
-    .map_err(|err| err.to_string())?;
-    let turns = query.analyze_turns.clone().unwrap_or_default();
-    if turns.is_empty() {
-        return Err("analysis batch query did not include any turns".to_string());
-    }
-
-    let query_jsonl = query.to_jsonl().map_err(|err| err.to_string())?;
-    let expected = turns.len();
-    Ok(PreparedBatchAnalysis {
-        query_jsonl,
-        turns,
-        board_size: game.summary.board_size,
-        expected,
-    })
-}
-
-fn emit_katago_analysis_complete(
-    app_handle: &AppHandle,
-    run_id: &str,
-    job_id_string: &str,
-    prepared: &PreparedBatchAnalysis,
-    response_jsonl_lines: Vec<String>,
-) {
-    let job_id = Uuid::parse_str(job_id_string).unwrap_or_else(|_| Uuid::nil());
-    let responses = response_jsonl_lines
-        .iter()
-        .map(|line| katago_protocol::parse_response_line(line).map_err(|err| err.to_string()))
-        .collect::<Result<Vec<_>, _>>();
-
-    let frames = responses.and_then(|responses| {
-        validate_batch_response_turns(&prepared.turns, &responses)?;
-        Ok(katago_protocol::normalize_responses_for_turns(
-            job_id,
-            responses,
-            prepared.board_size,
-            &prepared.turns,
-        ))
-    });
-
-    match frames {
-        Ok(frames) => {
-            let _ = app_handle.emit(
-                "katago://analysis-complete",
-                AnalysisCompletePayload {
-                    run_id: run_id.to_string(),
-                    job_id: job_id_string.to_string(),
-                    frames,
-                },
-            );
-        }
-        Err(message) => {
-            let _ = app_handle.emit(
-                "katago://analysis-error",
-                AnalysisMessagePayload {
-                    run_id: run_id.to_string(),
-                    job_id: job_id_string.to_string(),
-                    message,
-                },
-            );
-        }
-    }
-}
-
-fn validate_batch_response_turns(
-    expected_turns: &[u32],
-    responses: &[katago_protocol::AnalysisResponse],
-) -> Result<(), String> {
-    let expected = sorted_unique_turns(expected_turns);
-    let received_raw = responses
-        .iter()
-        .map(|response| response.turn_number)
-        .collect::<Vec<_>>();
-    let received = sorted_unique_turns(&received_raw);
-    let duplicates = duplicate_turns(&received_raw);
-
-    if expected == received && duplicates.is_empty() {
-        return Ok(());
-    }
-
-    let missing = expected
-        .iter()
-        .copied()
-        .filter(|turn| received.binary_search(turn).is_err())
-        .collect::<Vec<_>>();
-    let unexpected = received
-        .iter()
-        .copied()
-        .filter(|turn| expected.binary_search(turn).is_err())
-        .collect::<Vec<_>>();
-
-    Err(format!(
-        "KataGo batch response turns did not match request; expected={expected:?}; received={received:?}; missing={missing:?}; unexpected={unexpected:?}; duplicates={duplicates:?}"
-    ))
-}
-
-fn sorted_unique_turns(turns: &[u32]) -> Vec<u32> {
-    let mut values = turns.to_vec();
-    values.sort_unstable();
-    values.dedup();
-    values
-}
-
-fn duplicate_turns(turns: &[u32]) -> Vec<u32> {
-    let mut values = turns.to_vec();
-    values.sort_unstable();
-    let mut duplicates = Vec::new();
-    for pair in values.windows(2) {
-        if pair[0] == pair[1] && duplicates.last().copied() != Some(pair[0]) {
-            duplicates.push(pair[0]);
-        }
-    }
-    duplicates
 }
 
 fn ensure_asset_check(checks: &mut Vec<AssetCheck>, path: &Option<String>, label: &str) {
@@ -1067,68 +758,6 @@ fn ensure_asset_check(checks: &mut Vec<AssetCheck>, path: &Option<String>, label
         required: true,
         label: label.to_string(),
     });
-}
-
-fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPreferencesDto {
-    preferences.candidate_limit = preferences.candidate_limit.clamp(1, 20);
-    preferences.default_max_visits = preferences.default_max_visits.clamp(1, 1_000_000);
-    if preferences.review_mode != "deep" {
-        preferences.review_mode = default_review_mode();
-    }
-    if preferences.board_theme != "high-contrast" {
-        preferences.board_theme = default_board_theme();
-    }
-    preferences
-}
-
-fn default_app_preferences() -> AppPreferencesDto {
-    AppPreferencesDto {
-        show_ownership: default_show_ownership(),
-        show_policy: default_show_policy(),
-        show_candidates: default_show_candidates(),
-        candidate_limit: default_candidate_limit(),
-        auto_load_cache: default_auto_load_cache(),
-        auto_save_analysis: default_auto_save_analysis(),
-        default_max_visits: default_max_visits(),
-        review_mode: default_review_mode(),
-        board_theme: default_board_theme(),
-    }
-}
-
-fn default_show_ownership() -> bool {
-    true
-}
-
-fn default_show_policy() -> bool {
-    true
-}
-
-fn default_show_candidates() -> bool {
-    true
-}
-
-fn default_candidate_limit() -> u32 {
-    8
-}
-
-fn default_auto_load_cache() -> bool {
-    true
-}
-
-fn default_auto_save_analysis() -> bool {
-    true
-}
-
-fn default_max_visits() -> u32 {
-    800
-}
-
-fn default_review_mode() -> String {
-    "quick".to_string()
-}
-
-fn default_board_theme() -> String {
-    "classic".to_string()
 }
 
 fn selected_engine_profile_record(settings: &EngineProfilesSettingsDto) -> Option<&EngineProfileRecordDto> {
@@ -1204,619 +833,6 @@ fn app_preferences_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
         )
     })?;
     Ok(dir.join(APP_PREFERENCES_FILE))
-}
-
-fn analysis_cache_db_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|err| format!("failed to resolve app data directory for analysis cache: {err}"))?;
-    fs::create_dir_all(&dir).map_err(|err| {
-        format!(
-            "failed to create analysis cache directory {}: {err}",
-            dir.display()
-        )
-    })?;
-    Ok(dir.join(ANALYSIS_CACHE_DB_FILE))
-}
-
-fn open_analysis_cache_connection(path: &Path) -> Result<Connection, String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            format!(
-                "failed to create analysis cache directory {}: {err}",
-                parent.display()
-            )
-        })?;
-    }
-    let mut conn = Connection::open(path)
-        .map_err(|err| format!("failed to open analysis cache database {}: {err}", path.display()))?;
-    storage::apply_migrations(&mut conn).map_err(|err| {
-        format!(
-            "failed to migrate analysis cache database {}: {err}",
-            path.display()
-        )
-    })?;
-    Ok(conn)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn save_analysis_cache_at_path(
-    path: &Path,
-    game_key: String,
-    sgf_hash: String,
-    profile_id: Option<String>,
-    engine_kind: String,
-    source: String,
-    move_count: u32,
-    analyzed_move_count: u32,
-    payload: Value,
-) -> Result<SaveAnalysisCacheDto, String> {
-    let conn = open_analysis_cache_connection(path)?;
-    let input = AnalysisCacheSaveInput {
-        game_key,
-        sgf_hash,
-        profile_id,
-        engine_kind,
-        source,
-        move_count,
-        analyzed_move_count,
-        payload,
-    };
-    save_analysis_cache_in_connection(&conn, input)
-}
-
-fn get_analysis_cache_at_path(
-    path: &Path,
-    game_key: String,
-    profile_id: Option<String>,
-    engine_kind: Option<String>,
-) -> Result<GetAnalysisCacheDto, String> {
-    let conn = open_analysis_cache_connection(path)?;
-    let record =
-        latest_analysis_cache_record(&conn, &game_key, profile_id.as_deref(), engine_kind.as_deref())?;
-    Ok(GetAnalysisCacheDto {
-        status: if record.is_some() { "hit" } else { "miss" }.to_string(),
-        record,
-        error: None,
-    })
-}
-
-fn delete_analysis_cache_at_path(
-    path: &Path,
-    game_key: String,
-    profile_id: Option<String>,
-    engine_kind: Option<String>,
-) -> Result<DeleteAnalysisCacheDto, String> {
-    let conn = open_analysis_cache_connection(path)?;
-    let deleted = if profile_id.is_none() && engine_kind.is_none() {
-        storage::delete_analysis_for_game(&conn, &game_key, None)
-            .map_err(|err| format!("failed to delete analysis cache for {game_key}: {err}"))?
-    } else {
-        matching_cache_scope_ids(&conn, &game_key, profile_id.as_deref(), engine_kind.as_deref())?
-            .into_iter()
-            .map(|scope_id| {
-                storage::delete_analysis_for_game(&conn, &game_key, Some(&scope_id))
-                    .map_err(|err| format!("failed to delete analysis cache for {game_key}: {err}"))
-            })
-            .try_fold(0usize, |total, deleted| deleted.map(|deleted| total + deleted))?
-    };
-    Ok(DeleteAnalysisCacheDto { deleted })
-}
-
-struct AnalysisCacheSaveInput {
-    game_key: String,
-    sgf_hash: String,
-    profile_id: Option<String>,
-    engine_kind: String,
-    source: String,
-    move_count: u32,
-    analyzed_move_count: u32,
-    payload: Value,
-}
-
-#[derive(Debug, Clone)]
-struct StoredAnalysisJob {
-    id: String,
-    engine_profile_id: Option<String>,
-    model_hash: Option<String>,
-    created_at: Option<String>,
-    finished_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AnalysisPositionRawJson {
-    record: Option<AnalysisCacheRecordDto>,
-    frame: Option<AnalysisFrameDto>,
-}
-
-fn save_analysis_cache_in_connection(
-    conn: &Connection,
-    input: AnalysisCacheSaveInput,
-) -> Result<SaveAnalysisCacheDto, String> {
-    let frames = parse_cached_frames(&input.payload)?;
-    let id = cache_record_id(
-        &input.game_key,
-        input.profile_id.as_deref(),
-        Some(input.engine_kind.as_str()),
-    );
-    let now = cache_timestamp();
-    let created_at = existing_analysis_job_created_at(conn, &id)?.unwrap_or_else(|| now.clone());
-    let scope_id = cache_scope_id(input.profile_id.as_deref(), Some(input.engine_kind.as_str()));
-    let record = AnalysisCacheRecordDto {
-        id: id.clone(),
-        game_key: input.game_key.clone(),
-        sgf_hash: input.sgf_hash.clone(),
-        profile_id: input.profile_id.clone(),
-        engine_kind: Some(input.engine_kind.clone()),
-        source: input.source.clone(),
-        move_count: input.move_count,
-        analyzed_move_count: input.analyzed_move_count,
-        payload: input.payload,
-        created_at: Some(created_at.clone()),
-        updated_at: now.clone(),
-    };
-    let game = storage::GameMetadata {
-        id: input.game_key.clone(),
-        source: input.source,
-        source_id: Some(input.sgf_hash.clone()),
-        board_size: i64::from(infer_board_size(&frames)),
-        komi: 7.5,
-        black_name: None,
-        white_name: None,
-        result: None,
-        sgf_hash: Some(input.sgf_hash),
-    };
-    let job = storage::AnalysisJob {
-        id: id.clone(),
-        game_id: Some(input.game_key.clone()),
-        engine_profile_id: scope_id,
-        model_hash: Some(input.engine_kind),
-        visits: frames
-            .iter()
-            .map(|frame| i64::from(frame.visits))
-            .max()
-            .unwrap_or(0),
-        status: "finished".to_string(),
-        created_at: Some(created_at),
-        finished_at: Some(now.clone()),
-    };
-
-    conn.execute_batch("SAVEPOINT save_analysis_cache")
-        .map_err(|err| format!("failed to start analysis cache save: {err}"))?;
-    let result = (|| -> Result<(), String> {
-        storage::upsert_game_metadata(conn, &game)
-            .map_err(|err| format!("failed to upsert cached game metadata: {err}"))?;
-        if analysis_job_exists(conn, &id)? {
-            storage::update_analysis_job(conn, &job)
-                .map_err(|err| format!("failed to update analysis cache job: {err}"))?;
-        } else {
-            storage::create_analysis_job(conn, &job)
-                .map_err(|err| format!("failed to create analysis cache job: {err}"))?;
-        }
-        conn.execute("DELETE FROM analysis_positions WHERE job_id = ?1", [&id])
-            .map_err(|err| format!("failed to replace cached analysis positions: {err}"))?;
-        save_cached_positions(conn, &record, &frames)?;
-        Ok(())
-    })();
-
-    match result {
-        Ok(()) => {
-            if let Err(err) = conn.execute_batch("RELEASE SAVEPOINT save_analysis_cache") {
-                let _ = conn.execute_batch(
-                    "ROLLBACK TO SAVEPOINT save_analysis_cache;
-                    RELEASE SAVEPOINT save_analysis_cache;",
-                );
-                return Err(format!("failed to commit analysis cache save: {err}"));
-            }
-        }
-        Err(err) => {
-            let _ = conn.execute_batch(
-                "ROLLBACK TO SAVEPOINT save_analysis_cache;
-                RELEASE SAVEPOINT save_analysis_cache;",
-            );
-            return Err(err);
-        }
-    }
-
-    Ok(SaveAnalysisCacheDto {
-        id,
-        game_key: input.game_key,
-        updated_at: now,
-    })
-}
-
-fn parse_cached_frames(payload: &Value) -> Result<Vec<AnalysisFrameDto>, String> {
-    let frames = payload
-        .get("frames")
-        .ok_or_else(|| "analysis cache payload must include frames".to_string())?;
-    if !payload.get("problems").is_some_and(Value::is_array) {
-        return Err("analysis cache payload must include problems".to_string());
-    }
-    serde_json::from_value(frames.clone())
-        .map_err(|err| format!("failed to parse analysis cache payload frames: {err}"))
-}
-
-fn save_cached_positions(
-    conn: &Connection,
-    record: &AnalysisCacheRecordDto,
-    frames: &[AnalysisFrameDto],
-) -> Result<(), String> {
-    let mut saved_turn_zero_record = false;
-    for frame in frames {
-        let raw = AnalysisPositionRawJson {
-            record: if frame.turn == 0 {
-                saved_turn_zero_record = true;
-                Some(record.clone())
-            } else {
-                None
-            },
-            frame: Some(frame.clone()),
-        };
-        let position = analysis_position_from_frame(&record.id, frame, raw)?;
-        storage::upsert_analysis_position(conn, &position)
-            .map_err(|err| format!("failed to save cached analysis position {}: {err}", frame.turn))?;
-    }
-
-    if !saved_turn_zero_record {
-        let raw = AnalysisPositionRawJson {
-            record: Some(record.clone()),
-            frame: None,
-        };
-        let position = storage::AnalysisPosition {
-            id: format!("{}:turn:0", record.id),
-            job_id: record.id.clone(),
-            node_id: None,
-            turn: 0,
-            visits: 0,
-            winrate_black: 0.0,
-            score_mean_black: 0.0,
-            score_stdev: None,
-            policy_json: None,
-            ownership_json: None,
-            candidates_json: "[]".to_string(),
-            raw_json: Some(serialize_raw_position(&raw)?),
-        };
-        storage::upsert_analysis_position(conn, &position)
-            .map_err(|err| format!("failed to save cached analysis payload: {err}"))?;
-    }
-    Ok(())
-}
-
-fn analysis_position_from_frame(
-    job_id: &str,
-    frame: &AnalysisFrameDto,
-    raw: AnalysisPositionRawJson,
-) -> Result<storage::AnalysisPosition, String> {
-    Ok(storage::AnalysisPosition {
-        id: format!("{job_id}:turn:{}", frame.turn),
-        job_id: job_id.to_string(),
-        node_id: frame.node_id.map(|id| id.to_string()),
-        turn: i64::from(frame.turn),
-        visits: i64::from(frame.visits),
-        winrate_black: f64::from(frame.winrate_black),
-        score_mean_black: f64::from(frame.score_mean_black),
-        score_stdev: frame.score_stdev.map(f64::from),
-        policy_json: optional_json_string(&frame.policy)?,
-        ownership_json: optional_json_string(&frame.ownership)?,
-        candidates_json: serde_json::to_string(&frame.candidates)
-            .map_err(|err| format!("failed to serialize cached candidate moves: {err}"))?,
-        raw_json: Some(serialize_raw_position(&raw)?),
-    })
-}
-
-fn optional_json_string<T: Serialize>(value: &Option<T>) -> Result<Option<String>, String> {
-    value
-        .as_ref()
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(|err| format!("failed to serialize analysis cache JSON field: {err}"))
-}
-
-fn serialize_raw_position(raw: &AnalysisPositionRawJson) -> Result<String, String> {
-    serde_json::to_string(raw)
-        .map_err(|err| format!("failed to serialize cached raw analysis payload: {err}"))
-}
-
-fn latest_analysis_cache_record(
-    conn: &Connection,
-    game_key: &str,
-    profile_id: Option<&str>,
-    engine_kind: Option<&str>,
-) -> Result<Option<AnalysisCacheRecordDto>, String> {
-    for job in load_finished_analysis_jobs(conn, game_key)? {
-        let record = analysis_cache_record_from_job(conn, game_key, &job)?;
-        if cache_record_matches(&record, game_key, profile_id, engine_kind) {
-            return Ok(Some(record));
-        }
-    }
-    Ok(None)
-}
-
-fn matching_cache_scope_ids(
-    conn: &Connection,
-    game_key: &str,
-    profile_id: Option<&str>,
-    engine_kind: Option<&str>,
-) -> Result<Vec<String>, String> {
-    let mut scopes = HashSet::new();
-    for job in load_finished_analysis_jobs(conn, game_key)? {
-        let Some(scope_id) = job.engine_profile_id.clone() else {
-            continue;
-        };
-        let record = analysis_cache_record_from_job(conn, game_key, &job)?;
-        if cache_record_matches(&record, game_key, profile_id, engine_kind) {
-            scopes.insert(scope_id);
-        }
-    }
-    Ok(scopes.into_iter().collect())
-}
-
-fn load_finished_analysis_jobs(conn: &Connection, game_key: &str) -> Result<Vec<StoredAnalysisJob>, String> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, engine_profile_id, model_hash, created_at, finished_at
-            FROM analysis_jobs
-            WHERE game_id = ?1 AND status = 'finished'
-            ORDER BY COALESCE(finished_at, created_at) DESC, created_at DESC, id DESC",
-        )
-        .map_err(|err| format!("failed to prepare analysis cache lookup: {err}"))?;
-    let rows = stmt
-        .query_map([game_key], |row| {
-            Ok(StoredAnalysisJob {
-                id: row.get(0)?,
-                engine_profile_id: row.get(1)?,
-                model_hash: row.get(2)?,
-                created_at: row.get(3)?,
-                finished_at: row.get(4)?,
-            })
-        })
-        .map_err(|err| format!("failed to query analysis cache jobs: {err}"))?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|err| format!("failed to read analysis cache jobs: {err}"))
-}
-
-fn analysis_cache_record_from_job(
-    conn: &Connection,
-    game_key: &str,
-    job: &StoredAnalysisJob,
-) -> Result<AnalysisCacheRecordDto, String> {
-    let positions = storage::load_analysis_positions(conn, &job.id)
-        .map_err(|err| format!("failed to load cached analysis positions: {err}"))?;
-    if let Some(record) = positions.iter().find_map(raw_record_from_position) {
-        return Ok(record);
-    }
-
-    let sgf_hash = conn
-        .query_row("SELECT sgf_hash FROM games WHERE id = ?1", [game_key], |row| {
-            row.get::<_, Option<String>>(0)
-        })
-        .optional()
-        .map_err(|err| format!("failed to load cached game metadata: {err}"))?
-        .flatten()
-        .unwrap_or_default();
-    let frames = positions
-        .iter()
-        .filter_map(raw_frame_from_position)
-        .collect::<Vec<_>>();
-    let payload = serde_json::json!({
-        "frames": frames,
-        "problems": [],
-    });
-    Ok(AnalysisCacheRecordDto {
-        id: job.id.clone(),
-        game_key: game_key.to_string(),
-        sgf_hash,
-        profile_id: None,
-        engine_kind: job.model_hash.clone(),
-        source: job.model_hash.clone().unwrap_or_else(|| "katago".to_string()),
-        move_count: positions
-            .iter()
-            .map(|position| position.turn as u32)
-            .max()
-            .unwrap_or(0),
-        analyzed_move_count: positions.len() as u32,
-        payload,
-        created_at: job.created_at.clone(),
-        updated_at: job
-            .finished_at
-            .clone()
-            .or_else(|| job.created_at.clone())
-            .unwrap_or_else(cache_timestamp),
-    })
-}
-
-fn raw_record_from_position(position: &storage::AnalysisPosition) -> Option<AnalysisCacheRecordDto> {
-    position
-        .raw_json
-        .as_deref()
-        .and_then(|raw| serde_json::from_str::<AnalysisPositionRawJson>(raw).ok())
-        .and_then(|raw| raw.record)
-}
-
-fn raw_frame_from_position(position: &storage::AnalysisPosition) -> Option<AnalysisFrameDto> {
-    if let Some(frame) = position
-        .raw_json
-        .as_deref()
-        .and_then(|raw| serde_json::from_str::<AnalysisPositionRawJson>(raw).ok())
-        .and_then(|raw| raw.frame)
-    {
-        return Some(frame);
-    }
-    let candidates = serde_json::from_str::<Vec<CandidateMoveDto>>(&position.candidates_json).ok()?;
-    let ownership = position
-        .ownership_json
-        .as_deref()
-        .map(serde_json::from_str::<Vec<f32>>)
-        .transpose()
-        .ok()?;
-    let policy = position
-        .policy_json
-        .as_deref()
-        .map(serde_json::from_str::<Vec<f32>>)
-        .transpose()
-        .ok()?;
-    Some(AnalysisFrameDto {
-        job_id: Uuid::nil(),
-        game_id: None,
-        node_id: position
-            .node_id
-            .as_deref()
-            .and_then(|id| Uuid::parse_str(id).ok()),
-        turn: position.turn as u32,
-        visits: position.visits as u32,
-        winrate_black: position.winrate_black as f32,
-        score_mean_black: position.score_mean_black as f32,
-        score_stdev: position.score_stdev.map(|value| value as f32),
-        candidates,
-        ownership,
-        policy,
-    })
-}
-
-fn existing_analysis_job_created_at(conn: &Connection, job_id: &str) -> Result<Option<String>, String> {
-    conn.query_row(
-        "SELECT created_at FROM analysis_jobs WHERE id = ?1",
-        [job_id],
-        |row| row.get(0),
-    )
-    .optional()
-    .map_err(|err| format!("failed to read existing analysis cache job: {err}"))
-}
-
-fn analysis_job_exists(conn: &Connection, job_id: &str) -> Result<bool, String> {
-    let count: i64 = conn
-        .query_row(
-            "SELECT COUNT(1) FROM analysis_jobs WHERE id = ?1",
-            [job_id],
-            |row| row.get(0),
-        )
-        .map_err(|err| format!("failed to inspect analysis cache job: {err}"))?;
-    Ok(count > 0)
-}
-
-fn cache_scope_id(profile_id: Option<&str>, engine_kind: Option<&str>) -> Option<String> {
-    if profile_id.is_none() && engine_kind.is_none() {
-        return None;
-    }
-    let scope = serde_json::json!({
-        "profile_id": profile_id,
-        "engine_kind": engine_kind,
-    });
-    Some(format!(
-        "cache-scope:{}",
-        stable_hash_hex(&scope.to_string())
-            .chars()
-            .take(24)
-            .collect::<String>()
-    ))
-}
-
-fn infer_board_size(frames: &[AnalysisFrameDto]) -> u8 {
-    frames
-        .iter()
-        .flat_map(|frame| [frame.ownership.as_ref(), frame.policy.as_ref()])
-        .flatten()
-        .find_map(|values| perfect_square_board_size(values.len()))
-        .unwrap_or(19)
-}
-
-fn perfect_square_board_size(value_count: usize) -> Option<u8> {
-    let size = (value_count as f64).sqrt() as usize;
-    if (2..=25).contains(&size) && size * size == value_count {
-        Some(size as u8)
-    } else {
-        None
-    }
-}
-
-fn cache_record_matches(
-    record: &AnalysisCacheRecordDto,
-    game_key: &str,
-    profile_id: Option<&str>,
-    engine_kind: Option<&str>,
-) -> bool {
-    if record.game_key != game_key {
-        return false;
-    }
-    if profile_id.is_some() && record.profile_id.as_deref() != profile_id {
-        return false;
-    }
-    if engine_kind.is_some() && record.engine_kind.as_deref() != engine_kind {
-        return false;
-    }
-    true
-}
-
-fn cache_record_id(game_key: &str, profile_id: Option<&str>, engine_kind: Option<&str>) -> String {
-    format!(
-        "cache:{}",
-        stable_hash_hex(&format!(
-            "{}\n{}\n{}",
-            game_key,
-            profile_id.unwrap_or(""),
-            engine_kind.unwrap_or("")
-        ))
-        .chars()
-        .take(24)
-        .collect::<String>()
-    )
-}
-
-fn cache_timestamp() -> String {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
-    format_unix_seconds_utc(seconds)
-}
-
-fn stable_hash_hex(value: &str) -> String {
-    const SEEDS: [u64; 4] = [
-        0xcbf2_9ce4_8422_2325,
-        0x8422_2325_cbf2_9ce4,
-        0x9e37_79b9_7f4a_7c15,
-        0x94d0_49bb_1331_11eb,
-    ];
-    SEEDS
-        .iter()
-        .map(|seed| format!("{:016x}", fnv1a64(value.as_bytes(), *seed)))
-        .collect::<String>()
-}
-
-fn fnv1a64(bytes: &[u8], seed: u64) -> u64 {
-    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = seed;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    hash ^= bytes.len() as u64;
-    hash.wrapping_mul(FNV_PRIME)
-}
-
-fn format_unix_seconds_utc(seconds: u64) -> String {
-    let days = (seconds / 86_400) as i64;
-    let seconds_of_day = seconds % 86_400;
-    let (year, month, day) = civil_from_days(days);
-    let hour = seconds_of_day / 3_600;
-    let minute = (seconds_of_day % 3_600) / 60;
-    let second = seconds_of_day % 60;
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
-}
-
-fn civil_from_days(days_since_unix_epoch: i64) -> (i64, u32, u32) {
-    let days = days_since_unix_epoch + 719_468;
-    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
-    let day_of_era = days - era * 146_097;
-    let year_of_era = (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_prime = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
-    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
-    let year = year + if month <= 2 { 1 } else { 0 };
-    (year, month as u32, day as u32)
 }
 
 fn non_empty_path(path: String) -> Result<PathBuf, String> {
@@ -1965,6 +981,9 @@ pub fn run() {
                             let _ = emit_handle.emit("foreground-engine://failure", failure);
                         }
                         ForegroundEngineEventDto::Job { job } => {
+                            if let Some(state) = emit_handle.try_state::<CurrentGameState>() {
+                                let _ = state.attach_from_job_event(&job);
+                            }
                             let _ = emit_handle.emit("foreground-engine://job", job);
                         }
                     }
@@ -2006,10 +1025,6 @@ pub fn run() {
             save_engine_profile_settings,
             load_engine_profiles_settings,
             save_engine_profiles_settings,
-            compute_game_cache_key,
-            get_analysis_cache,
-            save_analysis_cache,
-            delete_analysis_cache,
             katago_start_analyze_game,
             katago_cancel_analysis,
             foreground_engine_snapshot,
@@ -2035,17 +1050,62 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    const BRANCHING: &str = include_str!("../../../../tests/golden/editable-workspace-branching.sgf");
+
     #[test]
-    fn batch_analysis_query_requests_ownership_and_policy() {
-        let job_id = Uuid::nil();
-        let sgf_text = "(;GM[1]FF[4]SZ[19]KM[7.5];B[dd];W[qq])";
+    fn whole_game_work_items_capture_first_child_positions_rules_and_policy() {
+        let state = CurrentGameState::default();
+        let opened = state.replace(BRANCHING, None).unwrap();
+        let admitted = state.admit_whole_game(opened.generation).unwrap();
+        let items = whole_game_work_items(&admitted, 64, "run-1").unwrap();
+        assert_eq!(items.len(), 4);
+        assert!(items[0].node_path.indices.is_empty());
+        assert_eq!(items[1].node_path.indices, vec![0]);
+        assert_eq!(items[2].node_path.indices, vec![0, 0]);
+        assert_eq!(items[3].node_path.indices, vec![0, 0, 0]);
+        assert_eq!(items[0].move_number, 0);
+        assert_eq!(items[3].move_number, 3);
+        let root: serde_json::Value =
+            serde_json::from_str(items[0].query.to_jsonl().unwrap().trim()).unwrap();
+        assert_eq!(root["includeOwnership"], true);
+        assert_eq!(root["includePolicy"], true);
+        assert_eq!(root["rules"], "chinese");
+        assert!((root["komi"].as_f64().unwrap() - 0.5).abs() < f64::EPSILON);
+        assert_eq!(root["boardXSize"], 5);
+        assert_eq!(root["boardYSize"], 5);
+        let stones = root["initialStones"].as_array().expect("setup stones");
+        assert!(stones
+            .iter()
+            .any(|stone| stone == &serde_json::json!(["B", "A5"])));
+        assert!(stones
+            .iter()
+            .any(|stone| stone == &serde_json::json!(["W", "C3"])));
+        assert!(!stones
+            .iter()
+            .any(|stone| stone == &serde_json::json!(["B", "A2"])));
+        assert_eq!(items[0].query.analyze_turns, Some(vec![1]));
+        assert_eq!(items[1].query.analyze_turns, Some(vec![0]));
+    }
 
-        let prepared = prepare_katago_batch_analysis(sgf_text, job_id, 64).unwrap();
-        let query: serde_json::Value = serde_json::from_str(prepared.query_jsonl.trim()).unwrap();
+    #[test]
+    fn whole_game_work_items_use_current_game_owned_rules() {
+        let state = CurrentGameState::default();
+        let opened = state
+            .replace("(;GM[1]FF[4]SZ[9]KM[6.5]RU[Japanese];B[dd])", None)
+            .unwrap();
+        let admitted = state.admit_whole_game(opened.generation).unwrap();
+        let items = whole_game_work_items(&admitted, 32, "run-rules").unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].query.rules, "japanese");
+        assert_eq!(items[1].query.rules, "japanese");
+    }
 
-        assert_eq!(query["includeOwnership"], true);
-        assert_eq!(query["includePolicy"], true);
-        assert_eq!(query["analyzeTurns"], serde_json::json!([0, 1, 2]));
+    #[test]
+    fn whole_game_admission_rejects_stale_generation_before_worklist() {
+        let state = CurrentGameState::default();
+        let opened = state.replace("(;GM[1]FF[4]SZ[9])", None).unwrap();
+        let stale = state.admit_whole_game(opened.generation + 1).unwrap_err();
+        assert_eq!(stale.message, "current game generation does not match");
     }
 
     fn registered_tauri_commands(source: &str) -> Vec<&str> {
@@ -2088,21 +1148,124 @@ mod tests {
     }
 
     #[test]
-    fn whole_game_progress_payload_keeps_run_and_job_identities() {
-        let payload = AnalysisProgressPayload {
-            run_id: "run-1".into(),
-            job_id: "job-9".into(),
-            completed: 1,
-            expected: 2,
-            turn: Some(3),
-            response_jsonl: r#"{"id":"job-9"}"#.into(),
+    fn whole_game_gateway_drops_legacy_event_bus_and_stays_registered() {
+        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+        for forbidden in [
+            concat!("katago://", "analysis-progress"),
+            concat!("katago://", "analysis-complete"),
+            concat!("katago://", "analysis-error"),
+            concat!("katago://", "analysis-cancelled"),
+            concat!("forward_whole_game_job", "_events"),
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "legacy whole-game event bus must not remain: {forbidden}"
+            );
+        }
+        let commands = registered_tauri_commands(source);
+        assert!(
+            commands.contains(&"katago_start_analyze_game"),
+            "whole-game analysis must stay on the manager-owned run command"
+        );
+    }
+
+    #[test]
+    fn whole_game_command_admits_current_game_instead_of_caller_sgf_batch() {
+        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+        let command = source
+            .split("fn katago_start_analyze_game(")
+            .nth(1)
+            .and_then(|rest| rest.split("fn katago_cancel_analysis(").next())
+            .expect("katago_start_analyze_game");
+        assert!(command.contains("admit_whole_game"));
+        assert!(command.contains("generation: u64"));
+        assert!(!command.contains("sgf_text"));
+        assert!(!command.contains("analysis_batch_query_from_game"));
+        assert!(!command.contains("prepare_katago_batch_analysis"));
+    }
+
+    #[test]
+    fn selected_node_request_captures_exact_position_turn_rules_and_komi_before_protocol() {
+        let state = CurrentGameState::default();
+        let opened = state
+            .replace("(;GM[1]FF[4]SZ[5]KM[6.5]RU[Japanese];B[cc];W[ee])", None)
+            .unwrap();
+        let path = NodePath { indices: vec![0, 0] };
+        let selected = state.select_path(path.clone()).unwrap();
+        assert_eq!(selected.snapshot.position.move_number, 2);
+        assert_eq!(selected.snapshot.position.to_play, app_model::PlayerColor::Black);
+
+        let request = bind_selected_node_job(
+            &state,
+            "run-ready".to_string(),
+            opened.generation,
+            path.clone(),
+            64,
+        )
+        .unwrap();
+
+        assert_eq!(request.run_id, "run-ready");
+        assert_eq!(request.generation, opened.generation);
+        assert_eq!(request.node_path, path);
+        assert_eq!(request.board_size, 5);
+        assert_eq!(request.query.komi, 6.5);
+        assert_eq!(request.query.rules, "japanese");
+        assert_eq!(request.query.include_ownership, Some(true));
+        assert_eq!(request.query.include_policy, Some(true));
+        assert_eq!(request.query.max_visits, Some(64));
+        assert_eq!(
+            request.query.initial_stones,
+            vec![
+                ("B".to_string(), "C3".to_string()),
+                ("W".to_string(), "E1".to_string()),
+            ]
+        );
+        assert!(request.query.moves.is_empty());
+        assert_eq!(request.query.analyze_turns, Some(vec![0]));
+    }
+
+    #[test]
+    fn selected_node_illegal_path_is_typed_invalid_state_before_protocol() {
+        let state = CurrentGameState::default();
+        let opened = state
+            .replace("(;GM[1]FF[4]SZ[5]KM[6.5]RU[Japanese];B[cc])", None)
+            .unwrap();
+        let error = match bind_selected_node_job(
+            &state,
+            "run-ready".to_string(),
+            opened.generation,
+            NodePath { indices: vec![9] },
+            8,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("illegal path must fail before protocol"),
         };
-        let json = serde_json::to_value(&payload).unwrap();
-        assert_eq!(json["run_id"], "run-1");
-        assert_eq!(json["job_id"], "job-9");
-        assert_eq!(json["completed"], 1);
-        assert_eq!(json["expected"], 2);
-        assert_eq!(json["turn"], 3);
+        assert_eq!(error.kind, EngineFailureKind::InvalidState);
+        assert_eq!(error.operation, EngineOperationDto::Job);
+        assert_eq!(error.run_id.as_deref(), Some("run-ready"));
+        assert!(error.job_id.is_none());
+        assert_eq!(error.message, "invalid node path");
+    }
+
+    #[test]
+    fn selected_node_stale_generation_is_typed_invalid_state_before_protocol() {
+        let state = CurrentGameState::default();
+        let opened = state
+            .replace("(;GM[1]FF[4]SZ[5]KM[6.5]RU[Japanese];B[cc])", None)
+            .unwrap();
+        let error = match bind_selected_node_job(
+            &state,
+            "run-ready".to_string(),
+            opened.generation + 1,
+            opened.selected_path,
+            8,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("stale generation must fail before protocol"),
+        };
+        assert_eq!(error.kind, EngineFailureKind::InvalidState);
+        assert_eq!(error.message, "current game generation does not match");
+        assert!(error.job_id.is_none());
     }
 
     #[test]
@@ -2305,75 +1468,6 @@ mod tests {
         assert!(sync_error
             .message
             .contains("readboard image OCR runtime is unavailable"));
-    }
-
-    #[test]
-    fn analysis_cache_saves_and_restores_payload_from_sqlite() {
-        let path = std::env::temp_dir().join(format!("lizzieyzy-analysis-cache-{}.sqlite3", Uuid::new_v4()));
-        let sgf_text = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[Black]PW[White];B[dd];W[qq])";
-        let cache_key = compute_game_cache_key(sgf_text.to_string(), None).unwrap();
-        let frames = fake_analyze(sgf_text.to_string()).unwrap();
-        let problems = classify_problems(frames.clone());
-        let payload = serde_json::json!({
-            "frames": frames,
-            "problems": problems,
-        });
-
-        let saved = save_analysis_cache_at_path(
-            &path,
-            cache_key.game_key.clone(),
-            cache_key.sgf_hash.clone(),
-            None,
-            "fake".to_string(),
-            "fake".to_string(),
-            2,
-            payload["frames"].as_array().unwrap().len() as u32,
-            payload.clone(),
-        )
-        .unwrap();
-        let lookup =
-            get_analysis_cache_at_path(&path, cache_key.game_key.clone(), None, Some("fake".to_string()))
-                .unwrap();
-
-        assert_eq!(lookup.status, "hit");
-        let record = lookup.record.unwrap();
-        assert_eq!(record.id, saved.id);
-        assert_eq!(record.game_key, cache_key.game_key);
-        assert_eq!(record.sgf_hash, cache_key.sgf_hash);
-        assert_eq!(record.engine_kind.as_deref(), Some("fake"));
-        assert_eq!(
-            record.payload["frames"].as_array().unwrap().len(),
-            payload["frames"].as_array().unwrap().len()
-        );
-        assert_eq!(
-            record.payload["problems"].as_array().unwrap().len(),
-            payload["problems"].as_array().unwrap().len()
-        );
-        assert_eq!(record.payload["frames"][0]["turn"], serde_json::json!(0));
-
-        let conn = open_analysis_cache_connection(&path).unwrap();
-        let game_count: i64 = conn
-            .query_row("SELECT COUNT(1) FROM games", [], |row| row.get(0))
-            .unwrap();
-        let job_count: i64 = conn
-            .query_row("SELECT COUNT(1) FROM analysis_jobs", [], |row| row.get(0))
-            .unwrap();
-        let position_count: i64 = conn
-            .query_row("SELECT COUNT(1) FROM analysis_positions", [], |row| row.get(0))
-            .unwrap();
-        let full_payload_rows: i64 = conn
-            .query_row(
-                "SELECT COUNT(1) FROM analysis_positions WHERE turn = 0 AND raw_json LIKE '%\"record\"%'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        let _ = fs::remove_file(&path);
-        assert_eq!(game_count, 1);
-        assert_eq!(job_count, 1);
-        assert_eq!(position_count, payload["frames"].as_array().unwrap().len() as i64);
-        assert_eq!(full_payload_rows, 1);
     }
 
     fn provider_fetch_request(provider: ProviderKind) -> ProviderFetchRequest {

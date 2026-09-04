@@ -1,0 +1,6 @@
+(;FF[4]GM[1]SZ[19]KM[7.5]C[root personal]XY[keep-me]LZOP[MainEngine 44.0 1.5k 3.5 0.7 0.9
+move D16 visits 1500 winrate 5600 prior 1828 scoreMean 3.50 pv D16 C16 ownership 0.1 -0.2 0.3]LZOP2[SubEngine 41.0 150
+move Q16 visits 150 winrate 5900 prior 4000 pv Q16];B[dd]C[move comment]LZ[MainEngine 38.5 800 1.25 0.4
+move Q4 visits 400 winrate 6150 prior 4500 scoreMean 1.25 pv Q4 Q5 pass]LZ2[SubEngine 41.0 120
+move D4 visits 120 winrate 5900 prior 4000 pv D4]ZZ[unknown-stay];W[pp](;B[]C[mainline pass]LZ[PassEngine 50.0 64
+move pass visits 64 winrate 5000 prior 1000 pv pass])(;B[pq]C[branch leaf]LZ[not-analysis]LZ2[incomplete]))

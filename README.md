@@ -10,15 +10,15 @@ Implemented in the Next workspace:
 
 - Tauri 2 desktop shell under `apps/desktop/src-tauri`.
 - React + TypeScript + Vite frontend under `apps/desktop`.
-- Rust workspace crates for app DTOs, Go rules, SGF parsing/replay/serialization, native Save As outcomes, KataGo protocol normalization, analysis classification, engine management, and SQLite-backed storage/cache.
+- Rust workspace crates for app DTOs, Go rules, SGF parsing/replay/serialization, native Save As outcomes, KataGo protocol normalization, analysis classification, engine management, and SQLite-backed application storage.
 - One Rust-owned editable SGF workspace with complete-tree `NodePath` navigation, legal move/pass editing, variation removal, personal comments, setup/metadata preservation, and semantic save/reopen.
 - Native SGF Open, Save, and Save As through the Tauri desktop backend, including cancellation and failed-write state preservation.
 - A Windows-native no-engine workflow covering open, navigate, edit, comment, remove, save, reopen, and rejected ACL Save As.
 - KataGo one-position analysis and full-game batch analysis through analysis JSONL.
 - Analysis progress events, cancellation, candidate moves, ownership, policy, and winrate/progress overlays.
+- Attached analysis persists in the SGF through ordinary Save / Save As.
 - Engine path/model/config pickers, asset checks, and multiple engine profiles persisted in app data.
 - A manager-owned Foreground Engine Run: Engine Switcher Start/Stop/Restart, Autoload Default, transactional A→B switch with failed-B rollback, typed failure, and manual recovery on a real `KataGoAnalysis` path.
-- SQLite analysis cache with cache key computation, lookup, save, and delete commands.
 - Scaffold validation, Rust tests, and frontend build checks wired for local and CI use.
 - Release preflight validation for Tauri metadata and the safe dry-run workflow.
 - Multi-platform GitHub Release workflow for macOS, Windows, and Linux CI-built assets.
@@ -68,9 +68,9 @@ Status and evidence are separate. The evidence ladder is `Not started` → `Scaf
 ## Technology Stack
 
 - Desktop runtime: Tauri 2.
-- Backend: Rust workspace, Tauri commands, SQLite via `rusqlite`.
+- Backend: Rust workspace, Tauri commands, and SQLite application storage via `rusqlite`.
 - Frontend: React, TypeScript, Vite, `@tauri-apps/api`.
-- Core domains: SGF, Go rules, KataGo analysis JSONL, engine profiles, analysis cache.
+- Core domains: SGF, Go rules, KataGo analysis JSONL, engine profiles.
 - Validation: `scripts/validate_scaffold.py`, Rust unit tests, frontend build, and smoke checks.
 
 ## Repository Map
@@ -84,7 +84,7 @@ Status and evidence are separate. The evidence ladder is `Not started` → `Scaf
 - `crates/katago-protocol`: KataGo analysis query/response models.
 - `crates/analysis-core`: Candidate/problem classification helpers.
 - `crates/engine-manager`: Engine profiles, asset checks, Foreground Engine Run lifecycle, process execution, and cancellation.
-- `crates/storage`: SQLite storage/cache schema helpers.
+- `crates/storage`: SQLite application storage schema helpers.
 - `docs/ARCHITECTURE_NEXT.md`: Current Next architecture and module boundaries.
 - `docs/JAVA_BASELINE.md`: Frozen Java behavior reference and successor policy.
 - `docs/JAVA_CAPABILITY_INVENTORY.md`: Exhaustive Migration Baseline v1 Capability and Entry Point census.
@@ -139,7 +139,7 @@ cd apps/desktop
 npm run dev
 ```
 
-The browser preview can exercise presentation fallbacks, local SGF parsing, fake review frames, and browser-local cache. Rust-owned current-game editing and authoritative Save are unavailable there. Those behaviors, real KataGo execution, native file dialogs, asset inspection, and app-data profile persistence require the Tauri desktop runtime.
+The browser preview can exercise presentation fallbacks, local SGF parsing, and fake review frames. Rust-owned current-game editing and authoritative Save are unavailable there. Those behaviors, real KataGo execution, native file dialogs, asset inspection, and app-data profile persistence require the Tauri desktop runtime.
 
 ## Local Smoke Flow
 
@@ -153,7 +153,7 @@ Use `docs/DEVELOPMENT.md` for the full checklist. The core no-engine acceptance 
 6. Cancel Save As once and verify the current path and dirty state do not change.
 7. Save the edited game, reopen it, and verify the retained edit/comment, removed sibling, setup, and metadata.
 
-Engine configuration, one-position analysis, whole-game analysis/cancellation, and cache checks are separate regression paths; they are not prerequisites for SGF workspace use.
+Engine configuration, one-position analysis, whole-game analysis/cancellation, and SGF analysis persistence are separate regression paths; they are not prerequisites for SGF workspace use.
 
 ## CI Status
 

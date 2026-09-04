@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 mod analysis_job;
 pub use analysis_job::{
-    admits_analysis_publication, AnalysisJobEventDto, AnalysisJobLaneDto, AnalysisJobOutcomeDto,
-    AnalysisJobStartedDto, AnalysisPublicationScopeDto,
+    admits_analysis_attachment, admits_analysis_publication, AnalysisJobEventDto, AnalysisJobLaneDto,
+    AnalysisJobOutcomeDto, AnalysisJobStartedDto, AnalysisPublicationScopeDto,
 };
 
 pub type GameId = Uuid;
@@ -108,6 +108,10 @@ pub struct SelectedNodeSnapshotDto {
     pub personal_comment: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generated_information: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_analysis: Option<AnalysisFrameDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_analysis: Option<AnalysisFrameDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -236,6 +240,7 @@ pub enum EngineFailureKind {
     Cancellation,
     UnsupportedCapability,
     InvalidState,
+    Occupied,
     ProfileNotFound,
     ProfileInUse,
 }
@@ -287,6 +292,21 @@ pub struct EngineRunDto {
 pub struct ForegroundEngineSnapshotDto {
     pub revision: u64,
     pub lifecycle: ForegroundEngineLifecycleDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_node_job: Option<AnalysisJobStartedDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whole_game_job: Option<AnalysisJobStartedDto>,
+}
+
+impl ForegroundEngineSnapshotDto {
+    pub fn with_lifecycle(revision: u64, lifecycle: ForegroundEngineLifecycleDto) -> Self {
+        Self {
+            revision,
+            lifecycle,
+            selected_node_job: None,
+            whole_game_job: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -661,6 +681,8 @@ mod current_game_wire {
                 },
                 personal_comment: "mainline pass".to_string(),
                 generated_information: None,
+                primary_analysis: None,
+                secondary_analysis: None,
             },
             generation: 1,
             dirty: false,
@@ -746,6 +768,20 @@ mod foreground_engine_wire {
                     }),
                 },
             },
+            selected_node_job: Some(AnalysisJobStartedDto {
+                run_id: "run-1".into(),
+                job_id: "job-selected".into(),
+                lane: AnalysisJobLaneDto::SelectedNode,
+                generation: 3,
+                node_path: NodePath { indices: vec![0] },
+            }),
+            whole_game_job: Some(AnalysisJobStartedDto {
+                run_id: "run-1".into(),
+                job_id: "job-whole".into(),
+                lane: AnalysisJobLaneDto::WholeGame,
+                generation: 3,
+                node_path: NodePath { indices: vec![] },
+            }),
         };
         let failure = EngineFailureDto {
             operation: EngineOperationDto::Start,
@@ -767,6 +803,10 @@ mod foreground_engine_wire {
 
         assert_eq!(snapshot_json["revision"], 4);
         assert_eq!(snapshot_json["lifecycle"]["state"], "ready");
+        assert_eq!(snapshot_json["selected_node_job"]["lane"], "selected_node");
+        assert_eq!(snapshot_json["selected_node_job"]["job_id"], "job-selected");
+        assert_eq!(snapshot_json["whole_game_job"]["lane"], "whole_game");
+        assert_eq!(snapshot_json["whole_game_job"]["job_id"], "job-whole");
         assert_eq!(snapshot_json["lifecycle"]["run"]["run_id"], "run-1");
         assert_eq!(snapshot_json["lifecycle"]["run"]["profile_id"], "profile-1");
         assert_eq!(
@@ -815,6 +855,8 @@ mod foreground_engine_wire {
                 },
                 switch_id: "switch-1".into(),
             },
+            selected_node_job: None,
+            whole_game_job: None,
         };
 
         let json = serde_json::to_value(&snapshot).unwrap();
@@ -830,6 +872,8 @@ mod foreground_engine_wire {
         let clean = ForegroundEngineSnapshotDto {
             revision: 1,
             lifecycle: ForegroundEngineLifecycleDto::NoEngine { failure: None },
+            selected_node_job: None,
+            whole_game_job: None,
         };
         let clean_json = serde_json::to_value(&clean).unwrap();
         assert_eq!(clean_json["lifecycle"]["state"], "no_engine");
@@ -855,6 +899,8 @@ mod foreground_engine_wire {
             lifecycle: ForegroundEngineLifecycleDto::NoEngine {
                 failure: Some(failure.clone()),
             },
+            selected_node_job: None,
+            whole_game_job: None,
         };
         let failed_json = serde_json::to_value(&failed).unwrap();
         assert_eq!(failed_json["lifecycle"]["state"], "no_engine");

@@ -1,12 +1,12 @@
 use app_model::{
     admits_analysis_publication, AnalysisJobEventDto, AnalysisJobOutcomeDto, AnalysisPublicationScopeDto,
     EngineBackend, EngineCapabilitySnapshotDto, EngineFailureKind, EngineOperationDto, EngineProfileDto,
-    ForegroundEngineEventDto, ForegroundEngineLifecycleDto, NodePath,
+    ForegroundEngineEventDto, ForegroundEngineLifecycleDto, MoveVertex, NodePath, PointDto,
 };
 use engine_manager::{
-    AnalysisCancelToken, AnalysisJobCancel, AnalysisJobEventDto as WholeGameJobEventDto, AnalysisJobLane,
-    EngineProfileCatalog, ForegroundEngineConfig, ForegroundEngineManager, InMemoryEngineProfileCatalog,
-    SavedEngineProfile, SelectedNodeJobRequest,
+    AnalysisCancelToken, AnalysisJobCancel, AnalysisJobLane, EngineProfileCatalog, ForegroundEngineConfig,
+    ForegroundEngineManager, InMemoryEngineProfileCatalog, SavedEngineProfile, SelectedNodeJobRequest,
+    WholeGameJobRequest, WholeGameWorkItem,
 };
 use katago_protocol::AnalysisQuery;
 use std::path::{Path, PathBuf};
@@ -179,6 +179,50 @@ fn selected_request(run_id: &str, generation: u64, indices: Vec<u32>) -> Selecte
     }
 }
 
+fn whole_game_request(run_id: &str, generation: u64, expected_responses: usize) -> WholeGameJobRequest {
+    WholeGameJobRequest {
+        run_id: run_id.into(),
+        generation,
+        work_items: (0..expected_responses)
+            .map(|depth| WholeGameWorkItem {
+                node_path: NodePath {
+                    indices: vec![0; depth],
+                },
+                query: sample_query(),
+                board_size: 9,
+                move_number: depth as u32,
+            })
+            .collect(),
+    }
+}
+
+fn count_job_queries(logged: &str, job_id: &str) -> usize {
+    logged
+        .lines()
+        .filter(|line| {
+            line.contains(job_id) && !line.contains("terminate") && !line.contains("lifecycle-readiness-")
+        })
+        .count()
+}
+
+fn collect_job_events(
+    events: &Receiver<ForegroundEngineEventDto>,
+    until: Instant,
+) -> Vec<AnalysisJobEventDto> {
+    let mut jobs = Vec::new();
+    while Instant::now() < until {
+        let remaining = until
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_millis(50));
+        match events.recv_timeout(remaining) {
+            Ok(ForegroundEngineEventDto::Job { job }) => jobs.push(job),
+            Ok(_) => {}
+            Err(_) => {}
+        }
+    }
+    jobs
+}
+
 #[cfg(unix)]
 fn hold_after_probe_script() -> String {
     r#"
@@ -273,6 +317,70 @@ while IFS= read -r line; do
   if [ "${EXIT_AFTER:-}" = "first" ]; then
     exit "${EXIT_CODE:-1}"
   fi
+done
+"#
+    .into()
+}
+
+#[cfg(unix)]
+fn resident_selected_node_result_script() -> String {
+    r#"
+first=1
+while IFS= read -r line; do
+  if [ -n "$ENGINE_LOG" ]; then
+    printf '%s\n' "$line" >> "$ENGINE_LOG"
+  fi
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  [ -z "$id" ] && id="ok"
+  if [ "$first" = 1 ]; then
+    printf '{"id":"%s","turnNumber":0}\n' "$id"
+    first=0
+    continue
+  fi
+  printf '{"id":"%s","turnNumber":2,"rootInfo":{"visits":8,"winrate":0.61,"scoreMean":2.5,"scoreStdev":4.0},"moveInfos":[{"move":"D6","visits":5,"winrate":0.62,"scoreMean":2.7,"prior":0.4,"pv":["D6","C7"]}],"ownership":[0.1,-0.2,0.3],"policy":[0.01,0.02,0.03]}\n' "$id"
+done
+"#
+    .into()
+}
+
+#[cfg(unix)]
+fn selected_node_protocol_error_script() -> String {
+    r#"
+first=1
+while IFS= read -r line; do
+  if [ -n "$ENGINE_LOG" ]; then
+    printf '%s\n' "$line" >> "$ENGINE_LOG"
+  fi
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  [ -z "$id" ] && id="ok"
+  if [ "$first" = 1 ]; then
+    printf '{"id":"%s","turnNumber":0}\n' "$id"
+    first=0
+    continue
+  fi
+  printf 'engine stderr failure for %s\n' "$id" >&2
+  printf '{"id":"%s","error":"stderr boom"}\n' "$id"
+done
+"#
+    .into()
+}
+
+#[cfg(unix)]
+fn selected_node_malformed_response_script() -> String {
+    r#"
+first=1
+while IFS= read -r line; do
+  if [ -n "$ENGINE_LOG" ]; then
+    printf '%s\n' "$line" >> "$ENGINE_LOG"
+  fi
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  [ -z "$id" ] && id="ok"
+  if [ "$first" = 1 ]; then
+    printf '{"id":"%s","turnNumber":0}\n' "$id"
+    first=0
+    continue
+  fi
+  printf '{"id":"%s","broken"\n' "$id"
 done
 "#
     .into()
@@ -594,6 +702,164 @@ fn selected_node_start_completes_with_identity_and_keeps_ready() {
 
 #[cfg(unix)]
 #[test]
+fn selected_node_completion_publishes_normalized_candidates_pv_ownership_policy_and_score() {
+    let temp = TestTempDir::new("selected-normalized");
+    let log = temp.path().join("engine.log");
+    let mut script = format!(
+        "ENGINE_LOG='{}'
+",
+        log.display()
+    );
+    script.push_str(&resident_selected_node_result_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let mut query = sample_query();
+    query.rules = "japanese".into();
+    query.komi = 6.5;
+    query.include_ownership = Some(true);
+    query.include_policy = Some(true);
+    query.initial_stones = vec![("B".into(), "C3".into())];
+    let started = manager
+        .start_selected_node_job(SelectedNodeJobRequest {
+            run_id: run_id.clone(),
+            generation: 4,
+            node_path: NodePath { indices: vec![0, 1] },
+            query,
+            board_size: 9,
+        })
+        .unwrap();
+    let completed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+    let frame = completed.frame.as_ref().expect("normalized frame");
+    assert_eq!(completed.run_id, run_id);
+    assert_eq!(completed.generation, 4);
+    assert_eq!(completed.node_path.indices, vec![0, 1]);
+    assert_eq!(frame.visits, 8);
+    assert!((frame.winrate_black - 0.61).abs() < f32::EPSILON);
+    assert!((frame.score_mean_black - 2.5).abs() < f32::EPSILON);
+    assert_eq!(frame.score_stdev, Some(4.0));
+    assert_eq!(frame.candidates.len(), 1);
+    assert_eq!(
+        frame.candidates[0].vertex,
+        MoveVertex::Point(PointDto { x: 3, y: 3 })
+    );
+    assert_eq!(
+        frame.candidates[0].pv,
+        vec![
+            MoveVertex::Point(PointDto { x: 3, y: 3 }),
+            MoveVertex::Point(PointDto { x: 2, y: 2 }),
+        ]
+    );
+    assert_eq!(frame.candidates[0].policy_prior, Some(0.4));
+    assert_eq!(frame.ownership, Some(vec![0.1, -0.2, 0.3]));
+    assert_eq!(frame.policy, Some(vec![0.01, 0.02, 0.03]));
+    let current = started.publication_scope();
+    assert!(admits_analysis_publication(&completed, &current));
+    let logged = std::fs::read_to_string(&log).unwrap();
+    assert!(logged.contains(r#""rules":"japanese""#), "{logged}");
+    assert!(logged.contains(r#""komi":6.5"#), "{logged}");
+    assert!(logged.contains(r#""includeOwnership":true"#), "{logged}");
+    assert!(logged.contains(r#""includePolicy":true"#), "{logged}");
+    assert!(logged.contains(r#"["B","C3"]"#), "{logged}");
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn selected_node_protocol_stderr_failure_is_typed_and_publishes_no_frame() {
+    let temp = TestTempDir::new("selected-protocol");
+    let log = temp.path().join("engine.log");
+    let mut script = format!(
+        "ENGINE_LOG='{}'
+",
+        log.display()
+    );
+    script.push_str(&selected_node_protocol_error_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let started = manager
+        .start_selected_node_job(selected_request(&run_id, 3, vec![0]))
+        .unwrap();
+    let failed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    assert!(failed.frame.is_none());
+    let failure = failed.failure.as_ref().expect("typed protocol failure");
+    assert_eq!(failure.kind, EngineFailureKind::Protocol);
+    assert_eq!(failure.job_id.as_deref(), Some(started.job_id.as_str()));
+    assert!(failure.message.contains("stderr boom"), "{}", failure.message);
+    let current = started.publication_scope();
+    assert!(!admits_analysis_publication(&failed, &current));
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn selected_node_malformed_response_is_typed_failure_without_a_frame() {
+    let temp = TestTempDir::new("selected-malformed");
+    let mut script = String::new();
+    script.push_str(&selected_node_malformed_response_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let started = manager
+        .start_selected_node_job(selected_request(&run_id, 1, vec![]))
+        .unwrap();
+    let failed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    assert!(failed.frame.is_none());
+    let failure = failed.failure.as_ref().expect("typed protocol failure");
+    assert_eq!(failure.kind, EngineFailureKind::Protocol);
+    assert!(!admits_analysis_publication(
+        &failed,
+        &started.publication_scope()
+    ));
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn selected_node_protocol_failure_does_not_cancel_whole_game() {
+    let temp = TestTempDir::new("selected-fail-whole-game");
+    let cancel_marker = temp.path().join("whole-game-cancelled");
+    let script = selected_node_protocol_error_script();
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    struct FileCancel(PathBuf);
+    impl AnalysisJobCancel for FileCancel {
+        fn cancel(&self) {
+            std::fs::write(&self.0, "cancelled").unwrap();
+        }
+    }
+    manager
+        .register_job(
+            &run_id,
+            AnalysisJobLane::WholeGame,
+            Arc::new(FileCancel(cancel_marker.clone())),
+        )
+        .unwrap();
+    let started = manager
+        .start_selected_node_job(selected_request(&run_id, 2, vec![0]))
+        .unwrap();
+    let failed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    assert!(failed.frame.is_none());
+    assert!(!cancel_marker.exists());
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn selected_node_explicit_cancel_writes_terminate_and_keeps_ready() {
     let temp = TestTempDir::new("selected-cancel");
     let log = temp.path().join("engine.log");
@@ -850,7 +1116,7 @@ fn timeout_must_not_follow_teardown(
         }
     }
     assert!(
-        timeout_after_teardown == false,
+        !timeout_after_teardown,
         "selected-node Timeout must not publish after Stop/Switch teardown: {outcomes:?}"
     );
     outcomes
@@ -872,9 +1138,7 @@ fn stop_before_selected_node_timeout_never_publishes_timeout() {
         Instant::now() + Duration::from_millis(1200),
     );
     assert!(
-        outcomes
-            .iter()
-            .any(|outcome| *outcome == AnalysisJobOutcomeDto::Cancelled),
+        outcomes.contains(&AnalysisJobOutcomeDto::Cancelled),
         "Stop should publish Cancelled for the live selected-node job: {outcomes:?}"
     );
 }
@@ -905,32 +1169,16 @@ fn switch_before_selected_node_timeout_never_publishes_timeout() {
     );
 }
 
-#[test]
-fn whole_game_job_event_keeps_snake_case_run_and_job_identities() {
-    let event = WholeGameJobEventDto::Progress {
-        run_id: "run-1".into(),
-        job_id: "job-9".into(),
-        lane: AnalysisJobLane::WholeGame,
-        completed: 1,
-        expected: 2,
-        response_jsonl_line: r#"{"id":"job-9"}"#.into(),
-    };
-    let json = serde_json::to_value(&event).unwrap();
-    assert_eq!(json["type"], "progress");
-    assert_eq!(json["run_id"], "run-1");
-    assert_eq!(json["job_id"], "job-9");
-    assert_eq!(json["lane"], "whole_game");
-    assert_eq!(json["completed"], 1);
-    assert_eq!(json["expected"], 2);
-}
-
-fn whole_game_query_jsonl() -> String {
-    r#"{"id":"caller","rules":"chinese","komi":7.5,"boardXSize":19,"boardYSize":19,"moves":[],"analyzeTurns":[0,1]}"#.into()
+#[cfg(unix)]
+fn resident_whole_game_script() -> String {
+    resident_echo_script()
 }
 
 #[cfg(unix)]
-fn resident_whole_game_script() -> String {
-    r#"
+fn echo_first_then_hold_script(release: &Path) -> String {
+    format!(
+        r#"
+first=1
 while IFS= read -r line; do
   if [ -n "$ENGINE_LOG" ]; then
     printf '%s\n' "$line" >> "$ENGINE_LOG"
@@ -940,34 +1188,22 @@ while IFS= read -r line; do
   [ -z "$id" ] && id="ok"
   case "$id" in
     lifecycle-readiness-*)
-      printf '{"id":"%s","turnNumber":0}\n' "$id"
+      printf '{{"id":"%s","turnNumber":0}}\n' "$id"
       ;;
     *)
-      printf '{"id":"%s","turnNumber":0}\n' "$id"
-      printf '{"id":"%s","turnNumber":1}\n' "$id"
+      if [ "$first" = 1 ]; then
+        first=0
+        printf '{{"id":"%s","turnNumber":0}}\n' "$id"
+      else
+        while [ ! -f '{release}' ]; do sleep 0.01; done
+        printf '{{"id":"%s","turnNumber":1}}\n' "$id"
+      fi
       ;;
   esac
 done
-"#
-    .into()
-}
-
-#[cfg(unix)]
-fn wait_job_event(
-    events: &Receiver<WholeGameJobEventDto>,
-    timeout: Duration,
-    mut predicate: impl FnMut(&WholeGameJobEventDto) -> bool,
-) -> WholeGameJobEventDto {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let event = events
-            .recv_timeout(remaining)
-            .expect("timed out waiting for analysis job event");
-        if predicate(&event) {
-            return event;
-        }
-    }
+"#,
+        release = release.display(),
+    )
 }
 
 #[cfg(unix)]
@@ -977,44 +1213,45 @@ fn whole_game_job_completes_on_ready_run_without_spawning_another_process() {
     let log = temp.path().join("engine.log");
     let mut script = format!("ENGINE_LOG='{}'\n", log.display());
     script.push_str(&resident_whole_game_script());
-    let (manager, _, _, run_id) = ready_manager(&temp, &script);
-    let (job_id, events) = manager
-        .start_whole_game_analysis(&run_id, &whole_game_query_jsonl(), 2)
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let started = manager
+        .start_whole_game_analysis(whole_game_request(&run_id, 4, 2))
         .unwrap();
-    let progress = wait_job_event(&events, Duration::from_secs(2), |event| {
-        matches!(event, WholeGameJobEventDto::Progress { completed: 1, .. })
+    assert_eq!(started.run_id, run_id);
+    assert_eq!(started.lane, AnalysisJobLane::WholeGame);
+    assert_eq!(started.generation, 4);
+    assert_eq!(started.node_path.indices, Vec::<u32>::new());
+    let job_id = started.job_id.clone();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == job_id && job.outcome == AnalysisJobOutcomeDto::Started
     });
-    match progress {
-        WholeGameJobEventDto::Progress {
-            run_id: event_run,
-            job_id: event_job,
-            lane,
-            expected,
-            ..
-        } => {
-            assert_eq!(event_run, run_id);
-            assert_eq!(event_job, job_id);
-            assert_eq!(lane, AnalysisJobLane::WholeGame);
-            assert_eq!(expected, 2);
-        }
-        other => panic!("expected progress, got {other:?}"),
-    }
-    let completed = wait_job_event(&events, Duration::from_secs(2), |event| {
-        matches!(event, WholeGameJobEventDto::Completed { .. })
+    let progress = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == job_id && job.outcome == AnalysisJobOutcomeDto::Progress && job.completed == Some(1)
     });
-    match completed {
-        WholeGameJobEventDto::Completed {
-            run_id: event_run,
-            job_id: event_job,
-            response_jsonl_lines,
-            ..
-        } => {
-            assert_eq!(event_run, run_id);
-            assert_eq!(event_job, job_id);
-            assert_eq!(response_jsonl_lines.len(), 2);
-        }
-        other => panic!("expected completed, got {other:?}"),
-    }
+    assert_eq!(progress.run_id, run_id);
+    assert_eq!(progress.lane, AnalysisJobLane::WholeGame);
+    assert_eq!(progress.generation, 4);
+    assert_eq!(progress.node_path.indices, Vec::<u32>::new());
+    assert_eq!(progress.expected, Some(2));
+    assert_eq!(progress.remaining, Some(1));
+    assert_eq!(progress.frame.as_ref().map(|frame| frame.turn), Some(0));
+    let progress_done = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == job_id && job.outcome == AnalysisJobOutcomeDto::Progress && job.completed == Some(2)
+    });
+    assert_eq!(progress_done.node_path.indices, vec![0]);
+    assert_eq!(progress_done.expected, Some(2));
+    assert_eq!(progress_done.remaining, Some(0));
+    assert_eq!(progress_done.frame.as_ref().map(|frame| frame.turn), Some(1));
+    let completed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+    assert_eq!(completed.run_id, run_id);
+    assert_eq!(completed.generation, 4);
+    assert_eq!(completed.completed, Some(2));
+    assert_eq!(completed.expected, Some(2));
+    assert_eq!(completed.remaining, Some(0));
+    assert!(completed.frame.is_none());
+    assert!(manager.snapshot().whole_game_job.is_none());
     assert!(matches!(
         manager.snapshot().lifecycle,
         ForegroundEngineLifecycleDto::Ready { .. }
@@ -1023,6 +1260,7 @@ fn whole_game_job_completes_on_ready_run_without_spawning_another_process() {
     assert!(logged.contains("lifecycle-readiness-"));
     assert!(logged.contains(&job_id));
     assert!(!logged.contains("\"id\":\"caller\""));
+    assert_eq!(count_job_queries(&logged, &job_id), 2);
 }
 
 #[cfg(unix)]
@@ -1045,9 +1283,13 @@ while IFS= read -r line; do
       printf '{{"id":"%s","turnNumber":0}}\n' "$id"
       ;;
     *)
-      printf '{{"id":"%s","turnNumber":0}}\n' "$id"
-      while [ ! -f '{release}' ]; do sleep 0.01; done
-      printf '{{"id":"%s","turnNumber":1}}\n' "$id"
+      if [ "${{WG_FIRST:-1}}" = 1 ]; then
+        WG_FIRST=0
+        printf '{{"id":"%s","turnNumber":0}}\n' "$id"
+      else
+        while [ ! -f '{release}' ]; do sleep 0.01; done
+        printf '{{"id":"%s","turnNumber":1}}\n' "$id"
+      fi
       ;;
   esac
 done
@@ -1055,7 +1297,7 @@ done
         log = log.display(),
         release = release.display(),
     );
-    let (manager, _, _events, run_id) = ready_manager(&temp, &script);
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
     struct FileCancel(std::path::PathBuf);
     impl AnalysisJobCancel for FileCancel {
         fn cancel(&self) {
@@ -1069,25 +1311,31 @@ done
             Arc::new(FileCancel(selected_cancelled.clone())),
         )
         .unwrap();
-    let (job_id, job_events) = manager
-        .start_whole_game_analysis(&run_id, &whole_game_query_jsonl(), 2)
+    let started = manager
+        .start_whole_game_analysis(whole_game_request(&run_id, 6, 2))
         .unwrap();
-    wait_job_event(&job_events, Duration::from_secs(2), |event| {
-        matches!(event, WholeGameJobEventDto::Progress { completed: 1, .. })
+    let progress = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id
+            && job.outcome == AnalysisJobOutcomeDto::Progress
+            && job.completed == Some(1)
     });
-    manager.cancel_job(&run_id, &job_id).unwrap();
-    wait_job_event(&job_events, Duration::from_secs(2), |event| {
-        matches!(event, WholeGameJobEventDto::Cancelled { .. })
+    assert!(progress.frame.is_some());
+    assert_eq!(progress.remaining, Some(1));
+    manager.cancel_job(&run_id, &started.job_id).unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Cancelled
     });
     std::fs::write(&release, "go").unwrap();
-    std::thread::sleep(Duration::from_millis(200));
-    assert!(job_events
-        .try_recv()
-        .ok()
-        .is_none_or(|event| !matches!(event, WholeGameJobEventDto::Completed { .. })));
+    let later = collect_job_events(&events, Instant::now() + Duration::from_millis(200));
+    assert!(later
+        .iter()
+        .all(|job| { job.job_id != started.job_id || job.outcome != AnalysisJobOutcomeDto::Completed }));
     assert!(!selected_cancelled.exists());
+    let snapshot = manager.snapshot();
+    assert!(snapshot.selected_node_job.is_some());
+    assert!(snapshot.whole_game_job.is_none());
     assert!(matches!(
-        manager.snapshot().lifecycle,
+        snapshot.lifecycle,
         ForegroundEngineLifecycleDto::Ready { .. }
     ));
     let logged = std::fs::read_to_string(&log).unwrap();
@@ -1110,9 +1358,13 @@ while IFS= read -r line; do
       printf '{{"id":"%s","turnNumber":0}}\n' "$id"
       ;;
     *)
-      printf '{{"id":"%s","turnNumber":0}}\n' "$id"
-      while [ ! -f '{release}' ]; do sleep 0.01; done
-      printf '{{"id":"%s","turnNumber":1}}\n' "$id"
+      if [ "${{WG_FIRST:-1}}" = 1 ]; then
+        WG_FIRST=0
+        printf '{{"id":"%s","turnNumber":0}}\n' "$id"
+      else
+        while [ ! -f '{release}' ]; do sleep 0.01; done
+        printf '{{"id":"%s","turnNumber":1}}\n' "$id"
+      fi
       ;;
   esac
 done
@@ -1120,25 +1372,26 @@ done
         release = release.display(),
     );
     let (manager, _, events, run_id) = ready_manager(&temp, &script);
-    let (_, job_events) = manager
-        .start_whole_game_analysis(&run_id, &whole_game_query_jsonl(), 2)
+    let started = manager
+        .start_whole_game_analysis(whole_game_request(&run_id, 7, 2))
         .unwrap();
-    wait_job_event(&job_events, Duration::from_secs(2), |event| {
-        matches!(event, WholeGameJobEventDto::Progress { completed: 1, .. })
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id
+            && job.outcome == AnalysisJobOutcomeDto::Progress
+            && job.completed == Some(1)
     });
     manager.stop().unwrap();
-    wait_job_event(&job_events, Duration::from_secs(2), |event| {
-        matches!(event, WholeGameJobEventDto::Cancelled { .. })
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Cancelled
     });
     std::fs::write(&release, "go").unwrap();
     wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
         matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. })
     });
-    std::thread::sleep(Duration::from_millis(200));
-    assert!(job_events
-        .try_recv()
-        .ok()
-        .is_none_or(|event| !matches!(event, WholeGameJobEventDto::Completed { .. })));
+    let later = collect_job_events(&events, Instant::now() + Duration::from_millis(200));
+    assert!(later
+        .iter()
+        .all(|job| { job.job_id != started.job_id || job.outcome != AnalysisJobOutcomeDto::Completed }));
 }
 
 #[cfg(unix)]
@@ -1156,9 +1409,13 @@ while IFS= read -r line; do
       printf '{{"id":"%s","turnNumber":0}}\n' "$id"
       ;;
     *)
-      printf '{{"id":"%s","turnNumber":0}}\n' "$id"
-      while [ ! -f '{crash}' ]; do sleep 0.01; done
-      exit 9
+      if [ "${{WG_FIRST:-1}}" = 1 ]; then
+        WG_FIRST=0
+        printf '{{"id":"%s","turnNumber":0}}\n' "$id"
+      else
+        while [ ! -f '{crash}' ]; do sleep 0.01; done
+        exit 9
+      fi
       ;;
   esac
 done
@@ -1166,23 +1423,26 @@ done
         crash = crash.display(),
     );
     let (manager, _, events, run_id) = ready_manager(&temp, &script);
-    let (_, job_events) = manager
-        .start_whole_game_analysis(&run_id, &whole_game_query_jsonl(), 2)
+    let started = manager
+        .start_whole_game_analysis(whole_game_request(&run_id, 8, 2))
         .unwrap();
-    wait_job_event(&job_events, Duration::from_secs(2), |event| {
-        matches!(event, WholeGameJobEventDto::Progress { completed: 1, .. })
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id
+            && job.outcome == AnalysisJobOutcomeDto::Progress
+            && job.completed == Some(1)
     });
     std::fs::write(&crash, "now").unwrap();
+    let terminal = wait_job(&events, Duration::from_secs(3), |job| {
+        job.job_id == started.job_id
+            && matches!(
+                job.outcome,
+                AnalysisJobOutcomeDto::Cancelled | AnalysisJobOutcomeDto::Failed
+            )
+    });
+    assert_ne!(terminal.outcome, AnalysisJobOutcomeDto::Completed);
     wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
         matches!(lifecycle, ForegroundEngineLifecycleDto::Error { .. })
     });
-    let terminal = wait_job_event(&job_events, Duration::from_secs(2), |event| {
-        matches!(
-            event,
-            WholeGameJobEventDto::Cancelled { .. } | WholeGameJobEventDto::Failed { .. }
-        )
-    });
-    assert!(!matches!(terminal, WholeGameJobEventDto::Completed { .. }));
     std::thread::sleep(Duration::from_millis(200));
     assert!(matches!(
         manager.snapshot().lifecycle,
@@ -1215,17 +1475,16 @@ fn unsupported_whole_game_capability_is_rejected_before_protocol_io() {
         matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { .. })
     });
     let run_id = run_from_ready(&ready.lifecycle).run_id.clone();
-    assert_eq!(
-        run_from_ready(&ready.lifecycle)
+    assert!(
+        !run_from_ready(&ready.lifecycle)
             .capability_snapshot
             .as_ref()
             .unwrap()
-            .whole_game_analysis,
-        false
+            .whole_game_analysis
     );
     let logged_before = std::fs::read_to_string(&log).unwrap();
     let err = manager
-        .start_whole_game_analysis(&run_id, &whole_game_query_jsonl(), 2)
+        .start_whole_game_analysis(whole_game_request(&run_id, 9, 2))
         .unwrap_err();
     assert_eq!(err.kind, EngineFailureKind::UnsupportedCapability);
     assert_eq!(err.operation, app_model::EngineOperationDto::Job);
@@ -1233,6 +1492,473 @@ fn unsupported_whole_game_capability_is_rejected_before_protocol_io() {
     std::thread::sleep(Duration::from_millis(100));
     let logged_after = std::fs::read_to_string(&log).unwrap();
     assert_eq!(logged_before, logged_after);
+}
+
+#[cfg(unix)]
+fn hold_both_lanes_manager(
+    temp: &TestTempDir,
+) -> (
+    ForegroundEngineManager,
+    Receiver<ForegroundEngineEventDto>,
+    String,
+    PathBuf,
+) {
+    let log = temp.path().join("engine.log");
+    let mut script = format!("ENGINE_LOG='{}'\n", log.display());
+    script.push_str(&hold_after_probe_script());
+    let (manager, _, events, run_id) = ready_manager(temp, &script);
+    (manager, events, run_id, log)
+}
+
+#[cfg(unix)]
+fn start_both_lanes(
+    manager: &ForegroundEngineManager,
+    run_id: &str,
+    generation: u64,
+) -> (app_model::AnalysisJobStartedDto, app_model::AnalysisJobStartedDto) {
+    let selected = manager
+        .start_selected_node_job(selected_request(run_id, generation, vec![0]))
+        .unwrap();
+    let whole = manager
+        .start_whole_game_analysis(whole_game_request(run_id, generation, 2))
+        .unwrap();
+    let snapshot = manager.snapshot();
+    assert_eq!(
+        snapshot.selected_node_job.as_ref().map(|job| job.job_id.as_str()),
+        Some(selected.job_id.as_str())
+    );
+    assert_eq!(
+        snapshot.whole_game_job.as_ref().map(|job| job.job_id.as_str()),
+        Some(whole.job_id.as_str())
+    );
+    (selected, whole)
+}
+
+#[cfg(unix)]
+#[test]
+fn selected_node_and_whole_game_jobs_run_concurrently() {
+    let temp = TestTempDir::new("lanes-concurrent");
+    let (manager, _, run_id, _) = hold_both_lanes_manager(&temp);
+    let (selected, whole) = start_both_lanes(&manager, &run_id, 11);
+    let again = manager
+        .start_selected_node_job(selected_request(&run_id, 12, vec![1]))
+        .unwrap();
+    let snapshot = manager.snapshot();
+    assert_eq!(
+        snapshot.selected_node_job.as_ref().map(|job| job.job_id.as_str()),
+        Some(again.job_id.as_str())
+    );
+    assert_eq!(
+        snapshot.whole_game_job.as_ref().map(|job| job.job_id.as_str()),
+        Some(whole.job_id.as_str())
+    );
+    assert_ne!(again.job_id, selected.job_id);
+    assert!(matches!(
+        snapshot.lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn second_whole_game_start_while_occupied_returns_occupied() {
+    let temp = TestTempDir::new("lanes-occupied");
+    let (manager, events, run_id, log) = hold_both_lanes_manager(&temp);
+    let whole = manager
+        .start_whole_game_analysis(whole_game_request(&run_id, 13, 2))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let logged = std::fs::read_to_string(&log).unwrap_or_default();
+        if logged.contains(&whole.job_id) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("engine log never recorded the first whole-game query: {logged}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let selected = manager
+        .start_selected_node_job(selected_request(&run_id, 13, vec![0]))
+        .unwrap();
+    let selected_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let logged = std::fs::read_to_string(&log).unwrap_or_default();
+        if logged.contains(&selected.job_id) {
+            break;
+        }
+        if Instant::now() >= selected_deadline {
+            panic!("engine log never recorded the selected-node query: {logged}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let logged_before = std::fs::read_to_string(&log).unwrap();
+    let err = manager
+        .start_whole_game_analysis(whole_game_request(&run_id, 99, 2))
+        .unwrap_err();
+    assert_eq!(err.kind, EngineFailureKind::Occupied);
+    assert_eq!(err.operation, EngineOperationDto::Job);
+    assert_eq!(err.run_id.as_deref(), Some(run_id.as_str()));
+    assert_eq!(err.job_id.as_deref(), Some(whole.job_id.as_str()));
+    assert!(!err.message.is_empty());
+    std::thread::sleep(Duration::from_millis(50));
+    let logged_after = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(logged_before, logged_after);
+    let snapshot = manager.snapshot();
+    assert_eq!(
+        snapshot.selected_node_job.as_ref().map(|job| job.job_id.as_str()),
+        Some(selected.job_id.as_str())
+    );
+    assert_eq!(
+        snapshot.whole_game_job.as_ref().map(|job| job.job_id.as_str()),
+        Some(whole.job_id.as_str())
+    );
+    let later = collect_job_events(&events, Instant::now() + Duration::from_millis(150));
+    assert!(later.iter().all(|job| {
+        job.job_id != selected.job_id
+            || !matches!(
+                job.outcome,
+                AnalysisJobOutcomeDto::Cancelled | AnalysisJobOutcomeDto::Completed
+            )
+    }));
+    assert!(later.iter().all(|job| {
+        job.job_id != whole.job_id
+            || !matches!(
+                job.outcome,
+                AnalysisJobOutcomeDto::Cancelled | AnalysisJobOutcomeDto::Completed
+            )
+    }));
+}
+
+#[cfg(unix)]
+#[test]
+fn cancel_whole_game_leaves_selected_node_job_running() {
+    let temp = TestTempDir::new("cancel-whole-keeps-selected");
+    let (manager, events, run_id, _) = hold_both_lanes_manager(&temp);
+    let (selected, whole) = start_both_lanes(&manager, &run_id, 14);
+    manager.cancel_job(&run_id, &whole.job_id).unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == whole.job_id && job.outcome == AnalysisJobOutcomeDto::Cancelled
+    });
+    let snapshot = manager.snapshot();
+    assert_eq!(
+        snapshot.selected_node_job.as_ref().map(|job| job.job_id.as_str()),
+        Some(selected.job_id.as_str())
+    );
+    assert!(snapshot.whole_game_job.is_none());
+    let later = collect_job_events(&events, Instant::now() + Duration::from_millis(150));
+    assert!(later.iter().all(|job| {
+        job.job_id != selected.job_id
+            || !matches!(
+                job.outcome,
+                AnalysisJobOutcomeDto::Cancelled | AnalysisJobOutcomeDto::Completed
+            )
+    }));
+    assert!(matches!(
+        snapshot.lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn cancel_selected_node_leaves_whole_game_job_running() {
+    let temp = TestTempDir::new("cancel-selected-keeps-whole");
+    let (manager, events, run_id, _) = hold_both_lanes_manager(&temp);
+    let (selected, whole) = start_both_lanes(&manager, &run_id, 15);
+    manager.cancel_job(&run_id, &selected.job_id).unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == selected.job_id && job.outcome == AnalysisJobOutcomeDto::Cancelled
+    });
+    let snapshot = manager.snapshot();
+    assert_eq!(
+        snapshot.whole_game_job.as_ref().map(|job| job.job_id.as_str()),
+        Some(whole.job_id.as_str())
+    );
+    assert!(snapshot.selected_node_job.is_none());
+    let later = collect_job_events(&events, Instant::now() + Duration::from_millis(150));
+    assert!(later.iter().all(|job| {
+        job.job_id != whole.job_id
+            || !matches!(
+                job.outcome,
+                AnalysisJobOutcomeDto::Cancelled | AnalysisJobOutcomeDto::Completed
+            )
+    }));
+}
+
+#[test]
+fn empty_whole_game_worklist_is_rejected_before_run_admission() {
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    let err = manager
+        .start_whole_game_analysis(WholeGameJobRequest {
+            run_id: "run-empty".into(),
+            generation: 1,
+            work_items: Vec::new(),
+        })
+        .unwrap_err();
+    assert_eq!(err.kind, EngineFailureKind::InvalidState);
+    assert_eq!(err.run_id.as_deref(), Some("run-empty"));
+}
+
+#[cfg(unix)]
+#[test]
+fn whole_game_progress_publishes_exact_node_path_and_writes_one_query_per_node() {
+    let temp = TestTempDir::new("whole-game-exact-nodes");
+    let log = temp.path().join("engine.log");
+    let mut script = format!("ENGINE_LOG='{}'\n", log.display());
+    script.push_str(&resident_echo_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let mut root_query = sample_query();
+    root_query.initial_stones = vec![("B".into(), "A1".into()), ("W".into(), "C3".into())];
+    root_query.komi = 0.5;
+    root_query.board_x_size = 5;
+    root_query.board_y_size = 5;
+    let mut child_query = sample_query();
+    child_query.initial_stones = vec![
+        ("B".into(), "A1".into()),
+        ("W".into(), "C3".into()),
+        ("W".into(), "D4".into()),
+    ];
+    child_query.komi = 0.5;
+    child_query.board_x_size = 5;
+    child_query.board_y_size = 5;
+    let started = manager
+        .start_whole_game_analysis(WholeGameJobRequest {
+            run_id: run_id.clone(),
+            generation: 21,
+            work_items: vec![
+                WholeGameWorkItem {
+                    node_path: NodePath { indices: Vec::new() },
+                    query: root_query,
+                    board_size: 5,
+                    move_number: 0,
+                },
+                WholeGameWorkItem {
+                    node_path: NodePath { indices: vec![0] },
+                    query: child_query,
+                    board_size: 5,
+                    move_number: 1,
+                },
+            ],
+        })
+        .unwrap();
+    let first = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id
+            && job.outcome == AnalysisJobOutcomeDto::Progress
+            && job.completed == Some(1)
+    });
+    assert_eq!(first.node_path.indices, Vec::<u32>::new());
+    assert_eq!(first.remaining, Some(1));
+    assert_eq!(first.frame.as_ref().map(|frame| frame.turn), Some(0));
+    let second = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id
+            && job.outcome == AnalysisJobOutcomeDto::Progress
+            && job.completed == Some(2)
+    });
+    assert_eq!(second.node_path.indices, vec![0]);
+    assert_eq!(second.remaining, Some(0));
+    assert_eq!(second.frame.as_ref().map(|frame| frame.turn), Some(1));
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+    let logged = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(count_job_queries(&logged, &started.job_id), 2);
+    assert!(logged.contains("\"initialStones\""));
+    assert!(logged.contains("A1"));
+    assert!(logged.contains("C3"));
+    assert!(logged.contains("D4"));
+    assert!(
+        !logged.contains("B5"),
+        "sibling variation must not enter first-child work items"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn whole_game_timeout_stops_remaining_work_and_keeps_completed_progress() {
+    let temp = TestTempDir::new("whole-game-timeout");
+    let log = temp.path().join("engine.log");
+    let release = temp.path().join("never-release");
+    let mut script = format!("ENGINE_LOG='{}'\n", log.display());
+    script.push_str(&echo_first_then_hold_script(&release));
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let started = manager
+        .start_whole_game_analysis(whole_game_request(&run_id, 22, 2))
+        .unwrap();
+    let progress = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id
+            && job.outcome == AnalysisJobOutcomeDto::Progress
+            && job.completed == Some(1)
+    });
+    assert!(progress.frame.is_some());
+    let timed_out = wait_job(&events, Duration::from_secs(4), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Timeout
+    });
+    assert_eq!(timed_out.completed, Some(1));
+    assert_eq!(timed_out.expected, Some(2));
+    assert_eq!(timed_out.remaining, Some(1));
+    assert!(manager.snapshot().whole_game_job.is_none());
+    let logged = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(count_job_queries(&logged, &started.job_id), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn whole_game_protocol_error_stops_remaining_work() {
+    let temp = TestTempDir::new("whole-game-protocol");
+    let log = temp.path().join("engine.log");
+    let script = format!(
+        r#"
+ENGINE_LOG='{log}'
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$ENGINE_LOG"
+  printf '%s' "$line" | grep -q '"action":"terminate"' && continue
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  [ -z "$id" ] && id="ok"
+  case "$id" in
+    lifecycle-readiness-*)
+      printf '{{"id":"%s","turnNumber":0}}\n' "$id"
+      ;;
+    *)
+      printf '{{"id":"%s","error":"engine failed"}}\n' "$id"
+      ;;
+  esac
+done
+"#,
+        log = log.display(),
+    );
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let started = manager
+        .start_whole_game_analysis(whole_game_request(&run_id, 23, 2))
+        .unwrap();
+    let failed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    assert_eq!(failed.completed, Some(0));
+    assert_eq!(failed.remaining, Some(2));
+    assert_eq!(
+        failed.failure.as_ref().map(|failure| failure.kind),
+        Some(EngineFailureKind::Protocol)
+    );
+    let logged = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(count_job_queries(&logged, &started.job_id), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn selected_node_supersession_does_not_cancel_whole_game_job() {
+    let temp = TestTempDir::new("supersede-keeps-whole");
+    let (manager, events, run_id, _) = hold_both_lanes_manager(&temp);
+    let whole = manager
+        .start_whole_game_analysis(whole_game_request(&run_id, 16, 2))
+        .unwrap();
+    let first = manager
+        .start_selected_node_job(selected_request(&run_id, 16, vec![0]))
+        .unwrap();
+    let second = manager
+        .start_selected_node_job(selected_request(&run_id, 16, vec![1]))
+        .unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == first.job_id && job.outcome == AnalysisJobOutcomeDto::Superseded
+    });
+    let snapshot = manager.snapshot();
+    assert_eq!(
+        snapshot.whole_game_job.as_ref().map(|job| job.job_id.as_str()),
+        Some(whole.job_id.as_str())
+    );
+    assert_eq!(
+        snapshot.selected_node_job.as_ref().map(|job| job.job_id.as_str()),
+        Some(second.job_id.as_str())
+    );
+    let later = collect_job_events(&events, Instant::now() + Duration::from_millis(150));
+    assert!(later.iter().all(|job| {
+        job.job_id != whole.job_id
+            || !matches!(
+                job.outcome,
+                AnalysisJobOutcomeDto::Cancelled
+                    | AnalysisJobOutcomeDto::Completed
+                    | AnalysisJobOutcomeDto::Superseded
+            )
+    }));
+}
+
+#[cfg(unix)]
+#[test]
+fn stop_and_restart_cancel_both_analysis_job_lanes() {
+    let temp = TestTempDir::new("stop-both-lanes");
+    let (manager, events, run_id, _) = hold_both_lanes_manager(&temp);
+    let (selected, whole) = start_both_lanes(&manager, &run_id, 17);
+    manager.stop().unwrap();
+    let jobs = collect_job_events(&events, Instant::now() + Duration::from_secs(2));
+    assert!(
+        jobs.iter()
+            .any(|job| job.job_id == selected.job_id && job.outcome == AnalysisJobOutcomeDto::Cancelled),
+        "Stop should cancel selected-node: {jobs:?}"
+    );
+    assert!(
+        jobs.iter()
+            .any(|job| job.job_id == whole.job_id && job.outcome == AnalysisJobOutcomeDto::Cancelled),
+        "Stop should cancel whole-game: {jobs:?}"
+    );
+    assert!(jobs
+        .iter()
+        .all(|job| job.outcome != AnalysisJobOutcomeDto::Completed));
+    wait_lifecycle(&manager, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. })
+    });
+
+    let temp_restart = TestTempDir::new("restart-both-lanes");
+    let (manager, events, run_id, _) = hold_both_lanes_manager(&temp_restart);
+    let (selected, whole) = start_both_lanes(&manager, &run_id, 18);
+    manager.restart().unwrap();
+    let jobs = collect_job_events(&events, Instant::now() + Duration::from_secs(2));
+    assert!(
+        jobs.iter()
+            .any(|job| job.job_id == selected.job_id && job.outcome == AnalysisJobOutcomeDto::Cancelled),
+        "Restart should cancel selected-node: {jobs:?}"
+    );
+    assert!(
+        jobs.iter()
+            .any(|job| job.job_id == whole.job_id && job.outcome == AnalysisJobOutcomeDto::Cancelled),
+        "Restart should cancel whole-game: {jobs:?}"
+    );
+    assert!(jobs
+        .iter()
+        .all(|job| job.outcome != AnalysisJobOutcomeDto::Completed));
+    wait_lifecycle(
+        &manager,
+        Duration::from_secs(4),
+        |lifecycle| matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { run } if run.run_id != run_id),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn mismatched_job_identity_does_not_complete_the_other_lane() {
+    let temp = TestTempDir::new("mismatched-lane-identity");
+    let (manager, events, run_id, _) = hold_both_lanes_manager(&temp);
+    let (selected, whole) = start_both_lanes(&manager, &run_id, 19);
+    manager.cancel_job(&run_id, &selected.job_id).unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == selected.job_id && job.outcome == AnalysisJobOutcomeDto::Cancelled
+    });
+    let snapshot = manager.snapshot();
+    assert_eq!(
+        snapshot.whole_game_job.as_ref().map(|job| job.job_id.as_str()),
+        Some(whole.job_id.as_str())
+    );
+    assert_eq!(snapshot.whole_game_job.as_ref().unwrap().generation, 19);
+    let stale = manager.cancel_job(&run_id, &selected.job_id).unwrap_err();
+    assert_eq!(stale.kind, EngineFailureKind::InvalidState);
+    let later = collect_job_events(&events, Instant::now() + Duration::from_millis(150));
+    assert!(later.iter().all(|job| {
+        job.job_id != whole.job_id
+            || !matches!(
+                job.outcome,
+                AnalysisJobOutcomeDto::Cancelled | AnalysisJobOutcomeDto::Completed
+            )
+    }));
 }
 
 #[cfg(unix)]
@@ -1750,18 +2476,16 @@ fn switch_rebinding_covers_whole_game_jobs() {
         &resident_whole_game_script(),
         &hold_probe_until_release_script(&release),
     );
-    let (job_a, rx_a) = manager
-        .start_whole_game_analysis(&run_a, &whole_game_query_jsonl(), 2)
+    let started_a = manager
+        .start_whole_game_analysis(whole_game_request(&run_a, 1, 2))
         .unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started_a.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
     manager.switch_to("profile-b").unwrap();
     wait_snapshot(&events, Duration::from_secs(2), |lifecycle| {
         matches!(lifecycle, ForegroundEngineLifecycleDto::Switching { .. })
     });
-    wait_job_event(
-        &rx_a,
-        Duration::from_secs(2),
-        |event| matches!(event, WholeGameJobEventDto::Completed { job_id, .. } if job_id == &job_a),
-    );
     std::fs::write(&release, b"go").unwrap();
     let promoted = wait_snapshot(
         &events,
@@ -1769,16 +2493,14 @@ fn switch_rebinding_covers_whole_game_jobs() {
         |lifecycle| matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "profile-b"),
     );
     let run_b = run_from_ready(&promoted.lifecycle).run_id.clone();
-    let (job_b, rx_b) = manager
-        .start_whole_game_analysis(&run_b, &whole_game_query_jsonl(), 2)
+    let started_b = manager
+        .start_whole_game_analysis(whole_game_request(&run_b, 2, 2))
         .unwrap();
-    wait_job_event(
-        &rx_b,
-        Duration::from_secs(2),
-        |event| matches!(event, WholeGameJobEventDto::Completed { job_id, .. } if job_id == &job_b),
-    );
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started_b.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
     let err = manager
-        .start_whole_game_analysis(&run_a, &whole_game_query_jsonl(), 2)
+        .start_whole_game_analysis(whole_game_request(&run_a, 3, 2))
         .unwrap_err();
     assert_eq!(err.kind, EngineFailureKind::InvalidState);
 }
@@ -2136,7 +2858,7 @@ fn stale_a_job_after_failed_switch_does_not_bind_to_b() {
         .start_selected_node_job(selected_request(&candidate.run_id, 14, vec![]))
         .unwrap_err();
     manager
-        .start_whole_game_analysis(&candidate.run_id, &whole_game_query_jsonl(), 2)
+        .start_whole_game_analysis(whole_game_request(&candidate.run_id, 14, 2))
         .unwrap_err();
     let started = manager
         .start_selected_node_job(selected_request(&run_a, 14, vec![]))

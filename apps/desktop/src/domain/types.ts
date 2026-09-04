@@ -23,6 +23,8 @@ export type SelectedNodeSnapshotDto = {
   position: PositionDto;
   personal_comment: string;
   generated_information?: string | null;
+  primary_analysis?: AnalysisFrameDto | null;
+  secondary_analysis?: AnalysisFrameDto | null;
 };
 export type CurrentGameResultDto = {
   tree: SgfTreeNodeDto;
@@ -73,6 +75,7 @@ export type EngineFailureKind =
   | "cancellation"
   | "unsupported_capability"
   | "invalid_state"
+  | "occupied"
   | "profile_not_found"
   | "profile_in_use";
 export type EngineFailureDto = {
@@ -108,10 +111,13 @@ export type ForegroundEngineLifecycleDto =
 export type ForegroundEngineSnapshotDto = {
   revision: number;
   lifecycle: ForegroundEngineLifecycleDto;
+  selected_node_job?: AnalysisJobStartedDto | null;
+  whole_game_job?: AnalysisJobStartedDto | null;
 };
 export type AnalysisJobLaneDto = "selected_node" | "whole_game";
 export type AnalysisJobOutcomeDto =
   | "started"
+  | "progress"
   | "completed"
   | "cancelled"
   | "superseded"
@@ -137,6 +143,9 @@ export type AnalysisJobEventDto = {
   generation: number;
   node_path: NodePath;
   outcome: AnalysisJobOutcomeDto;
+  completed?: number | null;
+  expected?: number | null;
+  remaining?: number | null;
   frame?: AnalysisFrameDto | null;
   failure?: EngineFailureDto | null;
 };

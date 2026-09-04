@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+mod analysis;
 mod current_game;
+pub use analysis::{encode_analysis_payload, parse_analysis_payload, AnalysisSlot, SgfAnalysisPayload};
 pub use current_game::CurrentSgfDocument;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SgfDocument {
@@ -1285,8 +1287,14 @@ impl SgfParser {
 
     fn parse_property_key(&mut self) -> String {
         let start = self.index;
-        while self.peek().is_some_and(|c| c.is_ascii_uppercase()) {
+        if self.peek().is_some_and(|c| c.is_ascii_uppercase()) {
             self.index += 1;
+            while self
+                .peek()
+                .is_some_and(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+            {
+                self.index += 1;
+            }
         }
         self.chars[start..self.index].iter().collect()
     }

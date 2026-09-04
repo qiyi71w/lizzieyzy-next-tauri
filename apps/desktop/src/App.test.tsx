@@ -17,7 +17,6 @@ const backend = vi.hoisted(() => ({
   cancelKataGoAnalysis: vi.fn(),
   classifyProblems: vi.fn(),
   fakeAnalyze: vi.fn(),
-  listenToKataGoAnalysisEvents: vi.fn(),
   openSgfDocument: vi.fn(),
   parseSgfSummary: vi.fn(),
   replaySgfPositions: vi.fn(),
@@ -40,27 +39,18 @@ vi.mock("./api/backend", () => ({
   nativeCurrentGameUnavailable: "Native current-game commands require the Tauri desktop runtime."
 }));
 
-const analysisCache = vi.hoisted(() => ({
-  computeGameCacheKey: vi.fn(() => Promise.resolve({ gameKey: "game", sgfHash: "hash" })),
-  loadAnalysisCache: vi.fn(),
-  saveAnalysisCache: vi.fn()
-}));
-
-vi.mock("./api/analysisCache", () => analysisCache);
-
-vi.mock("./api/preferences", () => ({
+const preferencesApi = vi.hoisted(() => ({
   loadAppPreferences: vi.fn(() => Promise.reject(new Error("preferences unavailable in test"))),
-  saveAppPreferences: vi.fn()
+  saveAppPreferences: vi.fn(async (preferences: unknown) => preferences)
 }));
 
-vi.mock("./components/CacheStatusBadge", () => ({ CacheStatusBadge: () => null }));
+vi.mock("./api/preferences", () => preferencesApi);
+
 vi.mock("./components/EngineSetupPanel", () => ({ EngineSetupPanel: () => null }));
 vi.mock("./components/PreferencesPanel", () => ({ PreferencesPanel: () => null }));
 vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
 vi.mock("./components/WinrateChart", () => ({
-  WinrateChart: ({ frames }: { frames: AnalysisFrameDto[] }) => (
-    <canvas aria-label="胜率走势" data-frame-count={frames.length} />
-  )
+  WinrateChart: () => <canvas aria-label="胜率走势" />
 }));
 
 import { App } from "./App";
@@ -213,7 +203,6 @@ beforeEach(() => {
   });
   backend.replaceCurrentGame.mockResolvedValue(initialGame);
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
-  analysisCache.loadAnalysisCache.mockResolvedValue({ status: "miss" });
 });
 
 afterEach(() => {
@@ -357,7 +346,6 @@ describe("App stale review presentation", () => {
     const host = await renderApp();
     await runFakeAnalyze(host);
     expect(candidateCoords(host)).toEqual(["C6", "G4"]);
-    expect(requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="胜率走势"]').dataset.frameCount).toBe("1");
     expect(buttonNamed(host, "问题手 (1)")).toBeTruthy();
 
     const board = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
@@ -382,7 +370,6 @@ describe("App stale review presentation", () => {
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
     expect(candidateCoords(host)).toEqual([]);
     expect(host.querySelector(".cand-row.is-selected")).toBeNull();
-    expect(requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="胜率走势"]').dataset.frameCount).toBe("0");
     expect(buttonNamed(host, "问题手 (0)")).toBeTruthy();
   });
 
@@ -813,6 +800,7 @@ describe("App focus-safe review controls", () => {
     const policyItem = [...host.querySelectorAll("button")].find((candidate) => candidate.textContent?.includes("策略网络(T)"));
     expect(policyItem?.getAttribute("aria-checked")).toBe("true");
     pressKey(buttonNamed(host, "坐标"), "t");
+    await flushLast(preferencesApi.saveAppPreferences);
     act(() => buttonNamed(host, "显示").click());
     act(() => buttonNamed(host, "显示").click());
     const policyItemAfter = [...host.querySelectorAll("button")].find((candidate) => candidate.textContent?.includes("策略网络(T)"));
@@ -888,7 +876,7 @@ describe("App focus-safe review controls", () => {
   });
 
   it("selects candidates from number keys and the candidate list while ignoring board and text targets", async () => {
-    installCandidateCacheHit();
+    installCandidateAnalysis();
     const host = await renderApp();
     await waitForCandidateRows(host);
 
@@ -916,7 +904,7 @@ describe("App focus-safe review controls", () => {
   });
 
   it("applies overlay and filter controls from their visible owners", async () => {
-    installCandidateCacheHit();
+    installCandidateAnalysis();
     const host = await renderApp();
     await waitForCandidateRows(host);
 
@@ -947,9 +935,11 @@ describe("App focus-safe review controls", () => {
     expect(candidatePref.getAttribute("aria-checked")).toBe("true");
     expect(ownershipPref.getAttribute("aria-checked")).toBe("true");
     act(() => candidatePref.click());
+    await flushLast(preferencesApi.saveAppPreferences);
     act(() => buttonNamed(host, "显示").click());
     expect(menuCheck(host, "候选").getAttribute("aria-checked")).toBe("false");
     act(() => menuCheck(host, "领地").click());
+    await flushLast(preferencesApi.saveAppPreferences);
     act(() => buttonNamed(host, "显示").click());
     expect(menuCheck(host, "领地").getAttribute("aria-checked")).toBe("false");
 
@@ -992,6 +982,43 @@ describe("App focus-safe review controls", () => {
     expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
     expect(backend.startKataGoGameAnalysis).not.toHaveBeenCalled();
   });
+
+  it("opens the same searchable Shortcut Reference from Help and focus-safe ?", async () => {
+    const host = await renderApp();
+    pressKey(buttonNamed(host, "坐标"), "?", { shiftKey: true });
+    const dialog = requiredElement(host, '[role="dialog"][aria-label="快捷键参考"]');
+    expect(dialog.textContent).toContain("自动播放");
+    expect(dialog.textContent).toContain("Ctrl+A");
+    expect(dialog.textContent).toContain("快捷键参考");
+    expect(dialog.textContent).toContain("?");
+
+    const search = requiredElement<HTMLInputElement>(dialog, 'input[aria-label="搜索快捷键"]');
+    act(() => {
+      const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      valueSetter?.call(search, "自动");
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(dialog.textContent).toContain("自动播放");
+    expect(dialog.textContent).not.toContain("打开棋谱");
+
+    pressKey(dialog, "Escape");
+    expect(host.querySelector('[role="dialog"][aria-label="快捷键参考"]')).toBeNull();
+
+    act(() => buttonNamed(host, "帮助").click());
+    act(() => buttonNamed(host, "快捷键参考(?)").click());
+    const fromHelp = requiredElement(host, '[role="dialog"][aria-label="快捷键参考"]');
+    expect(fromHelp.textContent).toContain("自动播放");
+    expect(fromHelp.textContent).toContain("Ctrl+A");
+  });
+
+  it("keeps typed ? in editable controls instead of opening Shortcut Reference", async () => {
+    const host = await renderApp();
+    const editor = requiredElement<HTMLTextAreaElement>(host, 'textarea[aria-label="个人评论"]');
+    act(() => editor.focus());
+    pressKey(editor, "?", { shiftKey: true });
+    expect(host.querySelector('[role="dialog"][aria-label="快捷键参考"]')).toBeNull();
+    expect(buttonNamed(host, "坐标").getAttribute("aria-pressed")).toBe("true");
+  });
 });
 
 async function renderApp(): Promise<HTMLElement> {
@@ -1004,6 +1031,7 @@ async function renderApp(): Promise<HTMLElement> {
   await act(async () => {
     await backend.replaceCurrentGame.mock.results.at(-1)?.value;
     await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    await preferencesApi.loadAppPreferences.mock.results.at(-1)?.value.catch(() => undefined);
   });
   return host;
 }
@@ -1024,35 +1052,27 @@ function candidateRows(host: HTMLElement): HTMLTableRowElement[] {
   return [...host.querySelectorAll<HTMLTableRowElement>(".cand-row")];
 }
 
-function installCandidateCacheHit() {
+function installCandidateAnalysis() {
   const policy = Array.from({ length: 81 }, (_, index) => (index === 0 ? 0.2 : 0));
   const ownership = Array.from({ length: 81 }, () => 0);
-  analysisCache.loadAnalysisCache.mockResolvedValue({
-    status: "hit",
-    record: {
-      id: "c1",
-      gameKey: "game",
-      sgfHash: "hash",
-      source: "katago",
-      moveCount: 2,
-      analyzedMoveCount: 2,
-      payload: {
-        frames: [{
-          job_id: "job",
-          turn: 2,
-          visits: 20,
-          winrate_black: 0.5,
-          score_mean_black: 0,
-          candidates: [
-            { vertex: { point: { x: 2, y: 2 } }, visits: 8, winrate_black: 0.55, score_mean_black: 1, pv: [] },
-            { vertex: { point: { x: 3, y: 3 } }, visits: 6, winrate_black: 0.48, score_mean_black: 0, pv: [] }
-          ],
-          ownership,
-          policy
-        }],
-        problems: []
-      },
-      updatedAt: "2026-01-01T00:00:00Z"
+  const frame: AnalysisFrameDto = {
+    job_id: "job",
+    turn: 0,
+    visits: 20,
+    winrate_black: 0.5,
+    score_mean_black: 0,
+    candidates: [
+      { vertex: { point: { x: 2, y: 2 } }, visits: 8, winrate_black: 0.55, score_mean_black: 1, pv: [] },
+      { vertex: { point: { x: 3, y: 3 } }, visits: 6, winrate_black: 0.48, score_mean_black: 0, pv: [] }
+    ],
+    ownership,
+    policy
+  };
+  backend.replaceCurrentGame.mockResolvedValue({
+    ...initialGame,
+    snapshot: {
+      ...initialGame.snapshot,
+      primary_analysis: frame
     }
   });
 }

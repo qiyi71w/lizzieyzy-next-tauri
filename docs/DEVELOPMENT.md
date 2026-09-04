@@ -10,7 +10,7 @@ Use this guide when changing:
 - scaffold validation and smoke documentation,
 - the Tauri desktop app under `apps/desktop`,
 - Rust crates under `crates/*`,
-- SGF, KataGo, Foreground Engine Run, engine profile, Autoload Default, and cache behavior.
+- SGF, KataGo, Foreground Engine Run, engine profile, Autoload Default, durable preferences, and SGF analysis persistence.
 
 Do not treat a passing Next smoke run as full legacy parity. Provider/readboard work in this batch may provide offline contracts and runtime path plumbing, but live Fox/Yike network behavior, live readboard sidecar operation, and Tauri production release packaging still require environment-specific validation.
 
@@ -66,13 +66,13 @@ cd apps/desktop
 npm run dev
 ```
 
-The browser preview is useful for layout and fallback checks. Real KataGo execution, native file dialogs, app-data engine profile persistence, asset inspection, and SQLite cache commands require `npm run tauri:dev`.
+The browser preview is useful for layout and fallback checks. Real KataGo execution, native file dialogs, app-data engine profile persistence, asset inspection, and SGF analysis persistence require `npm run tauri:dev`.
 
 ## Repository Structure
 
 - `apps/desktop`: React + TypeScript frontend.
 - `apps/desktop/src/api`: frontend wrappers around Tauri commands and browser fallbacks.
-- `apps/desktop/src/components`: board, analysis, chart, cache, Engine Switcher, and Engine Settings UI.
+- `apps/desktop/src/components`: board, analysis, chart, Engine Switcher, and Engine Settings UI.
 - `apps/desktop/src-tauri`: Tauri 2 command gateway and native app integration.
 - `crates/app-model`: shared DTOs.
 - `crates/go-core`: board/rules logic.
@@ -80,7 +80,8 @@ The browser preview is useful for layout and fallback checks. Real KataGo execut
 - `crates/katago-protocol`: KataGo analysis JSONL query/response modeling.
 - `crates/analysis-core`: derived analysis markers.
 - `crates/engine-manager`: engine profiles, Autoload Default, Foreground Engine Run lifecycle, Analysis Jobs, process execution, and cancellation.
-- `crates/storage`: SQLite storage/cache helpers.
+- `crates/app-preferences`: durable app preference load/save, unreadable isolation, and replace-safe persist.
+- `crates/storage`: SQLite application storage helpers for games, nodes, engine profiles, and assets.
 - `tests/golden`: SGF fixtures for migration and regression checks.
 
 ## Local Smoke Flow
@@ -127,38 +128,149 @@ Expected result: analysis actions stay disabled until a Ready run exists. Check 
 
 ### 4. Run One-Position Analysis
 
-- With a Ready run, select a move on the board.
+- With a Ready run, select a node on the board (or keep the current selected node).
 - Click `分析此手`.
-- Confirm candidates, PV, winrate/score data, ownership/policy-backed overlays, and problem markers update for that move.
+- Confirm the job stays on that Ready run, the current-game generation, and the selected `NodePath`.
+- Confirm candidates, PV, winrate/score, ownership overlay (`领地`), and policy overlay (`策略`) update for that node only.
+- Click `取消此手` while the job is still running. Confirm the Engine Switcher stays Ready and whole-game (if running) continues.
+- Start a second `分析此手` and confirm only the latest matching identity publishes.
+- Confirm a timeout or protocol failure does not leave candidates or overlays.
 
-Expected result: selected-node analysis runs on the current Ready Foreground Engine Run, not a one-shot profile process.
+Expected result: selected-node analysis runs on the current Ready Foreground Engine Run, not a one-shot profile process. Publication is identity-bound to run/job/generation/`NodePath`.
+
+Repository evidence (does not substitute for native GUI or live KataGo):
+
+```bash
+cargo test -p sgf selected_node --offline
+cargo test -p lizzieyzy-next-desktop selected_node --offline
+cargo test -p engine-manager --test foreground_engine_run selected_node_ --offline -- --test-threads=1
+cd apps/desktop && npx vitest run src/EngineLifecycle.test.tsx src/SelectedNodeAnalysis.test.tsx
+```
+
+Optional real KataGo on a resident Run (ignored by default):
+
+```bash
+LIZZIEYZY_REAL_KATAGO=1 cargo test -p engine-manager --test real_katago_lifecycle_smoke -- --ignored --test-threads=1
+```
 
 ### 5. Run Full-Game Analysis
 
 - With a Ready run, click `自动分析`.
-- Watch progress update with completed/expected positions and current move.
-- Confirm winrate/candidate data accumulates across the game.
+- Watch the whole-game lane show `整局 completed/expected 剩余 remaining` as first-child mainline nodes finish. Each completed node should publish its own `NodePath` result immediately; do not wait for the batch to end, and do not treat turn as job identity.
+- Navigate with `上一手` / `下一手` while the lane is running and confirm review navigation stays enabled and does not cancel the job.
+- Optionally click `分析此手` / `继续分析` on the same Ready run and confirm both lanes stay active together.
+- A second `自动分析` while that lane is occupied must be rejected without cancelling the selected-node lane.
+- Cancel or fail after at least one node has completed and confirm the current-session result for that node remains visible.
 
-Expected result: whole-game analysis occupies the Ready Run's whole-game lane and stores analysis in the cache.
+Expected result: whole-game analysis occupies only the Ready Run's whole-game lane, walks `[]` / `[0]` / `[0,0]`…, and keeps completed node results after cancel/fail. Selected-node can run concurrently. Durable SGF attachment is not part of this smoke.
+
+### 5.1 Bind Analysis Presentation To Exact Nodes
+
+- After selected-node completes, navigate away with `下一变化` and back with `父节点`. Confirm that node's candidates, PV Sub-Board, winrate, and score return, and that candidate hover does not return.
+- Start `继续分析` while a whole-game result already exists for a child node, then open that child. Confirm the child's presentation appears, `取消整局` stays available, and navigation does not cancel whole-game.
+- Click `停止` so the chip returns to `未加载引擎`. Confirm candidates, PV, ownership (`领地`), and policy (`策略`) clear rather than remaining from the previous Ready run.
+- Confirm the candidate table follows the durable candidate limit without a second hardcoded cap, and that missing ownership/policy keep `领地` / `策略` disabled instead of showing default overlays.
+
+Expected result: review presentation is a projection of identity-valid current-session results keyed by `NodePath`. Leaving Ready clears it. Unsupported fields stay absent. Native KataGo/GTK is not required for this repository evidence.
+
+Repository evidence (does not substitute for native GUI or live KataGo):
+
+```bash
+cd apps/desktop && npx vitest run src/AnalysisPresentation.test.tsx src/EngineLifecycle.test.tsx src/SelectedNodeAnalysis.test.tsx
+```
+
+### 5.2 Round-Trip Java-Compatible SGF Analysis Payloads
+
+- Use native Open to load `tests/golden/java-analysis-branching.sgf` (or another Java SGF with `LZ` / `LZOP`).
+- Confirm the selected node shows that node's primary analysis (candidates, winrate, PV, and score when present) without starting KataGo.
+- Navigate with `下一变化` / `父节点` and sibling controls. Each node must show only its own primary analysis; a node whose `LZ` is malformed or incomplete must stay empty.
+- Save or Save As, reopen the file, and confirm personal `C`, unknown properties, secondary `LZ2` / `LZOP2`, and malformed payloads are still present. Next must not add an Analysis Context property or append generated statistics to `C`.
+- Confirm new encoded primary uses root `LZOP` and non-root `LZ`. Live engine attachment is §5.3.
+
+Expected result: opening a branching Java SGF shows selected-node analysis through the exact-node presentation path. Save/reopen preserves secondary, unknown properties, personal comments, and malformed payloads. Native KataGo/GTK is not required for this repository evidence.
+
+Repository evidence (does not substitute for native GUI or live KataGo):
+
+```bash
+cargo test -p sgf --test java_analysis_payloads --offline
+cd apps/desktop && npx vitest run src/AnalysisPresentation.test.tsx
+```
+
+### 5.3 Attach Live Analysis And Save Call-Time Snapshots
+
+- Start a Ready Foreground Engine Run and click `自动分析` on a game with at least two first-child mainline nodes.
+- After at least one node completes, confirm the document is dirty (`未保存` / Save enabled) and that node's candidates appear. Click `另存为(S)` and write snapshot A. Do not stop the job.
+- Wait for a later mainline node to complete. Confirm the document is dirty again. Click `另存为(S)` and write snapshot B.
+- Reopen snapshot A: it must contain only the analysis attached at the first Save As. Reopen snapshot B: it must include the later node's primary `LZ` / `LZOP` as well.
+- Confirm personal `C`, secondary `LZ2` / `LZOP2`, and unknown properties are still present. Confirm Save As remains available while analysis is still running.
+- Repeat with `分析此手` / `继续分析` on one node, then Save. Re-analysis of that node must replace only the primary payload.
+
+Expected result: identity-valid completed selected-node and whole-game results attach to the exact `NodePath`, dirty the game without changing generation, and persist only through ordinary Save / Save As as the call-time snapshot. Later completions re-dirty. A failed Save keeps dirty and in-memory payloads.
+
+Repository evidence (does not substitute for native GUI or live KataGo):
+
+```bash
+cargo test -p sgf --test replace_primary_analysis --offline
+cargo test -p lizzieyzy-next-desktop current_game_ --offline
+cargo test -p app-model admits_analysis_attachment --offline
+cd apps/desktop && npx vitest run src/domain/analysisJob.test.ts src/AnalysisPresentation.test.tsx src/App.test.tsx src/SelectedNodeAnalysis.test.tsx src/EngineLifecycle.test.tsx
+```
+
+Native KataGo/GTK is required for the GUI Save As A/B reopen steps above. When that environment is unavailable, record the smoke as not run; repository tests cover attachment admission, generation stability, partial retention, replacement preservation, save-while-running, later-redirty, and failed-save recovery.
+
+### 5.4 Persisted Sub-Board Variation And Raw
+
+- Open `显示` → `小棋盘设置`. Confirm first-use is `变化图` and the Sub-Board aria-label is `参考图变化副棋盘`.
+- With a live selected-node candidate list, confirm Variation shows the numbered active PV. Switch to `纯棋子` and confirm the Sub-Board keeps current stones but drops PV, branch, and move numbers, including after hovering a main-board candidate.
+- Confirm `参数` / Preferences `小棋盘内容` edits the same durable mode, including while the analysis rail stays visible. Collapse/hide of the rail (if used) must not rewrite the mode and is not Raw.
+- Quit and start `npm run tauri:dev` again. Confirm the last successfully saved mode is restored.
+- A failed write must keep the previous visible mode and report the save failure.
+
+Repository equivalent:
+
+```bash
+cd apps/desktop && npx vitest run src/SubBoardContentMode.test.tsx src/components/AnalysisPanel.test.tsx src/App.preferences.test.tsx src/api/preferences.test.ts
+cargo test -p app-preferences
+```
+
+Expected result: Variation/Raw is one durable PREF-01 value, not an SGF field and not rail collapse. Missing storage loads Variation. Native KataGo/GTK is not required for this repository evidence. Native restart smoke of Raw and Variation remains a separate desktop column.
+
+### 5.5 Synchronized Variation Replay
+
+- Confirm first-use `显示 → 变化回放` is off and Preferences `回放间隔` is 500 ms. The Variation Sub-Board shows the complete active PV.
+- Enable Variation Replay. Confirm the main-board candidate presentation and visible Variation Sub-Board immediately show the same first PV move, then advance together once per interval, and idle armed at the full PV without looping.
+- Switch to `纯棋子` or collapse the analysis rail while the main board still shows candidates: replay continues on the remaining eligible surface. Hide candidates as well so no eligible surface remains: progress pauses. Restore a surface and confirm replay continues from the retained prefix.
+- Disable replay and confirm both eligible surfaces restore full-PV presentation. A live interval change between 100 and 5000 ms applies to the next gap without resetting progress. A failed write keeps the previous enablement/interval.
+- Replay must not change `NodePath`, dirty the SGF, create a move, or start an Analysis Job. `Ctrl+A` remains Review Autoplay.
+- With a live KataGo PV, confirm a statistics-only update (visits/winrate) does not reset the prefix, and a candidate/PV sequence change immediately shows the new first move.
+
+Repository equivalent:
+
+```bash
+cd apps/desktop && npx vitest run src/VariationReplay.test.tsx src/SubBoardContentMode.test.tsx src/App.preferences.test.tsx src/api/preferences.test.ts
+cargo test -p app-preferences
+```
+
+Expected result: one application-owned timer and prefix are shared by the main board and visible Variation Sub-Board. Missing storage loads replay off / 500 ms. Native KataGo/GTK is not required for this repository evidence. Live PV statistics vs sequence updates and native restart remain a separate desktop column.
 
 ### 6. Cancel Analysis
 
-- Start a full-game analysis with enough visits to observe progress.
-- Click `Cancel`.
-- Confirm progress stops and the status message reports cancellation.
+- On one resident Ready run, start both `分析此手` and `自动分析`.
+- Click `取消此手` and confirm the whole-game lane continues.
+- Click `取消整局` and confirm selected-node (if restarted) is unaffected.
 - Confirm the Engine Switcher is still Ready (`停止` / `重启` enabled).
+- Confirm ordinary `保存` / `另存为` stay enabled while analysis is running.
 - Start another analysis afterwards to ensure the job registry recovered.
 
-Expected result: a cancelled job does not Stop the run, does not keep the UI locked, and does not prevent a later run.
+Expected result: each cancel is lane-local, does not Stop the run, does not lock Save/Save As, and does not prevent a later start on that lane.
 
-### 7. Verify Cache Hit
+### 7. Verify SGF Analysis Persistence
 
-- Analyze a game.
-- Reparse or reopen the same SGF.
-- Confirm cache status changes to hit for the same game/profile/engine kind.
-- If needed, clear the cache path through the UI or a targeted cache command and verify miss behavior.
+- Analyze a game, Save or Save As, and reopen the SGF. Confirm analysis returns from the file.
+- Reparse or reopen the same SGF without saving: live attachments that were not saved must not reappear.
+- Confirm Preferences has no cache category or automatic load/save cache controls, and that the chrome has no cache-status badge or cache action.
 
-Expected result: repeated loading of the same SGF can reuse cached analysis instead of starting from an empty review state.
+Expected result: attached analysis is only visible after Save/reopen of the SGF (or from the in-memory current game before Save). There is no second durable analysis authority.
 
 ### 8. Save SGF
 
@@ -167,6 +279,57 @@ Expected result: repeated loading of the same SGF can reuse cached analysis inst
 - Confirm parse/replay still succeeds and move count remains stable.
 
 Expected result: SGF write validates parseability and can round-trip through native open.
+
+### 9. Durable Preferences
+
+- Open Preferences from `参数`, `棋盘`, Settings → `首选项…`, or Settings → `综合设置(Shift+X)`.
+- Confirm the sheet is categorized (`分析呈现`, `复盘`, `棋盘`, `胜率图`) and that View-menu `候选` / `领地` / 胜率图设置 edit the same values as the sheet.
+- Change a visible preference (for example uncheck `候选`) and wait until the sheet reports that it is saved.
+- Quit the Tauri app and start `npm run tauri:dev` again.
+- Confirm the saved value is still applied after restart.
+
+Repository equivalent: `cargo test -p app-preferences successful_write_is_reloadable_as_restart`.
+
+Expected result: missing preference storage loads owner defaults; a successful write survives native restart; View-menu and Preferences-sheet edits share one durable store.
+
+### 10. Winrate Chart Encoding And Move Rank
+
+- Open a branching SGF whose selected line has `LZ` / `LZOP` on some nodes, including at least one node with `scoreMean` and one without (or a missing payload).
+- Confirm the chart follows `下一变化` / `下一分支` rather than a hardcoded mainline, missing analysis stays a gap, and the current-move marker tracks the selected node.
+- Toggle `显示` → `胜率图设置` and `参数` → `胜率图`: Black vs selected-node-side-to-play, winrate/score/both, Blunder Bar, Graph Hover, and Score Lead Scale. Confirm they share the PREF-01 keys and that a restart after a successful write keeps them.
+- On a score-less line, `目差线` and `目差刻度` are unavailable. A persisted score-only choice still presents as winrate without rewriting the stored `scoreLeadLine`. Invalid scale input is ignored; a larger current-line peak may grow the axis for the session only.
+- Enable Blunder Bar and confirm only Inaccuracy / Mistake / Blunder bars appear between adjacent displayed analyses. Hover shows move number and visible values and does not navigate; hover off is inert.
+
+Native KataGo/GTK: required for the GUI branching selected-line steps above. When that environment is unavailable, record the smoke as not run.
+
+Repository evidence (does not substitute for native GUI or live KataGo):
+
+```bash
+cargo test -p analysis-core -p app-preferences --offline
+cd apps/desktop && npx vitest run src/domain/moveRank.test.ts src/domain/winrateChart.test.ts src/WinrateChartEncoding.test.tsx src/App.preferences.test.tsx
+```
+
+Expected result: first-use defaults are Black perspective, both series on, Blunder Bar off, Graph Hover on, and Score Lead Scale 15. The chart encodes the selected root-to-leaf variation with Java Auto Move Rank bars.
+
+### 11. Next-move Review Marker
+
+- Open a branching SGF with coordinate children, a pass child, and Java `LZ` / `LZOP` on the selected node and its Primary Child.
+- Confirm first-use is Variations: every coordinate-bearing child is marked and the Primary Child is emphasized; pass / non-coordinate children stay in the tree without a board mark.
+- Cycle `显示` → `下一手标记(J)` and `参数` → `下一手标记` through Off, Variations, and Graded. Confirm they share the PREF-01 key and that a restart after a successful write keeps the last saved mode.
+- Press `J` when the board is not an editable control. Confirm it cycles the same three modes. Type `J` into 个人评论 and confirm the mode does not change.
+- In Graded, confirm the Primary Child uses the shared Auto Move Rank when both payloads are parseable and positive-visit. Missing, malformed, zero-visit, pass-only, or absent Primary Child analysis keeps variation marks and does not start an Analysis Job. No uncertainty label appears.
+- Native restart after saving Graded restores Graded without creating a new analysis request.
+
+Native KataGo/GTK: required for live grading of a freshly analyzed branching game. When that environment is unavailable, record the smoke as not run; Java LZ reopen and preference restart can still be checked from a fixture SGF.
+
+Repository evidence (does not substitute for native GUI or live KataGo):
+
+```bash
+cargo test -p app-preferences --offline
+cd apps/desktop && npx vitest run src/domain/nextMoveReviewMarker.test.ts src/domain/shortcuts.test.ts src/components/BoardCanvas.test.tsx src/NextMoveReviewMarker.test.tsx src/App.preferences.test.tsx
+```
+
+Expected result: first-use is Variations. Off draws no marks. Graded grades only the Primary Child from attached tree analysis and never starts analysis.
 
 ## Provider And Sidecar Smoke Flow
 

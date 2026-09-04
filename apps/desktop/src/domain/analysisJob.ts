@@ -1,4 +1,4 @@
-import type { AnalysisJobEventDto, AnalysisPublicationScopeDto } from "./types";
+import type { AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisPublicationScopeDto } from "./types";
 
 export function admitsAnalysisPublication(
   event: AnalysisJobEventDto,
@@ -11,4 +11,29 @@ export function admitsAnalysisPublication(
     && event.generation === current.generation
     && event.node_path.indices.length === current.node_path.indices.length
     && event.node_path.indices.every((index, offset) => index === current.node_path.indices[offset]);
+}
+
+export function matchesWholeGameJobIdentity(
+  pending: AnalysisJobStartedDto | null,
+  job: AnalysisJobEventDto
+): pending is AnalysisJobStartedDto {
+  return pending != null
+    && pending.run_id === job.run_id
+    && pending.job_id === job.job_id
+    && pending.lane === "whole_game"
+    && job.lane === "whole_game"
+    && pending.generation === job.generation;
+}
+
+export function admitsWholeGameNodeResult(job: AnalysisJobEventDto): boolean {
+  return job.lane === "whole_game"
+    && job.outcome === "progress"
+    && job.frame != null;
+}
+
+export function admitsAnalysisAttachment(event: AnalysisJobEventDto): boolean {
+  const frame = event.frame;
+  if (frame == null || frame.visits === 0 || frame.candidates.length === 0) return false;
+  if (event.lane === "selected_node") return event.outcome === "completed";
+  return event.lane === "whole_game" && event.outcome === "progress";
 }

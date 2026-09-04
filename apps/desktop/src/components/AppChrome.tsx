@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toolbarIcons } from "../assets/toolbar";
 import type { AppPreferences } from "../domain/preferences";
+import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
+import { claimedShortcutCatalog, formatShortcutChord } from "../domain/shortcuts";
 
 export type SheetId = "sgf" | "engine" | "sync" | "prefs";
 export type OverlayMode = "candidates" | "ownership" | "policy";
@@ -37,6 +39,7 @@ type Props = {
   onEngineCommand: (kind: "once" | "game") => void;
   preferences: AppPreferences;
   onPreferencesChange: (next: AppPreferences) => void;
+  scoreLeadAvailable?: boolean;
   showCoordinates: boolean;
   showMoveNumbers: boolean;
   onShowCoordinates: (value: boolean) => void;
@@ -45,7 +48,10 @@ type Props = {
   showWhiteCandidates: boolean;
   onShowBlackCandidates: (value: boolean) => void;
   onShowWhiteCandidates: (value: boolean) => void;
-  isKataGoRunning: boolean;
+  referenceRailCollapsed: boolean;
+  onReferenceRailCollapsed: (value: boolean) => void;
+  selectedNodeRunning: boolean;
+  wholeGameRunning: boolean;
   autoPlaying: boolean;
   komi: number;
   onNew: () => void;
@@ -57,8 +63,10 @@ type Props = {
   onLoadSample: () => void;
   onParse: () => void;
   onFakeAnalyze: () => void;
-  onCancel: () => void;
+  onCancelSelectedNode: () => void;
+  onCancelWholeGame: () => void;
   onAbout: () => void;
+  onOpenShortcutReference: () => void;
   onCopySgf: () => void;
   onPasteSgf: () => void;
   onClearBoard: () => void;
@@ -68,7 +76,6 @@ type Props = {
   onFirstMove?: () => void;
   onAutoPlay: () => void;
   onOverlayMode: (mode: OverlayMode) => void;
-  cacheBadge: ReactNode;
   message: string;
   toPlay: "black" | "white";
 };
@@ -79,11 +86,15 @@ export function AppChrome(props: Props) {
   const [openMenu, setOpenMenu] = useState<MenuKey>(null);
   const barRef = useRef<HTMLElement | null>(null);
   const later = "尚未接入";
+  const shortcutReference = claimedShortcutCatalog().find((item) => item.id === "help.shortcut-reference");
+  const shortcutReferenceLabel = shortcutReference
+    ? `${shortcutReference.label}(${formatShortcutChord(shortcutReference.primary)})`
+    : "快捷键参考";
   const nativeAvailable = props.nativeRuntime !== false;
   const nativeUnavailable = props.nativeUnavailable ?? "Native current-game, edit, and authoritative Save require the Tauri desktop backend. Browser preview is non-authoritative.";
   const openDisabled = props.busy || !nativeAvailable;
-  const saveDisabled = props.busy || !nativeAvailable || !props.dirty;
-  const saveAsDisabled = props.busy || !nativeAvailable;
+  const saveDisabled = !nativeAvailable || !props.dirty;
+  const saveAsDisabled = !nativeAvailable;
 
   useEffect(() => {
     function onPointerDown(event: PointerEvent) {
@@ -137,7 +148,11 @@ export function AppChrome(props: Props) {
           <ChromeMenu label="显示" open={openMenu === "view"} onToggle={() => setOpenMenu(openMenu === "view" ? null : "view")}>
             <SubMenu label="面板">
               <MenuItem label="胜率图(Alt+W)" disabled title={later} />
-              <MenuItem label="选点列表面板(Alt+G)" disabled title={later} />
+              <MenuCheck
+                label="选点列表面板"
+                checked={!props.referenceRailCollapsed}
+                onClick={() => run(() => props.onReferenceRailCollapsed(!props.referenceRailCollapsed))}
+              />
               <MenuItem label="分支面板(Shift+G)" disabled title={later} />
             </SubMenu>
             <MenuCheck label="坐标(C)" checked={props.showCoordinates} onClick={() => run(() => props.onShowCoordinates(!props.showCoordinates))} />
@@ -145,10 +160,98 @@ export function AppChrome(props: Props) {
             <MenuCheck label="候选" checked={props.preferences.showCandidates} onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, showCandidates: !props.preferences.showCandidates }))} />
             <MenuCheck label="领地" checked={props.preferences.showOwnership} onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, showOwnership: !props.preferences.showOwnership }))} />
             <MenuCheck label="策略网络(T)" checked={props.preferences.showPolicy} onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, showPolicy: !props.preferences.showPolicy }))} />
+            <SubMenu label="下一手标记(J)">
+              <MenuCheck
+                label="关闭"
+                checked={props.preferences.nextMoveReviewMarker === "off"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, nextMoveReviewMarker: "off" }))}
+              />
+              <MenuCheck
+                label="变化"
+                checked={props.preferences.nextMoveReviewMarker === "variations"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, nextMoveReviewMarker: "variations" }))}
+              />
+              <MenuCheck
+                label="分级"
+                checked={props.preferences.nextMoveReviewMarker === "graded"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, nextMoveReviewMarker: "graded" }))}
+              />
+            </SubMenu>
             <MenuItem label="落子评价标记(Alt+M)" disabled title={later} />
+            <MenuCheck
+              label="变化回放"
+              checked={props.preferences.variationReplayEnabled}
+              onClick={() => run(() => props.onPreferencesChange({
+                ...props.preferences,
+                variationReplayEnabled: !props.preferences.variationReplayEnabled
+              }))}
+            />
             <MenuItem label="自动播放(Ctrl+A)" onClick={() => run(props.onAutoPlay)} />
-            <MenuItem label="胜率图设置" disabled title={later} />
-            <MenuItem label="小棋盘设置" disabled title={later} />
+            <SubMenu label="胜率图设置">
+              <MenuCheck
+                label="黑棋视角"
+                checked={props.preferences.graphPerspective !== "sideToPlay"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, graphPerspective: "black" }))}
+              />
+              <MenuCheck
+                label="当前行棋方视角"
+                checked={props.preferences.graphPerspective === "sideToPlay"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, graphPerspective: "sideToPlay" }))}
+              />
+              <MenuCheck
+                label="胜率线"
+                checked={props.preferences.winrateLine}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, winrateLine: !props.preferences.winrateLine }))}
+              />
+              <MenuCheck
+                label="目差线"
+                checked={props.preferences.scoreLeadLine}
+                disabled={props.scoreLeadAvailable === false}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, scoreLeadLine: !props.preferences.scoreLeadLine }))}
+              />
+              <MenuCheck
+                label="失误条"
+                checked={props.preferences.blunderBar}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, blunderBar: !props.preferences.blunderBar }))}
+              />
+              <MenuCheck
+                label="图表悬停"
+                checked={props.preferences.graphHover}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, graphHover: !props.preferences.graphHover }))}
+              />
+              <div className="menu-item menu-scale">
+                <span>目差刻度</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={1000}
+                  step={1}
+                  aria-label="目差刻度"
+                  value={props.preferences.scoreLeadScale}
+                  disabled={props.scoreLeadAvailable === false}
+                  onChange={(event) => {
+                    const parsed = parsePositiveScoreLeadScale(event.target.value);
+                    if (parsed == null) {
+                      event.currentTarget.value = String(props.preferences.scoreLeadScale);
+                      return;
+                    }
+                    props.onPreferencesChange({ ...props.preferences, scoreLeadScale: parsed });
+                  }}
+                />
+              </div>
+            </SubMenu>
+            <SubMenu label="小棋盘设置">
+              <MenuCheck
+                label="变化图"
+                checked={props.preferences.subBoardContentMode !== "raw"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, subBoardContentMode: "variation" }))}
+              />
+              <MenuCheck
+                label="纯棋子"
+                checked={props.preferences.subBoardContentMode === "raw"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, subBoardContentMode: "raw" }))}
+              />
+            </SubMenu>
             <MenuItem label="布局模式" disabled title={later} />
           </ChromeMenu>
           <ChromeMenu label="棋局" open={openMenu === "game"} onToggle={() => setOpenMenu(openMenu === "game" ? null : "game")}>
@@ -171,7 +274,7 @@ export function AppChrome(props: Props) {
         <span className="menu-div" />
         <div className="menu-cluster">
           <ChromeMenu label="分析" open={openMenu === "analyze"} onToggle={() => setOpenMenu(openMenu === "analyze" ? null : "analyze")}>
-            <MenuItem label="开始/停止 分析" onClick={() => run(props.isKataGoRunning ? props.onCancel : () => props.onEngineCommand("once"))} />
+            <MenuItem label="开始/停止 分析" onClick={() => run(props.selectedNodeRunning ? props.onCancelSelectedNode : () => props.onEngineCommand("once"))} />
             <MenuItem label="AI 解说" onClick={() => run(props.onFakeAnalyze)} disabled={props.busy} />
             <div className="menu-sep" role="separator" />
             <MenuItem label="超级鹰眼" disabled title={later} />
@@ -183,9 +286,9 @@ export function AppChrome(props: Props) {
             <MenuItem label="纯网络(H)" onClick={() => run(() => props.onOverlayMode("policy"))} />
             <MenuItem label="形势判断" onClick={() => run(() => props.onOverlayMode("ownership"))} />
             <div className="menu-sep" role="separator" />
-            <MenuItem label="取消分析" onClick={() => run(props.onCancel)} disabled={!props.isKataGoRunning} />
+            <MenuItem label="取消此手分析" onClick={() => run(props.onCancelSelectedNode)} disabled={!props.selectedNodeRunning} />
+            <MenuItem label="取消整局分析" onClick={() => run(props.onCancelWholeGame)} disabled={!props.wholeGameRunning} />
             <MenuItem label="清除分析信息(此手)" disabled title={later} />
-            <MenuItem label="清除 Lizzie 缓存" disabled title={later} />
           </ChromeMenu>
           <ChromeMenu label="编辑" open={openMenu === "edit"} onToggle={() => setOpenMenu(openMenu === "edit" ? null : "edit")}>
             <MenuItem label="添加黑子" disabled title={later} />
@@ -219,6 +322,7 @@ export function AppChrome(props: Props) {
         <span className="menu-div" />
         <div className="menu-cluster">
           <ChromeMenu label="帮助" open={openMenu === "help"} onToggle={() => setOpenMenu(openMenu === "help" ? null : "help")}>
+            <MenuItem label={shortcutReferenceLabel} onClick={() => run(props.onOpenShortcutReference)} />
             <MenuItem label="关于" onClick={() => run(props.onAbout)} />
             <MenuItem label="检查更新" disabled title={later} />
             <MenuItem label="简介" disabled title={later} />
@@ -321,7 +425,7 @@ export function AppChrome(props: Props) {
 
       <div className="param-strip">
         <button type="button" className="chrome-btn chrome-btn-primary" onClick={props.onNew} disabled={props.busy}>新对局</button>
-        <button type="button" className="chrome-btn" onClick={props.onCancel} disabled={!props.isKataGoRunning}>暂停</button>
+        <button type="button" className="chrome-btn" onClick={props.onCancelSelectedNode} disabled={!props.selectedNodeRunning}>暂停</button>
         <span className="tool-sep" />
         <label className="param-label">
           贴目:
@@ -352,7 +456,6 @@ export function AppChrome(props: Props) {
         <button type="button" className="chrome-btn" onClick={() => props.onToggleSheet("prefs")}>棋盘</button>
         <button type="button" className="chrome-btn" onClick={props.onSave} disabled={saveDisabled} title={!nativeAvailable ? nativeUnavailable : undefined}>存档</button>
         <span className="spacer" />
-        {props.cacheBadge}
         <span className="doc-name" title={props.message}>{props.documentName}{props.dirty ? " *" : ""}</span>
       </div>
     </>
@@ -376,11 +479,13 @@ export function BottomBar(props: {
   onNextSibling: () => void;
   onRemoveVariation: () => void;
   engineReady: boolean;
-  isKataGoRunning: boolean;
-  analysisProgress: { completed: number; expected: number; turn: number } | null;
+  selectedNodeRunning: boolean;
+  wholeGameRunning: boolean;
+  wholeGameProgress: { completed: number; expected: number; remaining?: number | null } | null;
   onAnalyzeOnce: () => void;
   onAnalyzeGame: () => void;
-  onCancel: () => void;
+  onCancelSelectedNode: () => void;
+  onCancelWholeGame: () => void;
   onSync: () => void;
   onFlashAnalyze: () => void;
   onHeatmap: () => void;
@@ -397,12 +502,17 @@ export function BottomBar(props: {
   message: string;
   toPlay: "black" | "white";
 }) {
-  const progress = props.analysisProgress;
-  const progressText = progress
-    ? `${progress.completed}/${progress.expected || "?"} · 第 ${progress.turn} 手`
-    : props.isKataGoRunning
-      ? "正在分析…"
-      : null;
+  const progressParts = [
+    props.selectedNodeRunning ? "此手分析中" : null,
+    props.wholeGameProgress
+      ? `整局 ${props.wholeGameProgress.completed}/${props.wholeGameProgress.expected}${
+          props.wholeGameProgress.remaining == null ? "" : ` 剩余 ${props.wholeGameProgress.remaining}`
+        }`
+      : props.wholeGameRunning
+        ? "整局分析中"
+        : null
+  ].filter((part): part is string => part != null);
+  const progressText = progressParts.length > 0 ? progressParts.join(" · ") : null;
 
   return (
     <nav className="folio-nav" aria-label="复盘导航">
@@ -416,8 +526,11 @@ export function BottomBar(props: {
       <button type="button" className="chrome-btn" disabled title="尚未接入">设为主分支</button>
       <button type="button" className="chrome-btn" onClick={props.onClearBoard}>清空棋盘</button>
       <button type="button" className="chrome-btn" onClick={() => props.jumpRef.current?.focus()}>跳转</button>
-      {props.isKataGoRunning ? (
-        <button type="button" className="chrome-btn" onClick={props.onCancel}>取消</button>
+      {props.selectedNodeRunning ? (
+        <button type="button" className="chrome-btn" onClick={props.onCancelSelectedNode}>取消此手</button>
+      ) : null}
+      {props.wholeGameRunning ? (
+        <button type="button" className="chrome-btn" onClick={props.onCancelWholeGame}>取消整局</button>
       ) : null}
       {progressText ? <span className="nav-progress">{progressText}</span> : null}
       <span className="spacer" />
@@ -501,9 +614,9 @@ function MenuItem({ label, onClick, disabled, title }: { label: string; onClick?
   );
 }
 
-function MenuCheck({ label, checked, onClick }: { label: string; checked: boolean; onClick: () => void }) {
+function MenuCheck({ label, checked, onClick, disabled }: { label: string; checked: boolean; onClick: () => void; disabled?: boolean }) {
   return (
-    <button type="button" role="menuitemcheckbox" className="menu-item" aria-checked={checked} onClick={onClick}>
+    <button type="button" role="menuitemcheckbox" className="menu-item" aria-checked={checked} disabled={disabled} onClick={onClick}>
       <span className="menu-check">{checked ? "✓" : ""}</span>
       {label}
     </button>

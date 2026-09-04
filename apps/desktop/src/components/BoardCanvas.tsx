@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerE
 import { createPortal } from "react-dom";
 import type { AnalysisFrameDto, MoveDto, PointDto, PositionDto } from "../domain/types";
 import { isPoint } from "../domain/board";
+import type { NextMoveReviewMarker, NextMoveReviewMarkerMode } from "../domain/nextMoveReviewMarker";
+import { variationReplayPointSteps } from "../domain/variationReplay";
 import {
   shouldPublishReviewPresentation,
   type ReviewPresentationScope
@@ -22,6 +24,10 @@ type Props = {
   onPointClick?: (point: PointDto) => void;
   onCandidatePreview?: (index: number | null) => void;
   previewScope?: ReviewPresentationScope;
+  nextMoveMode?: NextMoveReviewMarkerMode;
+  nextMoveMarkers?: NextMoveReviewMarker[];
+  pvPrefixLength?: number;
+  replayCandidateIndex?: number | null;
 };
 type PolicyPoint = { x: number; y: number; value: number };
 
@@ -45,7 +51,11 @@ export function BoardCanvas({
   hideCandidates = false,
   onPointClick,
   onCandidatePreview,
-  previewScope
+  previewScope,
+  nextMoveMode = "off",
+  nextMoveMarkers = [],
+  pvPrefixLength,
+  replayCandidateIndex
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [keyboardPoint, setKeyboardPoint] = useState<PointDto | null>(null);
@@ -95,7 +105,7 @@ export function BoardCanvas({
     const grid = (cssSize - padding * 2) / Math.max(boardSize - 1, 1);
     const pointerX = event.clientX - rect.left;
     const pointerY = event.clientY - rect.top;
-    const candidateIndex = (analysis?.candidates.slice(0, 8) ?? []).findIndex((candidate) => {
+    const candidateIndex = (analysis?.candidates ?? []).findIndex((candidate) => {
       if (!isPoint(candidate.vertex)) return false;
       const centerX = padding + candidate.vertex.point.x * grid;
       const centerY = padding + candidate.vertex.point.y * grid;
@@ -261,24 +271,60 @@ export function BoardCanvas({
     if (effectiveOverlayMode === "policy" && hasPolicy) {
       drawPolicyOverlay(ctx, policyPoints, boardSize, coord, grid);
     } else if (!hideCandidates) {
-      const topCandidates = analysis?.candidates.slice(0, 8) ?? [];
-      for (const [index, candidate] of topCandidates.entries()) {
-        if (!isPoint(candidate.vertex)) continue;
-        const cx = coord(candidate.vertex.point.x); const cy = coord(candidate.vertex.point.y);
-        const radius = grid * (0.18 + Math.min(candidate.visits / Math.max(analysis?.visits ?? 1, 1), 1) * 0.22);
-        const isSelected = selectedCandidateIndex === index;
-        ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-        ctx.fillStyle = isSelected ? "#2156c7" : "rgba(255,255,255,.88)";
-        ctx.fill();
-        ctx.strokeStyle = isSelected ? "#163f96" : "rgba(42,28,14,.55)";
-        ctx.lineWidth = isSelected ? Math.max(1.5, grid * 0.06) : 1;
-        ctx.stroke();
-        ctx.fillStyle = isSelected ? "#fff" : "#1a1d21";
-        ctx.font = `${Math.max(10, grid * 0.28)}px "Noto Sans SC", sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(String(index + 1), cx, cy);
+      const topCandidates = analysis?.candidates ?? [];
+      const replayCandidate = topCandidates[replayCandidateIndex ?? selectedCandidateIndex ?? 0] ?? topCandidates[0];
+      const replaySteps = pvPrefixLength == null ? [] : variationReplayPointSteps(replayCandidate).slice(0, pvPrefixLength);
+      if (replaySteps.length === 0) {
+        for (const [index, candidate] of topCandidates.entries()) {
+          if (!isPoint(candidate.vertex)) continue;
+          const cx = coord(candidate.vertex.point.x); const cy = coord(candidate.vertex.point.y);
+          const radius = grid * (0.18 + Math.min(candidate.visits / Math.max(analysis?.visits ?? 1, 1), 1) * 0.22);
+          const isSelected = selectedCandidateIndex === index;
+          ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.fillStyle = isSelected ? "#2156c7" : "rgba(255,255,255,.88)";
+          ctx.fill();
+          ctx.strokeStyle = isSelected ? "#163f96" : "rgba(42,28,14,.55)";
+          ctx.lineWidth = isSelected ? Math.max(1.5, grid * 0.06) : 1;
+          ctx.stroke();
+          ctx.fillStyle = isSelected ? "#fff" : "#1a1d21";
+          ctx.font = `${Math.max(10, grid * 0.28)}px "Noto Sans SC", sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(String(index + 1), cx, cy);
+        }
+      } else {
+        let turnColor: "black" | "white" = position.to_play;
+        for (const [index, point] of replaySteps.entries()) {
+          if (index > 0) turnColor = turnColor === "black" ? "white" : "black";
+          const cx = coord(point.x);
+          const cy = coord(point.y);
+          const radius = grid * 0.45;
+          ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.fillStyle = turnColor === "black" ? "#1a1a1e" : "#ffffff";
+          ctx.fill();
+          ctx.strokeStyle = index === 0 ? "#2563eb" : "rgba(42,28,14,0.8)";
+          ctx.lineWidth = index === 0 ? 1.5 : 1;
+          ctx.stroke();
+          ctx.fillStyle = turnColor === "black" ? "#ffffff" : "#1a1a1e";
+          ctx.font = `bold ${Math.max(9, grid * 0.4)}px "Noto Sans SC", sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(String(index + 1), cx, cy);
+        }
       }
+    }
+
+    for (const marker of nextMoveMode === "off" ? [] : nextMoveMarkers) {
+      const cx = coord(marker.point.x);
+      const cy = coord(marker.point.y);
+      const radius = grid * (marker.primary ? 0.22 : 0.16);
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.fillStyle = markerFill(marker);
+      ctx.fill();
+      ctx.strokeStyle = marker.primary ? "#163f96" : "rgba(33,86,199,.55)";
+      ctx.lineWidth = marker.primary ? Math.max(2, grid * 0.08) : 1;
+      ctx.stroke();
     }
 
     if (keyboardPoint) {
@@ -296,7 +342,7 @@ export function BoardCanvas({
       ctx.lineWidth = Math.max(1.5, grid * 0.06);
       ctx.stroke();
     }
-  }, [position, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, moves, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint]);
+  }, [position, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, moves, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers, pvPrefixLength, replayCandidateIndex]);
 
   const layerHost = document.getElementById("board-layers");
   const overlays = (
@@ -307,7 +353,11 @@ export function BoardCanvas({
     </div>
   );
 
-  return <div className="board-canvas">
+  return <div
+    className="board-canvas"
+    data-next-move-mode={nextMoveMode}
+    data-next-move-markers={JSON.stringify(nextMoveMarkers)}
+  >
     <canvas
       ref={canvasRef}
       aria-label="棋盘"
@@ -382,3 +432,17 @@ function drawPolicyOverlay(ctx: CanvasRenderingContext2D, points: PolicyPoint[],
     }
   }
 }
+
+function markerFill(marker: NextMoveReviewMarker): string {
+  if (marker.rank) return NEXT_MOVE_RANK_FILL[marker.rank];
+  return marker.primary ? "rgba(33,86,199,.22)" : "rgba(33,86,199,.10)";
+}
+
+const NEXT_MOVE_RANK_FILL = {
+  best: "#1b7f3a",
+  good: "#5aa862",
+  normal: "#c7a21a",
+  inaccuracy: "#d67a12",
+  mistake: "#c4451c",
+  blunder: "#8e1515"
+} as const;

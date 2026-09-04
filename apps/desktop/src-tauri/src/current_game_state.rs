@@ -1,12 +1,23 @@
 use app_model::{
-    CurrentGameError, CurrentGameErrorKind, CurrentGameResultDto, GameDto, MoveVertex, NodePath,
-    SelectedNodeSnapshotDto,
+    admits_analysis_attachment, AnalysisJobEventDto, CurrentGameError, CurrentGameErrorKind,
+    CurrentGameResultDto, GameDto, MoveVertex, NodePath, SelectedNodeSnapshotDto,
 };
-use sgf::CurrentSgfDocument;
+use sgf::{CurrentSgfDocument, SgfAnalysisPayload};
 use std::sync::Mutex;
 
 #[cfg(test)]
+mod current_game_analysis_attach;
+#[cfg(test)]
 mod current_game_save_write;
+
+#[derive(Debug, Clone)]
+pub struct WholeGameAdmission {
+    pub generation: u64,
+    pub board_size: u8,
+    pub komi: f32,
+    pub rules: String,
+    pub nodes: Vec<SelectedNodeSnapshotDto>,
+}
 
 #[derive(Default)]
 pub struct CurrentGameState {
@@ -18,6 +29,7 @@ struct CurrentGameHolder {
     document: Option<CurrentSgfDocument>,
     generation: u64,
     dirty: bool,
+    dirty_epoch: u64,
     native_path: Option<String>,
 }
 
@@ -53,25 +65,47 @@ impl CurrentGameState {
         path: String,
         selected_path: NodePath,
     ) -> Result<CurrentGameResultDto, String> {
+        self.save_to_path_with(path, selected_path, || {})
+    }
+
+    fn save_to_path_with(
+        &self,
+        path: String,
+        selected_path: NodePath,
+        after_snapshot: impl FnOnce(),
+    ) -> Result<CurrentGameResultDto, String> {
         let trimmed = path.trim();
         if trimmed.is_empty() {
             return Err("path must not be empty".to_string());
         }
         let target = std::path::PathBuf::from(trimmed);
+        let (serialized, epoch) = {
+            let holder = self.holder.lock().expect("current game state");
+            let document = holder
+                .document
+                .as_ref()
+                .ok_or_else(|| no_current_game().to_string())?;
+            (
+                document.serialize().map_err(|error| error.to_string())?,
+                holder.dirty_epoch,
+            )
+        };
+        after_snapshot();
+        std::fs::write(&target, &serialized)
+            .map_err(|err| format!("failed to write SGF file {}: {err}", target.display()))?;
         let mut holder = self.holder.lock().expect("current game state");
+        holder.native_path = Some(trimmed.to_string());
+        if holder.dirty_epoch == epoch {
+            holder.dirty = false;
+        }
         let document = holder
             .document
             .as_ref()
             .ok_or_else(|| no_current_game().to_string())?;
-        let serialized = document.serialize().map_err(|error| error.to_string())?;
         let snapshot = document
             .snapshot(&selected_path)
             .map_err(|error| error.to_string())?;
         let tree = document.tree().map_err(|error| error.to_string())?;
-        std::fs::write(&target, &serialized)
-            .map_err(|err| format!("failed to write SGF file {}: {err}", target.display()))?;
-        holder.dirty = false;
-        holder.native_path = Some(trimmed.to_string());
         Ok(CurrentGameResultDto {
             tree,
             selected_path,
@@ -86,11 +120,29 @@ impl CurrentGameState {
         self.with_document(|document| Ok(document.mainline_projection()))
     }
 
+    pub fn admit_whole_game(&self, generation: u64) -> Result<WholeGameAdmission, CurrentGameError> {
+        let holder = self.holder.lock().expect("current game state");
+        let document = holder.document.as_ref().ok_or_else(no_current_game)?;
+        if holder.generation != generation {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::NoCurrentGame,
+                message: "current game generation does not match".to_string(),
+            });
+        }
+        Ok(WholeGameAdmission {
+            generation: holder.generation,
+            board_size: document.board_size(),
+            komi: document.komi(),
+            rules: document.rules(),
+            nodes: document.first_child_mainline_snapshots()?,
+        })
+    }
+
     pub fn admit_selected_node(
         &self,
         generation: u64,
         path: &NodePath,
-    ) -> Result<(SelectedNodeSnapshotDto, u8, f32), CurrentGameError> {
+    ) -> Result<(SelectedNodeSnapshotDto, u8, f32, String), CurrentGameError> {
         let holder = self.holder.lock().expect("current game state");
         let document = holder.document.as_ref().ok_or_else(no_current_game)?;
         if holder.generation != generation {
@@ -100,7 +152,7 @@ impl CurrentGameState {
             });
         }
         let snapshot = document.snapshot(path)?;
-        Ok((snapshot, document.board_size(), document.komi()))
+        Ok((snapshot, document.board_size(), document.komi(), document.rules()))
     }
 
     #[allow(dead_code)]
@@ -132,6 +184,28 @@ impl CurrentGameState {
             .lock()
             .expect("current game state")
             .remove_variation(path)
+    }
+
+    pub fn attach_primary_analysis(
+        &self,
+        generation: u64,
+        path: NodePath,
+        payload: SgfAnalysisPayload,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.holder
+            .lock()
+            .expect("current game state")
+            .attach_primary_analysis(generation, path, payload)
+    }
+
+    pub fn attach_from_job_event(&self, event: &AnalysisJobEventDto) -> Option<CurrentGameResultDto> {
+        if !admits_analysis_attachment(event) {
+            return None;
+        }
+        let frame = event.frame.as_ref()?;
+        let payload = SgfAnalysisPayload::from_frame(frame, "KataGo");
+        self.attach_primary_analysis(event.generation, event.node_path.clone(), payload)
+            .ok()
     }
 
     fn with_document<T>(
@@ -187,16 +261,19 @@ impl CurrentGameHolder {
     }
 
     fn play(&mut self, path: NodePath, vertex: MoveVertex) -> Result<CurrentGameResultDto, CurrentGameError> {
-        let document = self.document.as_mut().ok_or_else(no_current_game)?;
-        let before = document.serialize()?;
-        let snapshot = document.play(&path, vertex)?;
-        let after = document.serialize()?;
-        if before != after {
+        let (snapshot, tree, changed) = {
+            let document = self.document.as_mut().ok_or_else(no_current_game)?;
+            let before = document.serialize()?;
+            let snapshot = document.play(&path, vertex)?;
+            let changed = document.serialize()? != before;
+            (snapshot, document.tree()?, changed)
+        };
+        if changed {
             self.generation += 1;
-            self.dirty = true;
+            self.mark_dirty();
         }
         Ok(CurrentGameResultDto {
-            tree: document.tree()?,
+            tree,
             selected_path: snapshot.path.clone(),
             snapshot,
             generation: self.generation,
@@ -235,7 +312,7 @@ impl CurrentGameHolder {
         };
         if changed {
             self.generation += 1;
-            self.dirty = true;
+            self.mark_dirty();
         }
         Ok(CurrentGameResultDto {
             tree,
@@ -253,7 +330,7 @@ impl CurrentGameHolder {
         let snapshot = document.snapshot(&selected_path)?;
         let tree = document.tree()?;
         self.generation += 1;
-        self.dirty = true;
+        self.mark_dirty();
         Ok(CurrentGameResultDto {
             tree,
             selected_path,
@@ -262,6 +339,44 @@ impl CurrentGameHolder {
             dirty: self.dirty,
             native_path: self.native_path.clone(),
         })
+    }
+
+    fn attach_primary_analysis(
+        &mut self,
+        generation: u64,
+        path: NodePath,
+        payload: SgfAnalysisPayload,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        if self.document.is_none() {
+            return Err(no_current_game());
+        }
+        if self.generation != generation {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::NoCurrentGame,
+                message: "current game generation does not match".to_string(),
+            });
+        }
+        let (tree, snapshot, changed) = {
+            let document = self.document.as_mut().ok_or_else(no_current_game)?;
+            let (snapshot, changed) = document.replace_primary_analysis(&path, &payload)?;
+            (document.tree()?, snapshot, changed)
+        };
+        if changed {
+            self.mark_dirty();
+        }
+        Ok(CurrentGameResultDto {
+            tree,
+            selected_path: path,
+            snapshot,
+            generation: self.generation,
+            dirty: self.dirty,
+            native_path: self.native_path.clone(),
+        })
+    }
+
+    fn mark_dirty(&mut self) {
+        self.dirty = true;
+        self.dirty_epoch = self.dirty_epoch.saturating_add(1);
     }
 }
 
@@ -338,6 +453,10 @@ mod current_game_replacement {
             state.mainline_projection().unwrap_err().kind,
             CurrentGameErrorKind::NoCurrentGame
         );
+        assert_eq!(
+            state.admit_whole_game(1).unwrap_err().kind,
+            CurrentGameErrorKind::NoCurrentGame
+        );
     }
 
     #[test]
@@ -379,12 +498,13 @@ mod current_game_replacement {
     fn admit_selected_node_requires_matching_generation_and_existing_path() {
         let state = CurrentGameState::default();
         let opened = state.replace(EMPTY, None).unwrap();
-        let (snapshot, board_size, komi) = state
+        let (snapshot, board_size, komi, rules) = state
             .admit_selected_node(opened.generation, &opened.selected_path)
             .unwrap();
         assert_eq!(snapshot.path, opened.selected_path);
         assert_eq!(board_size, 19);
         assert_eq!(komi, 7.5);
+        assert_eq!(rules, "chinese");
 
         let stale = state
             .admit_selected_node(opened.generation + 1, &opened.selected_path)
@@ -395,6 +515,41 @@ mod current_game_replacement {
             .admit_selected_node(opened.generation, &NodePath { indices: vec![9] })
             .unwrap_err();
         assert_eq!(missing.kind, CurrentGameErrorKind::InvalidNodePath);
+    }
+
+    #[test]
+    fn admit_whole_game_captures_first_child_mainline_and_rejects_stale_generation() {
+        let state = CurrentGameState::default();
+        assert_eq!(
+            state.admit_whole_game(1).unwrap_err().kind,
+            CurrentGameErrorKind::NoCurrentGame
+        );
+
+        let opened = state
+            .replace(BRANCHING, Some("/tmp/branching.sgf".to_string()))
+            .unwrap();
+        let sibling = state.select_path(NodePath { indices: vec![0, 1] }).unwrap();
+        assert_eq!(sibling.generation, opened.generation);
+        assert_eq!(sibling.selected_path.indices, vec![0, 1]);
+
+        let admitted = state.admit_whole_game(opened.generation).unwrap();
+        assert_eq!(admitted.generation, opened.generation);
+        assert_eq!(admitted.board_size, 5);
+        assert_eq!(admitted.komi, 0.5);
+        assert_eq!(admitted.rules, "chinese");
+        let paths: Vec<Vec<u32>> = admitted
+            .nodes
+            .iter()
+            .map(|node| node.path.indices.clone())
+            .collect();
+        assert_eq!(paths, vec![Vec::new(), vec![0], vec![0, 0], vec![0, 0, 0]]);
+        assert_eq!(
+            admitted.nodes[3].position.last_move.as_ref().unwrap().vertex,
+            MoveVertex::Pass
+        );
+
+        let stale = state.admit_whole_game(opened.generation + 1).unwrap_err();
+        assert_eq!(stale.message, "current game generation does not match");
     }
 }
 
@@ -468,7 +623,16 @@ mod current_game_remove_variation {
 #[cfg(test)]
 impl CurrentGameState {
     fn force_dirty(&self) {
-        self.holder.lock().expect("current game state").dirty = true;
+        self.holder.lock().expect("current game state").mark_dirty();
+    }
+
+    fn save_to_path_after_hook(
+        &self,
+        path: String,
+        selected_path: NodePath,
+        hook: impl FnOnce(),
+    ) -> Result<CurrentGameResultDto, String> {
+        self.save_to_path_with(path, selected_path, hook)
     }
 
     fn inspect(&self) -> (u64, bool, Option<String>, Option<String>) {

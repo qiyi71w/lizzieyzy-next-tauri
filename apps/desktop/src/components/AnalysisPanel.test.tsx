@@ -47,11 +47,13 @@ const frame: AnalysisFrameDto = {
 
 let root: Root | null = null;
 let drawArc = vi.fn();
+let fillText = vi.fn();
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   drawArc = vi.fn();
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => canvasContext(drawArc));
+  fillText = vi.fn();
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => canvasContext(drawArc, fillText));
 });
 
 afterEach(() => {
@@ -92,14 +94,44 @@ describe("AnalysisPanel candidate preview", () => {
   });
 });
 
-function canvasContext(arc: Mock): CanvasRenderingContext2D {
+describe("AnalysisPanel sub-board content mode", () => {
+  it("suppresses PV, branch, and move numbers in Raw even with a live hover candidate", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const stonesOnBoard = { ...position, stones: [{ x: 4, y: 4, color: "black" as const }] };
+
+    act(() => root?.render(
+      <AnalysisPanel
+        pane="reference"
+        frame={frame}
+        problems={[]}
+        boardSize={9}
+        currentMove={0}
+        currentPosition={stonesOnBoard}
+        selectedCandidateIndex={0}
+        previewCandidateIndex={1}
+        contentMode="raw"
+        onSelectCandidate={() => undefined}
+        onSelectProblem={() => undefined}
+      />
+    ));
+
+    expect(host.querySelector(".subboard-canvas")?.getAttribute("aria-label")).toBe("纯棋子副棋盘");
+    expect(fillText.mock.calls.map((call) => call[0])).toEqual([]);
+    expect(drawArc.mock.calls.some((call) => Number(call[0].toFixed(1)) === 120 && Number(call[1].toFixed(1)) === 120)).toBe(true);
+    expect(drawArc.mock.calls.some((call) => Number(call[0].toFixed(1)) === 170.4 && Number(call[1].toFixed(1)) === 145.2)).toBe(false);
+  });
+});
+
+function canvasContext(arc: Mock, text: Mock = vi.fn()): CanvasRenderingContext2D {
   return {
     beginPath: vi.fn(),
     arc,
     clearRect: vi.fn(),
     fill: vi.fn(),
     fillRect: vi.fn(),
-    fillText: vi.fn(),
+    fillText: text,
     lineTo: vi.fn(),
     moveTo: vi.fn(),
     scale: vi.fn(),
