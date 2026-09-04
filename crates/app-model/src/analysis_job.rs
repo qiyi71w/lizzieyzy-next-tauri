@@ -103,12 +103,25 @@ pub fn admits_analysis_publication(
         && event.node_path == current.node_path
 }
 
+pub fn admits_analysis_attachment(event: &AnalysisJobEventDto) -> bool {
+    let Some(frame) = event.frame.as_ref() else {
+        return false;
+    };
+    if frame.visits == 0 || frame.candidates.is_empty() {
+        return false;
+    }
+    match event.lane {
+        AnalysisJobLaneDto::SelectedNode => event.outcome == AnalysisJobOutcomeDto::Completed,
+        AnalysisJobLaneDto::WholeGame => event.outcome == AnalysisJobOutcomeDto::Progress,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        AnalysisFrameDto, EngineFailureKind, EngineOperationDto, ForegroundEngineEventDto, MoveVertex,
-        PointDto,
+        AnalysisFrameDto, CandidateMoveDto, EngineFailureKind, EngineOperationDto, ForegroundEngineEventDto,
+        MoveVertex, PointDto,
     };
     use uuid::Uuid;
 
@@ -321,5 +334,63 @@ mod tests {
             other => panic!("expected job event, got {other:?}"),
         }
         assert!(!admits_analysis_publication(&event, &event.publication_scope()));
+    }
+
+    fn projectable_frame() -> AnalysisFrameDto {
+        AnalysisFrameDto {
+            job_id: Uuid::nil(),
+            game_id: None,
+            node_id: None,
+            turn: 0,
+            visits: 32,
+            winrate_black: 0.55,
+            score_mean_black: 1.5,
+            score_stdev: Some(0.2),
+            candidates: vec![CandidateMoveDto {
+                vertex: MoveVertex::Point(PointDto { x: 3, y: 3 }),
+                visits: 32,
+                winrate_black: 0.55,
+                score_mean_black: 1.5,
+                policy_prior: Some(0.4),
+                pv: vec![MoveVertex::Point(PointDto { x: 3, y: 3 })],
+            }],
+            ownership: None,
+            policy: None,
+        }
+    }
+
+    #[test]
+    fn admits_analysis_attachment_requires_projectable_lane_outcomes() {
+        let mut selected = sample_event(
+            "run-1",
+            "job-1",
+            7,
+            vec![],
+            AnalysisJobOutcomeDto::Completed,
+            true,
+        );
+        selected.frame = Some(projectable_frame());
+        assert!(admits_analysis_attachment(&selected));
+        selected.outcome = AnalysisJobOutcomeDto::Cancelled;
+        assert!(!admits_analysis_attachment(&selected));
+        selected.outcome = AnalysisJobOutcomeDto::Failed;
+        assert!(!admits_analysis_attachment(&selected));
+        selected.outcome = AnalysisJobOutcomeDto::Completed;
+        selected.frame = None;
+        assert!(!admits_analysis_attachment(&selected));
+
+        let mut whole = selected.clone();
+        whole.lane = AnalysisJobLaneDto::WholeGame;
+        whole.outcome = AnalysisJobOutcomeDto::Progress;
+        whole.frame = Some(projectable_frame());
+        assert!(admits_analysis_attachment(&whole));
+        whole.outcome = AnalysisJobOutcomeDto::Completed;
+        assert!(!admits_analysis_attachment(&whole));
+        let mut empty = projectable_frame();
+        empty.visits = 0;
+        empty.candidates.clear();
+        whole.outcome = AnalysisJobOutcomeDto::Progress;
+        whole.frame = Some(empty);
+        assert!(!admits_analysis_attachment(&whole));
     }
 }

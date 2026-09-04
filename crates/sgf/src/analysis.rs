@@ -20,6 +20,19 @@ impl SgfAnalysisPayload {
         self.visits > 0 && !self.candidates.is_empty()
     }
 
+    pub fn from_frame(frame: &AnalysisFrameDto, engine_name: impl Into<String>) -> Self {
+        Self {
+            engine_name: engine_name.into(),
+            visits: frame.visits,
+            winrate_black: frame.winrate_black,
+            score_mean_black: Some(frame.score_mean_black),
+            score_stdev: frame.score_stdev,
+            pda: None,
+            candidates: frame.candidates.clone(),
+            ownership: frame.ownership.clone(),
+        }
+    }
+
     pub fn to_frame(&self, turn: u32) -> AnalysisFrameDto {
         AnalysisFrameDto {
             job_id: Uuid::nil(),
@@ -276,6 +289,50 @@ pub fn encode_analysis_payload(
         key: slot.property_key().to_string(),
         values: vec![format_analysis_payload(payload, board_size)],
     }
+}
+
+const PRIMARY_PROPERTY_KEYS: [&str; 2] = ["LZ", "LZOP"];
+
+pub fn replace_primary_analysis(
+    node: &mut SgfNode,
+    payload: &SgfAnalysisPayload,
+    board_size: u8,
+    is_root: bool,
+) -> bool {
+    if !payload.is_projectable() {
+        return false;
+    }
+    let encoded = encode_analysis_payload(payload, AnalysisSlot::Primary { root: is_root }, board_size);
+    let primary_count = node
+        .properties
+        .iter()
+        .filter(|property| PRIMARY_PROPERTY_KEYS.contains(&property.key.as_str()))
+        .count();
+    let unchanged = primary_count == 1
+        && node.properties.iter().any(|property| {
+            PRIMARY_PROPERTY_KEYS.contains(&property.key.as_str())
+                && property.key == encoded.key
+                && property.values == encoded.values
+        });
+    if unchanged {
+        return false;
+    }
+    let mut wrote = false;
+    node.properties.retain_mut(|property| {
+        if !PRIMARY_PROPERTY_KEYS.contains(&property.key.as_str()) {
+            return true;
+        }
+        if wrote {
+            return false;
+        }
+        *property = encoded.clone();
+        wrote = true;
+        true
+    });
+    if !wrote {
+        node.properties.push(encoded);
+    }
+    true
 }
 
 fn format_analysis_payload(payload: &SgfAnalysisPayload, board_size: u8) -> String {

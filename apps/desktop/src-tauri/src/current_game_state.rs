@@ -1,10 +1,12 @@
 use app_model::{
-    CurrentGameError, CurrentGameErrorKind, CurrentGameResultDto, GameDto, MoveVertex, NodePath,
-    SelectedNodeSnapshotDto,
+    admits_analysis_attachment, AnalysisJobEventDto, CurrentGameError, CurrentGameErrorKind,
+    CurrentGameResultDto, GameDto, MoveVertex, NodePath, SelectedNodeSnapshotDto,
 };
-use sgf::CurrentSgfDocument;
+use sgf::{CurrentSgfDocument, SgfAnalysisPayload};
 use std::sync::Mutex;
 
+#[cfg(test)]
+mod current_game_analysis_attach;
 #[cfg(test)]
 mod current_game_save_write;
 
@@ -27,6 +29,7 @@ struct CurrentGameHolder {
     document: Option<CurrentSgfDocument>,
     generation: u64,
     dirty: bool,
+    dirty_epoch: u64,
     native_path: Option<String>,
 }
 
@@ -62,25 +65,47 @@ impl CurrentGameState {
         path: String,
         selected_path: NodePath,
     ) -> Result<CurrentGameResultDto, String> {
+        self.save_to_path_with(path, selected_path, || {})
+    }
+
+    fn save_to_path_with(
+        &self,
+        path: String,
+        selected_path: NodePath,
+        after_snapshot: impl FnOnce(),
+    ) -> Result<CurrentGameResultDto, String> {
         let trimmed = path.trim();
         if trimmed.is_empty() {
             return Err("path must not be empty".to_string());
         }
         let target = std::path::PathBuf::from(trimmed);
+        let (serialized, epoch) = {
+            let holder = self.holder.lock().expect("current game state");
+            let document = holder
+                .document
+                .as_ref()
+                .ok_or_else(|| no_current_game().to_string())?;
+            (
+                document.serialize().map_err(|error| error.to_string())?,
+                holder.dirty_epoch,
+            )
+        };
+        after_snapshot();
+        std::fs::write(&target, &serialized)
+            .map_err(|err| format!("failed to write SGF file {}: {err}", target.display()))?;
         let mut holder = self.holder.lock().expect("current game state");
+        holder.native_path = Some(trimmed.to_string());
+        if holder.dirty_epoch == epoch {
+            holder.dirty = false;
+        }
         let document = holder
             .document
             .as_ref()
             .ok_or_else(|| no_current_game().to_string())?;
-        let serialized = document.serialize().map_err(|error| error.to_string())?;
         let snapshot = document
             .snapshot(&selected_path)
             .map_err(|error| error.to_string())?;
         let tree = document.tree().map_err(|error| error.to_string())?;
-        std::fs::write(&target, &serialized)
-            .map_err(|err| format!("failed to write SGF file {}: {err}", target.display()))?;
-        holder.dirty = false;
-        holder.native_path = Some(trimmed.to_string());
         Ok(CurrentGameResultDto {
             tree,
             selected_path,
@@ -161,6 +186,28 @@ impl CurrentGameState {
             .remove_variation(path)
     }
 
+    pub fn attach_primary_analysis(
+        &self,
+        generation: u64,
+        path: NodePath,
+        payload: SgfAnalysisPayload,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.holder
+            .lock()
+            .expect("current game state")
+            .attach_primary_analysis(generation, path, payload)
+    }
+
+    pub fn attach_from_job_event(&self, event: &AnalysisJobEventDto) -> Option<CurrentGameResultDto> {
+        if !admits_analysis_attachment(event) {
+            return None;
+        }
+        let frame = event.frame.as_ref()?;
+        let payload = SgfAnalysisPayload::from_frame(frame, "KataGo");
+        self.attach_primary_analysis(event.generation, event.node_path.clone(), payload)
+            .ok()
+    }
+
     fn with_document<T>(
         &self,
         f: impl FnOnce(&CurrentSgfDocument) -> Result<T, CurrentGameError>,
@@ -214,16 +261,19 @@ impl CurrentGameHolder {
     }
 
     fn play(&mut self, path: NodePath, vertex: MoveVertex) -> Result<CurrentGameResultDto, CurrentGameError> {
-        let document = self.document.as_mut().ok_or_else(no_current_game)?;
-        let before = document.serialize()?;
-        let snapshot = document.play(&path, vertex)?;
-        let after = document.serialize()?;
-        if before != after {
+        let (snapshot, tree, changed) = {
+            let document = self.document.as_mut().ok_or_else(no_current_game)?;
+            let before = document.serialize()?;
+            let snapshot = document.play(&path, vertex)?;
+            let changed = document.serialize()? != before;
+            (snapshot, document.tree()?, changed)
+        };
+        if changed {
             self.generation += 1;
-            self.dirty = true;
+            self.mark_dirty();
         }
         Ok(CurrentGameResultDto {
-            tree: document.tree()?,
+            tree,
             selected_path: snapshot.path.clone(),
             snapshot,
             generation: self.generation,
@@ -262,7 +312,7 @@ impl CurrentGameHolder {
         };
         if changed {
             self.generation += 1;
-            self.dirty = true;
+            self.mark_dirty();
         }
         Ok(CurrentGameResultDto {
             tree,
@@ -280,7 +330,7 @@ impl CurrentGameHolder {
         let snapshot = document.snapshot(&selected_path)?;
         let tree = document.tree()?;
         self.generation += 1;
-        self.dirty = true;
+        self.mark_dirty();
         Ok(CurrentGameResultDto {
             tree,
             selected_path,
@@ -289,6 +339,44 @@ impl CurrentGameHolder {
             dirty: self.dirty,
             native_path: self.native_path.clone(),
         })
+    }
+
+    fn attach_primary_analysis(
+        &mut self,
+        generation: u64,
+        path: NodePath,
+        payload: SgfAnalysisPayload,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        if self.document.is_none() {
+            return Err(no_current_game());
+        }
+        if self.generation != generation {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::NoCurrentGame,
+                message: "current game generation does not match".to_string(),
+            });
+        }
+        let (tree, snapshot, changed) = {
+            let document = self.document.as_mut().ok_or_else(no_current_game)?;
+            let (snapshot, changed) = document.replace_primary_analysis(&path, &payload)?;
+            (document.tree()?, snapshot, changed)
+        };
+        if changed {
+            self.mark_dirty();
+        }
+        Ok(CurrentGameResultDto {
+            tree,
+            selected_path: path,
+            snapshot,
+            generation: self.generation,
+            dirty: self.dirty,
+            native_path: self.native_path.clone(),
+        })
+    }
+
+    fn mark_dirty(&mut self) {
+        self.dirty = true;
+        self.dirty_epoch = self.dirty_epoch.saturating_add(1);
     }
 }
 
@@ -535,7 +623,16 @@ mod current_game_remove_variation {
 #[cfg(test)]
 impl CurrentGameState {
     fn force_dirty(&self) {
-        self.holder.lock().expect("current game state").dirty = true;
+        self.holder.lock().expect("current game state").mark_dirty();
+    }
+
+    fn save_to_path_after_hook(
+        &self,
+        path: String,
+        selected_path: NodePath,
+        hook: impl FnOnce(),
+    ) -> Result<CurrentGameResultDto, String> {
+        self.save_to_path_with(path, selected_path, hook)
     }
 
     fn inspect(&self) -> (u64, bool, Option<String>, Option<String>) {

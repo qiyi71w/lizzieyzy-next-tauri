@@ -1704,6 +1704,9 @@ pub fn run() {
                             let _ = emit_handle.emit("foreground-engine://failure", failure);
                         }
                         ForegroundEngineEventDto::Job { job } => {
+                            if let Some(state) = emit_handle.try_state::<CurrentGameState>() {
+                                let _ = state.attach_from_job_event(&job);
+                            }
                             let _ = emit_handle.emit("foreground-engine://job", job);
                         }
                     }

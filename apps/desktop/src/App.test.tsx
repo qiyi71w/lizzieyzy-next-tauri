@@ -214,7 +214,6 @@ beforeEach(() => {
   });
   backend.replaceCurrentGame.mockResolvedValue(initialGame);
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
-  analysisCache.loadAnalysisCache.mockResolvedValue({ status: "miss" });
 });
 
 afterEach(() => {
@@ -332,6 +331,8 @@ describe("App candidate continuation preview", () => {
     expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
     expect(backend.playCurrentGame).not.toHaveBeenCalled();
     expect(backend.saveCurrentGame).not.toHaveBeenCalled();
+    expect(analysisCache.loadAnalysisCache).not.toHaveBeenCalled();
+    expect(analysisCache.saveAnalysisCache).not.toHaveBeenCalled();
     expect(backend.setCurrentGamePersonalComment).not.toHaveBeenCalled();
     expect(backend.removeCurrentGameVariation).not.toHaveBeenCalled();
 
@@ -893,6 +894,8 @@ describe("App focus-safe review controls", () => {
     installCandidateCacheHit();
     const host = await renderApp();
     await waitForCandidateRows(host);
+    expect(analysisCache.loadAnalysisCache).not.toHaveBeenCalled();
+    expect(analysisCache.saveAnalysisCache).not.toHaveBeenCalled();
 
     const [first, second] = candidateRows(host);
     expect(first?.classList.contains("is-selected")).toBe(true);
@@ -921,6 +924,8 @@ describe("App focus-safe review controls", () => {
     installCandidateCacheHit();
     const host = await renderApp();
     await waitForCandidateRows(host);
+    expect(analysisCache.loadAnalysisCache).not.toHaveBeenCalled();
+    expect(analysisCache.saveAnalysisCache).not.toHaveBeenCalled();
 
     const policyOverlay = buttonNamed(host, "策略");
     expect(policyOverlay.disabled).toBe(false);
@@ -1069,32 +1074,24 @@ function candidateRows(host: HTMLElement): HTMLTableRowElement[] {
 function installCandidateCacheHit() {
   const policy = Array.from({ length: 81 }, (_, index) => (index === 0 ? 0.2 : 0));
   const ownership = Array.from({ length: 81 }, () => 0);
-  analysisCache.loadAnalysisCache.mockResolvedValue({
-    status: "hit",
-    record: {
-      id: "c1",
-      gameKey: "game",
-      sgfHash: "hash",
-      source: "katago",
-      moveCount: 2,
-      analyzedMoveCount: 2,
-      payload: {
-        frames: [{
-          job_id: "job",
-          turn: 2,
-          visits: 20,
-          winrate_black: 0.5,
-          score_mean_black: 0,
-          candidates: [
-            { vertex: { point: { x: 2, y: 2 } }, visits: 8, winrate_black: 0.55, score_mean_black: 1, pv: [] },
-            { vertex: { point: { x: 3, y: 3 } }, visits: 6, winrate_black: 0.48, score_mean_black: 0, pv: [] }
-          ],
-          ownership,
-          policy
-        }],
-        problems: []
-      },
-      updatedAt: "2026-01-01T00:00:00Z"
+  const frame: AnalysisFrameDto = {
+    job_id: "job",
+    turn: 0,
+    visits: 20,
+    winrate_black: 0.5,
+    score_mean_black: 0,
+    candidates: [
+      { vertex: { point: { x: 2, y: 2 } }, visits: 8, winrate_black: 0.55, score_mean_black: 1, pv: [] },
+      { vertex: { point: { x: 3, y: 3 } }, visits: 6, winrate_black: 0.48, score_mean_black: 0, pv: [] }
+    ],
+    ownership,
+    policy
+  };
+  backend.replaceCurrentGame.mockResolvedValue({
+    ...initialGame,
+    snapshot: {
+      ...initialGame.snapshot,
+      primary_analysis: frame
     }
   });
 }

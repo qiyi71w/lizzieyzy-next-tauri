@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 mod analysis_job;
 pub use analysis_job::{
-    admits_analysis_publication, AnalysisJobEventDto, AnalysisJobLaneDto, AnalysisJobOutcomeDto,
-    AnalysisJobStartedDto, AnalysisPublicationScopeDto,
+    admits_analysis_attachment, admits_analysis_publication, AnalysisJobEventDto, AnalysisJobLaneDto,
+    AnalysisJobOutcomeDto, AnalysisJobStartedDto, AnalysisPublicationScopeDto,
 };
 
 pub type GameId = Uuid;

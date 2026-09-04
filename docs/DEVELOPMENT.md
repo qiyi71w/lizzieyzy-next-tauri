@@ -185,7 +185,7 @@ cd apps/desktop && npx vitest run src/AnalysisPresentation.test.tsx src/EngineLi
 - Confirm the selected node shows that node's primary analysis (candidates, winrate, PV, and score when present) without starting KataGo.
 - Navigate with `下一变化` / `父节点` and sibling controls. Each node must show only its own primary analysis; a node whose `LZ` is malformed or incomplete must stay empty.
 - Save or Save As, reopen the file, and confirm personal `C`, unknown properties, secondary `LZ2` / `LZOP2`, and malformed payloads are still present. Next must not add an Analysis Context property or append generated statistics to `C`.
-- Confirm new encoded primary uses root `LZOP` and non-root `LZ`. This smoke does not attach live engine results (ticket 08) and does not remove the SQLite cache (ticket 09).
+- Confirm new encoded primary uses root `LZOP` and non-root `LZ`. Live engine attachment is §5.3. Removing the SQLite cache product path remains ticket 09.
 
 Expected result: opening a branching Java SGF shows selected-node analysis through the exact-node presentation path. Save/reopen preserves secondary, unknown properties, personal comments, and malformed payloads. Native KataGo/GTK is not required for this repository evidence.
 
@@ -195,6 +195,28 @@ Repository evidence (does not substitute for native GUI or live KataGo):
 cargo test -p sgf --test java_analysis_payloads --offline
 cd apps/desktop && npx vitest run src/AnalysisPresentation.test.tsx
 ```
+
+### 5.3 Attach Live Analysis And Save Call-Time Snapshots
+
+- Start a Ready Foreground Engine Run and click `自动分析` on a game with at least two first-child mainline nodes.
+- After at least one node completes, confirm the document is dirty (`未保存` / Save enabled) and that node's candidates appear. Click `另存为(S)` and write snapshot A. Do not stop the job.
+- Wait for a later mainline node to complete. Confirm the document is dirty again. Click `另存为(S)` and write snapshot B.
+- Reopen snapshot A: it must contain only the analysis attached at the first Save As. Reopen snapshot B: it must include the later node's primary `LZ` / `LZOP` as well.
+- Confirm personal `C`, secondary `LZ2` / `LZOP2`, and unknown properties are still present. Confirm the cache badge does not show a hit from SQLite, and that Save As remains available while analysis is still running.
+- Repeat with `分析此手` / `继续分析` on one node, then Save. Re-analysis of that node must replace only the primary payload.
+
+Expected result: identity-valid completed selected-node and whole-game results attach to the exact `NodePath`, dirty the game without changing generation, and persist only through ordinary Save / Save As as the call-time snapshot. Later completions re-dirty. A failed Save keeps dirty and in-memory payloads. SQLite analysis cache is no longer a runtime load or save path. Ticket 09 still owns deleting cache prefs/UI/commands/schema.
+
+Repository evidence (does not substitute for native GUI or live KataGo):
+
+```bash
+cargo test -p sgf --test replace_primary_analysis --offline
+cargo test -p lizzieyzy-next-desktop current_game_ --offline
+cargo test -p app-model admits_analysis_attachment --offline
+cd apps/desktop && npx vitest run src/domain/analysisJob.test.ts src/AnalysisPresentation.test.tsx src/App.test.tsx src/SelectedNodeAnalysis.test.tsx src/EngineLifecycle.test.tsx
+```
+
+Native KataGo/GTK is required for the GUI Save As A/B reopen steps above. When that environment is unavailable, record the smoke as not run; repository tests cover attachment admission, generation stability, partial retention, replacement preservation, save-while-running, later-redirty, failed-save recovery, and no runtime SQLite read/write.
 
 ### 6. Cancel Analysis
 
@@ -209,12 +231,12 @@ Expected result: each cancel is lane-local, does not Stop the run, does not lock
 
 ### 7. Verify Cache Hit
 
-- Analyze a game.
-- Reparse or reopen the same SGF.
-- Confirm cache status changes to hit for the same game/profile/engine kind.
-- If needed, clear the cache path through the UI or a targeted cache command and verify miss behavior.
+This is no longer the active analysis persistence path. Ticket 08 cut runtime load/save over to SGF attachment and ordinary Save / Save As. Cache preferences, badge, commands, and schema remain until ticket 09 deletes them; they must not restore or persist analysis after a live run or reopen.
 
-Expected result: repeated loading of the same SGF can reuse cached analysis instead of starting from an empty review state.
+- Analyze a game, Save or Save As, and reopen the SGF. Confirm analysis returns from the file, not from a cache-hit badge.
+- Reparse or reopen the same SGF without saving: live attachments that were not saved must not reappear from SQLite.
+
+Expected result: attached analysis is only visible after Save/reopen of the SGF (or from the in-memory current game before Save). SQLite cache hit is not a product restore path.
 
 ### 8. Save SGF
 

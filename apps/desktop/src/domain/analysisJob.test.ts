@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { admitsAnalysisPublication, admitsWholeGameNodeResult, matchesWholeGameJobIdentity } from "./analysisJob";
+import { admitsAnalysisAttachment, admitsAnalysisPublication, admitsWholeGameNodeResult, matchesWholeGameJobIdentity } from "./analysisJob";
 import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisPublicationScopeDto } from "./types";
 
 const frame: AnalysisFrameDto = {
@@ -56,5 +56,29 @@ describe("whole-game incremental publication", () => {
     expect(admitsWholeGameNodeResult(event({ lane: "whole_game", outcome: "completed", frame }))).toBe(false);
     expect(admitsWholeGameNodeResult(event({ lane: "whole_game", outcome: "progress", frame: undefined }))).toBe(false);
     expect(admitsWholeGameNodeResult(event({ outcome: "progress", frame }))).toBe(false);
+  });
+});
+
+describe("admitsAnalysisAttachment", () => {
+  const projectable = {
+    ...frame,
+    visits: 48,
+    candidates: [{ vertex: { point: { x: 3, y: 3 } }, visits: 40, winrate_black: 0.62, score_mean_black: 2.8, pv: [] }]
+  };
+
+  it("requires projectable selected-node completed and whole-game progress frames", () => {
+    expect(admitsAnalysisAttachment(event({ frame: projectable }))).toBe(true);
+    expect(admitsAnalysisAttachment(event({ frame: projectable, outcome: "cancelled" }))).toBe(false);
+    expect(admitsAnalysisAttachment(event({ frame: projectable, outcome: "failed" }))).toBe(false);
+    expect(admitsAnalysisAttachment(event({ frame: undefined }))).toBe(false);
+    expect(admitsAnalysisAttachment(event({ frame }))).toBe(false);
+
+    expect(admitsAnalysisAttachment(event({ lane: "whole_game", outcome: "progress", frame: projectable }))).toBe(true);
+    expect(admitsAnalysisAttachment(event({ lane: "whole_game", outcome: "completed", frame: projectable }))).toBe(false);
+    expect(admitsAnalysisAttachment(event({
+      lane: "whole_game",
+      outcome: "progress",
+      frame: { ...projectable, visits: 0, candidates: [] }
+    }))).toBe(false);
   });
 });

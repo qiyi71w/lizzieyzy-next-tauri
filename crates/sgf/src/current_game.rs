@@ -168,6 +168,18 @@ impl CurrentSgfDocument {
         self.snapshot(path)
     }
 
+    pub fn replace_primary_analysis(
+        &mut self,
+        path: &NodePath,
+        payload: &crate::SgfAnalysisPayload,
+    ) -> Result<(SelectedNodeSnapshotDto, bool), CurrentGameError> {
+        let board_size = self.document.board_size;
+        let is_root = path.indices.is_empty();
+        let changed =
+            crate::analysis::replace_primary_analysis(self.node_mut(path)?, payload, board_size, is_root);
+        Ok((self.snapshot(path)?, changed))
+    }
+
     pub fn remove_variation(&mut self, path: &NodePath) -> Result<NodePath, CurrentGameError> {
         if path.indices.is_empty() {
             return Err(CurrentGameError {

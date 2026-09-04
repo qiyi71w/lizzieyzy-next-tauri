@@ -46,13 +46,12 @@ import {
   runFromSnapshot,
   shouldAcceptFailureEvent
 } from "./domain/foregroundEngine";
-import { computeGameCacheKey, loadAnalysisCache, saveAnalysisCache } from "./api/analysisCache";
 import { loadAppPreferences, saveAppPreferences } from "./api/preferences";
 import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition } from "./domain/board";
-import type { AnalysisCacheRecord, CacheStatus, GameCacheKey, JsonValue } from "./domain/cache";
+import type { AnalysisCacheRecord, CacheStatus } from "./domain/cache";
 import { defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "./domain/preferences";
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
-import { admitsAnalysisPublication, admitsWholeGameNodeResult, matchesWholeGameJobIdentity } from "./domain/analysisJob";
+import { admitsAnalysisAttachment, admitsAnalysisPublication, admitsWholeGameNodeResult, matchesWholeGameJobIdentity } from "./domain/analysisJob";
 import { createShortcutRegistry } from "./domain/shortcuts";
 import {
   createLocalRequestToken,
@@ -65,14 +64,8 @@ const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd
 const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
 const demoGame = createDemoGame();
 type WholeGameProgress = { completed: number; expected: number; remaining: number };
-type CacheEngineKind = "fake" | "katago";
-type CachedAnalysisPayload = { frames: AnalysisFrameDto[]; problems: ProblemMarkerDto[] };
 type PendingPreferencesSave = { version: number; preferences: AppPreferences };
 type CandidatePreview = { index: number; scope: ReviewPresentationScope };
-type AnalysisCacheLoadResult =
-  | { status: "hit"; record: AnalysisCacheRecord; engineKind: CacheEngineKind }
-  | { status: "miss" }
-  | { status: "error"; message: string };
 
 export function App() {
   const [health, setHealth] = useState<AppHealthDto | null>(null);
@@ -104,7 +97,6 @@ export function App() {
   const [cacheStatus, setCacheStatus] = useState<CacheStatus>("idle");
   const [cacheRecord, setCacheRecord] = useState<AnalysisCacheRecord | null>(null);
   const [cacheError, setCacheError] = useState<string | null>(null);
-  const [currentCacheKey, setCurrentCacheKey] = useState<GameCacheKey | null>(null);
   const [preferences, setPreferences] = useState<AppPreferences>(() => defaultAppPreferences);
   const [preferencesStatus, setPreferencesStatus] = useState("正在载入设置…");
   const [sheet, setSheet] = useState<"none" | SheetId>("none");
@@ -529,6 +521,19 @@ export function App() {
     setCurrentGame(result);
   }
 
+  async function refreshCurrentGameAfterAttach() {
+    const game = currentGameRef.current;
+    if (!nativeRuntime || !game) return;
+    try {
+      const refreshed = await selectCurrentGameNode(game.selected_path);
+      if (!refreshed || !isCurrentDocumentGeneration(refreshed.generation)) return;
+      adoptCurrentGame(refreshed);
+      setDirty(refreshed.dirty);
+    } catch {
+      return;
+    }
+  }
+
   function isCurrentDocumentGeneration(capturedGeneration: number): boolean {
     return documentGenerationRef.current === capturedGeneration;
   }
@@ -591,7 +596,6 @@ export function App() {
       fallbackName?: string | null;
       successMessage: (projection: GameDto, fileName: string) => string;
       failurePrefix: string;
-      checkCache?: boolean;
     }
   ): Promise<boolean> {
     if (!confirmDirtyReplacement(options.confirmMessage)) return false;
@@ -615,8 +619,7 @@ export function App() {
         await abandonWholeGameSession();
         const previewMessage = options.successMessage(parsed, options.fallbackName ?? "SGF");
         setMessage(`${nativeCurrentGameUnavailable} ${previewMessage}`);
-        if (options.checkCache === false) resetAnalysisCacheState();
-        else await checkAnalysisCacheForGame(sgfInput, null, parsed, `${nativeCurrentGameUnavailable} ${previewMessage}`);
+        resetAnalysisCacheState();
         return true;
       } catch (error) {
         setMessage(`${options.failurePrefix}: ${errorMessage(error)}`);
@@ -643,8 +646,7 @@ export function App() {
       const fileName = fileNameFromPath(result.native_path ?? options.fallbackName ?? "SGF");
       const success = options.successMessage(artifacts.projection, fileName);
       setMessage(success);
-      if (options.checkCache === false) resetAnalysisCacheState();
-      else await checkAnalysisCacheForGame(artifacts.serialized, result.native_path ?? null, artifacts.projection, success);
+      resetAnalysisCacheState();
       return true;
     } catch (error) {
       setMessage(`${options.failurePrefix}: ${errorMessage(error)}`);
@@ -687,7 +689,7 @@ export function App() {
       await abandonWholeGameSession();
       const openedMessage = `Opened ${fileNameFromPath(result.native_path ?? document.path ?? "SGF")}: ${artifacts.projection.summary.move_count} moves.`;
       setMessage(openedMessage);
-      await checkAnalysisCacheForGame(artifacts.serialized, result.native_path ?? document.path, artifacts.projection, openedMessage);
+      resetAnalysisCacheState();
     } catch (error) {
       setMessage(`Open failed: ${errorMessage(error)}`);
     }
@@ -728,9 +730,8 @@ export function App() {
         setGame(parsed);
         setPositions(replayed);
         setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
-        const cacheMessage = await saveAnalysisCacheForGame(sgfText, currentFilePath, parsed, result, classified, "fake");
         if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) return;
-        setMessage(`${nativeCurrentGameUnavailable} 已生成 ${result.length} 个预览复盘局面。${cacheMessage}`);
+        setMessage(`${nativeCurrentGameUnavailable} 已生成 ${result.length} 个预览复盘局面。`);
         return;
       }
       const artifacts = await artifactsFromCurrentGame();
@@ -738,9 +739,8 @@ export function App() {
       const classified = await classifyProblems(result);
       if (!publishReviewPresentation(captured, result, classified)) return;
       setGame(artifacts.projection);
-      const cacheMessage = await saveAnalysisCacheForGame(artifacts.serialized, documentPath, artifacts.projection, result, classified, "fake");
       if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) return;
-      setMessage(`已生成 ${result.length} 个复盘局面，含候选与胜率。${cacheMessage}`);
+      setMessage(`已生成 ${result.length} 个复盘局面，含候选与胜率。`);
     } catch (error) {
       setMessage(errorMessage(error));
     }
@@ -827,6 +827,7 @@ export function App() {
       }
       const frame = job.frame;
       rememberWholeGameFrame(job.node_path, frame);
+      if (admitsAnalysisAttachment(job)) void refreshCurrentGameAfterAttach();
       void (async () => {
         try {
           const classified = await classifyProblems([frame]);
@@ -891,6 +892,7 @@ export function App() {
       });
       if (job.outcome === "progress" && admitsWholeGameNodeResult(job) && job.frame) {
         rememberWholeGameFrame(job.node_path, job.frame);
+        if (admitsAnalysisAttachment(job)) void refreshCurrentGameAfterAttach();
       }
       return;
     }
@@ -989,8 +991,7 @@ export function App() {
     await applyReplacement(emptySgf, null, {
       confirmMessage: "放弃未保存的棋谱并新建对局？",
       successMessage: () => "已新建空谱。",
-      failurePrefix: "New game failed",
-      checkCache: false
+      failurePrefix: "New game failed"
     });
   }
 
@@ -1185,120 +1186,6 @@ export function App() {
     }
   }
 
-  async function checkAnalysisCacheForGame(text: string, filePath: string | null, parsed: GameDto, baseMessage: string) {
-    const captured = beginReviewRequest();
-    if (!preferences.autoLoadCache) {
-      resetAnalysisCacheState();
-      setMessage(`${baseMessage} Cache auto-load is off.`);
-      return;
-    }
-    setCacheStatus("checking");
-    setCacheRecord(null);
-    setCacheError(null);
-    try {
-      const key = await computeGameCacheKey(text, filePath);
-      setCurrentCacheKey(key);
-      const lookup = await loadPreferredAnalysisCache(key.gameKey);
-      if (lookup.status === "hit") {
-        const payload = cachedAnalysisPayload(lookup.record.payload);
-        if (!payload) {
-          setCacheStatus("error");
-          setCacheRecord(lookup.record);
-          setCacheError("Cached payload is not compatible with this app version.");
-          setMessage(`${baseMessage} ${cacheEngineLabel(lookup.engineKind)} cache hit, but the payload could not be restored.`);
-          return;
-        }
-        if (!publishReviewPresentation(captured, payload.frames, payload.problems)) return;
-        setCurrentMove(nativeRuntime
-          ? (currentGameRef.current?.snapshot.position.move_number ?? payload.frames.at(-1)?.turn ?? parsed.moves.length)
-          : clampMoveNumberToPositions(positions, payload.frames.at(-1)?.turn ?? parsed.moves.length));
-        setCacheStatus("hit");
-        setCacheRecord(lookup.record);
-        setMessage(`${baseMessage} Restored ${payload.frames.length} cached ${cacheEngineLabel(lookup.engineKind)} review frames.`);
-        return;
-      }
-      if (lookup.status === "error") {
-        setCacheStatus("error");
-        setCacheRecord(null);
-        setCacheError(lookup.message);
-        setMessage(`${baseMessage} Cache unavailable: ${lookup.message}`);
-        return;
-      }
-      setCacheStatus("miss");
-      setCacheRecord(null);
-      setMessage(`${baseMessage} No cached review yet.`);
-    } catch (error) {
-      const message = errorMessage(error);
-      setCacheStatus("error");
-      setCacheRecord(null);
-      setCacheError(message);
-      setCurrentCacheKey(null);
-      setMessage(`${baseMessage} Cache unavailable: ${message}`);
-    }
-  }
-
-  async function loadPreferredAnalysisCache(gameKey: string): Promise<AnalysisCacheLoadResult> {
-    const katagoLookup = await loadAnalysisCache(gameKey, null, "katago");
-    if (katagoLookup.status === "hit" && katagoLookup.record) return { status: "hit", record: katagoLookup.record, engineKind: "katago" };
-    if (katagoLookup.status === "error") return { status: "error", message: katagoLookup.error ?? "KataGo cache lookup failed." };
-
-    const fakeLookup = await loadAnalysisCache(gameKey, null, "fake");
-    if (fakeLookup.status === "hit" && fakeLookup.record) return { status: "hit", record: fakeLookup.record, engineKind: "fake" };
-    if (fakeLookup.status === "error") return { status: "error", message: fakeLookup.error ?? "Fake review cache lookup failed." };
-
-    return { status: "miss" };
-  }
-
-  async function saveAnalysisCacheForGame(
-    text: string,
-    filePath: string | null,
-    parsed: GameDto,
-    analysisFrames: AnalysisFrameDto[],
-    analysisProblems: ProblemMarkerDto[],
-    engineKind: CacheEngineKind
-  ): Promise<string> {
-    if (!preferences.autoSaveAnalysis) {
-      setCacheStatus("idle");
-      return " Cache auto-save is off.";
-    }
-    setCacheStatus("saving");
-    setCacheError(null);
-    try {
-      const key = currentCacheKey ?? await computeGameCacheKey(text, filePath);
-      setCurrentCacheKey(key);
-      const payload = { frames: analysisFrames, problems: analysisProblems } as unknown as JsonValue;
-      const saved = await saveAnalysisCache({
-        gameKey: key.gameKey,
-        sgfHash: key.sgfHash,
-        profileId: null,
-        engineKind,
-        source: engineKind === "katago" ? "katago" : "browser",
-        moveCount: parsed.summary.move_count,
-        analyzedMoveCount: countAnalyzedMoves(analysisFrames, parsed.summary.move_count),
-        payload
-      });
-      setCacheRecord({
-        id: saved.id,
-        gameKey: saved.gameKey,
-        sgfHash: key.sgfHash,
-        profileId: null,
-        engineKind,
-        source: engineKind === "katago" ? "katago" : "browser",
-        moveCount: parsed.summary.move_count,
-        analyzedMoveCount: countAnalyzedMoves(analysisFrames, parsed.summary.move_count),
-        payload,
-        updatedAt: saved.updatedAt
-      });
-      setCacheStatus("saved");
-      return ` Cached ${analysisFrames.length} ${cacheEngineLabel(engineKind)} frames.`;
-    } catch (error) {
-      const failed = errorMessage(error);
-      setCacheStatus("error");
-      setCacheError(failed);
-      return ` Cache save failed: ${failed}`;
-    }
-  }
-
   function previewCandidate(index: number | null) {
     setCandidatePreview(index === null ? null : { index, scope: activeScope });
   }
@@ -1321,7 +1208,6 @@ export function App() {
     setCacheStatus("idle");
     setCacheRecord(null);
     setCacheError(null);
-    setCurrentCacheKey(null);
   }
 
   return <main className={`app-shell${preferences.boardTheme === "high-contrast" ? " theme-high-contrast" : ""}${nativeRuntime ? "" : " has-native-runtime-note"}`}>
@@ -1575,26 +1461,8 @@ function resolveAnalysisMaxVisits(requestedMaxVisits: number | null | undefined,
   return preferences.reviewMode === "deep" ? preferences.defaultMaxVisits * 2 : preferences.defaultMaxVisits;
 }
 
-function cachedAnalysisPayload(payload: JsonValue): CachedAnalysisPayload | null {
-  if (!isJsonObject(payload)) return null;
-  if (!Array.isArray(payload.frames) || !Array.isArray(payload.problems)) return null;
-  return {
-    frames: payload.frames as unknown as AnalysisFrameDto[],
-    problems: payload.problems as unknown as ProblemMarkerDto[]
-  };
-}
-
-function isJsonObject(value: JsonValue): value is { [key: string]: JsonValue } {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function mergeAnalysisFrame(frames: AnalysisFrameDto[], frame: AnalysisFrameDto): AnalysisFrameDto[] {
   return [...frames.filter((item) => item.turn !== frame.turn), frame].sort((a, b) => a.turn - b.turn);
-}
-
-function countAnalyzedMoves(frames: AnalysisFrameDto[], moveCount: number): number {
-  const turns = new Set(frames.map((frame) => frame.turn).filter((turn) => turn > 0 && turn <= moveCount));
-  return turns.size;
 }
 
 function errorMessage(error: unknown): string {
@@ -1604,10 +1472,6 @@ function errorMessage(error: unknown): string {
     if (typeof message === "string" && message.trim()) return message;
   }
   return String(error);
-}
-
-function cacheEngineLabel(engineKind: CacheEngineKind): string {
-  return engineKind === "katago" ? "KataGo" : "fake";
 }
 
 function fileNameFromPath(path: string): string {

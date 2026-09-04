@@ -255,8 +255,12 @@ describe("selected-node analysis presentation", () => {
           policy
         }
       });
-      await backend.classifyProblems.mock.results.at(-1)?.value;
+      await Promise.all([
+        backend.classifyProblems.mock.results.at(-1)?.value,
+        backend.selectCurrentGameNode.mock.results.at(-1)?.value
+      ]);
     });
+    expect(analysisCache.loadAnalysisCache).not.toHaveBeenCalled();
     expect(Array.from(host.querySelectorAll(".cand-coord")).map((node) => node.textContent)).toEqual(["D6"]);
     expect(host.querySelector(".cand-winrate")?.textContent).toBe("62.0%");
     expect(host.querySelector(".cand-visits")?.textContent).toBe("40");

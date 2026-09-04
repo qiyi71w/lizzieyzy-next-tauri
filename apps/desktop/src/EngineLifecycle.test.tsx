@@ -658,6 +658,7 @@ describe("foreground engine lifecycle UI", () => {
           candidates: [{ vertex: { point: { x: 0, y: 0 } }, visits: 8, winrate_black: 0.61, score_mean_black: 1.5, pv: [] }]
         }
       });
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
     });
     expect(host.querySelector(".nav-progress")?.textContent).toContain("整局 1/2");
     expect(host.querySelector(".nav-progress")?.textContent).toContain("剩余 1");
@@ -716,6 +717,7 @@ describe("foreground engine lifecycle UI", () => {
           candidates: [{ vertex: { point: { x: 0, y: 0 } }, visits: 8, winrate_black: 0.61, score_mean_black: 1.5, pv: [] }]
         }
       });
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
     });
     expect(host.textContent).toContain("61.0%");
     expect(nextMove.disabled).toBe(false);
@@ -777,6 +779,7 @@ describe("foreground engine lifecycle UI", () => {
           candidates: [{ vertex: { point: { x: 0, y: 0 } }, visits: 8, winrate_black: 0.61, score_mean_black: 1.5, pv: [] }]
         }
       });
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
     });
     expect(host.textContent).toContain("61.0%");
 
