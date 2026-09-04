@@ -129,6 +129,8 @@ describe("durable preferences surface", () => {
     expect(host.textContent).not.toContain("自动保存分析");
     expect(host.textContent).not.toContain("缓存未用");
     expect(host.textContent).not.toContain("命中缓存");
+    act(() => buttonNamed(host, "分析").click());
+    expect(host.textContent).not.toContain("清除 Lizzie 缓存");
     expect(preferencesStatus(host)).toBe("Preferences loaded.");
   });
 

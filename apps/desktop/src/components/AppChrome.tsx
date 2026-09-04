@@ -193,7 +193,6 @@ export function AppChrome(props: Props) {
             <MenuItem label="取消此手分析" onClick={() => run(props.onCancelSelectedNode)} disabled={!props.selectedNodeRunning} />
             <MenuItem label="取消整局分析" onClick={() => run(props.onCancelWholeGame)} disabled={!props.wholeGameRunning} />
             <MenuItem label="清除分析信息(此手)" disabled title={later} />
-            <MenuItem label="清除 Lizzie 缓存" disabled title={later} />
           </ChromeMenu>
           <ChromeMenu label="编辑" open={openMenu === "edit"} onToggle={() => setOpenMenu(openMenu === "edit" ? null : "edit")}>
             <MenuItem label="添加黑子" disabled title={later} />

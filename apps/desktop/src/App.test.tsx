@@ -880,7 +880,7 @@ describe("App focus-safe review controls", () => {
   });
 
   it("selects candidates from number keys and the candidate list while ignoring board and text targets", async () => {
-    installCandidateCacheHit();
+    installCandidateAnalysis();
     const host = await renderApp();
     await waitForCandidateRows(host);
 
@@ -908,7 +908,7 @@ describe("App focus-safe review controls", () => {
   });
 
   it("applies overlay and filter controls from their visible owners", async () => {
-    installCandidateCacheHit();
+    installCandidateAnalysis();
     const host = await renderApp();
     await waitForCandidateRows(host);
 
@@ -1056,7 +1056,7 @@ function candidateRows(host: HTMLElement): HTMLTableRowElement[] {
   return [...host.querySelectorAll<HTMLTableRowElement>(".cand-row")];
 }
 
-function installCandidateCacheHit() {
+function installCandidateAnalysis() {
   const policy = Array.from({ length: 81 }, (_, index) => (index === 0 ? 0.2 : 0));
   const ownership = Array.from({ length: 81 }, () => 0);
   const frame: AnalysisFrameDto = {
