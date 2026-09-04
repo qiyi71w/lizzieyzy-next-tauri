@@ -116,6 +116,7 @@ export function App() {
   const engineFailureRef = useRef(engineFailure);
   engineFailureRef.current = engineFailure;
   const lastSwitchIdRef = useRef<string | null>(null);
+  const analysisRunIdRef = useRef<string | null>(null);
   const visibleEngineFailure = displayedEngineFailure(
     engineSnapshot,
     engineFailure,
@@ -200,7 +201,9 @@ export function App() {
   const visibleFrames = useMemo(() => presentationLive ? frames : [], [presentationLive, frames]);
   const visibleProblems = useMemo(() => presentationLive ? problems : [], [presentationLive, problems]);
   const currentFrame = useMemo(
-    () => visibleFrames.find((frame) => frame.turn === currentMove) ?? visibleFrames.at(-1),
+    () => visibleFrames.length <= 1
+      ? visibleFrames[0]
+      : visibleFrames.find((frame) => frame.turn === currentMove) ?? visibleFrames.at(-1),
     [visibleFrames, currentMove]
   );
   const visibleCurrentFrame = useMemo(() => applyPreferencesToFrame(currentFrame, preferences), [currentFrame, preferences]);
@@ -375,6 +378,16 @@ export function App() {
           lastSwitchIdRef.current = snapshot.lifecycle.switch_id;
         } else if (snapshot.lifecycle.state === "no_engine") {
           lastSwitchIdRef.current = null;
+        }
+        const nextRunId = snapshot.lifecycle.state === "ready" ? snapshot.lifecycle.run.run_id : null;
+        if (analysisRunIdRef.current !== nextRunId) {
+          if (analysisRunIdRef.current !== null) {
+            clearReviewData();
+            resetWholeGameSession();
+            selectedNodeJobRef.current = null;
+            setSelectedNodeRunning(false);
+          }
+          analysisRunIdRef.current = nextRunId;
         }
         if (snapshot.lifecycle.state === "error") {
           engineFailureRef.current = snapshot.lifecycle.failure;
@@ -759,7 +772,6 @@ export function App() {
   }
 
   function presentWholeGameFrame(path: NodePath, frame: AnalysisFrameDto) {
-    if (selectedNodeJobRef.current) return;
     const game = currentGameRef.current;
     if (!game || !samePath(game.selected_path, path)) return;
     const token = wholeGameJobRef.current?.job_id ?? activeRequestTokenRef.current;
@@ -784,6 +796,12 @@ export function App() {
     presentWholeGameFrame(path, frame);
   }
 
+  function forgetSessionFrame(path: NodePath) {
+    const next = new Map(wholeGameResultsRef.current);
+    next.delete(pathKey(path));
+    wholeGameResultsRef.current = next;
+  }
+
   handleSelectedNodeJobRef.current = (job: AnalysisJobEventDto) => {
     const pending = selectedNodeJobRef.current;
     if (!matchesPendingAnalysisJob(pending, job)) return;
@@ -799,11 +817,12 @@ export function App() {
         selectedPath: [...job.node_path.indices],
         requestToken: job.job_id
       };
-      if (!admitsAnalysisPublication(job, publication) || !job.frame || !shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) {
+      if (!admitsAnalysisPublication(job, publication) || !job.frame) {
         clearSelectedNodeRunning(job.job_id);
         return;
       }
       const frame = job.frame;
+      rememberWholeGameFrame(job.node_path, frame);
       void (async () => {
         try {
           const classified = await classifyProblems([frame]);
@@ -848,6 +867,7 @@ export function App() {
         maxVisits: visits
       });
       beginReviewRequest(started.job_id);
+      forgetSessionFrame(game.selected_path);
       selectedNodeJobRef.current = started;
       setSelectedNodeRunning(true);
       setMessage(`Running KataGo analysis (${started.job_id})...`);
@@ -897,7 +917,6 @@ export function App() {
         generation: game.generation,
         maxVisits: visits
       });
-      wholeGameResultsRef.current = new Map();
       wholeGameJobRef.current = started;
       setWholeGameRunning(true);
       setWholeGameProgress(null);

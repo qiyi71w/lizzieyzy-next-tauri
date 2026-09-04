@@ -96,7 +96,7 @@ export function AnalysisPanel({
                   </tr>
                 </thead>
                 <tbody>
-                  {candidates.slice(0, 8).map((candidate, index) => {
+                  {candidates.map((candidate, index) => {
                     const isSelected = selectedCandidateIndex === index || (selectedCandidateIndex === null && index === 0);
                     const moveText = vertexLabel(candidate.vertex, boardSize);
                     const winrateText = `${(candidate.winrate_black * 100).toFixed(1)}%`;
@@ -151,7 +151,7 @@ export function AnalysisPanel({
         </div>
         <div className="score-lead-box">
           <div className="score-lead-val">
-            {frame ? (frame.score_mean_black >= 0 ? `+${frame.score_mean_black.toFixed(1)}` : frame.score_mean_black.toFixed(1)) : "+0.0"}
+            {frame ? (frame.score_mean_black >= 0 ? `+${frame.score_mean_black.toFixed(1)}` : frame.score_mean_black.toFixed(1)) : "—"}
           </div>
           <div className="score-lead-desc">
             {frame ? (frame.score_mean_black > 0.5 ? "黑稍优" : frame.score_mean_black < -0.5 ? "白稍优" : "形势接近") : "待评估"}

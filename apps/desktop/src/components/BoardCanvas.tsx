@@ -95,7 +95,7 @@ export function BoardCanvas({
     const grid = (cssSize - padding * 2) / Math.max(boardSize - 1, 1);
     const pointerX = event.clientX - rect.left;
     const pointerY = event.clientY - rect.top;
-    const candidateIndex = (analysis?.candidates.slice(0, 8) ?? []).findIndex((candidate) => {
+    const candidateIndex = (analysis?.candidates ?? []).findIndex((candidate) => {
       if (!isPoint(candidate.vertex)) return false;
       const centerX = padding + candidate.vertex.point.x * grid;
       const centerY = padding + candidate.vertex.point.y * grid;
@@ -261,7 +261,7 @@ export function BoardCanvas({
     if (effectiveOverlayMode === "policy" && hasPolicy) {
       drawPolicyOverlay(ctx, policyPoints, boardSize, coord, grid);
     } else if (!hideCandidates) {
-      const topCandidates = analysis?.candidates.slice(0, 8) ?? [];
+      const topCandidates = analysis?.candidates ?? [];
       for (const [index, candidate] of topCandidates.entries()) {
         if (!isPoint(candidate.vertex)) continue;
         const cx = coord(candidate.vertex.point.x); const cy = coord(candidate.vertex.point.y);

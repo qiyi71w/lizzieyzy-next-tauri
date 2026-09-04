@@ -164,6 +164,21 @@ LIZZIEYZY_REAL_KATAGO=1 cargo test -p engine-manager --test real_katago_lifecycl
 
 Expected result: whole-game analysis occupies only the Ready Run's whole-game lane, walks `[]` / `[0]` / `[0,0]`…, and keeps completed node results after cancel/fail. Selected-node can run concurrently. Durable SGF attachment is not part of this smoke.
 
+### 5.1 Bind Analysis Presentation To Exact Nodes
+
+- After selected-node completes, navigate away with `下一变化` and back with `父节点`. Confirm that node's candidates, PV Sub-Board, winrate, and score return, and that candidate hover does not return.
+- Start `继续分析` while a whole-game result already exists for a child node, then open that child. Confirm the child's presentation appears, `取消整局` stays available, and navigation does not cancel whole-game.
+- Click `停止` so the chip returns to `未加载引擎`. Confirm candidates, PV, ownership (`领地`), and policy (`策略`) clear rather than remaining from the previous Ready run.
+- Confirm the candidate table follows the durable candidate limit without a second hardcoded cap, and that missing ownership/policy keep `领地` / `策略` disabled instead of showing default overlays.
+
+Expected result: review presentation is a projection of identity-valid current-session results keyed by `NodePath`. Leaving Ready clears it. Unsupported fields stay absent. Native KataGo/GTK is not required for this repository evidence.
+
+Repository evidence (does not substitute for native GUI or live KataGo):
+
+```bash
+cd apps/desktop && npx vitest run src/AnalysisPresentation.test.tsx src/EngineLifecycle.test.tsx src/SelectedNodeAnalysis.test.tsx
+```
+
 ### 6. Cancel Analysis
 
 - On one resident Ready run, start both `分析此手` and `自动分析`.
