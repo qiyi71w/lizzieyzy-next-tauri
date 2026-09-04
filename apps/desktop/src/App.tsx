@@ -1124,6 +1124,7 @@ export function App() {
     const editedPath = currentGame.selected_path;
     try {
       const result = await setCurrentGamePersonalComment(editedPath, comment);
+      documentGenerationRef.current = result.generation;
       const latestPath = pendingSelectedPathRef.current ?? currentGameRef.current?.selected_path ?? editedPath;
       const stillOnEditedNode = samePath(latestPath, editedPath);
       setCurrentGame((prev) => {

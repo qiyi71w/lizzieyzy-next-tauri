@@ -442,6 +442,88 @@ describe("foreground engine lifecycle UI", () => {
     });
   });
 
+  it("presents selected-node analysis after a personal comment advances the document generation", async () => {
+    backend.setCurrentGamePersonalComment.mockResolvedValue({
+      ...initialGame,
+      snapshot: { ...initialGame.snapshot, personal_comment: "reviewer note" },
+      generation: 2,
+      dirty: true
+    });
+    backend.startSelectedNodeAnalysis.mockResolvedValue({
+      run_id: "run-1",
+      job_id: "job-comment",
+      lane: "selected_node",
+      generation: 2,
+      node_path: { indices: [] }
+    });
+    const host = await renderApp();
+    await readyEngine(host);
+    const editor = host.querySelector('textarea[aria-label="个人评论"]') as HTMLTextAreaElement;
+
+    act(() => {
+      editor.focus();
+      const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      valueSetter?.call(editor, "reviewer note");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      editor.blur();
+      await vi.waitFor(() => expect(backend.projectCurrentGameMainline).toHaveBeenCalledTimes(2));
+    });
+
+    await act(async () => {
+      buttonNamed(host, "继续分析").click();
+      await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
+    });
+    expect(backend.startSelectedNodeAnalysis).toHaveBeenLastCalledWith({
+      runId: "run-1",
+      generation: 2,
+      nodePath: { indices: [] },
+      maxVisits: 800
+    });
+
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-1",
+        job_id: "job-comment",
+        lane: "selected_node",
+        generation: 1,
+        node_path: { indices: [] },
+        outcome: "completed",
+        frame: {
+          job_id: "job-comment",
+          turn: 0,
+          visits: 16,
+          winrate_black: 0.11,
+          score_mean_black: -9,
+          candidates: [{ vertex: { point: { x: 0, y: 0 } }, visits: 16, winrate_black: 0.11, score_mean_black: -9, pv: [] }]
+        }
+      });
+    });
+    expect(host.querySelector(".cand-row")).toBeNull();
+
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-1",
+        job_id: "job-comment",
+        lane: "selected_node",
+        generation: 2,
+        node_path: { indices: [] },
+        outcome: "completed",
+        frame: {
+          job_id: "job-comment",
+          turn: 0,
+          visits: 32,
+          winrate_black: 0.71,
+          score_mean_black: 4,
+          candidates: [{ vertex: { point: { x: 2, y: 3 } }, visits: 32, winrate_black: 0.71, score_mean_black: 4, pv: [] }]
+        }
+      });
+      await backend.classifyProblems.mock.results.at(-1)?.value;
+    });
+    expect(Array.from(host.querySelectorAll(".cand-coord")).map((node) => node.textContent)).toEqual(["C6"]);
+  });
+
   it("does not revive analysis presentation from a stale job event", async () => {
     const host = await renderApp();
     const switcher = host.querySelector('select[aria-label="Foreground Engine Profile"]') as HTMLSelectElement;
