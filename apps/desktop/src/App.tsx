@@ -59,6 +59,11 @@ import {
   shouldPublishReviewPresentation,
   type ReviewPresentationScope
 } from "./domain/reviewPresentation";
+import {
+  variationReplayIdentity,
+  variationReplayIdentityKey,
+  variationReplayPointSteps
+} from "./domain/variationReplay";
 import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AppHealthDto, CurrentGameResultDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, SgfTreeNodeDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
@@ -128,6 +133,8 @@ export function App() {
   const [showMoveNumbers, setShowMoveNumbers] = useState(false);
   const [showBlackCandidates, setShowBlackCandidates] = useState(true);
   const [showWhiteCandidates, setShowWhiteCandidates] = useState(true);
+  const [referenceRailCollapsed, setReferenceRailCollapsed] = useState(false);
+  const [replayProgress, setReplayProgress] = useState({ identity: "", prefix: 0 });
   const [overlayMode, setOverlayMode] = useState<OverlayMode>("candidates");
   const [autoPlaying, setAutoPlaying] = useState(false);
   const [shortcutReferenceOpen, setShortcutReferenceOpen] = useState(false);
@@ -212,6 +219,56 @@ export function App() {
     && shouldPublishReviewPresentation(activeScope, candidatePreview.scope)
     ? candidatePreview.index
     : null;
+  const hideCandidates = (currentPosition.to_play === "black" && !showBlackCandidates)
+    || (currentPosition.to_play === "white" && !showWhiteCandidates);
+  const activeCandidateIndex = previewCandidateIndex ?? selectedCandidateIndex ?? 0;
+  const activeCandidate = visibleCurrentFrame?.candidates[activeCandidateIndex]
+    ?? visibleCurrentFrame?.candidates[0]
+    ?? null;
+  const replayCandidate = currentFrame?.candidates[activeCandidateIndex]
+    ?? currentFrame?.candidates[0]
+    ?? null;
+  const replaySteps = variationReplayPointSteps(replayCandidate);
+  const replayIdentityKeyValue = variationReplayIdentityKey(variationReplayIdentity(selectedPath, replayCandidate));
+  const replayArmed = preferences.variationReplayEnabled && replaySteps.length > 0;
+  const replayEligible = replayArmed && (
+    (preferences.showCandidates && overlayMode === "candidates" && !hideCandidates)
+    || (preferences.showCandidates && preferences.subBoardContentMode === "variation" && !referenceRailCollapsed)
+  );
+  const replayPrefix = replayArmed
+    ? (replayProgress.identity !== replayIdentityKeyValue ? 1 : Math.max(replayProgress.prefix, 1))
+    : undefined;
+  const replayIntervalRef = useRef(preferences.variationReplayIntervalMs);
+  replayIntervalRef.current = preferences.variationReplayIntervalMs;
+
+  useEffect(() => {
+    if (!replayArmed) {
+      if (replayProgress.identity !== "" || replayProgress.prefix !== 0) {
+        setReplayProgress({ identity: "", prefix: 0 });
+      }
+      return;
+    }
+    if (replayProgress.identity !== replayIdentityKeyValue) {
+      setReplayProgress({ identity: replayIdentityKeyValue, prefix: 1 });
+      return;
+    }
+    if (!replayEligible || replayProgress.prefix >= replaySteps.length) return;
+    const timer = window.setTimeout(() => {
+      setReplayProgress((current) => (
+        current.identity !== replayIdentityKeyValue
+          ? current
+          : { identity: current.identity, prefix: Math.min(current.prefix + 1, replaySteps.length) }
+      ));
+    }, replayIntervalRef.current);
+    return () => window.clearTimeout(timer);
+  }, [
+    replayArmed,
+    replayEligible,
+    replayIdentityKeyValue,
+    replayProgress.identity,
+    replayProgress.prefix,
+    replaySteps.length
+  ]);
   const parentOfSelected = parentPath(selectedPath);
   const parentNode = currentGame && parentOfSelected ? nodeAt(currentGame.tree, parentOfSelected) : null;
   const siblingIndex = selectedPath.indices.at(-1);
@@ -1362,6 +1419,8 @@ export function App() {
       showWhiteCandidates={showWhiteCandidates}
       onShowBlackCandidates={setShowBlackCandidates}
       onShowWhiteCandidates={setShowWhiteCandidates}
+      referenceRailCollapsed={referenceRailCollapsed}
+      onReferenceRailCollapsed={setReferenceRailCollapsed}
       selectedNodeRunning={selectedNodeRunning}
       wholeGameRunning={wholeGameRunning}
       autoPlaying={autoPlaying}
@@ -1433,14 +1492,16 @@ export function App() {
           showMoveNumbers={showMoveNumbers}
           overlayMode={overlayMode}
           onOverlayModeChange={setOverlayMode}
-          hideCandidates={(currentPosition.to_play === "black" && !showBlackCandidates) || (currentPosition.to_play === "white" && !showWhiteCandidates)}
+          hideCandidates={hideCandidates}
+          pvPrefixLength={replayPrefix}
+          replayCandidateIndex={activeCandidateIndex}
           onPointClick={(point) => void playAt({ point })}
         />
         {boardIntentFeedback ? (
           <p className="board-intent-status" role="status" aria-live="polite">{boardIntentFeedback}</p>
         ) : null}
       </div>
-      <aside className="sheet-col">
+      <aside className="sheet-col" hidden={referenceRailCollapsed}>
         <AnalysisPanel
           pane="reference"
           frame={visibleCurrentFrame}
@@ -1454,6 +1515,7 @@ export function App() {
           onSelectCandidate={selectCandidate}
           onSelectProblem={handleMoveSelect}
           contentMode={preferences.subBoardContentMode}
+          pvPrefixLength={replayPrefix}
         />
       </aside>
     </section>

@@ -46,6 +46,24 @@ export function PreferencesPanel({ preferences, status, disabled = false, onChan
             <option value="raw">纯棋子</option>
           </select>
         </label>
+        <Toggle
+          label="变化回放"
+          checked={preferences.variationReplayEnabled}
+          disabled={disabled}
+          onChange={(checked) => update({ variationReplayEnabled: checked })}
+        />
+        <label>
+          <span>回放间隔</span>
+          <input
+            type="number"
+            min={100}
+            max={5000}
+            step={1}
+            value={preferences.variationReplayIntervalMs}
+            disabled={disabled}
+            onChange={(event) => update({ variationReplayIntervalMs: Number(event.target.value) })}
+          />
+        </label>
       </fieldset>
       <fieldset className="preferences-grid">
         <legend>复盘</legend>

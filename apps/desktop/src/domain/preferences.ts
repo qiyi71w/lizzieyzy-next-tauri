@@ -13,6 +13,8 @@ export type AppPreferences = {
   reviewMode: ReviewMode;
   boardTheme: BoardTheme;
   subBoardContentMode: SubBoardContentMode;
+  variationReplayEnabled: boolean;
+  variationReplayIntervalMs: number;
 };
 
 export const defaultAppPreferences: AppPreferences = {
@@ -25,7 +27,9 @@ export const defaultAppPreferences: AppPreferences = {
   defaultMaxVisits: 800,
   reviewMode: "quick",
   boardTheme: "classic",
-  subBoardContentMode: "variation"
+  subBoardContentMode: "variation",
+  variationReplayEnabled: false,
+  variationReplayIntervalMs: 500
 };
 
 export function normalizeAppPreferences(value: Partial<AppPreferences> | null | undefined): AppPreferences {
@@ -39,7 +43,14 @@ export function normalizeAppPreferences(value: Partial<AppPreferences> | null | 
     defaultMaxVisits: integerValue(value?.defaultMaxVisits, defaultAppPreferences.defaultMaxVisits, 1, 1_000_000),
     reviewMode: value?.reviewMode === "deep" ? "deep" : "quick",
     boardTheme: value?.boardTheme === "high-contrast" ? "high-contrast" : "classic",
-    subBoardContentMode: value?.subBoardContentMode === "raw" ? "raw" : "variation"
+    subBoardContentMode: value?.subBoardContentMode === "raw" ? "raw" : "variation",
+    variationReplayEnabled: booleanValue(value?.variationReplayEnabled, defaultAppPreferences.variationReplayEnabled),
+    variationReplayIntervalMs: integerValue(
+      value?.variationReplayIntervalMs,
+      defaultAppPreferences.variationReplayIntervalMs,
+      100,
+      5000
+    )
   };
 }
 

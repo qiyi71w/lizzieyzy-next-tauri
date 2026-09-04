@@ -135,6 +135,8 @@ describe("durable preferences surface", () => {
     expect(labeledNumber(host, "默认计算量").value).toBe("800");
     expect(labeledSelect(host, "复盘深度").value).toBe("quick");
     expect(labeledSelect(host, "棋盘对比").value).toBe("classic");
+    expect(labeledCheckbox(host, "变化回放").checked).toBe(false);
+    expect(labeledNumber(host, "回放间隔").value).toBe("500");
     expect(labeledCheckbox(host, "自动载入缓存").checked).toBe(true);
     expect(labeledCheckbox(host, "自动保存分析").checked).toBe(true);
     expect(preferencesStatus(host)).toBe("Preferences loaded.");
