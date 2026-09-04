@@ -29,6 +29,26 @@ describe("browser preference storage", () => {
     expect(loaded.recovery).toBeUndefined();
   });
 
+  it("fills missing Sub-Board content mode as Variation", async () => {
+    window.localStorage.setItem(storageKey, JSON.stringify({ showCandidates: false }));
+    const loaded = await loadAppPreferences();
+    expect(loaded.preferences.subBoardContentMode).toBe("variation");
+  });
+
+  it("fills missing Variation Replay as off with a 500 ms interval", async () => {
+    window.localStorage.setItem(storageKey, JSON.stringify({ showCandidates: false }));
+    const loaded = await loadAppPreferences();
+    expect(loaded.preferences.variationReplayEnabled).toBe(false);
+    expect(loaded.preferences.variationReplayIntervalMs).toBe(500);
+  });
+
+  it("clamps Variation Replay interval to 100–5000 ms", async () => {
+    const low = await saveAppPreferences({ ...defaultAppPreferences, variationReplayIntervalMs: 50 });
+    const high = await saveAppPreferences({ ...defaultAppPreferences, variationReplayIntervalMs: 9000 });
+    expect(low.variationReplayIntervalMs).toBe(100);
+    expect(high.variationReplayIntervalMs).toBe(5000);
+  });
+
   it("isolates unreadable storage, loads defaults, and reports recovery", async () => {
     window.localStorage.setItem(storageKey, "{not-json");
     const loaded = await loadAppPreferences();

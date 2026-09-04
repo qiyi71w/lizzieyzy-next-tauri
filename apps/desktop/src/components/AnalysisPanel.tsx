@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { AnalysisFrameDto, CandidateMoveDto, MoveDto, PositionDto, ProblemMarkerDto } from "../domain/types";
 import { isPoint, vertexLabel } from "../domain/board";
+import { variationReplayPointSteps } from "../domain/variationReplay";
 
 type PolicyPoint = { x: number; y: number; value: number };
 type Pane = "commentary" | "reference";
+type SubBoardContentMode = "variation" | "raw";
 
 type Props = {
   frame?: AnalysisFrameDto;
@@ -21,6 +23,8 @@ type Props = {
   onSelectCandidate: (index: number) => void;
   onSelectProblem: (moveNumber: number) => void;
   pane?: Pane;
+  contentMode?: SubBoardContentMode;
+  pvPrefixLength?: number;
 };
 
 const severityLabel: Record<ProblemMarkerDto["severity"], string> = {
@@ -45,7 +49,9 @@ export function AnalysisPanel({
   previewCandidateIndex = null,
   onSelectCandidate,
   onSelectProblem,
-  pane = "commentary"
+  pane = "commentary",
+  contentMode = "variation",
+  pvPrefixLength
 }: Props) {
   const [leftTab, setLeftTab] = useState<"commentary" | "problems">("commentary");
   const [commentDraft, setCommentDraft] = useState(personalComment);
@@ -132,6 +138,8 @@ export function AnalysisPanel({
               boardSize={boardSize}
               position={currentPosition}
               candidate={activeCandidate}
+              contentMode={contentMode}
+              pvPrefixLength={pvPrefixLength}
             />
           </div>
         </section>
@@ -265,11 +273,15 @@ export function AnalysisPanel({
 function SubBoardCanvas({
   boardSize,
   position,
-  candidate
+  candidate,
+  contentMode,
+  pvPrefixLength
 }: {
   boardSize: number;
   position?: PositionDto;
   candidate: CandidateMoveDto | null;
+  contentMode: SubBoardContentMode;
+  pvPrefixLength?: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -326,33 +338,22 @@ function SubBoardCanvas({
     }
 
     // 5. PV 变化步骤绘制 (1, 2, 3, 4, 5...)
-    if (candidate) {
+    if (contentMode === "variation" && candidate) {
       const pvSteps: { x: number; y: number; step: number; color: "black" | "white" }[] = [];
       let turnColor: "black" | "white" = position?.to_play ?? "black";
+      const visibleSteps = variationReplayPointSteps(candidate).slice(
+        0,
+        pvPrefixLength ?? Number.POSITIVE_INFINITY
+      );
 
-      // 首手候选点 (第 1 步)
-      if (isPoint(candidate.vertex)) {
+      for (const [index, point] of visibleSteps.entries()) {
+        if (index > 0) turnColor = turnColor === "black" ? "white" : "black";
         pvSteps.push({
-          x: candidate.vertex.point.x,
-          y: candidate.vertex.point.y,
-          step: 1,
+          x: point.x,
+          y: point.y,
+          step: index + 1,
           color: turnColor
         });
-      }
-
-      // 后续 PV 步骤
-      let stepIndex = 2;
-      for (const v of candidate.pv.slice(0, 8)) {
-        if (isPoint(v)) {
-          turnColor = turnColor === "black" ? "white" : "black";
-          pvSteps.push({
-            x: v.point.x,
-            y: v.point.y,
-            step: stepIndex,
-            color: turnColor
-          });
-          stepIndex += 1;
-        }
       }
 
       // 绘制 PV 棋子与序号
@@ -376,9 +377,15 @@ function SubBoardCanvas({
         ctx.fillText(String(item.step), cx, cy);
       }
     }
-  }, [boardSize, position, candidate]);
+  }, [boardSize, position, candidate, contentMode, pvPrefixLength]);
 
-  return <canvas ref={canvasRef} className="subboard-canvas" aria-label="参考图变化副棋盘" />;
+  return (
+    <canvas
+      ref={canvasRef}
+      className="subboard-canvas"
+      aria-label={contentMode === "raw" ? "纯棋子副棋盘" : "参考图变化副棋盘"}
+    />
+  );
 }
 
 function lastMoveLabel(position: PositionDto | undefined, boardSize: number): string {

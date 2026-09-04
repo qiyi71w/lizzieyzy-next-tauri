@@ -124,6 +124,9 @@ describe("durable preferences surface", () => {
     expect(labeledSelect(host, "复盘深度").value).toBe("quick");
     expect(labeledSelect(host, "棋盘对比").value).toBe("classic");
     expect(labeledSelect(host, "下一手标记").value).toBe("variations");
+    expect(labeledSelect(host, "小棋盘内容").value).toBe("variation");
+    expect(labeledCheckbox(host, "变化回放").checked).toBe(false);
+    expect(labeledNumber(host, "回放间隔").value).toBe("500");
     expect(host.textContent).not.toContain("自动载入缓存");
     expect(host.textContent).not.toContain("自动保存分析");
     expect(host.textContent).not.toContain("缓存未用");

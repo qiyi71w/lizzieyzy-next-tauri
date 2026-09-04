@@ -3,6 +3,7 @@ import type { NextMoveReviewMarkerMode } from "./nextMoveReviewMarker";
 export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
 export type GraphPerspective = "black" | "sideToPlay";
+export type SubBoardContentMode = "variation" | "raw";
 export type { NextMoveReviewMarkerMode };
 
 export type AppPreferences = {
@@ -20,6 +21,9 @@ export type AppPreferences = {
   graphHover: boolean;
   scoreLeadScale: number;
   nextMoveReviewMarker: NextMoveReviewMarkerMode;
+  subBoardContentMode: SubBoardContentMode;
+  variationReplayEnabled: boolean;
+  variationReplayIntervalMs: number;
 };
 
 export const defaultAppPreferences: AppPreferences = {
@@ -36,7 +40,10 @@ export const defaultAppPreferences: AppPreferences = {
   blunderBar: false,
   graphHover: true,
   scoreLeadScale: 15,
-  nextMoveReviewMarker: "variations"
+  nextMoveReviewMarker: "variations",
+  subBoardContentMode: "variation",
+  variationReplayEnabled: false,
+  variationReplayIntervalMs: 500
 };
 
 export function normalizeAppPreferences(value: Partial<AppPreferences> | null | undefined): AppPreferences {
@@ -56,7 +63,15 @@ export function normalizeAppPreferences(value: Partial<AppPreferences> | null | 
     blunderBar: booleanValue(value?.blunderBar, defaultAppPreferences.blunderBar),
     graphHover: booleanValue(value?.graphHover, defaultAppPreferences.graphHover),
     scoreLeadScale: positiveFloor(value?.scoreLeadScale, defaultAppPreferences.scoreLeadScale, 1, 1000),
-    nextMoveReviewMarker: nextMoveReviewMarkerValue(value?.nextMoveReviewMarker)
+    nextMoveReviewMarker: nextMoveReviewMarkerValue(value?.nextMoveReviewMarker),
+    subBoardContentMode: value?.subBoardContentMode === "raw" ? "raw" : "variation",
+    variationReplayEnabled: booleanValue(value?.variationReplayEnabled, defaultAppPreferences.variationReplayEnabled),
+    variationReplayIntervalMs: integerValue(
+      value?.variationReplayIntervalMs,
+      defaultAppPreferences.variationReplayIntervalMs,
+      100,
+      5000
+    )
   };
 }
 

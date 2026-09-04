@@ -39,6 +39,12 @@ pub struct AppPreferencesDto {
     pub score_lead_scale: u32,
     #[serde(default = "default_next_move_review_marker")]
     pub next_move_review_marker: String,
+    #[serde(default = "default_sub_board_content_mode")]
+    pub sub_board_content_mode: String,
+    #[serde(default = "default_variation_replay_enabled")]
+    pub variation_replay_enabled: bool,
+    #[serde(default = "default_variation_replay_interval_ms")]
+    pub variation_replay_interval_ms: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,12 +78,16 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         graph_hover: default_graph_hover(),
         score_lead_scale: default_score_lead_scale(),
         next_move_review_marker: default_next_move_review_marker(),
+        sub_board_content_mode: default_sub_board_content_mode(),
+        variation_replay_enabled: default_variation_replay_enabled(),
+        variation_replay_interval_ms: default_variation_replay_interval_ms(),
     }
 }
 
 pub fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPreferencesDto {
     preferences.candidate_limit = preferences.candidate_limit.clamp(1, 20);
     preferences.default_max_visits = preferences.default_max_visits.clamp(1, 1_000_000);
+    preferences.variation_replay_interval_ms = preferences.variation_replay_interval_ms.clamp(100, 5000);
     if preferences.review_mode != "deep" {
         preferences.review_mode = default_review_mode();
     }
@@ -97,6 +107,9 @@ pub fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPrefe
     }
     if preferences.next_move_review_marker != "off" && preferences.next_move_review_marker != "graded" {
         preferences.next_move_review_marker = default_next_move_review_marker();
+    }
+    if preferences.sub_board_content_mode != "raw" {
+        preferences.sub_board_content_mode = default_sub_board_content_mode();
     }
     preferences
 }
@@ -254,6 +267,18 @@ fn default_next_move_review_marker() -> String {
     "variations".to_string()
 }
 
+fn default_sub_board_content_mode() -> String {
+    "variation".to_string()
+}
+
+fn default_variation_replay_enabled() -> bool {
+    false
+}
+
+fn default_variation_replay_interval_ms() -> u32 {
+    500
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,6 +322,9 @@ mod tests {
             graph_hover: false,
             score_lead_scale: 20,
             next_move_review_marker: "graded".to_string(),
+            sub_board_content_mode: "raw".to_string(),
+            variation_replay_enabled: true,
+            variation_replay_interval_ms: 250,
         }
     }
 
@@ -323,9 +351,53 @@ mod tests {
         assert_eq!(loaded.preferences.review_mode, "quick");
         assert_eq!(loaded.preferences.board_theme, "classic");
         assert_eq!(loaded.preferences.next_move_review_marker, "variations");
+        assert_eq!(loaded.preferences.sub_board_content_mode, "variation");
+        assert!(!loaded.preferences.variation_replay_enabled);
+        assert_eq!(loaded.preferences.variation_replay_interval_ms, 500);
         assert!(loaded.recovery.is_none());
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn missing_sub_board_content_mode_defaults_to_variation() {
+        let (dir, path) = temp_prefs();
+        fs::write(&path, r#"{"showCandidates":true}"#).unwrap();
+
+        let loaded = load_from_path(&path).unwrap();
+        assert_eq!(loaded.preferences.sub_board_content_mode, "variation");
+        assert!(loaded.recovery.is_none());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn missing_variation_replay_defaults_to_off_and_500ms() {
+        let (dir, path) = temp_prefs();
+        fs::write(&path, r#"{"showCandidates":true}"#).unwrap();
+
+        let loaded = load_from_path(&path).unwrap();
+        assert!(!loaded.preferences.variation_replay_enabled);
+        assert_eq!(loaded.preferences.variation_replay_interval_ms, 500);
+        assert!(loaded.recovery.is_none());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn variation_replay_interval_clamps_to_100_5000() {
+        let low = normalize_app_preferences(AppPreferencesDto {
+            variation_replay_interval_ms: 50,
+            ..default_app_preferences()
+        });
+        let high = normalize_app_preferences(AppPreferencesDto {
+            variation_replay_interval_ms: 9000,
+            ..default_app_preferences()
+        });
+        assert_eq!(low.variation_replay_interval_ms, 100);
+        assert_eq!(high.variation_replay_interval_ms, 5000);
+        assert!(!default_app_preferences().variation_replay_enabled);
+        assert_eq!(default_app_preferences().variation_replay_interval_ms, 500);
     }
 
     #[test]

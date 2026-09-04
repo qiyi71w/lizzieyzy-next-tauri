@@ -1,4 +1,4 @@
-import type { AppPreferences, BoardTheme, GraphPerspective, NextMoveReviewMarkerMode, ReviewMode } from "../domain/preferences";
+import type { AppPreferences, BoardTheme, GraphPerspective, NextMoveReviewMarkerMode, ReviewMode, SubBoardContentMode } from "../domain/preferences";
 import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
 
 type Props = {
@@ -47,6 +47,35 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
             value={preferences.candidateLimit}
             disabled={disabled}
             onChange={(event) => update({ candidateLimit: Number(event.target.value) })}
+          />
+        </label>
+        <label>
+          <span>小棋盘内容</span>
+          <select
+            value={preferences.subBoardContentMode}
+            disabled={disabled}
+            onChange={(event) => update({ subBoardContentMode: event.target.value as SubBoardContentMode })}
+          >
+            <option value="variation">变化图</option>
+            <option value="raw">纯棋子</option>
+          </select>
+        </label>
+        <Toggle
+          label="变化回放"
+          checked={preferences.variationReplayEnabled}
+          disabled={disabled}
+          onChange={(checked) => update({ variationReplayEnabled: checked })}
+        />
+        <label>
+          <span>回放间隔</span>
+          <input
+            type="number"
+            min={100}
+            max={5000}
+            step={1}
+            value={preferences.variationReplayIntervalMs}
+            disabled={disabled}
+            onChange={(event) => update({ variationReplayIntervalMs: Number(event.target.value) })}
           />
         </label>
       </fieldset>

@@ -218,6 +218,41 @@ cd apps/desktop && npx vitest run src/domain/analysisJob.test.ts src/AnalysisPre
 
 Native KataGo/GTK is required for the GUI Save As A/B reopen steps above. When that environment is unavailable, record the smoke as not run; repository tests cover attachment admission, generation stability, partial retention, replacement preservation, save-while-running, later-redirty, and failed-save recovery.
 
+### 5.4 Persisted Sub-Board Variation And Raw
+
+- Open `显示` → `小棋盘设置`. Confirm first-use is `变化图` and the Sub-Board aria-label is `参考图变化副棋盘`.
+- With a live selected-node candidate list, confirm Variation shows the numbered active PV. Switch to `纯棋子` and confirm the Sub-Board keeps current stones but drops PV, branch, and move numbers, including after hovering a main-board candidate.
+- Confirm `参数` / Preferences `小棋盘内容` edits the same durable mode, including while the analysis rail stays visible. Collapse/hide of the rail (if used) must not rewrite the mode and is not Raw.
+- Quit and start `npm run tauri:dev` again. Confirm the last successfully saved mode is restored.
+- A failed write must keep the previous visible mode and report the save failure.
+
+Repository equivalent:
+
+```bash
+cd apps/desktop && npx vitest run src/SubBoardContentMode.test.tsx src/components/AnalysisPanel.test.tsx src/App.preferences.test.tsx src/api/preferences.test.ts
+cargo test -p app-preferences
+```
+
+Expected result: Variation/Raw is one durable PREF-01 value, not an SGF field and not rail collapse. Missing storage loads Variation. Native KataGo/GTK is not required for this repository evidence. Native restart smoke of Raw and Variation remains a separate desktop column.
+
+### 5.5 Synchronized Variation Replay
+
+- Confirm first-use `显示 → 变化回放` is off and Preferences `回放间隔` is 500 ms. The Variation Sub-Board shows the complete active PV.
+- Enable Variation Replay. Confirm the main-board candidate presentation and visible Variation Sub-Board immediately show the same first PV move, then advance together once per interval, and idle armed at the full PV without looping.
+- Switch to `纯棋子` or collapse the analysis rail while the main board still shows candidates: replay continues on the remaining eligible surface. Hide candidates as well so no eligible surface remains: progress pauses. Restore a surface and confirm replay continues from the retained prefix.
+- Disable replay and confirm both eligible surfaces restore full-PV presentation. A live interval change between 100 and 5000 ms applies to the next gap without resetting progress. A failed write keeps the previous enablement/interval.
+- Replay must not change `NodePath`, dirty the SGF, create a move, or start an Analysis Job. `Ctrl+A` remains Review Autoplay.
+- With a live KataGo PV, confirm a statistics-only update (visits/winrate) does not reset the prefix, and a candidate/PV sequence change immediately shows the new first move.
+
+Repository equivalent:
+
+```bash
+cd apps/desktop && npx vitest run src/VariationReplay.test.tsx src/SubBoardContentMode.test.tsx src/App.preferences.test.tsx src/api/preferences.test.ts
+cargo test -p app-preferences
+```
+
+Expected result: one application-owned timer and prefix are shared by the main board and visible Variation Sub-Board. Missing storage loads replay off / 500 ms. Native KataGo/GTK is not required for this repository evidence. Live PV statistics vs sequence updates and native restart remain a separate desktop column.
+
 ### 6. Cancel Analysis
 
 - On one resident Ready run, start both `分析此手` and `自动分析`.

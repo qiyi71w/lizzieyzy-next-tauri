@@ -48,6 +48,8 @@ type Props = {
   showWhiteCandidates: boolean;
   onShowBlackCandidates: (value: boolean) => void;
   onShowWhiteCandidates: (value: boolean) => void;
+  referenceRailCollapsed: boolean;
+  onReferenceRailCollapsed: (value: boolean) => void;
   selectedNodeRunning: boolean;
   wholeGameRunning: boolean;
   autoPlaying: boolean;
@@ -146,7 +148,11 @@ export function AppChrome(props: Props) {
           <ChromeMenu label="显示" open={openMenu === "view"} onToggle={() => setOpenMenu(openMenu === "view" ? null : "view")}>
             <SubMenu label="面板">
               <MenuItem label="胜率图(Alt+W)" disabled title={later} />
-              <MenuItem label="选点列表面板(Alt+G)" disabled title={later} />
+              <MenuCheck
+                label="选点列表面板"
+                checked={!props.referenceRailCollapsed}
+                onClick={() => run(() => props.onReferenceRailCollapsed(!props.referenceRailCollapsed))}
+              />
               <MenuItem label="分支面板(Shift+G)" disabled title={later} />
             </SubMenu>
             <MenuCheck label="坐标(C)" checked={props.showCoordinates} onClick={() => run(() => props.onShowCoordinates(!props.showCoordinates))} />
@@ -172,6 +178,14 @@ export function AppChrome(props: Props) {
               />
             </SubMenu>
             <MenuItem label="落子评价标记(Alt+M)" disabled title={later} />
+            <MenuCheck
+              label="变化回放"
+              checked={props.preferences.variationReplayEnabled}
+              onClick={() => run(() => props.onPreferencesChange({
+                ...props.preferences,
+                variationReplayEnabled: !props.preferences.variationReplayEnabled
+              }))}
+            />
             <MenuItem label="自动播放(Ctrl+A)" onClick={() => run(props.onAutoPlay)} />
             <SubMenu label="胜率图设置">
               <MenuCheck
@@ -226,7 +240,18 @@ export function AppChrome(props: Props) {
                 />
               </div>
             </SubMenu>
-            <MenuItem label="小棋盘设置" disabled title={later} />
+            <SubMenu label="小棋盘设置">
+              <MenuCheck
+                label="变化图"
+                checked={props.preferences.subBoardContentMode !== "raw"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, subBoardContentMode: "variation" }))}
+              />
+              <MenuCheck
+                label="纯棋子"
+                checked={props.preferences.subBoardContentMode === "raw"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, subBoardContentMode: "raw" }))}
+              />
+            </SubMenu>
             <MenuItem label="布局模式" disabled title={later} />
           </ChromeMenu>
           <ChromeMenu label="棋局" open={openMenu === "game"} onToggle={() => setOpenMenu(openMenu === "game" ? null : "game")}>

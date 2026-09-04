@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import type { AnalysisFrameDto, MoveDto, PointDto, PositionDto } from "../domain/types";
 import { isPoint } from "../domain/board";
 import type { NextMoveReviewMarker, NextMoveReviewMarkerMode } from "../domain/nextMoveReviewMarker";
+import { variationReplayPointSteps } from "../domain/variationReplay";
 import {
   shouldPublishReviewPresentation,
   type ReviewPresentationScope
@@ -25,6 +26,8 @@ type Props = {
   previewScope?: ReviewPresentationScope;
   nextMoveMode?: NextMoveReviewMarkerMode;
   nextMoveMarkers?: NextMoveReviewMarker[];
+  pvPrefixLength?: number;
+  replayCandidateIndex?: number | null;
 };
 type PolicyPoint = { x: number; y: number; value: number };
 
@@ -50,7 +53,9 @@ export function BoardCanvas({
   onCandidatePreview,
   previewScope,
   nextMoveMode = "off",
-  nextMoveMarkers = []
+  nextMoveMarkers = [],
+  pvPrefixLength,
+  replayCandidateIndex
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [keyboardPoint, setKeyboardPoint] = useState<PointDto | null>(null);
@@ -267,22 +272,45 @@ export function BoardCanvas({
       drawPolicyOverlay(ctx, policyPoints, boardSize, coord, grid);
     } else if (!hideCandidates) {
       const topCandidates = analysis?.candidates ?? [];
-      for (const [index, candidate] of topCandidates.entries()) {
-        if (!isPoint(candidate.vertex)) continue;
-        const cx = coord(candidate.vertex.point.x); const cy = coord(candidate.vertex.point.y);
-        const radius = grid * (0.18 + Math.min(candidate.visits / Math.max(analysis?.visits ?? 1, 1), 1) * 0.22);
-        const isSelected = selectedCandidateIndex === index;
-        ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-        ctx.fillStyle = isSelected ? "#2156c7" : "rgba(255,255,255,.88)";
-        ctx.fill();
-        ctx.strokeStyle = isSelected ? "#163f96" : "rgba(42,28,14,.55)";
-        ctx.lineWidth = isSelected ? Math.max(1.5, grid * 0.06) : 1;
-        ctx.stroke();
-        ctx.fillStyle = isSelected ? "#fff" : "#1a1d21";
-        ctx.font = `${Math.max(10, grid * 0.28)}px "Noto Sans SC", sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(String(index + 1), cx, cy);
+      const replayCandidate = topCandidates[replayCandidateIndex ?? selectedCandidateIndex ?? 0] ?? topCandidates[0];
+      const replaySteps = pvPrefixLength == null ? [] : variationReplayPointSteps(replayCandidate).slice(0, pvPrefixLength);
+      if (replaySteps.length === 0) {
+        for (const [index, candidate] of topCandidates.entries()) {
+          if (!isPoint(candidate.vertex)) continue;
+          const cx = coord(candidate.vertex.point.x); const cy = coord(candidate.vertex.point.y);
+          const radius = grid * (0.18 + Math.min(candidate.visits / Math.max(analysis?.visits ?? 1, 1), 1) * 0.22);
+          const isSelected = selectedCandidateIndex === index;
+          ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.fillStyle = isSelected ? "#2156c7" : "rgba(255,255,255,.88)";
+          ctx.fill();
+          ctx.strokeStyle = isSelected ? "#163f96" : "rgba(42,28,14,.55)";
+          ctx.lineWidth = isSelected ? Math.max(1.5, grid * 0.06) : 1;
+          ctx.stroke();
+          ctx.fillStyle = isSelected ? "#fff" : "#1a1d21";
+          ctx.font = `${Math.max(10, grid * 0.28)}px "Noto Sans SC", sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(String(index + 1), cx, cy);
+        }
+      } else {
+        let turnColor: "black" | "white" = position.to_play;
+        for (const [index, point] of replaySteps.entries()) {
+          if (index > 0) turnColor = turnColor === "black" ? "white" : "black";
+          const cx = coord(point.x);
+          const cy = coord(point.y);
+          const radius = grid * 0.45;
+          ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.fillStyle = turnColor === "black" ? "#1a1a1e" : "#ffffff";
+          ctx.fill();
+          ctx.strokeStyle = index === 0 ? "#2563eb" : "rgba(42,28,14,0.8)";
+          ctx.lineWidth = index === 0 ? 1.5 : 1;
+          ctx.stroke();
+          ctx.fillStyle = turnColor === "black" ? "#ffffff" : "#1a1a1e";
+          ctx.font = `bold ${Math.max(9, grid * 0.4)}px "Noto Sans SC", sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(String(index + 1), cx, cy);
+        }
       }
     }
 
@@ -314,7 +342,7 @@ export function BoardCanvas({
       ctx.lineWidth = Math.max(1.5, grid * 0.06);
       ctx.stroke();
     }
-  }, [position, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, moves, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers]);
+  }, [position, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, moves, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers, pvPrefixLength, replayCandidateIndex]);
 
   const layerHost = document.getElementById("board-layers");
   const overlays = (
