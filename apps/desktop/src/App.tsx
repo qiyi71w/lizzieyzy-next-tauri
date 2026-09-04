@@ -200,11 +200,15 @@ export function App() {
   const presentationLive = publishedScope !== null && shouldPublishReviewPresentation(activeScope, publishedScope);
   const visibleFrames = useMemo(() => presentationLive ? frames : [], [presentationLive, frames]);
   const visibleProblems = useMemo(() => presentationLive ? problems : [], [presentationLive, problems]);
+  const treeFrame = currentGame?.snapshot.primary_analysis ?? undefined;
   const currentFrame = useMemo(
-    () => visibleFrames.length <= 1
-      ? visibleFrames[0]
-      : visibleFrames.find((frame) => frame.turn === currentMove) ?? visibleFrames.at(-1),
-    [visibleFrames, currentMove]
+    () => {
+      const sessionFrame = visibleFrames.length <= 1
+        ? visibleFrames[0]
+        : visibleFrames.find((frame) => frame.turn === currentMove) ?? visibleFrames.at(-1);
+      return sessionFrame ?? treeFrame;
+    },
+    [visibleFrames, currentMove, treeFrame]
   );
   const visibleCurrentFrame = useMemo(() => applyPreferencesToFrame(currentFrame, preferences), [currentFrame, preferences]);
   const previewCandidateIndex = candidatePreview

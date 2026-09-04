@@ -498,6 +498,34 @@ describe("analysis presentation bound to exact nodes", () => {
     expect(host.textContent).toContain("胜率 61.0%");
   });
 
+  it("shows selected-node analysis from an opened Java SGF via the exact-node presentation path", async () => {
+    const javaRoot: CurrentGameResultDto = {
+      ...navigableRoot,
+      snapshot: {
+        ...navigableRoot.snapshot,
+        primary_analysis: analysisFrame({
+          candidates: [candidateAt(3, 3, [{ point: { x: 3, y: 3 } }, { point: { x: 2, y: 2 } }])]
+        })
+      }
+    };
+    backend.replaceCurrentGame.mockResolvedValue(javaRoot);
+    backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => {
+      if (path.indices.length === 0) {
+        return javaRoot;
+      }
+      return snapshotAt(path);
+    });
+    const host = await renderApp();
+    expect(candidateCoords(host)).toEqual(["D6"]);
+    expect(host.textContent).toContain("61.0%");
+
+    await selectPath(host, "下一变化");
+    expect(candidateCoords(host)).toEqual([]);
+
+    await selectPath(host, "父节点");
+    expect(candidateCoords(host)).toEqual(["D6"]);
+  });
+
   it("clears presentation when the Foreground Engine Run leaves Ready", async () => {
     const host = await renderApp();
     await readyEngine(host);

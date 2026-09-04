@@ -108,6 +108,10 @@ pub struct SelectedNodeSnapshotDto {
     pub personal_comment: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generated_information: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_analysis: Option<AnalysisFrameDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_analysis: Option<AnalysisFrameDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -677,6 +681,8 @@ mod current_game_wire {
                 },
                 personal_comment: "mainline pass".to_string(),
                 generated_information: None,
+                primary_analysis: None,
+                secondary_analysis: None,
             },
             generation: 1,
             dirty: false,

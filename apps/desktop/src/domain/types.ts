@@ -23,6 +23,8 @@ export type SelectedNodeSnapshotDto = {
   position: PositionDto;
   personal_comment: string;
   generated_information?: string | null;
+  primary_analysis?: AnalysisFrameDto | null;
+  secondary_analysis?: AnalysisFrameDto | null;
 };
 export type CurrentGameResultDto = {
   tree: SgfTreeNodeDto;

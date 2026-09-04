@@ -179,6 +179,23 @@ Repository evidence (does not substitute for native GUI or live KataGo):
 cd apps/desktop && npx vitest run src/AnalysisPresentation.test.tsx src/EngineLifecycle.test.tsx src/SelectedNodeAnalysis.test.tsx
 ```
 
+### 5.2 Round-Trip Java-Compatible SGF Analysis Payloads
+
+- Use native Open to load `tests/golden/java-analysis-branching.sgf` (or another Java SGF with `LZ` / `LZOP`).
+- Confirm the selected node shows that node's primary analysis (candidates, winrate, PV, and score when present) without starting KataGo.
+- Navigate with `下一变化` / `父节点` and sibling controls. Each node must show only its own primary analysis; a node whose `LZ` is malformed or incomplete must stay empty.
+- Save or Save As, reopen the file, and confirm personal `C`, unknown properties, secondary `LZ2` / `LZOP2`, and malformed payloads are still present. Next must not add an Analysis Context property or append generated statistics to `C`.
+- Confirm new encoded primary uses root `LZOP` and non-root `LZ`. This smoke does not attach live engine results (ticket 08) and does not remove the SQLite cache (ticket 09).
+
+Expected result: opening a branching Java SGF shows selected-node analysis through the exact-node presentation path. Save/reopen preserves secondary, unknown properties, personal comments, and malformed payloads. Native KataGo/GTK is not required for this repository evidence.
+
+Repository evidence (does not substitute for native GUI or live KataGo):
+
+```bash
+cargo test -p sgf --test java_analysis_payloads --offline
+cd apps/desktop && npx vitest run src/AnalysisPresentation.test.tsx
+```
+
 ### 6. Cancel Analysis
 
 - On one resident Ready run, start both `分析此手` and `自动分析`.
