@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerE
 import { createPortal } from "react-dom";
 import type { AnalysisFrameDto, MoveDto, PointDto, PositionDto } from "../domain/types";
 import { isPoint } from "../domain/board";
+import type { NextMoveReviewMarker, NextMoveReviewMarkerMode } from "../domain/nextMoveReviewMarker";
 import {
   shouldPublishReviewPresentation,
   type ReviewPresentationScope
@@ -22,6 +23,8 @@ type Props = {
   onPointClick?: (point: PointDto) => void;
   onCandidatePreview?: (index: number | null) => void;
   previewScope?: ReviewPresentationScope;
+  nextMoveMode?: NextMoveReviewMarkerMode;
+  nextMoveMarkers?: NextMoveReviewMarker[];
 };
 type PolicyPoint = { x: number; y: number; value: number };
 
@@ -45,7 +48,9 @@ export function BoardCanvas({
   hideCandidates = false,
   onPointClick,
   onCandidatePreview,
-  previewScope
+  previewScope,
+  nextMoveMode = "off",
+  nextMoveMarkers = []
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [keyboardPoint, setKeyboardPoint] = useState<PointDto | null>(null);
@@ -281,6 +286,19 @@ export function BoardCanvas({
       }
     }
 
+    for (const marker of nextMoveMode === "off" ? [] : nextMoveMarkers) {
+      const cx = coord(marker.point.x);
+      const cy = coord(marker.point.y);
+      const radius = grid * (marker.primary ? 0.22 : 0.16);
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.fillStyle = markerFill(marker);
+      ctx.fill();
+      ctx.strokeStyle = marker.primary ? "#163f96" : "rgba(33,86,199,.55)";
+      ctx.lineWidth = marker.primary ? Math.max(2, grid * 0.08) : 1;
+      ctx.stroke();
+    }
+
     if (keyboardPoint) {
       const cx = coord(keyboardPoint.x);
       const cy = coord(keyboardPoint.y);
@@ -296,7 +314,7 @@ export function BoardCanvas({
       ctx.lineWidth = Math.max(1.5, grid * 0.06);
       ctx.stroke();
     }
-  }, [position, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, moves, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint]);
+  }, [position, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, moves, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers]);
 
   const layerHost = document.getElementById("board-layers");
   const overlays = (
@@ -307,7 +325,11 @@ export function BoardCanvas({
     </div>
   );
 
-  return <div className="board-canvas">
+  return <div
+    className="board-canvas"
+    data-next-move-mode={nextMoveMode}
+    data-next-move-markers={JSON.stringify(nextMoveMarkers)}
+  >
     <canvas
       ref={canvasRef}
       aria-label="棋盘"
@@ -382,3 +404,17 @@ function drawPolicyOverlay(ctx: CanvasRenderingContext2D, points: PolicyPoint[],
     }
   }
 }
+
+function markerFill(marker: NextMoveReviewMarker): string {
+  if (marker.rank) return NEXT_MOVE_RANK_FILL[marker.rank];
+  return marker.primary ? "rgba(33,86,199,.22)" : "rgba(33,86,199,.10)";
+}
+
+const NEXT_MOVE_RANK_FILL = {
+  best: "#1b7f3a",
+  good: "#5aa862",
+  normal: "#c7a21a",
+  inaccuracy: "#d67a12",
+  mistake: "#c4451c",
+  blunder: "#8e1515"
+} as const;

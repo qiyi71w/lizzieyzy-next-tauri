@@ -276,6 +276,26 @@ cd apps/desktop && npx vitest run src/domain/moveRank.test.ts src/domain/winrate
 
 Expected result: first-use defaults are Black perspective, both series on, Blunder Bar off, Graph Hover on, and Score Lead Scale 15. The chart encodes the selected root-to-leaf variation with Java Auto Move Rank bars.
 
+### 11. Next-move Review Marker
+
+- Open a branching SGF with coordinate children, a pass child, and Java `LZ` / `LZOP` on the selected node and its Primary Child.
+- Confirm first-use is Variations: every coordinate-bearing child is marked and the Primary Child is emphasized; pass / non-coordinate children stay in the tree without a board mark.
+- Cycle `显示` → `下一手标记(J)` and `参数` → `下一手标记` through Off, Variations, and Graded. Confirm they share the PREF-01 key and that a restart after a successful write keeps the last saved mode.
+- Press `J` when the board is not an editable control. Confirm it cycles the same three modes. Type `J` into 个人评论 and confirm the mode does not change.
+- In Graded, confirm the Primary Child uses the shared Auto Move Rank when both payloads are parseable and positive-visit. Missing, malformed, zero-visit, pass-only, or absent Primary Child analysis keeps variation marks and does not start an Analysis Job. No uncertainty label appears.
+- Native restart after saving Graded restores Graded without creating a new analysis request.
+
+Native KataGo/GTK: required for live grading of a freshly analyzed branching game. When that environment is unavailable, record the smoke as not run; Java LZ reopen and preference restart can still be checked from a fixture SGF.
+
+Repository evidence (does not substitute for native GUI or live KataGo):
+
+```bash
+cargo test -p app-preferences --offline
+cd apps/desktop && npx vitest run src/domain/nextMoveReviewMarker.test.ts src/domain/shortcuts.test.ts src/components/BoardCanvas.test.tsx src/NextMoveReviewMarker.test.tsx src/App.preferences.test.tsx
+```
+
+Expected result: first-use is Variations. Off draws no marks. Graded grades only the Primary Child from attached tree analysis and never starts analysis.
+
 ## Provider And Sidecar Smoke Flow
 
 Run this only in an environment with the required provider accounts, network access, target client state, and readboard sidecar installed. Record skipped items explicitly; skipped live checks do not invalidate offline contract work, but they do block live-support claims.

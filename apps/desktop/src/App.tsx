@@ -48,6 +48,7 @@ import {
 import { loadAppPreferences, saveAppPreferences } from "./api/preferences";
 import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition } from "./domain/board";
 import { defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "./domain/preferences";
+import { buildNextMoveReviewMarkers, cycleNextMoveReviewMarker } from "./domain/nextMoveReviewMarker";
 import { admitsChartSeriesChange, buildWinrateChartModel, displayedWinrate } from "./domain/winrateChart";
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
 import { admitsAnalysisAttachment, admitsAnalysisPublication, admitsWholeGameNodeResult, matchesWholeGameJobIdentity } from "./domain/analysisJob";
@@ -231,6 +232,13 @@ export function App() {
     ? displayedWinrate(currentChartPoint, chartModel.perspective, chartModel.selectedToPlay)
     : null;
   const chartTitleSide = chartModel.perspective === "sideToPlay" && chartModel.selectedToPlay === "white" ? "白" : "黑";
+  const nextMoveMarkers = useMemo(() => buildNextMoveReviewMarkers({
+    mode: preferences.nextMoveReviewMarker,
+    selectedNode,
+    selectedIsRoot: selectedPath.indices.length === 0,
+    toPlay: currentPosition.to_play,
+    boardSize: currentPosition.board_size
+  }), [preferences.nextMoveReviewMarker, selectedNode, selectedPath.indices.length, currentPosition.to_play, currentPosition.board_size]);
   const documentDirty = currentGame?.dirty ?? dirty;
   const documentPath = currentGame?.native_path ?? currentFilePath;
   const documentName = useMemo(() => documentPath ? fileNameFromPath(documentPath) : fallbackFileName ?? "未命名棋谱", [documentPath, fallbackFileName]);
@@ -313,6 +321,12 @@ export function App() {
     });
     shortcutRegistry.bind("view.policy-overlay", () => {
       setOverlayMode("policy");
+    });
+    shortcutRegistry.bind("review.next-move-marker", () => {
+      void handlePreferencesChange({
+        ...preferences,
+        nextMoveReviewMarker: cycleNextMoveReviewMarker(preferences.nextMoveReviewMarker)
+      });
     });
     shortcutRegistry.bind("review.autoplay", () => {
       setAutoPlaying((value) => !value);
@@ -1330,6 +1344,8 @@ export function App() {
           onOverlayModeChange={setOverlayMode}
           hideCandidates={(currentPosition.to_play === "black" && !showBlackCandidates) || (currentPosition.to_play === "white" && !showWhiteCandidates)}
           onPointClick={(point) => void playAt({ point })}
+          nextMoveMode={preferences.nextMoveReviewMarker}
+          nextMoveMarkers={nextMoveMarkers}
         />
         {boardIntentFeedback ? (
           <p className="board-intent-status" role="status" aria-live="polite">{boardIntentFeedback}</p>

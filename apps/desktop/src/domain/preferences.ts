@@ -1,6 +1,9 @@
+import type { NextMoveReviewMarkerMode } from "./nextMoveReviewMarker";
+
 export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
 export type GraphPerspective = "black" | "sideToPlay";
+export type { NextMoveReviewMarkerMode };
 
 export type AppPreferences = {
   showOwnership: boolean;
@@ -16,6 +19,7 @@ export type AppPreferences = {
   blunderBar: boolean;
   graphHover: boolean;
   scoreLeadScale: number;
+  nextMoveReviewMarker: NextMoveReviewMarkerMode;
 };
 
 export const defaultAppPreferences: AppPreferences = {
@@ -31,7 +35,8 @@ export const defaultAppPreferences: AppPreferences = {
   scoreLeadLine: true,
   blunderBar: false,
   graphHover: true,
-  scoreLeadScale: 15
+  scoreLeadScale: 15,
+  nextMoveReviewMarker: "variations"
 };
 
 export function normalizeAppPreferences(value: Partial<AppPreferences> | null | undefined): AppPreferences {
@@ -50,8 +55,13 @@ export function normalizeAppPreferences(value: Partial<AppPreferences> | null | 
     scoreLeadLine,
     blunderBar: booleanValue(value?.blunderBar, defaultAppPreferences.blunderBar),
     graphHover: booleanValue(value?.graphHover, defaultAppPreferences.graphHover),
-    scoreLeadScale: positiveFloor(value?.scoreLeadScale, defaultAppPreferences.scoreLeadScale, 1, 1000)
+    scoreLeadScale: positiveFloor(value?.scoreLeadScale, defaultAppPreferences.scoreLeadScale, 1, 1000),
+    nextMoveReviewMarker: nextMoveReviewMarkerValue(value?.nextMoveReviewMarker)
   };
+}
+
+function nextMoveReviewMarkerValue(value: unknown): NextMoveReviewMarkerMode {
+  return value === "off" || value === "graded" ? value : "variations";
 }
 
 function booleanValue(value: unknown, fallback: boolean): boolean {

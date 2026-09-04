@@ -154,6 +154,23 @@ export function AppChrome(props: Props) {
             <MenuCheck label="候选" checked={props.preferences.showCandidates} onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, showCandidates: !props.preferences.showCandidates }))} />
             <MenuCheck label="领地" checked={props.preferences.showOwnership} onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, showOwnership: !props.preferences.showOwnership }))} />
             <MenuCheck label="策略网络(T)" checked={props.preferences.showPolicy} onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, showPolicy: !props.preferences.showPolicy }))} />
+            <SubMenu label="下一手标记(J)">
+              <MenuCheck
+                label="关闭"
+                checked={props.preferences.nextMoveReviewMarker === "off"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, nextMoveReviewMarker: "off" }))}
+              />
+              <MenuCheck
+                label="变化"
+                checked={props.preferences.nextMoveReviewMarker === "variations"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, nextMoveReviewMarker: "variations" }))}
+              />
+              <MenuCheck
+                label="分级"
+                checked={props.preferences.nextMoveReviewMarker === "graded"}
+                onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, nextMoveReviewMarker: "graded" }))}
+              />
+            </SubMenu>
             <MenuItem label="落子评价标记(Alt+M)" disabled title={later} />
             <MenuItem label="自动播放(Ctrl+A)" onClick={() => run(props.onAutoPlay)} />
             <SubMenu label="胜率图设置">

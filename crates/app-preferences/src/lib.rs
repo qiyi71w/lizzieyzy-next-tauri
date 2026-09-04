@@ -37,6 +37,8 @@ pub struct AppPreferencesDto {
     pub graph_hover: bool,
     #[serde(default = "default_score_lead_scale")]
     pub score_lead_scale: u32,
+    #[serde(default = "default_next_move_review_marker")]
+    pub next_move_review_marker: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +71,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         blunder_bar: default_blunder_bar(),
         graph_hover: default_graph_hover(),
         score_lead_scale: default_score_lead_scale(),
+        next_move_review_marker: default_next_move_review_marker(),
     }
 }
 
@@ -91,6 +94,9 @@ pub fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPrefe
         preferences.score_lead_scale = default_score_lead_scale();
     } else {
         preferences.score_lead_scale = preferences.score_lead_scale.clamp(1, 1000);
+    }
+    if preferences.next_move_review_marker != "off" && preferences.next_move_review_marker != "graded" {
+        preferences.next_move_review_marker = default_next_move_review_marker();
     }
     preferences
 }
@@ -244,6 +250,10 @@ fn default_score_lead_scale() -> u32 {
     15
 }
 
+fn default_next_move_review_marker() -> String {
+    "variations".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,6 +296,7 @@ mod tests {
             blunder_bar: true,
             graph_hover: false,
             score_lead_scale: 20,
+            next_move_review_marker: "graded".to_string(),
         }
     }
 
@@ -311,6 +322,7 @@ mod tests {
         assert!(loaded.preferences.show_policy);
         assert_eq!(loaded.preferences.review_mode, "quick");
         assert_eq!(loaded.preferences.board_theme, "classic");
+        assert_eq!(loaded.preferences.next_move_review_marker, "variations");
         assert!(loaded.recovery.is_none());
 
         let _ = fs::remove_dir_all(dir);

@@ -1,4 +1,4 @@
-import type { AppPreferences, BoardTheme, GraphPerspective, ReviewMode } from "../domain/preferences";
+import type { AppPreferences, BoardTheme, GraphPerspective, NextMoveReviewMarkerMode, ReviewMode } from "../domain/preferences";
 import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
 
 type Props = {
@@ -25,6 +25,18 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
         <Toggle label="候选" checked={preferences.showCandidates} disabled={disabled} onChange={(checked) => update({ showCandidates: checked })} />
         <Toggle label="领地" checked={preferences.showOwnership} disabled={disabled} onChange={(checked) => update({ showOwnership: checked })} />
         <Toggle label="策略" checked={preferences.showPolicy} disabled={disabled} onChange={(checked) => update({ showPolicy: checked })} />
+        <label>
+          <span>下一手标记</span>
+          <select
+            value={preferences.nextMoveReviewMarker}
+            disabled={disabled}
+            onChange={(event) => update({ nextMoveReviewMarker: event.target.value as NextMoveReviewMarkerMode })}
+          >
+            <option value="off">关闭</option>
+            <option value="variations">变化</option>
+            <option value="graded">分级</option>
+          </select>
+        </label>
         <label>
           <span>显示候选数</span>
           <input
