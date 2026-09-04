@@ -388,7 +388,7 @@ export function BottomBar(props: {
   engineReady: boolean;
   selectedNodeRunning: boolean;
   wholeGameRunning: boolean;
-  wholeGameProgress: { completed: number; expected: number } | null;
+  wholeGameProgress: { completed: number; expected: number; remaining?: number | null } | null;
   onAnalyzeOnce: () => void;
   onAnalyzeGame: () => void;
   onCancelSelectedNode: () => void;
@@ -412,7 +412,9 @@ export function BottomBar(props: {
   const progressParts = [
     props.selectedNodeRunning ? "此手分析中" : null,
     props.wholeGameProgress
-      ? `整局 ${props.wholeGameProgress.completed}/${props.wholeGameProgress.expected}`
+      ? `整局 ${props.wholeGameProgress.completed}/${props.wholeGameProgress.expected}${
+          props.wholeGameProgress.remaining == null ? "" : ` 剩余 ${props.wholeGameProgress.remaining}`
+        }`
       : props.wholeGameRunning
         ? "整局分析中"
         : null

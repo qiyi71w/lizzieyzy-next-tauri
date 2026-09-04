@@ -52,7 +52,7 @@ import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, select
 import type { AnalysisCacheRecord, CacheStatus, GameCacheKey, JsonValue } from "./domain/cache";
 import { defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "./domain/preferences";
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
-import { admitsAnalysisPublication } from "./domain/analysisJob";
+import { admitsAnalysisPublication, admitsWholeGameNodeResult, matchesWholeGameJobIdentity } from "./domain/analysisJob";
 import { createShortcutRegistry } from "./domain/shortcuts";
 import {
   createLocalRequestToken,
@@ -64,7 +64,7 @@ import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AppH
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
 const demoGame = createDemoGame();
-type WholeGameProgress = { completed: number; expected: number };
+type WholeGameProgress = { completed: number; expected: number; remaining: number };
 type CacheEngineKind = "fake" | "katago";
 type CachedAnalysisPayload = { frames: AnalysisFrameDto[]; problems: ProblemMarkerDto[] };
 type PendingPreferencesSave = { version: number; preferences: AppPreferences };
@@ -145,6 +145,7 @@ export function App() {
   const currentGameRef = useRef<CurrentGameResultDto | null>(null);
   const selectedNodeJobRef = useRef<AnalysisJobStartedDto | null>(null);
   const wholeGameJobRef = useRef<AnalysisJobStartedDto | null>(null);
+  const wholeGameResultsRef = useRef<Map<string, AnalysisFrameDto>>(new Map());
   const handleSelectedNodeJobRef = useRef<(job: AnalysisJobEventDto) => void>(() => undefined);
   const handleWholeGameJobRef = useRef<(job: AnalysisJobEventDto) => void>(() => undefined);
 
@@ -594,6 +595,7 @@ export function App() {
         setFrames([]);
         setProblems([]);
         setSelectedCandidateIndex(null);
+        await abandonWholeGameSession();
         const previewMessage = options.successMessage(parsed, options.fallbackName ?? "SGF");
         setMessage(`${nativeCurrentGameUnavailable} ${previewMessage}`);
         if (options.checkCache === false) resetAnalysisCacheState();
@@ -620,6 +622,7 @@ export function App() {
       setFrames([]);
       setProblems([]);
       setSelectedCandidateIndex(null);
+      await abandonWholeGameSession();
       const fileName = fileNameFromPath(result.native_path ?? options.fallbackName ?? "SGF");
       const success = options.successMessage(artifacts.projection, fileName);
       setMessage(success);
@@ -664,6 +667,7 @@ export function App() {
       setFrames([]);
       setProblems([]);
       setSelectedCandidateIndex(null);
+      await abandonWholeGameSession();
       const openedMessage = `Opened ${fileNameFromPath(result.native_path ?? document.path ?? "SGF")}: ${artifacts.projection.summary.move_count} moves.`;
       setMessage(openedMessage);
       await checkAnalysisCacheForGame(artifacts.serialized, result.native_path ?? document.path, artifacts.projection, openedMessage);
@@ -731,10 +735,53 @@ export function App() {
     setSelectedNodeRunning(false);
   }
 
-  function clearWholeGameLane() {
+  function resetWholeGameSession() {
+    wholeGameResultsRef.current = new Map();
     wholeGameJobRef.current = null;
     setWholeGameRunning(false);
     setWholeGameProgress(null);
+  }
+
+  async function abandonWholeGameSession() {
+    const pending = wholeGameJobRef.current;
+    resetWholeGameSession();
+    if (!pending) return;
+    try {
+      await cancelKataGoAnalysis(pending.run_id, pending.job_id);
+    } catch {
+      // Document identity already dropped; a failed cancel may leave the lane occupied.
+    }
+  }
+
+  function clearWholeGameRunning() {
+    wholeGameJobRef.current = null;
+    setWholeGameRunning(false);
+  }
+
+  function presentWholeGameFrame(path: NodePath, frame: AnalysisFrameDto) {
+    if (selectedNodeJobRef.current) return;
+    const game = currentGameRef.current;
+    if (!game || !samePath(game.selected_path, path)) return;
+    const token = wholeGameJobRef.current?.job_id ?? activeRequestTokenRef.current;
+    activeRequestTokenRef.current = token;
+    setActiveRequestToken(token);
+    documentGenerationRef.current = Math.max(documentGenerationRef.current, game.generation);
+    publishReviewPresentation(
+      {
+        generation: game.generation,
+        selectedPath: [...path.indices],
+        requestToken: token
+      },
+      [frame],
+      []
+    );
+  }
+
+  function rememberWholeGameFrame(path: NodePath, frame: AnalysisFrameDto) {
+    const next = new Map(wholeGameResultsRef.current);
+    next.set(pathKey(path), frame);
+    wholeGameResultsRef.current = next;
+    presentWholeGameFrame(path, frame);
   }
 
   handleSelectedNodeJobRef.current = (job: AnalysisJobEventDto) => {
@@ -811,12 +858,16 @@ export function App() {
 
   handleWholeGameJobRef.current = (job: AnalysisJobEventDto) => {
     const pending = wholeGameJobRef.current;
-    if (!matchesPendingAnalysisJob(pending, job)) return;
-    if (job.outcome === "progress") {
+    if (!matchesWholeGameJobIdentity(pending, job)) return;
+    if (job.outcome === "started" || job.outcome === "progress") {
       setWholeGameProgress({
         completed: job.completed ?? 0,
-        expected: job.expected ?? 0
+        expected: job.expected ?? 0,
+        remaining: job.remaining ?? Math.max(0, (job.expected ?? 0) - (job.completed ?? 0))
       });
+      if (job.outcome === "progress" && admitsWholeGameNodeResult(job) && job.frame) {
+        rememberWholeGameFrame(job.node_path, job.frame);
+      }
       return;
     }
     if (job.outcome === "completed" || job.outcome === "cancelled" || job.outcome === "failed" || job.outcome === "timeout") {
@@ -829,18 +880,24 @@ export function App() {
       } else {
         setMessage("整局分析超时");
       }
-      clearWholeGameLane();
+      clearWholeGameRunning();
     }
   };
 
   async function handleAnalyzeKataGoGame(runId: string, maxVisits: number) {
+    const game = currentGameRef.current;
+    if (!nativeRuntime || !game) {
+      setMessage(nativeRuntime ? "整局分析需要当前游戏。" : nativeCurrentGameUnavailable);
+      return;
+    }
     const visits = resolveAnalysisMaxVisits(maxVisits, preferences);
     try {
-      const artifacts = nativeRuntime
-        ? await artifactsFromCurrentGame()
-        : { serialized: sgfText, projection: await parseSgfSummary(sgfText) };
-      if (!nativeRuntime) setMessage(nativeCurrentGameUnavailable);
-      const started = await startKataGoGameAnalysis(runId, artifacts.serialized, visits);
+      const started = await startKataGoGameAnalysis({
+        runId,
+        generation: game.generation,
+        maxVisits: visits
+      });
+      wholeGameResultsRef.current = new Map();
       wholeGameJobRef.current = started;
       setWholeGameRunning(true);
       setWholeGameProgress(null);
@@ -973,6 +1030,7 @@ export function App() {
       const artifacts = await artifactsFromCurrentGame();
       setGame(artifacts.projection);
       clearReviewData();
+      await abandonWholeGameSession();
       resetAnalysisCacheState();
       setMessage("已更新选中节点的个人评论。");
     } catch (error) {
@@ -1001,6 +1059,14 @@ export function App() {
       setChosenChildren((prev) => rememberChosenChildren(prev, result.selected_path));
       setCurrentMove(result.snapshot.position.move_number);
       setSelectedCandidateIndex(null);
+      currentGameRef.current = {
+        ...(currentGameRef.current ?? result),
+        selected_path: result.selected_path,
+        snapshot: result.snapshot,
+        generation: Math.max(currentGameRef.current?.generation ?? 0, result.generation)
+      };
+      const stored = wholeGameResultsRef.current.get(pathKey(result.selected_path));
+      if (stored) presentWholeGameFrame(result.selected_path, stored);
     } catch (error) {
       setMessage(`导航失败: ${errorMessage(error)}`);
     } finally {
@@ -1060,6 +1126,7 @@ export function App() {
       setMessage("落子已接受。");
       if (result.generation !== previousGeneration) {
         clearReviewData();
+        await abandonWholeGameSession();
         resetAnalysisCacheState();
         const artifacts = await artifactsFromCurrentGame();
         if (documentGenerationRef.current !== result.generation) return;
@@ -1084,6 +1151,7 @@ export function App() {
       setDirty(result.dirty);
       setCurrentMove(result.snapshot.position.move_number);
       clearReviewData();
+      await abandonWholeGameSession();
       resetAnalysisCacheState();
       const artifacts = await artifactsFromCurrentGame();
       if (!isCurrentDocumentGeneration(result.generation)) return;

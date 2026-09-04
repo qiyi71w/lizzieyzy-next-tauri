@@ -62,6 +62,8 @@ pub struct AnalysisJobEventDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame: Option<AnalysisFrameDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<EngineFailureDto>,
@@ -127,6 +129,7 @@ mod tests {
             outcome,
             completed: None,
             expected: None,
+            remaining: None,
             frame: with_frame.then(|| AnalysisFrameDto {
                 job_id: Uuid::nil(),
                 game_id: None,
@@ -296,6 +299,7 @@ mod tests {
             outcome: AnalysisJobOutcomeDto::Progress,
             completed: Some(1),
             expected: Some(3),
+            remaining: Some(2),
             frame: None,
             failure: None,
         };
@@ -310,6 +314,7 @@ mod tests {
         assert_eq!(json["job"]["outcome"], "progress");
         assert_eq!(json["job"]["completed"], 1);
         assert_eq!(json["job"]["expected"], 3);
+        assert_eq!(json["job"]["remaining"], 2);
         let decoded: ForegroundEngineEventDto = serde_json::from_value(json).unwrap();
         match decoded {
             ForegroundEngineEventDto::Job { job } => assert_eq!(job, event),

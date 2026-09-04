@@ -156,11 +156,13 @@ LIZZIEYZY_REAL_KATAGO=1 cargo test -p engine-manager --test real_katago_lifecycl
 ### 5. Run Full-Game Analysis
 
 - With a Ready run, click `自动分析`.
-- Watch the whole-game lane show `整局 completed/expected` progress. Do not treat turn as job identity.
+- Watch the whole-game lane show `整局 completed/expected 剩余 remaining` as first-child mainline nodes finish. Each completed node should publish its own `NodePath` result immediately; do not wait for the batch to end, and do not treat turn as job identity.
+- Navigate with `上一手` / `下一手` while the lane is running and confirm review navigation stays enabled and does not cancel the job.
 - Optionally click `分析此手` / `继续分析` on the same Ready run and confirm both lanes stay active together.
 - A second `自动分析` while that lane is occupied must be rejected without cancelling the selected-node lane.
+- Cancel or fail after at least one node has completed and confirm the current-session result for that node remains visible.
 
-Expected result: whole-game analysis occupies only the Ready Run's whole-game lane. Selected-node can run concurrently. Per-node incremental attachment is not part of this smoke.
+Expected result: whole-game analysis occupies only the Ready Run's whole-game lane, walks `[]` / `[0]` / `[0,0]`…, and keeps completed node results after cancel/fail. Selected-node can run concurrently. Durable SGF attachment is not part of this smoke.
 
 ### 6. Cancel Analysis
 

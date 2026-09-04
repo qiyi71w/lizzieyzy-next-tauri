@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CurrentGameResultDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
+import type { CurrentGameResultDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, NodePath } from "./domain/types";
 
 const listeners: {
   onSnapshot?: (snapshot: ForegroundEngineSnapshotDto) => void;
@@ -91,6 +91,30 @@ const initialProjection: GameDto = {
   summary: { id: "game", board_size: 9, komi: 7.5, move_count: 0 },
   moves: []
 };
+
+const mainlineRoot: CurrentGameResultDto = {
+  ...initialGame,
+  tree: {
+    properties: [],
+    children: [{ properties: [{ key: "B", values: ["fe"] }], children: [] }]
+  }
+};
+
+function snapshotAt(path: NodePath): CurrentGameResultDto {
+  return {
+    ...mainlineRoot,
+    selected_path: path,
+    snapshot: {
+      path,
+      position: {
+        ...emptyPosition,
+        move_number: path.indices.length,
+        to_play: path.indices.length % 2 === 0 ? "black" : "white"
+      },
+      personal_comment: ""
+    }
+  };
+}
 
 const savedProfile = {
   id: "profile-1",
@@ -609,7 +633,11 @@ describe("foreground engine lifecycle UI", () => {
       buttonNamed(host, "自动分析").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
-    expect(backend.startKataGoGameAnalysis).toHaveBeenCalledWith("run-1", "(;SZ[9])", 800);
+    expect(backend.startKataGoGameAnalysis).toHaveBeenCalledWith({
+      runId: "run-1",
+      generation: 1,
+      maxVisits: 800
+    });
     await act(async () => {
       listeners.onJob?.({
         run_id: "run-1",
@@ -619,10 +647,21 @@ describe("foreground engine lifecycle UI", () => {
         node_path: { indices: [] },
         outcome: "progress",
         completed: 1,
-        expected: 2
+        expected: 2,
+        remaining: 1,
+        frame: {
+          job_id: "job-wg",
+          turn: 0,
+          visits: 8,
+          winrate_black: 0.61,
+          score_mean_black: 1.5,
+          candidates: [{ vertex: { point: { x: 0, y: 0 } }, visits: 8, winrate_black: 0.61, score_mean_black: 1.5, pv: [] }]
+        }
       });
     });
     expect(host.querySelector(".nav-progress")?.textContent).toContain("整局 1/2");
+    expect(host.querySelector(".nav-progress")?.textContent).toContain("剩余 1");
+    expect(host.textContent).toContain("61.0%");
     await act(async () => {
       buttonNamed(host, "取消整局").click();
       await backend.cancelKataGoAnalysis.mock.results.at(-1)?.value;
@@ -641,6 +680,132 @@ describe("foreground engine lifecycle UI", () => {
       });
     });
     expect(host.querySelector(".engine-chip-label")?.textContent).toBe("Local KataGo");
+    expect(host.textContent).toContain("61.0%");
+  });
+
+  it("keeps review navigation live during whole-game analysis and restores completed node results", async () => {
+    backend.replaceCurrentGame.mockResolvedValue(mainlineRoot);
+    backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => snapshotAt(path));
+    const host = await renderApp();
+    await readyEngine(host);
+    const nextMove = host.querySelector('button[title="下一手"]') as HTMLButtonElement;
+    const prevMove = host.querySelector('button[title="上一手"]') as HTMLButtonElement;
+    expect(nextMove.disabled).toBe(false);
+
+    await act(async () => {
+      buttonNamed(host, "自动分析").click();
+      await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-1",
+        job_id: "job-wg",
+        lane: "whole_game",
+        generation: 1,
+        node_path: { indices: [] },
+        outcome: "progress",
+        completed: 1,
+        expected: 2,
+        remaining: 1,
+        frame: {
+          job_id: "job-wg",
+          turn: 0,
+          visits: 8,
+          winrate_black: 0.61,
+          score_mean_black: 1.5,
+          candidates: [{ vertex: { point: { x: 0, y: 0 } }, visits: 8, winrate_black: 0.61, score_mean_black: 1.5, pv: [] }]
+        }
+      });
+    });
+    expect(host.textContent).toContain("61.0%");
+    expect(nextMove.disabled).toBe(false);
+
+    backend.cancelKataGoAnalysis.mockClear();
+    await act(async () => {
+      nextMove.click();
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
+    });
+    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
+    expect(backend.cancelKataGoAnalysis).not.toHaveBeenCalled();
+    expect(buttonNamed(host, "取消整局")).toBeTruthy();
+    expect(host.querySelector(".nav-progress")?.textContent).toContain("整局 1/2");
+    expect(host.querySelector(".nav-progress")?.textContent).toContain("剩余 1");
+    expect((host.querySelector('input[aria-label="跳转手数"]') as HTMLInputElement).value).toBe("1");
+    expect(host.textContent).not.toContain("61.0%");
+
+    await act(async () => {
+      prevMove.click();
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
+    });
+    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] });
+    expect(backend.cancelKataGoAnalysis).not.toHaveBeenCalled();
+    expect((host.querySelector('input[aria-label="跳转手数"]') as HTMLInputElement).value).toBe("0");
+    expect(host.textContent).toContain("61.0%");
+    expect(host.querySelector(".nav-progress")?.textContent).toContain("整局 1/2");
+  });
+
+  it("does not restore a previous document's whole-game node result after Open", async () => {
+    backend.replaceCurrentGame.mockResolvedValue(mainlineRoot);
+    backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => snapshotAt(path));
+    backend.openSgfDocument.mockResolvedValue({ sgfText: "(;SZ[9]B[fe])", path: "/tmp/other.sgf" });
+    const host = await renderApp();
+    await readyEngine(host);
+    const nextMove = host.querySelector('button[title="下一手"]') as HTMLButtonElement;
+    const prevMove = host.querySelector('button[title="上一手"]') as HTMLButtonElement;
+
+    await act(async () => {
+      buttonNamed(host, "自动分析").click();
+      await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-1",
+        job_id: "job-wg",
+        lane: "whole_game",
+        generation: 1,
+        node_path: { indices: [] },
+        outcome: "progress",
+        completed: 1,
+        expected: 2,
+        remaining: 1,
+        frame: {
+          job_id: "job-wg",
+          turn: 0,
+          visits: 8,
+          winrate_black: 0.61,
+          score_mean_black: 1.5,
+          candidates: [{ vertex: { point: { x: 0, y: 0 } }, visits: 8, winrate_black: 0.61, score_mean_black: 1.5, pv: [] }]
+        }
+      });
+    });
+    expect(host.textContent).toContain("61.0%");
+
+    backend.replaceCurrentGame.mockResolvedValue({
+      ...mainlineRoot,
+      generation: 2,
+      native_path: "/tmp/other.sgf"
+    });
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "打开棋谱(O)").click();
+      await backend.openSgfDocument.mock.results.at(-1)?.value;
+      await backend.replaceCurrentGame.mock.results.at(-1)?.value;
+    });
+    expect(host.textContent).not.toContain("61.0%");
+    expect(backend.cancelKataGoAnalysis).toHaveBeenCalledWith("run-1", "job-wg");
+
+    await act(async () => {
+      nextMove.click();
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      prevMove.click();
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
+    });
+    expect(host.textContent).not.toContain("61.0%");
+    expect(host.textContent).not.toContain("取消整局");
   });
 
   it("does not restore presentation or cache from a stale whole-game completion", async () => {

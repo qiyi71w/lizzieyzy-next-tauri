@@ -12,10 +12,11 @@ use engine_manager::{
     parse_engine_profiles, save_engine_profiles as persist_engine_profiles, AssetCheck, CommandSpec,
     EngineProfileCatalog, EngineProfileRecord as EngineProfileRecordDto,
     EngineProfilesSettings as EngineProfilesSettingsDto, ForegroundEngineConfig, ForegroundEngineManager,
-    SavedEngineProfile, SelectedNodeJobRequest, WholeGameJobRequest, DEFAULT_ENGINE_PROFILE_ID,
+    SavedEngineProfile, SelectedNodeJobRequest, WholeGameJobRequest, WholeGameWorkItem,
+    DEFAULT_ENGINE_PROFILE_ID,
 };
 use go_core::ReadBoardLocalContext;
-use katago_protocol::{analysis_query_from_position, AnalysisBatchQueryOptions, AnalysisQueryOptions};
+use katago_protocol::{analysis_query_from_position, AnalysisQueryOptions};
 use provider_core::{
     invalid_payload, invalid_request, invalid_url, timeout, transport_failed, ProviderResult,
     ProviderTransport,
@@ -38,7 +39,7 @@ use app_preferences::{
     load_from_path as load_app_preferences_from_path, save_to_path, AppPreferencesDto,
     AppPreferencesLoadResultDto, APP_PREFERENCES_FILE,
 };
-use current_game_state::CurrentGameState;
+use current_game_state::{CurrentGameState, WholeGameAdmission};
 use uuid::Uuid;
 
 const ENGINE_PROFILE_FILE: &str = "lizzieyzy-next-engine-profile.json";
@@ -256,11 +257,6 @@ fn map_engine_failure(failure: EngineFailureDto) -> String {
 struct EngineProfileSettingsDto {
     profile: EngineProfileDto,
     max_visits: u32,
-}
-
-struct PreparedBatchAnalysis {
-    query_jsonl: String,
-    expected: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -787,8 +783,51 @@ fn foreground_engine_cancel_job(
     manager.cancel_job(&run_id, &job_id)
 }
 
-fn whole_game_node_path() -> NodePath {
-    NodePath { indices: Vec::new() }
+fn job_failure(run_id: &str, kind: EngineFailureKind, message: String) -> EngineFailureDto {
+    EngineFailureDto {
+        operation: EngineOperationDto::Job,
+        run_id: Some(run_id.to_string()),
+        switch_id: None,
+        job_id: None,
+        profile_id: None,
+        kind,
+        message,
+        diagnostic_summary: None,
+    }
+}
+
+fn whole_game_work_items(
+    admitted: &WholeGameAdmission,
+    max_visits: u32,
+    run_id: &str,
+) -> Result<Vec<WholeGameWorkItem>, EngineFailureDto> {
+    admitted
+        .nodes
+        .iter()
+        .map(|snapshot| {
+            let query = analysis_query_from_position(
+                admitted.board_size,
+                admitted.komi,
+                &snapshot.position.stones,
+                snapshot.position.to_play,
+                AnalysisQueryOptions {
+                    id: "pending".to_string(),
+                    rules: admitted.rules.clone(),
+                    turn: snapshot.position.move_number,
+                    max_visits: Some(max_visits),
+                    include_ownership: Some(true),
+                    include_policy: Some(true),
+                },
+            )
+            .map_err(|error| job_failure(run_id, EngineFailureKind::Protocol, error.to_string()))?;
+            Ok(WholeGameWorkItem {
+                node_path: snapshot.path.clone(),
+                query,
+                board_size: admitted.board_size,
+                move_number: snapshot.position.move_number,
+            })
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -796,37 +835,17 @@ fn katago_start_analyze_game(
     manager: State<'_, ForegroundEngineManager>,
     current_game: State<'_, CurrentGameState>,
     run_id: String,
-    sgf_text: String,
+    generation: u64,
     max_visits: u32,
 ) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
-    let generation = current_game.generation().map_err(|error| EngineFailureDto {
-        operation: EngineOperationDto::Job,
-        run_id: Some(run_id.clone()),
-        switch_id: None,
-        job_id: None,
-        profile_id: None,
-        kind: EngineFailureKind::InvalidState,
-        message: error.message,
-        diagnostic_summary: None,
-    })?;
-    let prepared = prepare_katago_batch_analysis(&sgf_text, Uuid::nil(), max_visits).map_err(|message| {
-        EngineFailureDto {
-            operation: EngineOperationDto::Job,
-            run_id: Some(run_id.clone()),
-            switch_id: None,
-            job_id: None,
-            profile_id: None,
-            kind: EngineFailureKind::Start,
-            message,
-            diagnostic_summary: None,
-        }
-    })?;
+    let admitted = current_game
+        .admit_whole_game(generation)
+        .map_err(|error| job_failure(&run_id, EngineFailureKind::InvalidState, error.message))?;
+    let work_items = whole_game_work_items(&admitted, max_visits, &run_id)?;
     manager.start_whole_game_analysis(WholeGameJobRequest {
         run_id,
-        generation,
-        node_path: whole_game_node_path(),
-        query_jsonl: prepared.query_jsonl,
-        expected_responses: prepared.expected,
+        generation: admitted.generation,
+        work_items,
     })
 }
 
@@ -837,38 +856,6 @@ fn katago_cancel_analysis(
     job_id: String,
 ) -> Result<(), EngineFailureDto> {
     manager.cancel_job(&run_id, &job_id)
-}
-
-fn prepare_katago_batch_analysis(
-    sgf_text: &str,
-    job_id: Uuid,
-    max_visits: u32,
-) -> Result<PreparedBatchAnalysis, String> {
-    let document = sgf::parse_sgf(sgf_text).map_err(|err| err.to_string())?;
-    let game = sgf::to_game_dto(document);
-    let query = katago_protocol::analysis_batch_query_from_game(
-        &game,
-        AnalysisBatchQueryOptions {
-            id: job_id.to_string(),
-            rules: "chinese".to_string(),
-            analyze_turns: None,
-            max_visits: Some(max_visits),
-            include_ownership: Some(true),
-            include_policy: Some(true),
-        },
-    )
-    .map_err(|err| err.to_string())?;
-    let turns = query.analyze_turns.clone().unwrap_or_default();
-    if turns.is_empty() {
-        return Err("analysis batch query did not include any turns".to_string());
-    }
-
-    let query_jsonl = query.to_jsonl().map_err(|err| err.to_string())?;
-    let expected = turns.len();
-    Ok(PreparedBatchAnalysis {
-        query_jsonl,
-        expected,
-    })
 }
 
 fn ensure_asset_check(checks: &mut Vec<AssetCheck>, path: &Option<String>, label: &str) {
@@ -1787,17 +1774,62 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    const BRANCHING: &str = include_str!("../../../../tests/golden/editable-workspace-branching.sgf");
+
     #[test]
-    fn batch_analysis_query_requests_ownership_and_policy() {
-        let job_id = Uuid::nil();
-        let sgf_text = "(;GM[1]FF[4]SZ[19]KM[7.5];B[dd];W[qq])";
+    fn whole_game_work_items_capture_first_child_positions_rules_and_policy() {
+        let state = CurrentGameState::default();
+        let opened = state.replace(BRANCHING, None).unwrap();
+        let admitted = state.admit_whole_game(opened.generation).unwrap();
+        let items = whole_game_work_items(&admitted, 64, "run-1").unwrap();
+        assert_eq!(items.len(), 4);
+        assert!(items[0].node_path.indices.is_empty());
+        assert_eq!(items[1].node_path.indices, vec![0]);
+        assert_eq!(items[2].node_path.indices, vec![0, 0]);
+        assert_eq!(items[3].node_path.indices, vec![0, 0, 0]);
+        assert_eq!(items[0].move_number, 0);
+        assert_eq!(items[3].move_number, 3);
+        let root: serde_json::Value =
+            serde_json::from_str(items[0].query.to_jsonl().unwrap().trim()).unwrap();
+        assert_eq!(root["includeOwnership"], true);
+        assert_eq!(root["includePolicy"], true);
+        assert_eq!(root["rules"], "chinese");
+        assert!((root["komi"].as_f64().unwrap() - 0.5).abs() < f64::EPSILON);
+        assert_eq!(root["boardXSize"], 5);
+        assert_eq!(root["boardYSize"], 5);
+        let stones = root["initialStones"].as_array().expect("setup stones");
+        assert!(stones
+            .iter()
+            .any(|stone| stone == &serde_json::json!(["B", "A5"])));
+        assert!(stones
+            .iter()
+            .any(|stone| stone == &serde_json::json!(["W", "C3"])));
+        assert!(!stones
+            .iter()
+            .any(|stone| stone == &serde_json::json!(["B", "A2"])));
+        assert_eq!(items[0].query.analyze_turns, Some(vec![1]));
+        assert_eq!(items[1].query.analyze_turns, Some(vec![0]));
+    }
 
-        let prepared = prepare_katago_batch_analysis(sgf_text, job_id, 64).unwrap();
-        let query: serde_json::Value = serde_json::from_str(prepared.query_jsonl.trim()).unwrap();
+    #[test]
+    fn whole_game_work_items_use_current_game_owned_rules() {
+        let state = CurrentGameState::default();
+        let opened = state
+            .replace("(;GM[1]FF[4]SZ[9]KM[6.5]RU[Japanese];B[dd])", None)
+            .unwrap();
+        let admitted = state.admit_whole_game(opened.generation).unwrap();
+        let items = whole_game_work_items(&admitted, 32, "run-rules").unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].query.rules, "japanese");
+        assert_eq!(items[1].query.rules, "japanese");
+    }
 
-        assert_eq!(query["includeOwnership"], true);
-        assert_eq!(query["includePolicy"], true);
-        assert_eq!(query["analyzeTurns"], serde_json::json!([0, 1, 2]));
+    #[test]
+    fn whole_game_admission_rejects_stale_generation_before_worklist() {
+        let state = CurrentGameState::default();
+        let opened = state.replace("(;GM[1]FF[4]SZ[9])", None).unwrap();
+        let stale = state.admit_whole_game(opened.generation + 1).unwrap_err();
+        assert_eq!(stale.message, "current game generation does not match");
     }
 
     fn registered_tauri_commands(source: &str) -> Vec<&str> {
@@ -1862,8 +1894,18 @@ mod tests {
     }
 
     #[test]
-    fn whole_game_request_uses_empty_root_node_path() {
-        assert!(whole_game_node_path().indices.is_empty());
+    fn whole_game_command_admits_current_game_instead_of_caller_sgf_batch() {
+        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+        let command = source
+            .split("fn katago_start_analyze_game(")
+            .nth(1)
+            .and_then(|rest| rest.split("fn katago_cancel_analysis(").next())
+            .expect("katago_start_analyze_game");
+        assert!(command.contains("admit_whole_game"));
+        assert!(command.contains("generation: u64"));
+        assert!(!command.contains("sgf_text"));
+        assert!(!command.contains("analysis_batch_query_from_game"));
+        assert!(!command.contains("prepare_katago_batch_analysis"));
     }
 
     #[test]
