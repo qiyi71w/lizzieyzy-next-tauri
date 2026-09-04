@@ -61,18 +61,18 @@ The existing Tauri implementation is the migration starting point and must be pr
 - Rust-owned current-game state, tree-shaped DTOs, `NodePath`, SGF mutation/serialization, Go-rule validation, and fresh projections for remaining analysis consumers.
 - Native SGF Open/Save/Save As, including cancellation and failed-write preservation; browser preview remains explicitly non-authoritative.
 - Variation navigation, legal move/pass editing, branch removal, personal comments, and semantic save/reopen without an engine.
-- Board, analysis panel, win-rate chart, candidate/PV display, ownership/policy paths, problem markers, mini-board, cache state, and engine setup UI.
-- Persisted engine profiles, asset checks, KataGo command construction, one-shot analysis, whole-game analysis, progress, full-game cancellation, timeout/error propagation, and response-turn validation.
-- SQLite analysis cache with stable SGF cache keys and lookup/save/delete commands.
+- Board, exact-node analysis presentation, candidate/PV/ownership/policy paths, Java-compatible Move Rank markers, configurable win-rate/score chart, Sub-Board Variation/Raw, and synchronized Variation Replay.
+- Persisted engine profiles, asset checks, KataGo command construction, one manager-owned event contract, independent selected-node and first-child-mainline lanes, incremental progress, lane-local cancellation, timeout/error propagation, and exact identity rejection.
+- Java-compatible `LZ` / `LZOP` / `LZ2` / `LZOP2` SGF exchange and exact-node attachment. Save / Save As is the only active analysis persistence path; the unshipped SQLite analysis-cache product surface and runtime are removed.
 - Yike and Fox runtime fetch/import command paths with normalized DTO/error boundaries.
 - readboard probe and protocol-line snapshot parsing/preview command paths.
 - Release asset/workflow preflight and compile-oriented dry-run paths.
 
 ### Known Workflow Gaps
 
-- `UI-02` remains Partial: there is still no evidence that engine events are delivered while a board mutation promise is pending. That residual does not block R4.
-- Analysis product contracts remain R4: exact-position admission, lane presentation, Next-move Review Marker, chart encoding, Sub-Board Mode, and Variation Replay are not claimed by the R3 lifecycle exit.
-- Safe current-game replacement, native file activation, window file-drop dispatch, graceful shutdown, and current-game session recovery are not yet the R5 seams.
+- `UI-02` remains Partial: there is still no evidence that engine events are delivered while a board mutation promise is pending. That residual does not reopen R4.
+- R4 Analysis has exited with all ten owner items plus pulled-forward `PREF-01` and `APP-05` Accepted.
+- Remaining R5 work is safe current-game replacement, native file activation semantics, window file-drop dispatch, graceful shutdown, and current-game session recovery.
 - Layout rails are fixed at `228px` and `260px`; splitters, rail visibility, window-geometry reset, and narrow Restore Default are absent.
 - Review HUD player labels are hardcoded 黑棋/白棋 rather than root `PB`/`PW` (`REVIEW-09`). Main-window always-on-top is absent (`WINDOW-02`).
 - Multi-backend profiles, Generic GTP, and Match Sessions are absent.
@@ -187,9 +187,9 @@ Phase numbers group work and express Delivery Order. They are not Item Start Pre
 ```mermaid
 flowchart TB
   R2[R2 Core Review UI - done]
-  R3[R3 Foreground Engine]
-  R4[R4 Analysis]
-  R5[R5 Safe Current Game]
+  R3[R3 Foreground Engine - done]
+  R4[R4 Analysis - done]
+  R5[R5 Safe Current Game - next]
   R6[R6 SGF Authoring / Review]
   R7[R7 Adaptive Workspace]
   R8[R8 Engine Adapters]
@@ -213,7 +213,7 @@ flowchart TB
 
 Layout, window, and appearance in R7 wait only for `PREF-01`. `GUIDE-01` is Deferred (Ticket 21) and is not an R7 member or exit.
 
-R4 may start after R3 without waiting for R5. Matrix-owned Item Start Prerequisites make `ANA-10` an item-level cross-phase exception, so R4 can execute its other items while R5 proceeds beside R3 but cannot exit before `ANA-10` is accepted. `ANA-11` through `ANA-13` persist through the `PREF-01` mechanism but do **not** wait for `PREF-01` Accepted and are not gated by R5.
+R4 ran after R3 and pulled only `PREF-01` and `APP-05` forward from R5; both are now Accepted. The R4 exit does not accept any other R5 item. R5 proceeds with `SGF-07` while the completed R4 dependencies continue to gate later phases.
 
 ### Critical Edges
 
@@ -487,45 +487,49 @@ Current state: Ticket 09 closeout on `90508df` accepted `ENG-02` through `ENG-07
 
 ### R4 — Analysis
 
-**Goal:** Bind interactive and whole-game analysis to the selected SGF node and the R3 run/job identity, expose the independent Next-move Review Marker, encode the winrate chart, persist Sub-Board Content Mode, and replay one active PV coherently across eligible analysis surfaces. R4 is the next executable phase.
+**Goal:** Bind selected-node and first-child-mainline analysis to exact SGF nodes and R3 run/job identity, make Java-compatible SGF analysis the only durable source, expose Java-compatible next-move grading and chart encoding, persist Sub-Board Content Mode, and replay one active PV coherently across eligible analysis surfaces.
 
-**Owns:** `ANA-01`, `ANA-02`, `ANA-03`, `ANA-04`, `ANA-10`, `ANA-11`, `ANA-12`, `ANA-13`. Accepted `ANA-05` remains the SQLite cache foundation and is not reopened.
+**Owns:** `ANA-01`, `ANA-02`, `ANA-03`, `ANA-04`, promoted `ANA-08`, and `ANA-10` through `ANA-14`. Accepted `ANA-05` remains frozen historical evidence; successor `ANA-14` supersedes its active runtime. `PREF-01` and `APP-05` retain R5 ownership but were pulled forward as prerequisites for the complete R4 batch.
 
 **Migration Phase Gate:** `ENG-02` through `ENG-07` accepted.
 
-`ANA-10`'s Matrix-owned Item Start Prerequisites make it R4's cross-phase exception. `PREF-01` is a persistence mechanism, not an Item Start Prerequisite, for `ANA-11` through `ANA-13`; their exact sets remain canonical in the Matrix.
-
 **Delivery Order:**
 
-1. `ANA-03` independent selected-node and whole-game lanes.
-2. `ANA-01` and `ANA-02` in parallel on those lanes.
-3. `ANA-04` Next-native presentation of identity-valid results and `ANA-11` winrate-chart encoding in parallel after `ANA-01`/`ANA-03`.
-4. `ANA-12` Sub-Board Content Mode after `ANA-04` on the same widget.
-5. `ANA-13` synchronized Variation Replay after `ANA-12`.
-6. `ANA-10` Next-move Review Marker after its analysis, cache, preference, and shortcut gates.
+1. Close R5 prerequisites `PREF-01` and `APP-05` without pulling the rest of R5 forward.
+2. `ANA-03` unifies one run-owned job-event contract and independent UI state for selected-node and whole-game lanes.
+3. `ANA-01` completes exact selected-node analysis; `ANA-02` completes root-plus-first-child-mainline analysis with incremental node results.
+4. `ANA-04` binds candidates, PV, ownership, policy, and the mini-board to identity-valid exact-node results.
+5. `ANA-08` adds Java-compatible SGF primary/secondary analysis parsing, projection, and primary serialization.
+6. `ANA-14` attaches completed results without advancing generation, establishes dirty/save-while-running behavior, and removes the SQLite cache product path.
+7. Add the shared fixed Java Auto six-rank Move Rank, then deliver `ANA-11` chart encoding and `ANA-12` Sub-Board Content Mode.
+8. `ANA-13` adds synchronized Variation Replay after `ANA-12`.
+9. `ANA-10` adds the Off / Variations / Graded board marker after SGF attachment, `PREF-01`, and registry-owned `J` exist.
 
-**Deliver:**
+Shared DTO, Tauri event, `App.tsx`, `AppChrome`, and preference changes were serialized through the integration owner; no temporary persistence or duplicate contract remains.
 
-- One-shot analysis of the selected position after adapter capability and exact-position admission, with result, typed failure, explicit cancellation, and supersession.
-- One single-stage, mainline-only whole-game session with visible progress, node-linked results, and cancellation that does not block review navigation.
-- Lane-local supersession: a new selected-node request does not silently cancel whole-game work. Stop, Restart, switch, crash, and exit cancel both lanes for that run.
-- Candidates, PV mini-board, ownership, policy, and candidate-limit rendering only for the current adapter capability and run/job/node scope.
-- Pre-invocation rejection of unsupported capabilities. No hidden dedicated analysis engine.
-- Persisted Next-move Review Marker (`Off` / `Variations` / `Graded`) with visible and `J` entry points; Graded uses comparable current or cached analysis only.
-- Winrate-chart encoding: Graph Perspective, Winrate Line / Score Lead Line, Blunder Bar, Graph Hover, and Score Lead Scale. Chart presence stays `UI-01`.
+**Delivered:**
+
+- One job-event contract carrying lane, run, job, generation, and exact `NodePath`; the selected-node and whole-game entries expose independent progress and cancellation. Selected-node supersession never cancels whole-game work.
+- Capability-admitted exact selected-position analysis with normalized results, typed failure, cancellation, supersession, and stale identity fences.
+- One single-stage whole-game session over root `[]` and repeated first-child paths only, with exact node-linked progress, occupied rejection, and completed-node retention after cancel/failure.
+- Exact-node candidates, PV mini-board, ownership, policy, score, and candidate-limit rendering. Navigation during whole-game analysis preserves other nodes' results.
+- Java-compatible SGF analysis exchange: read `LZ` / `LZOP` / `LZ2` / `LZOP2`; preserve malformed, secondary, unknown, and personal `C`; write or replace only canonical primary `LZOP` at root and `LZ` elsewhere; write no companion Analysis Context.
+- Incremental exact-node attachment that marks the current game dirty without advancing generation. Save / Save As includes the invocation-time completed snapshot while jobs continue; later completion dirties again. Automatic cache preferences, status UI, frontend API, Tauri commands, and analysis-cache storage code are removed without migration for unshipped development data.
+- Persisted Next-move Review Marker (`Off` / `Variations` / `Graded`) with visible and registry-owned focus-safe `J` entry points. Graded compares any positive-visit selected-node/Primary-Child primary pair as Java did, with no context gate or warning.
+- Fixed Java default Auto Move Rank: Best, Good, Normal, Inaccuracy, Mistake, Blunder; winrate-loss boundaries 1/3/6/12/24 percentage points and score-loss boundaries 0.5/1.5/3/6/12. Custom thresholds and modes are not delivered.
+- Winrate-chart Graph Perspective, Winrate Line / Score Lead Line, last-three-rank Blunder Bar, Graph Hover, and Score Lead Scale. Chart presence stays `UI-01`.
 - Persisted Sub-Board Variation / Raw switch. Heatmap-on-sub is not delivered.
-- Persisted default-off Variation Replay with a validated 500 ms default interval, exact PV identity, one synchronized main-board/Sub-Board prefix, hidden-surface pause/resume, full-PV disable/end behavior, and no current-game or Analysis Job mutation. Engine Continuation is not delivered.
+- Persisted default-off Variation Replay with validated 500 ms default interval, exact PV identity, one synchronized main-board/Sub-Board prefix, hidden-surface pause/resume, full-PV disable/end behavior, and no current-game or Analysis Job mutation. Engine Continuation is not delivered.
 
-**Exit when:**
+**Exit evidence:**
 
-- `ANA-01` through `ANA-04` and `ANA-10` through `ANA-13` are accepted.
-- Repository evidence covers exact-node publication, concurrent lanes, lane-local supersession, progress, explicit cancellation, typed failure, presentation scoping, unsupported-capability rejection, marker modes, chart encoding, Variation/Raw, and deterministic Variation Replay with a controlled clock.
-- Controlled or real KataGo evidence covers response validation, timeout, stderr error, cancellation, stale results, Graded marker, a branching current line with and without score-lead, and an active PV whose statistics and move sequence update independently.
-- Native smoke exercises one-shot and whole-game analysis against a branching edited SGF, plus marker, chart, Sub-Board Mode, synchronized main-board/Sub-Board Variation Replay, Raw suppression, and restart persistence.
+- `ANA-01` through `ANA-04`, promoted `ANA-08`, and `ANA-10` through `ANA-14` are Accepted. Pulled-forward prerequisites `PREF-01` and `APP-05` are Accepted without claiming the rest of R5.
+- Repository evidence covers exact-node publication, concurrent lanes, lane-local supersession, first-child path mapping, progress, partial-result retention, typed failure, Java LZ import/export, dirty/save snapshot behavior, complete SQLite-path removal, six-rank boundaries, marker modes, chart encoding, Variation/Raw, deterministic Variation Replay, durable preferences, and the shortcut registry/reference.
+- Controlled and real KataGo evidence covers response validation, timeout, stderr error, cancellation, stale results, incremental first-child-mainline attachment, Graded marker, score-lead data, and active PV updates.
+- WSL workspace tests, Windows workspace tests, desktop Vitest, TypeScript checking, and Windows `cargo fmt --all -- --check` passed on integration commit `602106b53b2d52f7c9d7ee2c534979c824ea69ac` before this documentation closeout.
+- Windows native smoke exercised concurrent lanes and lane-local cancel; Save while analysis continued; partial A versus final B snapshots and native reopen; fresh Java-compatible SGF analysis preservation; marker/chart/Sub-Board/Replay behavior; Help/`?` focus safety; preference restart/restoration; and unchanged legacy cache metadata.
 
-`ANA-05` variation-aware expansion, Java in-tree cache semantics, and SGF analysis exchange stay outside this exit. Personal `C` mutation/persistence and `EXPORT-01`/`EXPORT-02` remain Ticket 03.
-
-Engine Continuation, the full-variation-first pause, Java's separate replay threads, and dual interval fields are explicit Ticket 28 exclusions, not R4 deliverables.
+Current state: R4 has exited. `ANA-05` remains an immutable historical acceptance record only; `ANA-14` owns its deliberate runtime replacement. Java generated-statistics mutation of personal `C`, a companion Analysis Context property, custom Move Rank settings, Engine Continuation, full-variation-first pause, separate Java replay threads, dual interval fields, and `EXPORT-01`/`EXPORT-02` remain outside this exit.
 
 ### R5 — Safe Current Game And Application Shell
 
@@ -533,14 +537,14 @@ Engine Continuation, the full-variation-first pause, Java's separate replay thre
 
 **Owns:** `PREF-01`, `SGF-07`, `APP-02`, `APP-03`, `APP-04`, `APP-05`, and the `APP-01` semantic gate.
 
-**Migration Phase Gate:** R1, R2, and R3 have exited. This phase is dependency-legal beside R4, but the named next batch remains R4 Analysis (`ANA-03` first).
+**Migration Phase Gate:** R1, R2, and R3 have exited, so the gate is satisfied; R4 has also exited. `PREF-01` and `APP-05` were accepted early in R4. Begin remaining R5 work with `SGF-07`.
 
 **Delivery Order:**
 
-1. `PREF-01` durable mechanism and categorized surface.
-2. `SGF-07` safe replacement.
-3. `APP-03` Safe Graceful Shutdown, `APP-04` current-game recovery, and `APP-05` Shortcut Registry.
-4. `APP-01` semantic gate after `SGF-07`. Record the gate as passed here; do not wait for final `APP-01` Accepted.
+1. `PREF-01` durable preferences and `APP-05` Shortcut Registry are already Accepted from R4 closeout.
+2. Deliver `SGF-07` safe replacement.
+3. Deliver `APP-03` Safe Graceful Shutdown and `APP-04` current-game recovery.
+4. Pass the `APP-01` semantic gate after `SGF-07`; do not wait for final `APP-01` Accepted.
 5. `APP-02` window file-drop dispatch after the recorded `APP-01` semantic gate.
 
 **Deliver:**
@@ -815,7 +819,7 @@ These items are stable and unnumbered. Each has an owner and a Plan-owned Promot
 
 ## Next Executable Batch
 
-R3 Foreground Engine Lifecycle has exited (`ENG-02` through `ENG-07` Accepted on `KataGoAnalysis`). The `UI-02` residual (engine events during a pending board mutation) is not the next slice. Start R4 Analysis at `ANA-03` independent selected-node and whole-game lanes. Do not mix R5–R11 integration work into this batch, do not accept `ENG-09` / `ENG-10` here, and do not treat the `UI-02` residual as the next slice.
+R4 Analysis has exited with `ANA-01`–`ANA-04`, promoted `ANA-08`, `ANA-10`–`ANA-14`, `PREF-01`, and `APP-05` Accepted. Execute R5 Safe Current Game / Application Shell next, beginning with `SGF-07` parse-before-replace and Save / Discard / Cancel semantics. Do not pull R6–R11 work into that slice; `ENG-09` / `ENG-10` and the `UI-02` residual remain separate.
 
 Slice R3-A (Foreground engine identity and lifecycle) is complete. The historical scope below is audit record, not the current batch.
 
