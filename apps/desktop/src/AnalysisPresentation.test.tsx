@@ -11,12 +11,6 @@ const listeners: {
   onJob?: (job: unknown) => void;
 } = {};
 
-const analysisCache = vi.hoisted(() => ({
-  computeGameCacheKey: vi.fn(() => Promise.resolve({ gameKey: "game", sgfHash: "hash" })),
-  loadAnalysisCache: vi.fn(() => Promise.resolve({ status: "miss" })),
-  saveAnalysisCache: vi.fn(() => Promise.resolve({ id: "c1", gameKey: "game", updatedAt: "now" }))
-}));
-
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
   replaceCurrentGame: vi.fn(),
@@ -58,11 +52,8 @@ vi.mock("./api/backend", () => ({
   nativeCurrentGameUnavailable: "Native current-game commands require the Tauri desktop runtime."
 }));
 
-vi.mock("./api/analysisCache", () => analysisCache);
-
 vi.mock("./api/preferences", () => preferencesApi);
 
-vi.mock("./components/CacheStatusBadge", () => ({ CacheStatusBadge: () => null }));
 vi.mock("./components/PreferencesPanel", () => ({ PreferencesPanel: () => null }));
 vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
 vi.mock("./components/WinrateChart", () => ({
@@ -572,8 +563,6 @@ describe("attached SGF analysis as the active persistence path", () => {
 
     dirty = true;
     await emitWholeGameProgress({ indices: [] }, analysisFrame({ job_id: "job-wg" }));
-    expect(analysisCache.loadAnalysisCache).not.toHaveBeenCalled();
-    expect(analysisCache.saveAnalysisCache).not.toHaveBeenCalled();
     expect(buttonNamed(host, "存档").disabled).toBe(false);
     expect(host.querySelector(".doc-name")?.textContent).toContain("*");
 
@@ -591,7 +580,6 @@ describe("attached SGF analysis as the active persistence path", () => {
       candidates: [candidate(1)]
     }), { completed: 2, expected: 2, remaining: 0 });
     expect(buttonNamed(host, "存档").disabled).toBe(false);
-    expect(analysisCache.saveAnalysisCache).not.toHaveBeenCalled();
   });
 
   it("keeps dirty and in-memory analysis when Save fails", async () => {
@@ -615,7 +603,6 @@ describe("attached SGF analysis as the active persistence path", () => {
     expect(host.textContent).toContain("Save failed: disk full");
     expect(buttonNamed(host, "存档").disabled).toBe(false);
     expect(candidateCoords(host)).toEqual(["D6"]);
-    expect(analysisCache.saveAnalysisCache).not.toHaveBeenCalled();
   });
 
   it("does not dirty or persist cancelled, failed, or non-projectable events", async () => {
@@ -653,7 +640,6 @@ describe("attached SGF analysis as the active persistence path", () => {
     });
     expect(backend.selectCurrentGameNode.mock.calls.length).toBe(selectCalls);
     expect(buttonNamed(host, "存档").disabled).toBe(true);
-    expect(analysisCache.saveAnalysisCache).not.toHaveBeenCalled();
   });
 });
 

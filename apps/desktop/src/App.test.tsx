@@ -39,14 +39,6 @@ vi.mock("./api/backend", () => ({
   nativeCurrentGameUnavailable: "Native current-game commands require the Tauri desktop runtime."
 }));
 
-const analysisCache = vi.hoisted(() => ({
-  computeGameCacheKey: vi.fn(() => Promise.resolve({ gameKey: "game", sgfHash: "hash" })),
-  loadAnalysisCache: vi.fn(),
-  saveAnalysisCache: vi.fn()
-}));
-
-vi.mock("./api/analysisCache", () => analysisCache);
-
 const preferencesApi = vi.hoisted(() => ({
   loadAppPreferences: vi.fn(() => Promise.reject(new Error("preferences unavailable in test"))),
   saveAppPreferences: vi.fn(async (preferences: unknown) => preferences)
@@ -54,7 +46,6 @@ const preferencesApi = vi.hoisted(() => ({
 
 vi.mock("./api/preferences", () => preferencesApi);
 
-vi.mock("./components/CacheStatusBadge", () => ({ CacheStatusBadge: () => null }));
 vi.mock("./components/EngineSetupPanel", () => ({ EngineSetupPanel: () => null }));
 vi.mock("./components/PreferencesPanel", () => ({ PreferencesPanel: () => null }));
 vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
@@ -331,8 +322,6 @@ describe("App candidate continuation preview", () => {
     expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
     expect(backend.playCurrentGame).not.toHaveBeenCalled();
     expect(backend.saveCurrentGame).not.toHaveBeenCalled();
-    expect(analysisCache.loadAnalysisCache).not.toHaveBeenCalled();
-    expect(analysisCache.saveAnalysisCache).not.toHaveBeenCalled();
     expect(backend.setCurrentGamePersonalComment).not.toHaveBeenCalled();
     expect(backend.removeCurrentGameVariation).not.toHaveBeenCalled();
 
@@ -894,8 +883,6 @@ describe("App focus-safe review controls", () => {
     installCandidateCacheHit();
     const host = await renderApp();
     await waitForCandidateRows(host);
-    expect(analysisCache.loadAnalysisCache).not.toHaveBeenCalled();
-    expect(analysisCache.saveAnalysisCache).not.toHaveBeenCalled();
 
     const [first, second] = candidateRows(host);
     expect(first?.classList.contains("is-selected")).toBe(true);
@@ -924,8 +911,6 @@ describe("App focus-safe review controls", () => {
     installCandidateCacheHit();
     const host = await renderApp();
     await waitForCandidateRows(host);
-    expect(analysisCache.loadAnalysisCache).not.toHaveBeenCalled();
-    expect(analysisCache.saveAnalysisCache).not.toHaveBeenCalled();
 
     const policyOverlay = buttonNamed(host, "策略");
     expect(policyOverlay.disabled).toBe(false);

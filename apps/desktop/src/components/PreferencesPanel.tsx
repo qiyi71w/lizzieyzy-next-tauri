@@ -67,11 +67,6 @@ export function PreferencesPanel({ preferences, status, disabled = false, onChan
           </select>
         </label>
       </fieldset>
-      <fieldset className="preferences-grid">
-        <legend>缓存</legend>
-        <Toggle label="自动载入缓存" checked={preferences.autoLoadCache} disabled={disabled} onChange={(checked) => update({ autoLoadCache: checked })} />
-        <Toggle label="自动保存分析" checked={preferences.autoSaveAnalysis} disabled={disabled} onChange={(checked) => update({ autoSaveAnalysis: checked })} />
-      </fieldset>
     </section>
   );
 }

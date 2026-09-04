@@ -19,10 +19,6 @@ pub struct AppPreferencesDto {
     pub show_candidates: bool,
     #[serde(default = "default_candidate_limit")]
     pub candidate_limit: u32,
-    #[serde(default = "default_auto_load_cache")]
-    pub auto_load_cache: bool,
-    #[serde(default = "default_auto_save_analysis")]
-    pub auto_save_analysis: bool,
     #[serde(default = "default_max_visits")]
     pub default_max_visits: u32,
     #[serde(default = "default_review_mode")]
@@ -52,8 +48,6 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         show_policy: default_show_policy(),
         show_candidates: default_show_candidates(),
         candidate_limit: default_candidate_limit(),
-        auto_load_cache: default_auto_load_cache(),
-        auto_save_analysis: default_auto_save_analysis(),
         default_max_visits: default_max_visits(),
         review_mode: default_review_mode(),
         board_theme: default_board_theme(),
@@ -185,14 +179,6 @@ fn default_candidate_limit() -> u32 {
     8
 }
 
-fn default_auto_load_cache() -> bool {
-    true
-}
-
-fn default_auto_save_analysis() -> bool {
-    true
-}
-
 fn default_max_visits() -> u32 {
     800
 }
@@ -238,8 +224,6 @@ mod tests {
             show_policy: false,
             show_candidates: false,
             candidate_limit: 3,
-            auto_load_cache: false,
-            auto_save_analysis: false,
             default_max_visits: 200,
             review_mode: "deep".to_string(),
             board_theme: "high-contrast".to_string(),
@@ -359,5 +343,28 @@ mod tests {
         assert!(!tmp_path(&path).exists());
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn analysis_cache_preferences_are_absent_from_dto_and_defaults() {
+        let defaults = serde_json::to_value(default_app_preferences()).unwrap();
+        let object = defaults.as_object().unwrap();
+        assert!(!object.contains_key("autoLoadCache"));
+        assert!(!object.contains_key("autoSaveAnalysis"));
+
+        let loaded: AppPreferencesDto = serde_json::from_value(serde_json::json!({
+            "autoLoadCache": false,
+            "autoSaveAnalysis": false,
+            "showCandidates": true
+        }))
+        .unwrap();
+        let roundtrip = serde_json::to_value(normalize_app_preferences(loaded)).unwrap();
+        let roundtrip_object = roundtrip.as_object().unwrap();
+        assert!(!roundtrip_object.contains_key("autoLoadCache"));
+        assert!(!roundtrip_object.contains_key("autoSaveAnalysis"));
+        assert_eq!(
+            roundtrip_object.get("showCandidates"),
+            Some(&serde_json::json!(true))
+        );
     }
 }

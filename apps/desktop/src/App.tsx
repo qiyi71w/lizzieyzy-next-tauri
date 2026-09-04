@@ -3,7 +3,6 @@ import { BoardCanvas } from "./components/BoardCanvas";
 import { WinrateChart } from "./components/WinrateChart";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import { EngineSetupPanel } from "./components/EngineSetupPanel";
-import { CacheStatusBadge } from "./components/CacheStatusBadge";
 import { AppChrome, BottomBar, type OverlayMode, type SheetId } from "./components/AppChrome";
 import { PreferencesPanel } from "./components/PreferencesPanel";
 import { ShortcutReference } from "./components/ShortcutReference";
@@ -48,7 +47,6 @@ import {
 } from "./domain/foregroundEngine";
 import { loadAppPreferences, saveAppPreferences } from "./api/preferences";
 import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition } from "./domain/board";
-import type { AnalysisCacheRecord, CacheStatus } from "./domain/cache";
 import { defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "./domain/preferences";
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
 import { admitsAnalysisAttachment, admitsAnalysisPublication, admitsWholeGameNodeResult, matchesWholeGameJobIdentity } from "./domain/analysisJob";
@@ -94,9 +92,6 @@ export function App() {
   const documentGenerationRef = useRef(0);
   const pendingSelectedPathRef = useRef<NodePath | null>(null);
   const pendingBoardIntentRef = useRef<string | null>(null);
-  const [cacheStatus, setCacheStatus] = useState<CacheStatus>("idle");
-  const [cacheRecord, setCacheRecord] = useState<AnalysisCacheRecord | null>(null);
-  const [cacheError, setCacheError] = useState<string | null>(null);
   const [preferences, setPreferences] = useState<AppPreferences>(() => defaultAppPreferences);
   const [preferencesStatus, setPreferencesStatus] = useState("正在载入设置…");
   const [sheet, setSheet] = useState<"none" | SheetId>("none");
@@ -619,7 +614,6 @@ export function App() {
         await abandonWholeGameSession();
         const previewMessage = options.successMessage(parsed, options.fallbackName ?? "SGF");
         setMessage(`${nativeCurrentGameUnavailable} ${previewMessage}`);
-        resetAnalysisCacheState();
         return true;
       } catch (error) {
         setMessage(`${options.failurePrefix}: ${errorMessage(error)}`);
@@ -646,7 +640,6 @@ export function App() {
       const fileName = fileNameFromPath(result.native_path ?? options.fallbackName ?? "SGF");
       const success = options.successMessage(artifacts.projection, fileName);
       setMessage(success);
-      resetAnalysisCacheState();
       return true;
     } catch (error) {
       setMessage(`${options.failurePrefix}: ${errorMessage(error)}`);
@@ -689,7 +682,6 @@ export function App() {
       await abandonWholeGameSession();
       const openedMessage = `Opened ${fileNameFromPath(result.native_path ?? document.path ?? "SGF")}: ${artifacts.projection.summary.move_count} moves.`;
       setMessage(openedMessage);
-      resetAnalysisCacheState();
     } catch (error) {
       setMessage(`Open failed: ${errorMessage(error)}`);
     }
@@ -1055,7 +1047,6 @@ export function App() {
       setGame(artifacts.projection);
       clearReviewData();
       await abandonWholeGameSession();
-      resetAnalysisCacheState();
       setMessage("已更新选中节点的个人评论。");
     } catch (error) {
       setMessage(`评论更新失败: ${errorMessage(error)}`);
@@ -1151,7 +1142,6 @@ export function App() {
       if (result.generation !== previousGeneration) {
         clearReviewData();
         await abandonWholeGameSession();
-        resetAnalysisCacheState();
         const artifacts = await artifactsFromCurrentGame();
         if (documentGenerationRef.current !== result.generation) return;
         setGame(artifacts.projection);
@@ -1176,7 +1166,6 @@ export function App() {
       setCurrentMove(result.snapshot.position.move_number);
       clearReviewData();
       await abandonWholeGameSession();
-      resetAnalysisCacheState();
       const artifacts = await artifactsFromCurrentGame();
       if (!isCurrentDocumentGeneration(result.generation)) return;
       setGame(artifacts.projection);
@@ -1201,13 +1190,6 @@ export function App() {
     setSelectedCandidateIndex(null);
     setCandidatePreview(null);
     setPublishedScope(null);
-    setCacheRecord(null);
-  }
-
-  function resetAnalysisCacheState() {
-    setCacheStatus("idle");
-    setCacheRecord(null);
-    setCacheError(null);
   }
 
   return <main className={`app-shell${preferences.boardTheme === "high-contrast" ? " theme-high-contrast" : ""}${nativeRuntime ? "" : " has-native-runtime-note"}`}>
@@ -1278,7 +1260,6 @@ export function App() {
       onFirstMove={() => handleMoveSelect(0)}
       onAutoPlay={() => setAutoPlaying((value) => !value)}
       onOverlayMode={setOverlayMode}
-      cacheBadge={<CacheStatusBadge status={cacheStatus} record={cacheRecord} error={cacheError} />}
       message={message}
       toPlay={currentPosition.to_play}
     />

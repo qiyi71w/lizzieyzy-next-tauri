@@ -14,12 +14,12 @@ flowchart LR
   Tauri --> Kata["katago-protocol\nanalysis JSONL"]
   Tauri --> Engine["engine-manager\nrun / jobs / process"]
   Tauri --> Analysis["analysis-core\nmarkers / sorting"]
-  Tauri --> Cache["storage + rusqlite\nanalysis cache"]
+  Tauri --> Prefs["app-preferences\napp data JSON"]
   Engine --> KataGo["Local KataGo process"]
-  Cache --> AppData["Tauri app data"]
+  Prefs --> AppData["Tauri app data"]
 ```
 
-The UI consumes DTOs and view models. It does not consume raw KataGo JSON and does not own long-running engine processes. `engine-manager` owns the Foreground Engine Run, Analysis Jobs, and process lifetime. Rust owns file I/O, SGF parsing, process execution, cancellation, app-data persistence, and SQLite.
+The UI consumes DTOs and view models. It does not consume raw KataGo JSON and does not own long-running engine processes. `engine-manager` owns the Foreground Engine Run, Analysis Jobs, and process lifetime. Rust owns file I/O, SGF parsing, process execution, cancellation, and app-data persistence.
 
 Provider and readboard live paths follow the same boundary rule. The React UI should enter these paths through frontend API wrappers and Tauri commands; provider HTTP parsing, readboard sidecar probing, protocol parsing, and DTO normalization belong behind Rust crate boundaries. A wired command path is repository evidence only. It is not evidence that the external Yike/Fox services, accounts, network, or a local readboard sidecar have been validated.
 
@@ -27,13 +27,13 @@ Provider and readboard live paths follow the same boundary rule. The React UI sh
 
 ### `apps/desktop`
 
-React + TypeScript desktop UI built with Vite. The current UI includes board rendering, SGF text/import workflow, native open/save entry points, winrate and analysis panels, cache status, and engine profile controls.
+React + TypeScript desktop UI built with Vite. The current UI includes board rendering, SGF text/import workflow, native open/save entry points, winrate and analysis panels, and engine profile controls.
 
 The browser preview can exercise UI fallback paths and fake analysis, but it cannot perform native file dialogs, authoritative current-game edit/Save, app-data profile persistence, local asset checks, or real KataGo execution.
 
 ### `apps/desktop/src-tauri`
 
-Tauri 2 command gateway. It exposes health, SGF parse/replay, native SGF read/write, fake analysis, engine profile persistence, asset checks, analysis cache commands, and manager-owned Foreground Engine Run commands (`foreground_engine_snapshot`, `foreground_engine_start`, `foreground_engine_stop`, `foreground_engine_restart`, `foreground_engine_switch`, `foreground_engine_start_selected_node`, `foreground_engine_cancel_job`). Whole-game analysis on a Ready Run uses `katago_start_analyze_game` / `katago_cancel_analysis`. Removed profile-to-process commands `katago_analyze_once` and `katago_analyze_game` are not registered. Fake analysis remains non-authoritative and does not create a Foreground Engine Run.
+Tauri 2 command gateway. It exposes health, SGF parse/replay, native SGF read/write, fake analysis, engine profile persistence, asset checks, and manager-owned Foreground Engine Run commands (`foreground_engine_snapshot`, `foreground_engine_start`, `foreground_engine_stop`, `foreground_engine_restart`, `foreground_engine_switch`, `foreground_engine_start_selected_node`, `foreground_engine_cancel_job`). Whole-game analysis on a Ready Run uses `katago_start_analyze_game` / `katago_cancel_analysis`. Removed profile-to-process commands `katago_analyze_once` and `katago_analyze_game` are not registered. Fake analysis remains non-authoritative and does not create a Foreground Engine Run.
 
 This layer should stay a gateway. Domain behavior belongs in crates unless it is directly about Tauri lifecycle, app data paths, command shape, or event emission.
 
@@ -43,7 +43,7 @@ Current-game commands are `replace_current_game`, `select_current_game_node`, `p
 
 `save_current_game` writes a caller-supplied path. `save_current_game_as` owns the Save As dialog: cancel returns `null` (`Save cancelled.`); a chosen allowed path writes through `save_current_game`'s path; a dialog-denied or Windows-redirected path is a Gateway write failure (`failed to write`) and does not write, adopt, or clear dirty. The `save-as-dialog` crate classifies those outcomes without a new harness. Successful Save keeps the caller-supplied cursor and does not increment `generation`. Directory-as-file write failure remains `current_game_save_write_failure`. Save is a semantic SGF round-trip, not byte-for-byte format preservation.
 
-`serialize_current_game` and `project_current_game_mainline` are derived reads. The only remaining first-child adapter is the fresh Rust mainline `GameDto` consumed by analysis, cache, and review. React must not treat original `sgfText`, independently replayed positions, or `GameDto.moves` as document authority. The SGF textarea remains load input. Browser preview keeps edit and authoritative Save unavailable and explains that they need the native runtime.
+`serialize_current_game` and `project_current_game_mainline` are derived reads. The only remaining first-child adapter is the fresh Rust mainline `GameDto` consumed by analysis and review. React must not treat original `sgfText`, independently replayed positions, or `GameDto.moves` as document authority. The SGF textarea remains load input. Browser preview keeps edit and authoritative Save unavailable and explains that they need the native runtime.
 
 Provider/readboard command contracts in this batch:
 
@@ -92,7 +92,7 @@ The readboard sidecar crate owns launch/probe discovery, protocol line parsing, 
 
 ### `crates/storage`
 
-SQLite schema and storage helpers. The current user-visible cache commands live at the Tauri gateway and use SQLite in app data; long-term storage logic should continue moving behind this crate boundary as schemas stabilize.
+SQLite schema and storage helpers for unrelated application tables (`games`, `game_nodes`, `engine_profiles`, `assets`). Analysis persistence is SGF attachment through ordinary Save / Save As, not this crate.
 
 ## Data Flow
 
@@ -103,8 +103,8 @@ SQLite schema and storage helpers. The current user-visible cache commands live 
 5. The Engine Switcher starts, stops, restarts, or switches a manager-owned Foreground Engine Run. `engine-manager` validates assets, spawns KataGo, and publishes Ready only after adapter readiness.
 6. Selected-node and whole-game analysis jobs occupy that Ready Run. `katago-protocol` builds JSONL; `engine-manager` writes it to the resident process, emits progress, and cancels by run/job identity.
 7. Responses are normalized into `AnalysisFrameDto` and classified by `analysis-core`.
-8. Analysis results can be persisted and reused through the SQLite cache.
-9. The UI renders board state, winrate, candidates, PVs, ownership, policy, problem markers, and cache status from DTOs.
+8. Identity-valid completed analysis attaches to the exact node and persists only through ordinary SGF Save / Save As.
+9. The UI renders board state, winrate, candidates, PVs, ownership, policy, and problem markers from DTOs.
 
 ## Persistence
 
@@ -112,9 +112,8 @@ Current app-data persistence includes:
 
 - `lizzieyzy-next-engine-profile.json` for multiple engine profile settings.
 - `lizzieyzy-next-app-preferences.json` for categorized durable app preferences.
-- `analysis-cache.sqlite3` for cached analysis records.
 
-The cache key is derived from parsed SGF content and the raw SGF hash. Cache records can be filtered by profile and engine kind. This is an MVP cache contract, not a complete replacement for all legacy storage.
+Attached analysis lives in the SGF document. There is no second durable analysis-cache file or command path.
 
 ## Production Invariants
 

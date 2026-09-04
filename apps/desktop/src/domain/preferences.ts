@@ -6,8 +6,6 @@ export type AppPreferences = {
   showPolicy: boolean;
   showCandidates: boolean;
   candidateLimit: number;
-  autoLoadCache: boolean;
-  autoSaveAnalysis: boolean;
   defaultMaxVisits: number;
   reviewMode: ReviewMode;
   boardTheme: BoardTheme;
@@ -18,8 +16,6 @@ export const defaultAppPreferences: AppPreferences = {
   showPolicy: true,
   showCandidates: true,
   candidateLimit: 8,
-  autoLoadCache: true,
-  autoSaveAnalysis: true,
   defaultMaxVisits: 800,
   reviewMode: "quick",
   boardTheme: "classic"
@@ -31,8 +27,6 @@ export function normalizeAppPreferences(value: Partial<AppPreferences> | null | 
     showPolicy: booleanValue(value?.showPolicy, defaultAppPreferences.showPolicy),
     showCandidates: booleanValue(value?.showCandidates, defaultAppPreferences.showCandidates),
     candidateLimit: integerValue(value?.candidateLimit, defaultAppPreferences.candidateLimit, 1, 20),
-    autoLoadCache: booleanValue(value?.autoLoadCache, defaultAppPreferences.autoLoadCache),
-    autoSaveAnalysis: booleanValue(value?.autoSaveAnalysis, defaultAppPreferences.autoSaveAnalysis),
     defaultMaxVisits: integerValue(value?.defaultMaxVisits, defaultAppPreferences.defaultMaxVisits, 1, 1_000_000),
     reviewMode: value?.reviewMode === "deep" ? "deep" : "quick",
     boardTheme: value?.boardTheme === "high-contrast" ? "high-contrast" : "classic"

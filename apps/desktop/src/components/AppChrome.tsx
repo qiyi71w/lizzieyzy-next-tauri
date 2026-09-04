@@ -72,7 +72,6 @@ type Props = {
   onFirstMove?: () => void;
   onAutoPlay: () => void;
   onOverlayMode: (mode: OverlayMode) => void;
-  cacheBadge: ReactNode;
   message: string;
   toPlay: "black" | "white";
 };
@@ -362,7 +361,6 @@ export function AppChrome(props: Props) {
         <button type="button" className="chrome-btn" onClick={() => props.onToggleSheet("prefs")}>棋盘</button>
         <button type="button" className="chrome-btn" onClick={props.onSave} disabled={saveDisabled} title={!nativeAvailable ? nativeUnavailable : undefined}>存档</button>
         <span className="spacer" />
-        {props.cacheBadge}
         <span className="doc-name" title={props.message}>{props.documentName}{props.dirty ? " *" : ""}</span>
       </div>
     </>
