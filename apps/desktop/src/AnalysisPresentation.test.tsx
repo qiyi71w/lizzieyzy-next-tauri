@@ -283,7 +283,7 @@ async function startSelectedNode(host: HTMLElement, jobId = "job-1", path: NodeP
     node_path: path
   });
   await act(async () => {
-    buttonNamed(host, "继续分析").click();
+    buttonNamed(host, "分析当前节点").click();
     await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
   });
 }
@@ -324,7 +324,7 @@ async function emitWholeGameProgress(path: NodePath, frame: AnalysisFrameDto, pr
 
 async function startWholeGame(host: HTMLElement) {
   await act(async () => {
-    buttonNamed(host, "自动分析").click();
+    buttonNamed(host, "分析第一子主线").click();
     await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
   });
 }
@@ -406,8 +406,8 @@ describe("analysis presentation bound to exact nodes", () => {
 
   it("keeps no-engine review empty without manufacturing analysis overlays", async () => {
     const host = await renderApp();
-    expect(buttonNamed(host, "继续分析").disabled).toBe(true);
-    expect(buttonNamed(host, "自动分析").disabled).toBe(true);
+    expect(buttonNamed(host, "分析当前节点").disabled).toBe(true);
+    expect(buttonNamed(host, "分析第一子主线").disabled).toBe(true);
     expect(candidateCoords(host)).toEqual([]);
     expect(buttonNamed(host, "领地").disabled).toBe(true);
     expect(buttonNamed(host, "策略").disabled).toBe(true);
@@ -514,7 +514,7 @@ describe("analysis presentation bound to exact nodes", () => {
     expect(candidateCoords(host)).toEqual(["B9"]);
 
     await act(async () => {
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
     await selectPath(host, "父节点");

@@ -239,7 +239,7 @@ describe("selected-node analysis presentation", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results[0]?.value;
     });
     const ownership = Array.from({ length: 81 }, () => 0.25);
@@ -294,7 +294,7 @@ describe("selected-node analysis presentation", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results[0]?.value;
     });
     await act(async () => {

@@ -136,6 +136,12 @@ export function createShortcutRegistry(definitions: readonly ShortcutDefinition[
   };
 }
 
+export function actionLabelFromRegistry(id: string, fallback: string): string {
+  const item = claimedShortcutCatalog().find((entry) => entry.id === id);
+  if (!item) return fallback;
+  return `${fallback}(${formatShortcutChord(item.primary)})`;
+}
+
 export function formatShortcutChord(chord: ShortcutChord): string {
   const parts: string[] = [];
   if (chord.ctrl) parts.push("Ctrl");
