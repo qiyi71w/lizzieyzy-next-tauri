@@ -44,18 +44,20 @@ export type ShortcutRegistry = {
 };
 
 const CLAIMED_SHORTCUTS: ShortcutDefinition[] = [
-  { id: "file.new", label: "新建", primary: { key: "n" }, aliases: [{ key: "Home", ctrl: true }], focusRule: "focus-safe" },
+  { id: "file.new", label: "新建", primary: { key: "Home", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.open", label: "打开棋谱", primary: { key: "o" }, aliases: [], focusRule: "focus-safe" },
   { id: "file.save", label: "保存", primary: { key: "s", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.save-as", label: "另存为", primary: { key: "s" }, aliases: [], focusRule: "focus-safe" },
   { id: "file.copy-sgf", label: "复制棋谱", primary: { key: "c", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.paste-sgf", label: "粘贴棋谱", primary: { key: "v", ctrl: true }, aliases: [], focusRule: "focus-safe" },
+  { id: "game.human-vs-engine", label: "人机对局（未接入）", primary: { key: "n" }, aliases: [], focusRule: "focus-safe" },
+  { id: "analysis.continuous", label: "连续分析（未接入）", primary: { key: " " }, aliases: [], focusRule: "focus-safe" },
   { id: "review.pass", label: "停一手", primary: { key: "p" }, aliases: [], focusRule: "focus-safe" },
   { id: "review.remove-variation", label: "删除分支", primary: { key: "Delete", shift: true }, aliases: [{ key: "Backspace", shift: true }], focusRule: "focus-safe" },
-  { id: "review.parent", label: "上一手", primary: { key: "ArrowLeft" }, aliases: [], focusRule: "focus-safe" },
-  { id: "review.next-child", label: "下一手", primary: { key: "ArrowRight" }, aliases: [], focusRule: "focus-safe" },
-  { id: "review.prev-sibling", label: "上一分支", primary: { key: "ArrowUp" }, aliases: [], focusRule: "focus-safe" },
-  { id: "review.next-sibling", label: "下一分支", primary: { key: "ArrowDown" }, aliases: [], focusRule: "focus-safe" },
+  { id: "review.parent", label: "上一手", primary: { key: "ArrowUp" }, aliases: [], focusRule: "focus-safe" },
+  { id: "review.next-child", label: "下一手", primary: { key: "ArrowDown" }, aliases: [], focusRule: "focus-safe" },
+  { id: "review.prev-sibling", label: "上一分支", primary: { key: "ArrowLeft" }, aliases: [], focusRule: "focus-safe" },
+  { id: "review.next-sibling", label: "下一分支", primary: { key: "ArrowRight" }, aliases: [], focusRule: "focus-safe" },
   { id: "review.first", label: "首手", primary: { key: "Home" }, aliases: [], focusRule: "focus-safe" },
   { id: "review.last", label: "末手", primary: { key: "End" }, aliases: [], focusRule: "focus-safe" },
   { id: "review.back-10", label: "回退 10 手", primary: { key: "PageUp" }, aliases: [], focusRule: "focus-safe" },
@@ -115,6 +117,8 @@ export function createShortcutRegistry(definitions: readonly ShortcutDefinition[
       handlers.set(id, handler);
     },
     dispatch(event) {
+      if (event.isComposing || event.key === "Process") return false;
+      if (isSystemReservedCombo(event)) return false;
       if (shouldIgnoreShortcutTarget(event.target)) return false;
       const match = items.find((item) => chordsOf(item).some((chord) => matchesChord(event, chord)));
       if (!match) return false;
@@ -157,7 +161,7 @@ export function shouldIgnoreShortcutTarget(target: EventTarget | null): boolean 
   if (target.isContentEditable) return true;
   const editable = target.getAttribute("contenteditable");
   if (editable !== null && editable !== "false") return true;
-  return target.getAttribute("aria-label") === "棋盘";
+  return target.closest('[role="dialog"]') !== null;
 }
 
 function cloneDefinition(definition: ShortcutDefinition): ShortcutDefinition {
@@ -201,8 +205,15 @@ function normalizeKey(key: string): string {
 }
 
 function displayKey(key: string): string {
+  if (key === " " || key === "Space") return "Space";
   if (key.length === 1) return key.toUpperCase();
   return key.replace(/^Arrow/, "");
+}
+
+function isSystemReservedCombo(event: KeyboardEvent): boolean {
+  if (event.key === "Tab" || event.key === "F10" || event.key === "ContextMenu") return true;
+  if (event.altKey && (event.key === "F4" || event.key === "Tab")) return true;
+  return false;
 }
 
 function isShiftImpliedByKey(key: string): boolean {
@@ -213,7 +224,7 @@ function shouldPreventDefault(event: KeyboardEvent): boolean {
   const key = event.key;
   const ctrl = event.ctrlKey || event.metaKey;
   if (ctrl || event.altKey || event.shiftKey) return true;
-  if (key === "?") return true;
+  if (key === "?" || key === " ") return true;
   return key.length !== 1;
 }
 

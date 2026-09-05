@@ -259,9 +259,10 @@ describe("App board intent feedback", () => {
       await backend.projectCurrentGameMainline.mock.results[0]?.value;
     });
 
+    act(() => buttonNamed(host, "键盘落子").click());
     const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
-    act(() => canvas.focus());
     expect(document.activeElement).toBe(canvas);
+    expect(buttonNamed(host, "键盘落子").getAttribute("aria-pressed")).toBe("true");
 
     dispatchKey(canvas, "Enter");
     dispatchKey(canvas, "Enter");
@@ -500,8 +501,8 @@ describe("App stale review presentation", () => {
     await runFakeAnalyze(host);
     expect(candidateCoords(host)).toEqual(["C6", "G4"]);
 
+    act(() => buttonNamed(host, "键盘落子").click());
     const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
-    act(() => canvas.focus());
     dispatchKey(canvas, "Enter");
     await act(async () => {
       await backend.playCurrentGame.mock.results[0]?.value;
@@ -562,21 +563,38 @@ describe("App focus-safe review controls", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
   });
 
-  it("ignores application shortcuts on the board and text-editing targets", async () => {
+  it("keeps review shortcuts on the board while isolating text, select, contenteditable, and IME", async () => {
     const host = await renderApp();
     const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
     const coordinates = buttonNamed(host, "坐标");
     const jump = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
 
     backend.selectCurrentGameNode.mockClear();
+    backend.playCurrentGame.mockClear();
+    backend.saveCurrentGame.mockClear();
     act(() => canvas.focus());
-    pressKey(canvas, "ArrowLeft");
+    pressKey(canvas, "p");
+    await flushLast(backend.playCurrentGame);
+    expect(backend.playCurrentGame).toHaveBeenLastCalledWith({ indices: [0, 1] }, "pass");
+    pressKey(canvas, "s", { ctrlKey: true });
+    await flushLast(backend.saveCurrentGame);
+    expect(backend.saveCurrentGame).toHaveBeenCalledTimes(1);
+    pressKey(canvas, "ArrowUp");
+    await flushLast(backend.selectCurrentGameNode);
+    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
     pressKey(canvas, "c");
-    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    expect(coordinates.getAttribute("aria-pressed")).toBe("false");
+    pressKey(canvas, "c");
     expect(coordinates.getAttribute("aria-pressed")).toBe("true");
 
+    const composing = new KeyboardEvent("keydown", { key: "c", bubbles: true, cancelable: true });
+    Object.defineProperty(composing, "isComposing", { value: true });
+    act(() => canvas.dispatchEvent(composing));
+    expect(coordinates.getAttribute("aria-pressed")).toBe("true");
+
+    backend.selectCurrentGameNode.mockClear();
     act(() => jump.focus());
-    pressKey(jump, "ArrowLeft");
+    pressKey(jump, "ArrowUp");
     pressKey(jump, "c");
     expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
     expect(coordinates.getAttribute("aria-pressed")).toBe("true");
@@ -611,7 +629,15 @@ describe("App focus-safe review controls", () => {
 
     const hostLeft = await renderApp();
     backend.selectCurrentGameNode.mockClear();
-    pressKey(buttonNamed(hostLeft, "坐标"), "ArrowLeft");
+    pressKey(buttonNamed(hostLeft, "坐标"), "ArrowUp");
+    await flushLast(backend.selectCurrentGameNode);
+    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
+
+    const hostBoardUp = await renderApp();
+    backend.selectCurrentGameNode.mockClear();
+    const board = requiredElement(hostBoardUp, 'canvas[aria-label="棋盘"]');
+    act(() => board.focus());
+    pressKey(board, "ArrowUp");
     await flushLast(backend.selectCurrentGameNode);
     expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
 
@@ -630,7 +656,7 @@ describe("App focus-safe review controls", () => {
 
     const hostUpKey = await renderApp();
     backend.selectCurrentGameNode.mockClear();
-    pressKey(buttonNamed(hostUpKey, "坐标"), "ArrowUp");
+    pressKey(buttonNamed(hostUpKey, "坐标"), "ArrowLeft");
     await flushLast(backend.selectCurrentGameNode);
     expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 0] });
 
@@ -648,7 +674,7 @@ describe("App focus-safe review controls", () => {
     act(() => buttonNamed(hostRightKey, "父节点").click());
     await flushLast(backend.selectCurrentGameNode);
     backend.selectCurrentGameNode.mockClear();
-    pressKey(buttonNamed(hostRightKey, "坐标"), "ArrowRight");
+    pressKey(buttonNamed(hostRightKey, "坐标"), "ArrowDown");
     await flushLast(backend.selectCurrentGameNode);
     expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
 
@@ -666,7 +692,7 @@ describe("App focus-safe review controls", () => {
     act(() => buttonNamed(hostDownKey, "上一分支").click());
     await flushLast(backend.selectCurrentGameNode);
     backend.selectCurrentGameNode.mockClear();
-    pressKey(buttonNamed(hostDownKey, "坐标"), "ArrowDown");
+    pressKey(buttonNamed(hostDownKey, "坐标"), "ArrowRight");
     await flushLast(backend.selectCurrentGameNode);
     expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
 
@@ -791,11 +817,13 @@ describe("App focus-safe review controls", () => {
     });
     expect(backend.replaceCurrentGame.mock.calls.length).toBeGreaterThan(replaceCalls);
 
+    const beforeN = backend.replaceCurrentGame.mock.calls.length;
     pressKey(buttonNamed(hostKeys, "坐标"), "n");
     await act(async () => {
       await Promise.resolve();
     });
-    expect(backend.replaceCurrentGame).toHaveBeenCalled();
+    expect(backend.replaceCurrentGame.mock.calls.length).toBe(beforeN);
+    expect(requiredElement(hostKeys, ".nav-message").textContent).toContain("人机对局尚未接入");
 
     const newCalls = backend.replaceCurrentGame.mock.calls.length;
     pressKey(buttonNamed(hostKeys, "坐标"), "Home", { ctrlKey: true });
@@ -917,13 +945,13 @@ describe("App focus-safe review controls", () => {
     const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
     act(() => canvas.focus());
     pressKey(canvas, "2");
-    expect(first?.classList.contains("is-selected")).toBe(true);
-    expect(second?.classList.contains("is-selected")).toBe(false);
+    expect(second?.classList.contains("is-selected")).toBe(true);
 
     const jump = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
     act(() => jump.focus());
     pressKey(jump, "2");
-    expect(first?.classList.contains("is-selected")).toBe(true);
+    expect(second?.classList.contains("is-selected")).toBe(true);
+    expect(first?.classList.contains("is-selected")).toBe(false);
 
     pressKey(buttonNamed(host, "坐标"), "2");
     expect(second?.classList.contains("is-selected")).toBe(true);
@@ -1005,10 +1033,13 @@ describe("App focus-safe review controls", () => {
 
     backend.startSelectedNodeAnalysis.mockClear();
     backend.startKataGoGameAnalysis.mockClear();
+    backend.playCurrentGame.mockClear();
     pressKey(buttonNamed(host, "坐标"), "a");
     pressKey(buttonNamed(host, "坐标"), " ");
     expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
     expect(backend.startKataGoGameAnalysis).not.toHaveBeenCalled();
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    expect(requiredElement(host, ".nav-message").textContent).toContain("连续分析尚未接入");
   });
 
   it("opens the same searchable Shortcut Reference from Help and focus-safe ?", async () => {
@@ -1019,6 +1050,16 @@ describe("App focus-safe review controls", () => {
     expect(dialog.textContent).toContain("Ctrl+A");
     expect(dialog.textContent).toContain("快捷键参考");
     expect(dialog.textContent).toContain("?");
+    expect(dialog.textContent).toContain("上一手");
+    expect(dialog.textContent).toContain("Up");
+    expect(dialog.textContent).toContain("下一分支");
+    expect(dialog.textContent).toContain("Right");
+    expect(dialog.textContent).toContain("新建");
+    expect(dialog.textContent).toContain("Ctrl+Home");
+    expect(dialog.textContent).not.toContain("N, Ctrl+Home");
+    expect(dialog.textContent).toContain("人机对局（未接入）");
+    expect(dialog.textContent).toContain("连续分析（未接入）");
+    expect(dialog.textContent).toContain("Space");
 
     const search = requiredElement<HTMLInputElement>(dialog, 'input[aria-label="搜索快捷键"]');
     act(() => {
@@ -1046,6 +1087,60 @@ describe("App focus-safe review controls", () => {
     pressKey(editor, "?", { shiftKey: true });
     expect(host.querySelector('[role="dialog"][aria-label="快捷键参考"]')).toBeNull();
     expect(buttonNamed(host, "坐标").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("uses explicit keyboard placement for arrows and Enter and never submits Space", async () => {
+    const host = await renderApp();
+    const toggle = buttonNamed(host, "键盘落子");
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    backend.playCurrentGame.mockClear();
+    backend.selectCurrentGameNode.mockClear();
+
+    act(() => toggle.click());
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
+    expect(document.activeElement).toBe(canvas);
+
+    pressKey(canvas, "ArrowRight");
+    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    pressKey(canvas, " ");
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    expect(requiredElement(host, ".nav-message").textContent).toContain("连续分析尚未接入");
+    pressKey(canvas, "Enter", { shiftKey: true });
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+
+    pressKey(canvas, "s", { ctrlKey: true });
+    await flushLast(backend.saveCurrentGame);
+    expect(backend.saveCurrentGame).toHaveBeenCalled();
+
+    pressKey(canvas, "Enter");
+    await flushLast(backend.playCurrentGame);
+    expect(backend.playCurrentGame).toHaveBeenCalled();
+
+    pressKey(canvas, "Escape");
+    expect(buttonNamed(host, "键盘落子").getAttribute("aria-pressed")).toBe("false");
+    backend.playCurrentGame.mockClear();
+    pressKey(canvas, "Enter");
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+  });
+
+  it("rejects an illegal keyboard placement and leaves the tree unchanged", async () => {
+    backend.playCurrentGame.mockRejectedValueOnce({ kind: "occupied_point", message: "point is occupied" });
+    const host = await renderApp();
+    act(() => buttonNamed(host, "键盘落子").click());
+    const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
+    const moveField = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
+    const before = moveField.value;
+    pressKey(canvas, "Enter");
+    await act(async () => {
+      await Promise.resolve();
+      const last = backend.playCurrentGame.mock.results.at(-1)?.value;
+      if (last && typeof (last as Promise<unknown>).then === "function") {
+        await (last as Promise<unknown>).catch(() => undefined);
+      }
+    });
+    expect(requiredElement(host, ".board-intent-status").textContent).toContain("落子失败: point is occupied");
+    expect(moveField.value).toBe(before);
   });
 });
 
@@ -1191,6 +1286,20 @@ describe("App document replacement", () => {
       await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
     });
     expect(backend.prepareDocumentReplacement.mock.calls.length).toBe(4);
+  });
+
+  it("exits keyboard placement after a committed document replacement", async () => {
+    const host = await renderApp();
+    act(() => buttonNamed(host, "键盘落子").click());
+    expect(buttonNamed(host, "键盘落子").getAttribute("aria-pressed")).toBe("true");
+    backend.prepareDocumentReplacement.mockClear();
+    backend.prepareDocumentReplacement.mockResolvedValue({ status: "ready", departure_id: 9 });
+    await act(async () => {
+      buttonLabeled(host, "新建").click();
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    expect(buttonNamed(host, "键盘落子").getAttribute("aria-pressed")).toBe("false");
   });
 });
 

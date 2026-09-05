@@ -22,6 +22,8 @@ describe("shortcut registry catalog", () => {
       "file.save-as",
       "file.copy-sgf",
       "file.paste-sgf",
+      "game.human-vs-engine",
+      "analysis.continuous",
       "review.pass",
       "review.remove-variation",
       "review.parent",
@@ -61,6 +63,55 @@ describe("shortcut registry catalog", () => {
       id: "review.next-move-marker",
       label: "下一手标记",
       primary: { key: "j" },
+      aliases: [],
+      focusRule: "focus-safe"
+    });
+    expect(catalog.find((item) => item.id === "file.new")).toEqual({
+      id: "file.new",
+      label: "新建",
+      primary: { key: "Home", ctrl: true },
+      aliases: [],
+      focusRule: "focus-safe"
+    });
+    expect(catalog.find((item) => item.id === "review.parent")).toEqual({
+      id: "review.parent",
+      label: "上一手",
+      primary: { key: "ArrowUp" },
+      aliases: [],
+      focusRule: "focus-safe"
+    });
+    expect(catalog.find((item) => item.id === "review.next-child")).toEqual({
+      id: "review.next-child",
+      label: "下一手",
+      primary: { key: "ArrowDown" },
+      aliases: [],
+      focusRule: "focus-safe"
+    });
+    expect(catalog.find((item) => item.id === "review.prev-sibling")).toEqual({
+      id: "review.prev-sibling",
+      label: "上一分支",
+      primary: { key: "ArrowLeft" },
+      aliases: [],
+      focusRule: "focus-safe"
+    });
+    expect(catalog.find((item) => item.id === "review.next-sibling")).toEqual({
+      id: "review.next-sibling",
+      label: "下一分支",
+      primary: { key: "ArrowRight" },
+      aliases: [],
+      focusRule: "focus-safe"
+    });
+    expect(catalog.find((item) => item.id === "game.human-vs-engine")).toEqual({
+      id: "game.human-vs-engine",
+      label: "人机对局（未接入）",
+      primary: { key: "n" },
+      aliases: [],
+      focusRule: "focus-safe"
+    });
+    expect(catalog.find((item) => item.id === "analysis.continuous")).toEqual({
+      id: "analysis.continuous",
+      label: "连续分析（未接入）",
+      primary: { key: " " },
       aliases: [],
       focusRule: "focus-safe"
     });
@@ -138,7 +189,37 @@ describe("shortcut reference and dispatch", () => {
     expect(help).toEqual({ id: "help.shortcut-reference", label: "快捷键参考", keys: "?" });
     expect(candidates).toEqual({ id: "review.select-candidate", label: "选择候选", keys: "1–9" });
     expect(remove).toEqual({ id: "review.remove-variation", label: "删除分支", keys: "Shift+Delete, Shift+Backspace" });
-    expect(create).toEqual({ id: "file.new", label: "新建", keys: "N, Ctrl+Home" });
+    expect(create).toEqual({ id: "file.new", label: "新建", keys: "Ctrl+Home" });
+    expect(entries.find((entry) => entry.id === "review.parent")).toEqual({
+      id: "review.parent",
+      label: "上一手",
+      keys: "Up"
+    });
+    expect(entries.find((entry) => entry.id === "review.next-child")).toEqual({
+      id: "review.next-child",
+      label: "下一手",
+      keys: "Down"
+    });
+    expect(entries.find((entry) => entry.id === "review.prev-sibling")).toEqual({
+      id: "review.prev-sibling",
+      label: "上一分支",
+      keys: "Left"
+    });
+    expect(entries.find((entry) => entry.id === "review.next-sibling")).toEqual({
+      id: "review.next-sibling",
+      label: "下一分支",
+      keys: "Right"
+    });
+    expect(entries.find((entry) => entry.id === "game.human-vs-engine")).toEqual({
+      id: "game.human-vs-engine",
+      label: "人机对局（未接入）",
+      keys: "N"
+    });
+    expect(entries.find((entry) => entry.id === "analysis.continuous")).toEqual({
+      id: "analysis.continuous",
+      label: "连续分析（未接入）",
+      keys: "Space"
+    });
     expect(entries.find((entry) => entry.id === "review.next-move-marker")).toEqual({
       id: "review.next-move-marker",
       label: "下一手标记",
@@ -152,7 +233,7 @@ describe("shortcut reference and dispatch", () => {
     expect(filterShortcutReference(entries, "zzz")).toEqual([]);
   });
 
-  it("dispatches a bound owner callback and ignores board and editable targets", () => {
+  it("dispatches a bound owner callback from the board and ignores editable and dialog targets", () => {
     const registry = createShortcutRegistry();
     const autoplay = vi.fn();
     const help = vi.fn();
@@ -185,8 +266,32 @@ describe("shortcut reference and dispatch", () => {
     document.body.append(board);
     const boardEvent = new KeyboardEvent("keydown", { key: "a", ctrlKey: true, bubbles: true, cancelable: true });
     Object.defineProperty(boardEvent, "target", { value: board });
-    expect(registry.dispatch(boardEvent)).toBe(false);
-    expect(autoplay).toHaveBeenCalledTimes(1);
+    expect(shouldIgnoreShortcutTarget(board)).toBe(false);
+    expect(registry.dispatch(boardEvent)).toBe(true);
+    expect(autoplay).toHaveBeenCalledTimes(2);
+
+    const composing = new KeyboardEvent("keydown", { key: "n", bubbles: true, cancelable: true });
+    Object.defineProperty(composing, "target", { value: host });
+    Object.defineProperty(composing, "isComposing", { value: true });
+    const reserved = vi.fn();
+    registry.bind("game.human-vs-engine", reserved);
+    expect(registry.dispatch(composing)).toBe(false);
+    expect(reserved).not.toHaveBeenCalled();
+
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    const dialogButton = document.createElement("button");
+    dialog.append(dialogButton);
+    document.body.append(dialog);
+    expect(shouldIgnoreShortcutTarget(dialogButton)).toBe(true);
+    const dialogEvent = new KeyboardEvent("keydown", { key: "n", bubbles: true, cancelable: true });
+    Object.defineProperty(dialogEvent, "target", { value: dialogButton });
+    expect(registry.dispatch(dialogEvent)).toBe(false);
+    expect(reserved).not.toHaveBeenCalled();
+
+    const altF4 = new KeyboardEvent("keydown", { key: "F4", altKey: true, bubbles: true, cancelable: true });
+    Object.defineProperty(altF4, "target", { value: host });
+    expect(registry.dispatch(altF4)).toBe(false);
 
     const marker = vi.fn();
     registry.bind("review.next-move-marker", marker);
