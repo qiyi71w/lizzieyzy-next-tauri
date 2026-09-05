@@ -56,6 +56,19 @@ export type DocumentDepartureOutcomeDto = {
   current?: CurrentGameResultDto | null;
   message: string;
 };
+export type ApplicationExitActionDto = "save" | "discard" | "cancel" | "continue";
+export type ApplicationExitDispositionDto = "clean_completed" | "explicit_discard" | "exit_incomplete";
+export type ApplicationTeardownAttemptDto =
+  | { status: "completed" }
+  | { status: "timed_out"; outstanding: string[] };
+export type ApplicationExitOutcomeDto = {
+  committed: boolean;
+  analysis_stopped: boolean;
+  current?: CurrentGameResultDto | null;
+  message: string;
+  disposition?: ApplicationExitDispositionDto | null;
+  teardown?: ApplicationTeardownAttemptDto | null;
+};
 export type CandidateMoveDto = { vertex: MoveVertex; visits: number; winrate_black: number; score_mean_black: number; policy_prior?: number | null; pv: MoveVertex[] };
 export type AnalysisFrameDto = { job_id: string; game_id?: string | null; node_id?: string | null; turn: number; visits: number; winrate_black: number; score_mean_black: number; score_stdev?: number | null; candidates: CandidateMoveDto[]; ownership?: number[] | null; policy?: number[] | null };
 export type ProblemMarkerDto = { turn: number; severity: "info" | "inaccuracy" | "mistake" | "blunder"; winrate_loss: number; score_loss: number; label: string };

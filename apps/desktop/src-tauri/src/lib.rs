@@ -39,7 +39,11 @@ use app_preferences::{
     AppPreferencesLoadResultDto, APP_PREFERENCES_FILE,
 };
 use current_game_state::{CurrentGameState, WholeGameAdmission};
-use document_departure::{prepare_document_replacement, resolve_document_replacement};
+use document_departure::{
+    confirm_application_exit_anyway, confirm_native_exit, prepare_application_exit,
+    prepare_document_replacement, resolve_application_exit, resolve_document_replacement,
+    retry_application_teardown, APPLICATION_EXIT_REQUESTED_EVENT,
+};
 use uuid::Uuid;
 
 const ENGINE_PROFILE_FILE: &str = "lizzieyzy-next-engine-profile.json";
@@ -1011,6 +1015,11 @@ pub fn run() {
             replace_current_game,
             prepare_document_replacement,
             resolve_document_replacement,
+            prepare_application_exit,
+            resolve_application_exit,
+            retry_application_teardown,
+            confirm_application_exit_anyway,
+            confirm_native_exit,
             serialize_current_game,
             save_current_game,
             save_current_game_as,
@@ -1041,12 +1050,23 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build LizzieYzy Next")
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
+        .run(|app, event| match event {
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::CloseRequested { api, .. },
+                ..
+            } => {
+                api.prevent_close();
+                if let Some(window) = app.get_webview_window(&label) {
+                    let _ = window.emit(APPLICATION_EXIT_REQUESTED_EVENT, ());
+                }
+            }
+            tauri::RunEvent::Exit => {
                 if let Some(manager) = app.try_state::<ForegroundEngineManager>() {
                     let _ = manager.teardown();
                 }
             }
+            _ => {}
         });
 }
 
@@ -1123,6 +1143,28 @@ mod tests {
             .map(|line| line.trim_end_matches(','))
             .filter(|line| !line.is_empty())
             .collect()
+    }
+
+    #[test]
+    fn native_close_and_file_exit_share_application_exit_commands() {
+        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+        let commands = registered_tauri_commands(source);
+        for command in [
+            "prepare_application_exit",
+            "resolve_application_exit",
+            "retry_application_teardown",
+            "confirm_application_exit_anyway",
+            "confirm_native_exit",
+        ] {
+            assert!(
+                commands.contains(&command),
+                "{command} must be registered: {commands:?}"
+            );
+        }
+        assert!(source.contains("CloseRequested"));
+        assert!(source.contains("prevent_close"));
+        assert!(source.contains("APPLICATION_EXIT_REQUESTED_EVENT"));
+        assert!(source.contains("prepare_application_exit"));
     }
 
     #[test]

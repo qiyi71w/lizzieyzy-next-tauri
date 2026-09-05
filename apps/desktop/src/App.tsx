@@ -7,6 +7,7 @@ import { AppChrome, BottomBar, type OverlayMode, type SheetId } from "./componen
 import { PreferencesPanel } from "./components/PreferencesPanel";
 import { ShortcutReference } from "./components/ShortcutReference";
 import { DocumentDepartureDialog } from "./components/DocumentDepartureDialog";
+import { ApplicationTeardownDialog } from "./components/ApplicationTeardownDialog";
 import { ProviderPanel } from "./components/ProviderPanel";
 import {
   cancelKataGoAnalysis,
@@ -19,10 +20,16 @@ import {
   openSgfDocument,
   parseSgfSummary,
   playCurrentGame,
+  prepareApplicationExit,
   prepareDocumentReplacement,
   projectCurrentGameMainline,
   replaySgfPositions,
+  resolveApplicationExit,
   resolveDocumentReplacement,
+  retryApplicationTeardown,
+  confirmApplicationExitAnyway,
+  confirmNativeExit,
+  subscribeApplicationExitRequested,
   saveCurrentGame,
   serializeCurrentGame,
   selectCurrentGameNode,
@@ -65,7 +72,7 @@ import {
   variationReplayIdentityKey,
   variationReplayPointSteps
 } from "./domain/variationReplay";
-import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AppHealthDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, SgfTreeNodeDto } from "./domain/types";
+import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, SgfTreeNodeDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
@@ -134,6 +141,11 @@ export function App() {
     message: string;
     choose: (action: DocumentDepartureActionDto) => void;
   } | null>(null);
+  const [teardownPrompt, setTeardownPrompt] = useState<{
+    message: string;
+    choose: (action: "retry" | "exit_anyway") => void;
+  } | null>(null);
+  const exitInFlightRef = useRef(false);
   const shortcutRegistry = useMemo(() => createShortcutRegistry(), []);
   const jumpRef = useRef<HTMLInputElement | null>(null);
   const requestSerialRef = useRef(0);
@@ -698,6 +710,107 @@ export function App() {
       });
     });
   }
+
+  function requestTeardownDecision(message: string): Promise<"retry" | "exit_anyway"> {
+    return new Promise((resolve) => {
+      setTeardownPrompt({
+        message,
+        choose: (action) => {
+          setTeardownPrompt(null);
+          resolve(action);
+        }
+      });
+    });
+  }
+
+  function isDepartureInProgressError(error: unknown): boolean {
+    if (!error || typeof error !== "object") return false;
+    const kind = Reflect.get(error, "kind");
+    const message = Reflect.get(error, "message");
+    return kind === "departure_in_progress"
+      || (typeof message === "string" && message.includes("already in progress"));
+  }
+
+  async function finishExitTeardown(departureId: number, outcome: ApplicationExitOutcomeDto): Promise<void> {
+    let current = outcome;
+    const selectedPath = currentGameRef.current?.selected_path ?? { indices: [] };
+    while (current.teardown?.status === "timed_out") {
+      const outstanding = current.teardown.outstanding;
+      const choice = await requestTeardownDecision(
+        `退出清理未完成：${outstanding.join("、") || "owned resources"}。重试还是强制退出？`
+      );
+      current = choice === "retry"
+        ? await retryApplicationTeardown({ departureId, selectedPath })
+        : await confirmApplicationExitAnyway({ departureId, selectedPath, outstanding });
+      if (current.analysis_stopped) {
+        clearLocalAnalysisSession();
+      }
+      if (current.current) {
+        adoptCurrentGame(current.current);
+        setDirty(current.current.dirty);
+        setCurrentFilePath(current.current.native_path ?? null);
+      }
+      if (choice === "exit_anyway") break;
+    }
+    await confirmNativeExit();
+  }
+
+  async function handleApplicationExit() {
+    if (!nativeRuntime) {
+      setMessage(nativeCurrentGameUnavailable);
+      return;
+    }
+    if (exitInFlightRef.current || departurePrompt || teardownPrompt) return;
+    exitInFlightRef.current = true;
+    try {
+      const admission = await prepareApplicationExit();
+      const action: ApplicationExitActionDto = admission.status === "needs_decision"
+        ? await requestDepartureDecision("当前棋谱尚未保存。保存后退出，放弃更改，还是取消退出？")
+        : "continue";
+      const outcome = await resolveApplicationExit({
+        departureId: admission.departure_id,
+        action,
+        selectedPath: currentGameRef.current?.selected_path ?? { indices: [] },
+        defaultFileName: saveFileName
+      });
+      if (outcome.analysis_stopped) {
+        clearLocalAnalysisSession();
+      }
+      if (!outcome.committed) {
+        setMessage(action === "cancel" ? "已取消退出，当前棋谱和分析保持不变。" : outcome.message);
+        return;
+      }
+      if (outcome.current) {
+        adoptCurrentGame(outcome.current);
+        setDirty(outcome.current.dirty);
+        setCurrentFilePath(outcome.current.native_path ?? null);
+      }
+      await finishExitTeardown(admission.departure_id, outcome);
+    } catch (error) {
+      if (isDepartureInProgressError(error)) return;
+      setMessage(`退出失败: ${errorMessage(error)}`);
+    } finally {
+      exitInFlightRef.current = false;
+    }
+  }
+
+  const handleApplicationExitRef = useRef(handleApplicationExit);
+  handleApplicationExitRef.current = handleApplicationExit;
+  useEffect(() => {
+    if (!nativeRuntime) return;
+    let cancelled = false;
+    let unlisten: () => void = () => undefined;
+    void subscribeApplicationExitRequested(() => {
+      void handleApplicationExitRef.current();
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten();
+    };
+  }, [nativeRuntime]);
 
   function clearLocalAnalysisSession() {
     selectedNodeJobRef.current = null;
@@ -1420,6 +1533,7 @@ export function App() {
       onOpenShortcutReference={() => setShortcutReferenceOpen(true)}
       onCopySgf={() => void handleCopySgf()}
       onPasteSgf={() => void handlePasteSgf()}
+      onExit={() => void handleApplicationExit()}
       onClearBoard={() => void handleNewGame()}
       onPass={() => void playAt("pass")}
       onRemoveVariation={() => void handleRemoveVariation()}
@@ -1577,6 +1691,13 @@ export function App() {
       <DocumentDepartureDialog
         message={departurePrompt.message}
         onChoose={departurePrompt.choose}
+      />
+    ) : null}
+    {teardownPrompt ? (
+      <ApplicationTeardownDialog
+        message={teardownPrompt.message}
+        onRetry={() => teardownPrompt.choose("retry")}
+        onExitAnyway={() => teardownPrompt.choose("exit_anyway")}
       />
     ) : null}
     {shortcutReferenceOpen ? (

@@ -11,6 +11,18 @@ const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
   replaceCurrentGame: vi.fn(),
   prepareDocumentReplacement: vi.fn(async () => ({ status: "ready", departure_id: 1 })),
+  prepareApplicationExit: vi.fn(async () => ({ status: "ready", departure_id: 1 })),
+  resolveApplicationExit: vi.fn(async (input: { action: string }) => {
+    if (input.action === "cancel") {
+      return { committed: false, analysis_stopped: false, current: null, message: "Exit cancelled.", disposition: null, teardown: null };
+    }
+    const current = await backend.replaceCurrentGame("", null);
+    return { committed: true, analysis_stopped: true, current, message: "Application exit completed.", disposition: "clean_completed", teardown: { status: "completed" } };
+  }),
+  retryApplicationTeardown: vi.fn(async () => ({ committed: true, analysis_stopped: true, current: null, message: "Application exit completed.", disposition: "clean_completed", teardown: { status: "completed" } })),
+  confirmApplicationExitAnyway: vi.fn(async () => ({ committed: true, analysis_stopped: true, current: null, message: "Application exit completed.", disposition: "exit_incomplete", teardown: { status: "timed_out", outstanding: ["foreground engine"] } })),
+  confirmNativeExit: vi.fn(async () => undefined),
+  subscribeApplicationExitRequested: vi.fn(async () => () => undefined),
   resolveDocumentReplacement: vi.fn(async (input: { action: string }) => {
     if (input.action === "cancel") {
       return { committed: false, analysis_stopped: false, current: null, message: "Replacement cancelled." };

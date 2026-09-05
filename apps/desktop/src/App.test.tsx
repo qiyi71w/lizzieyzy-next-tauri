@@ -3,12 +3,24 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AnalysisFrameDto, CurrentGameResultDto, GameDto, NodePath } from "./domain/types";
+import type { AnalysisFrameDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureAdmissionDto, GameDto, NodePath } from "./domain/types";
 
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
   replaceCurrentGame: vi.fn(),
   prepareDocumentReplacement: vi.fn(async () => ({ status: "ready", departure_id: 1 })),
+  prepareApplicationExit: vi.fn(async (): Promise<DocumentDepartureAdmissionDto> => ({ status: "ready", departure_id: 1 })),
+  resolveApplicationExit: vi.fn(async (input: { action: string }): Promise<ApplicationExitOutcomeDto> => {
+    if (input.action === "cancel") {
+      return { committed: false, analysis_stopped: false, current: null, message: "Exit cancelled.", disposition: null, teardown: null };
+    }
+    const current = await backend.replaceCurrentGame("", null) as CurrentGameResultDto;
+    return { committed: true, analysis_stopped: true, current, message: "Application exit completed.", disposition: "clean_completed", teardown: { status: "completed" } };
+  }),
+  retryApplicationTeardown: vi.fn(async (): Promise<ApplicationExitOutcomeDto> => ({ committed: true, analysis_stopped: true, current: null, message: "Application exit completed.", disposition: "clean_completed", teardown: { status: "completed" } })),
+  confirmApplicationExitAnyway: vi.fn(async (): Promise<ApplicationExitOutcomeDto> => ({ committed: true, analysis_stopped: true, current: null, message: "Application exit completed.", disposition: "exit_incomplete", teardown: { status: "timed_out", outstanding: ["foreground engine"] } })),
+  confirmNativeExit: vi.fn(async () => undefined),
+  subscribeApplicationExitRequested: vi.fn(async (_onRequest: () => void) => () => undefined),
   resolveDocumentReplacement: vi.fn(async (input: { action: string }) => {
     if (input.action === "cancel") {
       return { committed: false, analysis_stopped: false, current: null, message: "Replacement cancelled." };
@@ -1171,6 +1183,200 @@ describe("App document replacement", () => {
       await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
     });
     expect(backend.prepareDocumentReplacement.mock.calls.length).toBe(4);
+  });
+});
+
+
+describe("App application exit", () => {
+  it("routes File Exit and window close through one clean-exit transaction", async () => {
+    const host = await renderApp();
+    backend.prepareApplicationExit.mockClear();
+    backend.resolveApplicationExit.mockClear();
+    backend.confirmNativeExit.mockClear();
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "退出").click();
+      await backend.prepareApplicationExit.mock.results.at(-1)?.value;
+      await backend.resolveApplicationExit.mock.results.at(-1)?.value;
+      await backend.confirmNativeExit.mock.results.at(-1)?.value;
+    });
+    expect(backend.prepareApplicationExit).toHaveBeenCalledTimes(1);
+    expect(backend.resolveApplicationExit).toHaveBeenCalledWith(expect.objectContaining({ action: "continue" }));
+    expect(backend.confirmNativeExit).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).toBeNull();
+  });
+
+  it("keeps analysis running when the initial exit prompt is cancelled", async () => {
+    backend.prepareApplicationExit.mockResolvedValue({ status: "needs_decision", departure_id: 4 });
+    const host = await renderApp();
+    backend.cancelSelectedNodeAnalysis.mockClear();
+    backend.resolveApplicationExit.mockClear();
+    backend.confirmNativeExit.mockClear();
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "退出").click();
+      await backend.prepareApplicationExit.mock.results.at(-1)?.value;
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).not.toBeNull();
+    await act(async () => {
+      buttonLabeled(host, "Cancel").click();
+      await backend.resolveApplicationExit.mock.results.at(-1)?.value;
+    });
+    expect(backend.resolveApplicationExit).toHaveBeenCalledWith(expect.objectContaining({ action: "cancel" }));
+    expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("已取消退出");
+  });
+
+  it("does not open a second prompt for a repeated close while exit is in progress", async () => {
+    backend.prepareApplicationExit.mockResolvedValue({ status: "needs_decision", departure_id: 5 });
+    const host = await renderApp();
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "退出").click();
+      await backend.prepareApplicationExit.mock.results.at(-1)?.value;
+    });
+    backend.prepareApplicationExit.mockClear();
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "退出").click();
+    });
+    expect(backend.prepareApplicationExit).not.toHaveBeenCalled();
+    expect(host.querySelectorAll('[role="dialog"][aria-label="保存当前棋谱"]')).toHaveLength(1);
+  });
+
+  it("uses the same File Exit owner for a native close request", async () => {
+    const listeners: Array<() => void> = [];
+    backend.subscribeApplicationExitRequested.mockImplementation(async (onRequest: () => void) => {
+      listeners.push(onRequest);
+      return () => undefined;
+    });
+    const host = await renderApp();
+    backend.prepareApplicationExit.mockClear();
+    backend.resolveApplicationExit.mockClear();
+    backend.confirmNativeExit.mockClear();
+    expect(listeners).toHaveLength(1);
+    await act(async () => {
+      listeners[0]();
+      await backend.prepareApplicationExit.mock.results.at(-1)?.value;
+      await backend.resolveApplicationExit.mock.results.at(-1)?.value;
+      await backend.confirmNativeExit.mock.results.at(-1)?.value;
+    });
+    expect(backend.prepareApplicationExit).toHaveBeenCalledTimes(1);
+    expect(backend.resolveApplicationExit).toHaveBeenCalledWith(expect.objectContaining({ action: "continue" }));
+    expect(backend.confirmNativeExit).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).toBeNull();
+  });
+
+  it("names outstanding resources and offers Retry then Exit anyway", async () => {
+    backend.prepareApplicationExit.mockResolvedValue({ status: "ready", departure_id: 6 });
+    backend.resolveApplicationExit.mockResolvedValue({
+      committed: true,
+      analysis_stopped: true,
+      current: initialGame,
+      message: "Exit teardown timed out: foreground engine. Retry or exit anyway.",
+      disposition: "exit_incomplete",
+      teardown: { status: "timed_out", outstanding: ["foreground engine"] }
+    });
+    backend.retryApplicationTeardown.mockResolvedValue({
+      committed: true,
+      analysis_stopped: true,
+      current: initialGame,
+      message: "Exit teardown timed out: foreground engine. Retry or exit anyway.",
+      disposition: "exit_incomplete",
+      teardown: { status: "timed_out", outstanding: ["foreground engine"] }
+    });
+    const host = await renderApp();
+    backend.confirmNativeExit.mockClear();
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "退出").click();
+      await backend.prepareApplicationExit.mock.results.at(-1)?.value;
+      await backend.resolveApplicationExit.mock.results.at(-1)?.value;
+    });
+    const timeoutDialog = host.querySelector('[role="dialog"][aria-label="退出清理未完成"]');
+    expect(timeoutDialog).not.toBeNull();
+    expect(timeoutDialog?.textContent).toContain("foreground engine");
+    expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+    await act(async () => {
+      buttonLabeled(host, "Retry").click();
+      await backend.retryApplicationTeardown.mock.results.at(-1)?.value;
+    });
+    expect(backend.retryApplicationTeardown).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      buttonLabeled(host, "Exit anyway").click();
+      await backend.confirmApplicationExitAnyway.mock.results.at(-1)?.value;
+      await backend.confirmNativeExit.mock.results.at(-1)?.value;
+    });
+    expect(backend.confirmApplicationExitAnyway).toHaveBeenCalledWith(expect.objectContaining({
+      outstanding: ["foreground engine"]
+    }));
+    expect(backend.confirmNativeExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves a dirty document then exits without a second prompt", async () => {
+    backend.prepareApplicationExit.mockResolvedValue({ status: "needs_decision", departure_id: 7 });
+    backend.resolveApplicationExit.mockResolvedValue({
+      committed: true,
+      analysis_stopped: true,
+      current: { ...initialGame, dirty: false, native_path: "/tmp/review.sgf" },
+      message: "Application exit completed.",
+      disposition: "clean_completed",
+      teardown: { status: "completed" }
+    });
+    const host = await renderApp();
+    backend.confirmNativeExit.mockClear();
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "退出").click();
+      await backend.prepareApplicationExit.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonLabeled(host, "Save").click();
+      await backend.resolveApplicationExit.mock.results.at(-1)?.value;
+      await backend.confirmNativeExit.mock.results.at(-1)?.value;
+    });
+    expect(backend.resolveApplicationExit).toHaveBeenCalledWith(expect.objectContaining({ action: "save" }));
+    expect(backend.confirmNativeExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the window after a failed final save and does not exit", async () => {
+    backend.prepareApplicationExit.mockResolvedValue({ status: "needs_decision", departure_id: 8 });
+    backend.resolveApplicationExit.mockResolvedValue({
+      committed: false,
+      analysis_stopped: true,
+      current: initialGame,
+      message: "disk full. Analysis is stopped; restart it explicitly.",
+      disposition: null,
+      teardown: null
+    });
+    const host = await renderApp();
+    backend.confirmNativeExit.mockClear();
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "退出").click();
+      await backend.prepareApplicationExit.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonLabeled(host, "Save").click();
+      await backend.resolveApplicationExit.mock.results.at(-1)?.value;
+    });
+    expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("disk full");
   });
 });
 

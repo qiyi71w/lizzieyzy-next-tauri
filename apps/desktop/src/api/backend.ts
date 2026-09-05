@@ -9,6 +9,8 @@ import type {
   AssetCheckDto,
   CandidateMoveDto,
   CurrentGameResultDto,
+  ApplicationExitActionDto,
+  ApplicationExitOutcomeDto,
   DocumentDepartureActionDto,
   DocumentDepartureAdmissionDto,
   DocumentDepartureOutcomeDto,
@@ -116,6 +118,62 @@ export async function resolveDocumentReplacement(input: {
     throw new Error(nativeCurrentGameUnavailable);
   }
   return invoke<DocumentDepartureOutcomeDto>("resolve_document_replacement", input);
+}
+
+export async function prepareApplicationExit(): Promise<DocumentDepartureAdmissionDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<DocumentDepartureAdmissionDto>("prepare_application_exit");
+}
+
+export async function resolveApplicationExit(input: {
+  departureId: number;
+  action: ApplicationExitActionDto;
+  selectedPath: NodePath;
+  defaultFileName?: string | null;
+}): Promise<ApplicationExitOutcomeDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<ApplicationExitOutcomeDto>("resolve_application_exit", input);
+}
+
+export async function retryApplicationTeardown(input: {
+  departureId: number;
+  selectedPath: NodePath;
+}): Promise<ApplicationExitOutcomeDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<ApplicationExitOutcomeDto>("retry_application_teardown", input);
+}
+
+export async function confirmApplicationExitAnyway(input: {
+  departureId: number;
+  selectedPath: NodePath;
+  outstanding: string[];
+}): Promise<ApplicationExitOutcomeDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<ApplicationExitOutcomeDto>("confirm_application_exit_anyway", input);
+}
+
+export async function confirmNativeExit(): Promise<void> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  await invoke("confirm_native_exit");
+}
+
+export async function subscribeApplicationExitRequested(onRequest: () => void): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+  return listen("application-exit-requested", () => {
+    onRequest();
+  });
 }
 
 export async function serializeCurrentGame(): Promise<string> {

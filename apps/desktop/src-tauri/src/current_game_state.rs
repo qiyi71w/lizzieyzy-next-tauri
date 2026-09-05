@@ -1,6 +1,6 @@
 use app_model::{
-    admits_analysis_attachment, AnalysisJobEventDto, CurrentGameError, CurrentGameErrorKind,
-    CurrentGameResultDto, GameDto, MoveVertex, NodePath, SelectedNodeSnapshotDto,
+    admits_analysis_attachment, AnalysisJobEventDto, ApplicationExitDispositionDto, CurrentGameError,
+    CurrentGameErrorKind, CurrentGameResultDto, GameDto, MoveVertex, NodePath, SelectedNodeSnapshotDto,
 };
 use sgf::{CurrentSgfDocument, SgfAnalysisPayload};
 use std::collections::HashSet;
@@ -39,6 +39,7 @@ struct CurrentGameHolder {
     next_departure_id: u64,
     edits_blocked: bool,
     closed_jobs: HashSet<(String, String)>,
+    exit_disposition: Option<ApplicationExitDispositionDto>,
 }
 
 impl CurrentGameState {

@@ -69,6 +69,7 @@ type Props = {
   onOpenShortcutReference: () => void;
   onCopySgf: () => void;
   onPasteSgf: () => void;
+  onExit: () => void;
   onClearBoard: () => void;
   onPass?: () => void;
   onRemoveVariation?: () => void;
@@ -143,7 +144,7 @@ export function AppChrome(props: Props) {
             <MenuItem label="导入棋谱…" onClick={() => run(() => props.onToggleSheet("sgf"))} disabled={props.busy} />
             <MenuItem label="载入示例" onClick={() => run(props.onLoadSample)} disabled={props.busy} />
             <div className="menu-sep" role="separator" />
-            <MenuItem label="退出" disabled title={later} />
+            <MenuItem label="退出" onClick={() => run(props.onExit)} />
           </ChromeMenu>
           <ChromeMenu label="显示" open={openMenu === "view"} onToggle={() => setOpenMenu(openMenu === "view" ? null : "view")}>
             <SubMenu label="面板">

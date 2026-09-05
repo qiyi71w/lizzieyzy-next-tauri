@@ -9,7 +9,9 @@ pub use analysis_job::{
 };
 mod document_departure;
 pub use document_departure::{
-    DocumentDepartureActionDto, DocumentDepartureAdmissionDto, DocumentDepartureOutcomeDto,
+    ApplicationExitActionDto, ApplicationExitDispositionDto, ApplicationExitOutcomeDto,
+    ApplicationTeardownAttemptDto, DocumentDepartureActionDto, DocumentDepartureAdmissionDto,
+    DocumentDepartureOutcomeDto,
 };
 
 pub type GameId = Uuid;

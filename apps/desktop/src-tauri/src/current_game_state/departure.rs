@@ -1,16 +1,29 @@
 use super::*;
-use app_model::{AnalysisJobStartedDto, DocumentDepartureAdmissionDto, DocumentDepartureOutcomeDto};
+use app_model::{
+    AnalysisJobStartedDto, ApplicationExitDispositionDto, ApplicationExitOutcomeDto,
+    ApplicationTeardownAttemptDto, DocumentDepartureAdmissionDto, DocumentDepartureOutcomeDto,
+};
 
 pub(super) struct DepartureSession {
     pub id: u64,
     pub phase: DeparturePhase,
-    pub candidate: CurrentSgfDocument,
-    pub candidate_path: Option<String>,
+    pub target: DepartureTarget,
+}
+
+pub(super) enum DepartureTarget {
+    Replacement {
+        candidate: CurrentSgfDocument,
+        candidate_path: Option<String>,
+    },
+    ApplicationExit,
 }
 
 pub(super) enum DeparturePhase {
     AwaitingDecision,
     Protected,
+    TearingDown {
+        disposition: ApplicationExitDispositionDto,
+    },
 }
 
 impl CurrentGameState {
@@ -20,24 +33,14 @@ impl CurrentGameState {
         native_path: Option<String>,
     ) -> Result<DocumentDepartureAdmissionDto, CurrentGameError> {
         let candidate = CurrentSgfDocument::open(sgf_text)?;
-        let mut holder = self.holder.lock().expect("current game state");
-        if holder.departure.is_some() {
-            return Err(departure_in_progress());
-        }
-        holder.next_departure_id = holder.next_departure_id.saturating_add(1);
-        let departure_id = holder.next_departure_id;
-        let dirty = holder.dirty;
-        holder.departure = Some(DepartureSession {
-            id: departure_id,
-            phase: DeparturePhase::AwaitingDecision,
+        self.admit_departure(DepartureTarget::Replacement {
             candidate,
             candidate_path: native_path,
-        });
-        if dirty {
-            Ok(DocumentDepartureAdmissionDto::NeedsDecision { departure_id })
-        } else {
-            Ok(DocumentDepartureAdmissionDto::Ready { departure_id })
-        }
+        })
+    }
+
+    pub fn prepare_exit(&self) -> Result<DocumentDepartureAdmissionDto, CurrentGameError> {
+        self.admit_departure(DepartureTarget::ApplicationExit)
     }
 
     pub fn cancel_replacement(
@@ -47,7 +50,7 @@ impl CurrentGameState {
         let mut holder = self.holder.lock().expect("current game state");
         match holder.departure.as_ref() {
             Some(session) if session.id == departure_id => {
-                if matches!(session.phase, DeparturePhase::Protected) {
+                if !matches!(session.phase, DeparturePhase::AwaitingDecision) {
                     return Err(departure_blocked());
                 }
             }
@@ -70,6 +73,9 @@ impl CurrentGameState {
         let mut holder = self.holder.lock().expect("current game state");
         match holder.departure.as_mut() {
             Some(session) if session.id == departure_id => {
+                if matches!(session.phase, DeparturePhase::TearingDown { .. }) {
+                    return Err(departure_blocked());
+                }
                 session.phase = DeparturePhase::Protected;
             }
             _ => return Err(departure_in_progress()),
@@ -95,7 +101,15 @@ impl CurrentGameState {
             _ => return Err(departure_in_progress()),
         }
         let session = holder.departure.take().expect("departure required");
-        let current = holder.install_document(session.candidate, session.candidate_path)?;
+        let DepartureTarget::Replacement {
+            candidate,
+            candidate_path,
+        } = session.target
+        else {
+            holder.departure = Some(session);
+            return Err(departure_blocked());
+        };
+        let current = holder.install_document(candidate, candidate_path)?;
         Ok(DocumentDepartureOutcomeDto {
             committed: true,
             analysis_stopped: true,
@@ -118,6 +132,7 @@ impl CurrentGameState {
         }
         holder.departure = None;
         holder.edits_blocked = false;
+        holder.exit_disposition = None;
         let current = holder.result_dto(selected_path)?;
         Ok(DocumentDepartureOutcomeDto {
             committed: false,
@@ -142,6 +157,120 @@ impl CurrentGameState {
             }
         }
         self.save_to_path_allowing_departure(path, selected_path, || {}, true)
+    }
+
+    pub fn begin_application_teardown(
+        &self,
+        departure_id: u64,
+        selected_path: NodePath,
+        disposition: ApplicationExitDispositionDto,
+    ) -> Result<ApplicationExitOutcomeDto, CurrentGameError> {
+        let mut holder = self.holder.lock().expect("current game state");
+        match holder.departure.as_mut() {
+            Some(session)
+                if session.id == departure_id
+                    && matches!(session.target, DepartureTarget::ApplicationExit)
+                    && matches!(session.phase, DeparturePhase::Protected) =>
+            {
+                session.phase = DeparturePhase::TearingDown { disposition };
+            }
+            Some(session) if session.id == departure_id => return Err(departure_blocked()),
+            _ => return Err(departure_in_progress()),
+        }
+        holder.exit_disposition = Some(disposition);
+        let current = holder.result_dto(selected_path)?;
+        Ok(ApplicationExitOutcomeDto {
+            committed: true,
+            analysis_stopped: true,
+            current: Some(current),
+            message: match disposition {
+                ApplicationExitDispositionDto::ExplicitDiscard => {
+                    "Document discarded. Stopping owned resources.".to_string()
+                }
+                _ => "Departure committed. Stopping owned resources.".to_string(),
+            },
+            disposition: Some(disposition),
+            teardown: None,
+        })
+    }
+
+    pub fn finish_application_teardown(
+        &self,
+        departure_id: u64,
+        selected_path: NodePath,
+        attempt: ApplicationTeardownAttemptDto,
+        exit_anyway: bool,
+    ) -> Result<ApplicationExitOutcomeDto, CurrentGameError> {
+        let mut holder = self.holder.lock().expect("current game state");
+        let Some(session) = holder.departure.as_ref() else {
+            return Err(departure_in_progress());
+        };
+        if session.id != departure_id {
+            return Err(departure_in_progress());
+        }
+        let DeparturePhase::TearingDown { disposition } = session.phase else {
+            return Err(departure_blocked());
+        };
+        let completed = matches!(attempt, ApplicationTeardownAttemptDto::Completed);
+        let disposition =
+            if completed && !matches!(disposition, ApplicationExitDispositionDto::ExplicitDiscard) {
+                ApplicationExitDispositionDto::CleanCompleted
+            } else {
+                disposition
+            };
+        holder.exit_disposition = Some(disposition);
+        let current = holder.result_dto(selected_path.clone())?;
+        if completed || exit_anyway {
+            holder.departure = None;
+            if completed {
+                holder.edits_blocked = false;
+                holder.closed_jobs.clear();
+            }
+        }
+        Ok(ApplicationExitOutcomeDto {
+            committed: true,
+            analysis_stopped: true,
+            current: Some(current),
+            message: match (&attempt, disposition) {
+                (ApplicationTeardownAttemptDto::TimedOut { outstanding }, _) => format!(
+                    "Exit teardown timed out: {}. Retry or exit anyway.",
+                    outstanding.join(", ")
+                ),
+                (_, ApplicationExitDispositionDto::ExplicitDiscard) => {
+                    "Application exit discarded the document.".to_string()
+                }
+                _ => "Application exit completed.".to_string(),
+            },
+            disposition: Some(disposition),
+            teardown: Some(attempt),
+        })
+    }
+
+    pub fn application_exit_disposition(&self) -> Option<ApplicationExitDispositionDto> {
+        self.holder.lock().expect("current game state").exit_disposition
+    }
+
+    fn admit_departure(
+        &self,
+        target: DepartureTarget,
+    ) -> Result<DocumentDepartureAdmissionDto, CurrentGameError> {
+        let mut holder = self.holder.lock().expect("current game state");
+        if holder.departure.is_some() {
+            return Err(departure_in_progress());
+        }
+        holder.next_departure_id = holder.next_departure_id.saturating_add(1);
+        let departure_id = holder.next_departure_id;
+        let dirty = holder.dirty;
+        holder.departure = Some(DepartureSession {
+            id: departure_id,
+            phase: DeparturePhase::AwaitingDecision,
+            target,
+        });
+        if dirty {
+            Ok(DocumentDepartureAdmissionDto::NeedsDecision { departure_id })
+        } else {
+            Ok(DocumentDepartureAdmissionDto::Ready { departure_id })
+        }
     }
 }
 
