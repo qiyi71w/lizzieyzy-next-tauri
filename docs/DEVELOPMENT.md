@@ -88,6 +88,8 @@ The browser preview is useful for layout and fallback checks. Real KataGo execut
 
 Use the desktop runtime for this flow:
 
+Use the `分析` menu for the analysis start/cancel steps below. With a Ready run, `分析当前节点` starts selected-node analysis and `分析第一子主线` starts whole-game analysis. `自动分析` and continuous analysis are unavailable follow-up features, not alternate start controls for this smoke.
+
 ```bash
 cd apps/desktop
 npm run tauri:dev
@@ -129,11 +131,11 @@ Expected result: analysis actions stay disabled until a Ready run exists. Check 
 ### 4. Run One-Position Analysis
 
 - With a Ready run, select a node on the board (or keep the current selected node).
-- Click `分析此手`.
+- Click `分析当前节点`.
 - Confirm the job stays on that Ready run, the current-game generation, and the selected `NodePath`.
 - Confirm candidates, PV, winrate/score, ownership overlay (`领地`), and policy overlay (`策略`) update for that node only.
-- Click `取消此手` while the job is still running. Confirm the Engine Switcher stays Ready and whole-game (if running) continues.
-- Start a second `分析此手` and confirm only the latest matching identity publishes.
+- Click `取消此手分析` while the job is still running. Confirm the Engine Switcher stays Ready and whole-game (if running) continues.
+- Start a second `分析当前节点` and confirm only the latest matching identity publishes.
 - Confirm a timeout or protocol failure does not leave candidates or overlays.
 
 Expected result: selected-node analysis runs on the current Ready Foreground Engine Run, not a one-shot profile process. Publication is identity-bound to run/job/generation/`NodePath`.
@@ -155,11 +157,11 @@ LIZZIEYZY_REAL_KATAGO=1 cargo test -p engine-manager --test real_katago_lifecycl
 
 ### 5. Run Full-Game Analysis
 
-- With a Ready run, click `自动分析`.
+- With a Ready run, click `分析第一子主线`.
 - Watch the whole-game lane show `整局 completed/expected 剩余 remaining` as first-child mainline nodes finish. Each completed node should publish its own `NodePath` result immediately; do not wait for the batch to end, and do not treat turn as job identity.
 - Navigate with `上一手` / `下一手` while the lane is running and confirm review navigation stays enabled and does not cancel the job.
-- Optionally click `分析此手` / `继续分析` on the same Ready run and confirm both lanes stay active together.
-- A second `自动分析` while that lane is occupied must be rejected without cancelling the selected-node lane.
+- Optionally click `分析当前节点` on the same Ready run and confirm both lanes stay active together.
+- A second `分析第一子主线` while that lane is occupied must be rejected without cancelling the selected-node lane.
 - Cancel or fail after at least one node has completed and confirm the current-session result for that node remains visible.
 
 Expected result: whole-game analysis occupies only the Ready Run's whole-game lane, walks `[]` / `[0]` / `[0,0]`…, and keeps completed node results after cancel/fail. Selected-node can run concurrently. Durable SGF attachment is not part of this smoke.
@@ -167,7 +169,7 @@ Expected result: whole-game analysis occupies only the Ready Run's whole-game la
 ### 5.1 Bind Analysis Presentation To Exact Nodes
 
 - After selected-node completes, navigate away with `下一变化` and back with `父节点`. Confirm that node's candidates, PV Sub-Board, winrate, and score return, and that candidate hover does not return.
-- Start `继续分析` while a whole-game result already exists for a child node, then open that child. Confirm the child's presentation appears, `取消整局` stays available, and navigation does not cancel whole-game.
+- Start `分析当前节点` while a whole-game result already exists for a child node, then open that child. Confirm the child's presentation appears, `取消整局分析` stays available, and navigation does not cancel whole-game.
 - Click `停止` so the chip returns to `未加载引擎`. Confirm candidates, PV, ownership (`领地`), and policy (`策略`) clear rather than remaining from the previous Ready run.
 - Confirm the candidate table follows the durable candidate limit without a second hardcoded cap, and that missing ownership/policy keep `领地` / `策略` disabled instead of showing default overlays.
 
@@ -198,12 +200,12 @@ cd apps/desktop && npx vitest run src/AnalysisPresentation.test.tsx
 
 ### 5.3 Attach Live Analysis And Save Call-Time Snapshots
 
-- Start a Ready Foreground Engine Run and click `自动分析` on a game with at least two first-child mainline nodes.
+- Start a Ready Foreground Engine Run and click `分析第一子主线` on a game with at least two first-child mainline nodes.
 - After at least one node completes, confirm the document is dirty (`未保存` / Save enabled) and that node's candidates appear. Click `另存为(S)` and write snapshot A. Do not stop the job.
 - Wait for a later mainline node to complete. Confirm the document is dirty again. Click `另存为(S)` and write snapshot B.
 - Reopen snapshot A: it must contain only the analysis attached at the first Save As. Reopen snapshot B: it must include the later node's primary `LZ` / `LZOP` as well.
 - Confirm personal `C`, secondary `LZ2` / `LZOP2`, and unknown properties are still present. Confirm Save As remains available while analysis is still running.
-- Repeat with `分析此手` / `继续分析` on one node, then Save. Re-analysis of that node must replace only the primary payload.
+- Repeat with `分析当前节点` on one node, then Save. Re-analysis of that node must replace only the primary payload.
 
 Expected result: identity-valid completed selected-node and whole-game results attach to the exact `NodePath`, dirty the game without changing generation, and persist only through ordinary Save / Save As as the call-time snapshot. Later completions re-dirty. A failed Save keeps dirty and in-memory payloads.
 
@@ -255,9 +257,9 @@ Expected result: one application-owned timer and prefix are shared by the main b
 
 ### 6. Cancel Analysis
 
-- On one resident Ready run, start both `分析此手` and `自动分析`.
-- Click `取消此手` and confirm the whole-game lane continues.
-- Click `取消整局` and confirm selected-node (if restarted) is unaffected.
+- On one resident Ready run, start both `分析当前节点` and `分析第一子主线`.
+- Click `取消此手分析` and confirm the whole-game lane continues.
+- Click `取消整局分析` and confirm selected-node (if restarted) is unaffected.
 - Confirm the Engine Switcher is still Ready (`停止` / `重启` enabled).
 - Confirm ordinary `保存` / `另存为` stay enabled while analysis is running.
 - Start another analysis afterwards to ensure the job registry recovered.
