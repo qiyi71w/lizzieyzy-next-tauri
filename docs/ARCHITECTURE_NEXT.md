@@ -15,8 +15,10 @@ flowchart LR
   Tauri --> Engine["engine-manager\nrun / jobs / process"]
   Tauri --> Analysis["analysis-core\nmarkers / sorting"]
   Tauri --> Prefs["app-preferences\napp data JSON"]
+  Tauri --> Recovery["current-game-recovery"]
   Engine --> KataGo["Local KataGo process"]
   Prefs --> AppData["Tauri app data"]
+  Recovery --> AppData
 ```
 
 The UI consumes DTOs and view models. It does not consume raw KataGo JSON and does not own long-running engine processes. `engine-manager` owns the Foreground Engine Run, Analysis Jobs, and process lifetime. Rust owns file I/O, SGF parsing, process execution, cancellation, and app-data persistence.
@@ -29,19 +31,21 @@ Provider and readboard live paths follow the same boundary rule. The React UI sh
 
 React + TypeScript desktop UI built with Vite. The current UI includes board rendering, SGF text/import workflow, native open/save entry points, winrate and analysis panels, and engine profile controls.
 
-The browser preview can exercise UI fallback paths and fake analysis, but it cannot perform native file dialogs, authoritative current-game edit/Save, app-data profile persistence, local asset checks, or real KataGo execution.
+The browser preview can exercise UI fallback paths and local demonstration analysis, but it cannot perform native file dialogs, authoritative current-game edit/Save, app-data profile or recovery persistence, local asset checks, or real KataGo execution.
 
 ### `apps/desktop/src-tauri`
 
-Tauri 2 command gateway. It exposes health, SGF parse/replay, native SGF read/write, fake analysis, engine profile persistence, asset checks, and manager-owned Foreground Engine Run commands (`foreground_engine_snapshot`, `foreground_engine_start`, `foreground_engine_stop`, `foreground_engine_restart`, `foreground_engine_switch`, `foreground_engine_start_selected_node`, `foreground_engine_cancel_job`). Whole-game analysis on a Ready Run uses `katago_start_analyze_game` / `katago_cancel_analysis`. Removed profile-to-process commands `katago_analyze_once` and `katago_analyze_game` are not registered. Fake analysis remains non-authoritative and does not create a Foreground Engine Run.
+Tauri 2 command gateway. It exposes health, SGF parse/replay, native SGF read/write, engine profile persistence, asset checks, and manager-owned Foreground Engine Run commands (`foreground_engine_snapshot`, `foreground_engine_start`, `foreground_engine_stop`, `foreground_engine_restart`, `foreground_engine_switch`, `foreground_engine_start_selected_node`, `foreground_engine_cancel_job`). Whole-game analysis on a Ready Run uses `katago_start_analyze_game` / `katago_cancel_analysis`. Current-game replacement uses `prepare_document_replacement` / `resolve_document_replacement`. Application exit uses `prepare_application_exit`, `resolve_application_exit`, `retry_application_teardown`, `confirm_application_exit_anyway`, and `confirm_native_exit`. Current-game recovery uses `inspect_current_game_recovery`, `restore_current_game_recovery`, `discard_current_game_recovery`, `retry_current_game_recovery`, and `current_game_recovery_protection`. Removed profile-to-process commands `katago_analyze_once` and `katago_analyze_game` are not registered. Native `fake_analyze` is not registered; browser-preview demonstration analysis remains non-authoritative and does not create a Foreground Engine Run.
 
 This layer should stay a gateway. Domain behavior belongs in crates unless it is directly about Tauri lifecycle, app data paths, command shape, or event emission.
 
-Rust owns the authoritative current game. The holder stores `CurrentSgfDocument`, a monotonic `generation`, `dirty`, and `native_path`. It does not store the React-owned `NodePath` cursor. Shared results use `CurrentGameResultDto` (`tree`, `selected_path`, `snapshot`, `generation`, `dirty`, `native_path`). Domain failures stay in `CurrentGameError` / `CurrentGameErrorKind`. Filesystem Save failures stay Gateway `String` errors and do not extend the domain kind enum.
+Rust owns the authoritative current game. The holder stores `CurrentSgfDocument`, a monotonic `generation`, `dirty`, `native_path`, the selected `NodePath`, and recovery sequence counters (`document_seq`, `snapshot_seq`). Shared results use `CurrentGameResultDto` (`tree`, `selected_path`, `snapshot`, `generation`, `dirty`, `native_path`). Domain failures stay in `CurrentGameError` / `CurrentGameErrorKind`. Filesystem Save failures stay Gateway `String` errors and do not extend the domain kind enum.
 
-Current-game commands are `replace_current_game`, `select_current_game_node`, `play_current_game`, `set_current_game_personal_comment`, `remove_current_game_variation`, `serialize_current_game`, `save_current_game`, `save_current_game_as`, and `project_current_game_mainline`. `play_current_game` sends a `NodePath` plus point/pass vertex; Rust uses the selected position's player-to-play color and `go-core` legality. An identical existing child is selected without mutation. A new child increments document generation and marks the game dirty. Occupied, suicide, simple-ko, and invalid-path failures are atomic.
+Current-game mutation and derived reads are `select_current_game_node`, `play_current_game`, `set_current_game_personal_comment`, `remove_current_game_variation`, `serialize_current_game`, `save_current_game`, `save_current_game_as`, and `project_current_game_mainline`. Native document replacement prepares and resolves a candidate rather than installing SGF in one command. `play_current_game` sends a `NodePath` plus point/pass vertex; Rust uses the selected position's player-to-play color and `go-core` legality. An identical existing child is selected without mutation. A new child increments document generation and marks the game dirty. Occupied, suicide, simple-ko, and invalid-path failures are atomic.
 
-`save_current_game` writes a caller-supplied path. `save_current_game_as` owns the Save As dialog: cancel returns `null` (`Save cancelled.`); a chosen allowed path writes through `save_current_game`'s path; a dialog-denied or Windows-redirected path is a Gateway write failure (`failed to write`) and does not write, adopt, or clear dirty. The `save-as-dialog` crate classifies those outcomes without a new harness. Successful Save keeps the caller-supplied cursor and does not increment `generation`. Directory-as-file write failure remains `current_game_save_write_failure`. Save is a semantic SGF round-trip, not byte-for-byte format preservation.
+Ordinary `save_current_game` writes a caller-supplied path. Ordinary `save_current_game_as` owns the Save As dialog: cancel returns `null` (`Save cancelled.`); a chosen allowed path writes through `save_current_game`'s path; a dialog-denied or Windows-redirected path is a Gateway write failure (`failed to write`) and does not write, adopt, or clear dirty. The `save-as-dialog` crate classifies those outcomes without a new harness. Successful ordinary Save keeps the caller-supplied `NodePath`, does not increment `generation`, and does not admit a document departure or cancel analysis. Directory-as-file write failure remains `current_game_save_write_failure`. Save is a semantic SGF round-trip, not byte-for-byte format preservation.
+
+Confirmed replacement and application exit share a document-departure owner. `prepare_document_replacement` parses and validates the candidate before admission; a dirty holder returns `needs_decision`, a clean holder returns `ready`. `resolve_document_replacement` then takes Save / Discard / Cancel. Cancel aborts without sealing. Confirmed Discard or Save can stop Analysis Jobs; successful commit installs one candidate at its default selected path, clears dirty, and adopts the candidate source path. Cancelled or failed departure Save keeps the current game, keeps the engine, and stops analysis. `prepare_application_exit` / `resolve_application_exit` reuse that dirty gate for File Exit and window close (`application-exit-requested`). After confirmed leave, teardown uses a 10s budget, with `retry_application_teardown` and `confirm_application_exit_anyway` for outstanding resources, then `confirm_native_exit` to end the process. Exit dispositions recorded on the recovery envelope are `clean_completed`, `explicit_discard`, and `exit_incomplete`.
 
 `serialize_current_game` and `project_current_game_mainline` are derived reads. The only remaining first-child adapter is the fresh Rust mainline `GameDto` consumed by analysis and review. React must not treat original `sgfText`, independently replayed positions, or `GameDto.moves` as document authority. The SGF textarea remains load input. Browser preview keeps edit and authoritative Save unavailable and explains that they need the native runtime.
 
@@ -82,6 +86,10 @@ Engine profile catalog, Autoload Default, asset checks, and the manager-owned Fo
 
 Durable app preference storage for the categorized Preferences surface. Missing files load owner defaults. Unreadable files are isolated beside the original path and recovered to defaults with a user-visible report. Explicit writes use replace-safe persist; serialize/write/replace failures keep the previous durable value. This crate owns the preference mechanism only. It does not absorb analysis, shortcut, layout, scoring, window, or engine-domain semantics.
 
+### `crates/current-game-recovery`
+
+Session recovery for the current game only. The recovery envelope (`RecoveryEnvelopeDto`) stores `document_seq`, `snapshot_seq`, `sgf_text`, `selected_path`, optional `source_path`, `dirty`, and `disposition` (`clean_completed`, `explicit_discard`, or `exit_incomplete`). The crate coalesces pending snapshots with a 1000 ms scheduling delay and atomically replaces the recovery file; the gateway supplies the app-data `current-game-recovery.json` path and runs the writer. Replacement and exit also have explicit flush paths. A failed write reports `Unprotected` and keeps the last successful envelope; `retry_current_game_recovery` reissues a pending write. `inspect_current_game_recovery` classifies startup as `none` (missing or `explicit_discard`), `abnormal` (`exit_incomplete`), `normal` (`clean_completed`), or `unreadable`. Restore installs that current game, including its attached SGF analysis, personal `C`, `NodePath`, source path, and dirty state. It does not resume a Foreground Engine Run, Analysis Job, Match Session, or provider session. Discard persists `explicit_discard`. Preference `restoreLastSession` defaults off and applies only to a `normal` envelope.
+
 ### Provider crates
 
 Provider crates own provider-specific URL parsing, request construction, payload parsing, and normalization. Yike live fetch must remain behind the Yike provider boundary. Fox fetch must support the documented `chessid`, `uid`, and `user_name` command shapes through the Fox provider boundary. The UI should not hand-roll provider HTTP behavior.
@@ -96,15 +104,17 @@ SQLite schema and storage helpers for unrelated application tables (`games`, `ga
 
 ## Data Flow
 
-1. The user opens or edits SGF in the React UI.
-2. The frontend calls Tauri commands through API wrapper functions.
-3. Rust parses SGF into DTOs and replays positions through `sgf` and `go-core`.
+1. The user opens, replaces, or edits SGF in the React UI.
+2. The frontend calls Tauri commands through API wrapper functions. Native Open / New / paste / import use `prepare_document_replacement` then `resolve_document_replacement`. Ordinary Save / Save As use `save_current_game` / `save_current_game_as` and do not admit a document departure.
+3. Rust parses SGF into DTOs and replays positions through `sgf` and `go-core`. The holder keeps the selected `NodePath` with the document.
 4. The user edits saved engine profiles and Autoload Default in Engine Settings. Manual Check Assets is diagnostic, not a Start gate.
 5. The Engine Switcher starts, stops, restarts, or switches a manager-owned Foreground Engine Run. `engine-manager` validates assets, spawns KataGo, and publishes Ready only after adapter readiness.
 6. Selected-node and whole-game analysis jobs occupy that Ready Run. `katago-protocol` builds JSONL; `engine-manager` writes it to the resident process, emits progress, and cancels by run/job identity.
 7. Responses are normalized into `AnalysisFrameDto` and classified by `analysis-core`.
-8. Identity-valid completed analysis attaches to the exact node and persists only through ordinary SGF Save / Save As.
-9. The UI renders board state, winrate, candidates, PVs, ownership, policy, and problem markers from DTOs.
+8. Identity-valid completed analysis attaches to the exact SGF node. Ordinary Save / Save As persists the invocation-time document while analysis continues. Confirmed-departure Save during replacement or exit first seals/stops document analysis, then saves before installing a candidate or finishing teardown.
+9. Launch calls `inspect_current_game_recovery`. Restore / Discard apply or drop the envelope through the recovery commands. Restoring a game does not resume a Foreground Engine Run or Analysis Job.
+10. File Exit and window close call `prepare_application_exit` / `resolve_application_exit`.
+11. The UI renders board state, winrate, candidates, PVs, ownership, policy, and problem markers from DTOs.
 
 ## Persistence
 
@@ -112,8 +122,9 @@ Current app-data persistence includes:
 
 - `lizzieyzy-next-engine-profile.json` for multiple engine profile settings.
 - `lizzieyzy-next-app-preferences.json` for categorized durable app preferences.
+- `current-game-recovery.json` for the current-game recovery envelope.
 
-Attached analysis lives in the SGF document. There is no second durable analysis-cache file or command path.
+Attached analysis lives in the SGF document. There is no separate durable analysis-cache command path. The recovery envelope snapshots that document, including attached analysis, for session recovery; it is not a Foreground Engine Run or Analysis Job checkpoint.
 
 ## Production Invariants
 

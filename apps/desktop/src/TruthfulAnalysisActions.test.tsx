@@ -15,15 +15,15 @@ const listeners: {
   onJob?: (job: unknown) => void;
 } = {};
 
+const currentGameFixture = vi.hoisted(() => vi.fn());
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
-  replaceCurrentGame: vi.fn(),
   prepareDocumentReplacement: vi.fn(async () => ({ status: "ready", departure_id: 1 })),
   resolveDocumentReplacement: vi.fn(async (input: { action: string }) => {
     if (input.action === "cancel") {
       return { committed: false, analysis_stopped: false, current: null, message: "Replacement cancelled." };
     }
-    const current = await backend.replaceCurrentGame("", null);
+    const current = await currentGameFixture("", null);
     return { committed: true, analysis_stopped: true, current, message: "Replacement committed." };
   }),
   inspectCurrentGameRecovery: vi.fn(async () => ({ status: "none" as const })),
@@ -129,7 +129,7 @@ beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
     return canvasContext(this);
   });
-  backend.replaceCurrentGame.mockResolvedValue(initialGame);
+  currentGameFixture.mockResolvedValue(initialGame);
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
   backend.parseSgfSummary.mockResolvedValue(previewGame);
   backend.replaySgfPositions.mockResolvedValue([emptyPosition]);
@@ -195,7 +195,7 @@ async function renderApp() {
   act(() => root?.render(<App />));
   await act(async () => {
     await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value.catch(() => undefined);
-    await backend.replaceCurrentGame.mock.results[0]?.value.catch(() => undefined);
+    await currentGameFixture.mock.results[0]?.value.catch(() => undefined);
     await backend.projectCurrentGameMainline.mock.results[0]?.value.catch(() => undefined);
     await backend.subscribeForegroundEngine.mock.results[0]?.value;
     await Promise.resolve();
@@ -385,8 +385,9 @@ describe("truthful browser demonstration analysis", () => {
     const demos = [...host.querySelectorAll("button")].filter((button) => button.textContent === "预览复盘（非权威）");
     expect(demos.length).toBeGreaterThan(0);
     expect(demos.every((button) => !button.disabled)).toBe(true);
-    backend.replaceCurrentGame.mockClear();
     backend.saveCurrentGame.mockClear();
+    backend.prepareDocumentReplacement.mockClear();
+    backend.resolveDocumentReplacement.mockClear();
     await act(async () => {
       demos[0]?.click();
       await backend.fakeAnalyze.mock.results.at(-1)?.value;
@@ -394,7 +395,8 @@ describe("truthful browser demonstration analysis", () => {
     });
     expect(backend.fakeAnalyze).toHaveBeenCalled();
     expect(backend.saveCurrentGame).not.toHaveBeenCalled();
-    expect(backend.replaceCurrentGame).not.toHaveBeenCalled();
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+    expect(backend.resolveDocumentReplacement).not.toHaveBeenCalled();
     expect(host.querySelectorAll(".cand-row").length).toBeGreaterThan(0);
     expect(host.textContent).toMatch(/non-authoritative|预览复盘/);
   });

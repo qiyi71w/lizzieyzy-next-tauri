@@ -6,16 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CurrentGameResultDto, GameDto, NodePath, SgfTreeNodeDto } from "./domain/types";
 import { defaultAppPreferences, type AppPreferences } from "./domain/preferences";
 
+const currentGameFixture = vi.hoisted(() => vi.fn());
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
-  replaceCurrentGame: vi.fn(),
   prepareDocumentReplacement: vi.fn(async () => ({ status: "ready", departure_id: 1 })),
   prepareApplicationExit: vi.fn(async () => ({ status: "ready", departure_id: 1 })),
   resolveApplicationExit: vi.fn(async (input: { action: string }) => {
     if (input.action === "cancel") {
       return { committed: false, analysis_stopped: false, current: null, message: "Exit cancelled.", disposition: null, teardown: null };
     }
-    const current = await backend.replaceCurrentGame("", null);
+    const current = await currentGameFixture("", null);
     return { committed: true, analysis_stopped: true, current, message: "Application exit completed.", disposition: "clean_completed", teardown: { status: "completed" } };
   }),
   retryApplicationTeardown: vi.fn(async () => ({ committed: true, analysis_stopped: true, current: null, message: "Application exit completed.", disposition: "clean_completed", teardown: { status: "completed" } })),
@@ -26,7 +26,7 @@ const backend = vi.hoisted(() => ({
     if (input.action === "cancel") {
       return { committed: false, analysis_stopped: false, current: null, message: "Replacement cancelled." };
     }
-    const current = await backend.replaceCurrentGame("", null);
+    const current = await currentGameFixture("", null);
     return { committed: true, analysis_stopped: true, current, message: "Replacement committed." };
   }),
   serializeCurrentGame: vi.fn(() => Promise.resolve("(;SZ[9])")),
@@ -168,7 +168,7 @@ beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
     return canvasContext(this);
   });
-  backend.replaceCurrentGame.mockResolvedValue(gameAt({ indices: [] }));
+  currentGameFixture.mockResolvedValue(gameAt({ indices: [] }));
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
   backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => gameAt(path));
   preferencesApi.loadAppPreferences.mockResolvedValue({ preferences: defaultAppPreferences });
@@ -271,7 +271,7 @@ describe("winrate chart encoding surface", () => {
 
   it("keeps persisted score-only when scoreMean is missing without rewriting it", async () => {
     activeTree = node([lzop("MainEngine 40.0 100")]);
-    backend.replaceCurrentGame.mockResolvedValue(gameAt({ indices: [] }));
+    currentGameFixture.mockResolvedValue(gameAt({ indices: [] }));
     preferencesApi.loadAppPreferences.mockResolvedValue({
       preferences: { ...defaultAppPreferences, winrateLine: false, scoreLeadLine: true }
     });
@@ -291,7 +291,7 @@ describe("winrate chart encoding surface", () => {
 
   it("refuses to turn off the last effective series when scoreMean is missing", async () => {
     activeTree = node([lzop("MainEngine 40.0 100")]);
-    backend.replaceCurrentGame.mockResolvedValue(gameAt({ indices: [] }));
+    currentGameFixture.mockResolvedValue(gameAt({ indices: [] }));
     const host = await renderApp();
     act(() => buttonNamed(host, "显示").click());
     act(() => menuCheck(host, "胜率线").click());
@@ -303,14 +303,14 @@ describe("winrate chart encoding surface", () => {
 
   it("keeps missing analysis as a gap on the selected line", async () => {
     activeTree = gappedTree;
-    backend.replaceCurrentGame.mockResolvedValue(gameAt({ indices: [] }));
+    currentGameFixture.mockResolvedValue(gameAt({ indices: [] }));
     const host = await renderApp();
     expect(chartShell(host).getAttribute("data-gap-count")).toBe("1");
   });
 
   it("draws Blunder Bar only for Inaccuracy, Mistake, and Blunder", async () => {
     activeTree = barTree;
-    backend.replaceCurrentGame.mockResolvedValue(gameAt({ indices: [] }));
+    currentGameFixture.mockResolvedValue(gameAt({ indices: [] }));
     const host = await renderApp();
     act(() => buttonNamed(host, "显示").click());
     act(() => menuCheck(host, "失误条").click());
@@ -350,7 +350,7 @@ describe("winrate chart encoding surface", () => {
 
   it("keeps the empty chart surface when there is no engine analysis", async () => {
     activeTree = emptyTree;
-    backend.replaceCurrentGame.mockResolvedValue(gameAt({ indices: [] }));
+    currentGameFixture.mockResolvedValue(gameAt({ indices: [] }));
     const host = await renderApp();
     expect(host.querySelector('canvas[aria-label="胜率走势"]')).not.toBeNull();
     expect(chartShell(host).getAttribute("data-gap-count")).toBe("1");
@@ -361,7 +361,7 @@ describe("winrate chart encoding surface", () => {
 
   it("grows the session score axis without persisting the peak, and ignores invalid scale input", async () => {
     activeTree = node([lzop("MainEngine 40.0 100 21.0")]);
-    backend.replaceCurrentGame.mockResolvedValue(gameAt({ indices: [] }));
+    currentGameFixture.mockResolvedValue(gameAt({ indices: [] }));
     const host = await renderApp();
     expect(chartShell(host).getAttribute("data-score-scale")).toBe("21");
     openPreferences(host);
@@ -388,7 +388,7 @@ async function renderApp(): Promise<HTMLElement> {
   act(() => root?.render(<App />));
   await act(async () => {
     await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
-    await backend.replaceCurrentGame.mock.results.at(-1)?.value;
+    await currentGameFixture.mock.results.at(-1)?.value;
     await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
     await preferencesApi.loadAppPreferences.mock.results.at(-1)?.value.catch(() => undefined);
   });

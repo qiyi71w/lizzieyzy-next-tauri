@@ -10,16 +10,16 @@ const listeners: {
   onFailure?: (failure: EngineFailureDto) => void;
   onJob?: (job: unknown) => void;
 } = {};
+const currentGameFixture = vi.hoisted(() => vi.fn());
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
-  replaceCurrentGame: vi.fn(),
   prepareDocumentReplacement: vi.fn(async () => ({ status: "ready", departure_id: 1 })),
   prepareApplicationExit: vi.fn(async () => ({ status: "ready", departure_id: 1 })),
   resolveApplicationExit: vi.fn(async (input: { action: string }) => {
     if (input.action === "cancel") {
       return { committed: false, analysis_stopped: false, current: null, message: "Exit cancelled.", disposition: null, teardown: null };
     }
-    const current = await backend.replaceCurrentGame("", null);
+    const current = await currentGameFixture("", null);
     return { committed: true, analysis_stopped: true, current, message: "Application exit completed.", disposition: "clean_completed", teardown: { status: "completed" } };
   }),
   retryApplicationTeardown: vi.fn(async () => ({ committed: true, analysis_stopped: true, current: null, message: "Application exit completed.", disposition: "clean_completed", teardown: { status: "completed" } })),
@@ -30,7 +30,7 @@ const backend = vi.hoisted(() => ({
     if (input.action === "cancel") {
       return { committed: false, analysis_stopped: false, current: null, message: "Replacement cancelled." };
     }
-    const current = await backend.replaceCurrentGame("", null);
+    const current = await currentGameFixture("", null);
     return { committed: true, analysis_stopped: true, current, message: "Replacement committed." };
   }),
   serializeCurrentGame: vi.fn(() => Promise.resolve("(;SZ[9])")),
@@ -230,7 +230,7 @@ beforeEach(() => {
       clip: vi.fn()
     } as unknown as CanvasRenderingContext2D;
   });
-  backend.replaceCurrentGame.mockResolvedValue(initialGame);
+  currentGameFixture.mockResolvedValue(initialGame);
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
   backend.loadEngineProfilesSettings.mockResolvedValue({
     selected_profile_id: "profile-1",
@@ -279,7 +279,7 @@ async function renderApp() {
   act(() => root?.render(<App />));
   await act(async () => {
     await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
-      await backend.replaceCurrentGame.mock.results[0]?.value;
+      await currentGameFixture.mock.results[0]?.value;
     await backend.projectCurrentGameMainline.mock.results[0]?.value;
     await backend.subscribeForegroundEngine.mock.results[0]?.value;
   });
@@ -785,7 +785,7 @@ describe("foreground engine lifecycle UI", () => {
   });
 
   it("keeps review navigation live during whole-game analysis and restores completed node results", async () => {
-    backend.replaceCurrentGame.mockResolvedValue(mainlineRoot);
+    currentGameFixture.mockResolvedValue(mainlineRoot);
     backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => snapshotAt(path));
     const host = await renderApp();
     await readyEngine(host);
@@ -847,7 +847,7 @@ describe("foreground engine lifecycle UI", () => {
   });
 
   it("does not restore a previous document's whole-game node result after Open", async () => {
-    backend.replaceCurrentGame.mockResolvedValue(mainlineRoot);
+    currentGameFixture.mockResolvedValue(mainlineRoot);
     backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => snapshotAt(path));
     backend.openSgfDocument.mockResolvedValue({ sgfText: "(;SZ[9]B[fe])", path: "/tmp/other.sgf" });
     const host = await renderApp();
@@ -883,7 +883,7 @@ describe("foreground engine lifecycle UI", () => {
     });
     expect(host.textContent).toContain("61.0%");
 
-    backend.replaceCurrentGame.mockResolvedValue({
+    currentGameFixture.mockResolvedValue({
       ...mainlineRoot,
       generation: 2,
       native_path: "/tmp/other.sgf"
@@ -895,7 +895,7 @@ describe("foreground engine lifecycle UI", () => {
       buttonNamed(host, "打开棋谱(O)").click();
       await backend.openSgfDocument.mock.results.at(-1)?.value;
       await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
-    await backend.replaceCurrentGame.mock.results.at(-1)?.value;
+    await currentGameFixture.mock.results.at(-1)?.value;
     });
     expect(host.textContent).not.toContain("61.0%");
     expect(backend.resolveDocumentReplacement).toHaveBeenCalledWith(expect.objectContaining({ action: "discard" }));
@@ -913,7 +913,7 @@ describe("foreground engine lifecycle UI", () => {
   });
 
   it("drops a selected-node session when Open replaces the document", async () => {
-    backend.replaceCurrentGame.mockResolvedValue(mainlineRoot);
+    currentGameFixture.mockResolvedValue(mainlineRoot);
     backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => snapshotAt(path));
     backend.openSgfDocument.mockResolvedValue({ sgfText: "(;SZ[9]B[fe])", path: "/tmp/other.sgf" });
     const host = await renderApp();
@@ -926,7 +926,7 @@ describe("foreground engine lifecycle UI", () => {
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
     });
 
-    backend.replaceCurrentGame.mockResolvedValue({
+    currentGameFixture.mockResolvedValue({
       ...mainlineRoot,
       generation: 2,
       native_path: "/tmp/other.sgf"
@@ -943,7 +943,7 @@ describe("foreground engine lifecycle UI", () => {
       buttonNamed(host, "打开棋谱(O)").click();
       await backend.openSgfDocument.mock.results.at(-1)?.value;
       await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
-    await backend.replaceCurrentGame.mock.results.at(-1)?.value;
+    await currentGameFixture.mock.results.at(-1)?.value;
     });
     expect.soft(host.textContent).not.toContain("取消此手");
     expect.soft(backend.resolveDocumentReplacement).toHaveBeenCalledWith(expect.objectContaining({ action: "discard" }));
@@ -1173,7 +1173,7 @@ describe("foreground engine lifecycle UI", () => {
   });
 
   it("keeps Save and Save As available while both analysis lanes are running", async () => {
-    backend.replaceCurrentGame.mockResolvedValue({ ...initialGame, dirty: true });
+    currentGameFixture.mockResolvedValue({ ...initialGame, dirty: true });
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {

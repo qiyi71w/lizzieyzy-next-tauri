@@ -52,6 +52,7 @@ struct CurrentGameHolder {
 }
 
 impl CurrentGameState {
+    #[cfg(test)]
     pub fn replace(
         &self,
         sgf_text: &str,
@@ -61,6 +62,7 @@ impl CurrentGameState {
             .ok_or_else(no_current_game)
     }
 
+    #[cfg(test)]
     pub fn replace_unless_discarded(
         &self,
         sgf_text: &str,
@@ -293,6 +295,7 @@ fn no_current_game() -> CurrentGameError {
 }
 
 impl CurrentGameHolder {
+    #[cfg(test)]
     fn replace(
         &mut self,
         sgf_text: &str,

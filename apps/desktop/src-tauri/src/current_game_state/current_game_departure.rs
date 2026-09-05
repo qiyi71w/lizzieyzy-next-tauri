@@ -114,6 +114,29 @@ fn replacement_validates_candidate_before_dirty_prompt() {
 }
 
 #[test]
+fn dirty_replacement_cannot_commit_before_a_departure_decision() {
+    let state = CurrentGameState::default();
+    state
+        .replace(BRANCHING, Some("/tmp/branching.sgf".to_string()))
+        .unwrap();
+    state
+        .set_personal_comment(path(&[]), "unsaved personal comment".to_string())
+        .unwrap();
+    let before = state.inspect();
+    let admission = state.prepare_replacement(EMPTY, None).unwrap();
+    let DocumentDepartureAdmissionDto::NeedsDecision { departure_id } = admission else {
+        panic!("dirty replacement must require a departure decision");
+    };
+
+    let error = state.commit_replacement(departure_id).unwrap_err();
+    assert_eq!(error.kind, CurrentGameErrorKind::DepartureBlocked);
+    assert_eq!(state.inspect(), before);
+
+    state.cancel_replacement(departure_id).unwrap();
+    assert_eq!(state.inspect(), before);
+}
+
+#[test]
 fn duplicate_replacement_is_rejected_and_initial_cancel_does_not_seal_jobs() {
     let state = CurrentGameState::default();
     let opened = state

@@ -92,12 +92,6 @@ export async function openSgfDocument(): Promise<SgfDocument | null> {
 export const nativeCurrentGameUnavailable =
   "Native current-game, edit, and authoritative Save require the Tauri desktop backend. Browser preview is non-authoritative.";
 
-export async function replaceCurrentGame(sgfText: string, nativePath: string | null): Promise<CurrentGameResultDto> {
-  if (!isTauriRuntime()) {
-    throw new Error(nativeCurrentGameUnavailable);
-  }
-  return invoke<CurrentGameResultDto>("replace_current_game", { sgfText, nativePath });
-}
 
 export async function prepareDocumentReplacement(
   sgfText: string,

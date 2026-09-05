@@ -11,16 +11,16 @@ const listeners: {
   onJob?: (job: unknown) => void;
 } = {};
 
+const currentGameFixture = vi.hoisted(() => vi.fn());
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
-  replaceCurrentGame: vi.fn(),
   prepareDocumentReplacement: vi.fn(async () => ({ status: "ready", departure_id: 1 })),
   prepareApplicationExit: vi.fn(async () => ({ status: "ready", departure_id: 1 })),
   resolveApplicationExit: vi.fn(async (input: { action: string }) => {
     if (input.action === "cancel") {
       return { committed: false, analysis_stopped: false, current: null, message: "Exit cancelled.", disposition: null, teardown: null };
     }
-    const current = await backend.replaceCurrentGame("", null);
+    const current = await currentGameFixture("", null);
     return { committed: true, analysis_stopped: true, current, message: "Application exit completed.", disposition: "clean_completed", teardown: { status: "completed" } };
   }),
   retryApplicationTeardown: vi.fn(async () => ({ committed: true, analysis_stopped: true, current: null, message: "Application exit completed.", disposition: "clean_completed", teardown: { status: "completed" } })),
@@ -31,7 +31,7 @@ const backend = vi.hoisted(() => ({
     if (input.action === "cancel") {
       return { committed: false, analysis_stopped: false, current: null, message: "Replacement cancelled." };
     }
-    const current = await backend.replaceCurrentGame("", null);
+    const current = await currentGameFixture("", null);
     return { committed: true, analysis_stopped: true, current, message: "Replacement committed." };
   }),
   serializeCurrentGame: vi.fn(() => Promise.resolve("(;SZ[9])")),
@@ -152,7 +152,7 @@ beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
     return canvasContext(this);
   });
-  backend.replaceCurrentGame.mockResolvedValue(initialGame);
+  currentGameFixture.mockResolvedValue(initialGame);
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
   backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => ({
     ...initialGame,
@@ -318,7 +318,7 @@ async function renderApp(): Promise<HTMLElement> {
   act(() => root?.render(<App />));
   await act(async () => {
     await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
-    await backend.replaceCurrentGame.mock.results.at(-1)?.value;
+    await currentGameFixture.mock.results.at(-1)?.value;
     await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
     await backend.subscribeForegroundEngine.mock.results.at(-1)?.value;
     await preferencesApi.loadAppPreferences.mock.results.at(-1)?.value.catch(() => undefined);

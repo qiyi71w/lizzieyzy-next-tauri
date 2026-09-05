@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### English
+
+- Removed the legacy force-replace IPC and frontend wrapper. Native current-game replacement uses the shared candidate-validation and Save / Discard / Cancel workflow.
+
+### 中文
+
+- 移除旧强制替换 IPC 及前端 wrapper；原生当前棋谱替换统一使用候选验证与保存/放弃/取消流程。
+
 ## [0.1.0] - 2026-05-01
 
 ### English

@@ -395,14 +395,6 @@ fn read_sgf_file(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|err| format!("failed to read SGF file {}: {err}", path.display()))
 }
 
-#[tauri::command]
-fn replace_current_game(
-    state: State<CurrentGameState>,
-    sgf_text: String,
-    native_path: Option<String>,
-) -> Result<CurrentGameResultDto, CurrentGameError> {
-    state.replace(&sgf_text, native_path)
-}
 
 #[tauri::command]
 fn serialize_current_game(state: State<CurrentGameState>) -> Result<String, CurrentGameError> {
@@ -976,7 +968,6 @@ pub fn run() {
             readboard_sidecar_sync_snapshot,
             replay_sgf_positions,
             read_sgf_file,
-            replace_current_game,
             prepare_document_replacement,
             resolve_document_replacement,
             prepare_application_exit,

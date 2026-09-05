@@ -543,7 +543,7 @@ Current state: R4 has exited. `ANA-05` remains an immutable historical acceptanc
 
 1. `PREF-01` durable preferences and `APP-05` Shortcut Registry are already Accepted from R4 closeout.
 2. `SGF-07` safe replacement is Accepted from Ticket 06.
-3. Deliver `APP-03` Safe Graceful Shutdown and `APP-04` current-game recovery.
+3. Finish named residual native evidence for Partial `APP-03` (stuck-resource 10s timeout / Retry / Exit anyway) and Partial `APP-04` (recovery write-failure prompt).
 4. Pass the `APP-01` semantic gate after `SGF-07`; do not wait for final `APP-01` Accepted.
 5. `APP-02` window file-drop dispatch after the recorded `APP-01` semantic gate.
 
