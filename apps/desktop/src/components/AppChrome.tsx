@@ -2,7 +2,20 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toolbarIcons } from "../assets/toolbar";
 import type { AppPreferences } from "../domain/preferences";
 import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
-import { claimedShortcutCatalog, formatShortcutChord } from "../domain/shortcuts";
+import { claimedShortcutCatalog, formatShortcutChord, actionLabelFromRegistry } from "../domain/shortcuts";
+import {
+  AI_COMMENTARY_LABEL,
+  AI_COMMENTARY_UNAVAILABLE,
+  AUTO_ANALYZE_LABEL,
+  BROWSER_DEMO_ANALYSIS_LABEL,
+  CONTINUOUS_ANALYSIS_LABEL,
+  CONTINUOUS_ANALYSIS_UNAVAILABLE,
+  FIRST_CHILD_MAINLINE_ANALYSIS_LABEL,
+  LIGHTNING_ANALYSIS_MENU_LABEL,
+  LIGHTNING_ANALYSIS_TOOLBAR_LABEL,
+  LIGHTNING_ANALYSIS_UNAVAILABLE,
+  SELECTED_NODE_ANALYSIS_LABEL
+} from "../domain/analysisActions";
 
 export type SheetId = "sgf" | "engine" | "sync" | "prefs";
 export type OverlayMode = "candidates" | "ownership" | "policy";
@@ -274,16 +287,17 @@ export function AppChrome(props: Props) {
         <span className="menu-div" />
         <div className="menu-cluster">
           <ChromeMenu label="分析" open={openMenu === "analyze"} onToggle={() => setOpenMenu(openMenu === "analyze" ? null : "analyze")}>
-            <MenuItem label="开始/停止 分析" onClick={() => run(props.selectedNodeRunning ? props.onCancelSelectedNode : () => props.onEngineCommand("once"))} />
-            <MenuItem label="AI 解说" onClick={() => run(props.onFakeAnalyze)} disabled={props.busy} />
+            <MenuItem label={CONTINUOUS_ANALYSIS_LABEL} disabled title={CONTINUOUS_ANALYSIS_UNAVAILABLE} />
+            <MenuItem label={AI_COMMENTARY_LABEL} disabled title={AI_COMMENTARY_UNAVAILABLE} />
             <div className="menu-sep" role="separator" />
             <MenuItem label="超级鹰眼" disabled title={later} />
             <MenuItem label="死活" disabled title={later} />
-            <MenuItem label="分析此手" onClick={() => run(() => props.onEngineCommand("once"))} disabled={!props.engineReady} />
-            <MenuItem label="自动分析(A)" onClick={() => run(() => props.onEngineCommand("game"))} disabled={!props.engineReady} />
+            <MenuItem label={SELECTED_NODE_ANALYSIS_LABEL} onClick={() => run(() => props.onEngineCommand("once"))} disabled={!props.engineReady} />
+            <MenuItem label={FIRST_CHILD_MAINLINE_ANALYSIS_LABEL} onClick={() => run(() => props.onEngineCommand("game"))} disabled={!props.engineReady} />
+            <MenuItem label={AUTO_ANALYZE_LABEL} disabled title={later} />
             <MenuItem label="批量分析" disabled title={later} />
-            <MenuItem label="试复盘 / 闪电分析" onClick={() => run(props.onFakeAnalyze)} disabled={props.busy} />
-            <MenuItem label="纯网络(H)" onClick={() => run(() => props.onOverlayMode("policy"))} />
+            <MenuItem label={LIGHTNING_ANALYSIS_MENU_LABEL} disabled title={LIGHTNING_ANALYSIS_UNAVAILABLE} />
+            <MenuItem label={actionLabelFromRegistry("view.policy-overlay", "纯网络")} onClick={() => run(() => props.onOverlayMode("policy"))} />
             <MenuItem label="形势判断" onClick={() => run(() => props.onOverlayMode("ownership"))} />
             <div className="menu-sep" role="separator" />
             <MenuItem label="取消此手分析" onClick={() => run(props.onCancelSelectedNode)} disabled={!props.selectedNodeRunning} />
@@ -294,7 +308,7 @@ export function AppChrome(props: Props) {
             <MenuItem label="添加黑子" disabled title={later} />
             <MenuItem label="添加白子" disabled title={later} />
             <MenuItem label="交替落子" disabled title={later} />
-            <MenuItem label="停一手(P)" onClick={() => run(() => props.onPass?.())} disabled={props.busy || !nativeAvailable || !props.onPass} title={!nativeAvailable ? nativeUnavailable : undefined} />
+            <MenuItem label={actionLabelFromRegistry("review.pass", "停一手")} onClick={() => run(() => props.onPass?.())} disabled={props.busy || !nativeAvailable || !props.onPass} title={!nativeAvailable ? nativeUnavailable : undefined} />
             <div className="menu-sep" role="separator" />
             <MenuItem label="设为主分支(L)" disabled title={later} />
             <MenuItem label="返回主分支(B)" disabled title={later} />
@@ -381,9 +395,14 @@ export function AppChrome(props: Props) {
           </span>
         ) : null}
         <span className="spacer" />
-        <button type="button" className="ai-comment" onClick={props.onFakeAnalyze} disabled={props.busy} title="生成 AI 解说">
-          AI 解说
+        <button type="button" className="ai-comment" disabled title={AI_COMMENTARY_UNAVAILABLE}>
+          {AI_COMMENTARY_LABEL}
         </button>
+        {!nativeAvailable ? (
+          <button type="button" className="ai-comment" onClick={props.onFakeAnalyze} disabled={props.busy} title={BROWSER_DEMO_ANALYSIS_LABEL}>
+            {BROWSER_DEMO_ANALYSIS_LABEL}
+          </button>
+        ) : null}
       </nav>
 
       <div className="tool-strip" role="toolbar" aria-label="分析工具">
@@ -394,7 +413,7 @@ export function AppChrome(props: Props) {
         </div>
         <span className="tool-sep" />
         <div className="icon-group">
-          <IconBtn src={toolbarIcons.flash} label="闪电分析" onClick={props.onFakeAnalyze} disabled={props.busy} />
+          <IconBtn src={toolbarIcons.flash} label={LIGHTNING_ANALYSIS_TOOLBAR_LABEL} disabled title={LIGHTNING_ANALYSIS_UNAVAILABLE} />
           <IconBtn src={toolbarIcons.hawkeye2} label="超级鹰眼" disabled title={later} />
           <IconBtn src={toolbarIcons.rankMarkOn} label="落子评价" disabled title={later} />
           <IconBtn src={toolbarIcons.pass} label="交换行棋" disabled title={later} />
@@ -487,7 +506,7 @@ export function BottomBar(props: {
   onCancelSelectedNode: () => void;
   onCancelWholeGame: () => void;
   onSync: () => void;
-  onFlashAnalyze: () => void;
+  onBrowserDemoAnalyze?: () => void;
   onHeatmap: () => void;
   onRefresh: () => void;
   onClearBoard: () => void;
@@ -518,11 +537,14 @@ export function BottomBar(props: {
     <nav className="folio-nav" aria-label="复盘导航">
       <button type="button" className="chrome-btn" onClick={props.onSync}>同步</button>
       <button type="button" className="chrome-btn" onClick={props.onEstimate}>Kata评估</button>
-      <button type="button" className="chrome-btn" onClick={props.onFlashAnalyze}>闪电分析</button>
-      <button type="button" className="chrome-btn" onClick={props.onAnalyzeGame} disabled={!props.engineReady}>自动分析</button>
+      <button type="button" className="chrome-btn" disabled title={LIGHTNING_ANALYSIS_UNAVAILABLE}>{LIGHTNING_ANALYSIS_TOOLBAR_LABEL}</button>
+      {props.onBrowserDemoAnalyze ? (
+        <button type="button" className="chrome-btn" onClick={props.onBrowserDemoAnalyze}>{BROWSER_DEMO_ANALYSIS_LABEL}</button>
+      ) : null}
+      <button type="button" className="chrome-btn" onClick={props.onAnalyzeGame} disabled={!props.engineReady}>{FIRST_CHILD_MAINLINE_ANALYSIS_LABEL}</button>
       <button type="button" className="chrome-btn" onClick={props.onHeatmap}>纯网络</button>
       <button type="button" className="chrome-btn" onClick={props.onRefresh}>刷新</button>
-      <button type="button" className="chrome-btn" onClick={props.onAnalyzeOnce} disabled={!props.engineReady}>继续分析</button>
+      <button type="button" className="chrome-btn" onClick={props.onAnalyzeOnce} disabled={!props.engineReady}>{SELECTED_NODE_ANALYSIS_LABEL}</button>
       <button type="button" className="chrome-btn" disabled title="尚未接入">设为主分支</button>
       <button type="button" className="chrome-btn" onClick={props.onClearBoard}>清空棋盘</button>
       <button type="button" className="chrome-btn" onClick={() => props.jumpRef.current?.focus()}>跳转</button>

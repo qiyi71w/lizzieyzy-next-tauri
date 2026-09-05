@@ -6,6 +6,7 @@ import {
   claimedShortcutCatalog,
   createShortcutRegistry,
   filterShortcutReference,
+  actionLabelFromRegistry,
   formatShortcutChord,
   shouldIgnoreShortcutTarget
 } from "./shortcuts";
@@ -199,4 +200,10 @@ describe("shortcut reference and dispatch", () => {
     expect(registry.dispatch(globalJ)).toBe(true);
     expect(marker).toHaveBeenCalledTimes(1);
   });
+
+  it("only appends a shortcut suffix for claimed registry actions", () => {
+    expect(actionLabelFromRegistry("review.pass", "停一手")).toBe("停一手(P)");
+    expect(actionLabelFromRegistry("analysis.selected-node", "分析当前节点")).toBe("分析当前节点");
+  });
+
 });

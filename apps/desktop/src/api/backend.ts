@@ -62,13 +62,12 @@ export async function parseSgfSummary(sgfText: string): Promise<GameDto> {
   }
 }
 
+export const nativeSyntheticAnalysisUnavailable =
+  "Synthetic analysis is not available in the native desktop product. Browser preview demonstration is non-authoritative.";
+
 export async function fakeAnalyze(sgfText: string): Promise<AnalysisFrameDto[]> {
   if (!isTauriRuntime()) return buildBrowserAnalysis(parseSgfLocally(sgfText));
-  try {
-    return await invoke<AnalysisFrameDto[]>("fake_analyze", { sgfText });
-  } catch {
-    return buildBrowserAnalysis(parseSgfLocally(sgfText));
-  }
+  throw new Error(nativeSyntheticAnalysisUnavailable);
 }
 
 export async function openSgfDocument(): Promise<SgfDocument | null> {
@@ -156,7 +155,7 @@ export async function startKataGoGameAnalysis(input: {
   maxVisits: number;
 }): Promise<AnalysisJobStartedDto> {
   if (!isTauriRuntime()) {
-    throw new Error("Full-game KataGo analysis requires the Tauri desktop backend. Browser preview cannot run real KataGo; use Run review for fake analysis.");
+    throw new Error("Full-game KataGo analysis requires the Tauri desktop backend. Browser preview cannot run real KataGo.");
   }
   return await invoke<AnalysisJobStartedDto>("katago_start_analyze_game", {
     runId: input.runId,

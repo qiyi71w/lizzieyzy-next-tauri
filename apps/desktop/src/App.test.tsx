@@ -24,14 +24,19 @@ const backend = vi.hoisted(() => ({
   setCurrentGamePersonalComment: vi.fn(),
   removeCurrentGameVariation: vi.fn(),
   startKataGoGameAnalysis: vi.fn(),
-  loadEngineProfilesSettings: vi.fn(() => Promise.resolve({ selected_profile_id: "default", profiles: [] })),
-  subscribeForegroundEngine: vi.fn(() => Promise.resolve(() => undefined)),
+  loadEngineProfilesSettings: vi.fn(),
+  subscribeForegroundEngine: vi.fn(),
   startForegroundEngine: vi.fn(),
   stopForegroundEngine: vi.fn(),
   restartForegroundEngine: vi.fn(),
   switchForegroundEngine: vi.fn(),
   getForegroundEngineSnapshot: vi.fn(() => Promise.resolve({ revision: 0, lifecycle: { state: "no_engine" } }))
 }));
+
+const listeners: {
+  onSnapshot?: (snapshot: unknown) => void;
+  onJob?: (job: unknown) => void;
+} = {};
 
 vi.mock("./api/backend", () => ({
   ...backend,
@@ -78,6 +83,19 @@ const initialGame: CurrentGameResultDto = {
 const initialProjection: GameDto = {
   summary: { id: "test", board_size: 9, komi: 7.5, move_count: 0 },
   moves: []
+};
+
+const savedProfile = {
+  id: "profile-1",
+  max_visits: 800,
+  profile: {
+    name: "Local KataGo",
+    engine_path: "/bin/katago",
+    model_path: "/models/model.bin",
+    config_path: "/configs/analysis.cfg",
+    working_dir: "/tmp",
+    backend: "kata_go_analysis" as const
+  }
 };
 
 const analysisFrame: AnalysisFrameDto = {
@@ -203,6 +221,29 @@ beforeEach(() => {
   });
   backend.replaceCurrentGame.mockResolvedValue(initialGame);
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
+  backend.startForegroundEngine.mockResolvedValue(undefined);
+  backend.startSelectedNodeAnalysis.mockResolvedValue({
+    run_id: "run-1",
+    job_id: "job-1",
+    lane: "selected_node",
+    generation: 1,
+    node_path: { indices: [] }
+  });
+  backend.loadEngineProfilesSettings.mockResolvedValue({
+    selected_profile_id: "profile-1",
+    autoload_profile_id: null,
+    profiles: [savedProfile]
+  });
+  backend.subscribeForegroundEngine.mockImplementation(async (
+    onSnapshot: (snapshot: unknown) => void,
+    _onFailure: unknown,
+    onJob?: (job: unknown) => void
+  ) => {
+    listeners.onSnapshot = onSnapshot;
+    listeners.onJob = onJob;
+    onSnapshot({ revision: 0, lifecycle: { state: "no_engine" } });
+    return () => undefined;
+  });
 });
 
 afterEach(() => {
@@ -276,24 +317,13 @@ describe("App board intent feedback", () => {
 
 describe("App candidate continuation preview", () => {
   it("propagates board dwell to the mini-board without mutating the selected game", async () => {
-    backend.fakeAnalyze.mockResolvedValue([analysisFrame]);
     backend.classifyProblems.mockResolvedValue([]);
-    const host = document.createElement("div");
-    document.body.append(host);
-    root = createRoot(host);
-    act(() => root?.render(<App />));
-    await act(async () => {
-      await backend.replaceCurrentGame.mock.results[0]?.value;
-      await backend.projectCurrentGameMainline.mock.results[0]?.value;
-    });
-
-    await act(async () => {
-      buttonNamed(host, "AI 解说").click();
-      await vi.waitFor(() => expect(backend.fakeAnalyze).toHaveBeenCalledOnce());
-      await backend.fakeAnalyze.mock.results[0]?.value;
-      await backend.classifyProblems.mock.results[0]?.value;
-    });
+    const host = await renderApp();
+    await readyEngine(host);
+    await startSelectedNode(host);
+    await completeSelectedNode("job-1", { indices: [] }, analysisFrame);
     expect(host.querySelectorAll(".cand-row")).toHaveLength(2);
+    const selectCalls = backend.selectCurrentGameNode.mock.calls.length;
 
     const board = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
     const miniBoard = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="参考图变化副棋盘"]');
@@ -317,7 +347,7 @@ describe("App candidate continuation preview", () => {
     expect(rows[1]?.classList.contains("is-selected")).toBe(false);
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe(currentMove);
     expect(backend.serializeCurrentGame).toHaveBeenCalledTimes(serializedCalls);
-    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    expect(backend.selectCurrentGameNode).toHaveBeenCalledTimes(selectCalls);
     expect(backend.playCurrentGame).not.toHaveBeenCalled();
     expect(backend.saveCurrentGame).not.toHaveBeenCalled();
     expect(backend.setCurrentGamePersonalComment).not.toHaveBeenCalled();
@@ -333,8 +363,9 @@ describe("App candidate continuation preview", () => {
 describe("App stale review presentation", () => {
   it("drops candidate and hover presentation when the selected NodePath changes", async () => {
     backend.replaceCurrentGame.mockResolvedValue(navigableRoot);
-    backend.selectCurrentGameNode.mockResolvedValue(navigableChild);
-    backend.fakeAnalyze.mockResolvedValue([analysisFrame]);
+    backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => (
+      path.indices.length === 0 ? navigableRoot : navigableChild
+    ));
     backend.classifyProblems.mockResolvedValue([{
       turn: 1,
       severity: "mistake",
@@ -344,7 +375,9 @@ describe("App stale review presentation", () => {
     }]);
 
     const host = await renderApp();
-    await runFakeAnalyze(host);
+    await readyEngine(host);
+    await startSelectedNode(host);
+    await completeSelectedNode("job-1", { indices: [] }, analysisFrame);
     expect(candidateCoords(host)).toEqual(["C6", "G4"]);
     expect(buttonNamed(host, "问题手 (1)")).toBeTruthy();
 
@@ -364,7 +397,7 @@ describe("App stale review presentation", () => {
 
     await act(async () => {
       buttonNamed(host, "下一变化").click();
-      await backend.selectCurrentGameNode.mock.results[0]?.value;
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
     });
 
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
@@ -374,78 +407,48 @@ describe("App stale review presentation", () => {
   });
 
   it("ignores a late completion after the selected NodePath has already changed", async () => {
-    let finishStale: ((frames: AnalysisFrameDto[]) => void) | undefined;
     backend.replaceCurrentGame.mockResolvedValue(navigableRoot);
     backend.selectCurrentGameNode.mockResolvedValue(navigableChild);
-    backend.fakeAnalyze.mockImplementation(() => new Promise((resolve) => {
-      finishStale = resolve;
-    }));
     backend.classifyProblems.mockResolvedValue([]);
 
     const host = await renderApp();
-    act(() => buttonNamed(host, "AI 解说").click());
-    await act(async () => {
-      await vi.waitFor(() => expect(backend.fakeAnalyze).toHaveBeenCalledOnce());
-    });
+    await readyEngine(host);
+    await startSelectedNode(host, "job-1");
 
     await act(async () => {
       buttonNamed(host, "下一变化").click();
-      await backend.selectCurrentGameNode.mock.results[0]?.value;
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
     });
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
 
-    await act(async () => {
-      finishStale?.([analysisFrame]);
-      await backend.fakeAnalyze.mock.results[0]?.value;
-      await backend.classifyProblems.mock.results[0]?.value;
-    });
+    await completeSelectedNode("job-1", { indices: [] }, analysisFrame);
 
     expect(candidateCoords(host)).toEqual([]);
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
   });
 
   it("keeps the superseding request and ignores the earlier completion", async () => {
-    let finishStale: ((frames: AnalysisFrameDto[]) => void) | undefined;
-    backend.fakeAnalyze
-      .mockImplementationOnce(() => new Promise((resolve) => {
-        finishStale = resolve;
-      }))
-      .mockResolvedValueOnce([currentAnalysisFrame]);
     backend.classifyProblems.mockResolvedValue([]);
-
     const host = await renderApp();
-    act(() => buttonNamed(host, "AI 解说").click());
-    await act(async () => {
-      await vi.waitFor(() => expect(backend.fakeAnalyze).toHaveBeenCalledOnce());
-    });
-
-    await runFakeAnalyze(host);
+    await readyEngine(host);
+    await startSelectedNode(host, "stale-job");
+    await startSelectedNode(host, "current-job");
+    await completeSelectedNode("current-job", { indices: [] }, currentAnalysisFrame);
     expect(candidateCoords(host)).toEqual(["J1"]);
 
-    await act(async () => {
-      finishStale?.([staleAnalysisFrame]);
-      await backend.fakeAnalyze.mock.results[0]?.value;
-      await backend.classifyProblems.mock.results.at(-1)?.value;
-    });
-
+    await completeSelectedNode("stale-job", { indices: [] }, staleAnalysisFrame);
     expect(candidateCoords(host)).toEqual(["J1"]);
   });
 
   it("clears presentation on game replacement before a late completion can return", async () => {
-    let finishStale: ((frames: AnalysisFrameDto[]) => void) | undefined;
-    backend.fakeAnalyze.mockImplementation(() => new Promise((resolve) => {
-      finishStale = resolve;
-    }));
     backend.classifyProblems.mockResolvedValue([]);
     backend.replaceCurrentGame
       .mockResolvedValueOnce(initialGame)
       .mockResolvedValueOnce({ ...initialGame, generation: 4 });
 
     const host = await renderApp();
-    act(() => buttonNamed(host, "AI 解说").click());
-    await act(async () => {
-      await vi.waitFor(() => expect(backend.fakeAnalyze).toHaveBeenCalledOnce());
-    });
+    await readyEngine(host);
+    await startSelectedNode(host, "job-1");
 
     await act(async () => {
       buttonNamed(host, "新对局").click();
@@ -455,21 +458,18 @@ describe("App stale review presentation", () => {
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("0");
     expect(candidateCoords(host)).toEqual([]);
 
-    await act(async () => {
-      finishStale?.([analysisFrame]);
-      await backend.fakeAnalyze.mock.results[0]?.value;
-      await backend.classifyProblems.mock.results[0]?.value;
-    });
+    await completeSelectedNode("job-1", { indices: [] }, analysisFrame);
     expect(candidateCoords(host)).toEqual([]);
   });
 
   it("clears presentation when a move mutates the current game", async () => {
-    backend.fakeAnalyze.mockResolvedValue([analysisFrame]);
     backend.classifyProblems.mockResolvedValue([]);
     backend.playCurrentGame.mockResolvedValue(acceptedGame);
 
     const host = await renderApp();
-    await runFakeAnalyze(host);
+    await readyEngine(host);
+    await startSelectedNode(host);
+    await completeSelectedNode("job-1", { indices: [] }, analysisFrame);
     expect(candidateCoords(host)).toEqual(["C6", "G4"]);
 
     const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
@@ -1031,6 +1031,8 @@ async function renderApp(): Promise<HTMLElement> {
   await act(async () => {
     await backend.replaceCurrentGame.mock.results.at(-1)?.value;
     await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    await backend.loadEngineProfilesSettings.mock.results.at(-1)?.value;
+    await backend.subscribeForegroundEngine.mock.results.at(-1)?.value;
     await preferencesApi.loadAppPreferences.mock.results.at(-1)?.value.catch(() => undefined);
   });
   return host;
@@ -1117,13 +1119,64 @@ function requiredElement<T extends Element = HTMLElement>(host: HTMLElement, sel
   return element as T;
 }
 
-async function runFakeAnalyze(host: HTMLElement): Promise<void> {
-  const prior = backend.fakeAnalyze.mock.calls.length;
+async function readyEngine(host: HTMLElement) {
+  const switcher = host.querySelector('select[aria-label="Foreground Engine Profile"]') as HTMLSelectElement;
   await act(async () => {
-    buttonNamed(host, "AI 解说").click();
-    await vi.waitFor(() => expect(backend.fakeAnalyze.mock.calls.length).toBeGreaterThan(prior));
-    await backend.fakeAnalyze.mock.results.at(-1)?.value;
-    await backend.classifyProblems.mock.results.at(-1)?.value;
+    switcher.value = "profile-1";
+    switcher.dispatchEvent(new Event("change", { bubbles: true }));
+    await backend.startForegroundEngine.mock.results[0]?.value;
+  });
+  await act(async () => {
+    listeners.onSnapshot?.({
+      revision: 2,
+      lifecycle: {
+        state: "ready",
+        run: {
+          run_id: "run-1",
+          profile_id: "profile-1",
+          adapter_kind: "kata_go_analysis",
+          profile_snapshot: savedProfile.profile,
+          capability_snapshot: {
+            adapter_kind: "kata_go_analysis",
+            selected_node_analysis: true,
+            whole_game_analysis: true,
+            protocol_cancel: true
+          }
+        }
+      }
+    });
+  });
+}
+
+async function startSelectedNode(host: HTMLElement, jobId = "job-1") {
+  backend.startSelectedNodeAnalysis.mockResolvedValueOnce({
+    run_id: "run-1",
+    job_id: jobId,
+    lane: "selected_node",
+    generation: 1,
+    node_path: { indices: [] }
+  });
+  await act(async () => {
+    buttonNamed(host, "分析当前节点").click();
+    await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
+  });
+}
+
+async function completeSelectedNode(jobId: string, path: { indices: number[] }, frame: AnalysisFrameDto) {
+  await act(async () => {
+    listeners.onJob?.({
+      run_id: "run-1",
+      job_id: jobId,
+      lane: "selected_node",
+      generation: 1,
+      node_path: path,
+      outcome: "completed",
+      frame
+    });
+    await Promise.all([
+      backend.classifyProblems.mock.results.at(-1)?.value,
+      backend.selectCurrentGameNode.mock.results.at(-1)?.value
+    ]);
   });
 }
 

@@ -332,7 +332,7 @@ async function startSelectedNode(host: HTMLElement) {
     node_path: { indices: [] }
   });
   await act(async () => {
-    buttonNamed(host, "继续分析").click();
+    buttonNamed(host, "分析当前节点").click();
     await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
   });
 }

@@ -15,6 +15,7 @@ import {
   getHealth,
   isTauriRuntime,
   nativeCurrentGameUnavailable,
+  nativeSyntheticAnalysisUnavailable,
   openSgfDocument,
   parseSgfSummary,
   playCurrentGame,
@@ -807,26 +808,20 @@ export function App() {
   }
 
   async function handleFakeAnalyze() {
+    if (nativeRuntime) {
+      setMessage(nativeSyntheticAnalysisUnavailable);
+      return;
+    }
     const captured = beginReviewRequest();
     try {
-      if (!nativeRuntime) {
-        const [parsed, result, replayed] = await Promise.all([parseSgfSummary(sgfText), fakeAnalyze(sgfText), replaySgfPositions(sgfText)]);
-        const classified = await classifyProblems(result);
-        if (!publishReviewPresentation(captured, result, classified)) return;
-        setGame(parsed);
-        setPositions(replayed);
-        setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
-        if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) return;
-        setMessage(`${nativeCurrentGameUnavailable} 已生成 ${result.length} 个预览复盘局面。`);
-        return;
-      }
-      const artifacts = await artifactsFromCurrentGame();
-      const result = await fakeAnalyze(artifacts.serialized);
+      const [parsed, result, replayed] = await Promise.all([parseSgfSummary(sgfText), fakeAnalyze(sgfText), replaySgfPositions(sgfText)]);
       const classified = await classifyProblems(result);
       if (!publishReviewPresentation(captured, result, classified)) return;
-      setGame(artifacts.projection);
+      setGame(parsed);
+      setPositions(replayed);
+      setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
       if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) return;
-      setMessage(`已生成 ${result.length} 个复盘局面，含候选与胜率。`);
+      setMessage(`${nativeCurrentGameUnavailable} 已生成 ${result.length} 个预览复盘局面。`);
     } catch (error) {
       setMessage(errorMessage(error));
     }
@@ -1460,7 +1455,7 @@ export function App() {
       onCancelSelectedNode={() => void handleCancelSelectedNodeAnalysis()}
       onCancelWholeGame={() => void handleCancelWholeGameAnalysis()}
       onSync={() => toggleSheet("sync")}
-      onFlashAnalyze={() => void handleFakeAnalyze()}
+      onBrowserDemoAnalyze={nativeRuntime ? undefined : () => void handleFakeAnalyze()}
       onHeatmap={() => setOverlayMode("policy")}
       onRefresh={() => void handleParseSgf()}
       onClearBoard={() => void handleNewGame()}

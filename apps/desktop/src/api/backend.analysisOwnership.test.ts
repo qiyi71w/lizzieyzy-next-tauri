@@ -8,7 +8,7 @@ describe("frontend analysis API ownership", () => {
     expect("listenToKataGoAnalysisEvents" in backend).toBe(false);
   });
 
-  it("keeps manager-owned analysis entry points and non-authoritative fake analysis", () => {
+  it("keeps manager-owned analysis entry points and browser-only demonstration analysis", () => {
     expect(typeof backend.startSelectedNodeAnalysis).toBe("function");
     expect(typeof backend.startKataGoGameAnalysis).toBe("function");
     expect(typeof backend.fakeAnalyze).toBe("function");

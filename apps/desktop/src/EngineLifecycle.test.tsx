@@ -307,8 +307,8 @@ describe("foreground engine lifecycle UI", () => {
   it("shows authoritative no-engine status and does not start from Engine Settings selection", async () => {
     const host = await renderApp();
     expect(host.querySelector(".engine-chip-label")?.textContent).toBe("未加载引擎");
-    const analyzeOnce = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "分析此手");
-    expect(analyzeOnce).toBeUndefined();
+    const analyzeOnce = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "分析当前节点") as HTMLButtonElement;
+    expect(analyzeOnce.disabled).toBe(true);
     act(() => {
       Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "设置")?.click();
     });
@@ -428,7 +428,7 @@ describe("foreground engine lifecycle UI", () => {
         }
       });
     });
-    const analyzeOnce = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "继续分析") as HTMLButtonElement;
+    const analyzeOnce = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "分析当前节点") as HTMLButtonElement;
     expect(analyzeOnce.disabled).toBe(false);
     await act(async () => {
       analyzeOnce.click();
@@ -472,7 +472,7 @@ describe("foreground engine lifecycle UI", () => {
     });
 
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
     });
     expect(backend.startSelectedNodeAnalysis).toHaveBeenLastCalledWith({
@@ -567,7 +567,7 @@ describe("foreground engine lifecycle UI", () => {
         generation: 1,
         node_path: { indices: [] }
       });
-    const analyzeOnce = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "继续分析") as HTMLButtonElement;
+    const analyzeOnce = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "分析当前节点") as HTMLButtonElement;
     expect(analyzeOnce.disabled).toBe(false);
     await act(async () => {
       analyzeOnce.click();
@@ -623,7 +623,7 @@ describe("foreground engine lifecycle UI", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results[0]?.value;
     });
     await act(async () => {
@@ -643,7 +643,7 @@ describe("foreground engine lifecycle UI", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results[0]?.value;
     });
     await act(async () => {
@@ -677,7 +677,7 @@ describe("foreground engine lifecycle UI", () => {
       node_path: { indices: [] }
     });
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
     });
     await act(async () => {
@@ -703,7 +703,7 @@ describe("foreground engine lifecycle UI", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
     expect(backend.startKataGoGameAnalysis).toHaveBeenCalledWith({
@@ -767,7 +767,7 @@ describe("foreground engine lifecycle UI", () => {
     expect(nextMove.disabled).toBe(false);
 
     await act(async () => {
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
     await act(async () => {
@@ -829,7 +829,7 @@ describe("foreground engine lifecycle UI", () => {
     const prevMove = host.querySelector('button[title="上一手"]') as HTMLButtonElement;
 
     await act(async () => {
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
     await act(async () => {
@@ -894,7 +894,7 @@ describe("foreground engine lifecycle UI", () => {
     const prevMove = host.querySelector('button[title="上一手"]') as HTMLButtonElement;
 
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
     });
 
@@ -955,7 +955,7 @@ describe("foreground engine lifecycle UI", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
     await act(async () => {
@@ -1030,8 +1030,8 @@ describe("foreground engine lifecycle UI", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析当前节点").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
@@ -1080,7 +1080,7 @@ describe("foreground engine lifecycle UI", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
     backend.startKataGoGameAnalysis.mockRejectedValueOnce({
@@ -1089,12 +1089,12 @@ describe("foreground engine lifecycle UI", () => {
       message: "whole-game analysis is already running on this Foreground Engine Run"
     });
     await act(async () => {
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value.catch(() => undefined);
     });
     expect(host.textContent).toContain("whole-game analysis is already running on this Foreground Engine Run");
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
     });
     expect(backend.startSelectedNodeAnalysis).toHaveBeenCalled();
@@ -1111,7 +1111,7 @@ describe("foreground engine lifecycle UI", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
     backend.cancelKataGoAnalysis.mockClear();
@@ -1130,7 +1130,7 @@ describe("foreground engine lifecycle UI", () => {
         generation: 1,
         node_path: { indices: [] }
       });
-    const analyzeOnce = buttonNamed(host, "继续分析");
+    const analyzeOnce = buttonNamed(host, "分析当前节点");
     await act(async () => {
       analyzeOnce.click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-2)?.value;
@@ -1148,8 +1148,8 @@ describe("foreground engine lifecycle UI", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析当前节点").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
@@ -1164,8 +1164,8 @@ describe("foreground engine lifecycle UI", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析当前节点").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
@@ -1265,7 +1265,7 @@ describe("foreground engine lifecycle UI", () => {
     });
     expect(host.querySelector(".engine-chip-label")?.textContent).toBe("正在切换 Other KataGo");
     expect(switcher.value).toBe("profile-1");
-    const analyzeOnce = buttonNamed(host, "继续分析");
+    const analyzeOnce = buttonNamed(host, "分析当前节点");
     expect(analyzeOnce.disabled).toBe(false);
     await act(async () => {
       analyzeOnce.click();
@@ -1320,7 +1320,7 @@ describe("foreground engine lifecycle UI", () => {
     expect(switcher.value).toBe("profile-2");
     backend.startSelectedNodeAnalysis.mockClear();
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
     });
     expect(backend.startSelectedNodeAnalysis).toHaveBeenCalledWith({
@@ -1410,7 +1410,7 @@ describe("foreground engine lifecycle UI", () => {
     expect(failure.textContent).toContain("required engine assets are missing");
     backend.startSelectedNodeAnalysis.mockClear();
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
     });
     expect(backend.startSelectedNodeAnalysis).toHaveBeenCalledWith({
@@ -1510,7 +1510,7 @@ describe("foreground engine lifecycle UI", () => {
     expect(switcher.value).toBe("profile-3");
     backend.startSelectedNodeAnalysis.mockClear();
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
     });
     expect(backend.startSelectedNodeAnalysis).toHaveBeenCalledWith({
@@ -1603,7 +1603,7 @@ describe("foreground engine lifecycle UI", () => {
     expect(buttonNamed(host, "重启").disabled).toBe(false);
     backend.startSelectedNodeAnalysis.mockClear();
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
     });
     expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
   });
