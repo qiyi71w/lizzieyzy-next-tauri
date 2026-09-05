@@ -10,6 +10,14 @@ import { UNREADABLE_PREFERENCES_RECOVERY_MESSAGE } from "./api/preferences";
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
   replaceCurrentGame: vi.fn(),
+  prepareDocumentReplacement: vi.fn(async () => ({ status: "ready", departure_id: 1 })),
+  resolveDocumentReplacement: vi.fn(async (input: { action: string }) => {
+    if (input.action === "cancel") {
+      return { committed: false, analysis_stopped: false, current: null, message: "Replacement cancelled." };
+    }
+    const current = await backend.replaceCurrentGame("", null);
+    return { committed: true, analysis_stopped: true, current, message: "Replacement committed." };
+  }),
   serializeCurrentGame: vi.fn(() => Promise.resolve("(;SZ[9])")),
   projectCurrentGameMainline: vi.fn(),
   playCurrentGame: vi.fn(),

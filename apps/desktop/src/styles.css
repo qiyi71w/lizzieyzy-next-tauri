@@ -1335,3 +1335,26 @@ textarea {
   font-family: var(--mono);
   white-space: nowrap;
 }
+
+.document-departure-dialog {
+  width: min(420px, calc(100vw - 32px));
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgba(23, 24, 27, 0.18);
+}
+
+.document-departure-dialog p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.document-departure-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

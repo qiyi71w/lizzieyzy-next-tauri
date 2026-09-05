@@ -9,6 +9,9 @@ import type {
   AssetCheckDto,
   CandidateMoveDto,
   CurrentGameResultDto,
+  DocumentDepartureActionDto,
+  DocumentDepartureAdmissionDto,
+  DocumentDepartureOutcomeDto,
   NodePath,
   EngineProfileRecordDto,
   EngineProfileDto,
@@ -91,6 +94,28 @@ export async function replaceCurrentGame(sgfText: string, nativePath: string | n
     throw new Error(nativeCurrentGameUnavailable);
   }
   return invoke<CurrentGameResultDto>("replace_current_game", { sgfText, nativePath });
+}
+
+export async function prepareDocumentReplacement(
+  sgfText: string,
+  nativePath: string | null
+): Promise<DocumentDepartureAdmissionDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<DocumentDepartureAdmissionDto>("prepare_document_replacement", { sgfText, nativePath });
+}
+
+export async function resolveDocumentReplacement(input: {
+  departureId: number;
+  action: DocumentDepartureActionDto;
+  selectedPath: NodePath;
+  defaultFileName?: string | null;
+}): Promise<DocumentDepartureOutcomeDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<DocumentDepartureOutcomeDto>("resolve_document_replacement", input);
 }
 
 export async function serializeCurrentGame(): Promise<string> {

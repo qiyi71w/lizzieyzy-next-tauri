@@ -8,6 +8,14 @@ import type { AnalysisFrameDto, CurrentGameResultDto, GameDto, NodePath } from "
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
   replaceCurrentGame: vi.fn(),
+  prepareDocumentReplacement: vi.fn(async () => ({ status: "ready", departure_id: 1 })),
+  resolveDocumentReplacement: vi.fn(async (input: { action: string }) => {
+    if (input.action === "cancel") {
+      return { committed: false, analysis_stopped: false, current: null, message: "Replacement cancelled." };
+    }
+    const current = await backend.replaceCurrentGame("", null);
+    return { committed: true, analysis_stopped: true, current, message: "Replacement committed." };
+  }),
   serializeCurrentGame: vi.fn(() => Promise.resolve("(;SZ[9])")),
   projectCurrentGameMainline: vi.fn(),
   playCurrentGame: vi.fn(),
@@ -1018,6 +1026,151 @@ describe("App focus-safe review controls", () => {
     pressKey(editor, "?", { shiftKey: true });
     expect(host.querySelector('[role="dialog"][aria-label="快捷键参考"]')).toBeNull();
     expect(buttonNamed(host, "坐标").getAttribute("aria-pressed")).toBe("true");
+  });
+});
+
+describe("App document replacement", () => {
+  beforeEach(() => {
+    backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
+    backend.openSgfDocument.mockResolvedValue({ sgfText: "(;SZ[9])", path: "/tmp/opened.sgf" });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: vi.fn(async () => undefined),
+        readText: vi.fn(async () => "(;SZ[9])")
+      }
+    });
+  });
+
+  it("rejects an invalid candidate before prompting and keeps the current game", async () => {
+    backend.prepareDocumentReplacement
+      .mockResolvedValueOnce({ status: "ready", departure_id: 1 })
+      .mockRejectedValueOnce({ kind: "malformed_sgf", message: "malformed SGF" });
+    const host = await renderApp();
+    await act(async () => {
+      (navigator.clipboard.readText as ReturnType<typeof vi.fn>).mockResolvedValue("not an sgf");
+      pressKey(buttonNamed(host, "坐标"), "v", { ctrlKey: true });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).toBeNull();
+    expect(backend.resolveDocumentReplacement).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("粘贴失败");
+  });
+
+  it("shows Save/Discard/Cancel for a dirty document and Cancel does not stop analysis", async () => {
+    backend.prepareDocumentReplacement.mockImplementation(async () => {
+      if (backend.prepareDocumentReplacement.mock.calls.length <= 1) {
+        return { status: "ready", departure_id: 1 };
+      }
+      return { status: "needs_decision", departure_id: 2 };
+    });
+    const host = await renderApp();
+    backend.cancelSelectedNodeAnalysis.mockClear();
+    backend.resolveDocumentReplacement.mockClear();
+    await act(async () => {
+      buttonLabeled(host, "新建").click();
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).not.toBeNull();
+    expect(backend.resolveDocumentReplacement).not.toHaveBeenCalled();
+    await act(async () => {
+      buttonLabeled(host, "Cancel").click();
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    expect(backend.resolveDocumentReplacement).toHaveBeenCalledWith(expect.objectContaining({ action: "cancel" }));
+    expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).toBeNull();
+    expect(host.textContent).toContain("已取消替换");
+  });
+
+  it("discards without writing the old source file", async () => {
+    backend.prepareDocumentReplacement.mockImplementation(async () => {
+      if (backend.prepareDocumentReplacement.mock.calls.length <= 1) {
+        return { status: "ready", departure_id: 1 };
+      }
+      return { status: "needs_decision", departure_id: 2 };
+    });
+    const host = await renderApp();
+    backend.saveCurrentGame.mockClear();
+    backend.resolveDocumentReplacement.mockClear();
+    await act(async () => {
+      buttonLabeled(host, "新建").click();
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonLabeled(host, "Discard").click();
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    expect(backend.resolveDocumentReplacement).toHaveBeenCalledWith(expect.objectContaining({ action: "discard" }));
+    expect(backend.saveCurrentGame).not.toHaveBeenCalled();
+  });
+
+  it("save-and-leave asks the owner to save then replace", async () => {
+    backend.prepareDocumentReplacement.mockImplementation(async () => {
+      if (backend.prepareDocumentReplacement.mock.calls.length <= 1) {
+        return { status: "ready", departure_id: 1 };
+      }
+      return { status: "needs_decision", departure_id: 2 };
+    });
+    const host = await renderApp();
+    backend.saveCurrentGame.mockClear();
+    backend.resolveDocumentReplacement.mockClear();
+    await act(async () => {
+      buttonLabeled(host, "新建").click();
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonLabeled(host, "Save").click();
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    expect(backend.resolveDocumentReplacement).toHaveBeenCalledWith(expect.objectContaining({ action: "save" }));
+    expect(backend.saveCurrentGame).not.toHaveBeenCalled();
+  });
+
+  it("opens a file picker and validates the candidate before any dirty prompt", async () => {
+    const host = await renderApp();
+    backend.prepareDocumentReplacement.mockClear();
+    backend.prepareDocumentReplacement.mockResolvedValue({ status: "ready", departure_id: 2 });
+    backend.openSgfDocument.mockClear();
+    backend.openSgfDocument.mockResolvedValue({ sgfText: "(;SZ[9])", path: "/tmp/opened.sgf" });
+    await act(async () => {
+      buttonLabeled(host, "打开").click();
+      await backend.openSgfDocument.mock.results.at(-1)?.value;
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    expect(backend.openSgfDocument).toHaveBeenCalledTimes(1);
+    expect(backend.prepareDocumentReplacement).toHaveBeenCalledWith("(;SZ[9])", "/tmp/opened.sgf");
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).toBeNull();
+  });
+
+  it("routes paste, sample, New, and parse through the shared replacement owner", async () => {
+    const host = await renderApp();
+    backend.prepareDocumentReplacement.mockClear();
+    backend.prepareDocumentReplacement.mockResolvedValue({ status: "ready", departure_id: 3 });
+    await act(async () => {
+      pressKey(buttonNamed(host, "坐标"), "v", { ctrlKey: true });
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "载入示例").click();
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonLabeled(host, "新建").click();
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonNamed(host, "棋局").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "解析棋谱").click();
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    expect(backend.prepareDocumentReplacement.mock.calls.length).toBe(4);
   });
 });
 

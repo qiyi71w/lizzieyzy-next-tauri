@@ -3,12 +3,16 @@ use app_model::{
     CurrentGameResultDto, GameDto, MoveVertex, NodePath, SelectedNodeSnapshotDto,
 };
 use sgf::{CurrentSgfDocument, SgfAnalysisPayload};
+use std::collections::HashSet;
 use std::sync::Mutex;
 
 #[cfg(test)]
 mod current_game_analysis_attach;
 #[cfg(test)]
+mod current_game_departure;
+#[cfg(test)]
 mod current_game_save_write;
+mod departure;
 
 #[derive(Debug, Clone)]
 pub struct WholeGameAdmission {
@@ -31,6 +35,10 @@ struct CurrentGameHolder {
     dirty: bool,
     dirty_epoch: u64,
     native_path: Option<String>,
+    departure: Option<departure::DepartureSession>,
+    next_departure_id: u64,
+    edits_blocked: bool,
+    closed_jobs: HashSet<(String, String)>,
 }
 
 impl CurrentGameState {
@@ -50,10 +58,24 @@ impl CurrentGameState {
         discard_confirmed: bool,
     ) -> Result<Option<CurrentGameResultDto>, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
+        if holder.departure.is_some() {
+            return Err(departure::departure_in_progress());
+        }
         if holder.dirty && !discard_confirmed {
             return Ok(None);
         }
         Ok(Some(holder.replace(sgf_text, native_path)?))
+    }
+
+    pub fn native_path(&self) -> Option<String> {
+        self.holder
+            .lock()
+            .expect("current game state")
+            .native_path
+            .as_ref()
+            .map(|path| path.trim())
+            .filter(|path| !path.is_empty())
+            .map(|path| path.to_string())
     }
 
     pub fn serialize(&self) -> Result<String, CurrentGameError> {
@@ -74,6 +96,16 @@ impl CurrentGameState {
         selected_path: NodePath,
         after_snapshot: impl FnOnce(),
     ) -> Result<CurrentGameResultDto, String> {
+        self.save_to_path_allowing_departure(path, selected_path, after_snapshot, false)
+    }
+
+    fn save_to_path_allowing_departure(
+        &self,
+        path: String,
+        selected_path: NodePath,
+        after_snapshot: impl FnOnce(),
+        allow_departure: bool,
+    ) -> Result<CurrentGameResultDto, String> {
         let trimmed = path.trim();
         if trimmed.is_empty() {
             return Err("path must not be empty".to_string());
@@ -81,6 +113,9 @@ impl CurrentGameState {
         let target = std::path::PathBuf::from(trimmed);
         let (serialized, epoch) = {
             let holder = self.holder.lock().expect("current game state");
+            if holder.edits_blocked && !allow_departure {
+                return Err("cannot save while a document departure is in progress".to_string());
+            }
             let document = holder
                 .document
                 .as_ref()
@@ -122,6 +157,7 @@ impl CurrentGameState {
 
     pub fn admit_whole_game(&self, generation: u64) -> Result<WholeGameAdmission, CurrentGameError> {
         let holder = self.holder.lock().expect("current game state");
+        holder.ensure_editable()?;
         let document = holder.document.as_ref().ok_or_else(no_current_game)?;
         if holder.generation != generation {
             return Err(CurrentGameError {
@@ -144,6 +180,7 @@ impl CurrentGameState {
         path: &NodePath,
     ) -> Result<(SelectedNodeSnapshotDto, u8, f32, String), CurrentGameError> {
         let holder = self.holder.lock().expect("current game state");
+        holder.ensure_editable()?;
         let document = holder.document.as_ref().ok_or_else(no_current_game)?;
         if holder.generation != generation {
             return Err(CurrentGameError {
@@ -202,6 +239,12 @@ impl CurrentGameState {
         if !admits_analysis_attachment(event) {
             return None;
         }
+        {
+            let holder = self.holder.lock().expect("current game state");
+            if holder.rejects_job(&event.run_id, &event.job_id) {
+                return None;
+            }
+        }
         let frame = event.frame.as_ref()?;
         let payload = SgfAnalysisPayload::from_frame(frame, "KataGo");
         self.attach_primary_analysis(event.generation, event.node_path.clone(), payload)
@@ -231,21 +274,7 @@ impl CurrentGameHolder {
         native_path: Option<String>,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let document = CurrentSgfDocument::open(sgf_text)?;
-        let selected_path = document.default_selected_path();
-        let snapshot = document.snapshot(&selected_path)?;
-        let tree = document.tree()?;
-        self.document = Some(document);
-        self.generation += 1;
-        self.dirty = false;
-        self.native_path = native_path;
-        Ok(CurrentGameResultDto {
-            tree,
-            selected_path,
-            snapshot,
-            generation: self.generation,
-            dirty: self.dirty,
-            native_path: self.native_path.clone(),
-        })
+        self.install_document(document, native_path)
     }
 
     #[cfg(test)]
@@ -261,6 +290,7 @@ impl CurrentGameHolder {
     }
 
     fn play(&mut self, path: NodePath, vertex: MoveVertex) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.ensure_editable()?;
         let (snapshot, tree, changed) = {
             let document = self.document.as_mut().ok_or_else(no_current_game)?;
             let before = document.serialize()?;
@@ -303,6 +333,7 @@ impl CurrentGameHolder {
         path: NodePath,
         comment: &str,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.ensure_editable()?;
         let (snapshot, tree, changed) = {
             let document = self.document.as_mut().ok_or_else(no_current_game)?;
             let before = document.serialize()?;
@@ -325,6 +356,7 @@ impl CurrentGameHolder {
     }
 
     fn remove_variation(&mut self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.ensure_editable()?;
         let document = self.document.as_mut().ok_or_else(no_current_game)?;
         let selected_path = document.remove_variation(&path)?;
         let snapshot = document.snapshot(&selected_path)?;
@@ -347,6 +379,7 @@ impl CurrentGameHolder {
         path: NodePath,
         payload: SgfAnalysisPayload,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.ensure_editable()?;
         if self.document.is_none() {
             return Err(no_current_game());
         }
@@ -622,7 +655,7 @@ mod current_game_remove_variation {
 
 #[cfg(test)]
 impl CurrentGameState {
-    fn force_dirty(&self) {
+    pub(crate) fn force_dirty(&self) {
         self.holder.lock().expect("current game state").mark_dirty();
     }
 

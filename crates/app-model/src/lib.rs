@@ -7,6 +7,10 @@ pub use analysis_job::{
     admits_analysis_attachment, admits_analysis_publication, AnalysisJobEventDto, AnalysisJobLaneDto,
     AnalysisJobOutcomeDto, AnalysisJobStartedDto, AnalysisPublicationScopeDto,
 };
+mod document_departure;
+pub use document_departure::{
+    DocumentDepartureActionDto, DocumentDepartureAdmissionDto, DocumentDepartureOutcomeDto,
+};
 
 pub type GameId = Uuid;
 pub type NodeId = Uuid;
@@ -142,6 +146,8 @@ pub enum CurrentGameErrorKind {
     Suicide,
     SimpleKo,
     RootRemoval,
+    DepartureInProgress,
+    DepartureBlocked,
 }
 
 impl std::fmt::Display for CurrentGameError {
@@ -719,6 +725,8 @@ mod current_game_wire {
             (CurrentGameErrorKind::Suicide, "suicide"),
             (CurrentGameErrorKind::SimpleKo, "simple_ko"),
             (CurrentGameErrorKind::RootRemoval, "root_removal"),
+            (CurrentGameErrorKind::DepartureInProgress, "departure_in_progress"),
+            (CurrentGameErrorKind::DepartureBlocked, "departure_blocked"),
         ];
 
         for (kind, expected) in kinds {

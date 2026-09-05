@@ -30,6 +30,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod current_game_state;
+mod document_departure;
 mod save_as;
 #[cfg(windows)]
 extern crate windows_core;
@@ -38,6 +39,7 @@ use app_preferences::{
     AppPreferencesLoadResultDto, APP_PREFERENCES_FILE,
 };
 use current_game_state::{CurrentGameState, WholeGameAdmission};
+use document_departure::{prepare_document_replacement, resolve_document_replacement};
 use uuid::Uuid;
 
 const ENGINE_PROFILE_FILE: &str = "lizzieyzy-next-engine-profile.json";
@@ -1007,6 +1009,8 @@ pub fn run() {
             replay_sgf_positions,
             read_sgf_file,
             replace_current_game,
+            prepare_document_replacement,
+            resolve_document_replacement,
             serialize_current_game,
             save_current_game,
             save_current_game_as,

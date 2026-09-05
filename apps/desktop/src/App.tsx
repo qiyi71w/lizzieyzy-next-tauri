@@ -6,6 +6,7 @@ import { EngineSetupPanel } from "./components/EngineSetupPanel";
 import { AppChrome, BottomBar, type OverlayMode, type SheetId } from "./components/AppChrome";
 import { PreferencesPanel } from "./components/PreferencesPanel";
 import { ShortcutReference } from "./components/ShortcutReference";
+import { DocumentDepartureDialog } from "./components/DocumentDepartureDialog";
 import { ProviderPanel } from "./components/ProviderPanel";
 import {
   cancelKataGoAnalysis,
@@ -18,9 +19,10 @@ import {
   openSgfDocument,
   parseSgfSummary,
   playCurrentGame,
+  prepareDocumentReplacement,
   projectCurrentGameMainline,
   replaySgfPositions,
-  replaceCurrentGame,
+  resolveDocumentReplacement,
   saveCurrentGame,
   serializeCurrentGame,
   selectCurrentGameNode,
@@ -63,7 +65,7 @@ import {
   variationReplayIdentityKey,
   variationReplayPointSteps
 } from "./domain/variationReplay";
-import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AppHealthDto, CurrentGameResultDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, SgfTreeNodeDto } from "./domain/types";
+import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AppHealthDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, SgfTreeNodeDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
@@ -128,6 +130,10 @@ export function App() {
   const [overlayMode, setOverlayMode] = useState<OverlayMode>("candidates");
   const [autoPlaying, setAutoPlaying] = useState(false);
   const [shortcutReferenceOpen, setShortcutReferenceOpen] = useState(false);
+  const [departurePrompt, setDeparturePrompt] = useState<{
+    message: string;
+    choose: (action: DocumentDepartureActionDto) => void;
+  } | null>(null);
   const shortcutRegistry = useMemo(() => createShortcutRegistry(), []);
   const jumpRef = useRef<HTMLInputElement | null>(null);
   const requestSerialRef = useRef(0);
@@ -393,6 +399,13 @@ export function App() {
     });
 
     function onKey(event: KeyboardEvent) {
+      if (departurePrompt) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          departurePrompt.choose("cancel");
+        }
+        return;
+      }
       shortcutRegistry.dispatch(event);
     }
     window.addEventListener("keydown", onKey);
@@ -406,6 +419,7 @@ export function App() {
     preferences,
     reviewIndex,
     reviewMax,
+    departurePrompt,
     shortcutRegistry,
     visibleCurrentFrame
   ]);
@@ -600,10 +614,6 @@ export function App() {
   }
 
 
-  function confirmDirtyReplacement(confirmMessage: string): boolean {
-    return !documentDirty || window.confirm(confirmMessage);
-  }
-
   function adoptCurrentGame(result: CurrentGameResultDto) {
     documentGenerationRef.current = result.generation;
     currentGameRef.current = result;
@@ -677,6 +687,88 @@ export function App() {
     return { serialized, projection };
   }
 
+  function requestDepartureDecision(message: string): Promise<DocumentDepartureActionDto> {
+    return new Promise((resolve) => {
+      setDeparturePrompt({
+        message,
+        choose: (action) => {
+          setDeparturePrompt(null);
+          resolve(action);
+        }
+      });
+    });
+  }
+
+  function clearLocalAnalysisSession() {
+    selectedNodeJobRef.current = null;
+    setSelectedNodeRunning(false);
+    resetWholeGameSession();
+  }
+
+  async function adoptCommittedReplacement(
+    result: CurrentGameResultDto,
+    sgfInput: string,
+    nativePath: string | null,
+    options: {
+      fallbackName?: string | null;
+      successMessage: (projection: GameDto, fileName: string) => string;
+    }
+  ) {
+    adoptCurrentGame(result);
+    clearLocalAnalysisSession();
+    const artifacts = await artifactsFromCurrentGame();
+    pendingSelectedPathRef.current = result.selected_path;
+    setChosenChildren(chosenFromPath(result.selected_path));
+    setSgfText(sgfInput);
+    setCurrentFilePath(result.native_path ?? nativePath);
+    setFallbackFileName(result.native_path ? null : options.fallbackName ?? null);
+    setDirty(result.dirty);
+    setGame(artifacts.projection);
+    setCurrentMove(result.snapshot.position.move_number);
+    setFrames([]);
+    setProblems([]);
+    setSelectedCandidateIndex(null);
+    const fileName = fileNameFromPath(result.native_path ?? options.fallbackName ?? "SGF");
+    setMessage(options.successMessage(artifacts.projection, fileName));
+  }
+
+  async function finishNativeReplacement(
+    departureId: number,
+    action: DocumentDepartureActionDto,
+    sgfInput: string,
+    nativePath: string | null,
+    options: {
+      fallbackName?: string | null;
+      successMessage: (projection: GameDto, fileName: string) => string;
+      failurePrefix: string;
+    }
+  ): Promise<boolean> {
+    const outcome = await resolveDocumentReplacement({
+      departureId,
+      action,
+      selectedPath: currentGameRef.current?.selected_path ?? { indices: [] },
+      defaultFileName: saveFileName
+    });
+    if (outcome.analysis_stopped) {
+      clearLocalAnalysisSession();
+    }
+    if (!outcome.committed) {
+      if (outcome.current) {
+        adoptCurrentGame(outcome.current);
+        setDirty(outcome.current.dirty);
+        setCurrentFilePath(outcome.current.native_path ?? null);
+      }
+      setMessage(action === "cancel" ? "已取消替换，当前棋谱和分析保持不变。" : outcome.message);
+      return false;
+    }
+    if (!outcome.current) {
+      setMessage(`${options.failurePrefix}: replacement committed without a current game`);
+      return false;
+    }
+    await adoptCommittedReplacement(outcome.current, sgfInput, nativePath, options);
+    return true;
+  }
+
   async function applyReplacement(
     sgfInput: string,
     nativePath: string | null,
@@ -687,11 +779,10 @@ export function App() {
       failurePrefix: string;
     }
   ): Promise<boolean> {
-    if (!confirmDirtyReplacement(options.confirmMessage)) return false;
-
     if (!nativeRuntime) {
       try {
         const [parsed, replayed] = await Promise.all([parseSgfSummary(sgfInput), replaySgfPositions(sgfInput)]);
+        if (documentDirty && !window.confirm(options.confirmMessage)) return false;
         documentGenerationRef.current = 0;
         setCurrentGame(null);
         pendingSelectedPathRef.current = null;
@@ -716,25 +807,11 @@ export function App() {
     }
 
     try {
-      const result = await replaceCurrentGame(sgfInput, nativePath);
-      adoptCurrentGame(result);
-      await abandonAnalysisSessions();
-      const artifacts = await artifactsFromCurrentGame();
-      pendingSelectedPathRef.current = result.selected_path;
-      setChosenChildren(chosenFromPath(result.selected_path));
-      setSgfText(sgfInput);
-      setCurrentFilePath(result.native_path ?? nativePath);
-      setFallbackFileName(result.native_path ? null : options.fallbackName ?? null);
-      setDirty(result.dirty);
-      setGame(artifacts.projection);
-      setCurrentMove(result.snapshot.position.move_number);
-      setFrames([]);
-      setProblems([]);
-      setSelectedCandidateIndex(null);
-      const fileName = fileNameFromPath(result.native_path ?? options.fallbackName ?? "SGF");
-      const success = options.successMessage(artifacts.projection, fileName);
-      setMessage(success);
-      return true;
+      const admission = await prepareDocumentReplacement(sgfInput, nativePath);
+      const action: DocumentDepartureActionDto = admission.status === "needs_decision"
+        ? await requestDepartureDecision(options.confirmMessage)
+        : "discard";
+      return await finishNativeReplacement(admission.departure_id, action, sgfInput, nativePath, options);
     } catch (error) {
       setMessage(`${options.failurePrefix}: ${errorMessage(error)}`);
       return false;
@@ -756,26 +833,14 @@ export function App() {
       setMessage(nativeCurrentGameUnavailable);
       return;
     }
-    if (!confirmDirtyReplacement("Discard unsaved SGF changes and open another file?")) return;
     try {
       const document = await openSgfDocument();
       if (!document) return;
-      const result = await replaceCurrentGame(document.sgfText, document.path);
-      adoptCurrentGame(result);
-      await abandonAnalysisSessions();
-      const artifacts = await artifactsFromCurrentGame();
-      pendingSelectedPathRef.current = result.selected_path;
-      setSgfText(document.sgfText);
-      setCurrentFilePath(result.native_path ?? document.path);
-      setFallbackFileName(null);
-      setDirty(result.dirty);
-      setGame(artifacts.projection);
-      setCurrentMove(result.snapshot.position.move_number);
-      setFrames([]);
-      setProblems([]);
-      setSelectedCandidateIndex(null);
-      const openedMessage = `Opened ${fileNameFromPath(result.native_path ?? document.path ?? "SGF")}: ${artifacts.projection.summary.move_count} moves.`;
-      setMessage(openedMessage);
+      await applyReplacement(document.sgfText, document.path, {
+        confirmMessage: "放弃未保存的棋谱并打开这个文件？",
+        successMessage: (projection, fileName) => `Opened ${fileName}: ${projection.summary.move_count} moves.`,
+        failurePrefix: "Open failed"
+      });
     } catch (error) {
       setMessage(`Open failed: ${errorMessage(error)}`);
     }
@@ -1508,6 +1573,12 @@ export function App() {
         onChange={(nextPreferences) => void handlePreferencesChange(nextPreferences)}
       /> : null}
     </section>
+    {departurePrompt ? (
+      <DocumentDepartureDialog
+        message={departurePrompt.message}
+        onChoose={departurePrompt.choose}
+      />
+    ) : null}
     {shortcutReferenceOpen ? (
       <ShortcutReference
         entries={shortcutRegistry.referenceEntries()}
