@@ -3,11 +3,31 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AnalysisFrameDto, CurrentGameResultDto, GameDto, NodePath } from "./domain/types";
+import type { AnalysisFrameDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureAdmissionDto, GameDto, NodePath, RecoveryProtectionDto, RecoveryStartupDto } from "./domain/types";
 
+const currentGameFixture = vi.hoisted(() => vi.fn());
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
-  replaceCurrentGame: vi.fn(),
+  prepareDocumentReplacement: vi.fn(async () => ({ status: "ready", departure_id: 1 })),
+  prepareApplicationExit: vi.fn(async (): Promise<DocumentDepartureAdmissionDto> => ({ status: "ready", departure_id: 1 })),
+  resolveApplicationExit: vi.fn(async (input: { action: string }): Promise<ApplicationExitOutcomeDto> => {
+    if (input.action === "cancel") {
+      return { committed: false, analysis_stopped: false, current: null, message: "Exit cancelled.", disposition: null, teardown: null };
+    }
+    const current = await currentGameFixture("", null) as CurrentGameResultDto;
+    return { committed: true, analysis_stopped: true, current, message: "Application exit completed.", disposition: "clean_completed", teardown: { status: "completed" } };
+  }),
+  retryApplicationTeardown: vi.fn(async (): Promise<ApplicationExitOutcomeDto> => ({ committed: true, analysis_stopped: true, current: null, message: "Application exit completed.", disposition: "clean_completed", teardown: { status: "completed" } })),
+  confirmApplicationExitAnyway: vi.fn(async (): Promise<ApplicationExitOutcomeDto> => ({ committed: true, analysis_stopped: true, current: null, message: "Application exit completed.", disposition: "exit_incomplete", teardown: { status: "timed_out", outstanding: ["foreground engine"] } })),
+  confirmNativeExit: vi.fn(async () => undefined),
+  subscribeApplicationExitRequested: vi.fn(async (_onRequest: () => void) => () => undefined),
+  resolveDocumentReplacement: vi.fn(async (input: { action: string }) => {
+    if (input.action === "cancel") {
+      return { committed: false, analysis_stopped: false, current: null, message: "Replacement cancelled." };
+    }
+    const current = await currentGameFixture("", null);
+    return { committed: true, analysis_stopped: true, current, message: "Replacement committed." };
+  }),
   serializeCurrentGame: vi.fn(() => Promise.resolve("(;SZ[9])")),
   projectCurrentGameMainline: vi.fn(),
   playCurrentGame: vi.fn(),
@@ -24,14 +44,25 @@ const backend = vi.hoisted(() => ({
   setCurrentGamePersonalComment: vi.fn(),
   removeCurrentGameVariation: vi.fn(),
   startKataGoGameAnalysis: vi.fn(),
-  loadEngineProfilesSettings: vi.fn(() => Promise.resolve({ selected_profile_id: "default", profiles: [] })),
-  subscribeForegroundEngine: vi.fn(() => Promise.resolve(() => undefined)),
+  loadEngineProfilesSettings: vi.fn(),
+  subscribeForegroundEngine: vi.fn(),
   startForegroundEngine: vi.fn(),
   stopForegroundEngine: vi.fn(),
   restartForegroundEngine: vi.fn(),
   switchForegroundEngine: vi.fn(),
-  getForegroundEngineSnapshot: vi.fn(() => Promise.resolve({ revision: 0, lifecycle: { state: "no_engine" } }))
+  getForegroundEngineSnapshot: vi.fn(() => Promise.resolve({ revision: 0, lifecycle: { state: "no_engine" } })),
+  inspectCurrentGameRecovery: vi.fn(async (): Promise<RecoveryStartupDto> => ({ status: "none" })),
+  restoreCurrentGameRecovery: vi.fn(),
+  discardCurrentGameRecovery: vi.fn(async () => undefined),
+  retryCurrentGameRecovery: vi.fn(async (): Promise<RecoveryProtectionDto> => ({ status: "protected" })),
+  currentGameRecoveryProtection: vi.fn(async (): Promise<RecoveryProtectionDto> => ({ status: "protected" })),
+  subscribeCurrentGameRecoveryProtection: vi.fn(async (_onProtection: (protection: RecoveryProtectionDto) => void) => () => undefined)
 }));
+
+const listeners: {
+  onSnapshot?: (snapshot: unknown) => void;
+  onJob?: (job: unknown) => void;
+} = {};
 
 vi.mock("./api/backend", () => ({
   ...backend,
@@ -78,6 +109,19 @@ const initialGame: CurrentGameResultDto = {
 const initialProjection: GameDto = {
   summary: { id: "test", board_size: 9, komi: 7.5, move_count: 0 },
   moves: []
+};
+
+const savedProfile = {
+  id: "profile-1",
+  max_visits: 800,
+  profile: {
+    name: "Local KataGo",
+    engine_path: "/bin/katago",
+    model_path: "/models/model.bin",
+    config_path: "/configs/analysis.cfg",
+    working_dir: "/tmp",
+    backend: "kata_go_analysis" as const
+  }
 };
 
 const analysisFrame: AnalysisFrameDto = {
@@ -201,8 +245,31 @@ beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
     return canvasContext(this);
   });
-  backend.replaceCurrentGame.mockResolvedValue(initialGame);
+  currentGameFixture.mockResolvedValue(initialGame);
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
+  backend.startForegroundEngine.mockResolvedValue(undefined);
+  backend.startSelectedNodeAnalysis.mockResolvedValue({
+    run_id: "run-1",
+    job_id: "job-1",
+    lane: "selected_node",
+    generation: 1,
+    node_path: { indices: [] }
+  });
+  backend.loadEngineProfilesSettings.mockResolvedValue({
+    selected_profile_id: "profile-1",
+    autoload_profile_id: null,
+    profiles: [savedProfile]
+  });
+  backend.subscribeForegroundEngine.mockImplementation(async (
+    onSnapshot: (snapshot: unknown) => void,
+    _onFailure: unknown,
+    onJob?: (job: unknown) => void
+  ) => {
+    listeners.onSnapshot = onSnapshot;
+    listeners.onJob = onJob;
+    onSnapshot({ revision: 0, lifecycle: { state: "no_engine" } });
+    return () => undefined;
+  });
 });
 
 afterEach(() => {
@@ -228,13 +295,15 @@ describe("App board intent feedback", () => {
     root = createRoot(host);
     act(() => root?.render(<App />));
     await act(async () => {
-      await backend.replaceCurrentGame.mock.results[0]?.value;
+      await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
+      await currentGameFixture.mock.results[0]?.value;
       await backend.projectCurrentGameMainline.mock.results[0]?.value;
     });
 
+    act(() => buttonNamed(host, "键盘落子").click());
     const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
-    act(() => canvas.focus());
     expect(document.activeElement).toBe(canvas);
+    expect(buttonNamed(host, "键盘落子").getAttribute("aria-pressed")).toBe("true");
 
     dispatchKey(canvas, "Enter");
     dispatchKey(canvas, "Enter");
@@ -276,24 +345,13 @@ describe("App board intent feedback", () => {
 
 describe("App candidate continuation preview", () => {
   it("propagates board dwell to the mini-board without mutating the selected game", async () => {
-    backend.fakeAnalyze.mockResolvedValue([analysisFrame]);
     backend.classifyProblems.mockResolvedValue([]);
-    const host = document.createElement("div");
-    document.body.append(host);
-    root = createRoot(host);
-    act(() => root?.render(<App />));
-    await act(async () => {
-      await backend.replaceCurrentGame.mock.results[0]?.value;
-      await backend.projectCurrentGameMainline.mock.results[0]?.value;
-    });
-
-    await act(async () => {
-      buttonNamed(host, "AI 解说").click();
-      await vi.waitFor(() => expect(backend.fakeAnalyze).toHaveBeenCalledOnce());
-      await backend.fakeAnalyze.mock.results[0]?.value;
-      await backend.classifyProblems.mock.results[0]?.value;
-    });
+    const host = await renderApp();
+    await readyEngine(host);
+    await startSelectedNode(host);
+    await completeSelectedNode("job-1", { indices: [] }, analysisFrame);
     expect(host.querySelectorAll(".cand-row")).toHaveLength(2);
+    const selectCalls = backend.selectCurrentGameNode.mock.calls.length;
 
     const board = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
     const miniBoard = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="参考图变化副棋盘"]');
@@ -317,7 +375,7 @@ describe("App candidate continuation preview", () => {
     expect(rows[1]?.classList.contains("is-selected")).toBe(false);
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe(currentMove);
     expect(backend.serializeCurrentGame).toHaveBeenCalledTimes(serializedCalls);
-    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    expect(backend.selectCurrentGameNode).toHaveBeenCalledTimes(selectCalls);
     expect(backend.playCurrentGame).not.toHaveBeenCalled();
     expect(backend.saveCurrentGame).not.toHaveBeenCalled();
     expect(backend.setCurrentGamePersonalComment).not.toHaveBeenCalled();
@@ -332,9 +390,10 @@ describe("App candidate continuation preview", () => {
 
 describe("App stale review presentation", () => {
   it("drops candidate and hover presentation when the selected NodePath changes", async () => {
-    backend.replaceCurrentGame.mockResolvedValue(navigableRoot);
-    backend.selectCurrentGameNode.mockResolvedValue(navigableChild);
-    backend.fakeAnalyze.mockResolvedValue([analysisFrame]);
+    currentGameFixture.mockResolvedValue(navigableRoot);
+    backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => (
+      path.indices.length === 0 ? navigableRoot : navigableChild
+    ));
     backend.classifyProblems.mockResolvedValue([{
       turn: 1,
       severity: "mistake",
@@ -344,7 +403,9 @@ describe("App stale review presentation", () => {
     }]);
 
     const host = await renderApp();
-    await runFakeAnalyze(host);
+    await readyEngine(host);
+    await startSelectedNode(host);
+    await completeSelectedNode("job-1", { indices: [] }, analysisFrame);
     expect(candidateCoords(host)).toEqual(["C6", "G4"]);
     expect(buttonNamed(host, "问题手 (1)")).toBeTruthy();
 
@@ -364,7 +425,7 @@ describe("App stale review presentation", () => {
 
     await act(async () => {
       buttonNamed(host, "下一变化").click();
-      await backend.selectCurrentGameNode.mock.results[0]?.value;
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
     });
 
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
@@ -374,106 +435,73 @@ describe("App stale review presentation", () => {
   });
 
   it("ignores a late completion after the selected NodePath has already changed", async () => {
-    let finishStale: ((frames: AnalysisFrameDto[]) => void) | undefined;
-    backend.replaceCurrentGame.mockResolvedValue(navigableRoot);
+    currentGameFixture.mockResolvedValue(navigableRoot);
     backend.selectCurrentGameNode.mockResolvedValue(navigableChild);
-    backend.fakeAnalyze.mockImplementation(() => new Promise((resolve) => {
-      finishStale = resolve;
-    }));
     backend.classifyProblems.mockResolvedValue([]);
 
     const host = await renderApp();
-    act(() => buttonNamed(host, "AI 解说").click());
-    await act(async () => {
-      await vi.waitFor(() => expect(backend.fakeAnalyze).toHaveBeenCalledOnce());
-    });
+    await readyEngine(host);
+    await startSelectedNode(host, "job-1");
 
     await act(async () => {
       buttonNamed(host, "下一变化").click();
-      await backend.selectCurrentGameNode.mock.results[0]?.value;
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
     });
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
 
-    await act(async () => {
-      finishStale?.([analysisFrame]);
-      await backend.fakeAnalyze.mock.results[0]?.value;
-      await backend.classifyProblems.mock.results[0]?.value;
-    });
+    await completeSelectedNode("job-1", { indices: [] }, analysisFrame);
 
     expect(candidateCoords(host)).toEqual([]);
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
   });
 
   it("keeps the superseding request and ignores the earlier completion", async () => {
-    let finishStale: ((frames: AnalysisFrameDto[]) => void) | undefined;
-    backend.fakeAnalyze
-      .mockImplementationOnce(() => new Promise((resolve) => {
-        finishStale = resolve;
-      }))
-      .mockResolvedValueOnce([currentAnalysisFrame]);
     backend.classifyProblems.mockResolvedValue([]);
-
     const host = await renderApp();
-    act(() => buttonNamed(host, "AI 解说").click());
-    await act(async () => {
-      await vi.waitFor(() => expect(backend.fakeAnalyze).toHaveBeenCalledOnce());
-    });
-
-    await runFakeAnalyze(host);
+    await readyEngine(host);
+    await startSelectedNode(host, "stale-job");
+    await startSelectedNode(host, "current-job");
+    await completeSelectedNode("current-job", { indices: [] }, currentAnalysisFrame);
     expect(candidateCoords(host)).toEqual(["J1"]);
 
-    await act(async () => {
-      finishStale?.([staleAnalysisFrame]);
-      await backend.fakeAnalyze.mock.results[0]?.value;
-      await backend.classifyProblems.mock.results.at(-1)?.value;
-    });
-
+    await completeSelectedNode("stale-job", { indices: [] }, staleAnalysisFrame);
     expect(candidateCoords(host)).toEqual(["J1"]);
   });
 
   it("clears presentation on game replacement before a late completion can return", async () => {
-    let finishStale: ((frames: AnalysisFrameDto[]) => void) | undefined;
-    backend.fakeAnalyze.mockImplementation(() => new Promise((resolve) => {
-      finishStale = resolve;
-    }));
     backend.classifyProblems.mockResolvedValue([]);
-    backend.replaceCurrentGame
+    currentGameFixture
       .mockResolvedValueOnce(initialGame)
       .mockResolvedValueOnce({ ...initialGame, generation: 4 });
 
     const host = await renderApp();
-    act(() => buttonNamed(host, "AI 解说").click());
-    await act(async () => {
-      await vi.waitFor(() => expect(backend.fakeAnalyze).toHaveBeenCalledOnce());
-    });
+    await readyEngine(host);
+    await startSelectedNode(host, "job-1");
 
     await act(async () => {
       buttonNamed(host, "新对局").click();
-      await backend.replaceCurrentGame.mock.results.at(-1)?.value;
+      await currentGameFixture.mock.results.at(-1)?.value;
       await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
     });
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("0");
     expect(candidateCoords(host)).toEqual([]);
 
-    await act(async () => {
-      finishStale?.([analysisFrame]);
-      await backend.fakeAnalyze.mock.results[0]?.value;
-      await backend.classifyProblems.mock.results[0]?.value;
-    });
+    await completeSelectedNode("job-1", { indices: [] }, analysisFrame);
     expect(candidateCoords(host)).toEqual([]);
   });
 
   it("clears presentation when a move mutates the current game", async () => {
-    backend.fakeAnalyze.mockResolvedValue([analysisFrame]);
     backend.classifyProblems.mockResolvedValue([]);
     backend.playCurrentGame.mockResolvedValue(acceptedGame);
 
     const host = await renderApp();
-    await runFakeAnalyze(host);
+    await readyEngine(host);
+    await startSelectedNode(host);
+    await completeSelectedNode("job-1", { indices: [] }, analysisFrame);
     expect(candidateCoords(host)).toEqual(["C6", "G4"]);
 
+    act(() => buttonNamed(host, "键盘落子").click());
     const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
-    act(() => canvas.focus());
     dispatchKey(canvas, "Enter");
     await act(async () => {
       await backend.playCurrentGame.mock.results[0]?.value;
@@ -487,7 +515,7 @@ describe("App stale review presentation", () => {
 
 describe("App focus-safe review controls", () => {
   beforeEach(() => {
-    backend.replaceCurrentGame.mockResolvedValue(branchingGame);
+    currentGameFixture.mockResolvedValue(branchingGame);
     backend.projectCurrentGameMainline.mockResolvedValue({
       summary: { id: "branch", board_size: 9, komi: 7.5, move_count: 2 },
       moves: []
@@ -534,21 +562,38 @@ describe("App focus-safe review controls", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
   });
 
-  it("ignores application shortcuts on the board and text-editing targets", async () => {
+  it("keeps review shortcuts on the board while isolating text, select, contenteditable, and IME", async () => {
     const host = await renderApp();
     const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
     const coordinates = buttonNamed(host, "坐标");
     const jump = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
 
     backend.selectCurrentGameNode.mockClear();
+    backend.playCurrentGame.mockClear();
+    backend.saveCurrentGame.mockClear();
     act(() => canvas.focus());
-    pressKey(canvas, "ArrowLeft");
+    pressKey(canvas, "p");
+    await flushLast(backend.playCurrentGame);
+    expect(backend.playCurrentGame).toHaveBeenLastCalledWith({ indices: [0, 1] }, "pass");
+    pressKey(canvas, "s", { ctrlKey: true });
+    await flushLast(backend.saveCurrentGame);
+    expect(backend.saveCurrentGame).toHaveBeenCalledTimes(1);
+    pressKey(canvas, "ArrowUp");
+    await flushLast(backend.selectCurrentGameNode);
+    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
     pressKey(canvas, "c");
-    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    expect(coordinates.getAttribute("aria-pressed")).toBe("false");
+    pressKey(canvas, "c");
     expect(coordinates.getAttribute("aria-pressed")).toBe("true");
 
+    const composing = new KeyboardEvent("keydown", { key: "c", bubbles: true, cancelable: true });
+    Object.defineProperty(composing, "isComposing", { value: true });
+    act(() => canvas.dispatchEvent(composing));
+    expect(coordinates.getAttribute("aria-pressed")).toBe("true");
+
+    backend.selectCurrentGameNode.mockClear();
     act(() => jump.focus());
-    pressKey(jump, "ArrowLeft");
+    pressKey(jump, "ArrowUp");
     pressKey(jump, "c");
     expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
     expect(coordinates.getAttribute("aria-pressed")).toBe("true");
@@ -583,7 +628,15 @@ describe("App focus-safe review controls", () => {
 
     const hostLeft = await renderApp();
     backend.selectCurrentGameNode.mockClear();
-    pressKey(buttonNamed(hostLeft, "坐标"), "ArrowLeft");
+    pressKey(buttonNamed(hostLeft, "坐标"), "ArrowUp");
+    await flushLast(backend.selectCurrentGameNode);
+    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
+
+    const hostBoardUp = await renderApp();
+    backend.selectCurrentGameNode.mockClear();
+    const board = requiredElement(hostBoardUp, 'canvas[aria-label="棋盘"]');
+    act(() => board.focus());
+    pressKey(board, "ArrowUp");
     await flushLast(backend.selectCurrentGameNode);
     expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
 
@@ -602,7 +655,7 @@ describe("App focus-safe review controls", () => {
 
     const hostUpKey = await renderApp();
     backend.selectCurrentGameNode.mockClear();
-    pressKey(buttonNamed(hostUpKey, "坐标"), "ArrowUp");
+    pressKey(buttonNamed(hostUpKey, "坐标"), "ArrowLeft");
     await flushLast(backend.selectCurrentGameNode);
     expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 0] });
 
@@ -620,7 +673,7 @@ describe("App focus-safe review controls", () => {
     act(() => buttonNamed(hostRightKey, "父节点").click());
     await flushLast(backend.selectCurrentGameNode);
     backend.selectCurrentGameNode.mockClear();
-    pressKey(buttonNamed(hostRightKey, "坐标"), "ArrowRight");
+    pressKey(buttonNamed(hostRightKey, "坐标"), "ArrowDown");
     await flushLast(backend.selectCurrentGameNode);
     expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
 
@@ -638,7 +691,7 @@ describe("App focus-safe review controls", () => {
     act(() => buttonNamed(hostDownKey, "上一分支").click());
     await flushLast(backend.selectCurrentGameNode);
     backend.selectCurrentGameNode.mockClear();
-    pressKey(buttonNamed(hostDownKey, "坐标"), "ArrowDown");
+    pressKey(buttonNamed(hostDownKey, "坐标"), "ArrowRight");
     await flushLast(backend.selectCurrentGameNode);
     expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
 
@@ -752,29 +805,42 @@ describe("App focus-safe review controls", () => {
     expect(backend.removeCurrentGameVariation).toHaveBeenCalledTimes(2);
 
     const hostKeys = await renderApp();
-    const replaceCalls = backend.replaceCurrentGame.mock.calls.length;
     pressKey(buttonNamed(hostKeys, "坐标"), "c", { ctrlKey: true });
     await flushLast(backend.serializeCurrentGame);
     expect(backend.serializeCurrentGame).toHaveBeenCalled();
 
+    currentGameFixture.mockResolvedValue({
+      ...branchingGame,
+      selected_path: { indices: [] },
+      snapshot: {
+        ...branchingGame.snapshot,
+        path: { indices: [] },
+        position: { ...emptyPosition, move_number: 0 }
+      }
+    });
     pressKey(buttonNamed(hostKeys, "坐标"), "v", { ctrlKey: true });
     await act(async () => {
       await Promise.resolve();
+      await currentGameFixture.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
     });
-    expect(backend.replaceCurrentGame.mock.calls.length).toBeGreaterThan(replaceCalls);
+    expect(requiredElement<HTMLInputElement>(hostKeys, 'input[aria-label="跳转手数"]').value).toBe("0");
 
     pressKey(buttonNamed(hostKeys, "坐标"), "n");
     await act(async () => {
       await Promise.resolve();
     });
-    expect(backend.replaceCurrentGame).toHaveBeenCalled();
+    expect(requiredElement(hostKeys, ".nav-message").textContent).toContain("人机对局尚未接入");
+    expect(requiredElement<HTMLInputElement>(hostKeys, 'input[aria-label="跳转手数"]').value).toBe("0");
 
-    const newCalls = backend.replaceCurrentGame.mock.calls.length;
+    currentGameFixture.mockResolvedValue(branchingGame);
     pressKey(buttonNamed(hostKeys, "坐标"), "Home", { ctrlKey: true });
     await act(async () => {
       await Promise.resolve();
+      await currentGameFixture.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
     });
-    expect(backend.replaceCurrentGame.mock.calls.length).toBeGreaterThan(newCalls);
+    expect(requiredElement<HTMLInputElement>(hostKeys, 'input[aria-label="跳转手数"]').value).toBe("2");
 
     backend.saveCurrentGame.mockClear();
     pressKey(buttonNamed(hostKeys, "坐标"), "s");
@@ -843,36 +909,67 @@ describe("App focus-safe review controls", () => {
     await flushLast(backend.saveCurrentGame);
     expect(backend.saveCurrentGame).toHaveBeenLastCalledWith(null, { indices: [0, 1] }, "review.sgf");
 
-    const sampleCalls = backend.replaceCurrentGame.mock.calls.length;
     const hostSample = await renderApp();
+    currentGameFixture.mockResolvedValue({
+      ...branchingGame,
+      selected_path: { indices: [] },
+      snapshot: {
+        ...branchingGame.snapshot,
+        path: { indices: [] },
+        position: { ...emptyPosition, move_number: 0 }
+      }
+    });
     act(() => buttonNamed(hostSample, "文件").click());
     act(() => buttonNamed(hostSample, "载入示例").click());
     await act(async () => {
       await Promise.resolve();
+      await currentGameFixture.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
     });
-    expect(backend.replaceCurrentGame.mock.calls.length).toBeGreaterThan(sampleCalls);
+    expect(requiredElement<HTMLInputElement>(hostSample, 'input[aria-label="跳转手数"]').value).toBe("0");
 
     const hostImport = await renderApp();
     act(() => buttonNamed(hostImport, "文件").click());
     act(() => buttonNamed(hostImport, "导入棋谱…").click());
     expect(hostImport.querySelector('textarea[aria-label="棋谱载入文本"]')).not.toBeNull();
 
-    const parseCalls = backend.replaceCurrentGame.mock.calls.length;
     const hostParse = await renderApp();
+    currentGameFixture.mockResolvedValue({
+      ...branchingGame,
+      selected_path: { indices: [] },
+      snapshot: {
+        ...branchingGame.snapshot,
+        path: { indices: [] },
+        position: { ...emptyPosition, move_number: 0 }
+      }
+    });
     act(() => buttonNamed(hostParse, "棋局").click());
     act(() => buttonNamed(hostParse, "解析棋谱").click());
     await act(async () => {
       await Promise.resolve();
+      await currentGameFixture.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
     });
-    expect(backend.replaceCurrentGame.mock.calls.length).toBeGreaterThan(parseCalls);
+    expect(requiredElement<HTMLInputElement>(hostParse, 'input[aria-label="跳转手数"]').value).toBe("0");
 
-    const refreshCalls = backend.replaceCurrentGame.mock.calls.length;
     const hostRefresh = await renderApp();
+    currentGameFixture.mockResolvedValue({
+      ...branchingGame,
+      selected_path: { indices: [] },
+      snapshot: {
+        ...branchingGame.snapshot,
+        path: { indices: [] },
+        position: { ...emptyPosition, move_number: 0 }
+      }
+    });
     act(() => buttonNamed(hostRefresh, "刷新").click());
     await act(async () => {
       await Promise.resolve();
+      await currentGameFixture.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
     });
-    expect(backend.replaceCurrentGame.mock.calls.length).toBeGreaterThan(refreshCalls);
+    expect(requiredElement<HTMLInputElement>(hostRefresh, 'input[aria-label="跳转手数"]').value).toBe("0");
+
   });
 
   it("selects candidates from number keys and the candidate list while ignoring board and text targets", async () => {
@@ -889,13 +986,13 @@ describe("App focus-safe review controls", () => {
     const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
     act(() => canvas.focus());
     pressKey(canvas, "2");
-    expect(first?.classList.contains("is-selected")).toBe(true);
-    expect(second?.classList.contains("is-selected")).toBe(false);
+    expect(second?.classList.contains("is-selected")).toBe(true);
 
     const jump = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
     act(() => jump.focus());
     pressKey(jump, "2");
-    expect(first?.classList.contains("is-selected")).toBe(true);
+    expect(second?.classList.contains("is-selected")).toBe(true);
+    expect(first?.classList.contains("is-selected")).toBe(false);
 
     pressKey(buttonNamed(host, "坐标"), "2");
     expect(second?.classList.contains("is-selected")).toBe(true);
@@ -977,10 +1074,13 @@ describe("App focus-safe review controls", () => {
 
     backend.startSelectedNodeAnalysis.mockClear();
     backend.startKataGoGameAnalysis.mockClear();
+    backend.playCurrentGame.mockClear();
     pressKey(buttonNamed(host, "坐标"), "a");
     pressKey(buttonNamed(host, "坐标"), " ");
     expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
     expect(backend.startKataGoGameAnalysis).not.toHaveBeenCalled();
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    expect(requiredElement(host, ".nav-message").textContent).toContain("连续分析尚未接入");
   });
 
   it("opens the same searchable Shortcut Reference from Help and focus-safe ?", async () => {
@@ -991,6 +1091,16 @@ describe("App focus-safe review controls", () => {
     expect(dialog.textContent).toContain("Ctrl+A");
     expect(dialog.textContent).toContain("快捷键参考");
     expect(dialog.textContent).toContain("?");
+    expect(dialog.textContent).toContain("上一手");
+    expect(dialog.textContent).toContain("Up");
+    expect(dialog.textContent).toContain("下一分支");
+    expect(dialog.textContent).toContain("Right");
+    expect(dialog.textContent).toContain("新建");
+    expect(dialog.textContent).toContain("Ctrl+Home");
+    expect(dialog.textContent).not.toContain("N, Ctrl+Home");
+    expect(dialog.textContent).toContain("人机对局（未接入）");
+    expect(dialog.textContent).toContain("连续分析（未接入）");
+    expect(dialog.textContent).toContain("Space");
 
     const search = requiredElement<HTMLInputElement>(dialog, 'input[aria-label="搜索快捷键"]');
     act(() => {
@@ -1019,6 +1129,594 @@ describe("App focus-safe review controls", () => {
     expect(host.querySelector('[role="dialog"][aria-label="快捷键参考"]')).toBeNull();
     expect(buttonNamed(host, "坐标").getAttribute("aria-pressed")).toBe("true");
   });
+
+  it("uses explicit keyboard placement for arrows and Enter and never submits Space", async () => {
+    const host = await renderApp();
+    const toggle = buttonNamed(host, "键盘落子");
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    backend.playCurrentGame.mockClear();
+    backend.selectCurrentGameNode.mockClear();
+
+    act(() => toggle.click());
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
+    expect(document.activeElement).toBe(canvas);
+
+    pressKey(canvas, "ArrowRight");
+    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    pressKey(canvas, " ");
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    expect(requiredElement(host, ".nav-message").textContent).toContain("连续分析尚未接入");
+    pressKey(canvas, "Enter", { shiftKey: true });
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+
+    pressKey(canvas, "s", { ctrlKey: true });
+    await flushLast(backend.saveCurrentGame);
+    expect(backend.saveCurrentGame).toHaveBeenCalled();
+
+    pressKey(canvas, "Enter");
+    await flushLast(backend.playCurrentGame);
+    expect(backend.playCurrentGame).toHaveBeenCalled();
+
+    pressKey(canvas, "Escape");
+    expect(buttonNamed(host, "键盘落子").getAttribute("aria-pressed")).toBe("false");
+    backend.playCurrentGame.mockClear();
+    pressKey(canvas, "Enter");
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+  });
+
+  it("rejects an illegal keyboard placement and leaves the tree unchanged", async () => {
+    backend.playCurrentGame.mockRejectedValueOnce({ kind: "occupied_point", message: "point is occupied" });
+    const host = await renderApp();
+    act(() => buttonNamed(host, "键盘落子").click());
+    const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
+    const moveField = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
+    const before = moveField.value;
+    pressKey(canvas, "Enter");
+    await act(async () => {
+      await Promise.resolve();
+      const last = backend.playCurrentGame.mock.results.at(-1)?.value;
+      if (last && typeof (last as Promise<unknown>).then === "function") {
+        await (last as Promise<unknown>).catch(() => undefined);
+      }
+    });
+    expect(requiredElement(host, ".board-intent-status").textContent).toContain("落子失败: point is occupied");
+    expect(moveField.value).toBe(before);
+  });
+});
+
+describe("App document replacement", () => {
+  beforeEach(() => {
+    backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
+    backend.openSgfDocument.mockResolvedValue({ sgfText: "(;SZ[9])", path: "/tmp/opened.sgf" });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: vi.fn(async () => undefined),
+        readText: vi.fn(async () => "(;SZ[9])")
+      }
+    });
+  });
+
+  it("rejects an invalid candidate before prompting and keeps the current game", async () => {
+    backend.prepareDocumentReplacement
+      .mockResolvedValueOnce({ status: "ready", departure_id: 1 })
+      .mockRejectedValueOnce({ kind: "malformed_sgf", message: "malformed SGF" });
+    const host = await renderApp();
+    await act(async () => {
+      (navigator.clipboard.readText as ReturnType<typeof vi.fn>).mockResolvedValue("not an sgf");
+      pressKey(buttonNamed(host, "坐标"), "v", { ctrlKey: true });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).toBeNull();
+    expect(backend.resolveDocumentReplacement).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("粘贴失败");
+  });
+
+  it("shows Save/Discard/Cancel for a dirty document and Cancel does not stop analysis", async () => {
+    backend.prepareDocumentReplacement.mockImplementation(async () => {
+      if (backend.prepareDocumentReplacement.mock.calls.length <= 1) {
+        return { status: "ready", departure_id: 1 };
+      }
+      return { status: "needs_decision", departure_id: 2 };
+    });
+    const host = await renderApp();
+    backend.cancelSelectedNodeAnalysis.mockClear();
+    backend.resolveDocumentReplacement.mockClear();
+    await act(async () => {
+      buttonLabeled(host, "新建").click();
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).not.toBeNull();
+    expect(backend.resolveDocumentReplacement).not.toHaveBeenCalled();
+    await act(async () => {
+      buttonLabeled(host, "Cancel").click();
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    expect(backend.resolveDocumentReplacement).toHaveBeenCalledWith(expect.objectContaining({ action: "cancel" }));
+    expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).toBeNull();
+    expect(host.textContent).toContain("已取消替换");
+  });
+
+  it("discards without writing the old source file", async () => {
+    backend.prepareDocumentReplacement.mockImplementation(async () => {
+      if (backend.prepareDocumentReplacement.mock.calls.length <= 1) {
+        return { status: "ready", departure_id: 1 };
+      }
+      return { status: "needs_decision", departure_id: 2 };
+    });
+    const host = await renderApp();
+    backend.saveCurrentGame.mockClear();
+    backend.resolveDocumentReplacement.mockClear();
+    await act(async () => {
+      buttonLabeled(host, "新建").click();
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonLabeled(host, "Discard").click();
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    expect(backend.resolveDocumentReplacement).toHaveBeenCalledWith(expect.objectContaining({ action: "discard" }));
+    expect(backend.saveCurrentGame).not.toHaveBeenCalled();
+  });
+
+  it("save-and-leave asks the owner to save then replace", async () => {
+    backend.prepareDocumentReplacement.mockImplementation(async () => {
+      if (backend.prepareDocumentReplacement.mock.calls.length <= 1) {
+        return { status: "ready", departure_id: 1 };
+      }
+      return { status: "needs_decision", departure_id: 2 };
+    });
+    const host = await renderApp();
+    backend.saveCurrentGame.mockClear();
+    backend.resolveDocumentReplacement.mockClear();
+    await act(async () => {
+      buttonLabeled(host, "新建").click();
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonLabeled(host, "Save").click();
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    expect(backend.resolveDocumentReplacement).toHaveBeenCalledWith(expect.objectContaining({ action: "save" }));
+    expect(backend.saveCurrentGame).not.toHaveBeenCalled();
+  });
+
+  it("opens a file picker and validates the candidate before any dirty prompt", async () => {
+    const host = await renderApp();
+    backend.prepareDocumentReplacement.mockClear();
+    backend.prepareDocumentReplacement.mockResolvedValue({ status: "ready", departure_id: 2 });
+    backend.openSgfDocument.mockClear();
+    backend.openSgfDocument.mockResolvedValue({ sgfText: "(;SZ[9])", path: "/tmp/opened.sgf" });
+    await act(async () => {
+      buttonLabeled(host, "打开").click();
+      await backend.openSgfDocument.mock.results.at(-1)?.value;
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    expect(backend.openSgfDocument).toHaveBeenCalledTimes(1);
+    expect(backend.prepareDocumentReplacement).toHaveBeenCalledWith("(;SZ[9])", "/tmp/opened.sgf");
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).toBeNull();
+  });
+
+  it("routes paste, sample, New, and parse through the shared replacement owner", async () => {
+    const host = await renderApp();
+    backend.prepareDocumentReplacement.mockClear();
+    backend.prepareDocumentReplacement.mockResolvedValue({ status: "ready", departure_id: 3 });
+    await act(async () => {
+      pressKey(buttonNamed(host, "坐标"), "v", { ctrlKey: true });
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "载入示例").click();
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonLabeled(host, "新建").click();
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonNamed(host, "棋局").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "解析棋谱").click();
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    expect(backend.prepareDocumentReplacement.mock.calls.length).toBe(4);
+  });
+
+  it("exits keyboard placement after a committed document replacement", async () => {
+    const host = await renderApp();
+    act(() => buttonNamed(host, "键盘落子").click());
+    expect(buttonNamed(host, "键盘落子").getAttribute("aria-pressed")).toBe("true");
+    backend.prepareDocumentReplacement.mockClear();
+    backend.prepareDocumentReplacement.mockResolvedValue({ status: "ready", departure_id: 9 });
+    await act(async () => {
+      buttonLabeled(host, "新建").click();
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    expect(buttonNamed(host, "键盘落子").getAttribute("aria-pressed")).toBe("false");
+  });
+});
+
+
+describe("App application exit", () => {
+  it("routes File Exit and window close through one clean-exit transaction", async () => {
+    const host = await renderApp();
+    backend.prepareApplicationExit.mockClear();
+    backend.resolveApplicationExit.mockClear();
+    backend.confirmNativeExit.mockClear();
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "退出").click();
+      await backend.prepareApplicationExit.mock.results.at(-1)?.value;
+      await backend.resolveApplicationExit.mock.results.at(-1)?.value;
+      await backend.confirmNativeExit.mock.results.at(-1)?.value;
+    });
+    expect(backend.prepareApplicationExit).toHaveBeenCalledTimes(1);
+    expect(backend.resolveApplicationExit).toHaveBeenCalledWith(expect.objectContaining({ action: "continue" }));
+    expect(backend.confirmNativeExit).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).toBeNull();
+  });
+
+  it("keeps analysis running when the initial exit prompt is cancelled", async () => {
+    backend.prepareApplicationExit.mockResolvedValue({ status: "needs_decision", departure_id: 4 });
+    const host = await renderApp();
+    backend.cancelSelectedNodeAnalysis.mockClear();
+    backend.resolveApplicationExit.mockClear();
+    backend.confirmNativeExit.mockClear();
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "退出").click();
+      await backend.prepareApplicationExit.mock.results.at(-1)?.value;
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).not.toBeNull();
+    await act(async () => {
+      buttonLabeled(host, "Cancel").click();
+      await backend.resolveApplicationExit.mock.results.at(-1)?.value;
+    });
+    expect(backend.resolveApplicationExit).toHaveBeenCalledWith(expect.objectContaining({ action: "cancel" }));
+    expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("已取消退出");
+  });
+
+  it("does not open a second prompt for a repeated close while exit is in progress", async () => {
+    backend.prepareApplicationExit.mockResolvedValue({ status: "needs_decision", departure_id: 5 });
+    const host = await renderApp();
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "退出").click();
+      await backend.prepareApplicationExit.mock.results.at(-1)?.value;
+    });
+    backend.prepareApplicationExit.mockClear();
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "退出").click();
+    });
+    expect(backend.prepareApplicationExit).not.toHaveBeenCalled();
+    expect(host.querySelectorAll('[role="dialog"][aria-label="保存当前棋谱"]')).toHaveLength(1);
+  });
+
+  it("uses the same File Exit owner for a native close request", async () => {
+    const listeners: Array<() => void> = [];
+    backend.subscribeApplicationExitRequested.mockImplementation(async (onRequest: () => void) => {
+      listeners.push(onRequest);
+      return () => undefined;
+    });
+    const host = await renderApp();
+    backend.prepareApplicationExit.mockClear();
+    backend.resolveApplicationExit.mockClear();
+    backend.confirmNativeExit.mockClear();
+    expect(listeners).toHaveLength(1);
+    await act(async () => {
+      listeners[0]();
+      await backend.prepareApplicationExit.mock.results.at(-1)?.value;
+      await backend.resolveApplicationExit.mock.results.at(-1)?.value;
+      await backend.confirmNativeExit.mock.results.at(-1)?.value;
+    });
+    expect(backend.prepareApplicationExit).toHaveBeenCalledTimes(1);
+    expect(backend.resolveApplicationExit).toHaveBeenCalledWith(expect.objectContaining({ action: "continue" }));
+    expect(backend.confirmNativeExit).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).toBeNull();
+  });
+
+  it("names outstanding resources and offers Retry then Exit anyway", async () => {
+    backend.prepareApplicationExit.mockResolvedValue({ status: "ready", departure_id: 6 });
+    backend.resolveApplicationExit.mockResolvedValue({
+      committed: true,
+      analysis_stopped: true,
+      current: initialGame,
+      message: "Exit teardown timed out: foreground engine. Retry or exit anyway.",
+      disposition: "exit_incomplete",
+      teardown: { status: "timed_out", outstanding: ["foreground engine"] }
+    });
+    backend.retryApplicationTeardown.mockResolvedValue({
+      committed: true,
+      analysis_stopped: true,
+      current: initialGame,
+      message: "Exit teardown timed out: foreground engine. Retry or exit anyway.",
+      disposition: "exit_incomplete",
+      teardown: { status: "timed_out", outstanding: ["foreground engine"] }
+    });
+    const host = await renderApp();
+    backend.confirmNativeExit.mockClear();
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "退出").click();
+      await backend.prepareApplicationExit.mock.results.at(-1)?.value;
+      await backend.resolveApplicationExit.mock.results.at(-1)?.value;
+    });
+    const timeoutDialog = host.querySelector('[role="dialog"][aria-label="退出清理未完成"]');
+    expect(timeoutDialog).not.toBeNull();
+    expect(timeoutDialog?.textContent).toContain("foreground engine");
+    expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+    await act(async () => {
+      buttonLabeled(host, "Retry").click();
+      await backend.retryApplicationTeardown.mock.results.at(-1)?.value;
+    });
+    expect(backend.retryApplicationTeardown).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      buttonLabeled(host, "Exit anyway").click();
+      await backend.confirmApplicationExitAnyway.mock.results.at(-1)?.value;
+      await backend.confirmNativeExit.mock.results.at(-1)?.value;
+    });
+    expect(backend.confirmApplicationExitAnyway).toHaveBeenCalledWith(expect.objectContaining({
+      outstanding: ["foreground engine"]
+    }));
+    expect(backend.confirmNativeExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves a dirty document then exits without a second prompt", async () => {
+    backend.prepareApplicationExit.mockResolvedValue({ status: "needs_decision", departure_id: 7 });
+    backend.resolveApplicationExit.mockResolvedValue({
+      committed: true,
+      analysis_stopped: true,
+      current: { ...initialGame, dirty: false, native_path: "/tmp/review.sgf" },
+      message: "Application exit completed.",
+      disposition: "clean_completed",
+      teardown: { status: "completed" }
+    });
+    const host = await renderApp();
+    backend.confirmNativeExit.mockClear();
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "退出").click();
+      await backend.prepareApplicationExit.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonLabeled(host, "Save").click();
+      await backend.resolveApplicationExit.mock.results.at(-1)?.value;
+      await backend.confirmNativeExit.mock.results.at(-1)?.value;
+    });
+    expect(backend.resolveApplicationExit).toHaveBeenCalledWith(expect.objectContaining({ action: "save" }));
+    expect(backend.confirmNativeExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the window after a failed final save and does not exit", async () => {
+    backend.prepareApplicationExit.mockResolvedValue({ status: "needs_decision", departure_id: 8 });
+    backend.resolveApplicationExit.mockResolvedValue({
+      committed: false,
+      analysis_stopped: true,
+      current: initialGame,
+      message: "disk full. Analysis is stopped; restart it explicitly.",
+      disposition: null,
+      teardown: null
+    });
+    const host = await renderApp();
+    backend.confirmNativeExit.mockClear();
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "退出").click();
+      await backend.prepareApplicationExit.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonLabeled(host, "Save").click();
+      await backend.resolveApplicationExit.mock.results.at(-1)?.value;
+    });
+    expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("disk full");
+  });
+});
+
+
+describe("App current-game recovery", () => {
+  const recoveredGame: CurrentGameResultDto = {
+    ...initialGame,
+    dirty: true,
+    native_path: "/tmp/recovered.sgf",
+    snapshot: { ...initialGame.snapshot, personal_comment: "restored personal" }
+  };
+
+  it("prompts Restore/Discard for an abnormal snapshot before sample load", async () => {
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "abnormal",
+      envelope: {
+        document_seq: 1,
+        snapshot_seq: 2,
+        sgf_text: "(;SZ[9])",
+        selected_path: { indices: [] },
+        source_path: "/tmp/recovered.sgf",
+        dirty: true,
+        disposition: "exit_incomplete"
+      }
+    });
+    act(() => root?.unmount());
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<App />));
+    await act(async () => {
+      await preferencesApi.loadAppPreferences.mock.results.at(-1)?.value.catch(() => undefined);
+      await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="恢复当前棋谱"]')).not.toBeNull();
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+  });
+
+  it("discards the abnormal candidate then loads the sample", async () => {
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "abnormal",
+      envelope: {
+        document_seq: 1,
+        snapshot_seq: 2,
+        sgf_text: "(;SZ[9])",
+        selected_path: { indices: [] },
+        dirty: true,
+        disposition: "exit_incomplete"
+      }
+    });
+    act(() => root?.unmount());
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<App />));
+    await act(async () => {
+      await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonLabeled(host, "Discard").click();
+      await backend.discardCurrentGameRecovery.mock.results.at(-1)?.value;
+      await currentGameFixture.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+    expect(backend.discardCurrentGameRecovery).toHaveBeenCalled();
+    expect(host.querySelector('[role="dialog"][aria-label="恢复当前棋谱"]')).toBeNull();
+    expect(backend.prepareDocumentReplacement).toHaveBeenCalled();
+  });
+
+  it("restores the abnormal document without loading the sample", async () => {
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "abnormal",
+      envelope: {
+        document_seq: 1,
+        snapshot_seq: 2,
+        sgf_text: "(;SZ[9];B[pd])",
+        selected_path: { indices: [0] },
+        source_path: "/tmp/recovered.sgf",
+        dirty: true,
+        disposition: "exit_incomplete"
+      }
+    });
+    backend.restoreCurrentGameRecovery.mockResolvedValue(recoveredGame);
+    backend.serializeCurrentGame.mockResolvedValue("(;SZ[9];B[pd])");
+    act(() => root?.unmount());
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<App />));
+    await act(async () => {
+      await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
+    });
+    backend.prepareDocumentReplacement.mockClear();
+    await act(async () => {
+      buttonLabeled(host, "Restore").click();
+      await backend.restoreCurrentGameRecovery.mock.results.at(-1)?.value;
+      await backend.serializeCurrentGame.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+    expect(backend.restoreCurrentGameRecovery).toHaveBeenCalled();
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("已恢复上次未正常退出的棋谱");
+  });
+
+  it("keeps the current game when restore validation fails", async () => {
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "abnormal",
+      envelope: {
+        document_seq: 1,
+        snapshot_seq: 1,
+        sgf_text: "not-sgf",
+        selected_path: { indices: [] },
+        dirty: true,
+        disposition: "exit_incomplete"
+      }
+    });
+    backend.restoreCurrentGameRecovery.mockRejectedValue({ kind: "malformed_sgf", message: "malformed SGF" });
+    act(() => root?.unmount());
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<App />));
+    await act(async () => {
+      await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonLabeled(host, "Restore").click();
+      await backend.restoreCurrentGameRecovery.mock.results.at(-1)?.value.catch(() => undefined);
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="恢复当前棋谱"]')).not.toBeNull();
+    expect(host.textContent).toContain("恢复失败");
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+  });
+
+  it("shows unprotected recovery status and retries the write", async () => {
+    backend.subscribeCurrentGameRecoveryProtection.mockImplementation(async (onProtection: (protection: RecoveryProtectionDto) => void) => {
+      onProtection({ status: "unprotected", message: "Recent current-game changes are not yet protected." });
+      return () => undefined;
+    });
+    const host = await renderApp();
+    expect(host.textContent).toContain("Recent current-game changes are not yet protected.");
+    await act(async () => {
+      buttonLabeled(host, "Retry recovery write").click();
+      await backend.retryCurrentGameRecovery.mock.results.at(-1)?.value;
+    });
+    expect(backend.retryCurrentGameRecovery).toHaveBeenCalled();
+  });
+
+  it("keeps an unreadable recovery explanation after sample load", async () => {
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "unreadable",
+      message: "Recovery snapshot is unreadable and was not applied."
+    });
+    const host = await renderApp();
+    expect(host.querySelector('[role="dialog"][aria-label="恢复当前棋谱"]')).toBeNull();
+    expect(host.textContent).toContain("Recovery snapshot is unreadable and was not applied.");
+    expect(backend.prepareDocumentReplacement).toHaveBeenCalled();
+  });
+
+  it("does not confirm native exit when recovery persist fails", async () => {
+    backend.resolveApplicationExit.mockResolvedValue({
+      committed: true,
+      analysis_stopped: true,
+      current: initialGame,
+      message: "Failed to persist current-game recovery: disk full",
+      disposition: "clean_completed",
+      teardown: { status: "completed" },
+      recovery_persist_error: "disk full"
+    });
+    const host = await renderApp();
+    backend.confirmNativeExit.mockClear();
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "退出").click();
+      await backend.prepareApplicationExit.mock.results.at(-1)?.value;
+      await backend.resolveApplicationExit.mock.results.at(-1)?.value;
+    });
+    expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("disk full");
+  });
 });
 
 async function renderApp(): Promise<HTMLElement> {
@@ -1029,9 +1727,12 @@ async function renderApp(): Promise<HTMLElement> {
   root = createRoot(host);
   act(() => root?.render(<App />));
   await act(async () => {
-    await backend.replaceCurrentGame.mock.results.at(-1)?.value;
-    await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
     await preferencesApi.loadAppPreferences.mock.results.at(-1)?.value.catch(() => undefined);
+    await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
+    await currentGameFixture.mock.results.at(-1)?.value;
+    await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    await backend.loadEngineProfilesSettings.mock.results.at(-1)?.value;
+    await backend.subscribeForegroundEngine.mock.results.at(-1)?.value;
   });
   return host;
 }
@@ -1068,7 +1769,7 @@ function installCandidateAnalysis() {
     ownership,
     policy
   };
-  backend.replaceCurrentGame.mockResolvedValue({
+  currentGameFixture.mockResolvedValue({
     ...initialGame,
     snapshot: {
       ...initialGame.snapshot,
@@ -1117,13 +1818,64 @@ function requiredElement<T extends Element = HTMLElement>(host: HTMLElement, sel
   return element as T;
 }
 
-async function runFakeAnalyze(host: HTMLElement): Promise<void> {
-  const prior = backend.fakeAnalyze.mock.calls.length;
+async function readyEngine(host: HTMLElement) {
+  const switcher = host.querySelector('select[aria-label="Foreground Engine Profile"]') as HTMLSelectElement;
   await act(async () => {
-    buttonNamed(host, "AI 解说").click();
-    await vi.waitFor(() => expect(backend.fakeAnalyze.mock.calls.length).toBeGreaterThan(prior));
-    await backend.fakeAnalyze.mock.results.at(-1)?.value;
-    await backend.classifyProblems.mock.results.at(-1)?.value;
+    switcher.value = "profile-1";
+    switcher.dispatchEvent(new Event("change", { bubbles: true }));
+    await backend.startForegroundEngine.mock.results[0]?.value;
+  });
+  await act(async () => {
+    listeners.onSnapshot?.({
+      revision: 2,
+      lifecycle: {
+        state: "ready",
+        run: {
+          run_id: "run-1",
+          profile_id: "profile-1",
+          adapter_kind: "kata_go_analysis",
+          profile_snapshot: savedProfile.profile,
+          capability_snapshot: {
+            adapter_kind: "kata_go_analysis",
+            selected_node_analysis: true,
+            whole_game_analysis: true,
+            protocol_cancel: true
+          }
+        }
+      }
+    });
+  });
+}
+
+async function startSelectedNode(host: HTMLElement, jobId = "job-1") {
+  backend.startSelectedNodeAnalysis.mockResolvedValueOnce({
+    run_id: "run-1",
+    job_id: jobId,
+    lane: "selected_node",
+    generation: 1,
+    node_path: { indices: [] }
+  });
+  await act(async () => {
+    buttonNamed(host, "分析当前节点").click();
+    await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
+  });
+}
+
+async function completeSelectedNode(jobId: string, path: { indices: number[] }, frame: AnalysisFrameDto) {
+  await act(async () => {
+    listeners.onJob?.({
+      run_id: "run-1",
+      job_id: jobId,
+      lane: "selected_node",
+      generation: 1,
+      node_path: path,
+      outcome: "completed",
+      frame
+    });
+    await Promise.all([
+      backend.classifyProblems.mock.results.at(-1)?.value,
+      backend.selectCurrentGameNode.mock.results.at(-1)?.value
+    ]);
   });
 }
 

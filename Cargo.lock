@@ -669,6 +669,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "current-game-recovery"
+version = "0.1.0"
+dependencies = [
+ "app-model",
+ "serde",
+ "serde_json",
+ "sgf",
+]
+
+[[package]]
 name = "darling"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2134,6 +2144,7 @@ dependencies = [
  "analysis-core",
  "app-model",
  "app-preferences",
+ "current-game-recovery",
  "engine-manager",
  "go-core",
  "katago-protocol",

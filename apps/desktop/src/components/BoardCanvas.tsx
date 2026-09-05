@@ -22,6 +22,7 @@ type Props = {
   onOverlayModeChange?: (mode: OverlayMode) => void;
   hideCandidates?: boolean;
   onPointClick?: (point: PointDto) => void;
+  keyboardPlacement?: boolean;
   onCandidatePreview?: (index: number | null) => void;
   previewScope?: ReviewPresentationScope;
   nextMoveMode?: NextMoveReviewMarkerMode;
@@ -50,6 +51,7 @@ export function BoardCanvas({
   onOverlayModeChange,
   hideCandidates = false,
   onPointClick,
+  keyboardPlacement = false,
   onCandidatePreview,
   previewScope,
   nextMoveMode = "off",
@@ -151,20 +153,34 @@ export function BoardCanvas({
     });
   }, [position.board_size]);
 
+  useEffect(() => {
+    if (!keyboardPlacement) {
+      setKeyboardPoint(null);
+      return;
+    }
+    const center = Math.floor(position.board_size / 2);
+    setKeyboardPoint((current) => current ?? { x: center, y: center });
+    canvasRef.current?.focus();
+  }, [keyboardPlacement, position.board_size]);
+
   function handleKeyDown(event: KeyboardEvent<HTMLCanvasElement>) {
-    const isSubmit = event.key === "Enter" || event.key === " ";
+    if (!keyboardPlacement) return;
+    if (event.nativeEvent.isComposing || event.key === "Process") return;
+    const modified = event.altKey || event.ctrlKey || event.metaKey || event.shiftKey;
+    if (modified) return;
+    const isEnter = event.key === "Enter";
     const isArrow = event.key === "ArrowLeft" ||
       event.key === "ArrowRight" ||
       event.key === "ArrowUp" ||
       event.key === "ArrowDown";
-    if (!isSubmit && !isArrow) return;
+    if (!isEnter && !isArrow) return;
 
     event.preventDefault();
     event.stopPropagation();
 
     const center = Math.floor(position.board_size / 2);
     const current = keyboardPoint ?? { x: center, y: center };
-    if (isSubmit) {
+    if (isEnter) {
       cancelCandidatePreview();
       onPointClick?.(current);
       return;
@@ -363,10 +379,6 @@ export function BoardCanvas({
       aria-label="棋盘"
       role="application"
       tabIndex={0}
-      onFocus={() => {
-        const center = Math.floor(position.board_size / 2);
-        setKeyboardPoint((current) => current ?? { x: center, y: center });
-      }}
       onKeyDown={handleKeyDown}
       onPointerMove={handleCandidatePointerMove}
       onPointerLeave={cancelCandidatePreview}

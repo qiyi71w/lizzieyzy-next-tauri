@@ -128,7 +128,7 @@ export function AnalysisPanel({
             </div>
           ) : (
             <p className="muted commentary" style={{ padding: "12px 10px", margin: 0, color: "#8b919c" }}>
-              暂无候选点。点击“分析此手”或开启自动分析。
+              暂无候选点。点击“分析当前节点”或“分析第一子主线”。
             </p>
           )}
         </section>
@@ -232,7 +232,7 @@ export function AnalysisPanel({
                   </div>
                 </div>
               ) : (
-                <p className="muted commentary">点击“试复盘”或“分析此手”查看详细 AI 评注与局势分析。</p>
+                <p className="muted commentary">点击“分析当前节点”查看详细评注与局势分析。</p>
               )}
             </div>
           ) : (

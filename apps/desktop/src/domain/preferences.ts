@@ -24,6 +24,7 @@ export type AppPreferences = {
   subBoardContentMode: SubBoardContentMode;
   variationReplayEnabled: boolean;
   variationReplayIntervalMs: number;
+  restoreLastSession: boolean;
 };
 
 export const defaultAppPreferences: AppPreferences = {
@@ -43,7 +44,8 @@ export const defaultAppPreferences: AppPreferences = {
   nextMoveReviewMarker: "variations",
   subBoardContentMode: "variation",
   variationReplayEnabled: false,
-  variationReplayIntervalMs: 500
+  variationReplayIntervalMs: 500,
+  restoreLastSession: false
 };
 
 export function normalizeAppPreferences(value: Partial<AppPreferences> | null | undefined): AppPreferences {
@@ -71,7 +73,8 @@ export function normalizeAppPreferences(value: Partial<AppPreferences> | null | 
       defaultAppPreferences.variationReplayIntervalMs,
       100,
       5000
-    )
+    ),
+    restoreLastSession: booleanValue(value?.restoreLastSession, defaultAppPreferences.restoreLastSession)
   };
 }
 

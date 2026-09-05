@@ -13,6 +13,7 @@ members = [
   "crates/analysis-core",
   "crates/engine-manager",
   "crates/app-preferences",
+  "crates/current-game-recovery",
   "crates/storage",
   "crates/save-as-dialog",
 ]

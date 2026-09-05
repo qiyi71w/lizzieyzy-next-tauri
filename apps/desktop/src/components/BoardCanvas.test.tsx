@@ -72,12 +72,30 @@ afterEach(() => {
 });
 
 describe("BoardCanvas keyboard intent", () => {
-  it("submits the focused keyboard cursor without leaking board keys", () => {
+  it("does not consume review keys until explicit placement mode is on", () => {
     const onPointClick = vi.fn<(point: PointDto) => void>();
     const globalKeydown = vi.fn();
     window.addEventListener("keydown", globalKeydown);
 
     const { canvas } = renderBoard({ onPointClick });
+    act(() => canvas.focus());
+    const right = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    const space = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true });
+    act(() => expect(canvas.dispatchEvent(right)).toBe(true));
+    act(() => expect(canvas.dispatchEvent(enter)).toBe(true));
+    act(() => expect(canvas.dispatchEvent(space)).toBe(true));
+    expect(globalKeydown).toHaveBeenCalledTimes(3);
+    expect(onPointClick).not.toHaveBeenCalled();
+    window.removeEventListener("keydown", globalKeydown);
+  });
+
+  it("submits the focused keyboard cursor without leaking board keys", () => {
+    const onPointClick = vi.fn<(point: PointDto) => void>();
+    const globalKeydown = vi.fn();
+    window.addEventListener("keydown", globalKeydown);
+
+    const { canvas } = renderBoard({ onPointClick, keyboardPlacement: true });
     expect(canvas.getAttribute("aria-label")).toBe("棋盘");
     expect(canvas.tabIndex).toBe(0);
     expect(canvas.getAttribute("role")).toBe("application");
@@ -105,23 +123,24 @@ describe("BoardCanvas keyboard intent", () => {
 
     const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
     const space = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true });
+    const shiftEnter = new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true });
     act(() => expect(canvas.dispatchEvent(enter)).toBe(false));
-    act(() => expect(canvas.dispatchEvent(space)).toBe(false));
+    act(() => expect(canvas.dispatchEvent(space)).toBe(true));
+    act(() => expect(canvas.dispatchEvent(shiftEnter)).toBe(true));
 
-    expect(globalKeydown).not.toHaveBeenCalled();
-    expect(onPointClick).toHaveBeenNthCalledWith(1, { x: 5, y: 5 });
-    expect(onPointClick).toHaveBeenNthCalledWith(2, { x: 5, y: 5 });
-    expect(onPointClick).toHaveBeenCalledTimes(2);
+    expect(globalKeydown).toHaveBeenCalledTimes(2);
+    expect(onPointClick).toHaveBeenCalledTimes(1);
+    expect(onPointClick).toHaveBeenCalledWith({ x: 5, y: 5 });
 
     act(() => canvas.blur());
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
-    expect(globalKeydown).toHaveBeenCalledTimes(1);
+    expect(globalKeydown).toHaveBeenCalledTimes(3);
     window.removeEventListener("keydown", globalKeydown);
   });
 
   it("retains the cursor across blur and clamps it after a board-size change", () => {
     const onPointClick = vi.fn<(point: PointDto) => void>();
-    const { canvas, rerender } = renderBoard({ onPointClick });
+    const { canvas, rerender } = renderBoard({ onPointClick, keyboardPlacement: true });
 
     act(() => canvas.focus());
     for (let index = 0; index < 10; index += 1) dispatchKey(canvas, "ArrowRight");
@@ -365,7 +384,8 @@ function renderBoard({
   initialPosition = position,
   overlayMode,
   nextMoveMode,
-  nextMoveMarkers
+  nextMoveMarkers,
+  keyboardPlacement
 }: {
   onPointClick?: (point: PointDto) => void;
   onCandidatePreview?: (index: number | null) => void;
@@ -375,6 +395,7 @@ function renderBoard({
   overlayMode?: "candidates" | "ownership" | "policy";
   nextMoveMode?: "off" | "variations" | "graded";
   nextMoveMarkers?: Array<{ point: { x: number; y: number }; primary: boolean; rank: "best" | "good" | "normal" | "inaccuracy" | "mistake" | "blunder" | null }>;
+  keyboardPlacement?: boolean;
 }) {
   const host = document.createElement("div");
   document.body.append(host);
@@ -390,6 +411,7 @@ function renderBoard({
         overlayMode={overlayMode}
         nextMoveMode={nextMoveMode}
         nextMoveMarkers={nextMoveMarkers}
+        keyboardPlacement={keyboardPlacement}
       />
     ));
   };

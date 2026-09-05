@@ -10,9 +10,29 @@ const listeners: {
   onFailure?: (failure: EngineFailureDto) => void;
   onJob?: (job: unknown) => void;
 } = {};
+const currentGameFixture = vi.hoisted(() => vi.fn());
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
-  replaceCurrentGame: vi.fn(),
+  prepareDocumentReplacement: vi.fn(async () => ({ status: "ready", departure_id: 1 })),
+  prepareApplicationExit: vi.fn(async () => ({ status: "ready", departure_id: 1 })),
+  resolveApplicationExit: vi.fn(async (input: { action: string }) => {
+    if (input.action === "cancel") {
+      return { committed: false, analysis_stopped: false, current: null, message: "Exit cancelled.", disposition: null, teardown: null };
+    }
+    const current = await currentGameFixture("", null);
+    return { committed: true, analysis_stopped: true, current, message: "Application exit completed.", disposition: "clean_completed", teardown: { status: "completed" } };
+  }),
+  retryApplicationTeardown: vi.fn(async () => ({ committed: true, analysis_stopped: true, current: null, message: "Application exit completed.", disposition: "clean_completed", teardown: { status: "completed" } })),
+  confirmApplicationExitAnyway: vi.fn(async () => ({ committed: true, analysis_stopped: true, current: null, message: "Application exit completed.", disposition: "exit_incomplete", teardown: { status: "timed_out", outstanding: ["foreground engine"] } })),
+  confirmNativeExit: vi.fn(async () => undefined),
+  subscribeApplicationExitRequested: vi.fn(async () => () => undefined),
+  resolveDocumentReplacement: vi.fn(async (input: { action: string }) => {
+    if (input.action === "cancel") {
+      return { committed: false, analysis_stopped: false, current: null, message: "Replacement cancelled." };
+    }
+    const current = await currentGameFixture("", null);
+    return { committed: true, analysis_stopped: true, current, message: "Replacement committed." };
+  }),
   serializeCurrentGame: vi.fn(() => Promise.resolve("(;SZ[9])")),
   projectCurrentGameMainline: vi.fn(),
   playCurrentGame: vi.fn(),
@@ -37,7 +57,13 @@ const backend = vi.hoisted(() => ({
   restartForegroundEngine: vi.fn(() => Promise.resolve()),
   switchForegroundEngine: vi.fn(() => Promise.resolve()),
   getForegroundEngineSnapshot: vi.fn(),
-  subscribeForegroundEngine: vi.fn()
+  subscribeForegroundEngine: vi.fn(),
+  inspectCurrentGameRecovery: vi.fn(async (): Promise<{ status: "none" | "abnormal" | "normal" | "unreadable"; envelope?: unknown; message?: string }> => ({ status: "none" })),
+  restoreCurrentGameRecovery: vi.fn(),
+  discardCurrentGameRecovery: vi.fn(async () => undefined),
+  retryCurrentGameRecovery: vi.fn(async () => ({ status: "protected" })),
+  currentGameRecoveryProtection: vi.fn(async () => ({ status: "protected" })),
+  subscribeCurrentGameRecoveryProtection: vi.fn(async () => () => undefined)
 }));
 
 vi.mock("./api/backend", () => ({
@@ -204,7 +230,7 @@ beforeEach(() => {
       clip: vi.fn()
     } as unknown as CanvasRenderingContext2D;
   });
-  backend.replaceCurrentGame.mockResolvedValue(initialGame);
+  currentGameFixture.mockResolvedValue(initialGame);
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
   backend.loadEngineProfilesSettings.mockResolvedValue({
     selected_profile_id: "profile-1",
@@ -252,7 +278,8 @@ async function renderApp() {
   root = createRoot(host);
   act(() => root?.render(<App />));
   await act(async () => {
-    await backend.replaceCurrentGame.mock.results[0]?.value;
+    await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
+      await currentGameFixture.mock.results[0]?.value;
     await backend.projectCurrentGameMainline.mock.results[0]?.value;
     await backend.subscribeForegroundEngine.mock.results[0]?.value;
   });
@@ -307,8 +334,8 @@ describe("foreground engine lifecycle UI", () => {
   it("shows authoritative no-engine status and does not start from Engine Settings selection", async () => {
     const host = await renderApp();
     expect(host.querySelector(".engine-chip-label")?.textContent).toBe("未加载引擎");
-    const analyzeOnce = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "分析此手");
-    expect(analyzeOnce).toBeUndefined();
+    const analyzeOnce = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "分析当前节点") as HTMLButtonElement;
+    expect(analyzeOnce.disabled).toBe(true);
     act(() => {
       Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "设置")?.click();
     });
@@ -428,7 +455,7 @@ describe("foreground engine lifecycle UI", () => {
         }
       });
     });
-    const analyzeOnce = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "继续分析") as HTMLButtonElement;
+    const analyzeOnce = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "分析当前节点") as HTMLButtonElement;
     expect(analyzeOnce.disabled).toBe(false);
     await act(async () => {
       analyzeOnce.click();
@@ -472,7 +499,7 @@ describe("foreground engine lifecycle UI", () => {
     });
 
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
     });
     expect(backend.startSelectedNodeAnalysis).toHaveBeenLastCalledWith({
@@ -567,7 +594,7 @@ describe("foreground engine lifecycle UI", () => {
         generation: 1,
         node_path: { indices: [] }
       });
-    const analyzeOnce = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "继续分析") as HTMLButtonElement;
+    const analyzeOnce = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "分析当前节点") as HTMLButtonElement;
     expect(analyzeOnce.disabled).toBe(false);
     await act(async () => {
       analyzeOnce.click();
@@ -623,7 +650,7 @@ describe("foreground engine lifecycle UI", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results[0]?.value;
     });
     await act(async () => {
@@ -643,7 +670,7 @@ describe("foreground engine lifecycle UI", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results[0]?.value;
     });
     await act(async () => {
@@ -677,7 +704,7 @@ describe("foreground engine lifecycle UI", () => {
       node_path: { indices: [] }
     });
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
     });
     await act(async () => {
@@ -703,7 +730,7 @@ describe("foreground engine lifecycle UI", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
     expect(backend.startKataGoGameAnalysis).toHaveBeenCalledWith({
@@ -758,7 +785,7 @@ describe("foreground engine lifecycle UI", () => {
   });
 
   it("keeps review navigation live during whole-game analysis and restores completed node results", async () => {
-    backend.replaceCurrentGame.mockResolvedValue(mainlineRoot);
+    currentGameFixture.mockResolvedValue(mainlineRoot);
     backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => snapshotAt(path));
     const host = await renderApp();
     await readyEngine(host);
@@ -767,7 +794,7 @@ describe("foreground engine lifecycle UI", () => {
     expect(nextMove.disabled).toBe(false);
 
     await act(async () => {
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
     await act(async () => {
@@ -820,7 +847,7 @@ describe("foreground engine lifecycle UI", () => {
   });
 
   it("does not restore a previous document's whole-game node result after Open", async () => {
-    backend.replaceCurrentGame.mockResolvedValue(mainlineRoot);
+    currentGameFixture.mockResolvedValue(mainlineRoot);
     backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => snapshotAt(path));
     backend.openSgfDocument.mockResolvedValue({ sgfText: "(;SZ[9]B[fe])", path: "/tmp/other.sgf" });
     const host = await renderApp();
@@ -829,7 +856,7 @@ describe("foreground engine lifecycle UI", () => {
     const prevMove = host.querySelector('button[title="上一手"]') as HTMLButtonElement;
 
     await act(async () => {
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
     await act(async () => {
@@ -856,7 +883,7 @@ describe("foreground engine lifecycle UI", () => {
     });
     expect(host.textContent).toContain("61.0%");
 
-    backend.replaceCurrentGame.mockResolvedValue({
+    currentGameFixture.mockResolvedValue({
       ...mainlineRoot,
       generation: 2,
       native_path: "/tmp/other.sgf"
@@ -867,10 +894,11 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       buttonNamed(host, "打开棋谱(O)").click();
       await backend.openSgfDocument.mock.results.at(-1)?.value;
-      await backend.replaceCurrentGame.mock.results.at(-1)?.value;
+      await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
+    await currentGameFixture.mock.results.at(-1)?.value;
     });
     expect(host.textContent).not.toContain("61.0%");
-    expect(backend.cancelKataGoAnalysis).toHaveBeenCalledWith("run-1", "job-wg");
+    expect(backend.resolveDocumentReplacement).toHaveBeenCalledWith(expect.objectContaining({ action: "discard" }));
 
     await act(async () => {
       nextMove.click();
@@ -885,7 +913,7 @@ describe("foreground engine lifecycle UI", () => {
   });
 
   it("drops a selected-node session when Open replaces the document", async () => {
-    backend.replaceCurrentGame.mockResolvedValue(mainlineRoot);
+    currentGameFixture.mockResolvedValue(mainlineRoot);
     backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => snapshotAt(path));
     backend.openSgfDocument.mockResolvedValue({ sgfText: "(;SZ[9]B[fe])", path: "/tmp/other.sgf" });
     const host = await renderApp();
@@ -894,11 +922,11 @@ describe("foreground engine lifecycle UI", () => {
     const prevMove = host.querySelector('button[title="上一手"]') as HTMLButtonElement;
 
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
     });
 
-    backend.replaceCurrentGame.mockResolvedValue({
+    currentGameFixture.mockResolvedValue({
       ...mainlineRoot,
       generation: 2,
       native_path: "/tmp/other.sgf"
@@ -914,10 +942,11 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       buttonNamed(host, "打开棋谱(O)").click();
       await backend.openSgfDocument.mock.results.at(-1)?.value;
-      await backend.replaceCurrentGame.mock.results.at(-1)?.value;
+      await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
+    await currentGameFixture.mock.results.at(-1)?.value;
     });
     expect.soft(host.textContent).not.toContain("取消此手");
-    expect.soft(backend.cancelSelectedNodeAnalysis).toHaveBeenCalledWith({ runId: "run-1", jobId: "job-1" });
+    expect.soft(backend.resolveDocumentReplacement).toHaveBeenCalledWith(expect.objectContaining({ action: "discard" }));
 
     await act(async () => {
       listeners.onJob?.({
@@ -955,7 +984,7 @@ describe("foreground engine lifecycle UI", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
     await act(async () => {
@@ -1030,8 +1059,8 @@ describe("foreground engine lifecycle UI", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析当前节点").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
@@ -1080,7 +1109,7 @@ describe("foreground engine lifecycle UI", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
     backend.startKataGoGameAnalysis.mockRejectedValueOnce({
@@ -1089,12 +1118,12 @@ describe("foreground engine lifecycle UI", () => {
       message: "whole-game analysis is already running on this Foreground Engine Run"
     });
     await act(async () => {
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value.catch(() => undefined);
     });
     expect(host.textContent).toContain("whole-game analysis is already running on this Foreground Engine Run");
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
     });
     expect(backend.startSelectedNodeAnalysis).toHaveBeenCalled();
@@ -1111,7 +1140,7 @@ describe("foreground engine lifecycle UI", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
     backend.cancelKataGoAnalysis.mockClear();
@@ -1130,7 +1159,7 @@ describe("foreground engine lifecycle UI", () => {
         generation: 1,
         node_path: { indices: [] }
       });
-    const analyzeOnce = buttonNamed(host, "继续分析");
+    const analyzeOnce = buttonNamed(host, "分析当前节点");
     await act(async () => {
       analyzeOnce.click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-2)?.value;
@@ -1144,12 +1173,12 @@ describe("foreground engine lifecycle UI", () => {
   });
 
   it("keeps Save and Save As available while both analysis lanes are running", async () => {
-    backend.replaceCurrentGame.mockResolvedValue({ ...initialGame, dirty: true });
+    currentGameFixture.mockResolvedValue({ ...initialGame, dirty: true });
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析当前节点").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
@@ -1164,8 +1193,8 @@ describe("foreground engine lifecycle UI", () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
-      buttonNamed(host, "自动分析").click();
+      buttonNamed(host, "分析当前节点").click();
+      buttonNamed(host, "分析第一子主线").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
@@ -1265,7 +1294,7 @@ describe("foreground engine lifecycle UI", () => {
     });
     expect(host.querySelector(".engine-chip-label")?.textContent).toBe("正在切换 Other KataGo");
     expect(switcher.value).toBe("profile-1");
-    const analyzeOnce = buttonNamed(host, "继续分析");
+    const analyzeOnce = buttonNamed(host, "分析当前节点");
     expect(analyzeOnce.disabled).toBe(false);
     await act(async () => {
       analyzeOnce.click();
@@ -1320,7 +1349,7 @@ describe("foreground engine lifecycle UI", () => {
     expect(switcher.value).toBe("profile-2");
     backend.startSelectedNodeAnalysis.mockClear();
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
     });
     expect(backend.startSelectedNodeAnalysis).toHaveBeenCalledWith({
@@ -1410,7 +1439,7 @@ describe("foreground engine lifecycle UI", () => {
     expect(failure.textContent).toContain("required engine assets are missing");
     backend.startSelectedNodeAnalysis.mockClear();
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
     });
     expect(backend.startSelectedNodeAnalysis).toHaveBeenCalledWith({
@@ -1510,7 +1539,7 @@ describe("foreground engine lifecycle UI", () => {
     expect(switcher.value).toBe("profile-3");
     backend.startSelectedNodeAnalysis.mockClear();
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
     });
     expect(backend.startSelectedNodeAnalysis).toHaveBeenCalledWith({
@@ -1603,7 +1632,7 @@ describe("foreground engine lifecycle UI", () => {
     expect(buttonNamed(host, "重启").disabled).toBe(false);
     backend.startSelectedNodeAnalysis.mockClear();
     await act(async () => {
-      buttonNamed(host, "继续分析").click();
+      buttonNamed(host, "分析当前节点").click();
     });
     expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
   });

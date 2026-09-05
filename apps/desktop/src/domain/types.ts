@@ -42,8 +42,34 @@ export type CurrentGameErrorKind =
   | "occupied_point"
   | "suicide"
   | "simple_ko"
-  | "root_removal";
+  | "root_removal"
+  | "departure_in_progress"
+  | "departure_blocked";
 export type CurrentGameError = { kind: CurrentGameErrorKind; message: string };
+export type DocumentDepartureAdmissionDto =
+  | { status: "needs_decision"; departure_id: number }
+  | { status: "ready"; departure_id: number };
+export type DocumentDepartureActionDto = "save" | "discard" | "cancel";
+export type DocumentDepartureOutcomeDto = {
+  committed: boolean;
+  analysis_stopped: boolean;
+  current?: CurrentGameResultDto | null;
+  message: string;
+};
+export type ApplicationExitActionDto = "save" | "discard" | "cancel" | "continue";
+export type ApplicationExitDispositionDto = "clean_completed" | "explicit_discard" | "exit_incomplete";
+export type ApplicationTeardownAttemptDto =
+  | { status: "completed" }
+  | { status: "timed_out"; outstanding: string[] };
+export type ApplicationExitOutcomeDto = {
+  committed: boolean;
+  analysis_stopped: boolean;
+  current?: CurrentGameResultDto | null;
+  message: string;
+  disposition?: ApplicationExitDispositionDto | null;
+  teardown?: ApplicationTeardownAttemptDto | null;
+  recovery_persist_error?: string | null;
+};
 export type CandidateMoveDto = { vertex: MoveVertex; visits: number; winrate_black: number; score_mean_black: number; policy_prior?: number | null; pv: MoveVertex[] };
 export type AnalysisFrameDto = { job_id: string; game_id?: string | null; node_id?: string | null; turn: number; visits: number; winrate_black: number; score_mean_black: number; score_stdev?: number | null; candidates: CandidateMoveDto[]; ownership?: number[] | null; policy?: number[] | null };
 export type ProblemMarkerDto = { turn: number; severity: "info" | "inaccuracy" | "mistake" | "blunder"; winrate_loss: number; score_loss: number; label: string };
@@ -153,3 +179,21 @@ export type ForegroundEngineEventDto =
   | { type: "snapshot"; snapshot: ForegroundEngineSnapshotDto }
   | { type: "failure"; failure: EngineFailureDto }
   | { type: "job"; job: AnalysisJobEventDto };
+
+export type RecoveryEnvelopeDto = {
+  document_seq: number;
+  snapshot_seq: number;
+  sgf_text: string;
+  selected_path: NodePath;
+  source_path?: string | null;
+  dirty: boolean;
+  disposition: ApplicationExitDispositionDto;
+};
+export type RecoveryProtectionDto =
+  | { status: "protected" }
+  | { status: "unprotected"; message: string };
+export type RecoveryStartupDto =
+  | { status: "none" }
+  | { status: "abnormal"; envelope: RecoveryEnvelopeDto }
+  | { status: "normal"; envelope: RecoveryEnvelopeDto }
+  | { status: "unreadable"; message: string };

@@ -9,6 +9,11 @@ import type {
   AssetCheckDto,
   CandidateMoveDto,
   CurrentGameResultDto,
+  ApplicationExitActionDto,
+  ApplicationExitOutcomeDto,
+  DocumentDepartureActionDto,
+  DocumentDepartureAdmissionDto,
+  DocumentDepartureOutcomeDto,
   NodePath,
   EngineProfileRecordDto,
   EngineProfileDto,
@@ -21,7 +26,9 @@ import type {
   MoveVertex,
   PlayerColor,
   PositionDto,
-  ProblemMarkerDto
+  ProblemMarkerDto,
+  RecoveryProtectionDto,
+  RecoveryStartupDto
 } from "../domain/types";
 import { emptyForegroundEngineSnapshot, mergeForegroundEngineSnapshot } from "../domain/foregroundEngine";
 import { ensureInitialPosition, replayGamePositions } from "../domain/board";
@@ -62,13 +69,12 @@ export async function parseSgfSummary(sgfText: string): Promise<GameDto> {
   }
 }
 
+export const nativeSyntheticAnalysisUnavailable =
+  "Synthetic analysis is not available in the native desktop product. Browser preview demonstration is non-authoritative.";
+
 export async function fakeAnalyze(sgfText: string): Promise<AnalysisFrameDto[]> {
   if (!isTauriRuntime()) return buildBrowserAnalysis(parseSgfLocally(sgfText));
-  try {
-    return await invoke<AnalysisFrameDto[]>("fake_analyze", { sgfText });
-  } catch {
-    return buildBrowserAnalysis(parseSgfLocally(sgfText));
-  }
+  throw new Error(nativeSyntheticAnalysisUnavailable);
 }
 
 export async function openSgfDocument(): Promise<SgfDocument | null> {
@@ -86,11 +92,129 @@ export async function openSgfDocument(): Promise<SgfDocument | null> {
 export const nativeCurrentGameUnavailable =
   "Native current-game, edit, and authoritative Save require the Tauri desktop backend. Browser preview is non-authoritative.";
 
-export async function replaceCurrentGame(sgfText: string, nativePath: string | null): Promise<CurrentGameResultDto> {
+
+export async function prepareDocumentReplacement(
+  sgfText: string,
+  nativePath: string | null
+): Promise<DocumentDepartureAdmissionDto> {
   if (!isTauriRuntime()) {
     throw new Error(nativeCurrentGameUnavailable);
   }
-  return invoke<CurrentGameResultDto>("replace_current_game", { sgfText, nativePath });
+  return invoke<DocumentDepartureAdmissionDto>("prepare_document_replacement", { sgfText, nativePath });
+}
+
+export async function resolveDocumentReplacement(input: {
+  departureId: number;
+  action: DocumentDepartureActionDto;
+  selectedPath: NodePath;
+  defaultFileName?: string | null;
+}): Promise<DocumentDepartureOutcomeDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<DocumentDepartureOutcomeDto>("resolve_document_replacement", input);
+}
+
+export async function prepareApplicationExit(): Promise<DocumentDepartureAdmissionDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<DocumentDepartureAdmissionDto>("prepare_application_exit");
+}
+
+export async function resolveApplicationExit(input: {
+  departureId: number;
+  action: ApplicationExitActionDto;
+  selectedPath: NodePath;
+  defaultFileName?: string | null;
+}): Promise<ApplicationExitOutcomeDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<ApplicationExitOutcomeDto>("resolve_application_exit", input);
+}
+
+export async function retryApplicationTeardown(input: {
+  departureId: number;
+  selectedPath: NodePath;
+}): Promise<ApplicationExitOutcomeDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<ApplicationExitOutcomeDto>("retry_application_teardown", input);
+}
+
+export async function confirmApplicationExitAnyway(input: {
+  departureId: number;
+  selectedPath: NodePath;
+  outstanding: string[];
+}): Promise<ApplicationExitOutcomeDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<ApplicationExitOutcomeDto>("confirm_application_exit_anyway", input);
+}
+
+export async function confirmNativeExit(): Promise<void> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  await invoke("confirm_native_exit");
+}
+
+export async function subscribeApplicationExitRequested(onRequest: () => void): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+  return listen("application-exit-requested", () => {
+    onRequest();
+  });
+}
+
+export async function inspectCurrentGameRecovery(): Promise<RecoveryStartupDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<RecoveryStartupDto>("inspect_current_game_recovery");
+}
+
+export async function restoreCurrentGameRecovery(): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<CurrentGameResultDto>("restore_current_game_recovery");
+}
+
+export async function discardCurrentGameRecovery(): Promise<void> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  await invoke("discard_current_game_recovery");
+}
+
+export async function retryCurrentGameRecovery(): Promise<RecoveryProtectionDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<RecoveryProtectionDto>("retry_current_game_recovery");
+}
+
+export async function currentGameRecoveryProtection(): Promise<RecoveryProtectionDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<RecoveryProtectionDto>("current_game_recovery_protection");
+}
+
+export async function subscribeCurrentGameRecoveryProtection(
+  onProtection: (protection: RecoveryProtectionDto) => void
+): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+  return listen<RecoveryProtectionDto>("current-game-recovery://protection", (event) => {
+    onProtection(event.payload);
+  });
 }
 
 export async function serializeCurrentGame(): Promise<string> {
@@ -156,7 +280,7 @@ export async function startKataGoGameAnalysis(input: {
   maxVisits: number;
 }): Promise<AnalysisJobStartedDto> {
   if (!isTauriRuntime()) {
-    throw new Error("Full-game KataGo analysis requires the Tauri desktop backend. Browser preview cannot run real KataGo; use Run review for fake analysis.");
+    throw new Error("Full-game KataGo analysis requires the Tauri desktop backend. Browser preview cannot run real KataGo.");
   }
   return await invoke<AnalysisJobStartedDto>("katago_start_analyze_game", {
     runId: input.runId,

@@ -1,7 +1,7 @@
 use app_model::{
-    AnalysisFrameDto, AnalysisJobStartedDto, AppHealthDto, CandidateMoveDto, CurrentGameError,
+    AnalysisFrameDto, AnalysisJobStartedDto, AppHealthDto, CurrentGameError,
     CurrentGameResultDto, EngineBackend, EngineFailureDto, EngineFailureKind, EngineOperationDto,
-    EngineProfileDto, ForegroundEngineEventDto, ForegroundEngineSnapshotDto, MoveVertex, NodePath, PointDto,
+    EngineProfileDto, ForegroundEngineEventDto, ForegroundEngineSnapshotDto, MoveVertex, NodePath,
     PositionDto, ProviderError, ProviderErrorKind, ProviderFetchMethod, ProviderFetchRequest,
     ProviderFetchResult, ProviderGameMetadata, ProviderImportRequest, ProviderImportResult, ProviderKind,
     ReadboardSidecarProbeRequest, ReadboardSidecarProbeResult, ReadboardSidecarSyncSnapshotRequest,
@@ -30,14 +30,27 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod current_game_state;
+mod document_departure;
 mod save_as;
+mod session_recovery;
 #[cfg(windows)]
 extern crate windows_core;
 use app_preferences::{
     load_from_path as load_app_preferences_from_path, save_to_path, AppPreferencesDto,
     AppPreferencesLoadResultDto, APP_PREFERENCES_FILE,
 };
+use current_game_recovery::FileRecoveryStore;
 use current_game_state::{CurrentGameState, WholeGameAdmission};
+use document_departure::{
+    confirm_application_exit_anyway, confirm_native_exit, prepare_application_exit,
+    prepare_document_replacement, resolve_application_exit, resolve_document_replacement,
+    retry_application_teardown, APPLICATION_EXIT_REQUESTED_EVENT,
+};
+use session_recovery::{
+    current_game_recovery_protection, discard_current_game_recovery, inspect_current_game_recovery,
+    restore_current_game_recovery, retry_current_game_recovery, spawn_recovery_writer,
+};
+use std::sync::Mutex;
 use uuid::Uuid;
 
 const ENGINE_PROFILE_FILE: &str = "lizzieyzy-next-engine-profile.json";
@@ -382,14 +395,6 @@ fn read_sgf_file(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|err| format!("failed to read SGF file {}: {err}", path.display()))
 }
 
-#[tauri::command]
-fn replace_current_game(
-    state: State<CurrentGameState>,
-    sgf_text: String,
-    native_path: Option<String>,
-) -> Result<CurrentGameResultDto, CurrentGameError> {
-    state.replace(&sgf_text, native_path)
-}
 
 #[tauri::command]
 fn serialize_current_game(state: State<CurrentGameState>) -> Result<String, CurrentGameError> {
@@ -460,32 +465,6 @@ fn remove_current_game_variation(
     path: NodePath,
 ) -> Result<CurrentGameResultDto, CurrentGameError> {
     state.remove_variation(path)
-}
-
-#[tauri::command]
-fn fake_analyze(sgf_text: String) -> Result<Vec<AnalysisFrameDto>, String> {
-    let document = sgf::parse_sgf(&sgf_text).map_err(|err| err.to_string())?;
-    let job_id = Uuid::new_v4();
-    let mut frames = Vec::new();
-    for turn in 0..=document.moves.len() as u32 {
-        let drift = ((turn as f32 * 0.73).sin()) * 0.13;
-        let winrate = (0.52 + drift).clamp(0.05, 0.95);
-        let score = (turn as f32 * 0.31).cos() * 6.0;
-        frames.push(AnalysisFrameDto {
-            job_id,
-            game_id: None,
-            node_id: None,
-            turn,
-            visits: 256,
-            winrate_black: winrate,
-            score_mean_black: score,
-            score_stdev: Some(4.2),
-            candidates: demo_candidates(turn, document.board_size),
-            ownership: None,
-            policy: None,
-        });
-    }
-    Ok(frames)
 }
 
 #[tauri::command]
@@ -909,26 +888,6 @@ fn readboard_error(error: readboard_sidecar::ReadboardSidecarError) -> ProviderE
         message: error.to_string(),
     }
 }
-
-fn demo_candidates(turn: u32, board_size: u8) -> Vec<CandidateMoveDto> {
-    let anchors = [(15usize, 3usize), (3, 15), (15, 15), (3, 3), (9, 9), (10, 15)];
-    anchors
-        .iter()
-        .enumerate()
-        .map(|(index, (x, y))| CandidateMoveDto {
-            vertex: MoveVertex::Point(PointDto {
-                x: ((*x + turn as usize + index) % board_size as usize) as u8,
-                y: ((*y + index * 2) % board_size as usize) as u8,
-            }),
-            visits: 128u32.saturating_sub(index as u32 * 13),
-            winrate_black: (0.58 - index as f32 * 0.025).clamp(0.0, 1.0),
-            score_mean_black: 4.5 - index as f32,
-            policy_prior: Some(0.18 - index as f32 * 0.015),
-            pv: Vec::new(),
-        })
-        .collect()
-}
-
 #[tauri::command]
 fn foreground_engine_snapshot(manager: State<'_, ForegroundEngineManager>) -> ForegroundEngineSnapshotDto {
     manager.snapshot()
@@ -964,6 +923,9 @@ pub fn run() {
     tauri::Builder::default()
         .manage(CurrentGameState::default())
         .setup(|app| {
+            let recovery_path = session_recovery::recovery_file_path(app.handle())?;
+            app.manage(Mutex::new(FileRecoveryStore::new(recovery_path)));
+            spawn_recovery_writer(app.handle().clone());
             let _ = load_engine_profiles_from_disk(app.handle());
             let catalog = std::sync::Arc::new(DiskEngineCatalog {
                 handle: app.handle().clone(),
@@ -1006,7 +968,18 @@ pub fn run() {
             readboard_sidecar_sync_snapshot,
             replay_sgf_positions,
             read_sgf_file,
-            replace_current_game,
+            prepare_document_replacement,
+            resolve_document_replacement,
+            prepare_application_exit,
+            resolve_application_exit,
+            retry_application_teardown,
+            confirm_application_exit_anyway,
+            confirm_native_exit,
+            inspect_current_game_recovery,
+            restore_current_game_recovery,
+            discard_current_game_recovery,
+            retry_current_game_recovery,
+            current_game_recovery_protection,
             serialize_current_game,
             save_current_game,
             save_current_game_as,
@@ -1015,7 +988,6 @@ pub fn run() {
             play_current_game,
             set_current_game_personal_comment,
             remove_current_game_variation,
-            fake_analyze,
             classify_problems,
             katago_launch_plan,
             engine_asset_checks,
@@ -1037,12 +1009,23 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build LizzieYzy Next")
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
+        .run(|app, event| match event {
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::CloseRequested { api, .. },
+                ..
+            } => {
+                api.prevent_close();
+                if let Some(window) = app.get_webview_window(&label) {
+                    let _ = window.emit(APPLICATION_EXIT_REQUESTED_EVENT, ());
+                }
+            }
+            tauri::RunEvent::Exit => {
                 if let Some(manager) = app.try_state::<ForegroundEngineManager>() {
                     let _ = manager.teardown();
                 }
             }
+            _ => {}
         });
 }
 
@@ -1122,6 +1105,28 @@ mod tests {
     }
 
     #[test]
+    fn native_close_and_file_exit_share_application_exit_commands() {
+        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+        let commands = registered_tauri_commands(source);
+        for command in [
+            "prepare_application_exit",
+            "resolve_application_exit",
+            "retry_application_teardown",
+            "confirm_application_exit_anyway",
+            "confirm_native_exit",
+        ] {
+            assert!(
+                commands.contains(&command),
+                "{command} must be registered: {commands:?}"
+            );
+        }
+        assert!(source.contains("CloseRequested"));
+        assert!(source.contains("prevent_close"));
+        assert!(source.contains("APPLICATION_EXIT_REQUESTED_EVENT"));
+        assert!(source.contains("prepare_application_exit"));
+    }
+
+    #[test]
     fn obsolete_profile_to_process_commands_are_not_registered() {
         let commands =
             registered_tauri_commands(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs")));
@@ -1142,8 +1147,8 @@ mod tests {
             "selected-node analysis must stay on the manager-owned run command"
         );
         assert!(
-            commands.contains(&"fake_analyze"),
-            "browser/native fake analysis remains available and non-authoritative"
+            commands.iter().all(|command| *command != "fake_analyze"),
+            "native synthetic analysis command must not remain registered: {commands:?}"
         );
     }
 
