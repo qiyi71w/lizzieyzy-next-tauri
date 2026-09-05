@@ -13,6 +13,10 @@ pub use document_departure::{
     ApplicationTeardownAttemptDto, DocumentDepartureActionDto, DocumentDepartureAdmissionDto,
     DocumentDepartureOutcomeDto,
 };
+mod current_game_recovery;
+pub use current_game_recovery::{
+    RecoveryEnvelopeDto, RecoveryProtectionDto, RecoveryStartupDto, RECOVERY_UNREADABLE_MESSAGE,
+};
 
 pub type GameId = Uuid;
 pub type NodeId = Uuid;

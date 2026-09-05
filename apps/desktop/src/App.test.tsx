@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AnalysisFrameDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureAdmissionDto, GameDto, NodePath } from "./domain/types";
+import type { AnalysisFrameDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureAdmissionDto, GameDto, NodePath, RecoveryProtectionDto, RecoveryStartupDto } from "./domain/types";
 
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
@@ -50,7 +50,13 @@ const backend = vi.hoisted(() => ({
   stopForegroundEngine: vi.fn(),
   restartForegroundEngine: vi.fn(),
   switchForegroundEngine: vi.fn(),
-  getForegroundEngineSnapshot: vi.fn(() => Promise.resolve({ revision: 0, lifecycle: { state: "no_engine" } }))
+  getForegroundEngineSnapshot: vi.fn(() => Promise.resolve({ revision: 0, lifecycle: { state: "no_engine" } })),
+  inspectCurrentGameRecovery: vi.fn(async (): Promise<RecoveryStartupDto> => ({ status: "none" })),
+  restoreCurrentGameRecovery: vi.fn(),
+  discardCurrentGameRecovery: vi.fn(async () => undefined),
+  retryCurrentGameRecovery: vi.fn(async (): Promise<RecoveryProtectionDto> => ({ status: "protected" })),
+  currentGameRecoveryProtection: vi.fn(async (): Promise<RecoveryProtectionDto> => ({ status: "protected" })),
+  subscribeCurrentGameRecoveryProtection: vi.fn(async (_onProtection: (protection: RecoveryProtectionDto) => void) => () => undefined)
 }));
 
 vi.mock("./api/backend", () => ({
@@ -248,6 +254,7 @@ describe("App board intent feedback", () => {
     root = createRoot(host);
     act(() => root?.render(<App />));
     await act(async () => {
+      await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
       await backend.replaceCurrentGame.mock.results[0]?.value;
       await backend.projectCurrentGameMainline.mock.results[0]?.value;
     });
@@ -303,6 +310,7 @@ describe("App candidate continuation preview", () => {
     root = createRoot(host);
     act(() => root?.render(<App />));
     await act(async () => {
+      await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
       await backend.replaceCurrentGame.mock.results[0]?.value;
       await backend.projectCurrentGameMainline.mock.results[0]?.value;
     });
@@ -1380,6 +1388,187 @@ describe("App application exit", () => {
   });
 });
 
+
+describe("App current-game recovery", () => {
+  const recoveredGame: CurrentGameResultDto = {
+    ...initialGame,
+    dirty: true,
+    native_path: "/tmp/recovered.sgf",
+    snapshot: { ...initialGame.snapshot, personal_comment: "restored personal" }
+  };
+
+  it("prompts Restore/Discard for an abnormal snapshot before sample load", async () => {
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "abnormal",
+      envelope: {
+        document_seq: 1,
+        snapshot_seq: 2,
+        sgf_text: "(;SZ[9])",
+        selected_path: { indices: [] },
+        source_path: "/tmp/recovered.sgf",
+        dirty: true,
+        disposition: "exit_incomplete"
+      }
+    });
+    act(() => root?.unmount());
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<App />));
+    await act(async () => {
+      await preferencesApi.loadAppPreferences.mock.results.at(-1)?.value.catch(() => undefined);
+      await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="恢复当前棋谱"]')).not.toBeNull();
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+  });
+
+  it("discards the abnormal candidate then loads the sample", async () => {
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "abnormal",
+      envelope: {
+        document_seq: 1,
+        snapshot_seq: 2,
+        sgf_text: "(;SZ[9])",
+        selected_path: { indices: [] },
+        dirty: true,
+        disposition: "exit_incomplete"
+      }
+    });
+    act(() => root?.unmount());
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<App />));
+    await act(async () => {
+      await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonLabeled(host, "Discard").click();
+      await backend.discardCurrentGameRecovery.mock.results.at(-1)?.value;
+      await backend.replaceCurrentGame.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+    expect(backend.discardCurrentGameRecovery).toHaveBeenCalled();
+    expect(host.querySelector('[role="dialog"][aria-label="恢复当前棋谱"]')).toBeNull();
+    expect(backend.prepareDocumentReplacement).toHaveBeenCalled();
+  });
+
+  it("restores the abnormal document without loading the sample", async () => {
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "abnormal",
+      envelope: {
+        document_seq: 1,
+        snapshot_seq: 2,
+        sgf_text: "(;SZ[9];B[pd])",
+        selected_path: { indices: [0] },
+        source_path: "/tmp/recovered.sgf",
+        dirty: true,
+        disposition: "exit_incomplete"
+      }
+    });
+    backend.restoreCurrentGameRecovery.mockResolvedValue(recoveredGame);
+    backend.serializeCurrentGame.mockResolvedValue("(;SZ[9];B[pd])");
+    act(() => root?.unmount());
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<App />));
+    await act(async () => {
+      await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
+    });
+    backend.prepareDocumentReplacement.mockClear();
+    await act(async () => {
+      buttonLabeled(host, "Restore").click();
+      await backend.restoreCurrentGameRecovery.mock.results.at(-1)?.value;
+      await backend.serializeCurrentGame.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+    expect(backend.restoreCurrentGameRecovery).toHaveBeenCalled();
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("已恢复上次未正常退出的棋谱");
+  });
+
+  it("keeps the current game when restore validation fails", async () => {
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "abnormal",
+      envelope: {
+        document_seq: 1,
+        snapshot_seq: 1,
+        sgf_text: "not-sgf",
+        selected_path: { indices: [] },
+        dirty: true,
+        disposition: "exit_incomplete"
+      }
+    });
+    backend.restoreCurrentGameRecovery.mockRejectedValue({ kind: "malformed_sgf", message: "malformed SGF" });
+    act(() => root?.unmount());
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<App />));
+    await act(async () => {
+      await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonLabeled(host, "Restore").click();
+      await backend.restoreCurrentGameRecovery.mock.results.at(-1)?.value.catch(() => undefined);
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="恢复当前棋谱"]')).not.toBeNull();
+    expect(host.textContent).toContain("恢复失败");
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+  });
+
+  it("shows unprotected recovery status and retries the write", async () => {
+    backend.subscribeCurrentGameRecoveryProtection.mockImplementation(async (onProtection: (protection: RecoveryProtectionDto) => void) => {
+      onProtection({ status: "unprotected", message: "Recent current-game changes are not yet protected." });
+      return () => undefined;
+    });
+    const host = await renderApp();
+    expect(host.textContent).toContain("Recent current-game changes are not yet protected.");
+    await act(async () => {
+      buttonLabeled(host, "Retry recovery write").click();
+      await backend.retryCurrentGameRecovery.mock.results.at(-1)?.value;
+    });
+    expect(backend.retryCurrentGameRecovery).toHaveBeenCalled();
+  });
+
+  it("keeps an unreadable recovery explanation after sample load", async () => {
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "unreadable",
+      message: "Recovery snapshot is unreadable and was not applied."
+    });
+    const host = await renderApp();
+    expect(host.querySelector('[role="dialog"][aria-label="恢复当前棋谱"]')).toBeNull();
+    expect(host.textContent).toContain("Recovery snapshot is unreadable and was not applied.");
+    expect(backend.prepareDocumentReplacement).toHaveBeenCalled();
+  });
+
+  it("does not confirm native exit when recovery persist fails", async () => {
+    backend.resolveApplicationExit.mockResolvedValue({
+      committed: true,
+      analysis_stopped: true,
+      current: initialGame,
+      message: "Failed to persist current-game recovery: disk full",
+      disposition: "clean_completed",
+      teardown: { status: "completed" },
+      recovery_persist_error: "disk full"
+    });
+    const host = await renderApp();
+    backend.confirmNativeExit.mockClear();
+    await act(async () => {
+      buttonNamed(host, "文件").click();
+    });
+    await act(async () => {
+      buttonNamed(host, "退出").click();
+      await backend.prepareApplicationExit.mock.results.at(-1)?.value;
+      await backend.resolveApplicationExit.mock.results.at(-1)?.value;
+    });
+    expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("disk full");
+  });
+});
+
 async function renderApp(): Promise<HTMLElement> {
   act(() => root?.unmount());
   root = null;
@@ -1388,9 +1577,10 @@ async function renderApp(): Promise<HTMLElement> {
   root = createRoot(host);
   act(() => root?.render(<App />));
   await act(async () => {
+    await preferencesApi.loadAppPreferences.mock.results.at(-1)?.value.catch(() => undefined);
+    await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
     await backend.replaceCurrentGame.mock.results.at(-1)?.value;
     await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
-    await preferencesApi.loadAppPreferences.mock.results.at(-1)?.value.catch(() => undefined);
   });
   return host;
 }

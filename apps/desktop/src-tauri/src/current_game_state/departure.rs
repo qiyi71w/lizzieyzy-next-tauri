@@ -110,6 +110,7 @@ impl CurrentGameState {
             return Err(departure_blocked());
         };
         let current = holder.install_document(candidate, candidate_path)?;
+        self.note_recovery(&holder);
         Ok(DocumentDepartureOutcomeDto {
             committed: true,
             analysis_stopped: true,
@@ -191,6 +192,7 @@ impl CurrentGameState {
             },
             disposition: Some(disposition),
             teardown: None,
+            recovery_persist_error: None,
         })
     }
 
@@ -243,6 +245,7 @@ impl CurrentGameState {
             },
             disposition: Some(disposition),
             teardown: Some(attempt),
+            recovery_persist_error: None,
         })
     }
 
@@ -299,6 +302,9 @@ impl CurrentGameHolder {
         self.generation += 1;
         self.dirty = false;
         self.native_path = native_path;
+        self.selected_path = selected_path.clone();
+        self.document_seq = self.document_seq.saturating_add(1);
+        self.snapshot_seq = 1;
         self.edits_blocked = false;
         self.departure = None;
         self.closed_jobs.clear();

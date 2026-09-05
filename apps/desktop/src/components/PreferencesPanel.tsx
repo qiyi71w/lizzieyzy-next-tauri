@@ -80,6 +80,15 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
         </label>
       </fieldset>
       <fieldset className="preferences-grid">
+        <legend>启动</legend>
+        <Toggle
+          label="启动时恢复上次棋谱"
+          checked={preferences.restoreLastSession}
+          disabled={disabled}
+          onChange={(checked) => update({ restoreLastSession: checked })}
+        />
+      </fieldset>
+      <fieldset className="preferences-grid">
         <legend>复盘</legend>
         <label>
           <span>默认计算量</span>

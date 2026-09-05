@@ -32,18 +32,25 @@ use tauri::{AppHandle, Emitter, Manager, State};
 mod current_game_state;
 mod document_departure;
 mod save_as;
+mod session_recovery;
 #[cfg(windows)]
 extern crate windows_core;
 use app_preferences::{
     load_from_path as load_app_preferences_from_path, save_to_path, AppPreferencesDto,
     AppPreferencesLoadResultDto, APP_PREFERENCES_FILE,
 };
+use current_game_recovery::FileRecoveryStore;
 use current_game_state::{CurrentGameState, WholeGameAdmission};
 use document_departure::{
     confirm_application_exit_anyway, confirm_native_exit, prepare_application_exit,
     prepare_document_replacement, resolve_application_exit, resolve_document_replacement,
     retry_application_teardown, APPLICATION_EXIT_REQUESTED_EVENT,
 };
+use session_recovery::{
+    current_game_recovery_protection, discard_current_game_recovery, inspect_current_game_recovery,
+    restore_current_game_recovery, retry_current_game_recovery, spawn_recovery_writer,
+};
+use std::sync::Mutex;
 use uuid::Uuid;
 
 const ENGINE_PROFILE_FILE: &str = "lizzieyzy-next-engine-profile.json";
@@ -970,6 +977,9 @@ pub fn run() {
     tauri::Builder::default()
         .manage(CurrentGameState::default())
         .setup(|app| {
+            let recovery_path = session_recovery::recovery_file_path(app.handle())?;
+            app.manage(Mutex::new(FileRecoveryStore::new(recovery_path)));
+            spawn_recovery_writer(app.handle().clone());
             let _ = load_engine_profiles_from_disk(app.handle());
             let catalog = std::sync::Arc::new(DiskEngineCatalog {
                 handle: app.handle().clone(),
@@ -1020,6 +1030,11 @@ pub fn run() {
             retry_application_teardown,
             confirm_application_exit_anyway,
             confirm_native_exit,
+            inspect_current_game_recovery,
+            restore_current_game_recovery,
+            discard_current_game_recovery,
+            retry_current_game_recovery,
+            current_game_recovery_protection,
             serialize_current_game,
             save_current_game,
             save_current_game_as,

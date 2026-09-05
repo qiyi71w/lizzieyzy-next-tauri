@@ -8,6 +8,7 @@ import { PreferencesPanel } from "./components/PreferencesPanel";
 import { ShortcutReference } from "./components/ShortcutReference";
 import { DocumentDepartureDialog } from "./components/DocumentDepartureDialog";
 import { ApplicationTeardownDialog } from "./components/ApplicationTeardownDialog";
+import { CurrentGameRecoveryDialog } from "./components/CurrentGameRecoveryDialog";
 import { ProviderPanel } from "./components/ProviderPanel";
 import {
   cancelKataGoAnalysis,
@@ -30,6 +31,11 @@ import {
   confirmApplicationExitAnyway,
   confirmNativeExit,
   subscribeApplicationExitRequested,
+  inspectCurrentGameRecovery,
+  restoreCurrentGameRecovery,
+  discardCurrentGameRecovery,
+  retryCurrentGameRecovery,
+  subscribeCurrentGameRecoveryProtection,
   saveCurrentGame,
   serializeCurrentGame,
   selectCurrentGameNode,
@@ -72,7 +78,7 @@ import {
   variationReplayIdentityKey,
   variationReplayPointSteps
 } from "./domain/variationReplay";
-import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, SgfTreeNodeDto } from "./domain/types";
+import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, SgfTreeNodeDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
@@ -145,6 +151,8 @@ export function App() {
     message: string;
     choose: (action: "retry" | "exit_anyway") => void;
   } | null>(null);
+  const [recoveryPrompt, setRecoveryPrompt] = useState<Extract<RecoveryStartupDto, { status: "abnormal" }> | null>(null);
+  const [recoveryProtection, setRecoveryProtection] = useState<RecoveryProtectionDto>({ status: "protected" });
   const exitInFlightRef = useRef(false);
   const shortcutRegistry = useMemo(() => createShortcutRegistry(), []);
   const jumpRef = useRef<HTMLInputElement | null>(null);
@@ -172,26 +180,54 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!isTauriRuntime()) return;
-    void applyReplacement(demoSgf, null, {
-      confirmMessage: "放弃未保存的棋谱并载入示例？",
-      fallbackName: "sample.sgf",
-      successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
-      failurePrefix: "Sample load failed"
-    });
-  }, []);
-
-  useEffect(() => {
     let isMounted = true;
-    loadAppPreferences()
-      .then((loaded) => {
+    void (async () => {
+      let loadedPrefs = defaultAppPreferences;
+      try {
+        const loaded = await loadAppPreferences();
         if (!isMounted) return;
         settleLoadedPreferences(loaded.preferences, loaded.recovery?.message ?? "Preferences loaded.");
-      })
-      .catch((error: unknown) => {
+        loadedPrefs = loaded.preferences;
+      } catch (error: unknown) {
         if (!isMounted) return;
         settleLoadedPreferences(defaultAppPreferences, `Load failed: ${errorMessage(error)}`);
+      }
+      if (!isTauriRuntime()) return;
+      let startup: RecoveryStartupDto = { status: "none" };
+      try {
+        startup = await inspectCurrentGameRecovery();
+      } catch (error: unknown) {
+        if (!isMounted) return;
+        setMessage(`恢复检查失败: ${errorMessage(error)}`);
+      }
+      if (!isMounted) return;
+      if (startup.status === "abnormal") {
+        setRecoveryPrompt(startup);
+        return;
+      }
+      if (startup.status === "unreadable") {
+        setMessage(startup.message);
+      }
+      if (startup.status === "normal" && loadedPrefs.restoreLastSession) {
+        try {
+          await restoreRecoveredDocument("已恢复上次棋谱。");
+          return;
+        } catch (error: unknown) {
+          if (!isMounted) return;
+          setMessage(`恢复失败: ${errorMessage(error)}`);
+        }
+      }
+      await applyReplacement(demoSgf, null, {
+        confirmMessage: "放弃未保存的棋谱并载入示例？",
+        fallbackName: "sample.sgf",
+        successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
+        failurePrefix: "Sample load failed"
       });
+      if (!isMounted) return;
+      if (startup.status === "unreadable") {
+        setMessage(startup.message);
+      }
+    })();
     return () => {
       isMounted = false;
     };
@@ -752,6 +788,11 @@ export function App() {
       }
       if (choice === "exit_anyway") break;
     }
+    if (current.recovery_persist_error) {
+      setMessage(current.recovery_persist_error);
+      setRecoveryProtection({ status: "unprotected", message: current.recovery_persist_error });
+      return;
+    }
     await confirmNativeExit();
   }
 
@@ -802,6 +843,25 @@ export function App() {
     let unlisten: () => void = () => undefined;
     void subscribeApplicationExitRequested(() => {
       void handleApplicationExitRef.current();
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten();
+    };
+  }, [nativeRuntime]);
+
+  useEffect(() => {
+    if (!nativeRuntime) return;
+    let cancelled = false;
+    let unlisten: () => void = () => undefined;
+    void subscribeCurrentGameRecoveryProtection((protection) => {
+      if (!cancelled) {
+        setRecoveryProtection(protection);
+        if (protection.status === "unprotected") setMessage(protection.message);
+      }
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;
@@ -880,6 +940,55 @@ export function App() {
     }
     await adoptCommittedReplacement(outcome.current, sgfInput, nativePath, options);
     return true;
+  }
+
+
+  async function restoreRecoveredDocument(successMessage: string): Promise<boolean> {
+    const restored = await restoreCurrentGameRecovery();
+    const serialized = await serializeCurrentGame();
+    await adoptCommittedReplacement(restored, serialized, restored.native_path ?? null, {
+      fallbackName: restored.native_path ? null : "recovered.sgf",
+      successMessage: () => successMessage
+    });
+    return true;
+  }
+
+  async function handleRestoreRecoveredGame() {
+    try {
+      await restoreRecoveredDocument("已恢复上次未正常退出的棋谱。");
+      setRecoveryPrompt(null);
+    } catch (error: unknown) {
+      setMessage(`恢复失败: ${errorMessage(error)}`);
+    }
+  }
+
+  async function handleDiscardRecoveredGame() {
+    try {
+      await discardCurrentGameRecovery();
+      setRecoveryPrompt(null);
+      await applyReplacement(demoSgf, null, {
+        confirmMessage: "放弃未保存的棋谱并载入示例？",
+        fallbackName: "sample.sgf",
+        successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
+        failurePrefix: "Sample load failed"
+      });
+    } catch (error: unknown) {
+      setMessage(`放弃恢复失败: ${errorMessage(error)}`);
+    }
+  }
+
+  async function handleRetryRecoveryWrite() {
+    try {
+      const protection = await retryCurrentGameRecovery();
+      setRecoveryProtection(protection);
+      if (protection.status === "protected") {
+        setMessage("当前棋谱恢复快照已写入。");
+      } else {
+        setMessage(protection.message);
+      }
+    } catch (error: unknown) {
+      setMessage(`重试恢复写入失败: ${errorMessage(error)}`);
+    }
   }
 
   async function applyReplacement(
@@ -1614,6 +1723,14 @@ export function App() {
         />
       </aside>
     </section>
+    {recoveryProtection.status === "unprotected" ? (
+      <div className="recovery-unprotected">
+        <span role="status">{recoveryProtection.message}</span>
+        <button type="button" aria-label="Retry recovery write" onClick={() => void handleRetryRecoveryWrite()}>
+          重试
+        </button>
+      </div>
+    ) : null}
     <BottomBar
       currentMove={reviewIndex}
       maxMove={reviewMax}
@@ -1659,6 +1776,14 @@ export function App() {
         <div className="document-row">
           <strong title={documentPath ?? documentName}>{documentName}{documentDirty ? " *" : ""}</strong>
           <span>{documentDirty ? "未保存" : "已保存"}</span>
+          {recoveryProtection.status === "unprotected" ? (
+            <>
+              <span role="status">{recoveryProtection.message}</span>
+              <button type="button" aria-label="Retry recovery write" onClick={() => void handleRetryRecoveryWrite()}>
+                重试
+              </button>
+            </>
+          ) : null}
         </div>
         <textarea value={sgfText} onChange={(event) => {
           setSgfText(event.target.value);
@@ -1698,6 +1823,13 @@ export function App() {
         message={teardownPrompt.message}
         onRetry={() => teardownPrompt.choose("retry")}
         onExitAnyway={() => teardownPrompt.choose("exit_anyway")}
+      />
+    ) : null}
+    {recoveryPrompt ? (
+      <CurrentGameRecoveryDialog
+        message="检测到未正常退出的棋谱。恢复上次棋谱，还是放弃该恢复候选？"
+        onRestore={() => void handleRestoreRecoveredGame()}
+        onDiscard={() => void handleDiscardRecoveredGame()}
       />
     ) : null}
     {shortcutReferenceOpen ? (

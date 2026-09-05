@@ -26,7 +26,9 @@ import type {
   MoveVertex,
   PlayerColor,
   PositionDto,
-  ProblemMarkerDto
+  ProblemMarkerDto,
+  RecoveryProtectionDto,
+  RecoveryStartupDto
 } from "../domain/types";
 import { emptyForegroundEngineSnapshot, mergeForegroundEngineSnapshot } from "../domain/foregroundEngine";
 import { ensureInitialPosition, replayGamePositions } from "../domain/board";
@@ -173,6 +175,52 @@ export async function subscribeApplicationExitRequested(onRequest: () => void): 
   }
   return listen("application-exit-requested", () => {
     onRequest();
+  });
+}
+
+export async function inspectCurrentGameRecovery(): Promise<RecoveryStartupDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<RecoveryStartupDto>("inspect_current_game_recovery");
+}
+
+export async function restoreCurrentGameRecovery(): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<CurrentGameResultDto>("restore_current_game_recovery");
+}
+
+export async function discardCurrentGameRecovery(): Promise<void> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  await invoke("discard_current_game_recovery");
+}
+
+export async function retryCurrentGameRecovery(): Promise<RecoveryProtectionDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<RecoveryProtectionDto>("retry_current_game_recovery");
+}
+
+export async function currentGameRecoveryProtection(): Promise<RecoveryProtectionDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<RecoveryProtectionDto>("current_game_recovery_protection");
+}
+
+export async function subscribeCurrentGameRecoveryProtection(
+  onProtection: (protection: RecoveryProtectionDto) => void
+): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+  return listen<RecoveryProtectionDto>("current-game-recovery://protection", (event) => {
+    onProtection(event.payload);
   });
 }
 

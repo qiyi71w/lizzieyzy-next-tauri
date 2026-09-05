@@ -45,6 +45,8 @@ pub struct AppPreferencesDto {
     pub variation_replay_enabled: bool,
     #[serde(default = "default_variation_replay_interval_ms")]
     pub variation_replay_interval_ms: u32,
+    #[serde(default = "default_restore_last_session")]
+    pub restore_last_session: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +83,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         sub_board_content_mode: default_sub_board_content_mode(),
         variation_replay_enabled: default_variation_replay_enabled(),
         variation_replay_interval_ms: default_variation_replay_interval_ms(),
+        restore_last_session: default_restore_last_session(),
     }
 }
 
@@ -279,6 +282,10 @@ fn default_variation_replay_interval_ms() -> u32 {
     500
 }
 
+fn default_restore_last_session() -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,6 +332,7 @@ mod tests {
             sub_board_content_mode: "raw".to_string(),
             variation_replay_enabled: true,
             variation_replay_interval_ms: 250,
+            restore_last_session: true,
         }
     }
 
@@ -379,6 +387,19 @@ mod tests {
         let loaded = load_from_path(&path).unwrap();
         assert!(!loaded.preferences.variation_replay_enabled);
         assert_eq!(loaded.preferences.variation_replay_interval_ms, 500);
+        assert!(loaded.recovery.is_none());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn missing_restore_last_session_defaults_to_off() {
+        let (dir, path) = temp_prefs();
+        fs::write(&path, r#"{"showCandidates":true}"#).unwrap();
+
+        let loaded = load_from_path(&path).unwrap();
+        assert!(!loaded.preferences.restore_last_session);
+        assert!(!default_app_preferences().restore_last_session);
         assert!(loaded.recovery.is_none());
 
         let _ = fs::remove_dir_all(dir);

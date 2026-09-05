@@ -61,6 +61,8 @@ pub struct ApplicationExitOutcomeDto {
     pub disposition: Option<ApplicationExitDispositionDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub teardown: Option<ApplicationTeardownAttemptDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_persist_error: Option<String>,
 }
 
 #[cfg(test)]
@@ -96,5 +98,17 @@ mod tests {
         .unwrap();
         assert_eq!(timed_out["status"], "timed_out");
         assert_eq!(timed_out["outstanding"][0], "foreground engine");
+
+        let persist_failed = serde_json::to_value(ApplicationExitOutcomeDto {
+            committed: true,
+            analysis_stopped: true,
+            current: None,
+            message: "Failed to persist current-game recovery: disk full".to_string(),
+            disposition: Some(ApplicationExitDispositionDto::CleanCompleted),
+            teardown: Some(ApplicationTeardownAttemptDto::Completed),
+            recovery_persist_error: Some("disk full".to_string()),
+        })
+        .unwrap();
+        assert_eq!(persist_failed["recovery_persist_error"], "disk full");
     }
 }

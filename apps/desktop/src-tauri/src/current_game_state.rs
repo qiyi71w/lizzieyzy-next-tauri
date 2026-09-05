@@ -1,6 +1,8 @@
+use ::current_game_recovery::RecoveryCoordinator;
 use app_model::{
     admits_analysis_attachment, AnalysisJobEventDto, ApplicationExitDispositionDto, CurrentGameError,
-    CurrentGameErrorKind, CurrentGameResultDto, GameDto, MoveVertex, NodePath, SelectedNodeSnapshotDto,
+    CurrentGameErrorKind, CurrentGameResultDto, GameDto, MoveVertex, NodePath, RecoveryEnvelopeDto,
+    RecoveryProtectionDto, SelectedNodeSnapshotDto,
 };
 use sgf::{CurrentSgfDocument, SgfAnalysisPayload};
 use std::collections::HashSet;
@@ -12,7 +14,10 @@ mod current_game_analysis_attach;
 mod current_game_departure;
 #[cfg(test)]
 mod current_game_save_write;
+#[cfg(test)]
+mod current_game_session_recovery;
 mod departure;
+pub(crate) mod recovery;
 
 #[derive(Debug, Clone)]
 pub struct WholeGameAdmission {
@@ -26,6 +31,7 @@ pub struct WholeGameAdmission {
 #[derive(Default)]
 pub struct CurrentGameState {
     holder: Mutex<CurrentGameHolder>,
+    recovery: Mutex<RecoveryCoordinator>,
 }
 
 #[derive(Default)]
@@ -40,6 +46,9 @@ struct CurrentGameHolder {
     edits_blocked: bool,
     closed_jobs: HashSet<(String, String)>,
     exit_disposition: Option<ApplicationExitDispositionDto>,
+    selected_path: NodePath,
+    document_seq: u64,
+    snapshot_seq: u64,
 }
 
 impl CurrentGameState {
@@ -65,7 +74,9 @@ impl CurrentGameState {
         if holder.dirty && !discard_confirmed {
             return Ok(None);
         }
-        Ok(Some(holder.replace(sgf_text, native_path)?))
+        let result = holder.replace(sgf_text, native_path)?;
+        self.note_recovery(&holder);
+        Ok(Some(result))
     }
 
     pub fn native_path(&self) -> Option<String> {
@@ -142,6 +153,9 @@ impl CurrentGameState {
             .snapshot(&selected_path)
             .map_err(|error| error.to_string())?;
         let tree = document.tree().map_err(|error| error.to_string())?;
+        holder.selected_path = selected_path.clone();
+        holder.bump_snapshot();
+        self.note_recovery(&holder);
         Ok(CurrentGameResultDto {
             tree,
             selected_path,
@@ -199,11 +213,21 @@ impl CurrentGameState {
     }
 
     pub fn select_path(&self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
-        self.holder.lock().expect("current game state").select_path(path)
+        let mut holder = self.holder.lock().expect("current game state");
+        let changed = holder.selected_path != path;
+        let result = holder.select_path(path)?;
+        if changed {
+            holder.bump_snapshot();
+            self.note_recovery(&holder);
+        }
+        Ok(result)
     }
 
     pub fn play(&self, path: NodePath, vertex: MoveVertex) -> Result<CurrentGameResultDto, CurrentGameError> {
-        self.holder.lock().expect("current game state").play(path, vertex)
+        let mut holder = self.holder.lock().expect("current game state");
+        let result = holder.play(path, vertex)?;
+        self.note_recovery(&holder);
+        Ok(result)
     }
 
     pub fn set_personal_comment(
@@ -211,17 +235,17 @@ impl CurrentGameState {
         path: NodePath,
         comment: String,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
-        self.holder
-            .lock()
-            .expect("current game state")
-            .set_personal_comment(path, &comment)
+        let mut holder = self.holder.lock().expect("current game state");
+        let result = holder.set_personal_comment(path, &comment)?;
+        self.note_recovery(&holder);
+        Ok(result)
     }
 
     pub fn remove_variation(&self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
-        self.holder
-            .lock()
-            .expect("current game state")
-            .remove_variation(path)
+        let mut holder = self.holder.lock().expect("current game state");
+        let result = holder.remove_variation(path)?;
+        self.note_recovery(&holder);
+        Ok(result)
     }
 
     pub fn attach_primary_analysis(
@@ -230,10 +254,10 @@ impl CurrentGameState {
         path: NodePath,
         payload: SgfAnalysisPayload,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
-        self.holder
-            .lock()
-            .expect("current game state")
-            .attach_primary_analysis(generation, path, payload)
+        let mut holder = self.holder.lock().expect("current game state");
+        let result = holder.attach_primary_analysis(generation, path, payload)?;
+        self.note_recovery(&holder);
+        Ok(result)
     }
 
     pub fn attach_from_job_event(&self, event: &AnalysisJobEventDto) -> Option<CurrentGameResultDto> {
@@ -302,6 +326,8 @@ impl CurrentGameHolder {
         if changed {
             self.generation += 1;
             self.mark_dirty();
+            self.selected_path = snapshot.path.clone();
+            self.bump_snapshot();
         }
         Ok(CurrentGameResultDto {
             tree,
@@ -313,12 +339,13 @@ impl CurrentGameHolder {
         })
     }
 
-    fn select_path(&self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
+    fn select_path(&mut self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
         let document = self.document.as_ref().ok_or_else(|| CurrentGameError {
             kind: CurrentGameErrorKind::NoCurrentGame,
             message: "no current game".to_string(),
         })?;
         let snapshot = document.snapshot(&path)?;
+        self.selected_path = path.clone();
         Ok(CurrentGameResultDto {
             tree: document.tree()?,
             selected_path: path,
@@ -345,6 +372,8 @@ impl CurrentGameHolder {
         if changed {
             self.generation += 1;
             self.mark_dirty();
+            self.selected_path = path.clone();
+            self.bump_snapshot();
         }
         Ok(CurrentGameResultDto {
             tree,
@@ -364,6 +393,8 @@ impl CurrentGameHolder {
         let tree = document.tree()?;
         self.generation += 1;
         self.mark_dirty();
+        self.selected_path = selected_path.clone();
+        self.bump_snapshot();
         Ok(CurrentGameResultDto {
             tree,
             selected_path,
@@ -397,6 +428,8 @@ impl CurrentGameHolder {
         };
         if changed {
             self.mark_dirty();
+            self.selected_path = path.clone();
+            self.bump_snapshot();
         }
         Ok(CurrentGameResultDto {
             tree,
@@ -406,6 +439,10 @@ impl CurrentGameHolder {
             dirty: self.dirty,
             native_path: self.native_path.clone(),
         })
+    }
+
+    fn bump_snapshot(&mut self) {
+        self.snapshot_seq = self.snapshot_seq.saturating_add(1);
     }
 
     fn mark_dirty(&mut self) {

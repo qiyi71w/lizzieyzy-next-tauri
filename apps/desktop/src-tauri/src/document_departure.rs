@@ -1,14 +1,16 @@
-use crate::current_game_state::CurrentGameState;
+use crate::current_game_state::{recovery, CurrentGameState};
 use crate::save_as;
 use app_model::{
     AnalysisJobStartedDto, ApplicationExitActionDto, ApplicationExitDispositionDto,
     ApplicationExitOutcomeDto, ApplicationTeardownAttemptDto, CurrentGameError, DocumentDepartureActionDto,
     DocumentDepartureAdmissionDto, DocumentDepartureOutcomeDto, ForegroundEngineSnapshotDto, NodePath,
 };
+use current_game_recovery::FileRecoveryStore;
 use engine_manager::ForegroundEngineManager;
 use save_as_dialog::persist_save_as;
+use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 pub fn jobs_from_snapshot(snapshot: &ForegroundEngineSnapshotDto) -> Vec<AnalysisJobStartedDto> {
     let mut jobs = Vec::new();
@@ -137,6 +139,7 @@ fn exit_from_departure(
         message: outcome.message,
         disposition,
         teardown,
+        recovery_persist_error: None,
     }
 }
 
@@ -211,6 +214,7 @@ pub fn resolve_exit(
                 message: "Exit cancelled.".to_string(),
                 disposition: None,
                 teardown: None,
+                recovery_persist_error: None,
             })
         }
         ApplicationExitActionDto::Discard => {
@@ -274,6 +278,32 @@ pub fn exit_anyway(
     )
 }
 
+fn persist_exit_outcome(
+    state: &CurrentGameState,
+    store: &Mutex<FileRecoveryStore>,
+    outcome: ApplicationExitOutcomeDto,
+) -> ApplicationExitOutcomeDto {
+    let store = store.lock().expect("recovery store");
+    recovery::persist_committed_exit(state, &store, outcome)
+}
+
+fn persist_replacement_outcome(
+    app: &AppHandle,
+    state: &CurrentGameState,
+    store: &Mutex<FileRecoveryStore>,
+    outcome: DocumentDepartureOutcomeDto,
+) -> DocumentDepartureOutcomeDto {
+    if outcome.committed {
+        let store = store.lock().expect("recovery store");
+        let _ = recovery::persist_replacement_snapshot(state, &store);
+        let _ = app.emit(
+            crate::session_recovery::RECOVERY_PROTECTION_EVENT,
+            state.recovery_protection(),
+        );
+    }
+    outcome
+}
+
 #[tauri::command]
 pub fn prepare_document_replacement(
     state: State<CurrentGameState>,
@@ -288,6 +318,7 @@ pub async fn resolve_document_replacement(
     app: AppHandle,
     state: State<'_, CurrentGameState>,
     manager: State<'_, ForegroundEngineManager>,
+    store: State<'_, Mutex<FileRecoveryStore>>,
     departure_id: u64,
     action: DocumentDepartureActionDto,
     selected_path: NodePath,
@@ -297,21 +328,23 @@ pub async fn resolve_document_replacement(
     let cancel_job = |job: &AnalysisJobStartedDto| {
         let _ = manager.cancel_job(&job.run_id, &job.job_id);
     };
-    if matches!(action, DocumentDepartureActionDto::Save) && state.native_path().is_none() {
+    let outcome = if matches!(action, DocumentDepartureActionDto::Save) && state.native_path().is_none() {
         confirm_departure(&state, departure_id, &closed_jobs, cancel_job)?;
-        let destination = pick_untitled_save_destination(app, default_file_name).await;
-        return complete_save(&state, departure_id, selected_path, destination);
-    }
-    let save_path = state.native_path();
-    resolve_replacement(
-        &state,
-        departure_id,
-        action,
-        selected_path,
-        &closed_jobs,
-        cancel_job,
-        || Ok(save_path),
-    )
+        let destination = pick_untitled_save_destination(app.clone(), default_file_name).await;
+        complete_save(&state, departure_id, selected_path, destination)?
+    } else {
+        let save_path = state.native_path();
+        resolve_replacement(
+            &state,
+            departure_id,
+            action,
+            selected_path,
+            &closed_jobs,
+            cancel_job,
+            || Ok(save_path),
+        )?
+    };
+    Ok(persist_replacement_outcome(&app, &state, &store, outcome))
 }
 
 async fn pick_untitled_save_destination(
@@ -338,6 +371,7 @@ pub async fn resolve_application_exit(
     app: AppHandle,
     state: State<'_, CurrentGameState>,
     manager: State<'_, ForegroundEngineManager>,
+    store: State<'_, Mutex<FileRecoveryStore>>,
     departure_id: u64,
     action: ApplicationExitActionDto,
     selected_path: NodePath,
@@ -347,56 +381,62 @@ pub async fn resolve_application_exit(
     let cancel_job = |job: &AnalysisJobStartedDto| {
         let _ = manager.cancel_job(&job.run_id, &job.job_id);
     };
-    if matches!(action, ApplicationExitActionDto::Save) && state.native_path().is_none() {
+    let outcome = if matches!(action, ApplicationExitActionDto::Save) && state.native_path().is_none() {
         confirm_departure(&state, departure_id, &closed_jobs, cancel_job)?;
-        let destination = pick_untitled_save_destination(app, default_file_name).await;
-        return finish_exit_save(
+        let destination = pick_untitled_save_destination(app.clone(), default_file_name).await;
+        finish_exit_save(
             &state,
             departure_id,
             selected_path,
             destination,
             |budget| stop_foreground_resources(&manager, budget),
             APPLICATION_TEARDOWN_BUDGET,
-        );
-    }
-    let save_path = state.native_path();
-    resolve_exit(
-        &state,
-        departure_id,
-        action,
-        selected_path,
-        &closed_jobs,
-        cancel_job,
-        || Ok(save_path),
-        |budget| stop_foreground_resources(&manager, budget),
-        APPLICATION_TEARDOWN_BUDGET,
-    )
+        )?
+    } else {
+        let save_path = state.native_path();
+        resolve_exit(
+            &state,
+            departure_id,
+            action,
+            selected_path,
+            &closed_jobs,
+            cancel_job,
+            || Ok(save_path),
+            |budget| stop_foreground_resources(&manager, budget),
+            APPLICATION_TEARDOWN_BUDGET,
+        )?
+    };
+    Ok(persist_exit_outcome(&state, &store, outcome))
 }
 
 #[tauri::command]
 pub fn retry_application_teardown(
     state: State<CurrentGameState>,
     manager: State<ForegroundEngineManager>,
+    store: State<Mutex<FileRecoveryStore>>,
     departure_id: u64,
     selected_path: NodePath,
 ) -> Result<ApplicationExitOutcomeDto, CurrentGameError> {
-    retry_exit_teardown(
+    let outcome = retry_exit_teardown(
         &state,
         departure_id,
         selected_path,
         |budget| stop_foreground_resources(&manager, budget),
         APPLICATION_TEARDOWN_BUDGET,
-    )
+    )?;
+    Ok(persist_exit_outcome(&state, &store, outcome))
 }
 
 #[tauri::command]
 pub fn confirm_application_exit_anyway(
     state: State<CurrentGameState>,
+    store: State<Mutex<FileRecoveryStore>>,
     departure_id: u64,
     selected_path: NodePath,
     outstanding: Vec<String>,
 ) -> Result<ApplicationExitOutcomeDto, CurrentGameError> {
-    exit_anyway(&state, departure_id, selected_path, outstanding)
+    let outcome = exit_anyway(&state, departure_id, selected_path, outstanding)?;
+    Ok(persist_exit_outcome(&state, &store, outcome))
 }
 
 #[tauri::command]

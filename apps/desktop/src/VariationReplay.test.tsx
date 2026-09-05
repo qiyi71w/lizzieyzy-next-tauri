@@ -59,7 +59,13 @@ const backend = vi.hoisted(() => ({
   restartForegroundEngine: vi.fn(() => Promise.resolve()),
   switchForegroundEngine: vi.fn(() => Promise.resolve()),
   getForegroundEngineSnapshot: vi.fn(),
-  subscribeForegroundEngine: vi.fn()
+  subscribeForegroundEngine: vi.fn(),
+  inspectCurrentGameRecovery: vi.fn(async (): Promise<{ status: "none" | "abnormal" | "normal" | "unreadable"; envelope?: unknown; message?: string }> => ({ status: "none" })),
+  restoreCurrentGameRecovery: vi.fn(),
+  discardCurrentGameRecovery: vi.fn(async () => undefined),
+  retryCurrentGameRecovery: vi.fn(async () => ({ status: "protected" })),
+  currentGameRecoveryProtection: vi.fn(async () => ({ status: "protected" })),
+  subscribeCurrentGameRecoveryProtection: vi.fn(async () => () => undefined)
 }));
 
 const preferencesApi = vi.hoisted(() => ({
@@ -451,6 +457,7 @@ async function renderApp(): Promise<HTMLElement> {
   root = createRoot(host);
   act(() => root?.render(<App />));
   await act(async () => {
+    await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
     await backend.replaceCurrentGame.mock.results.at(-1)?.value;
     await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
     await backend.subscribeForegroundEngine.mock.results.at(-1)?.value;

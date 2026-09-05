@@ -52,7 +52,13 @@ const backend = vi.hoisted(() => ({
   stopForegroundEngine: vi.fn(),
   restartForegroundEngine: vi.fn(),
   switchForegroundEngine: vi.fn(),
-  getForegroundEngineSnapshot: vi.fn(() => Promise.resolve({ revision: 0, lifecycle: { state: "no_engine" } }))
+  getForegroundEngineSnapshot: vi.fn(() => Promise.resolve({ revision: 0, lifecycle: { state: "no_engine" } })),
+  inspectCurrentGameRecovery: vi.fn(async (): Promise<{ status: "none" | "abnormal" | "normal" | "unreadable"; envelope?: unknown; message?: string }> => ({ status: "none" })),
+  restoreCurrentGameRecovery: vi.fn(),
+  discardCurrentGameRecovery: vi.fn(async () => undefined),
+  retryCurrentGameRecovery: vi.fn(async () => ({ status: "protected" })),
+  currentGameRecoveryProtection: vi.fn(async () => ({ status: "protected" })),
+  subscribeCurrentGameRecoveryProtection: vi.fn(async () => () => undefined)
 }));
 
 vi.mock("./api/backend", () => ({
@@ -306,6 +312,7 @@ async function renderApp(): Promise<HTMLElement> {
   root = createRoot(host);
   act(() => root?.render(<App />));
   await act(async () => {
+    await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
     await backend.replaceCurrentGame.mock.results.at(-1)?.value;
     await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
     await preferencesApi.loadAppPreferences.mock.results.at(-1)?.value.catch(() => undefined);

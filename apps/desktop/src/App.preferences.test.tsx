@@ -53,7 +53,13 @@ const backend = vi.hoisted(() => ({
   stopForegroundEngine: vi.fn(),
   restartForegroundEngine: vi.fn(),
   switchForegroundEngine: vi.fn(),
-  getForegroundEngineSnapshot: vi.fn(() => Promise.resolve({ revision: 0, lifecycle: { state: "no_engine" } }))
+  getForegroundEngineSnapshot: vi.fn(() => Promise.resolve({ revision: 0, lifecycle: { state: "no_engine" } })),
+  inspectCurrentGameRecovery: vi.fn(async (): Promise<{ status: "none" | "abnormal" | "normal" | "unreadable"; envelope?: unknown; message?: string }> => ({ status: "none" })),
+  restoreCurrentGameRecovery: vi.fn(),
+  discardCurrentGameRecovery: vi.fn(async () => undefined),
+  retryCurrentGameRecovery: vi.fn(async () => ({ status: "protected" })),
+  currentGameRecoveryProtection: vi.fn(async () => ({ status: "protected" })),
+  subscribeCurrentGameRecoveryProtection: vi.fn(async () => () => undefined)
 }));
 
 vi.mock("./api/backend", () => ({
@@ -135,7 +141,7 @@ describe("durable preferences surface", () => {
     const host = await renderApp();
     openPreferences(host);
 
-    expect(categoryLegends(host)).toEqual(["分析呈现", "复盘", "棋盘", "胜率图"]);
+    expect(categoryLegends(host)).toEqual(["分析呈现", "启动", "复盘", "棋盘", "胜率图"]);
     expect(labeledCheckbox(host, "候选").checked).toBe(true);
     expect(labeledCheckbox(host, "领地").checked).toBe(true);
     expect(labeledCheckbox(host, "策略").checked).toBe(true);
@@ -147,6 +153,7 @@ describe("durable preferences surface", () => {
     expect(labeledSelect(host, "小棋盘内容").value).toBe("variation");
     expect(labeledCheckbox(host, "变化回放").checked).toBe(false);
     expect(labeledNumber(host, "回放间隔").value).toBe("500");
+    expect(labeledCheckbox(host, "启动时恢复上次棋谱").checked).toBe(false);
     expect(host.textContent).not.toContain("自动载入缓存");
     expect(host.textContent).not.toContain("自动保存分析");
     expect(host.textContent).not.toContain("缓存未用");
@@ -435,6 +442,40 @@ describe("durable preferences surface", () => {
   });
 });
 
+
+  it("restores the last document on a normal launch when the preference is enabled", async () => {
+    preferencesApi.loadAppPreferences.mockResolvedValue({
+      preferences: { ...defaultAppPreferences, restoreLastSession: true }
+    });
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "normal",
+      envelope: {
+        document_seq: 1,
+        snapshot_seq: 1,
+        sgf_text: "(;SZ[9])",
+        selected_path: { indices: [] },
+        dirty: false,
+        disposition: "clean_completed"
+      }
+    });
+    backend.restoreCurrentGameRecovery.mockResolvedValue(initialGame);
+    backend.serializeCurrentGame.mockResolvedValue("(;SZ[9])");
+    backend.prepareDocumentReplacement.mockClear();
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<App />));
+    await act(async () => {
+      await preferencesApi.loadAppPreferences.mock.results.at(-1)?.value;
+      await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
+      await backend.restoreCurrentGameRecovery.mock.results.at(-1)?.value;
+      await backend.serializeCurrentGame.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+    expect(backend.restoreCurrentGameRecovery).toHaveBeenCalled();
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("已恢复上次棋谱");
+  });
 async function renderApp(options?: { waitForLoad?: boolean }): Promise<HTMLElement> {
   act(() => root?.unmount());
   root = null;
@@ -443,11 +484,12 @@ async function renderApp(options?: { waitForLoad?: boolean }): Promise<HTMLEleme
   root = createRoot(host);
   act(() => root?.render(<App />));
   await act(async () => {
-    await backend.replaceCurrentGame.mock.results.at(-1)?.value;
-    await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
     if (options?.waitForLoad !== false) {
       await preferencesApi.loadAppPreferences.mock.results.at(-1)?.value.catch(() => undefined);
     }
+    await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
+    await backend.replaceCurrentGame.mock.results.at(-1)?.value;
+    await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
   });
   return host;
 }
