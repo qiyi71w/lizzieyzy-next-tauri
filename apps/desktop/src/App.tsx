@@ -130,6 +130,7 @@ export function App() {
   const [overlayMode, setOverlayMode] = useState<OverlayMode>("candidates");
   const [autoPlaying, setAutoPlaying] = useState(false);
   const [shortcutReferenceOpen, setShortcutReferenceOpen] = useState(false);
+  const [keyboardPlacement, setKeyboardPlacement] = useState(false);
   const [departurePrompt, setDeparturePrompt] = useState<{
     message: string;
     choose: (action: DocumentDepartureActionDto) => void;
@@ -326,6 +327,12 @@ export function App() {
     shortcutRegistry.bind("file.new", () => {
       void handleNewGame();
     });
+    shortcutRegistry.bind("game.human-vs-engine", () => {
+      setMessage("人机对局尚未接入，N 不会新建棋谱。");
+    });
+    shortcutRegistry.bind("analysis.continuous", () => {
+      setMessage("连续分析尚未接入，Space 不会落子或改为一次性分析。");
+    });
     shortcutRegistry.bind("file.open", () => {
       if (openEnabled) void handleOpenSgfDocument();
     });
@@ -406,6 +413,15 @@ export function App() {
         }
         return;
       }
+      if (
+        event.key === "Escape"
+        && keyboardPlacement
+        && !(event.target instanceof Element && event.target.closest('[role="dialog"]'))
+      ) {
+        event.preventDefault();
+        setKeyboardPlacement(false);
+        return;
+      }
       shortcutRegistry.dispatch(event);
     }
     window.addEventListener("keydown", onKey);
@@ -420,6 +436,7 @@ export function App() {
     reviewIndex,
     reviewMax,
     departurePrompt,
+    keyboardPlacement,
     shortcutRegistry,
     visibleCurrentFrame
   ]);
@@ -728,6 +745,7 @@ export function App() {
     setFrames([]);
     setProblems([]);
     setSelectedCandidateIndex(null);
+    setKeyboardPlacement(false);
     const fileName = fileNameFromPath(result.native_path ?? options.fallbackName ?? "SGF");
     setMessage(options.successMessage(artifacts.projection, fileName));
   }
@@ -796,6 +814,7 @@ export function App() {
         setFrames([]);
         setProblems([]);
         setSelectedCandidateIndex(null);
+        setKeyboardPlacement(false);
         await abandonAnalysisSessions();
         const previewMessage = options.successMessage(parsed, options.fallbackName ?? "SGF");
         setMessage(`${nativeCurrentGameUnavailable} ${previewMessage}`);
@@ -1475,6 +1494,7 @@ export function App() {
           pvPrefixLength={replayPrefix}
           replayCandidateIndex={activeCandidateIndex}
           onPointClick={(point) => void playAt({ point })}
+          keyboardPlacement={keyboardPlacement}
           nextMoveMode={preferences.nextMoveReviewMarker}
           nextMoveMarkers={nextMoveMarkers}
         />
@@ -1536,6 +1556,8 @@ export function App() {
       showMoveNumbers={showMoveNumbers}
       onShowCoordinates={setShowCoordinates}
       onShowMoveNumbers={setShowMoveNumbers}
+      keyboardPlacement={keyboardPlacement}
+      onKeyboardPlacement={setKeyboardPlacement}
       jumpRef={jumpRef}
       message={message}
       toPlay={currentPosition.to_play}

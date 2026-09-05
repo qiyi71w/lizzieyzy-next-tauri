@@ -121,7 +121,7 @@ export function AppChrome(props: Props) {
       <nav className="menu-bar" ref={barRef} aria-label="主菜单">
         <div className="menu-cluster">
           <ChromeMenu label="文件" open={openMenu === "file"} onToggle={() => setOpenMenu(openMenu === "file" ? null : "file")}>
-            <MenuItem label="新建" onClick={() => run(props.onNew)} disabled={props.busy} />
+            <MenuItem label="新建(Ctrl+Home)" onClick={() => run(props.onNew)} disabled={props.busy} />
             <MenuItem label="打开棋谱(O)" onClick={() => run(props.onOpen)} disabled={openDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
             <MenuItem label="最近打开" disabled title={later} />
             <MenuItem label="打开在线链接(Q)" disabled title={later} />
@@ -257,6 +257,7 @@ export function AppChrome(props: Props) {
           <ChromeMenu label="棋局" open={openMenu === "game"} onToggle={() => setOpenMenu(openMenu === "game" ? null : "game")}>
             <MenuItem label="新对局" onClick={() => run(props.onNew)} disabled={props.busy} />
             <SubMenu label="人机续弈">
+              <MenuItem label="人机对局(N)" disabled title="人机对局尚未接入，N 不会新建棋谱。" />
               <MenuItem label="人机对局(分析模式)" disabled title={later} />
               <MenuItem label="人机对局(Genmove模式)" disabled title={later} />
               <MenuItem label="续弈[AI执黑]" disabled title={later} />
@@ -275,6 +276,7 @@ export function AppChrome(props: Props) {
         <div className="menu-cluster">
           <ChromeMenu label="分析" open={openMenu === "analyze"} onToggle={() => setOpenMenu(openMenu === "analyze" ? null : "analyze")}>
             <MenuItem label="开始/停止 分析" onClick={() => run(props.selectedNodeRunning ? props.onCancelSelectedNode : () => props.onEngineCommand("once"))} />
+            <MenuItem label="连续分析(Space)" disabled title="连续分析尚未接入，Space 不会落子或改为一次性分析。" />
             <MenuItem label="AI 解说" onClick={() => run(props.onFakeAnalyze)} disabled={props.busy} />
             <div className="menu-sep" role="separator" />
             <MenuItem label="超级鹰眼" disabled title={later} />
@@ -498,6 +500,8 @@ export function BottomBar(props: {
   showMoveNumbers: boolean;
   onShowCoordinates: (value: boolean) => void;
   onShowMoveNumbers: (value: boolean) => void;
+  keyboardPlacement: boolean;
+  onKeyboardPlacement: (value: boolean) => void;
   jumpRef: { current: HTMLInputElement | null };
   message: string;
   toPlay: "black" | "white";
@@ -576,6 +580,7 @@ export function BottomBar(props: {
       <button type="button" className="chrome-btn" onClick={props.onEstimate}>形势判断</button>
       <button type="button" className="chrome-btn" aria-pressed={props.showMoveNumbers} onClick={() => props.onShowMoveNumbers(!props.showMoveNumbers)}>手数</button>
       <button type="button" className="chrome-btn" aria-pressed={props.showCoordinates} onClick={() => props.onShowCoordinates(!props.showCoordinates)}>坐标</button>
+      <button type="button" className="chrome-btn" aria-pressed={props.keyboardPlacement} onClick={() => props.onKeyboardPlacement(!props.keyboardPlacement)}>键盘落子</button>
       <button type="button" className="chrome-btn" aria-pressed={props.autoPlaying} onClick={props.onAutoPlay}>自动播放</button>
       <span className="nav-to-play">{props.toPlay === "black" ? "下一手 黑" : "下一手 白"}</span>
       <span className="nav-message" title={props.message}>{props.message}</span>
