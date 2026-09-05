@@ -72,7 +72,7 @@ The existing Tauri implementation is the migration starting point and must be pr
 
 - `UI-02` remains Partial: there is still no evidence that engine events are delivered while a board mutation promise is pending. That residual does not reopen R4.
 - R4 Analysis has exited with all ten owner items plus pulled-forward `PREF-01` and `APP-05` Accepted.
-- Remaining R5 work is safe current-game replacement, native file activation semantics, window file-drop dispatch, graceful shutdown, and current-game session recovery.
+- Remaining R5 work is the `APP-01` semantic gate, `APP-02` window file-drop, remaining `APP-03` teardown timeout/Retry/Exit anyway native evidence, and remaining `APP-04` recovery write-failure prompt. Ticket 06 on candidate `4fd710e` accepted `SGF-07` and recorded successors `UI-06` (Accepted) and `ANA-15` (Partial); `APP-03` and `APP-04` are Partial. R5 has not exited; the `APP-01` semantic gate is not claimed.
 - Layout rails are fixed at `228px` and `260px`; splitters, rail visibility, window-geometry reset, and narrow Restore Default are absent.
 - Review HUD player labels are hardcoded 黑棋/白棋 rather than root `PB`/`PW` (`REVIEW-09`). Main-window always-on-top is absent (`WINDOW-02`).
 - Multi-backend profiles, Generic GTP, and Match Sessions are absent.
@@ -213,7 +213,7 @@ flowchart TB
 
 Layout, window, and appearance in R7 wait only for `PREF-01`. `GUIDE-01` is Deferred (Ticket 21) and is not an R7 member or exit.
 
-R4 ran after R3 and pulled only `PREF-01` and `APP-05` forward from R5; both are now Accepted. The R4 exit does not accept any other R5 item. R5 proceeds with `SGF-07` while the completed R4 dependencies continue to gate later phases.
+R4 ran after R3 and pulled only `PREF-01` and `APP-05` forward from R5; both are now Accepted. Ticket 06 accepted `SGF-07` and recorded `UI-06`/`ANA-15` without exiting R5 or passing the `APP-01` semantic gate. Remaining R5 sequencing is that gate, then `APP-02`; `APP-03`/`APP-04` stay Partial until their unrun native cases exist.
 
 ### Critical Edges
 
@@ -535,14 +535,14 @@ Current state: R4 has exited. `ANA-05` remains an immutable historical acceptanc
 
 **Goal:** Make current-game replacement, shutdown, recovery, and the durable-preference mechanism safe before authoring, workspace, provider, and release apply work.
 
-**Owns:** `PREF-01`, `SGF-07`, `APP-02`, `APP-03`, `APP-04`, `APP-05`, and the `APP-01` semantic gate.
+**Owns:** `PREF-01`, `SGF-07`, `APP-02`, `APP-03`, `APP-04`, `APP-05`, the `APP-01` semantic gate, and successors `UI-06` and `ANA-15` (not additional exit items).
 
-**Migration Phase Gate:** R1, R2, and R3 have exited, so the gate is satisfied; R4 has also exited. `PREF-01` and `APP-05` were accepted early in R4. Begin remaining R5 work with `SGF-07`.
+**Migration Phase Gate:** R1, R2, and R3 have exited, so the gate is satisfied; R4 has also exited. `PREF-01` and `APP-05` were accepted early in R4. `SGF-07` is Accepted from Ticket 06. Remaining R5 work is the `APP-01` semantic gate and `APP-02`; do not treat Partial `APP-03`/`APP-04` as phase exit.
 
 **Delivery Order:**
 
 1. `PREF-01` durable preferences and `APP-05` Shortcut Registry are already Accepted from R4 closeout.
-2. Deliver `SGF-07` safe replacement.
+2. `SGF-07` safe replacement is Accepted from Ticket 06.
 3. Deliver `APP-03` Safe Graceful Shutdown and `APP-04` current-game recovery.
 4. Pass the `APP-01` semantic gate after `SGF-07`; do not wait for final `APP-01` Accepted.
 5. `APP-02` window file-drop dispatch after the recorded `APP-01` semantic gate.
@@ -552,7 +552,7 @@ Current state: R4 has exited. `ANA-05` remains an immutable historical acceptanc
 - Native durable preferences without importing Java configuration or absorbing owner-domain behavior.
 - Parse-before-replace current-game installation, including clipboard paste into `SGF-07`.
 - One-file drop follows the passed `APP-01` semantic gate; multiple supported files are explanatory and do not mutate the current game until `ANA-07` is started.
-- Shutdown uses Save / Discard / Cancel; cancelled or failed Save aborts exit and leaves resources running. After save or discard, persist owned state and stop owned resources. A teardown timeout names the stuck resource and offers Retry or contextual “Exit anyway.”
+- Shutdown uses Save / Discard / Cancel. Initial Cancel does not interrupt. After confirmed leave, cancelled or failed Save keeps the engine, stops analysis, and does not complete exit. After save or discard, persist owned state and stop owned resources. A teardown timeout names the stuck resource and offers Retry or contextual “Exit anyway.”
 - Recovery restores SGF tree, personal comments, current `NodePath`, source path, and dirty state only. Layout persists separately. Engine processes, analysis jobs, Match Sessions, and provider sessions are never resurrected. Normal-launch restore stays default off.
 - One Shortcut Registry and searchable Shortcut Reference.
 
@@ -562,6 +562,8 @@ Current state: R4 has exited. `ANA-05` remains an immutable historical acceptanc
 - The `APP-01` semantic gate is recorded as passed. `APP-01` itself remains unaccepted pending `REL-04`.
 - Native restart smoke proves preference durability and review-only recovery.
 - Shutdown smoke proves cancelled save aborts exit and successful teardown stops every currently owned resource.
+
+Current state: R5 has not exited. Ticket 06 native closeout on candidate `4fd710e` (Windows 11, Ticket 07 KataGo, worktree `safe-current-game-06`) accepted `SGF-07` and successor `UI-06`, recorded successor `ANA-15` as Partial, and moved `APP-03`/`APP-04` from Missing to Partial. Native File Exit, WM_CLOSE Cancel, clean `clean_completed`, Restore/Discard without resurrecting engine or jobs, and Q9 Save As cancel (engine kept, analysis stopped) were exercised. Not run: stuck-resource 10s timeout / Retry / Exit anyway; recovery write-failure prompt; native analysis failure presentation. The `APP-01` semantic gate is not recorded. R9 still requires Accepted `APP-04`; R10 still requires Accepted `APP-03`.
 
 ### R6 — SGF Authoring And Review
 
@@ -819,7 +821,7 @@ These items are stable and unnumbered. Each has an owner and a Plan-owned Promot
 
 ## Next Executable Batch
 
-R4 Analysis has exited with `ANA-01`–`ANA-04`, promoted `ANA-08`, `ANA-10`–`ANA-14`, `PREF-01`, and `APP-05` Accepted. Execute R5 Safe Current Game / Application Shell next, beginning with `SGF-07` parse-before-replace and Save / Discard / Cancel semantics. Do not pull R6–R11 work into that slice; `ENG-09` / `ENG-10` and the `UI-02` residual remain separate.
+R4 Analysis has exited with `ANA-01`–`ANA-04`, promoted `ANA-08`, `ANA-10`–`ANA-14`, `PREF-01`, and `APP-05` Accepted. Ticket 06 accepted `SGF-07` without exiting R5. Remaining executable R5 work is the `APP-01` semantic gate and `APP-02`; `APP-03`/`APP-04` need their unrun native cases before Accepted. Do not pull R6–R11 work into that slice; `ENG-09` / `ENG-10` and the `UI-02` residual remain separate.
 
 Slice R3-A (Foreground engine identity and lifecycle) is complete. The historical scope below is audit record, not the current batch.
 
