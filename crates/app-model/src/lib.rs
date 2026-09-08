@@ -301,10 +301,37 @@ pub struct EngineRunDto {
     pub capability_snapshot: Option<EngineCapabilitySnapshotDto>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContinuousAnalysisPhaseDto {
+    #[default]
+    Loading,
+    Off,
+    Waiting,
+    Unavailable,
+    Queued,
+    Searching,
+    Stopping,
+    TimeLimited,
+    Finite,
+    Paused,
+    Error,
+    SafetyHold,
+    Departing,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContinuousAnalysisSnapshotDto {
+    pub enabled: Option<bool>,
+    pub phase: ContinuousAnalysisPhaseDto,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ForegroundEngineSnapshotDto {
     pub revision: u64,
     pub lifecycle: ForegroundEngineLifecycleDto,
+    #[serde(default)]
+    pub continuous: ContinuousAnalysisSnapshotDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_node_job: Option<AnalysisJobStartedDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -316,6 +343,7 @@ impl ForegroundEngineSnapshotDto {
         Self {
             revision,
             lifecycle,
+            continuous: ContinuousAnalysisSnapshotDto::default(),
             selected_node_job: None,
             whole_game_job: None,
         }
@@ -769,6 +797,7 @@ mod foreground_engine_wire {
     fn foreground_engine_snapshot_and_failure_keep_snake_case_identities() {
         let snapshot = ForegroundEngineSnapshotDto {
             revision: 4,
+            continuous: ContinuousAnalysisSnapshotDto::default(),
             lifecycle: ForegroundEngineLifecycleDto::Ready {
                 run: EngineRunDto {
                     run_id: "run-1".into(),
@@ -866,6 +895,7 @@ mod foreground_engine_wire {
         };
         let snapshot = ForegroundEngineSnapshotDto {
             revision: 1,
+            continuous: ContinuousAnalysisSnapshotDto::default(),
             lifecycle: ForegroundEngineLifecycleDto::Switching {
                 primary: run.clone(),
                 candidate: EngineRunDto {
@@ -890,6 +920,7 @@ mod foreground_engine_wire {
     fn no_engine_omits_clean_failure_and_keeps_attempt_scoped_payload() {
         let clean = ForegroundEngineSnapshotDto {
             revision: 1,
+            continuous: ContinuousAnalysisSnapshotDto::default(),
             lifecycle: ForegroundEngineLifecycleDto::NoEngine { failure: None },
             selected_node_job: None,
             whole_game_job: None,
@@ -915,6 +946,7 @@ mod foreground_engine_wire {
         };
         let failed = ForegroundEngineSnapshotDto {
             revision: 3,
+            continuous: ContinuousAnalysisSnapshotDto::default(),
             lifecycle: ForegroundEngineLifecycleDto::NoEngine {
                 failure: Some(failure.clone()),
             },

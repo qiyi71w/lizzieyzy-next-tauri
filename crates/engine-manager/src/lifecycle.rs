@@ -6,9 +6,9 @@ use crate::{
 };
 use app_model::{
     AnalysisJobLaneDto, AnalysisJobModeDto, AnalysisJobOutcomeDto, AnalysisJobStartedDto,
-    AnalysisJobStateDto, EngineBackend, EngineCapabilitySnapshotDto, EngineFailureDto, EngineFailureKind,
-    EngineOperationDto, EngineRunDto, ForegroundEngineEventDto, ForegroundEngineLifecycleDto,
-    ForegroundEngineSnapshotDto, NodePath,
+    AnalysisJobStateDto, ContinuousAnalysisPhaseDto, ContinuousAnalysisSnapshotDto, EngineBackend,
+    EngineCapabilitySnapshotDto, EngineFailureDto, EngineFailureKind, EngineOperationDto, EngineRunDto,
+    ForegroundEngineEventDto, ForegroundEngineLifecycleDto, ForegroundEngineSnapshotDto, NodePath,
 };
 use katago_protocol::{normalize_response, parse_response_line, AnalysisQuery};
 use std::io;
@@ -69,7 +69,21 @@ enum JobDisposition {
     Cancelled,
     TimedOut,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContinuousPrimaryAction {
+    Start,
+    Stop,
+    Resume,
+}
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ContinuousAdmission {
+    run_id: String,
+    generation: u64,
+    node_path: NodePath,
+}
+
+#[derive(Clone)]
 pub struct SelectedNodeJobRequest {
     pub run_id: String,
     pub mode: AnalysisJobModeDto,
@@ -85,6 +99,16 @@ pub struct WholeGameWorkItem {
     pub query: AnalysisQuery,
     pub board_size: u8,
     pub move_number: u32,
+}
+
+struct SelectedSubmission {
+    started: AnalysisJobStartedDto,
+    jsonl: String,
+}
+
+enum ContinuousReconcileWork {
+    Cancel(AnalysisJobStartedDto),
+    Submit(SelectedSubmission),
 }
 
 pub struct WholeGameJobRequest {
@@ -106,6 +130,7 @@ struct RegisteredJob {
     state: AnalysisJobStateDto,
     cancel_deadline: Option<Instant>,
     cleanup_deadline: Option<Instant>,
+    submitted: bool,
     submitted_at: Instant,
     generation: u64,
     node_path: NodePath,
@@ -157,6 +182,14 @@ struct ManagerState {
     last_activity: Instant,
     jobs: Vec<RegisteredJob>,
     subscribers: Vec<Sender<ForegroundEngineEventDto>>,
+    continuous_intent: Option<bool>,
+    continuous_target: Option<SelectedNodeJobRequest>,
+    continuous_limited: Option<ContinuousAdmission>,
+    continuous_paused: Option<ContinuousAdmission>,
+    continuous_error: bool,
+    continuous_safety_hold: bool,
+    continuous_departing: bool,
+    finite_admission_pending: bool,
 }
 
 struct Inner {
@@ -187,6 +220,14 @@ impl ForegroundEngineManager {
                     jobs: Vec::new(),
                     last_activity: Instant::now(),
                     subscribers: Vec::new(),
+                    continuous_intent: None,
+                    continuous_target: None,
+                    continuous_limited: None,
+                    continuous_paused: None,
+                    continuous_error: false,
+                    continuous_safety_hold: false,
+                    continuous_departing: false,
+                    finite_admission_pending: false,
                 }),
             }),
         }
@@ -200,6 +241,185 @@ impl ForegroundEngineManager {
         let (tx, rx) = mpsc::channel();
         self.lock().subscribers.push(tx);
         rx
+    }
+    pub fn set_continuous_intent(&self, enabled: bool) {
+        let cancel = {
+            let mut state = self.lock();
+            if state.continuous_intent == Some(enabled) {
+                None
+            } else {
+                state.continuous_intent = Some(enabled);
+                let cancel = if enabled {
+                    None
+                } else {
+                    current_selected_job(&state).filter(|job| job.mode == AnalysisJobModeDto::Continuous)
+                };
+                publish_snapshot(&mut state);
+                cancel
+            }
+        };
+        if let Some(job) = cancel {
+            let _ = self.request_job_stop(&job.run_id, &job.job_id, JobDisposition::Cancelled);
+        }
+        self.reconcile_continuous();
+    }
+
+    pub fn follow_continuous_position(&self, mut request: SelectedNodeJobRequest) {
+        request.mode = AnalysisJobModeDto::Continuous;
+        let cancel = {
+            let mut state = self.lock();
+            let changed = state.continuous_target.as_ref().is_none_or(|old| {
+                !same_position(
+                    old.generation,
+                    &old.node_path,
+                    request.generation,
+                    &request.node_path,
+                )
+            });
+            state.continuous_target = Some(request);
+            if changed {
+                clear_weak_holds_for_new_position(&mut state);
+            }
+            let cancel = current_selected_job(&state).filter(|job| {
+                state.continuous_target.as_ref().is_some_and(|target| {
+                    !same_position(
+                        job.generation,
+                        &job.node_path,
+                        target.generation,
+                        &target.node_path,
+                    )
+                })
+            });
+            if changed || cancel.is_some() {
+                publish_snapshot(&mut state);
+            }
+            cancel
+        };
+        if let Some(job) = cancel {
+            let _ = self.request_job_stop(&job.run_id, &job.job_id, JobDisposition::Superseded);
+        }
+        self.reconcile_continuous();
+    }
+
+    pub fn clear_continuous_position(&self) {
+        let cancel = {
+            let mut state = self.lock();
+            let changed = state.continuous_target.take().is_some();
+            if changed {
+                clear_weak_holds_for_new_position(&mut state);
+            }
+            let cancel = current_selected_job(&state);
+            if changed || cancel.is_some() {
+                publish_snapshot(&mut state);
+            }
+            cancel
+        };
+        if let Some(job) = cancel {
+            let _ = self.request_job_stop(&job.run_id, &job.job_id, JobDisposition::Superseded);
+        }
+    }
+
+    pub fn continuous_primary_action(&self) -> Result<ContinuousPrimaryAction, EngineFailureDto> {
+        let state = self.lock();
+        if state.continuous_departing
+            || state.finite_admission_pending
+            || matches!(state.phase, Phase::Stopping(_))
+            || current_selected_job(&state).is_some_and(|job| job.state == AnalysisJobStateDto::Stopping)
+        {
+            return Err(continuous_invalid_state(
+                &state,
+                "continuous analysis is waiting for cancellation or departure cleanup",
+            ));
+        }
+        if let Phase::Error { failure, .. } = &state.phase {
+            return Err(failure.clone());
+        }
+        let enabled = state.continuous_intent.ok_or_else(|| {
+            continuous_invalid_state(&state, "continuous analysis preference is still loading")
+        })?;
+        if current_selected_job(&state).is_some_and(|job| job.mode == AnalysisJobModeDto::Finite) {
+            return Ok(if enabled {
+                ContinuousPrimaryAction::Stop
+            } else {
+                ContinuousPrimaryAction::Start
+            });
+        }
+        if !enabled {
+            return Ok(ContinuousPrimaryAction::Start);
+        }
+        if state.continuous_limited.is_some()
+            || state.continuous_paused.is_some()
+            || state.continuous_error
+            || state.continuous_safety_hold
+        {
+            return Ok(ContinuousPrimaryAction::Resume);
+        }
+        Ok(ContinuousPrimaryAction::Stop)
+    }
+
+    pub fn authorize_continuous_start(&self) {
+        {
+            let mut state = self.lock();
+            if state.continuous_departing
+                || state.finite_admission_pending
+                || current_selected_job(&state).is_some_and(|job| job.state == AnalysisJobStateDto::Stopping)
+            {
+                return;
+            }
+            clear_resumable_holds(&mut state);
+            publish_snapshot(&mut state);
+        }
+        self.reconcile_continuous();
+    }
+
+    pub fn resume_continuous(&self) -> Result<(), EngineFailureDto> {
+        {
+            let mut state = self.lock();
+            if state.continuous_intent != Some(true)
+                || state.continuous_departing
+                || !current_admitting_run(&state.phase).is_some_and(|run| {
+                    run.capability_snapshot
+                        .as_ref()
+                        .is_some_and(|capability| capability.selected_node_analysis)
+                })
+                || current_selected_job(&state)
+                    .is_some_and(|job| job.state != AnalysisJobStateDto::TimeLimited)
+                || state.continuous_target.is_none()
+            {
+                return Err(continuous_invalid_state(
+                    &state,
+                    "continuous analysis Resume requires an enabled intent, Ready Run, current position, and an idle selected-node lane",
+                ));
+            }
+            clear_resumable_holds(&mut state);
+            publish_snapshot(&mut state);
+        }
+        self.reconcile_continuous();
+        Ok(())
+    }
+
+    pub fn begin_continuous_departure(&self) {
+        let mut state = self.lock();
+        if !state.continuous_departing {
+            state.continuous_departing = true;
+            publish_snapshot(&mut state);
+        }
+    }
+
+    pub fn finish_continuous_departure(&self, committed_replacement: bool) {
+        {
+            let mut state = self.lock();
+            state.continuous_departing = false;
+            if committed_replacement {
+                clear_resumable_holds(&mut state);
+            } else {
+                state.continuous_safety_hold = true;
+            }
+            publish_snapshot(&mut state);
+        }
+        if committed_replacement {
+            self.reconcile_continuous();
+        }
     }
 
     pub fn start(&self, profile_id: &str) -> Result<(), EngineFailureDto> {
@@ -419,6 +639,7 @@ impl ForegroundEngineManager {
         let job_id = Uuid::new_v4().to_string();
         state.jobs.push(RegisteredJob {
             job_id: job_id.clone(),
+            submitted: true,
             run_id: run_id.to_string(),
             lane,
             generation: 0,
@@ -441,134 +662,182 @@ impl ForegroundEngineManager {
 
     pub fn start_selected_node_job(
         &self,
-        mut request: SelectedNodeJobRequest,
+        request: SelectedNodeJobRequest,
     ) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
-        let cancel = AnalysisCancelToken::new();
-        let (started, bound_query) = {
+        let old = {
             let mut state = self.lock();
-            let run = match admitting_run(&state.phase, &request.run_id) {
-                Some(run) => run,
-                None => {
-                    return Err(failure(
-                        EngineOperationDto::Job,
-                        EngineFailureKind::InvalidState,
-                        "selected-node analysis requires the current Ready Foreground Engine Run".into(),
-                        Some(request.run_id.as_str()),
-                        None,
-                        None,
-                    ));
-                }
-            };
-            let selected = run
-                .capability_snapshot
+            validate_selected_admission(&state, &request.run_id)?;
+            if state.finite_admission_pending {
+                return Err(continuous_invalid_state(
+                    &state,
+                    "selected-node admission is already pending",
+                ));
+            }
+            let old =
+                current_selected_job(&state).filter(|job| job.state != AnalysisJobStateDto::TimeLimited);
+            if old
                 .as_ref()
-                .map(|snapshot| snapshot.selected_node_analysis)
-                .unwrap_or(false);
-            if !selected {
+                .is_some_and(|job| job.state == AnalysisJobStateDto::Stopping)
+            {
                 return Err(failure(
                     EngineOperationDto::Job,
-                    EngineFailureKind::UnsupportedCapability,
-                    "current Foreground Engine Run does not advertise selected-node analysis".into(),
-                    Some(run.run_id.as_str()),
-                    Some(run.profile_id.as_str()),
+                    EngineFailureKind::Occupied,
+                    "selected-node cancellation is still pending".into(),
+                    Some(&request.run_id),
+                    None,
                     None,
                 ));
             }
-            if let Some(old) = state
-                .jobs
-                .iter()
-                .find(|job| {
-                    job.run_id == request.run_id && job.lane == AnalysisJobLane::SelectedNode && !job.terminal
-                })
-                .map(started_from)
-            {
-                if old.state == AnalysisJobStateDto::Stopping {
-                    return Err(failure(
-                        EngineOperationDto::Job,
-                        EngineFailureKind::Occupied,
-                        "selected-node cancellation is still pending".into(),
-                        Some(&request.run_id),
-                        None,
-                        None,
-                    ));
-                }
-                drop(state);
-                self.request_job_stop(&old.run_id, &old.job_id, JobDisposition::Superseded)?;
-                self.wait_for_job_cancellation(&old.run_id, &old.job_id, Duration::from_secs(5))?;
-                state = self.lock();
-                if admitting_run(&state.phase, &request.run_id).is_none() {
-                    return Err(failure(
-                        EngineOperationDto::Job,
-                        EngineFailureKind::InvalidState,
-                        "Run changed during selected-node admission".into(),
-                        Some(&request.run_id),
-                        None,
-                        None,
-                    ));
-                }
-            }
-            state
-                .jobs
-                .retain(|job| !(job.lane == AnalysisJobLane::SelectedNode && job.terminal));
-            if request.mode == AnalysisJobModeDto::Continuous {
-                request.query.continuous();
-            } else {
-                request.query.report_during_search_every = Some(0.1);
-            }
-            let job_id = Uuid::new_v4().to_string();
-            request.query.id = job_id.clone();
-            let started = AnalysisJobStartedDto {
-                run_id: request.run_id.clone(),
-                job_id: job_id.clone(),
-                lane: AnalysisJobLaneDto::SelectedNode,
-                mode: request.mode,
-                state: AnalysisJobStateDto::Queued,
-                generation: request.generation,
-                node_path: request.node_path.clone(),
-            };
-            state.jobs.push(RegisteredJob {
-                job_id: job_id.clone(),
-                run_id: request.run_id.clone(),
-                lane: AnalysisJobLane::SelectedNode,
-                mode: request.mode,
-                state: AnalysisJobStateDto::Queued,
-                cancel_deadline: None,
-                cleanup_deadline: None,
-                submitted_at: Instant::now(),
-                generation: request.generation,
-                node_path: request.node_path.clone(),
-                board_size: request.board_size,
-                cancel: Arc::new(cancel.clone()),
-                disposition: JobDisposition::Running,
-                expected: Some(1),
-                work_items: Vec::new(),
-                current_index: 0,
-                terminal: false,
-            });
-            publish_event(
-                &mut state,
-                ForegroundEngineEventDto::Job {
-                    job: selected_node_job_event(&started, AnalysisJobOutcomeDto::Started, None, None),
-                },
-            );
-            let bound_query = request.query.to_jsonl().map_err(|error| {
-                failure(
-                    EngineOperationDto::Job,
-                    EngineFailureKind::Protocol,
-                    format!("failed to serialize selected-node query: {error}"),
-                    Some(started.run_id.as_str()),
-                    None,
-                    None,
-                )
-                .with_job_id(&started.job_id)
-            })?;
-            (started, bound_query)
+            state.finite_admission_pending = true;
+            publish_snapshot(&mut state);
+            old
         };
-        if let Err(published) = self.write_live_jsonl(&started.run_id, &bound_query) {
-            self.abandon_job(&started.run_id, &started.job_id, published.clone());
+
+        if let Some(old) = old {
+            if let Err(error) = self
+                .request_job_stop(&old.run_id, &old.job_id, JobDisposition::Superseded)
+                .and_then(|()| {
+                    self.wait_for_job_cancellation(&old.run_id, &old.job_id, Duration::from_secs(5))
+                })
+            {
+                {
+                    let mut state = self.lock();
+                    state.finite_admission_pending = false;
+                    publish_snapshot(&mut state);
+                }
+                self.reconcile_continuous();
+                return Err(error);
+            }
+        }
+
+        let result = (|| {
+            let mut state = self.lock();
+            state.finite_admission_pending = false;
+            validate_selected_admission(&state, &request.run_id)?;
+            if state.continuous_target.as_ref().is_some_and(|target| {
+                !same_position(
+                    request.generation,
+                    &request.node_path,
+                    target.generation,
+                    &target.node_path,
+                )
+            }) {
+                return Err(continuous_invalid_state(
+                    &state,
+                    "selected-node position changed during finite admission",
+                ));
+            }
+            if current_selected_job(&state).is_some_and(|job| job.state != AnalysisJobStateDto::TimeLimited) {
+                return Err(continuous_invalid_state(
+                    &state,
+                    "selected-node lane changed during admission",
+                ));
+            }
+            self.register_selected_locked(&mut state, request)
+        })();
+        match result {
+            Ok(submission) => self.submit_registered_selected(submission),
+            Err(error) => {
+                let mut state = self.lock();
+                publish_snapshot(&mut state);
+                drop(state);
+                self.reconcile_continuous();
+                Err(error)
+            }
+        }
+    }
+
+    fn register_selected_locked(
+        &self,
+        state: &mut ManagerState,
+        mut request: SelectedNodeJobRequest,
+    ) -> Result<SelectedSubmission, EngineFailureDto> {
+        validate_selected_admission(state, &request.run_id)?;
+        state
+            .jobs
+            .retain(|job| !(job.lane == AnalysisJobLane::SelectedNode && job.terminal));
+        if request.mode == AnalysisJobModeDto::Continuous {
+            request.query.continuous();
+        } else {
+            request.query.report_during_search_every = Some(0.1);
+        }
+        let job_id = Uuid::new_v4().to_string();
+        request.query.id = job_id.clone();
+        let started = AnalysisJobStartedDto {
+            run_id: request.run_id.clone(),
+            job_id: job_id.clone(),
+            lane: AnalysisJobLaneDto::SelectedNode,
+            mode: request.mode,
+            state: AnalysisJobStateDto::Queued,
+            generation: request.generation,
+            node_path: request.node_path.clone(),
+        };
+        let bound_query = request.query.to_jsonl().map_err(|error| {
+            failure(
+                EngineOperationDto::Job,
+                EngineFailureKind::Protocol,
+                format!("failed to serialize selected-node query: {error}"),
+                Some(started.run_id.as_str()),
+                None,
+                None,
+            )
+            .with_job_id(&started.job_id)
+        })?;
+        state.jobs.push(RegisteredJob {
+            job_id,
+            run_id: request.run_id,
+            lane: AnalysisJobLane::SelectedNode,
+            mode: request.mode,
+            state: AnalysisJobStateDto::Queued,
+            cancel_deadline: None,
+            cleanup_deadline: None,
+            submitted: false,
+            submitted_at: Instant::now(),
+            generation: request.generation,
+            node_path: request.node_path,
+            board_size: request.board_size,
+            cancel: Arc::new(AnalysisCancelToken::new()),
+            disposition: JobDisposition::Running,
+            expected: Some(1),
+            work_items: Vec::new(),
+            current_index: 0,
+            terminal: false,
+        });
+        publish_event(
+            state,
+            ForegroundEngineEventDto::Job {
+                job: selected_node_job_event(&started, AnalysisJobOutcomeDto::Started, None, None),
+            },
+        );
+        publish_snapshot(state);
+        Ok(SelectedSubmission {
+            started,
+            jsonl: bound_query,
+        })
+    }
+
+    fn submit_registered_selected(
+        &self,
+        submission: SelectedSubmission,
+    ) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+        if let Err(error) = self.write_live_jsonl(&submission.started.run_id, &submission.jsonl) {
+            let published = error.with_job_id(&submission.started.job_id);
+            self.abandon_job(
+                &submission.started.run_id,
+                &submission.started.job_id,
+                published.clone(),
+            );
             return Err(published);
         }
-        Ok(started)
+        {
+            let mut state = self.lock();
+            if let Some(job) = state.jobs.iter_mut().find(|job| {
+                job.run_id == submission.started.run_id && job.job_id == submission.started.job_id
+            }) {
+                job.submitted = true;
+            }
+        }
+        Ok(submission.started)
     }
 
     pub fn start_whole_game_analysis(
@@ -649,6 +918,7 @@ impl ForegroundEngineManager {
                 state: AnalysisJobStateDto::Queued,
                 cancel_deadline: None,
                 cleanup_deadline: None,
+                submitted: true,
                 submitted_at: Instant::now(),
                 generation: request.generation,
                 node_path: first.node_path.clone(),
@@ -789,12 +1059,7 @@ impl ForegroundEngineManager {
         let run_id = run_id.to_string();
         let job_id = job_id.to_string();
         thread::spawn(move || {
-            let jsonl = katago_protocol::terminate_action_jsonl(&Uuid::new_v4().to_string(), &job_id);
-            if manager.write_live_jsonl(&run_id, &jsonl).is_err() {
-                manager
-                    .inner
-                    .fail_unresponsive_run(&run_id, "target cancellation could not be delivered");
-            }
+            manager.write_terminate_after_submission(&run_id, &job_id);
         });
         Ok(())
     }
@@ -844,6 +1109,38 @@ impl ForegroundEngineManager {
                 Some(published),
             );
         }
+        publish_snapshot(&mut state);
+    }
+
+    fn write_terminate_after_submission(&self, run_id: &str, job_id: &str) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let submitted = {
+                let state = self.lock();
+                let Some(job) = state
+                    .jobs
+                    .iter()
+                    .find(|job| job.run_id == run_id && job.job_id == job_id && !job.terminal)
+                else {
+                    return;
+                };
+                job.submitted
+            };
+            if submitted {
+                let jsonl = katago_protocol::terminate_action_jsonl(&Uuid::new_v4().to_string(), job_id);
+                if self.write_live_jsonl(run_id, &jsonl).is_err() {
+                    self.inner
+                        .fail_unresponsive_run(run_id, "target cancellation could not be delivered");
+                }
+                return;
+            }
+            if Instant::now() >= deadline {
+                self.inner
+                    .fail_unresponsive_run(run_id, "target cancellation waited for an unsubmitted query");
+                return;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
     }
 
     fn write_live_jsonl(&self, run_id: &str, jsonl: &str) -> Result<(), EngineFailureDto> {
@@ -890,6 +1187,105 @@ impl ForegroundEngineManager {
                 None,
             )
         })
+    }
+
+    fn reconcile_continuous(&self) {
+        let work = {
+            let mut state = self.lock();
+            if state.continuous_departing
+                || state.finite_admission_pending
+                || state.continuous_target.is_none()
+            {
+                return;
+            }
+            if let Some(active) =
+                current_selected_job(&state).filter(|job| job.state != AnalysisJobStateDto::TimeLimited)
+            {
+                let target = state
+                    .continuous_target
+                    .as_ref()
+                    .expect("target presence checked before reconciliation");
+                if same_position(
+                    active.generation,
+                    &active.node_path,
+                    target.generation,
+                    &target.node_path,
+                ) {
+                    return;
+                }
+                ContinuousReconcileWork::Cancel(active)
+            } else {
+                let current_run_id = current_admitting_run(&state.phase).map(|run| run.run_id);
+                let limited_matches = state.continuous_limited.as_ref().is_some_and(|hold| {
+                    hold.matches_target(current_run_id.as_deref(), state.continuous_target.as_ref())
+                });
+                let paused_matches = state.continuous_paused.as_ref().is_some_and(|hold| {
+                    hold.matches_target(current_run_id.as_deref(), state.continuous_target.as_ref())
+                });
+                if state.continuous_limited.is_some() && !limited_matches {
+                    state.continuous_limited = None;
+                }
+                if state.continuous_paused.is_some() && !paused_matches {
+                    state.continuous_paused = None;
+                }
+                let limited = state.continuous_limited.clone();
+                state.jobs.retain(|job| {
+                    !(job.lane == AnalysisJobLane::SelectedNode
+                        && job.terminal
+                        && limited.as_ref().is_none_or(|hold| !hold.matches_job(job)))
+                });
+                if state.continuous_intent != Some(true)
+                    || state.continuous_error
+                    || state.continuous_safety_hold
+                    || state.continuous_limited.is_some()
+                    || state.continuous_paused.is_some()
+                {
+                    return;
+                }
+                let Some(mut target) = state.continuous_target.clone() else {
+                    return;
+                };
+                let Some(run) = current_admitting_run(&state.phase) else {
+                    return;
+                };
+                if !run
+                    .capability_snapshot
+                    .as_ref()
+                    .is_some_and(|capability| capability.selected_node_analysis)
+                {
+                    return;
+                }
+                target.run_id = run.run_id;
+                match self.register_selected_locked(&mut state, target) {
+                    Ok(submission) => ContinuousReconcileWork::Submit(submission),
+                    Err(published) => {
+                        state.continuous_error = true;
+                        publish_event(
+                            &mut state,
+                            ForegroundEngineEventDto::Failure { failure: published },
+                        );
+                        publish_snapshot(&mut state);
+                        return;
+                    }
+                }
+            }
+        };
+        match work {
+            ContinuousReconcileWork::Cancel(job) => {
+                let _ = self.request_job_stop(&job.run_id, &job.job_id, JobDisposition::Superseded);
+            }
+            ContinuousReconcileWork::Submit(submission) => {
+                if let Err(published) = self.submit_registered_selected(submission) {
+                    let mut state = self.lock();
+                    state.continuous_error = true;
+                    publish_event(
+                        &mut state,
+                        ForegroundEngineEventDto::Failure { failure: published },
+                    );
+                    publish_snapshot(&mut state);
+                }
+            }
+        }
     }
 
     pub fn assert_profile_deletable(&self, profile_id: &str) -> Result<(), EngineFailureDto> {
@@ -1119,6 +1515,12 @@ impl Inner {
         }
         Ok(())
     }
+    fn reconcile_continuous(self: &Arc<Self>) {
+        ForegroundEngineManager {
+            inner: Arc::clone(self),
+        }
+        .reconcile_continuous();
+    }
 
     fn await_readiness(
         &self,
@@ -1251,6 +1653,7 @@ impl Inner {
             protocol_cancel: true,
         });
         state.phase = Phase::Ready(ready);
+        clear_holds_for_new_run(&mut state);
         publish_snapshot(&mut state);
         let process_id = state.live.as_ref().map(|live| live.process_id);
         let stdout_rx = state.live.as_mut().and_then(|live| live.stdout_rx.take());
@@ -1297,6 +1700,7 @@ impl Inner {
             let retiring = state.live.take();
             state.live = state.candidate.take();
             state.phase = Phase::Ready(ready);
+            clear_holds_for_new_run(&mut state);
             publish_snapshot(&mut state);
             let process_id = state.live.as_ref().map(|live| live.process_id);
             let stdout_rx = state.live.as_mut().and_then(|live| live.stdout_rx.take());
@@ -1576,8 +1980,9 @@ impl Inner {
                 Ok(Ok(None)) | Ok(Err(_)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                     thread::sleep(Duration::from_millis(50))
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
+            self.reconcile_continuous();
         }
     }
 
@@ -1611,6 +2016,7 @@ impl Inner {
                     return None;
                 }
                 finish_failed_job(&mut state, &started, published);
+                publish_snapshot(&mut state);
                 return None;
             }
         };
@@ -1993,6 +2399,7 @@ fn snapshot_from(state: &ManagerState) -> ForegroundEngineSnapshotDto {
         },
     };
     let mut snapshot = ForegroundEngineSnapshotDto::with_lifecycle(state.revision, lifecycle);
+    snapshot.continuous = continuous_snapshot(state);
     snapshot.selected_node_job = current_non_terminal_job(state, AnalysisJobLane::SelectedNode);
     snapshot.whole_game_job = current_non_terminal_job(state, AnalysisJobLane::WholeGame);
     snapshot
@@ -2223,30 +2630,222 @@ fn finish_selected_node_job(
     frame: Option<app_model::AnalysisFrameDto>,
     failure: Option<EngineFailureDto>,
 ) {
-    let owned = state
+    let Some(job) = state
         .jobs
         .iter()
-        .any(|job| job.job_id == started.job_id && job.run_id == started.run_id);
-    if !owned {
+        .find(|job| job.job_id == started.job_id && job.run_id == started.run_id)
+    else {
         return;
-    }
-    if outcome == Some(AnalysisJobOutcomeDto::TimeLimited) {
-        if let Some(job) = state.jobs.iter_mut().find(|job| job.job_id == started.job_id) {
-            job.terminal = true;
-            job.state = AnalysisJobStateDto::TimeLimited;
-        }
-    } else {
-        state.jobs.retain(|job| job.job_id != started.job_id);
-    }
+    };
+    let admission = ContinuousAdmission::from_job(job);
+    let mode = job.mode;
     let Some(outcome) = outcome else {
         return;
     };
+    match (mode, outcome) {
+        (AnalysisJobModeDto::Continuous, AnalysisJobOutcomeDto::TimeLimited) => {
+            state.continuous_limited = Some(admission);
+            if let Some(job) = state.jobs.iter_mut().find(|job| job.job_id == started.job_id) {
+                job.terminal = true;
+                job.state = AnalysisJobStateDto::TimeLimited;
+            }
+        }
+        (AnalysisJobModeDto::Continuous, AnalysisJobOutcomeDto::Failed) => {
+            state.continuous_error = true;
+            state.jobs.retain(|job| job.job_id != started.job_id);
+        }
+        (AnalysisJobModeDto::Finite, AnalysisJobOutcomeDto::Failed | AnalysisJobOutcomeDto::Timeout) => {
+            state.continuous_error = true;
+            state.jobs.retain(|job| job.job_id != started.job_id);
+        }
+        (AnalysisJobModeDto::Finite, _) => {
+            state.continuous_paused = Some(admission);
+            state.jobs.retain(|job| job.job_id != started.job_id);
+        }
+        _ => {
+            state.jobs.retain(|job| job.job_id != started.job_id);
+        }
+    }
     publish_event(
         state,
         ForegroundEngineEventDto::Job {
             job: selected_node_job_event(started, outcome, frame, failure),
         },
     );
+}
+impl ContinuousAdmission {
+    fn from_job(job: &RegisteredJob) -> Self {
+        Self {
+            run_id: job.run_id.clone(),
+            generation: job.generation,
+            node_path: job.node_path.clone(),
+        }
+    }
+
+    fn matches_job(&self, job: &RegisteredJob) -> bool {
+        self.run_id == job.run_id && self.generation == job.generation && self.node_path == job.node_path
+    }
+
+    fn matches_target(&self, run_id: Option<&str>, target: Option<&SelectedNodeJobRequest>) -> bool {
+        run_id == Some(self.run_id.as_str())
+            && target.is_some_and(|target| {
+                same_position(
+                    self.generation,
+                    &self.node_path,
+                    target.generation,
+                    &target.node_path,
+                )
+            })
+    }
+}
+
+fn same_position(
+    left_generation: u64,
+    left_path: &NodePath,
+    right_generation: u64,
+    right_path: &NodePath,
+) -> bool {
+    left_generation == right_generation && left_path == right_path
+}
+
+fn current_selected_job(state: &ManagerState) -> Option<AnalysisJobStartedDto> {
+    state
+        .jobs
+        .iter()
+        .rev()
+        .find(|job| {
+            job.lane == AnalysisJobLane::SelectedNode
+                && (!job.terminal || job.state == AnalysisJobStateDto::TimeLimited)
+        })
+        .map(started_from)
+}
+
+fn current_admitting_run(phase: &Phase) -> Option<EngineRunDto> {
+    match phase {
+        Phase::Ready(run) => Some(run.clone()),
+        Phase::Switching { primary, .. } => Some(primary.clone()),
+        _ => None,
+    }
+}
+
+fn validate_selected_admission(state: &ManagerState, run_id: &str) -> Result<EngineRunDto, EngineFailureDto> {
+    let run = admitting_run(&state.phase, run_id).ok_or_else(|| {
+        failure(
+            EngineOperationDto::Job,
+            EngineFailureKind::InvalidState,
+            "selected-node analysis requires the current Ready Foreground Engine Run".into(),
+            Some(run_id),
+            None,
+            None,
+        )
+    })?;
+    if !run
+        .capability_snapshot
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.selected_node_analysis)
+    {
+        return Err(failure(
+            EngineOperationDto::Job,
+            EngineFailureKind::UnsupportedCapability,
+            "current Foreground Engine Run does not advertise selected-node analysis".into(),
+            Some(run_id),
+            Some(&run.profile_id),
+            None,
+        ));
+    }
+    Ok(run)
+}
+
+fn clear_weak_holds_for_new_position(state: &mut ManagerState) {
+    state.continuous_limited = None;
+    state.continuous_paused = None;
+    state
+        .jobs
+        .retain(|job| !(job.lane == AnalysisJobLane::SelectedNode && job.terminal));
+}
+
+fn clear_resumable_holds(state: &mut ManagerState) {
+    state.continuous_limited = None;
+    state.continuous_paused = None;
+    state.continuous_error = false;
+    state.continuous_safety_hold = false;
+    state
+        .jobs
+        .retain(|job| !(job.lane == AnalysisJobLane::SelectedNode && job.terminal));
+}
+
+fn clear_holds_for_new_run(state: &mut ManagerState) {
+    state.continuous_limited = None;
+    state.continuous_paused = None;
+    state.continuous_error = false;
+    state
+        .jobs
+        .retain(|job| !(job.lane == AnalysisJobLane::SelectedNode && job.terminal));
+}
+
+fn continuous_invalid_state(state: &ManagerState, message: &str) -> EngineFailureDto {
+    failure(
+        EngineOperationDto::Job,
+        EngineFailureKind::InvalidState,
+        message.into(),
+        current_run_id(&state.phase).as_deref(),
+        None,
+        None,
+    )
+}
+
+fn continuous_snapshot(state: &ManagerState) -> ContinuousAnalysisSnapshotDto {
+    let enabled = state.continuous_intent;
+    let phase = if state.continuous_departing {
+        ContinuousAnalysisPhaseDto::Departing
+    } else if matches!(state.phase, Phase::Error { .. }) || state.continuous_error {
+        ContinuousAnalysisPhaseDto::Error
+    } else if current_selected_job(state).is_some_and(|job| job.state == AnalysisJobStateDto::Stopping) {
+        ContinuousAnalysisPhaseDto::Stopping
+    } else if current_selected_job(state).is_some_and(|job| {
+        job.mode == AnalysisJobModeDto::Finite && !matches!(job.state, AnalysisJobStateDto::TimeLimited)
+    }) {
+        ContinuousAnalysisPhaseDto::Finite
+    } else if enabled.is_none() {
+        ContinuousAnalysisPhaseDto::Loading
+    } else if enabled == Some(false) {
+        ContinuousAnalysisPhaseDto::Off
+    } else if matches!(state.phase, Phase::Stopping(_)) {
+        ContinuousAnalysisPhaseDto::Stopping
+    } else if state.continuous_safety_hold {
+        ContinuousAnalysisPhaseDto::SafetyHold
+    } else if let Some(job) =
+        current_selected_job(state).filter(|job| job.mode == AnalysisJobModeDto::Continuous)
+    {
+        match job.state {
+            AnalysisJobStateDto::Queued => ContinuousAnalysisPhaseDto::Queued,
+            AnalysisJobStateDto::Searching => ContinuousAnalysisPhaseDto::Searching,
+            AnalysisJobStateDto::Stopping => ContinuousAnalysisPhaseDto::Stopping,
+            AnalysisJobStateDto::TimeLimited => ContinuousAnalysisPhaseDto::TimeLimited,
+        }
+    } else if state.continuous_limited.is_some() {
+        ContinuousAnalysisPhaseDto::TimeLimited
+    } else if state.continuous_paused.is_some() {
+        ContinuousAnalysisPhaseDto::Paused
+    } else {
+        match &state.phase {
+            Phase::Ready(run) | Phase::Switching { primary: run, .. } => {
+                if !run
+                    .capability_snapshot
+                    .as_ref()
+                    .is_some_and(|capability| capability.selected_node_analysis)
+                {
+                    ContinuousAnalysisPhaseDto::Unavailable
+                } else {
+                    ContinuousAnalysisPhaseDto::Waiting
+                }
+            }
+            Phase::NoEngine { failure: Some(_) } => ContinuousAnalysisPhaseDto::Unavailable,
+            Phase::Error { .. } => ContinuousAnalysisPhaseDto::Error,
+            _ => ContinuousAnalysisPhaseDto::Waiting,
+        }
+    };
+    ContinuousAnalysisSnapshotDto { enabled, phase }
 }
 
 fn admitting_run(phase: &Phase, run_id: &str) -> Option<EngineRunDto> {

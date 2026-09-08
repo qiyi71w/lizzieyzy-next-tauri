@@ -59,6 +59,7 @@ const backend = vi.hoisted(() => ({
   restartForegroundEngine: vi.fn(() => Promise.resolve()),
   switchForegroundEngine: vi.fn(() => Promise.resolve()),
   getForegroundEngineSnapshot: vi.fn(),
+  foregroundEngineContinuousAction: vi.fn(),
   subscribeForegroundEngine: vi.fn(),
   inspectCurrentGameRecovery: vi.fn(async (): Promise<{ status: "none" | "abnormal" | "normal" | "unreadable"; envelope?: unknown; message?: string }> => ({ status: "none" })),
   restoreCurrentGameRecovery: vi.fn(),
@@ -181,12 +182,12 @@ beforeEach(() => {
     autoload_profile_id: null,
     profiles: [savedProfile]
   });
-  backend.getForegroundEngineSnapshot.mockResolvedValue({ revision: 0, lifecycle: { state: "no_engine" } });
+  backend.getForegroundEngineSnapshot.mockResolvedValue({ revision: 0, lifecycle: { state: "no_engine" }, continuous: { enabled: null, phase: "loading" } });
   backend.classifyProblems.mockResolvedValue([]);
   backend.subscribeForegroundEngine.mockImplementation(async (onSnapshot, _onFailure, onJob) => {
     listeners.onSnapshot = onSnapshot;
     listeners.onJob = onJob;
-    onSnapshot({ revision: 0, lifecycle: { state: "no_engine" } });
+    onSnapshot({ revision: 0, lifecycle: { state: "no_engine" }, continuous: { enabled: null, phase: "loading" } });
     return () => undefined;
   });
 });
@@ -479,6 +480,7 @@ async function readyEngine(host: HTMLElement) {
   await act(async () => {
     listeners.onSnapshot?.({
       revision: 2,
+      continuous: { enabled: true, phase: "waiting" },
       lifecycle: {
         state: "ready",
         run: {

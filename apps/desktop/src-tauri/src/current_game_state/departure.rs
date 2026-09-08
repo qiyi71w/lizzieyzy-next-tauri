@@ -81,6 +81,9 @@ impl CurrentGameState {
             _ => return Err(departure_in_progress()),
         }
         holder.edits_blocked = true;
+        if let Some(manager) = self.analysis_manager.get() {
+            manager.begin_continuous_departure();
+        }
         for job in closed_jobs {
             holder
                 .closed_jobs
@@ -111,6 +114,11 @@ impl CurrentGameState {
         };
         let current = holder.install_document(candidate, candidate_path)?;
         self.note_recovery(&holder);
+        if let Some(manager) = self.analysis_manager.get() {
+            manager.clear_continuous_position();
+            self.follow_continuous_position(&mut holder);
+            manager.finish_continuous_departure(true);
+        }
         Ok(DocumentDepartureOutcomeDto {
             committed: true,
             analysis_stopped: true,
@@ -135,6 +143,9 @@ impl CurrentGameState {
         holder.edits_blocked = false;
         holder.exit_disposition = None;
         let current = holder.result_dto(selected_path)?;
+        if let Some(manager) = self.analysis_manager.get() {
+            manager.finish_continuous_departure(false);
+        }
         Ok(DocumentDepartureOutcomeDto {
             committed: false,
             analysis_stopped: true,

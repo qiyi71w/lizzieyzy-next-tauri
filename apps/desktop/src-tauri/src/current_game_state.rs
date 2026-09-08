@@ -6,8 +6,10 @@ use app_model::{
 };
 use sgf::{CurrentSgfDocument, SgfAnalysisPayload};
 use std::collections::HashSet;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
+#[cfg(test)]
+mod continuous_intent;
 #[cfg(test)]
 mod current_game_analysis_attach;
 #[cfg(test)]
@@ -32,6 +34,7 @@ pub struct WholeGameAdmission {
 pub struct CurrentGameState {
     holder: Mutex<CurrentGameHolder>,
     recovery: Mutex<RecoveryCoordinator>,
+    analysis_manager: OnceLock<engine_manager::ForegroundEngineManager>,
 }
 
 #[derive(Default)]
@@ -49,9 +52,68 @@ struct CurrentGameHolder {
     selected_path: NodePath,
     document_seq: u64,
     snapshot_seq: u64,
+    analysis_target: Option<(u64, NodePath)>,
 }
 
 impl CurrentGameState {
+    pub fn connect_analysis_manager(&self, manager: engine_manager::ForegroundEngineManager) {
+        assert!(
+            self.analysis_manager.set(manager).is_ok(),
+            "analysis manager already connected"
+        );
+        let mut holder = self.holder.lock().expect("current game state");
+        self.follow_continuous_position(&mut holder);
+    }
+
+    // Called with the holder locked: accepted cursor/edit order is also target order.
+    fn follow_continuous_position(&self, holder: &mut CurrentGameHolder) {
+        let Some(manager) = self.analysis_manager.get() else {
+            return;
+        };
+        if holder.analysis_target.as_ref().is_some_and(|(generation, path)| {
+            *generation == holder.generation && *path == holder.selected_path
+        }) {
+            return;
+        }
+        if let Some(job) = manager
+            .snapshot()
+            .selected_node_job
+            .filter(|job| job.generation != holder.generation || job.node_path != holder.selected_path)
+        {
+            holder.closed_jobs.insert((job.run_id, job.job_id));
+        }
+        let Some(document) = holder.document.as_ref() else {
+            manager.clear_continuous_position();
+            return;
+        };
+        let request = document
+            .snapshot(&holder.selected_path)
+            .map_err(|error| error.to_string())
+            .and_then(|snapshot| {
+                crate::continuous_analysis::position_request(
+                    holder.generation,
+                    holder.selected_path.clone(),
+                    snapshot,
+                    document.board_size(),
+                    document.komi(),
+                    document.rules(),
+                )
+            });
+        match request {
+            Ok(request) => {
+                holder.analysis_target = Some((holder.generation, holder.selected_path.clone()));
+                manager.follow_continuous_position(request);
+            }
+            Err(_) => manager.clear_continuous_position(),
+        }
+    }
+
+    pub fn analysis_jobs(&self) -> Option<Vec<AnalysisJobStartedDto>> {
+        self.analysis_manager
+            .get()
+            .map(|manager| crate::document_departure::jobs_from_snapshot(&manager.snapshot()))
+    }
+
     #[cfg(test)]
     pub fn replace(
         &self,
@@ -78,6 +140,7 @@ impl CurrentGameState {
         }
         let result = holder.replace(sgf_text, native_path)?;
         self.note_recovery(&holder);
+        self.follow_continuous_position(&mut holder);
         Ok(Some(result))
     }
 
@@ -222,6 +285,7 @@ impl CurrentGameState {
             holder.bump_snapshot();
             self.note_recovery(&holder);
         }
+        self.follow_continuous_position(&mut holder);
         Ok(result)
     }
 
@@ -229,6 +293,7 @@ impl CurrentGameState {
         let mut holder = self.holder.lock().expect("current game state");
         let result = holder.play(path, vertex)?;
         self.note_recovery(&holder);
+        self.follow_continuous_position(&mut holder);
         Ok(result)
     }
 
@@ -240,6 +305,7 @@ impl CurrentGameState {
         let mut holder = self.holder.lock().expect("current game state");
         let result = holder.set_personal_comment(path, &comment)?;
         self.note_recovery(&holder);
+        self.follow_continuous_position(&mut holder);
         Ok(result)
     }
 
@@ -247,6 +313,7 @@ impl CurrentGameState {
         let mut holder = self.holder.lock().expect("current game state");
         let result = holder.remove_variation(path)?;
         self.note_recovery(&holder);
+        self.follow_continuous_position(&mut holder);
         Ok(result)
     }
 
@@ -263,6 +330,15 @@ impl CurrentGameState {
         Ok(result)
     }
 
+    pub fn run_analysis_action<T>(&self, action: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+        let holder = self.holder.lock().expect("current game state");
+        if holder.departure.is_some() {
+            return Err("A document departure is still pending.".to_string());
+        }
+        // Keep explicit authorization and its durable write before any later safety cutoff.
+        action()
+    }
+
     pub fn attach_from_job_event(&self, event: &AnalysisJobEventDto) -> Option<CurrentGameResultDto> {
         if !admits_analysis_attachment(event) {
             return None;
@@ -274,6 +350,20 @@ impl CurrentGameState {
             || (event.mode == AnalysisJobModeDto::Continuous && holder.selected_path != event.node_path)
         {
             return None;
+        }
+        if event.mode == AnalysisJobModeDto::Continuous {
+            if let Some(manager) = self.analysis_manager.get() {
+                let snapshot = manager.snapshot();
+                if snapshot.continuous.enabled == Some(false)
+                    || !snapshot.selected_node_job.is_some_and(|job| {
+                        job.run_id == event.run_id
+                            && job.job_id == event.job_id
+                            && job.state != app_model::AnalysisJobStateDto::Stopping
+                    })
+                {
+                    return None;
+                }
+            }
         }
         let mut result = holder
             .attach_primary_analysis(event.generation, event.node_path.clone(), payload)

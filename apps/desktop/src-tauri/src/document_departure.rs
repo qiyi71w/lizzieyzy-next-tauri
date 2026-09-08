@@ -38,6 +38,13 @@ pub fn confirm_departure(
     state
         .begin_protected_commit(departure_id, closed_jobs)
         .map_err(|error| error.to_string())?;
+    // Suppression is established by begin_protected_commit before taking this snapshot.
+    // Include jobs admitted after the caller's earlier snapshot, before the cutoff.
+    let owned_jobs = state.analysis_jobs();
+    let closed_jobs = owned_jobs.as_deref().unwrap_or(closed_jobs);
+    for job in closed_jobs {
+        state.seal_job(job);
+    }
     let deadline = Instant::now() + budget;
     let mut delivery_error = None;
     for job in closed_jobs {

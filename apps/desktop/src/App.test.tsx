@@ -50,7 +50,8 @@ const backend = vi.hoisted(() => ({
   stopForegroundEngine: vi.fn(),
   restartForegroundEngine: vi.fn(),
   switchForegroundEngine: vi.fn(),
-  getForegroundEngineSnapshot: vi.fn(() => Promise.resolve({ revision: 0, lifecycle: { state: "no_engine" } })),
+  getForegroundEngineSnapshot: vi.fn(() => Promise.resolve({ revision: 0, lifecycle: { state: "no_engine" }, continuous: { enabled: null, phase: "loading" } })),
+  foregroundEngineContinuousAction: vi.fn(),
   inspectCurrentGameRecovery: vi.fn(async (): Promise<RecoveryStartupDto> => ({ status: "none" })),
   restoreCurrentGameRecovery: vi.fn(),
   discardCurrentGameRecovery: vi.fn(async () => undefined),
@@ -85,6 +86,7 @@ vi.mock("./components/WinrateChart", () => ({
 }));
 
 import { App } from "./App";
+import { defaultAppPreferences } from "./domain/preferences";
 
 const emptyPosition = {
   board_size: 9,
@@ -247,6 +249,7 @@ beforeEach(() => {
   });
   currentGameFixture.mockResolvedValue(initialGame);
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
+  backend.foregroundEngineContinuousAction.mockResolvedValue(defaultAppPreferences);
   backend.startForegroundEngine.mockResolvedValue(undefined);
   backend.startSelectedNodeAnalysis.mockResolvedValue({
     run_id: "run-1",
@@ -269,7 +272,7 @@ beforeEach(() => {
   ) => {
     listeners.onSnapshot = onSnapshot;
     listeners.onJob = onJob;
-    onSnapshot({ revision: 0, lifecycle: { state: "no_engine" } });
+    onSnapshot({ revision: 0, lifecycle: { state: "no_engine" }, continuous: { enabled: null, phase: "loading" } });
     return () => undefined;
   });
 });
@@ -1777,6 +1780,38 @@ function installCandidateAnalysis() {
   });
 }
 
+describe("accepted navigation coalescing", () => {
+  it("shows only the latest path requested while an earlier native selection is pending", async () => {
+    currentGameFixture.mockResolvedValue(branchingGame);
+    let resolveFirstSelection!: (value: CurrentGameResultDto) => void;
+    const firstSelection = new Promise<CurrentGameResultDto>((resolve) => { resolveFirstSelection = resolve; });
+    const host = await renderApp();
+    backend.selectCurrentGameNode.mockClear();
+    backend.selectCurrentGameNode
+      .mockReturnValueOnce(firstSelection)
+      .mockResolvedValueOnce(initialGame);
+
+    act(() => buttonNamed(host, "父节点").click());
+    const jump = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
+    act(() => {
+      const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      valueSetter?.call(jump, "0");
+      jump.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(backend.selectCurrentGameNode).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFirstSelection({ ...branchingGame, selected_path: { indices: [0] }, snapshot: navigableChild.snapshot });
+      await firstSelection;
+      await Promise.resolve();
+    });
+    expect(backend.selectCurrentGameNode).toHaveBeenCalledTimes(2);
+    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] });
+    expect(jump.value).toBe("0");
+    expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+  });
+});
+
 function pressKey(target: EventTarget, key: string, init: KeyboardEventInit = {}) {
   act(() => {
     target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }));
@@ -1827,6 +1862,7 @@ async function readyEngine(host: HTMLElement) {
   await act(async () => {
     listeners.onSnapshot?.({
       revision: 2,
+      continuous: { enabled: true, phase: "waiting" },
       lifecycle: {
         state: "ready",
         run: {

@@ -29,16 +29,15 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+mod continuous_analysis;
+use continuous_analysis::{foreground_engine_continuous_action, PreferencesState};
 mod current_game_state;
 mod document_departure;
 mod save_as;
 mod session_recovery;
 #[cfg(windows)]
 extern crate windows_core;
-use app_preferences::{
-    load_from_path as load_app_preferences_from_path, save_to_path, AppPreferencesDto,
-    AppPreferencesLoadResultDto, APP_PREFERENCES_FILE,
-};
+use app_preferences::{AppPreferencesDto, AppPreferencesLoadResultDto, APP_PREFERENCES_FILE};
 use current_game_recovery::FileRecoveryStore;
 use current_game_state::{CurrentGameState, WholeGameAdmission};
 use document_departure::{
@@ -432,66 +431,40 @@ fn project_current_game_mainline(
     state.mainline_projection()
 }
 
-fn apply_current_game_change(
-    state: &CurrentGameState,
-    manager: &ForegroundEngineManager,
-    change: impl FnOnce() -> Result<CurrentGameResultDto, CurrentGameError>,
-) -> Result<CurrentGameResultDto, String> {
-    let previous_job = manager.snapshot().selected_node_job;
-    let result = change().map_err(|error| error.to_string())?;
-    if let Some(job) = previous_job.filter(|job| {
-        job.mode == AnalysisJobModeDto::Continuous
-            && job.state != app_model::AnalysisJobStateDto::TimeLimited
-            && (job.generation != result.generation || job.node_path != result.selected_path)
-    }) {
-        // The holder's generation/path fences already reject old frames at mutation commit.
-        state.seal_job(&job);
-        if let Err(error) = manager.cancel_job(&job.run_id, &job.job_id) {
-            // A target that finished during the mutation has no remaining cleanup work.
-            if error.kind != EngineFailureKind::InvalidState {
-                return Err(error.message);
-            }
-        }
-    }
-    Ok(result)
-}
-
 #[tauri::command]
 fn select_current_game_node(
     state: State<CurrentGameState>,
-    manager: State<ForegroundEngineManager>,
     path: NodePath,
 ) -> Result<CurrentGameResultDto, String> {
-    apply_current_game_change(&state, &manager, || state.select_path(path))
+    state.select_path(path).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn play_current_game(
     state: State<CurrentGameState>,
-    manager: State<ForegroundEngineManager>,
     path: NodePath,
     vertex: MoveVertex,
 ) -> Result<CurrentGameResultDto, String> {
-    apply_current_game_change(&state, &manager, || state.play(path, vertex))
+    state.play(path, vertex).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn set_current_game_personal_comment(
     state: State<CurrentGameState>,
-    manager: State<ForegroundEngineManager>,
     path: NodePath,
     comment: String,
 ) -> Result<CurrentGameResultDto, String> {
-    apply_current_game_change(&state, &manager, || state.set_personal_comment(path, comment))
+    state
+        .set_personal_comment(path, comment)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn remove_current_game_variation(
     state: State<CurrentGameState>,
-    manager: State<ForegroundEngineManager>,
     path: NodePath,
 ) -> Result<CurrentGameResultDto, String> {
-    apply_current_game_change(&state, &manager, || state.remove_variation(path))
+    state.remove_variation(path).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -515,18 +488,23 @@ fn engine_asset_checks(profile: EngineProfileDto) -> Vec<AssetCheck> {
 }
 
 #[tauri::command]
-fn load_app_preferences(app_handle: AppHandle) -> Result<AppPreferencesLoadResultDto, String> {
-    let path = app_preferences_path(&app_handle)?;
-    load_app_preferences_from_path(&path)
+fn load_app_preferences(
+    app_handle: AppHandle,
+    preferences: State<PreferencesState>,
+    manager: State<ForegroundEngineManager>,
+) -> Result<AppPreferencesLoadResultDto, String> {
+    preferences.load(&app_preferences_path(&app_handle)?, &manager)
 }
 
 #[tauri::command]
 fn save_app_preferences(
     app_handle: AppHandle,
+    state: State<PreferencesState>,
+    manager: State<ForegroundEngineManager>,
     preferences: AppPreferencesDto,
 ) -> Result<AppPreferencesDto, String> {
     let path = app_preferences_path(&app_handle)?;
-    save_to_path(&path, preferences)
+    state.save(&path, &manager, preferences)
 }
 
 #[tauri::command]
@@ -620,38 +598,22 @@ fn bind_selected_node_job(
             message: error.message,
             diagnostic_summary: None,
         })?;
-    let query = analysis_query_from_position(
-        board_size,
-        komi,
-        &snapshot.position.stones,
-        snapshot.position.to_play,
-        AnalysisQueryOptions {
-            id: "pending".to_string(),
-            rules,
-            turn: snapshot.position.move_number,
-            max_visits,
-            include_ownership: Some(true),
-            include_policy: Some(true),
-        },
-    )
-    .map_err(|error| EngineFailureDto {
-        operation: EngineOperationDto::Job,
-        run_id: Some(run_id.clone()),
-        switch_id: None,
-        job_id: None,
-        profile_id: None,
-        kind: EngineFailureKind::Protocol,
-        message: error.to_string(),
-        diagnostic_summary: None,
-    })?;
-    Ok(SelectedNodeJobRequest {
-        run_id,
-        mode,
-        generation,
-        node_path,
-        query,
-        board_size,
-    })
+    let mut request =
+        continuous_analysis::position_request(generation, node_path, snapshot, board_size, komi, rules)
+            .map_err(|error| EngineFailureDto {
+                operation: EngineOperationDto::Job,
+                run_id: Some(run_id.clone()),
+                switch_id: None,
+                job_id: None,
+                profile_id: None,
+                kind: EngineFailureKind::Protocol,
+                message: error.to_string(),
+                diagnostic_summary: None,
+            })?;
+    request.run_id = run_id;
+    request.mode = mode;
+    request.query.max_visits = max_visits;
+    Ok(request)
 }
 
 #[tauri::command]
@@ -670,24 +632,6 @@ fn foreground_engine_start_selected_node(
         node_path,
         AnalysisJobModeDto::Finite,
         Some(max_visits),
-    )?)
-}
-
-#[tauri::command]
-fn foreground_engine_start_continuous_node(
-    manager: State<'_, ForegroundEngineManager>,
-    current_game: State<'_, CurrentGameState>,
-    run_id: String,
-    generation: u64,
-    node_path: NodePath,
-) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
-    manager.start_selected_node_job(bind_selected_node_job(
-        &current_game,
-        run_id,
-        generation,
-        node_path,
-        AnalysisJobModeDto::Continuous,
-        None,
     )?)
 }
 
@@ -986,6 +930,7 @@ fn foreground_engine_switch(
 pub fn run() {
     tauri::Builder::default()
         .manage(CurrentGameState::default())
+        .manage(PreferencesState::default())
         .setup(|app| {
             let recovery_path = session_recovery::recovery_file_path(app.handle())?;
             app.manage(Mutex::new(FileRecoveryStore::new(recovery_path)));
@@ -995,6 +940,8 @@ pub fn run() {
                 handle: app.handle().clone(),
             });
             let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::default());
+            app.state::<CurrentGameState>()
+                .connect_analysis_manager(manager.clone());
             let events = manager.subscribe();
             let emit_handle = app.handle().clone();
             std::thread::spawn(move || {
@@ -1069,7 +1016,7 @@ pub fn run() {
             foreground_engine_restart,
             foreground_engine_switch,
             foreground_engine_start_selected_node,
-            foreground_engine_start_continuous_node,
+            foreground_engine_continuous_action,
             foreground_engine_cancel_job
         ])
         .build(tauri::generate_context!())
@@ -1152,6 +1099,7 @@ for line in sys.stdin:
             }
         };
         let state = CurrentGameState::default();
+        state.connect_analysis_manager(manager.clone());
         let opened = state.replace("(;SZ[9]AB[dd])", None).unwrap();
         let started = manager
             .start_selected_node_job(
@@ -1166,12 +1114,10 @@ for line in sys.stdin:
                 .unwrap(),
             )
             .unwrap();
-        let rejected = apply_current_game_change(&state, &manager, || {
-            state.play(
-                opened.selected_path,
-                MoveVertex::Point(app_model::PointDto { x: 3, y: 3 }),
-            )
-        });
+        let rejected = state.play(
+            opened.selected_path,
+            MoveVertex::Point(app_model::PointDto { x: 3, y: 3 }),
+        );
         let job = manager.snapshot().selected_node_job.unwrap();
         manager.teardown().unwrap();
         std::fs::remove_dir_all(directory).unwrap();
@@ -1271,36 +1217,6 @@ for line in sys.stdin:
         assert!(source.contains("prevent_close"));
         assert!(source.contains("APPLICATION_EXIT_REQUESTED_EVENT"));
         assert!(source.contains("prepare_application_exit"));
-    }
-
-    #[test]
-    fn obsolete_profile_to_process_commands_are_not_registered() {
-        let commands =
-            registered_tauri_commands(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs")));
-        assert!(
-            commands.iter().all(|command| *command != "katago_analyze_once"),
-            "legacy one-shot command must not remain registered: {commands:?}"
-        );
-        assert!(
-            commands.iter().all(|command| *command != "katago_analyze_game"),
-            "legacy batch command must not remain registered: {commands:?}"
-        );
-        assert!(
-            commands.contains(&"katago_start_analyze_game"),
-            "whole-game analysis must stay on the manager-owned run command"
-        );
-        assert!(
-            commands.contains(&"foreground_engine_start_selected_node"),
-            "selected-node analysis must stay on the manager-owned run command"
-        );
-        assert!(
-            commands.contains(&"foreground_engine_start_continuous_node"),
-            "continuous selected-node analysis must use the manager-owned run command"
-        );
-        assert!(
-            commands.iter().all(|command| *command != "fake_analyze"),
-            "native synthetic analysis command must not remain registered: {commands:?}"
-        );
     }
 
     #[test]

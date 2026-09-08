@@ -48,6 +48,12 @@ describe("browser preference storage", () => {
     expect(loaded.preferences.restoreLastSession).toBe(false);
   });
 
+  it("fills missing continuous-analysis intent as enabled", async () => {
+    window.localStorage.setItem(storageKey, JSON.stringify({ showCandidates: false }));
+    const loaded = await loadAppPreferences();
+    expect(loaded.preferences.continuousAnalysisEnabled).toBe(true);
+  });
+
   it("clamps Variation Replay interval to 100–5000 ms", async () => {
     const low = await saveAppPreferences({ ...defaultAppPreferences, variationReplayIntervalMs: 50 });
     const high = await saveAppPreferences({ ...defaultAppPreferences, variationReplayIntervalMs: 9000 });

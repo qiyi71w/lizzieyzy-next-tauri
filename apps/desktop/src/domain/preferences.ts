@@ -25,6 +25,7 @@ export type AppPreferences = {
   variationReplayEnabled: boolean;
   variationReplayIntervalMs: number;
   restoreLastSession: boolean;
+  continuousAnalysisEnabled: boolean;
 };
 
 export const defaultAppPreferences: AppPreferences = {
@@ -45,7 +46,8 @@ export const defaultAppPreferences: AppPreferences = {
   subBoardContentMode: "variation",
   variationReplayEnabled: false,
   variationReplayIntervalMs: 500,
-  restoreLastSession: false
+  restoreLastSession: false,
+  continuousAnalysisEnabled: true
 };
 
 export function normalizeAppPreferences(value: Partial<AppPreferences> | null | undefined): AppPreferences {
@@ -74,7 +76,8 @@ export function normalizeAppPreferences(value: Partial<AppPreferences> | null | 
       100,
       5000
     ),
-    restoreLastSession: booleanValue(value?.restoreLastSession, defaultAppPreferences.restoreLastSession)
+    restoreLastSession: booleanValue(value?.restoreLastSession, defaultAppPreferences.restoreLastSession),
+    continuousAnalysisEnabled: booleanValue(value?.continuousAnalysisEnabled, defaultAppPreferences.continuousAnalysisEnabled)
   };
 }
 

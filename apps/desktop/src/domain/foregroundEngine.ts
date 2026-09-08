@@ -2,7 +2,8 @@ import type { EngineFailureDto, EngineRunDto, ForegroundEngineSnapshotDto } from
 
 export const emptyForegroundEngineSnapshot = (): ForegroundEngineSnapshotDto => ({
   revision: 0,
-  lifecycle: { state: "no_engine" }
+  lifecycle: { state: "no_engine" },
+  continuous: { enabled: null, phase: "loading" }
 });
 
 export function mergeForegroundEngineSnapshot(

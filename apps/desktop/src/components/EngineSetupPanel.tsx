@@ -25,7 +25,11 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
   const visits = Number(maxVisits);
   const canSave = profileName.trim().length > 0 && Number.isFinite(visits) && visits > 0;
   const canDeleteProfile = selectedProfileId !== "default" && profiles.length > 1;
-  const snapshot = engineSnapshot ?? { revision: 0, lifecycle: { state: "no_engine" as const } };
+  const snapshot = engineSnapshot ?? {
+    revision: 0,
+    lifecycle: { state: "no_engine" as const },
+    continuous: { enabled: null, phase: "loading" as const }
+  };
   const run = runFromSnapshot(snapshot);
   const savedRecord = profiles.find((profile) => profile.id === run?.profile_id)?.profile;
   const pendingChanges = Boolean(savedRecord && run && profileHasPendingChanges(savedRecord, snapshot));

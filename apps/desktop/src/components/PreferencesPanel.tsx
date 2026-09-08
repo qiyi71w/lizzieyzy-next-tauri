@@ -87,6 +87,12 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
           disabled={disabled}
           onChange={(checked) => update({ restoreLastSession: checked })}
         />
+        <Toggle
+          label="连续分析"
+          checked={preferences.continuousAnalysisEnabled}
+          disabled={disabled}
+          onChange={(checked) => update({ continuousAnalysisEnabled: checked })}
+        />
       </fieldset>
       <fieldset className="preferences-grid">
         <legend>复盘</legend>

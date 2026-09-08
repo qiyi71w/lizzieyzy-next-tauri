@@ -57,6 +57,7 @@ const backend = vi.hoisted(() => ({
   restartForegroundEngine: vi.fn(() => Promise.resolve()),
   switchForegroundEngine: vi.fn(() => Promise.resolve()),
   getForegroundEngineSnapshot: vi.fn(),
+  foregroundEngineContinuousAction: vi.fn(),
   subscribeForegroundEngine: vi.fn(),
   inspectCurrentGameRecovery: vi.fn(async (): Promise<{ status: "none" | "abnormal" | "normal" | "unreadable"; envelope?: unknown; message?: string }> => ({ status: "none" })),
   restoreCurrentGameRecovery: vi.fn(),
@@ -238,7 +239,7 @@ beforeEach(() => {
     profiles: [savedProfile, savedProfileB]
   });
   backend.saveEngineProfilesSettings.mockImplementation(async (settings) => settings);
-  backend.getForegroundEngineSnapshot.mockResolvedValue({ revision: 0, lifecycle: { state: "no_engine" } });
+  backend.getForegroundEngineSnapshot.mockResolvedValue({ revision: 0, lifecycle: { state: "no_engine" }, continuous: { enabled: null, phase: "loading" } });
   backend.startSelectedNodeAnalysis.mockResolvedValue({
     run_id: "run-1",
     job_id: "job-1",
@@ -253,7 +254,7 @@ beforeEach(() => {
     listeners.onSnapshot = onSnapshot;
     listeners.onFailure = onFailure;
     listeners.onJob = onJob;
-    onSnapshot({ revision: 0, lifecycle: { state: "no_engine" } });
+    onSnapshot({ revision: 0, lifecycle: { state: "no_engine" }, continuous: { enabled: null, phase: "loading" } });
     return () => undefined;
   });
   backend.startKataGoGameAnalysis.mockResolvedValue({
@@ -301,6 +302,7 @@ async function readyEngine(host: HTMLElement) {
   await act(async () => {
     listeners.onSnapshot?.({
       revision: 2,
+      continuous: { enabled: true, phase: "waiting" },
       lifecycle: {
         state: "ready",
         run: {
@@ -365,6 +367,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 2,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "ready",
           run: {
@@ -404,6 +407,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 2,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "ready",
           run: {
@@ -442,6 +446,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 2,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "ready",
           run: {
@@ -570,6 +575,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 2,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "ready",
           run: {
@@ -695,6 +701,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: { state: "no_engine" }
       });
     });
@@ -728,6 +735,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 4,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: { state: "ready", run: readyRun("run-b", savedProfileB) }
       });
     });
@@ -1322,6 +1330,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "switching",
           primary: readyRun("run-1", savedProfile),
@@ -1375,6 +1384,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 4,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "ready",
           run: readyRun("run-b", savedProfileB)
@@ -1448,6 +1458,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "switching",
           primary: readyRun("run-1", savedProfile),
@@ -1462,6 +1473,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 4,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: { state: "ready", run: readyRun("run-1", savedProfile) }
       });
       listeners.onFailure?.({
@@ -1530,6 +1542,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "switching",
           primary: readyRun("run-1", savedProfile),
@@ -1551,6 +1564,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 5,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "switching",
           primary: readyRun("run-1", savedProfile),
@@ -1565,6 +1579,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 6,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: { state: "ready", run: readyRun("run-c", savedProfileC) }
       });
       listeners.onFailure?.({
@@ -1598,6 +1613,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "switching",
           primary: readyRun("run-1", savedProfile),
@@ -1622,6 +1638,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 4,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: { state: "ready", run: readyRun("run-1", savedProfile) }
       });
     });
@@ -1637,6 +1654,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "switching",
           primary: readyRun("run-1", savedProfile),
@@ -1651,6 +1669,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 4,
+        continuous: { enabled: true, phase: "error" },
         lifecycle: {
           state: "error",
           run: readyRun("run-1", savedProfile),
@@ -1684,6 +1703,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 2,
+        continuous: { enabled: null, phase: "loading" },
         lifecycle: {
           state: "no_engine",
           failure: {
@@ -1718,7 +1738,7 @@ describe("foreground engine lifecycle UI", () => {
       });
     });
     await act(async () => {
-      listeners.onSnapshot?.({ revision: 9, lifecycle: { state: "no_engine" } });
+      listeners.onSnapshot?.({ revision: 9, lifecycle: { state: "no_engine" }, continuous: { enabled: true, phase: "waiting" } });
     });
     expect(host.querySelector(".engine-chip-label")?.textContent).toBe("未加载引擎");
     expect(host.querySelector(".engine-failure")).toBeNull();
@@ -1796,6 +1816,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "error" },
         lifecycle: {
           state: "error",
           run: readyRun("run-1", savedProfile),
@@ -1828,6 +1849,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "error" },
         lifecycle: { state: "error", run: readyRun("run-1", savedProfile), failure: crashFailure }
       });
     });
@@ -1838,6 +1860,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 6,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "ready",
           run: {
@@ -1856,6 +1879,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "error" },
         lifecycle: { state: "error", run: readyRun("run-1", savedProfile), failure: crashFailure }
       });
     });
@@ -1866,6 +1890,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 5,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "no_engine",
           failure: {
@@ -1904,6 +1929,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "error" },
         lifecycle: { state: "error", run: readyRun("run-1", savedProfile), failure: crashFailure }
       });
     });

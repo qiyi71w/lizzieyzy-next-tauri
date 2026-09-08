@@ -22,8 +22,8 @@ pub use catalog::{
     SavedEngineProfile, DEFAULT_ENGINE_PROFILE_ID,
 };
 pub use lifecycle::{
-    AnalysisJobCancel, AnalysisJobEventDto, AnalysisJobLane, ForegroundEngineConfig, ForegroundEngineManager,
-    SelectedNodeJobRequest, WholeGameJobRequest, WholeGameWorkItem,
+    AnalysisJobCancel, AnalysisJobEventDto, AnalysisJobLane, ContinuousPrimaryAction, ForegroundEngineConfig,
+    ForegroundEngineManager, SelectedNodeJobRequest, WholeGameJobRequest, WholeGameWorkItem,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

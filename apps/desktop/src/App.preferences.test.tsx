@@ -48,12 +48,13 @@ const backend = vi.hoisted(() => ({
   removeCurrentGameVariation: vi.fn(),
   startKataGoGameAnalysis: vi.fn(),
   loadEngineProfilesSettings: vi.fn(() => Promise.resolve({ selected_profile_id: "default", profiles: [] })),
-  subscribeForegroundEngine: vi.fn(() => Promise.resolve(() => undefined)),
+  subscribeForegroundEngine: vi.fn(async (_onSnapshot?: (snapshot: unknown) => void) => () => undefined),
   startForegroundEngine: vi.fn(),
   stopForegroundEngine: vi.fn(),
   restartForegroundEngine: vi.fn(),
   switchForegroundEngine: vi.fn(),
-  getForegroundEngineSnapshot: vi.fn(() => Promise.resolve({ revision: 0, lifecycle: { state: "no_engine" } })),
+  getForegroundEngineSnapshot: vi.fn(() => Promise.resolve({ revision: 0, lifecycle: { state: "no_engine" }, continuous: { enabled: null, phase: "loading" } })),
+  foregroundEngineContinuousAction: vi.fn(),
   inspectCurrentGameRecovery: vi.fn(async (): Promise<{ status: "none" | "abnormal" | "normal" | "unreadable"; envelope?: unknown; message?: string }> => ({ status: "none" })),
   restoreCurrentGameRecovery: vi.fn(),
   discardCurrentGameRecovery: vi.fn(async () => undefined),
@@ -154,6 +155,7 @@ describe("durable preferences surface", () => {
     expect(labeledCheckbox(host, "变化回放").checked).toBe(false);
     expect(labeledNumber(host, "回放间隔").value).toBe("500");
     expect(labeledCheckbox(host, "启动时恢复上次棋谱").checked).toBe(false);
+    expect(labeledCheckbox(host, "连续分析").checked).toBe(true);
     expect(host.textContent).not.toContain("自动载入缓存");
     expect(host.textContent).not.toContain("自动保存分析");
     expect(host.textContent).not.toContain("缓存未用");
@@ -161,6 +163,22 @@ describe("durable preferences surface", () => {
     act(() => buttonNamed(host, "分析").click());
     expect(host.textContent).not.toContain("清除 Lizzie 缓存");
     expect(preferencesStatus(host)).toBe("Preferences loaded.");
+  });
+
+  it("keeps continuous intent disabled until the durable preference load settles", async () => {
+    let resolveLoad!: (value: { preferences: AppPreferences }) => void;
+    const loadPromise = new Promise<{ preferences: AppPreferences }>((resolve) => { resolveLoad = resolve; });
+    preferencesApi.loadAppPreferences.mockReturnValueOnce(loadPromise);
+    const host = await renderApp({ waitForLoad: false });
+    openPreferences(host);
+    expect(labeledCheckbox(host, "连续分析").disabled).toBe(true);
+
+    await act(async () => {
+      resolveLoad({ preferences: { ...defaultAppPreferences, continuousAnalysisEnabled: false } });
+      await loadPromise;
+    });
+    expect(labeledCheckbox(host, "连续分析").disabled).toBe(false);
+    expect(labeledCheckbox(host, "连续分析").checked).toBe(false);
   });
 
   it("reports unreadable-storage recovery without replacing owner defaults", async () => {
@@ -200,6 +218,78 @@ describe("durable preferences surface", () => {
     expect(labeledCheckbox(host, "候选").checked).toBe(true);
     expect(preferencesStatus(host)).toBe("Save failed: disk full");
     expect(preferencesApi.saveAppPreferences).toHaveBeenCalledTimes(1);
+  });
+
+  it("rolls back the continuous preference checkbox when persistence fails", async () => {
+    preferencesApi.saveAppPreferences.mockRejectedValueOnce(new Error("intent write failed"));
+    const host = await renderApp();
+    openPreferences(host);
+    act(() => labeledCheckbox(host, "连续分析").click());
+    expect(labeledCheckbox(host, "连续分析").checked).toBe(true);
+    await act(async () => {
+      await Promise.resolve(preferencesApi.saveAppPreferences.mock.results.at(-1)?.value).catch(() => undefined);
+    });
+    expect(labeledCheckbox(host, "连续分析").checked).toBe(true);
+    expect(preferencesStatus(host)).toBe("Save failed: intent write failed");
+    expect(backend.foregroundEngineContinuousAction).not.toHaveBeenCalled();
+  });
+
+  it("blocks a contextual Start while an older whole-preferences save is pending", async () => {
+    backend.subscribeForegroundEngine.mockImplementationOnce(async (onSnapshot?: (snapshot: unknown) => void) => {
+      onSnapshot?.({ revision: 1, lifecycle: { state: "no_engine" }, continuous: { enabled: false, phase: "off" } });
+      return () => undefined;
+    });
+    let resolveOlderSave!: (value: AppPreferences) => void;
+    const olderSave = new Promise<AppPreferences>((resolve) => { resolveOlderSave = resolve; });
+    preferencesApi.saveAppPreferences.mockReturnValueOnce(olderSave);
+    const host = await renderApp();
+    openPreferences(host);
+    act(() => labeledCheckbox(host, "候选").click());
+    const start = buttonNamed(host, "开始连续分析");
+    expect(start.disabled).toBe(true);
+    act(() => start.click());
+
+    await act(async () => {
+      resolveOlderSave({ ...defaultAppPreferences, showCandidates: false });
+      await olderSave;
+      await Promise.resolve();
+    });
+    expect(backend.foregroundEngineContinuousAction).not.toHaveBeenCalled();
+    expect(buttonNamed(host, "开始连续分析").disabled).toBe(false);
+    expect(labeledCheckbox(host, "候选").checked).toBe(false);
+  });
+
+  it("does not dispatch a stale visible Stop while disabling continuous intent is still saving", async () => {
+    let publishSnapshot: ((snapshot: unknown) => void) | undefined;
+    backend.subscribeForegroundEngine.mockImplementationOnce(async (onSnapshot?: (snapshot: unknown) => void) => {
+      publishSnapshot = onSnapshot;
+      onSnapshot?.({ revision: 1, lifecycle: { state: "no_engine" }, continuous: { enabled: true, phase: "searching" } });
+      return () => undefined;
+    });
+    let resolveDisable!: (value: AppPreferences) => void;
+    const disableSave = new Promise<AppPreferences>((resolve) => { resolveDisable = resolve; });
+    preferencesApi.saveAppPreferences.mockReturnValueOnce(disableSave);
+    backend.foregroundEngineContinuousAction.mockResolvedValueOnce({
+      ...defaultAppPreferences,
+      continuousAnalysisEnabled: true
+    });
+    const host = await renderApp();
+    openPreferences(host);
+
+    act(() => labeledCheckbox(host, "连续分析").click());
+    const staleStop = buttonNamed(host, "停止连续分析");
+    expect(staleStop.disabled).toBe(true);
+    act(() => staleStop.click());
+
+    await act(async () => {
+      resolveDisable({ ...defaultAppPreferences, continuousAnalysisEnabled: false });
+      await disableSave;
+      await Promise.resolve();
+      publishSnapshot?.({ revision: 2, lifecycle: { state: "no_engine" }, continuous: { enabled: false, phase: "off" } });
+    });
+    expect(labeledCheckbox(host, "连续分析").checked).toBe(false);
+    expect(buttonNamed(host, "开始连续分析")).toBeInstanceOf(HTMLButtonElement);
+    expect(backend.foregroundEngineContinuousAction).not.toHaveBeenCalled();
   });
 
   it("updates the visible value only after a successful write", async () => {

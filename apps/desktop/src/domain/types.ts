@@ -134,9 +134,28 @@ export type ForegroundEngineLifecycleDto =
   | { state: "switching"; primary: EngineRunDto; candidate: EngineRunDto; switch_id: string }
   | { state: "stopping"; run: EngineRunDto }
   | { state: "error"; run: EngineRunDto; failure: EngineFailureDto };
+export type ContinuousAnalysisPhaseDto =
+  | "loading"
+  | "off"
+  | "waiting"
+  | "unavailable"
+  | "queued"
+  | "searching"
+  | "stopping"
+  | "time_limited"
+  | "finite"
+  | "paused"
+  | "error"
+  | "safety_hold"
+  | "departing";
+export type ContinuousAnalysisSnapshotDto = {
+  enabled: boolean | null;
+  phase: ContinuousAnalysisPhaseDto;
+};
 export type ForegroundEngineSnapshotDto = {
   revision: number;
   lifecycle: ForegroundEngineLifecycleDto;
+  continuous: ContinuousAnalysisSnapshotDto;
   selected_node_job?: AnalysisJobStartedDto | null;
   whole_game_job?: AnalysisJobStartedDto | null;
 };

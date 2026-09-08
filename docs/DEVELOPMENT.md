@@ -88,7 +88,7 @@ The browser preview is useful for layout and fallback checks. Real KataGo execut
 
 Use the desktop runtime for this flow:
 
-Use the `分析` menu for the analysis start/cancel steps below. With a Ready run, `分析当前节点` starts finite selected-node analysis and `分析第一子主线` starts whole-game analysis. Space and the visible continuous action share manual continuous Start/Stop/Resume. Continuous analysis uses a fixed 600-second search budget, without a visits limit; navigation stops it and retains accepted node results. Automatic following and durable default-on intent remain subsequent restoration work.
+Use the `分析` menu for the analysis start/cancel steps below. With a Ready run, `分析当前节点` starts finite selected-node analysis and `分析第一子主线` starts whole-game analysis. Space and the visible continuous action share contextual Start/Stop/Resume. Continuous intent defaults on and is durable; it follows accepted navigation and edits on an independently Ready engine. Fixed 600-second limits pause the same admission. Failed/cancelled departure Save requires explicit Resume. Preferences writes must succeed before changing intent or stopping continuous work; the checkbox does not release safety/error holds. Finite and whole-game work remain independently requested.
 
 ```bash
 cd apps/desktop

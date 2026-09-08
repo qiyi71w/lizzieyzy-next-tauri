@@ -11,6 +11,8 @@ pub const UNREADABLE_RECOVERY_MESSAGE: &str = "Unreadable preferences isolated; 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppPreferencesDto {
+    #[serde(default = "default_continuous_analysis_enabled")]
+    pub continuous_analysis_enabled: bool,
     #[serde(default = "default_show_ownership")]
     pub show_ownership: bool,
     #[serde(default = "default_show_policy")]
@@ -66,6 +68,7 @@ pub struct AppPreferencesLoadResultDto {
 
 pub fn default_app_preferences() -> AppPreferencesDto {
     AppPreferencesDto {
+        continuous_analysis_enabled: default_continuous_analysis_enabled(),
         show_ownership: default_show_ownership(),
         show_policy: default_show_policy(),
         show_candidates: default_show_candidates(),
@@ -214,6 +217,10 @@ fn tmp_path(path: &Path) -> PathBuf {
     PathBuf::from(tmp)
 }
 
+fn default_continuous_analysis_enabled() -> bool {
+    true
+}
+
 fn default_show_ownership() -> bool {
     true
 }
@@ -315,6 +322,7 @@ mod tests {
 
     fn sample_preferences() -> AppPreferencesDto {
         AppPreferencesDto {
+            continuous_analysis_enabled: false,
             show_ownership: false,
             show_policy: false,
             show_candidates: false,
@@ -352,6 +360,7 @@ mod tests {
         fs::write(&path, r#"{"showCandidates":false,"candidateLimit":2}"#).unwrap();
 
         let loaded = load_from_path(&path).unwrap();
+        assert!(loaded.preferences.continuous_analysis_enabled);
         assert!(!loaded.preferences.show_candidates);
         assert_eq!(loaded.preferences.candidate_limit, 2);
         assert!(loaded.preferences.show_ownership);

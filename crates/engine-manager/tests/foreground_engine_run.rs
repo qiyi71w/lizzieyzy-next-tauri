@@ -3498,3 +3498,328 @@ fn continuous_cleanup_failure_remains_visible_and_blocks_new_work() {
         ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
 }
+
+fn continuous_request(run_id: &str, generation: u64, indices: Vec<u32>) -> SelectedNodeJobRequest {
+    let mut request = selected_request(run_id, generation, indices);
+    request.mode = app_model::AnalysisJobModeDto::Continuous;
+    request
+}
+
+#[cfg(unix)]
+fn wait_continuous_phase(
+    manager: &ForegroundEngineManager,
+    expected: app_model::ContinuousAnalysisPhaseDto,
+) -> app_model::ForegroundEngineSnapshotDto {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let snapshot = manager.snapshot();
+        if snapshot.continuous.phase == expected {
+            return snapshot;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {expected:?}, last={snapshot:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn continuous_intent_without_an_engine_waits_without_creating_a_job() {
+    let manager = ForegroundEngineManager::new(
+        Arc::new(InMemoryEngineProfileCatalog::new()),
+        ForegroundEngineConfig::for_tests(),
+    );
+    manager.set_continuous_intent(true);
+    manager.follow_continuous_position(continuous_request("ignored", 1, vec![]));
+
+    let snapshot = manager.snapshot();
+    assert_eq!(snapshot.continuous.enabled, Some(true));
+    assert_eq!(
+        snapshot.continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::Waiting
+    );
+    assert!(snapshot.selected_node_job.is_none());
+    assert!(matches!(
+        snapshot.lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine { .. }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_navigation_coalesces_to_the_latest_position_during_target_cleanup() {
+    let temp = TestTempDir::new("continuous-follow-latest");
+    let script = format!("export SCENARIO=queued\n{}", streaming_engine_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    manager.set_continuous_intent(true);
+    manager.follow_continuous_position(continuous_request("stale-wire-run", 20, vec![0]));
+    let first = manager.snapshot().selected_node_job.unwrap();
+    assert_eq!(first.run_id, run_id);
+
+    manager.follow_continuous_position(continuous_request("ignored", 20, vec![1]));
+    manager.follow_continuous_position(continuous_request("ignored", 20, vec![2]));
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut started_paths = Vec::new();
+    while Instant::now() < deadline {
+        if let Ok(ForegroundEngineEventDto::Job { job }) = events.recv_timeout(Duration::from_millis(100)) {
+            if job.outcome == AnalysisJobOutcomeDto::Started && job.job_id != first.job_id {
+                started_paths.push(job.node_path.indices.clone());
+                if job.node_path.indices == vec![2] {
+                    break;
+                }
+            }
+        }
+    }
+    assert_eq!(started_paths, vec![vec![2]]);
+    assert_eq!(
+        manager.snapshot().selected_node_job.unwrap().node_path.indices,
+        vec![2]
+    );
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_limit_survives_duplicate_ready_intent_and_reselection_but_not_navigation() {
+    let temp = TestTempDir::new("continuous-managed-limit");
+    let script = format!("export SCENARIO=limited\n{}", streaming_engine_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    manager.set_continuous_intent(true);
+    manager.follow_continuous_position(continuous_request(&run_id, 21, vec![]));
+    let limited = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::TimeLimited
+    });
+
+    manager.set_continuous_intent(true);
+    manager.follow_continuous_position(continuous_request("ignored", 21, vec![]));
+    std::thread::sleep(Duration::from_millis(200));
+    let held = manager.snapshot();
+    assert_eq!(
+        held.continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::TimeLimited
+    );
+    assert_eq!(held.selected_node_job.unwrap().job_id, limited.job_id);
+    assert!(
+        collect_job_events(&events, Instant::now() + Duration::from_millis(150))
+            .iter()
+            .all(|job| job.outcome != AnalysisJobOutcomeDto::Started)
+    );
+
+    manager.follow_continuous_position(continuous_request("ignored", 21, vec![0]));
+    let restarted = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::Started && job.node_path.indices == vec![0]
+    });
+    assert_ne!(restarted.job_id, limited.job_id);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_error_is_not_cleared_by_navigation_and_explicit_resume_reauthorizes_it() {
+    let temp = TestTempDir::new("continuous-managed-error");
+    let script = r#"
+first=1
+failed=0
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  [ -z "$id" ] && id="ok"
+  if printf '%s' "$line" | grep -q '"action":"terminate"'; then
+    target=$(printf '%s' "$line" | sed -n 's/.*"terminateId":"\([^"]*\)".*/\1/p')
+    [ -n "$target" ] && [ "$target" != "$id" ] || exit 20
+    printf '%s\n' "$line"
+    printf '{"id":"%s","isDuringSearch":false,"noResults":true,"turnNumber":0}\n' "$target"
+  elif [ "$first" = 1 ]; then
+    printf '{"id":"%s","turnNumber":0}\n' "$id"
+    first=0
+  elif [ "$failed" = 0 ]; then
+    printf '{"id":"%s","isDuringSearch":false,"noResults":true,"turnNumber":0}\n' "$id"
+    failed=1
+  fi
+done
+"#;
+    let (manager, _, events, run_id) = ready_manager(&temp, script);
+    manager.set_continuous_intent(true);
+    manager.follow_continuous_position(continuous_request(&run_id, 22, vec![]));
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    wait_continuous_phase(&manager, app_model::ContinuousAnalysisPhaseDto::Error);
+
+    manager.follow_continuous_position(continuous_request("ignored", 22, vec![0]));
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::Error
+    );
+    assert_eq!(
+        manager.continuous_primary_action().unwrap(),
+        engine_manager::ContinuousPrimaryAction::Resume
+    );
+    manager.resume_continuous().unwrap();
+    let resumed = manager.snapshot().selected_node_job.unwrap();
+    assert_eq!(resumed.node_path.indices, vec![0]);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn finite_owner_blocks_automatic_work_and_cancel_pauses_only_the_same_admission() {
+    let temp = TestTempDir::new("continuous-finite-cancel");
+    let (manager, _, events, run_id) = ready_manager(&temp, &hold_after_probe_script());
+    manager.follow_continuous_position(continuous_request(&run_id, 30, vec![]));
+    let finite = manager
+        .start_selected_node_job(selected_request(&run_id, 30, vec![]))
+        .unwrap();
+    manager.set_continuous_intent(true);
+    let active = manager.snapshot();
+    assert_eq!(
+        active.continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::Finite
+    );
+    assert_eq!(active.selected_node_job.unwrap().job_id, finite.job_id);
+
+    manager.cancel_job(&run_id, &finite.job_id).unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == finite.job_id && job.outcome == AnalysisJobOutcomeDto::Cancelled
+    });
+    let paused = wait_continuous_phase(&manager, app_model::ContinuousAnalysisPhaseDto::Paused);
+    assert!(paused.selected_node_job.is_none());
+
+    manager.follow_continuous_position(continuous_request("ignored", 30, vec![0]));
+    let restarted = manager.snapshot().selected_node_job.unwrap();
+    assert_eq!(restarted.mode, app_model::AnalysisJobModeDto::Continuous);
+    assert_eq!(restarted.node_path.indices, vec![0]);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_finite_owner_latches_error_across_intent_and_navigation() {
+    let temp = TestTempDir::new("continuous-finite-failure");
+    let (manager, _, events, run_id) = ready_manager(&temp, &selected_node_protocol_error_script());
+    manager.follow_continuous_position(continuous_request(&run_id, 31, vec![]));
+    let finite = manager
+        .start_selected_node_job(selected_request(&run_id, 31, vec![]))
+        .unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == finite.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    manager.set_continuous_intent(true);
+    wait_continuous_phase(&manager, app_model::ContinuousAnalysisPhaseDto::Error);
+
+    manager.follow_continuous_position(continuous_request("ignored", 31, vec![0]));
+    let held = manager.snapshot();
+    assert_eq!(
+        held.continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::Error
+    );
+    assert!(held.selected_node_job.is_none());
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn successful_finite_completion_remains_paused_until_explicit_resume() {
+    let temp = TestTempDir::new("continuous-finite-complete");
+    let (manager, _, events, run_id) = ready_manager(&temp, &resident_selected_node_result_script());
+    manager.follow_continuous_position(continuous_request(&run_id, 32, vec![]));
+    manager.set_continuous_intent(false);
+    let finite = manager
+        .start_selected_node_job(selected_request(&run_id, 32, vec![]))
+        .unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == finite.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+    manager.set_continuous_intent(true);
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::Paused
+    );
+    manager.resume_continuous().unwrap();
+    assert_eq!(
+        manager.snapshot().selected_node_job.unwrap().mode,
+        app_model::AnalysisJobModeDto::Continuous
+    );
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn safety_hold_survives_navigation_readiness_and_authorization_during_departure() {
+    let temp = TestTempDir::new("continuous-safety-readiness");
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-1".into(),
+        profile: setup_profile(&temp, &streaming_engine_script()),
+    });
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    let events = manager.subscribe();
+    manager.set_continuous_intent(true);
+    manager.follow_continuous_position(continuous_request("ignored", 40, vec![]));
+    manager.begin_continuous_departure();
+    manager.finish_continuous_departure(false);
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::SafetyHold
+    );
+
+    manager.begin_continuous_departure();
+    manager.authorize_continuous_start();
+    manager.finish_continuous_departure(false);
+    manager.follow_continuous_position(continuous_request("ignored", 40, vec![0]));
+    manager.start("profile-1").unwrap();
+    wait_snapshot(&events, Duration::from_secs(2), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    let held = manager.snapshot();
+    assert_eq!(
+        held.continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::SafetyHold
+    );
+    assert!(held.selected_node_job.is_none());
+
+    manager.resume_continuous().unwrap();
+    assert_eq!(
+        manager.snapshot().selected_node_job.unwrap().node_path.indices,
+        vec![0]
+    );
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_snapshot_prioritizes_pending_target_cleanup_over_intent_and_finite_owner() {
+    let continuous_temp = TestTempDir::new("continuous-stop-priority");
+    let script = format!("export SCENARIO=ack-only\n{}", streaming_engine_script());
+    let (manager, _, events, run_id) = ready_manager(&continuous_temp, &script);
+    manager.set_continuous_intent(true);
+    manager.follow_continuous_position(continuous_request(&run_id, 50, vec![]));
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.mode == app_model::AnalysisJobModeDto::Continuous
+            && job.frame.as_ref().is_some_and(|frame| frame.visits == 16)
+    });
+    manager.set_continuous_intent(false);
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::Stopping
+    );
+    assert!(manager.continuous_primary_action().is_err());
+    manager.teardown().unwrap();
+
+    let finite_temp = TestTempDir::new("finite-stop-priority");
+    let script = format!("export SCENARIO=ack-only\n{}", streaming_engine_script());
+    let (manager, _, _, run_id) = ready_manager(&finite_temp, &script);
+    manager.follow_continuous_position(continuous_request(&run_id, 51, vec![]));
+    let finite = manager
+        .start_selected_node_job(selected_request(&run_id, 51, vec![]))
+        .unwrap();
+    manager.set_continuous_intent(true);
+    manager.cancel_job(&run_id, &finite.job_id).unwrap();
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::Stopping
+    );
+    assert!(manager.continuous_primary_action().is_err());
+    manager.teardown().unwrap();
+}

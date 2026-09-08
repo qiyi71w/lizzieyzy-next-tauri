@@ -102,13 +102,15 @@ The readboard sidecar crate owns launch/probe discovery, protocol line parsing, 
 
 SQLite schema and storage helpers for unrelated application tables (`games`, `game_nodes`, `engine_profiles`, `assets`). Analysis persistence is SGF attachment through ordinary Save / Save As, not this crate.
 
-## Manual Continuous Selected-node Analysis
+## Continuous Selected-node Analysis
 
-The selected-node lane supports explicit `finite` and `continuous` modes. `foreground_engine_start_continuous_node` uses the same Ready Run capability and exact-position admission as finite analysis, with a fixed 600-second engine search budget, unbounded visits/playouts and 100 ms search reports. It does not start an engine or automatically follow navigation. Durable intent, automatic following and configurable budgets remain in subsequent restoration tickets.
+The selected-node lane supports `finite` and `continuous` modes. Durable `continuousAnalysisEnabled` defaults to true and is loaded before automatic admission. The manager follows the latest authoritative generation/NodePath on an independently Ready Run, with a fixed 600-second search budget, unbounded visits/playouts and 100 ms reports. It never starts an engine because intent is enabled. `foreground_engine_continuous_action` implements contextual Start/Stop/Resume; preference writes commit before intent/work change. The Preferences checkbox does not authorize Resume.
 
 Snapshots distinguish queued, searching, stopping and time-limited work. Valid continuous Progress and admitted final frames attach to the authoritative SGF node, mark dirty and advance recovery snapshot ordering without changing document generation. Ordinary Save persists its invocation-time snapshot; a later frame marks dirty again. Whole-game search reports do not advance completed-node counts. Valid activity on the shared Run prevents a queued lane from expiring on its old submission timeout.
 
 Targeted cancellation sends an independent control id plus `terminateId`. Stop and document departure seal publication immediately; cleanup ownership remains until the target final response, not its control ACK. The target wait is capped at five seconds within the shared departure budget. Delivery/deadline failure fails both lanes, visibly fails the Run and performs bounded process cleanup; an unconfirmed cleanup retains ownership and blocks new work. A pending replacement/exit aborts without final Save or installation. Initial departure Cancel leaves analysis untouched.
+
+The manager coalesces superseded targets while cancellation finishes. Same-admission time limits and finite cancellation/completion pause automatic work; job errors survive navigation. New Run identities release weak/error holds, not departure safety holds. Confirmed departure suppresses scheduling before collecting live jobs; aborted departure keeps a safety hold until explicit eligible Resume. Successful replacement supplies a fresh target. Finite successful-completion restoration and configurable budgets remain later restoration tickets. `ForegroundEngineSnapshotDto.continuous` separates loaded intent from loading/off/waiting/unavailable/queued/searching/stopping/time_limited/finite/paused/error/safety_hold/departing runtime phases.
 
 ## Data Flow
 
