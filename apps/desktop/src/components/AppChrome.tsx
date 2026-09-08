@@ -8,8 +8,6 @@ import {
   AI_COMMENTARY_UNAVAILABLE,
   AUTO_ANALYZE_LABEL,
   BROWSER_DEMO_ANALYSIS_LABEL,
-  CONTINUOUS_ANALYSIS_LABEL,
-  CONTINUOUS_ANALYSIS_UNAVAILABLE,
   FIRST_CHILD_MAINLINE_ANALYSIS_LABEL,
   LIGHTNING_ANALYSIS_MENU_LABEL,
   LIGHTNING_ANALYSIS_TOOLBAR_LABEL,
@@ -39,6 +37,13 @@ export type EngineSwitcherProps = {
   onStop: () => void;
   onRestart: () => void;
 };
+export type ContinuousAnalysisAction = {
+  label: string;
+  disabled: boolean;
+  title?: string;
+  status: string;
+};
+
 
 type Props = {
   sheet: "none" | SheetId;
@@ -50,6 +55,8 @@ type Props = {
   engineReady: boolean;
   engineSwitcher: EngineSwitcherProps;
   onEngineCommand: (kind: "once" | "game") => void;
+  continuousAnalysisAction: ContinuousAnalysisAction;
+  onContinuousAnalysis: () => void;
   preferences: AppPreferences;
   onPreferencesChange: (next: AppPreferences) => void;
   scoreLeadAvailable?: boolean;
@@ -289,7 +296,7 @@ export function AppChrome(props: Props) {
         <span className="menu-div" />
         <div className="menu-cluster">
           <ChromeMenu label="分析" open={openMenu === "analyze"} onToggle={() => setOpenMenu(openMenu === "analyze" ? null : "analyze")}>
-            <MenuItem label={CONTINUOUS_ANALYSIS_LABEL} disabled title={CONTINUOUS_ANALYSIS_UNAVAILABLE} />
+            <MenuItem label={props.continuousAnalysisAction.label} onClick={() => run(props.onContinuousAnalysis)} disabled={props.continuousAnalysisAction.disabled} title={props.continuousAnalysisAction.title} />
             <MenuItem label={AI_COMMENTARY_LABEL} disabled title={AI_COMMENTARY_UNAVAILABLE} />
             <div className="menu-sep" role="separator" />
             <MenuItem label="超级鹰眼" disabled title={later} />
@@ -501,8 +508,11 @@ export function BottomBar(props: {
   onRemoveVariation: () => void;
   engineReady: boolean;
   selectedNodeRunning: boolean;
+  selectedNodeMode?: "finite" | "continuous";
   wholeGameRunning: boolean;
   wholeGameProgress: { completed: number; expected: number; remaining?: number | null } | null;
+  continuousAnalysisAction: ContinuousAnalysisAction;
+  onContinuousAnalysis: () => void;
   onAnalyzeOnce: () => void;
   onAnalyzeGame: () => void;
   onCancelSelectedNode: () => void;
@@ -526,7 +536,8 @@ export function BottomBar(props: {
   toPlay: "black" | "white";
 }) {
   const progressParts = [
-    props.selectedNodeRunning ? "此手分析中" : null,
+    props.continuousAnalysisAction.status || null,
+    props.selectedNodeRunning && props.selectedNodeMode === "finite" ? "此手分析中" : null,
     props.wholeGameProgress
       ? `整局 ${props.wholeGameProgress.completed}/${props.wholeGameProgress.expected}${
           props.wholeGameProgress.remaining == null ? "" : ` 剩余 ${props.wholeGameProgress.remaining}`
@@ -545,6 +556,7 @@ export function BottomBar(props: {
       {props.onBrowserDemoAnalyze ? (
         <button type="button" className="chrome-btn" onClick={props.onBrowserDemoAnalyze}>{BROWSER_DEMO_ANALYSIS_LABEL}</button>
       ) : null}
+      <button type="button" className="chrome-btn" onClick={props.onContinuousAnalysis} disabled={props.continuousAnalysisAction.disabled} title={props.continuousAnalysisAction.title}>{props.continuousAnalysisAction.label}</button>
       <button type="button" className="chrome-btn" onClick={props.onAnalyzeGame} disabled={!props.engineReady}>{FIRST_CHILD_MAINLINE_ANALYSIS_LABEL}</button>
       <button type="button" className="chrome-btn" onClick={props.onHeatmap}>纯网络</button>
       <button type="button" className="chrome-btn" onClick={props.onRefresh}>刷新</button>

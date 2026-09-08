@@ -23,6 +23,7 @@ function event(overrides: Partial<AnalysisJobEventDto> = {}): AnalysisJobEventDt
     run_id: "run-1",
     job_id: "job-1",
     lane: "selected_node",
+    mode: "finite",
     generation: 3,
     node_path: { indices: [0, 1] },
     outcome: "completed",
@@ -40,12 +41,15 @@ describe("admitsAnalysisPublication", () => {
     expect(admitsAnalysisPublication(event({ node_path: { indices: [1] } }), current)).toBe(false);
     expect(admitsAnalysisPublication(event({ outcome: "cancelled" }), current)).toBe(false);
     expect(admitsAnalysisPublication(event({ frame: undefined }), current)).toBe(false);
+    expect(admitsAnalysisPublication(event({ mode: "continuous", outcome: "progress" }), current)).toBe(true);
+    expect(admitsAnalysisPublication(event({ mode: "continuous", outcome: "time_limited" }), current)).toBe(true);
+    expect(admitsAnalysisPublication(event({ mode: "finite", outcome: "progress" }), current)).toBe(false);
   });
 });
 
 describe("whole-game incremental publication", () => {
   it("matches the job identity without requiring the started NodePath", () => {
-    const pending = { run_id: "run-1", job_id: "job-1", lane: "whole_game" as const, generation: 3, node_path: { indices: [] } };
+    const pending = { run_id: "run-1", job_id: "job-1", lane: "whole_game" as const, mode: "finite" as const, state: "queued" as const, generation: 3, node_path: { indices: [] } };
     expect(matchesWholeGameJobIdentity(pending, event({ lane: "whole_game", outcome: "progress", node_path: { indices: [0] } }))).toBe(true);
     expect(matchesWholeGameJobIdentity(pending, event({ lane: "whole_game", run_id: "run-2" }))).toBe(false);
     expect(matchesWholeGameJobIdentity(null, event({ lane: "whole_game" }))).toBe(false);
@@ -77,6 +81,7 @@ describe("admitsAnalysisAttachment", () => {
     expect(admitsAnalysisAttachment(event({ lane: "whole_game", outcome: "completed", frame: projectable }))).toBe(false);
     expect(admitsAnalysisAttachment(event({
       lane: "whole_game",
+      mode: "finite",
       outcome: "progress",
       frame: { ...projectable, visits: 0, candidates: [] }
     }))).toBe(false);

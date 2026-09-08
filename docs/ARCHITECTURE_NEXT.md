@@ -102,6 +102,14 @@ The readboard sidecar crate owns launch/probe discovery, protocol line parsing, 
 
 SQLite schema and storage helpers for unrelated application tables (`games`, `game_nodes`, `engine_profiles`, `assets`). Analysis persistence is SGF attachment through ordinary Save / Save As, not this crate.
 
+## Manual Continuous Selected-node Analysis
+
+The selected-node lane supports explicit `finite` and `continuous` modes. `foreground_engine_start_continuous_node` uses the same Ready Run capability and exact-position admission as finite analysis, with a fixed 600-second engine search budget, unbounded visits/playouts and 100 ms search reports. It does not start an engine or automatically follow navigation. Durable intent, automatic following and configurable budgets remain in subsequent restoration tickets.
+
+Snapshots distinguish queued, searching, stopping and time-limited work. Valid continuous Progress and admitted final frames attach to the authoritative SGF node, mark dirty and advance recovery snapshot ordering without changing document generation. Ordinary Save persists its invocation-time snapshot; a later frame marks dirty again. Whole-game search reports do not advance completed-node counts. Valid activity on the shared Run prevents a queued lane from expiring on its old submission timeout.
+
+Targeted cancellation sends an independent control id plus `terminateId`. Stop and document departure seal publication immediately; cleanup ownership remains until the target final response, not its control ACK. The target wait is capped at five seconds within the shared departure budget. Delivery/deadline failure fails both lanes, visibly fails the Run and performs bounded process cleanup; an unconfirmed cleanup retains ownership and blocks new work. A pending replacement/exit aborts without final Save or installation. Initial departure Cancel leaves analysis untouched.
+
 ## Data Flow
 
 1. The user opens, replaces, or edits SGF in the React UI.
@@ -111,7 +119,7 @@ SQLite schema and storage helpers for unrelated application tables (`games`, `ga
 5. The Engine Switcher starts, stops, restarts, or switches a manager-owned Foreground Engine Run. `engine-manager` validates assets, spawns KataGo, and publishes Ready only after adapter readiness.
 6. Selected-node and whole-game analysis jobs occupy that Ready Run. `katago-protocol` builds JSONL; `engine-manager` writes it to the resident process, emits progress, and cancels by run/job identity.
 7. Responses are normalized into `AnalysisFrameDto` and classified by `analysis-core`.
-8. Identity-valid completed analysis attaches to the exact SGF node. Ordinary Save / Save As persists the invocation-time document while analysis continues. Confirmed-departure Save during replacement or exit first seals/stops document analysis, then saves before installing a candidate or finishing teardown.
+8. Identity-valid finite completion and continuous progress/final analysis attach to the exact SGF node. Ordinary Save / Save As persists the invocation-time document while analysis continues. Confirmed-departure Save during replacement or exit first seals/stops document analysis, then saves before installing a candidate or finishing teardown.
 9. Launch calls `inspect_current_game_recovery`. Restore / Discard apply or drop the envelope through the recovery commands. Restoring a game does not resume a Foreground Engine Run or Analysis Job.
 10. File Exit and window close call `prepare_application_exit` / `resolve_application_exit`.
 11. The UI renders board state, winrate, candidates, PVs, ownership, policy, and problem markers from DTOs.

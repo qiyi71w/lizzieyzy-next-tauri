@@ -198,12 +198,15 @@ fn query(max_visits: u32) -> AnalysisQuery {
         max_visits: Some(max_visits),
         include_ownership: Some(true),
         include_policy: Some(true),
+        report_during_search_every: None,
+        override_settings: None,
     }
 }
 
 fn selected_request(run_id: &str, generation: u64, max_visits: u32) -> SelectedNodeJobRequest {
     SelectedNodeJobRequest {
         run_id: run_id.into(),
+        mode: app_model::AnalysisJobModeDto::Finite,
         generation,
         node_path: app_model::NodePath { indices: vec![] },
         query: query(max_visits),

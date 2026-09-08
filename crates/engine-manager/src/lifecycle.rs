@@ -5,9 +5,10 @@ use crate::{
     spawn_stdout_lines_reader, write_jsonl, AnalysisCancelToken,
 };
 use app_model::{
-    AnalysisJobLaneDto, AnalysisJobOutcomeDto, AnalysisJobStartedDto, EngineBackend,
-    EngineCapabilitySnapshotDto, EngineFailureDto, EngineFailureKind, EngineOperationDto, EngineRunDto,
-    ForegroundEngineEventDto, ForegroundEngineLifecycleDto, ForegroundEngineSnapshotDto, NodePath,
+    AnalysisJobLaneDto, AnalysisJobModeDto, AnalysisJobOutcomeDto, AnalysisJobStartedDto,
+    AnalysisJobStateDto, EngineBackend, EngineCapabilitySnapshotDto, EngineFailureDto, EngineFailureKind,
+    EngineOperationDto, EngineRunDto, ForegroundEngineEventDto, ForegroundEngineLifecycleDto,
+    ForegroundEngineSnapshotDto, NodePath,
 };
 use katago_protocol::{normalize_response, parse_response_line, AnalysisQuery};
 use std::io;
@@ -66,10 +67,12 @@ enum JobDisposition {
     Running,
     Superseded,
     Cancelled,
+    TimedOut,
 }
 
 pub struct SelectedNodeJobRequest {
     pub run_id: String,
+    pub mode: AnalysisJobModeDto,
     pub generation: u64,
     pub node_path: NodePath,
     pub query: AnalysisQuery,
@@ -92,7 +95,6 @@ pub struct WholeGameJobRequest {
 
 struct WholeGameAdvance {
     started: AnalysisJobStartedDto,
-    item_index: usize,
     jsonl: String,
 }
 
@@ -100,6 +102,11 @@ struct RegisteredJob {
     job_id: String,
     run_id: String,
     lane: AnalysisJobLane,
+    mode: AnalysisJobModeDto,
+    state: AnalysisJobStateDto,
+    cancel_deadline: Option<Instant>,
+    cleanup_deadline: Option<Instant>,
+    submitted_at: Instant,
     generation: u64,
     node_path: NodePath,
     board_size: u8,
@@ -147,6 +154,7 @@ struct ManagerState {
     live: Option<LiveEngine>,
     candidate: Option<LiveEngine>,
     switch_seq: u64,
+    last_activity: Instant,
     jobs: Vec<RegisteredJob>,
     subscribers: Vec<Sender<ForegroundEngineEventDto>>,
 }
@@ -177,6 +185,7 @@ impl ForegroundEngineManager {
                     candidate: None,
                     switch_seq: 0,
                     jobs: Vec::new(),
+                    last_activity: Instant::now(),
                     subscribers: Vec::new(),
                 }),
             }),
@@ -270,8 +279,9 @@ impl ForegroundEngineManager {
         };
         let inner = self.inner.clone();
         thread::spawn(move || {
-            inner.terminate_live(operation);
-            inner.force_no_engine(operation);
+            if inner.terminate_live(operation).is_ok() {
+                inner.force_no_engine(operation);
+            }
         });
         Ok(())
     }
@@ -280,7 +290,7 @@ impl ForegroundEngineManager {
         let Some(operation) = self.begin_stop(EngineOperationDto::Teardown)? else {
             return Ok(());
         };
-        self.inner.terminate_live(operation);
+        self.inner.terminate_live(operation)?;
         self.inner.force_no_engine(operation);
         Ok(())
     }
@@ -310,7 +320,9 @@ impl ForegroundEngineManager {
         };
         let manager = self.clone();
         thread::spawn(move || {
-            manager.inner.terminate_live(operation);
+            if manager.inner.terminate_live(operation).is_err() {
+                return;
+            }
             if manager.inner.current_operation() != operation {
                 return;
             }
@@ -410,6 +422,11 @@ impl ForegroundEngineManager {
             run_id: run_id.to_string(),
             lane,
             generation: 0,
+            mode: AnalysisJobModeDto::Finite,
+            state: AnalysisJobStateDto::Queued,
+            cancel_deadline: None,
+            cleanup_deadline: None,
+            submitted_at: Instant::now(),
             node_path: NodePath { indices: Vec::new() },
             board_size: 19,
             cancel,
@@ -457,13 +474,55 @@ impl ForegroundEngineManager {
                     None,
                 ));
             }
-            supersede_selected_node_jobs(&mut state, &request.run_id);
+            if let Some(old) = state
+                .jobs
+                .iter()
+                .find(|job| {
+                    job.run_id == request.run_id && job.lane == AnalysisJobLane::SelectedNode && !job.terminal
+                })
+                .map(started_from)
+            {
+                if old.state == AnalysisJobStateDto::Stopping {
+                    return Err(failure(
+                        EngineOperationDto::Job,
+                        EngineFailureKind::Occupied,
+                        "selected-node cancellation is still pending".into(),
+                        Some(&request.run_id),
+                        None,
+                        None,
+                    ));
+                }
+                drop(state);
+                self.request_job_stop(&old.run_id, &old.job_id, JobDisposition::Superseded)?;
+                self.wait_for_job_cancellation(&old.run_id, &old.job_id, Duration::from_secs(5))?;
+                state = self.lock();
+                if admitting_run(&state.phase, &request.run_id).is_none() {
+                    return Err(failure(
+                        EngineOperationDto::Job,
+                        EngineFailureKind::InvalidState,
+                        "Run changed during selected-node admission".into(),
+                        Some(&request.run_id),
+                        None,
+                        None,
+                    ));
+                }
+            }
+            state
+                .jobs
+                .retain(|job| !(job.lane == AnalysisJobLane::SelectedNode && job.terminal));
+            if request.mode == AnalysisJobModeDto::Continuous {
+                request.query.continuous();
+            } else {
+                request.query.report_during_search_every = Some(0.1);
+            }
             let job_id = Uuid::new_v4().to_string();
             request.query.id = job_id.clone();
             let started = AnalysisJobStartedDto {
                 run_id: request.run_id.clone(),
                 job_id: job_id.clone(),
                 lane: AnalysisJobLaneDto::SelectedNode,
+                mode: request.mode,
+                state: AnalysisJobStateDto::Queued,
                 generation: request.generation,
                 node_path: request.node_path.clone(),
             };
@@ -471,6 +530,11 @@ impl ForegroundEngineManager {
                 job_id: job_id.clone(),
                 run_id: request.run_id.clone(),
                 lane: AnalysisJobLane::SelectedNode,
+                mode: request.mode,
+                state: AnalysisJobStateDto::Queued,
+                cancel_deadline: None,
+                cleanup_deadline: None,
+                submitted_at: Instant::now(),
                 generation: request.generation,
                 node_path: request.node_path.clone(),
                 board_size: request.board_size,
@@ -504,13 +568,6 @@ impl ForegroundEngineManager {
             self.abandon_job(&started.run_id, &started.job_id, published.clone());
             return Err(published);
         }
-        let inner = self.inner.clone();
-        let timed = started.clone();
-        let timeout = self.inner.config.job_timeout;
-        thread::spawn(move || {
-            thread::sleep(timeout);
-            inner.timeout_selected_node_job(&timed);
-        });
         Ok(started)
     }
 
@@ -578,6 +635,8 @@ impl ForegroundEngineManager {
                 run_id: request.run_id.clone(),
                 job_id: job_id.clone(),
                 lane: AnalysisJobLaneDto::WholeGame,
+                mode: AnalysisJobModeDto::Finite,
+                state: AnalysisJobStateDto::Queued,
                 generation: request.generation,
                 node_path: first.node_path.clone(),
             };
@@ -586,6 +645,11 @@ impl ForegroundEngineManager {
                 job_id: job_id.clone(),
                 run_id: request.run_id.clone(),
                 lane: AnalysisJobLane::WholeGame,
+                mode: AnalysisJobModeDto::Finite,
+                state: AnalysisJobStateDto::Queued,
+                cancel_deadline: None,
+                cleanup_deadline: None,
+                submitted_at: Instant::now(),
                 generation: request.generation,
                 node_path: first.node_path.clone(),
                 board_size: first.board_size,
@@ -617,78 +681,121 @@ impl ForegroundEngineManager {
             self.abandon_job(&started.run_id, &started.job_id, published.clone());
             return Err(published);
         }
-        self.arm_job_timeout(started.clone(), 0);
         Ok(started)
     }
 
-    fn arm_job_timeout(&self, started: AnalysisJobStartedDto, item_index: usize) {
-        let inner = self.inner.clone();
-        let timeout = self.inner.config.job_timeout;
-        thread::spawn(move || {
-            thread::sleep(timeout);
-            inner.timeout_analysis_item(&started, item_index);
-        });
+    pub fn wait_for_job_cancellation(
+        &self,
+        run_id: &str,
+        job_id: &str,
+        budget: Duration,
+    ) -> Result<(), EngineFailureDto> {
+        let deadline = Instant::now() + budget.min(Duration::from_secs(5));
+        {
+            let mut state = self.lock();
+            if let Some(job) = state
+                .jobs
+                .iter_mut()
+                .find(|job| job.run_id == run_id && job.job_id == job_id)
+            {
+                let cleanup_deadline = Instant::now() + budget;
+                job.cleanup_deadline = Some(
+                    job.cleanup_deadline
+                        .map_or(cleanup_deadline, |old| old.min(cleanup_deadline)),
+                );
+                if let Some(old) = job.cancel_deadline {
+                    job.cancel_deadline = Some(old.min(deadline));
+                }
+            }
+        }
+        loop {
+            {
+                let state = self.lock();
+                if let Phase::Error { failure, .. } = &state.phase {
+                    return Err(failure.clone());
+                }
+                if !state
+                    .jobs
+                    .iter()
+                    .any(|job| job.run_id == run_id && job.job_id == job_id && !job.terminal)
+                {
+                    return Ok(());
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(self.inner.fail_unresponsive_run(
+                    run_id,
+                    "target cancellation did not finish within its deadline",
+                ));
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     pub fn cancel_job(&self, run_id: &str, job_id: &str) -> Result<(), EngineFailureDto> {
-        let (started, counts) = {
+        self.request_job_stop(run_id, job_id, JobDisposition::Cancelled)
+    }
+
+    fn request_job_stop(
+        &self,
+        run_id: &str,
+        job_id: &str,
+        disposition: JobDisposition,
+    ) -> Result<(), EngineFailureDto> {
+        {
             let mut state = self.lock();
             let Some(job) = state
                 .jobs
                 .iter_mut()
-                .find(|job| job.job_id == job_id && job.run_id == run_id)
+                .find(|job| job.job_id == job_id && job.run_id == run_id && !job.terminal)
             else {
                 return Err(failure(
                     EngineOperationDto::Job,
                     EngineFailureKind::InvalidState,
-                    format!("analysis job not found: {job_id}"),
+                    "cancel requires a non-terminal job on this Run".into(),
                     Some(run_id),
                     None,
                     None,
                 )
                 .with_job_id(job_id));
             };
-            if job.disposition != JobDisposition::Running || job.terminal {
-                return Err(failure(
-                    EngineOperationDto::Job,
-                    EngineFailureKind::InvalidState,
-                    "cancel requires the current run identity and a non-terminal job".into(),
-                    Some(run_id),
+            if job.state == AnalysisJobStateDto::Stopping {
+                return Ok(());
+            }
+            job.cancel.cancel();
+            job.disposition = disposition;
+            job.state = AnalysisJobStateDto::Stopping;
+            job.cancel_deadline = Some(Instant::now() + Duration::from_secs(5));
+            let started = started_from(job);
+            let counts = whole_game_progress_counts(job);
+            let event = if job.lane == AnalysisJobLane::SelectedNode {
+                selected_node_job_event(&started, AnalysisJobOutcomeDto::Stopping, None, None)
+            } else {
+                whole_game_job_event(
+                    &started,
+                    AnalysisJobOutcomeDto::Stopping,
+                    started.node_path.clone(),
+                    counts.0,
+                    counts.1,
+                    counts.2,
                     None,
                     None,
                 )
-                .with_job_id(job_id));
-            }
-            let started = started_from(job);
-            let counts = (job.lane == AnalysisJobLane::WholeGame).then(|| whole_game_progress_counts(job));
-            job.cancel.cancel();
-            if job.lane == AnalysisJobLane::SelectedNode {
-                job.disposition = JobDisposition::Cancelled;
-            }
-            mark_job_cancelled(job);
-            (started, counts)
-        };
-        self.write_terminate(run_id, job_id);
-        let mut state = self.lock();
-        if let Some((completed, expected, remaining)) = counts {
-            finish_whole_game_job(
-                &mut state,
-                &started,
-                AnalysisJobOutcomeDto::Cancelled,
-                completed,
-                expected,
-                remaining,
-                None,
-            );
-        } else {
-            finish_selected_node_job(
-                &mut state,
-                &started,
-                Some(AnalysisJobOutcomeDto::Cancelled),
-                None,
-                None,
-            );
+            };
+            publish_event(&mut state, ForegroundEngineEventDto::Job { job: event });
+            publish_snapshot(&mut state);
         }
+        let manager = self.clone();
+        let run_id = run_id.to_string();
+        let job_id = job_id.to_string();
+        thread::spawn(move || {
+            let jsonl = katago_protocol::terminate_action_jsonl(&Uuid::new_v4().to_string(), &job_id);
+            if manager.write_live_jsonl(&run_id, &jsonl).is_err() {
+                manager
+                    .inner
+                    .fail_unresponsive_run(&run_id, "target cancellation could not be delivered");
+            }
+        });
         Ok(())
     }
 
@@ -783,22 +890,6 @@ impl ForegroundEngineManager {
                 None,
             )
         })
-    }
-
-    fn write_terminate(&self, run_id: &str, job_id: &str) {
-        let stdin = {
-            let state = self.lock();
-            let Some(stdin) = engine_stdin(&state, run_id) else {
-                return;
-            };
-            stdin
-        };
-        if let Ok(mut guard) = stdin.lock() {
-            if let Some(stdin) = guard.as_mut() {
-                let payload = format!(r#"{{"id":"{job_id}","action":"terminate"}}"#);
-                let _ = write_jsonl(stdin, &payload);
-            }
-        };
     }
 
     pub fn assert_profile_deletable(&self, profile_id: &str) -> Result<(), EngineFailureDto> {
@@ -973,6 +1064,8 @@ impl Inner {
             max_visits: Some(2),
             include_ownership: None,
             include_policy: None,
+            report_during_search_every: None,
+            override_settings: None,
         };
         let query_jsonl = query.to_jsonl().map_err(|error| {
             failure(
@@ -1303,20 +1396,53 @@ impl Inner {
         );
     }
 
-    fn terminate_live(&self, operation: u64) {
+    fn terminate_live(&self, operation: u64) -> Result<(), EngineFailureDto> {
         thread::sleep(self.config.stop_drain_timeout);
         let mut state = self.lock();
         if state.operation != operation {
-            return;
+            return Ok(());
         }
-        if let Some(mut live) = state.live.take() {
-            close_live_stdin(&live);
-            let _ = kill_timed_out_child(&mut live.child);
+        let deadline = Instant::now() + self.config.stop_drain_timeout;
+        let mut cleanup_error = None;
+        let ManagerState { live, candidate, .. } = &mut *state;
+        for slot in [live, candidate] {
+            if let Some(process) = slot.as_mut() {
+                match terminate_process(process, deadline) {
+                    Ok(()) => {
+                        *slot = None;
+                    }
+                    Err(error) => {
+                        cleanup_error = Some(error.to_string());
+                    }
+                }
+            }
         }
-        if let Some(mut live) = state.candidate.take() {
-            close_live_stdin(&live);
-            let _ = kill_timed_out_child(&mut live.child);
+        if let Some(error) = cleanup_error {
+            if let Phase::Stopping(run) = &state.phase {
+                let run = run.clone();
+                let published = failure(
+                    EngineOperationDto::Teardown,
+                    EngineFailureKind::Timeout,
+                    format!("engine process cleanup failed: {error}"),
+                    Some(&run.run_id),
+                    None,
+                    None,
+                );
+                state.phase = Phase::Error {
+                    run,
+                    failure: published.clone(),
+                };
+                publish_snapshot(&mut state);
+                publish_event(
+                    &mut state,
+                    ForegroundEngineEventDto::Failure {
+                        failure: published.clone(),
+                    },
+                );
+                return Err(published);
+            }
         }
+        Ok(())
     }
 
     fn force_no_engine(&self, operation: u64) {
@@ -1324,9 +1450,8 @@ impl Inner {
         if state.operation != operation {
             return;
         }
-        if let Some(mut live) = state.candidate.take() {
-            close_live_stdin(&live);
-            let _ = kill_timed_out_child(&mut live.child);
+        if state.live.is_some() || state.candidate.is_some() {
+            return;
         }
         state.jobs.clear();
         state.phase = Phase::NoEngine { failure: None };
@@ -1433,6 +1558,7 @@ impl Inner {
         stdout_rx: Receiver<io::Result<Option<String>>>,
     ) {
         loop {
+            self.check_job_deadlines(&run_id);
             let owned = {
                 let state = self.lock();
                 state.live.as_ref().is_some_and(|live| live.run_id == run_id)
@@ -1447,75 +1573,173 @@ impl Inner {
                         self.advance_whole_game(pending);
                     }
                 }
-                Ok(Ok(None)) | Ok(Err(_)) => return,
+                Ok(Ok(None)) | Ok(Err(_)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    thread::sleep(Duration::from_millis(50))
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                Err(mpsc::RecvTimeoutError::Disconnected) => return,
             }
         }
     }
 
     fn route_stdout_line(&self, run_id: &str, line: String) -> Option<WholeGameAdvance> {
         let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
         let response_id = extract_response_id(trimmed)?;
         let mut state = self.lock();
-        let selected = state.jobs.iter().find(|job| {
-            job.job_id == response_id
-                && job.run_id == run_id
-                && !job.terminal
-                && job.lane == AnalysisJobLane::SelectedNode
-        });
-        if let Some(job) = selected {
-            if job.disposition != JobDisposition::Running {
+        let index = state
+            .jobs
+            .iter()
+            .position(|job| job.job_id == response_id && job.run_id == run_id && !job.terminal)?;
+        let started = started_from(&state.jobs[index]);
+        let response = match parse_response_line(trimmed) {
+            Ok(response) => response,
+            Err(error) => {
+                if started.state == AnalysisJobStateDto::Stopping {
+                    return None;
+                }
+                let published = failure(
+                    EngineOperationDto::Job,
+                    EngineFailureKind::Protocol,
+                    format!("analysis response was not parseable: {error}"),
+                    Some(run_id),
+                    None,
+                    None,
+                )
+                .with_job_id(&started.job_id);
+                if started.mode == AnalysisJobModeDto::Continuous {
+                    drop(state);
+                    self.fail_unresponsive_run(run_id, &published.message);
+                    return None;
+                }
+                finish_failed_job(&mut state, &started, published);
                 return None;
             }
-            let started = AnalysisJobStartedDto {
-                run_id: job.run_id.clone(),
-                job_id: job.job_id.clone(),
-                lane: job.lane,
-                generation: job.generation,
-                node_path: job.node_path.clone(),
-            };
-            let board_size = job.board_size;
-            match parse_response_line(trimmed) {
-                Ok(response) if response.id == started.job_id => {
-                    let job_uuid = Uuid::parse_str(&started.job_id).unwrap_or_else(|_| Uuid::nil());
-                    let frame = normalize_response(job_uuid, response, board_size);
-                    finish_selected_node_job(
-                        &mut state,
-                        &started,
-                        Some(AnalysisJobOutcomeDto::Completed),
-                        Some(frame),
-                        None,
-                    );
+        };
+        if response.action.is_some() {
+            return None;
+        }
+        if started.state == AnalysisJobStateDto::Stopping {
+            if response.is_during_search == Some(false) {
+                let outcome = match state.jobs[index].disposition {
+                    JobDisposition::Superseded => AnalysisJobOutcomeDto::Superseded,
+                    JobDisposition::TimedOut => AnalysisJobOutcomeDto::Timeout,
+                    _ => AnalysisJobOutcomeDto::Cancelled,
+                };
+                let counts = whole_game_progress_counts(&state.jobs[index]);
+                if started.lane == AnalysisJobLane::SelectedNode {
+                    finish_selected_node_job(&mut state, &started, Some(outcome), None, None);
+                } else {
+                    finish_whole_game_job(&mut state, &started, outcome, counts.0, counts.1, counts.2, None);
                 }
-                Ok(_) => {}
-                Err(error) if trimmed.contains(&started.job_id) => {
-                    finish_selected_node_job(
-                        &mut state,
-                        &started,
-                        Some(AnalysisJobOutcomeDto::Failed),
-                        None,
-                        Some(
-                            failure(
-                                EngineOperationDto::Job,
-                                EngineFailureKind::Protocol,
-                                format!("selected-node response was not parseable: {error}"),
-                                Some(started.run_id.as_str()),
-                                None,
-                                None,
-                            )
-                            .with_job_id(&started.job_id),
-                        ),
-                    );
-                }
-                Err(_) => {}
+                state.last_activity = Instant::now();
+                publish_snapshot(&mut state);
             }
             return None;
         }
-        self.route_whole_game_line(&mut state, run_id, response_id, trimmed)
+        if let Some(warning) = response.warning.as_ref() {
+            if started.mode == AnalysisJobModeDto::Continuous
+                && [
+                    "reportDuringSearchEvery",
+                    "overrideSettings",
+                    "maxTime",
+                    "maxVisits",
+                    "maxPlayouts",
+                ]
+                .iter()
+                .any(|field| {
+                    response
+                        .field
+                        .as_deref()
+                        .is_some_and(|value| value.contains(field))
+                        || warning.contains(field)
+                })
+            {
+                let published = failure(
+                    EngineOperationDto::Job,
+                    EngineFailureKind::Protocol,
+                    format!("required continuous analysis setting was ignored: {warning}"),
+                    Some(run_id),
+                    None,
+                    None,
+                )
+                .with_job_id(&started.job_id);
+                drop(state);
+                self.fail_unresponsive_run(run_id, &published.message);
+            }
+            return None;
+        }
+        if started.lane == AnalysisJobLane::WholeGame {
+            return self.route_whole_game_line(&mut state, run_id, response_id, trimmed);
+        }
+        let during = response.is_during_search == Some(true);
+        let has_data = response.root_info.as_ref().is_some_and(|root| root.visits > 0)
+            && !response.move_infos.is_empty()
+            && !response.no_results;
+        if started.mode == AnalysisJobModeDto::Continuous && has_data && response.is_during_search.is_none() {
+            drop(state);
+            self.fail_unresponsive_run(
+                run_id,
+                "continuous response omitted the required search-progress marker",
+            );
+            return None;
+        }
+        if started.mode == AnalysisJobModeDto::Continuous {
+            if has_data && !response.has_valid_analysis(state.jobs[index].board_size) {
+                drop(state);
+                self.fail_unresponsive_run(
+                    run_id,
+                    "continuous response contained invalid analysis values or geometry",
+                );
+                return None;
+            }
+            if !during && !has_data {
+                let published = failure(
+                    EngineOperationDto::Job,
+                    EngineFailureKind::Protocol,
+                    "continuous search ended without valid analysis".into(),
+                    Some(run_id),
+                    None,
+                    None,
+                )
+                .with_job_id(&started.job_id);
+                finish_failed_job(&mut state, &started, published);
+                publish_snapshot(&mut state);
+                return None;
+            }
+        }
+        if during && !has_data {
+            return None;
+        }
+        let frame = has_data.then(|| {
+            normalize_response(
+                Uuid::parse_str(&started.job_id).expect("manager job UUID"),
+                response,
+                state.jobs[index].board_size,
+            )
+        });
+        if has_data {
+            state.last_activity = Instant::now();
+            state.jobs[index].state = AnalysisJobStateDto::Searching;
+        }
+        if during {
+            if started.mode == AnalysisJobModeDto::Continuous {
+                publish_event(
+                    &mut state,
+                    ForegroundEngineEventDto::Job {
+                        job: selected_node_job_event(&started, AnalysisJobOutcomeDto::Progress, frame, None),
+                    },
+                );
+            }
+            publish_snapshot(&mut state);
+        } else {
+            let outcome = if started.mode == AnalysisJobModeDto::Continuous {
+                AnalysisJobOutcomeDto::TimeLimited
+            } else {
+                AnalysisJobOutcomeDto::Completed
+            };
+            finish_selected_node_job(&mut state, &started, Some(outcome), frame, None);
+            publish_snapshot(&mut state);
+        }
+        None
     }
 
     fn route_whole_game_line(
@@ -1538,6 +1762,20 @@ impl Inner {
         let expected = state.jobs[job_index].expected?;
         match parse_response_line(trimmed) {
             Ok(response) if response.id == started.job_id => {
+                if response.action.is_some() || response.warning.is_some() {
+                    return None;
+                }
+                let has_data = response.root_info.as_ref().is_some_and(|root| root.visits > 0)
+                    && !response.move_infos.is_empty()
+                    && !response.no_results;
+                if has_data {
+                    state.last_activity = Instant::now();
+                    state.jobs[job_index].state = AnalysisJobStateDto::Searching;
+                }
+                if response.is_during_search == Some(true) {
+                    publish_snapshot(state);
+                    return None;
+                }
                 let job_uuid = Uuid::parse_str(&started.job_id).unwrap_or_else(|_| Uuid::nil());
                 let mut frame = normalize_response(job_uuid, response, item.board_size);
                 frame.turn = item.move_number;
@@ -1554,7 +1792,7 @@ impl Inner {
                             Some(completed),
                             Some(expected),
                             Some(remaining),
-                            Some(frame),
+                            has_data.then_some(frame),
                             None,
                         ),
                     },
@@ -1588,11 +1826,9 @@ impl Inner {
                     }
                 };
                 state.jobs[job_index].node_path = next.node_path;
-                Some(WholeGameAdvance {
-                    started,
-                    item_index: completed,
-                    jsonl,
-                })
+                state.jobs[job_index].state = AnalysisJobStateDto::Queued;
+                state.jobs[job_index].submitted_at = Instant::now();
+                Some(WholeGameAdvance { started, jsonl })
             }
             Ok(_) => None,
             Err(error) if trimmed.contains(&started.job_id) => {
@@ -1629,75 +1865,108 @@ impl Inner {
         };
         if let Err(published) = manager.write_live_jsonl(&pending.started.run_id, &pending.jsonl) {
             manager.abandon_job(&pending.started.run_id, &pending.started.job_id, published);
-            return;
         }
-        manager.arm_job_timeout(pending.started, pending.item_index);
     }
 
-    fn timeout_selected_node_job(&self, started: &AnalysisJobStartedDto) {
-        let mut state = self.lock();
-        if admitting_run(&state.phase, &started.run_id).is_none() {
+    fn check_job_deadlines(self: &Arc<Self>, run_id: &str) {
+        let state = self.lock();
+        if admitting_run(&state.phase, run_id).is_none() {
             return;
         }
-        {
-            let Some(job) = state.jobs.iter_mut().find(|job| {
-                job.job_id == started.job_id
-                    && job.run_id == started.run_id
-                    && job.disposition == JobDisposition::Running
+        let now = Instant::now();
+        let expired_cancel = state.jobs.iter().any(|job| {
+            job.run_id == run_id
+                && !job.terminal
+                && job.cancel_deadline.is_some_and(|deadline| now >= deadline)
+        });
+        let expired_activity: Vec<_> = state
+            .jobs
+            .iter()
+            .filter(|job| {
+                job.run_id == run_id
                     && !job.terminal
-            }) else {
-                return;
+                    && job.state != AnalysisJobStateDto::Stopping
+                    && now.duration_since(state.last_activity.max(job.submitted_at))
+                        >= self.config.job_timeout
+            })
+            .map(started_from)
+            .collect();
+        drop(state);
+        if expired_cancel {
+            self.fail_unresponsive_run(run_id, "target cancellation timed out without a final response");
+        } else {
+            let manager = ForegroundEngineManager {
+                inner: Arc::clone(self),
             };
-            job.disposition = JobDisposition::Cancelled;
-            job.cancel.cancel();
-            mark_job_cancelled(job);
+            for job in expired_activity {
+                let _ = manager.request_job_stop(&job.run_id, &job.job_id, JobDisposition::TimedOut);
+            }
         }
-        if let Some(live) = state.live.as_ref() {
-            write_terminate_to_live(live, &started.job_id);
+    }
+
+    fn fail_unresponsive_run(&self, run_id: &str, message: &str) -> EngineFailureDto {
+        let mut state = self.lock();
+        if let Phase::Error { failure, .. } = &state.phase {
+            return failure.clone();
         }
-        finish_selected_node_job(
-            &mut state,
-            started,
-            Some(AnalysisJobOutcomeDto::Timeout),
+        let mut published = failure(
+            EngineOperationDto::Job,
+            EngineFailureKind::Timeout,
+            message.into(),
+            Some(run_id),
             None,
             None,
         );
-    }
-
-    fn timeout_analysis_item(&self, started: &AnalysisJobStartedDto, item_index: usize) {
-        let mut state = self.lock();
-        if admitting_run(&state.phase, &started.run_id).is_none() {
-            return;
-        }
-        let counts = {
-            let Some(job) = state.jobs.iter_mut().find(|job| {
-                job.job_id == started.job_id
-                    && job.run_id == started.run_id
-                    && job.lane == AnalysisJobLane::WholeGame
-                    && job.disposition == JobDisposition::Running
-                    && !job.terminal
-                    && job.current_index == item_index
-            }) else {
-                return;
-            };
-            job.disposition = JobDisposition::Cancelled;
-            job.cancel.cancel();
-            let counts = whole_game_progress_counts(job);
-            mark_job_cancelled(job);
-            counts
+        let Some(run) = admitting_run(&state.phase, run_id) else {
+            return published;
         };
-        if let Some(live) = state.live.as_ref() {
-            write_terminate_to_live(live, &started.job_id);
+        state.operation += 1;
+        let deadline = state
+            .jobs
+            .iter()
+            .filter(|job| job.run_id == run_id)
+            .filter_map(|job| job.cleanup_deadline)
+            .fold(Instant::now() + self.config.stop_drain_timeout, Instant::min);
+        let jobs: Vec<_> = state
+            .jobs
+            .iter()
+            .filter(|job| job.run_id == run_id && !job.terminal)
+            .map(started_from)
+            .collect();
+        for started in jobs {
+            finish_failed_job(
+                &mut state,
+                &started,
+                published.clone().with_job_id(&started.job_id),
+            );
         }
-        finish_whole_game_job(
+        let ManagerState { live, candidate, .. } = &mut *state;
+        for slot in [live, candidate] {
+            if let Some(live) = slot.as_mut() {
+                match terminate_process(live, deadline) {
+                    Ok(()) => {
+                        *slot = None;
+                    }
+                    Err(error) => {
+                        published
+                            .message
+                            .push_str(&format!("; process cleanup failed: {error}"));
+                    }
+                }
+            }
+        }
+        state.phase = Phase::Error {
+            run,
+            failure: published.clone(),
+        };
+        publish_snapshot(&mut state);
+        publish_event(
             &mut state,
-            started,
-            AnalysisJobOutcomeDto::Timeout,
-            counts.0,
-            counts.1,
-            counts.2,
-            None,
+            ForegroundEngineEventDto::Failure {
+                failure: published.clone(),
+            },
         );
+        published
     }
 }
 
@@ -1809,43 +2078,6 @@ fn mark_job_cancelled(job: &mut RegisteredJob) {
     }
 }
 
-fn supersede_selected_node_jobs(state: &mut ManagerState, run_id: &str) {
-    let mut events = Vec::new();
-    let mut terminate = Vec::new();
-    for job in &mut state.jobs {
-        if job.run_id == run_id
-            && job.lane == AnalysisJobLane::SelectedNode
-            && job.disposition == JobDisposition::Running
-            && !job.terminal
-        {
-            job.disposition = JobDisposition::Superseded;
-            job.cancel.cancel();
-            mark_job_cancelled(job);
-            terminate.push(job.job_id.clone());
-            events.push(selected_node_job_event(
-                &AnalysisJobStartedDto {
-                    run_id: job.run_id.clone(),
-                    job_id: job.job_id.clone(),
-                    lane: job.lane,
-                    generation: job.generation,
-                    node_path: job.node_path.clone(),
-                },
-                AnalysisJobOutcomeDto::Superseded,
-                None,
-                None,
-            ));
-        }
-    }
-    if let Some(live) = state.live.as_ref() {
-        for job_id in terminate {
-            write_terminate_to_live(live, &job_id);
-        }
-    }
-    for event in events {
-        publish_event(state, ForegroundEngineEventDto::Job { job: event });
-    }
-}
-
 fn selected_node_job_event(
     started: &AnalysisJobStartedDto,
     outcome: AnalysisJobOutcomeDto,
@@ -1856,6 +2088,7 @@ fn selected_node_job_event(
         run_id: started.run_id.clone(),
         job_id: started.job_id.clone(),
         lane: started.lane,
+        mode: started.mode,
         generation: started.generation,
         node_path: started.node_path.clone(),
         outcome,
@@ -1864,6 +2097,7 @@ fn selected_node_job_event(
         remaining: None,
         frame,
         failure,
+        current_game: None,
     }
 }
 
@@ -1889,6 +2123,7 @@ fn whole_game_job_event(
         run_id: started.run_id.clone(),
         job_id: started.job_id.clone(),
         lane: started.lane,
+        mode: started.mode,
         generation: started.generation,
         node_path,
         outcome,
@@ -1897,12 +2132,14 @@ fn whole_game_job_event(
         remaining,
         frame,
         failure,
+        current_game: None,
     }
 }
 
 fn bound_work_item_query(item: &WholeGameWorkItem, job_id: &str) -> Result<String, EngineFailureDto> {
     let mut query = item.query.clone();
     query.id = job_id.to_string();
+    query.report_during_search_every = Some(0.1);
     query.to_jsonl().map_err(|error| {
         failure(
             EngineOperationDto::Job,
@@ -1963,6 +2200,8 @@ fn started_from(job: &RegisteredJob) -> AnalysisJobStartedDto {
         run_id: job.run_id.clone(),
         job_id: job.job_id.clone(),
         lane: job.lane,
+        mode: job.mode,
+        state: job.state,
         generation: job.generation,
         node_path: job.node_path.clone(),
     }
@@ -1973,7 +2212,7 @@ fn current_non_terminal_job(state: &ManagerState, lane: AnalysisJobLane) -> Opti
         .jobs
         .iter()
         .rev()
-        .find(|job| job.lane == lane && !job.terminal)
+        .find(|job| job.lane == lane && (!job.terminal || job.state == AnalysisJobStateDto::TimeLimited))
         .map(started_from)
 }
 
@@ -1991,7 +2230,14 @@ fn finish_selected_node_job(
     if !owned {
         return;
     }
-    state.jobs.retain(|job| job.job_id != started.job_id);
+    if outcome == Some(AnalysisJobOutcomeDto::TimeLimited) {
+        if let Some(job) = state.jobs.iter_mut().find(|job| job.job_id == started.job_id) {
+            job.terminal = true;
+            job.state = AnalysisJobStateDto::TimeLimited;
+        }
+    } else {
+        state.jobs.retain(|job| job.job_id != started.job_id);
+    }
     let Some(outcome) = outcome else {
         return;
     };
@@ -2034,9 +2280,62 @@ fn close_live_stdin(live: &LiveEngine) {
 fn write_terminate_to_live(live: &LiveEngine, job_id: &str) {
     if let Ok(mut guard) = live.stdin.lock() {
         if let Some(stdin) = guard.as_mut() {
-            let payload = format!(r#"{{"id":"{job_id}","action":"terminate"}}"#);
+            let payload = katago_protocol::terminate_action_jsonl(&Uuid::new_v4().to_string(), job_id);
             let _ = write_jsonl(stdin, &payload);
         }
+    }
+}
+
+fn terminate_process(live: &mut LiveEngine, deadline: Instant) -> io::Result<()> {
+    if live.child.try_wait()?.is_some() {
+        return Ok(());
+    }
+    live.child.kill()?;
+    if Instant::now() >= deadline {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "engine cleanup observation budget exhausted",
+        ));
+    }
+    loop {
+        if live.child.try_wait()?.is_some() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "engine process did not exit after kill",
+            ));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn finish_failed_job(state: &mut ManagerState, started: &AnalysisJobStartedDto, published: EngineFailureDto) {
+    if started.lane == AnalysisJobLane::SelectedNode {
+        finish_selected_node_job(
+            state,
+            started,
+            Some(AnalysisJobOutcomeDto::Failed),
+            None,
+            Some(published),
+        );
+    } else {
+        let counts = state
+            .jobs
+            .iter()
+            .find(|job| job.job_id == started.job_id)
+            .map(whole_game_progress_counts)
+            .unwrap_or((None, None, None));
+        finish_whole_game_job(
+            state,
+            started,
+            AnalysisJobOutcomeDto::Failed,
+            counts.0,
+            counts.1,
+            counts.2,
+            Some(published),
+        );
     }
 }
 

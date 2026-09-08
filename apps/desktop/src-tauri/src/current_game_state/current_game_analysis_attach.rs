@@ -1,7 +1,7 @@
 use super::*;
 use app_model::{
-    AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobLaneDto, AnalysisJobOutcomeDto, CandidateMoveDto,
-    CurrentGameErrorKind, MoveVertex, NodePath, PointDto,
+    AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobLaneDto, AnalysisJobModeDto, AnalysisJobOutcomeDto,
+    CandidateMoveDto, CurrentGameErrorKind, MoveVertex, NodePath, PointDto,
 };
 use sgf::SgfAnalysisPayload;
 use std::fs;
@@ -270,6 +270,7 @@ fn job_event(
         run_id: "run-1".into(),
         job_id: "job-1".into(),
         lane,
+        mode: AnalysisJobModeDto::Finite,
         generation,
         node_path: path(indices),
         outcome,
@@ -278,7 +279,25 @@ fn job_event(
         remaining: None,
         frame,
         failure: None,
+        current_game: None,
     }
+}
+
+fn continuous_job_event(
+    outcome: AnalysisJobOutcomeDto,
+    generation: u64,
+    indices: &[u32],
+    frame: Option<AnalysisFrameDto>,
+) -> AnalysisJobEventDto {
+    let mut event = job_event(
+        AnalysisJobLaneDto::SelectedNode,
+        outcome,
+        generation,
+        indices,
+        frame,
+    );
+    event.mode = AnalysisJobModeDto::Continuous;
+    event
 }
 
 #[test]
@@ -353,4 +372,184 @@ fn identity_valid_job_events_attach_and_terminal_failures_do_not() {
         ))
         .is_none());
     assert_eq!(state.inspect(), before);
+}
+
+#[test]
+fn continuous_progress_updates_same_node_and_save_reopens_latest_snapshot() {
+    let state = CurrentGameState::default();
+    let opened = state.replace(BRANCHING, None).unwrap();
+    let selected = opened.selected_path.clone();
+    let personal_comment = opened.snapshot.personal_comment.clone();
+
+    let first = state
+        .attach_from_job_event(&continuous_job_event(
+            AnalysisJobOutcomeDto::Progress,
+            opened.generation,
+            &selected.indices,
+            Some(projectable_frame(100, 3, 3)),
+        ))
+        .unwrap();
+    let mut policy_frame = projectable_frame(250, 4, 4);
+    let mut policy = vec![0.5 / 25.0; 26];
+    policy[0] = 0.5;
+    policy_frame.policy = Some(policy);
+    let second = state
+        .attach_from_job_event(&continuous_job_event(
+            AnalysisJobOutcomeDto::Progress,
+            opened.generation,
+            &selected.indices,
+            Some(policy_frame),
+        ))
+        .unwrap();
+
+    assert_eq!(second.generation, opened.generation);
+    assert!(second.dirty);
+    assert_eq!(first.snapshot.primary_analysis.unwrap().visits, 100);
+    assert_eq!(second.snapshot.primary_analysis.as_ref().unwrap().visits, 250);
+    assert_eq!(
+        second
+            .snapshot
+            .primary_analysis
+            .as_ref()
+            .unwrap()
+            .policy
+            .as_ref()
+            .map(|values| values[0]),
+        Some(0.5)
+    );
+    assert_eq!(second.snapshot.personal_comment, personal_comment);
+    let recovery = state
+        .take_due_recovery_write(u64::MAX)
+        .expect("analysis-only update reaches the bounded recovery writer");
+    let recovered = CurrentGameState::default()
+        .replace(&recovery.sgf_text, None)
+        .unwrap();
+    assert_eq!(recovered.snapshot.primary_analysis.unwrap().visits, 250);
+
+    let save_path = unique_sgf("continuous-reopen");
+    let saved = state
+        .save_to_path(save_path.to_string_lossy().into_owned(), selected.clone())
+        .unwrap();
+    assert!(!saved.dirty);
+    let later = state
+        .attach_from_job_event(&continuous_job_event(
+            AnalysisJobOutcomeDto::Progress,
+            opened.generation,
+            &selected.indices,
+            Some(projectable_frame(375, 5, 5)),
+        ))
+        .unwrap();
+    assert!(later.dirty);
+    assert_eq!(later.generation, saved.generation);
+    assert_eq!(later.snapshot.primary_analysis.unwrap().visits, 375);
+    let reopened = CurrentGameState::default()
+        .replace(&fs::read_to_string(&save_path).unwrap(), None)
+        .unwrap();
+    let _ = fs::remove_file(save_path);
+    assert_eq!(reopened.snapshot.primary_analysis.unwrap().visits, 250);
+    assert_eq!(reopened.snapshot.personal_comment, personal_comment);
+}
+
+#[test]
+fn continuous_attachment_observes_selected_path_and_sealed_job_cutoff() {
+    let state = CurrentGameState::default();
+    let opened = state.replace(BRANCHING, None).unwrap();
+    let selected = opened.selected_path.clone();
+    let mut late = continuous_job_event(
+        AnalysisJobOutcomeDto::Progress,
+        opened.generation,
+        &selected.indices,
+        Some(projectable_frame(100, 3, 3)),
+    );
+    let started = app_model::AnalysisJobStartedDto {
+        run_id: late.run_id.clone(),
+        job_id: late.job_id.clone(),
+        lane: late.lane,
+        mode: late.mode,
+        state: app_model::AnalysisJobStateDto::Searching,
+        generation: late.generation,
+        node_path: late.node_path.clone(),
+    };
+
+    state.seal_job(&started);
+    assert!(state.attach_from_job_event(&late).is_none());
+    let before = state.inspect();
+    late.frame = Some(projectable_frame(200, 4, 4));
+    assert!(state.attach_from_job_event(&late).is_none());
+    assert_eq!(state.inspect(), before);
+
+    let other = if selected.indices.is_empty() {
+        path(&[0])
+    } else {
+        path(&[])
+    };
+    state.select_path(other).unwrap();
+    let fresh = continuous_job_event(
+        AnalysisJobOutcomeDto::Progress,
+        opened.generation,
+        &selected.indices,
+        Some(projectable_frame(300, 5, 5)),
+    );
+    assert!(state.attach_from_job_event(&fresh).is_none());
+}
+
+#[test]
+fn whole_game_attachment_does_not_displace_continuous_selected_node() {
+    let state = CurrentGameState::default();
+    let opened = state.replace(BRANCHING, None).unwrap();
+    state.select_path(path(&[])).unwrap();
+    assert!(state
+        .attach_from_job_event(&continuous_job_event(
+            AnalysisJobOutcomeDto::Progress,
+            opened.generation,
+            &[],
+            Some(projectable_frame(100, 3, 3)),
+        ))
+        .is_some());
+    assert!(state
+        .attach_from_job_event(&job_event(
+            AnalysisJobLaneDto::WholeGame,
+            AnalysisJobOutcomeDto::Progress,
+            opened.generation,
+            &[0],
+            Some(projectable_frame(200, 4, 4)),
+        ))
+        .is_some());
+    assert!(state
+        .attach_from_job_event(&continuous_job_event(
+            AnalysisJobOutcomeDto::Progress,
+            opened.generation,
+            &[],
+            Some(projectable_frame(300, 5, 5)),
+        ))
+        .is_some());
+    assert_eq!(
+        state.take_due_recovery_write(u64::MAX).unwrap().selected_path,
+        path(&[])
+    );
+}
+
+#[test]
+fn existing_child_play_selects_without_dirtying_and_accepts_continuous_progress() {
+    let state = CurrentGameState::default();
+    let opened = state.replace(BRANCHING, None).unwrap();
+    state.select_path(path(&[])).unwrap();
+    let selected = state
+        .play(path(&[]), MoveVertex::Point(PointDto { x: 3, y: 3 }))
+        .unwrap();
+    assert_eq!(selected.selected_path, path(&[0]));
+    assert_eq!(selected.generation, opened.generation);
+    assert!(!selected.dirty);
+    assert_eq!(
+        state.take_due_recovery_write(u64::MAX).unwrap().selected_path,
+        path(&[0])
+    );
+    assert!(state
+        .attach_from_job_event(&continuous_job_event(
+            AnalysisJobOutcomeDto::Progress,
+            selected.generation,
+            &[0],
+            Some(projectable_frame(100, 4, 4)),
+        ))
+        .is_some());
 }

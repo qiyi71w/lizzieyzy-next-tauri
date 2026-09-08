@@ -1,5 +1,5 @@
 use app_model::{
-    AnalysisFrameDto, AnalysisJobStartedDto, AppHealthDto, CurrentGameError,
+    AnalysisFrameDto, AnalysisJobModeDto, AnalysisJobStartedDto, AppHealthDto, CurrentGameError,
     CurrentGameResultDto, EngineBackend, EngineFailureDto, EngineFailureKind, EngineOperationDto,
     EngineProfileDto, ForegroundEngineEventDto, ForegroundEngineSnapshotDto, MoveVertex, NodePath,
     PositionDto, ProviderError, ProviderErrorKind, ProviderFetchMethod, ProviderFetchRequest,
@@ -395,7 +395,6 @@ fn read_sgf_file(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|err| format!("failed to read SGF file {}: {err}", path.display()))
 }
 
-
 #[tauri::command]
 fn serialize_current_game(state: State<CurrentGameState>) -> Result<String, CurrentGameError> {
     state.serialize()
@@ -433,38 +432,66 @@ fn project_current_game_mainline(
     state.mainline_projection()
 }
 
+fn apply_current_game_change(
+    state: &CurrentGameState,
+    manager: &ForegroundEngineManager,
+    change: impl FnOnce() -> Result<CurrentGameResultDto, CurrentGameError>,
+) -> Result<CurrentGameResultDto, String> {
+    let previous_job = manager.snapshot().selected_node_job;
+    let result = change().map_err(|error| error.to_string())?;
+    if let Some(job) = previous_job.filter(|job| {
+        job.mode == AnalysisJobModeDto::Continuous
+            && job.state != app_model::AnalysisJobStateDto::TimeLimited
+            && (job.generation != result.generation || job.node_path != result.selected_path)
+    }) {
+        // The holder's generation/path fences already reject old frames at mutation commit.
+        state.seal_job(&job);
+        if let Err(error) = manager.cancel_job(&job.run_id, &job.job_id) {
+            // A target that finished during the mutation has no remaining cleanup work.
+            if error.kind != EngineFailureKind::InvalidState {
+                return Err(error.message);
+            }
+        }
+    }
+    Ok(result)
+}
+
 #[tauri::command]
 fn select_current_game_node(
     state: State<CurrentGameState>,
+    manager: State<ForegroundEngineManager>,
     path: NodePath,
-) -> Result<CurrentGameResultDto, CurrentGameError> {
-    state.select_path(path)
+) -> Result<CurrentGameResultDto, String> {
+    apply_current_game_change(&state, &manager, || state.select_path(path))
 }
 
 #[tauri::command]
 fn play_current_game(
     state: State<CurrentGameState>,
+    manager: State<ForegroundEngineManager>,
     path: NodePath,
     vertex: MoveVertex,
-) -> Result<CurrentGameResultDto, CurrentGameError> {
-    state.play(path, vertex)
+) -> Result<CurrentGameResultDto, String> {
+    apply_current_game_change(&state, &manager, || state.play(path, vertex))
 }
 
 #[tauri::command]
 fn set_current_game_personal_comment(
     state: State<CurrentGameState>,
+    manager: State<ForegroundEngineManager>,
     path: NodePath,
     comment: String,
-) -> Result<CurrentGameResultDto, CurrentGameError> {
-    state.set_personal_comment(path, comment)
+) -> Result<CurrentGameResultDto, String> {
+    apply_current_game_change(&state, &manager, || state.set_personal_comment(path, comment))
 }
 
 #[tauri::command]
 fn remove_current_game_variation(
     state: State<CurrentGameState>,
+    manager: State<ForegroundEngineManager>,
     path: NodePath,
-) -> Result<CurrentGameResultDto, CurrentGameError> {
-    state.remove_variation(path)
+) -> Result<CurrentGameResultDto, String> {
+    apply_current_game_change(&state, &manager, || state.remove_variation(path))
 }
 
 #[tauri::command]
@@ -578,7 +605,8 @@ fn bind_selected_node_job(
     run_id: String,
     generation: u64,
     node_path: NodePath,
-    max_visits: u32,
+    mode: AnalysisJobModeDto,
+    max_visits: Option<u32>,
 ) -> Result<SelectedNodeJobRequest, EngineFailureDto> {
     let (snapshot, board_size, komi, rules) = current_game
         .admit_selected_node(generation, &node_path)
@@ -601,7 +629,7 @@ fn bind_selected_node_job(
             id: "pending".to_string(),
             rules,
             turn: snapshot.position.move_number,
-            max_visits: Some(max_visits),
+            max_visits,
             include_ownership: Some(true),
             include_policy: Some(true),
         },
@@ -618,6 +646,7 @@ fn bind_selected_node_job(
     })?;
     Ok(SelectedNodeJobRequest {
         run_id,
+        mode,
         generation,
         node_path,
         query,
@@ -639,17 +668,51 @@ fn foreground_engine_start_selected_node(
         run_id,
         generation,
         node_path,
-        max_visits,
+        AnalysisJobModeDto::Finite,
+        Some(max_visits),
     )?)
+}
+
+#[tauri::command]
+fn foreground_engine_start_continuous_node(
+    manager: State<'_, ForegroundEngineManager>,
+    current_game: State<'_, CurrentGameState>,
+    run_id: String,
+    generation: u64,
+    node_path: NodePath,
+) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+    manager.start_selected_node_job(bind_selected_node_job(
+        &current_game,
+        run_id,
+        generation,
+        node_path,
+        AnalysisJobModeDto::Continuous,
+        None,
+    )?)
+}
+
+fn cancel_document_analysis_job(
+    current_game: &CurrentGameState,
+    manager: &ForegroundEngineManager,
+    run_id: &str,
+    job_id: &str,
+) -> Result<(), EngineFailureDto> {
+    for job in document_departure::jobs_from_snapshot(&manager.snapshot()) {
+        if job.run_id == run_id && job.job_id == job_id {
+            current_game.seal_job(&job);
+        }
+    }
+    manager.cancel_job(run_id, job_id)
 }
 
 #[tauri::command]
 fn foreground_engine_cancel_job(
     manager: State<'_, ForegroundEngineManager>,
+    current_game: State<'_, CurrentGameState>,
     run_id: String,
     job_id: String,
 ) -> Result<(), EngineFailureDto> {
-    manager.cancel_job(&run_id, &job_id)
+    cancel_document_analysis_job(&current_game, &manager, &run_id, &job_id)
 }
 
 fn job_failure(run_id: &str, kind: EngineFailureKind, message: String) -> EngineFailureDto {
@@ -721,10 +784,11 @@ fn katago_start_analyze_game(
 #[tauri::command]
 fn katago_cancel_analysis(
     manager: State<'_, ForegroundEngineManager>,
+    current_game: State<'_, CurrentGameState>,
     run_id: String,
     job_id: String,
 ) -> Result<(), EngineFailureDto> {
-    manager.cancel_job(&run_id, &job_id)
+    cancel_document_analysis_job(&current_game, &manager, &run_id, &job_id)
 }
 
 fn ensure_asset_check(checks: &mut Vec<AssetCheck>, path: &Option<String>, label: &str) {
@@ -942,9 +1006,9 @@ pub fn run() {
                         ForegroundEngineEventDto::Failure { failure } => {
                             let _ = emit_handle.emit("foreground-engine://failure", failure);
                         }
-                        ForegroundEngineEventDto::Job { job } => {
+                        ForegroundEngineEventDto::Job { mut job } => {
                             if let Some(state) = emit_handle.try_state::<CurrentGameState>() {
-                                let _ = state.attach_from_job_event(&job);
+                                job.current_game = state.attach_from_job_event(&job);
                             }
                             let _ = emit_handle.emit("foreground-engine://job", job);
                         }
@@ -1005,6 +1069,7 @@ pub fn run() {
             foreground_engine_restart,
             foreground_engine_switch,
             foreground_engine_start_selected_node,
+            foreground_engine_start_continuous_node,
             foreground_engine_cancel_job
         ])
         .build(tauri::generate_context!())
@@ -1032,6 +1097,88 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn rejected_edit_keeps_continuous_job_admitted() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::Arc;
+        use std::time::Duration;
+        let directory = std::env::temp_dir().join(format!("continuous-edit-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let executable = directory.join("engine");
+        std::fs::write(
+            &executable,
+            r##"#!/usr/bin/env python3
+import json, sys
+for line in sys.stdin:
+    q = json.loads(line)
+    if q.get("action") == "terminate":
+        assert "terminateId" in q and q["id"] != q["terminateId"]
+        print(json.dumps(dict(id=q["terminateId"], isDuringSearch=False, noResults=True)), flush=True)
+    else:
+        print(json.dumps(dict(id=q["id"], isDuringSearch=True, turnNumber=0,
+            rootInfo=dict(visits=8, winrate=0.6, scoreMean=2.5),
+            moveInfos=[dict(move="E5", visits=8, winrate=0.6, scoreMean=2.5)])), flush=True)
+"##,
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(directory.join("model"), "").unwrap();
+        std::fs::write(directory.join("config"), "").unwrap();
+        let catalog = Arc::new(engine_manager::InMemoryEngineProfileCatalog::new());
+        catalog.upsert(SavedEngineProfile {
+            profile_id: "test".into(),
+            profile: EngineProfileDto {
+                name: "test".into(),
+                engine_path: executable.to_string_lossy().into(),
+                model_path: Some("model".into()),
+                config_path: Some("config".into()),
+                working_dir: Some(directory.to_string_lossy().into()),
+                backend: EngineBackend::KataGoAnalysis,
+            },
+        });
+        let manager =
+            ForegroundEngineManager::new(catalog, engine_manager::ForegroundEngineConfig::for_tests());
+        let events = manager.subscribe();
+        manager.start("test").unwrap();
+        let run_id = loop {
+            if let ForegroundEngineEventDto::Snapshot { snapshot } =
+                events.recv_timeout(Duration::from_secs(2)).unwrap()
+            {
+                if let app_model::ForegroundEngineLifecycleDto::Ready { run } = snapshot.lifecycle {
+                    break run.run_id;
+                }
+            }
+        };
+        let state = CurrentGameState::default();
+        let opened = state.replace("(;SZ[9]AB[dd])", None).unwrap();
+        let started = manager
+            .start_selected_node_job(
+                bind_selected_node_job(
+                    &state,
+                    run_id,
+                    opened.generation,
+                    opened.selected_path.clone(),
+                    AnalysisJobModeDto::Continuous,
+                    None,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let rejected = apply_current_game_change(&state, &manager, || {
+            state.play(
+                opened.selected_path,
+                MoveVertex::Point(app_model::PointDto { x: 3, y: 3 }),
+            )
+        });
+        let job = manager.snapshot().selected_node_job.unwrap();
+        manager.teardown().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+        assert!(rejected.is_err());
+        assert_eq!(job.job_id, started.job_id);
+        assert_ne!(job.state, app_model::AnalysisJobStateDto::Stopping);
+    }
 
     const BRANCHING: &str = include_str!("../../../../tests/golden/editable-workspace-branching.sgf");
 
@@ -1147,6 +1294,10 @@ mod tests {
             "selected-node analysis must stay on the manager-owned run command"
         );
         assert!(
+            commands.contains(&"foreground_engine_start_continuous_node"),
+            "continuous selected-node analysis must use the manager-owned run command"
+        );
+        assert!(
             commands.iter().all(|command| *command != "fake_analyze"),
             "native synthetic analysis command must not remain registered: {commands:?}"
         );
@@ -1205,13 +1356,15 @@ mod tests {
             "run-ready".to_string(),
             opened.generation,
             path.clone(),
-            64,
+            AnalysisJobModeDto::Finite,
+            Some(64),
         )
         .unwrap();
 
         assert_eq!(request.run_id, "run-ready");
         assert_eq!(request.generation, opened.generation);
         assert_eq!(request.node_path, path);
+        assert_eq!(request.mode, AnalysisJobModeDto::Finite);
         assert_eq!(request.board_size, 5);
         assert_eq!(request.query.komi, 6.5);
         assert_eq!(request.query.rules, "japanese");
@@ -1240,7 +1393,8 @@ mod tests {
             "run-ready".to_string(),
             opened.generation,
             NodePath { indices: vec![9] },
-            8,
+            AnalysisJobModeDto::Finite,
+            Some(8),
         ) {
             Err(error) => error,
             Ok(_) => panic!("illegal path must fail before protocol"),
@@ -1263,7 +1417,8 @@ mod tests {
             "run-ready".to_string(),
             opened.generation + 1,
             opened.selected_path,
-            8,
+            AnalysisJobModeDto::Finite,
+            Some(8),
         ) {
             Err(error) => error,
             Ok(_) => panic!("stale generation must fail before protocol"),
@@ -1271,6 +1426,28 @@ mod tests {
         assert_eq!(error.kind, EngineFailureKind::InvalidState);
         assert_eq!(error.message, "current game generation does not match");
         assert!(error.job_id.is_none());
+    }
+
+    #[test]
+    fn continuous_selected_node_uses_exact_admission_without_finite_visit_budget() {
+        let state = CurrentGameState::default();
+        let opened = state
+            .replace("(;GM[1]FF[4]SZ[5]KM[6.5]RU[Japanese];B[cc])", None)
+            .unwrap();
+        let request = bind_selected_node_job(
+            &state,
+            "run-ready".to_string(),
+            opened.generation,
+            opened.selected_path,
+            AnalysisJobModeDto::Continuous,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(request.mode, AnalysisJobModeDto::Continuous);
+        assert_eq!(request.query.max_visits, None);
+        assert_eq!(request.query.include_ownership, Some(true));
+        assert_eq!(request.query.include_policy, Some(true));
     }
 
     #[test]

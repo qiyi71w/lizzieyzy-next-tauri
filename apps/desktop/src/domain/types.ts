@@ -141,6 +141,8 @@ export type ForegroundEngineSnapshotDto = {
   whole_game_job?: AnalysisJobStartedDto | null;
 };
 export type AnalysisJobLaneDto = "selected_node" | "whole_game";
+export type AnalysisJobModeDto = "finite" | "continuous";
+export type AnalysisJobStateDto = "queued" | "searching" | "stopping" | "time_limited";
 export type AnalysisJobOutcomeDto =
   | "started"
   | "progress"
@@ -148,11 +150,15 @@ export type AnalysisJobOutcomeDto =
   | "cancelled"
   | "superseded"
   | "timeout"
+  | "stopping"
+  | "time_limited"
   | "failed";
 export type AnalysisJobStartedDto = {
   run_id: string;
   job_id: string;
   lane: AnalysisJobLaneDto;
+  mode: AnalysisJobModeDto;
+  state: AnalysisJobStateDto;
   generation: number;
   node_path: NodePath;
 };
@@ -166,6 +172,8 @@ export type AnalysisJobEventDto = {
   run_id: string;
   job_id: string;
   lane: AnalysisJobLaneDto;
+  current_game?: CurrentGameResultDto | null;
+  mode: AnalysisJobModeDto;
   generation: number;
   node_path: NodePath;
   outcome: AnalysisJobOutcomeDto;

@@ -166,12 +166,15 @@ fn sample_query() -> AnalysisQuery {
         max_visits: Some(2),
         include_ownership: None,
         include_policy: None,
+        report_during_search_every: None,
+        override_settings: None,
     }
 }
 
 fn selected_request(run_id: &str, generation: u64, indices: Vec<u32>) -> SelectedNodeJobRequest {
     SelectedNodeJobRequest {
         run_id: run_id.into(),
+        mode: app_model::AnalysisJobModeDto::Finite,
         generation,
         node_path: NodePath { indices },
         query: sample_query(),
@@ -235,6 +238,10 @@ while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   [ -z "$id" ] && id="ok"
   if printf '%s' "$line" | grep -q '"action":"terminate"'; then
+    target=$(printf '%s' "$line" | sed -n 's/.*"terminateId":"\([^"]*\)".*/\1/p')
+    [ -n "$target" ] && [ "$target" != "$id" ] || exit 20
+    printf '%s\n' "$line"
+    printf '{"id":"%s","turnNumber":0,"isDuringSearch":false,"noResults":true}\n' "$target"
     holding=0
     continue
   fi
@@ -261,9 +268,10 @@ while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   [ -z "$id" ] && id="ok"
   if printf '%s' "$line" | grep -q '"action":"terminate"'; then
-    if [ -n "$pending" ] && [ "$pending" != "$id" ]; then
-      printf '{"id":"%s","turnNumber":0,"rootInfo":{"visits":4,"winrate":0.6,"scoreMean":1.25}}\n' "$pending"
-    fi
+    target=$(printf '%s' "$line" | sed -n 's/.*"terminateId":"\([^"]*\)".*/\1/p')
+    [ -n "$target" ] && [ "$target" != "$id" ] || exit 20
+    printf '%s\n' "$line"
+    printf '{"id":"%s","turnNumber":0,"isDuringSearch":false,"noResults":true}\n' "$target"
     pending=""
     mode=echo
     continue
@@ -277,7 +285,7 @@ while IFS= read -r line; do
     pending="$id"
     continue
   fi
-  printf '{"id":"%s","turnNumber":0,"rootInfo":{"visits":4,"winrate":0.6,"scoreMean":1.25}}\n' "$id"
+  printf '{"id":"%s","turnNumber":0,"isDuringSearch":false,"rootInfo":{"visits":4,"winrate":0.6,"scoreMean":1.25},"moveInfos":[{"move":"D4","visits":4,"winrate":0.6,"scoreMean":1.25}]}\n' "$id"
 done
 "#
     .into()
@@ -313,7 +321,14 @@ while IFS= read -r line; do
   fi
   id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   [ -z "$id" ] && id="ok"
-  printf '{"id":"%s","turnNumber":0}\n' "$id"
+  if printf '%s' "$line" | grep -q '"action":"terminate"'; then
+    target=$(printf '%s' "$line" | sed -n 's/.*"terminateId":"\([^"]*\)".*/\1/p')
+    [ -n "$target" ] && [ "$target" != "$id" ] || exit 20
+    printf '%s\n' "$line"
+    printf '{"id":"%s","turnNumber":0,"isDuringSearch":false,"noResults":true}\n' "$target"
+    continue
+  fi
+  printf '{"id":"%s","turnNumber":0,"isDuringSearch":false,"rootInfo":{"visits":4,"winrate":0.6,"scoreMean":1.25},"moveInfos":[{"move":"D4","visits":4,"winrate":0.6,"scoreMean":1.25}]}\n' "$id"
   if [ "${EXIT_AFTER:-}" = "first" ]; then
     exit "${EXIT_CODE:-1}"
   fi
@@ -721,6 +736,7 @@ fn selected_node_completion_publishes_normalized_candidates_pv_ownership_policy_
     let started = manager
         .start_selected_node_job(SelectedNodeJobRequest {
             run_id: run_id.clone(),
+            mode: app_model::AnalysisJobModeDto::Finite,
             generation: 4,
             node_path: NodePath { indices: vec![0, 1] },
             query,
@@ -1176,34 +1192,40 @@ fn resident_whole_game_script() -> String {
 
 #[cfg(unix)]
 fn echo_first_then_hold_script(release: &Path) -> String {
-    format!(
-        r#"
-first=1
-while IFS= read -r line; do
-  if [ -n "$ENGINE_LOG" ]; then
-    printf '%s\n' "$line" >> "$ENGINE_LOG"
-  fi
-  printf '%s' "$line" | grep -q '"action":"terminate"' && continue
-  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
-  [ -z "$id" ] && id="ok"
-  case "$id" in
-    lifecycle-readiness-*)
-      printf '{{"id":"%s","turnNumber":0}}\n' "$id"
-      ;;
-    *)
-      if [ "$first" = 1 ]; then
-        first=0
-        printf '{{"id":"%s","turnNumber":0}}\n' "$id"
-      else
-        while [ ! -f '{release}' ]; do sleep 0.01; done
-        printf '{{"id":"%s","turnNumber":1}}\n' "$id"
-      fi
-      ;;
-  esac
-done
-"#,
-        release = release.display(),
-    )
+    r#"
+export ENGINE_LOG
+exec python3 -u -c '
+import json, os, sys, threading, time
+cancelled = set()
+first = True
+def emit(identity):
+    print(json.dumps(dict(id=identity, turnNumber=0, isDuringSearch=False,
+        rootInfo=dict(visits=4, winrate=0.6, scoreMean=1.25),
+        moveInfos=[dict(move="D4", visits=4, winrate=0.6, scoreMean=1.25)])), flush=True)
+def held(identity):
+    while not os.path.isfile("$RELEASE_PATH"):
+        if identity in cancelled: return
+        time.sleep(0.01)
+    if identity not in cancelled: emit(identity)
+for line in sys.stdin:
+    log = os.environ.get("ENGINE_LOG")
+    if log:
+        with open(log, "a") as output: output.write(line)
+    q = json.loads(line)
+    if q.get("action") == "terminate":
+        assert "terminateId" in q and q["id"] != q["terminateId"]
+        cancelled.add(q["terminateId"])
+        print(json.dumps(q), flush=True)
+        print(json.dumps(dict(id=q["terminateId"], turnNumber=0, isDuringSearch=False, noResults=True)), flush=True)
+    elif q["id"].startswith("lifecycle-readiness-"):
+        emit(q["id"])
+    elif first:
+        first = False
+        emit(q["id"])
+    else:
+        threading.Thread(target=held, args=(q["id"],), daemon=True).start()
+'
+"#.replace("$RELEASE_PATH", &release.to_string_lossy())
 }
 
 #[cfg(unix)]
@@ -1270,33 +1292,8 @@ fn whole_game_user_cancel_keeps_run_ready_and_does_not_cancel_selected_node() {
     let log = temp.path().join("engine.log");
     let release = temp.path().join("release");
     let selected_cancelled = temp.path().join("selected-cancelled");
-    let script = format!(
-        r#"
-ENGINE_LOG='{log}'
-while IFS= read -r line; do
-  printf '%s\n' "$line" >> "$ENGINE_LOG"
-  printf '%s' "$line" | grep -q '"action":"terminate"' && continue
-  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
-  [ -z "$id" ] && id="ok"
-  case "$id" in
-    lifecycle-readiness-*)
-      printf '{{"id":"%s","turnNumber":0}}\n' "$id"
-      ;;
-    *)
-      if [ "${{WG_FIRST:-1}}" = 1 ]; then
-        WG_FIRST=0
-        printf '{{"id":"%s","turnNumber":0}}\n' "$id"
-      else
-        while [ ! -f '{release}' ]; do sleep 0.01; done
-        printf '{{"id":"%s","turnNumber":1}}\n' "$id"
-      fi
-      ;;
-  esac
-done
-"#,
-        log = log.display(),
-        release = release.display(),
-    );
+    let mut script = format!("ENGINE_LOG='{}'\n", log.display());
+    script.push_str(&echo_first_then_hold_script(&release));
     let (manager, _, events, run_id) = ready_manager(&temp, &script);
     struct FileCancel(std::path::PathBuf);
     impl AnalysisJobCancel for FileCancel {
@@ -3214,4 +3211,290 @@ exit 9
             Arc::new(AnalysisCancelToken::new()),
         )
         .expect_err("a new session must not restore the previous Error Run identity");
+}
+
+#[cfg(unix)]
+fn streaming_engine_script() -> String {
+    r#"
+exec python3 -u -c '
+import json, os, sys, threading, time
+scenario = os.environ.get("SCENARIO", "stream")
+active = set()
+queued = []
+def search(identity):
+    visits = 16
+    while identity in active:
+        time.sleep(0.1)
+        visits += 8
+        if identity in active: emit(frame(identity, visits, True))
+def emit(value):
+    print(json.dumps(value), flush=True)
+def frame(identity, visits, during):
+    return dict(id=identity, turnNumber=0, isDuringSearch=during,
+        ownership=[0.1] * 81, policy=[0.01] * 82,
+        rootInfo=dict(visits=visits, winrate=0.6, scoreLead=2.5),
+        moveInfos=[dict(move="D4", visits=visits, winrate=0.6, scoreMean=2.5, pv=["D4", "E5"])])
+first = True
+for line in sys.stdin:
+    q = json.loads(line)
+    if q.get("action") == "terminate":
+        assert "terminateId" in q and q["id"] != q["terminateId"]
+        emit(q)
+        if scenario == "ack-only": continue
+        active.discard(q["terminateId"])
+        emit(frame(q["terminateId"], 999, True))
+        time.sleep(0.05)
+        emit(dict(id=q["terminateId"], isDuringSearch=False, noResults=True, turnNumber=0))
+        for identity in queued: emit(frame(identity, 32, False))
+        queued.clear()
+    elif first:
+        first = False
+        emit(frame(q["id"], 2, False))
+    elif "overrideSettings" in q:
+        assert q["reportDuringSearchEvery"] == 0.1
+        assert q["overrideSettings"]["maxTime"] == 600
+        assert q["overrideSettings"]["maxVisits"] == 2**50
+        assert q["overrideSettings"]["maxPlayouts"] == 2**50
+        assert "maxVisits" not in q
+        emit(dict(id=q["id"], warning="informational warning", field="rules"))
+        if scenario == "ignored":
+            emit(dict(id=q["id"], warning="setting ignored", field="overrideSettings.maxTime"))
+            continue
+        emit(dict(id=q["id"], action="terminate", terminateId="unrelated"))
+        emit(frame(q["id"], 0, True))
+        emit(frame(q["id"], 8, True))
+        time.sleep(0.05)
+        emit(frame(q["id"], 16, True))
+        if scenario == "limited":
+            emit(frame(q["id"], 24, False))
+            emit(frame(q["id"], 999, False))
+        if scenario == "queued":
+            active.add(q["id"])
+            threading.Thread(target=search, args=(q["id"],), daemon=True).start()
+    else:
+        if scenario in ["queued", "ack-only"]: queued.append(q["id"])
+        else: emit(frame(q["id"], 32, False))
+'
+"#
+    .into()
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_progress_remains_owned_until_target_final_and_releases_compute() {
+    let temp = TestTempDir::new("continuous-progress");
+    let (manager, _, events, run_id) = ready_manager(&temp, &streaming_engine_script());
+    let mut request = selected_request(&run_id, 7, vec![0, 1]);
+    request.mode = app_model::AnalysisJobModeDto::Continuous;
+    let started = manager.start_selected_node_job(request).unwrap();
+    for visits in [8, 16] {
+        let event = wait_job(&events, Duration::from_secs(2), |job| {
+            job.job_id == started.job_id && job.outcome != AnalysisJobOutcomeDto::Started
+        });
+        assert_eq!(event.outcome, AnalysisJobOutcomeDto::Progress);
+        let frame = event.frame.unwrap();
+        assert_eq!(frame.visits, visits);
+        assert_eq!(frame.score_mean_black, 2.5);
+        assert_eq!(frame.ownership, Some(vec![0.1; 81]));
+        assert_eq!(frame.policy, Some(vec![0.01; 82]));
+        assert_eq!(
+            manager.snapshot().selected_node_job.unwrap().job_id,
+            started.job_id
+        );
+    }
+    manager.cancel_job(&run_id, &started.job_id).unwrap();
+    let stopping = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id
+    });
+    assert_eq!(stopping.outcome, AnalysisJobOutcomeDto::Stopping);
+    let stopped = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id
+    });
+    assert_eq!(stopped.outcome, AnalysisJobOutcomeDto::Cancelled);
+    assert!(stopped.frame.is_none());
+    assert!(manager.snapshot().selected_node_job.is_none());
+    let finite = manager
+        .start_selected_node_job(selected_request(&run_id, 7, vec![0, 1]))
+        .unwrap();
+    let final_event = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == finite.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+    assert_eq!(final_event.frame.unwrap().visits, 32);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_ack_without_target_final_fails_both_lanes_at_five_seconds() {
+    let temp = TestTempDir::new("continuous-ack-only");
+    let script = format!("export SCENARIO=ack-only\n{}", streaming_engine_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let mut request = selected_request(&run_id, 7, vec![]);
+    request.mode = app_model::AnalysisJobModeDto::Continuous;
+    let started = manager.start_selected_node_job(request).unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.frame.as_ref().is_some_and(|frame| frame.visits == 16)
+    });
+    let whole = manager
+        .start_whole_game_analysis(whole_game_request(&run_id, 7, 1))
+        .unwrap();
+    let before = Instant::now();
+    manager.cancel_job(&run_id, &started.job_id).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        manager.snapshot().selected_node_job.unwrap().state,
+        app_model::AnalysisJobStateDto::Stopping
+    );
+    let failed = wait_job(&events, Duration::from_secs(6), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    assert!(before.elapsed() >= Duration::from_secs(4));
+    assert!(before.elapsed() < Duration::from_secs(6));
+    assert!(failed.frame.is_none());
+    let whole_failed = wait_job(&events, Duration::from_secs(1), |job| {
+        job.job_id == whole.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    assert!(whole_failed.frame.is_none());
+    let snapshot = manager.snapshot();
+    assert!(matches!(
+        snapshot.lifecycle,
+        ForegroundEngineLifecycleDto::Error { .. }
+    ));
+    assert!(snapshot.selected_node_job.is_none() && snapshot.whole_game_job.is_none());
+    assert!(manager
+        .start_selected_node_job(selected_request(&run_id, 7, vec![]))
+        .is_err());
+    assert!(manager
+        .wait_for_job_cancellation(&run_id, &started.job_id, Duration::from_secs(1))
+        .is_err());
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_shared_activity_keeps_one_thread_queued_lane_alive() {
+    let temp = TestTempDir::new("continuous-queued");
+    let script = format!("export SCENARIO=queued\n{}", streaming_engine_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let mut request = selected_request(&run_id, 7, vec![]);
+    request.mode = app_model::AnalysisJobModeDto::Continuous;
+    let started = manager.start_selected_node_job(request).unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.frame.as_ref().is_some_and(|frame| frame.visits == 16)
+    });
+    let whole = manager
+        .start_whole_game_analysis(whole_game_request(&run_id, 7, 1))
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(1300));
+    let snapshot = manager.snapshot();
+    assert_eq!(
+        snapshot.selected_node_job.unwrap().state,
+        app_model::AnalysisJobStateDto::Searching
+    );
+    assert_eq!(
+        snapshot.whole_game_job.unwrap().state,
+        app_model::AnalysisJobStateDto::Queued
+    );
+    manager.cancel_job(&run_id, &started.job_id).unwrap();
+    let progress = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == whole.job_id && job.outcome != AnalysisJobOutcomeDto::Started
+    });
+    assert_eq!(progress.outcome, AnalysisJobOutcomeDto::Progress);
+    assert_eq!(progress.completed, Some(1));
+    assert_eq!(progress.frame.unwrap().visits, 32);
+    wait_job(&events, Duration::from_secs(1), |job| {
+        job.job_id == whole.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_time_limit_retains_final_snapshot_without_resubmission() {
+    let temp = TestTempDir::new("continuous-limited");
+    let script = format!("export SCENARIO=limited\n{}", streaming_engine_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let mut request = selected_request(&run_id, 7, vec![]);
+    request.mode = app_model::AnalysisJobModeDto::Continuous;
+    let started = manager.start_selected_node_job(request).unwrap();
+    let limited = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::TimeLimited
+    });
+    assert_eq!(limited.frame.unwrap().visits, 24);
+    assert!(limited.failure.is_none());
+    std::thread::sleep(Duration::from_millis(900));
+    let snapshot = manager.snapshot();
+    assert!(matches!(
+        snapshot.lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+    let retained = snapshot.selected_node_job.unwrap();
+    assert_eq!(retained.job_id, started.job_id);
+    assert_eq!(retained.state, app_model::AnalysisJobStateDto::TimeLimited);
+    assert!(collect_job_events(&events, Instant::now() + Duration::from_millis(100)).is_empty());
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_ignored_required_budget_fails_visibly_without_analysis() {
+    let temp = TestTempDir::new("continuous-ignored");
+    let script = format!("export SCENARIO=ignored\n{}", streaming_engine_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let mut request = selected_request(&run_id, 7, vec![]);
+    request.mode = app_model::AnalysisJobModeDto::Continuous;
+    let started = manager.start_selected_node_job(request).unwrap();
+    let failed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome != AnalysisJobOutcomeDto::Started
+    });
+    assert_eq!(failed.outcome, AnalysisJobOutcomeDto::Failed);
+    assert!(failed.frame.is_none());
+    assert!(failed.failure.unwrap().message.contains("ignored"));
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_cleanup_failure_remains_visible_and_blocks_new_work() {
+    let temp = TestTempDir::new("continuous-cleanup-failure");
+    let script = format!("export SCENARIO=ack-only\n{}", streaming_engine_script());
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-1".into(),
+        profile: setup_profile(&temp, &script),
+    });
+    let mut config = ForegroundEngineConfig::for_tests();
+    config.stop_drain_timeout = Duration::ZERO;
+    let manager = ForegroundEngineManager::new(catalog, config);
+    let events = manager.subscribe();
+    manager.start("profile-1").unwrap();
+    let ready = wait_snapshot(&events, Duration::from_secs(2), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    let run_id = run_from_ready(&ready.lifecycle).run_id.clone();
+    let mut request = selected_request(&run_id, 7, vec![]);
+    request.mode = app_model::AnalysisJobModeDto::Continuous;
+    let started = manager.start_selected_node_job(request).unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.frame.as_ref().is_some_and(|frame| frame.visits == 16)
+    });
+    manager.cancel_job(&run_id, &started.job_id).unwrap();
+    let failed = wait_snapshot(&events, Duration::from_secs(6), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::Error { .. })
+    });
+    let ForegroundEngineLifecycleDto::Error { failure, .. } = failed.lifecycle else {
+        unreachable!()
+    };
+    assert!(failure.message.contains("cleanup failed"));
+    assert!(manager.start("profile-1").is_err());
+    assert!(manager
+        .start_selected_node_job(selected_request(&run_id, 7, vec![]))
+        .is_err());
+    assert!(manager.assert_profile_deletable("profile-1").is_err());
+    std::thread::sleep(Duration::from_millis(100));
+    manager.teardown().unwrap();
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine { .. }
+    ));
 }

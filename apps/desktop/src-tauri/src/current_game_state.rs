@@ -1,8 +1,8 @@
 use ::current_game_recovery::RecoveryCoordinator;
 use app_model::{
-    admits_analysis_attachment, AnalysisJobEventDto, ApplicationExitDispositionDto, CurrentGameError,
-    CurrentGameErrorKind, CurrentGameResultDto, GameDto, MoveVertex, NodePath, RecoveryEnvelopeDto,
-    RecoveryProtectionDto, SelectedNodeSnapshotDto,
+    admits_analysis_attachment, AnalysisJobEventDto, AnalysisJobModeDto, AnalysisJobStartedDto,
+    ApplicationExitDispositionDto, CurrentGameError, CurrentGameErrorKind, CurrentGameResultDto, GameDto,
+    MoveVertex, NodePath, RecoveryEnvelopeDto, RecoveryProtectionDto, SelectedNodeSnapshotDto,
 };
 use sgf::{CurrentSgfDocument, SgfAnalysisPayload};
 use std::collections::HashSet;
@@ -250,6 +250,7 @@ impl CurrentGameState {
         Ok(result)
     }
 
+    #[cfg(test)]
     pub fn attach_primary_analysis(
         &self,
         generation: u64,
@@ -266,16 +267,31 @@ impl CurrentGameState {
         if !admits_analysis_attachment(event) {
             return None;
         }
-        {
-            let holder = self.holder.lock().expect("current game state");
-            if holder.rejects_job(&event.run_id, &event.job_id) {
-                return None;
-            }
-        }
         let frame = event.frame.as_ref()?;
         let payload = SgfAnalysisPayload::from_frame(frame, "KataGo");
-        self.attach_primary_analysis(event.generation, event.node_path.clone(), payload)
-            .ok()
+        let mut holder = self.holder.lock().expect("current game state");
+        if holder.rejects_job(&event.run_id, &event.job_id)
+            || (event.mode == AnalysisJobModeDto::Continuous && holder.selected_path != event.node_path)
+        {
+            return None;
+        }
+        let mut result = holder
+            .attach_primary_analysis(event.generation, event.node_path.clone(), payload)
+            .ok()?;
+        if let Some(analysis) = result.snapshot.primary_analysis.as_mut() {
+            // Global policy is a live search output; Java LZ stores candidates and ownership.
+            analysis.policy = frame.policy.clone();
+        }
+        self.note_recovery(&holder);
+        Some(result)
+    }
+
+    pub fn seal_job(&self, job: &AnalysisJobStartedDto) {
+        self.holder
+            .lock()
+            .expect("current game state")
+            .closed_jobs
+            .insert((job.run_id.clone(), job.job_id.clone()));
     }
 
     fn with_document<T>(
@@ -329,6 +345,8 @@ impl CurrentGameHolder {
         if changed {
             self.generation += 1;
             self.mark_dirty();
+        }
+        if changed || self.selected_path != snapshot.path {
             self.selected_path = snapshot.path.clone();
             self.bump_snapshot();
         }
@@ -431,7 +449,6 @@ impl CurrentGameHolder {
         };
         if changed {
             self.mark_dirty();
-            self.selected_path = path.clone();
             self.bump_snapshot();
         }
         Ok(CurrentGameResultDto {

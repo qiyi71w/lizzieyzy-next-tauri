@@ -37,6 +37,7 @@ const backend = vi.hoisted(() => ({
   playCurrentGame: vi.fn(),
   selectCurrentGameNode: vi.fn(),
   startSelectedNodeAnalysis: vi.fn(),
+  startForegroundContinuousNodeAnalysis: vi.fn(),
   cancelSelectedNodeAnalysis: vi.fn(),
   cancelKataGoAnalysis: vi.fn(),
   classifyProblems: vi.fn(),
@@ -167,6 +168,17 @@ beforeEach(() => {
     run_id: "run-1",
     job_id: "job-1",
     lane: "selected_node",
+    mode: "finite",
+    state: "queued",
+    generation: 1,
+    node_path: { indices: [] }
+  });
+  backend.startForegroundContinuousNodeAnalysis.mockResolvedValue({
+    run_id: "run-1",
+    job_id: "job-continuous",
+    lane: "selected_node",
+    mode: "continuous",
+    state: "queued",
     generation: 1,
     node_path: { indices: [] }
   });
@@ -242,6 +254,7 @@ describe("selected-node analysis presentation", () => {
       buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results[0]?.value;
     });
+    expect(host.querySelector(".nav-progress")?.textContent).toContain("此手分析中");
     const ownership = Array.from({ length: 81 }, () => 0.25);
     const policy = Array.from({ length: 81 }, () => 0);
     policy[3 + 3 * 9] = 0.4;
@@ -250,6 +263,7 @@ describe("selected-node analysis presentation", () => {
         run_id: "run-1",
         job_id: "job-1",
         lane: "selected_node",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "completed",
@@ -302,6 +316,7 @@ describe("selected-node analysis presentation", () => {
         run_id: "run-1",
         job_id: "job-1",
         lane: "selected_node",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "failed",
@@ -317,4 +332,212 @@ describe("selected-node analysis presentation", () => {
     expect(buttonNamed(host, "策略").disabled).toBe(true);
     expect(host.textContent).toContain("stderr boom");
   });
+});
+
+function continuousFrame(visits: number) {
+  return {
+    job_id: "job-continuous",
+    turn: 0,
+    visits,
+    winrate_black: 0.55 + visits / 1000,
+    score_mean_black: visits / 10,
+    candidates: [{
+      vertex: { point: { x: 3, y: 3 } } as const,
+      visits,
+      winrate_black: 0.56,
+      score_mean_black: visits / 10,
+      pv: [{ point: { x: 3, y: 3 } } as const]
+    }],
+    ownership: Array.from({ length: 81 }, () => 0.1),
+    policy: Array.from({ length: 81 }, (_, index) => index === 30 ? 0.4 : 0)
+  };
+}
+
+async function publishContinuousProgress(visits: number, outcome: "progress" | "time_limited" = "progress") {
+  const frame = continuousFrame(visits);
+  await act(async () => {
+    listeners.onJob?.({
+      run_id: "run-1",
+      job_id: "job-continuous",
+      lane: "selected_node",
+      mode: "continuous",
+      generation: 1,
+      node_path: { indices: [] },
+      outcome,
+      frame,
+      current_game: {
+        ...initialGame,
+        dirty: true,
+        snapshot: { ...initialGame.snapshot, primary_analysis: { ...frame, job_id: "00000000-0000-0000-0000-000000000000" } }
+      }
+    });
+    await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
+    await backend.classifyProblems.mock.results.at(-1)?.value;
+  });
+}
+
+describe("manual continuous selected-node analysis", () => {
+  it("starts only on explicit action, keeps multiple progress frames active, and distinguishes the time limit", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    expect(backend.startForegroundContinuousNodeAnalysis).not.toHaveBeenCalled();
+
+    await act(async () => {
+      buttonNamed(host, "开始连续分析").click();
+      await backend.startForegroundContinuousNodeAnalysis.mock.results.at(-1)?.value;
+    });
+    expect(backend.startForegroundContinuousNodeAnalysis).toHaveBeenCalledWith({
+      runId: "run-1",
+      generation: 1,
+      nodePath: { indices: [] }
+    });
+    expect(host.textContent).toContain("连续分析：排队中");
+
+    await publishContinuousProgress(12);
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("12");
+    expect(buttonNamed(host, "停止连续分析")).toBeInstanceOf(HTMLButtonElement);
+    expect(buttonNamed(host, "策略").disabled).toBe(false);
+    await publishContinuousProgress(37);
+    backend.saveCurrentGame.mockResolvedValueOnce({ ...initialGame, dirty: false, native_path: "/tmp/streaming.sgf" });
+    await act(async () => {
+      (host.querySelector('button[aria-label="保存"]') as HTMLButtonElement).click();
+      await backend.saveCurrentGame.mock.results.at(-1)?.value;
+    });
+    expect(backend.saveCurrentGame).toHaveBeenCalled();
+    expect(buttonNamed(host, "停止连续分析")).toBeInstanceOf(HTMLButtonElement);
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("37");
+    expect(host.textContent).toContain("连续分析：搜索中");
+
+    await publishContinuousProgress(45, "time_limited");
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("45");
+    expect(buttonNamed(host, "继续连续分析").disabled).toBe(false);
+    expect(host.textContent).toContain("连续分析：已达时间限制");
+  });
+
+  it("routes visible, menu, and focus-safe Space actions through the same Start and targeted Stop", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    const textarea = document.createElement("textarea");
+    host.append(textarea);
+    act(() => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true })));
+    expect(backend.startForegroundContinuousNodeAnalysis).not.toHaveBeenCalled();
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+      await backend.startForegroundContinuousNodeAnalysis.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonNamed(host, "停止连续分析").click();
+      await backend.cancelSelectedNodeAnalysis.mock.results.at(-1)?.value;
+    });
+    expect(backend.cancelSelectedNodeAnalysis).toHaveBeenCalledWith({ runId: "run-1", jobId: "job-continuous" });
+    act(() => listeners.onJob?.({
+      run_id: "run-1", job_id: "job-continuous", lane: "selected_node", mode: "continuous",
+      generation: 1, node_path: { indices: [] }, outcome: "cancelled"
+    }));
+
+    act(() => buttonNamed(host, "分析").click());
+    await act(async () => {
+      buttonNamed(host, "开始连续分析").click();
+      await backend.startForegroundContinuousNodeAnalysis.mock.results.at(-1)?.value;
+    });
+    expect(backend.startForegroundContinuousNodeAnalysis).toHaveBeenCalledTimes(2);
+  });
+
+  it("seals publication immediately while stopping and blocks Resume on Run failure", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => {
+      buttonNamed(host, "开始连续分析").click();
+      await backend.startForegroundContinuousNodeAnalysis.mock.results.at(-1)?.value;
+    });
+    await publishContinuousProgress(20);
+    backend.selectCurrentGameNode.mockClear();
+    act(() => buttonNamed(host, "停止连续分析").click());
+    const late = continuousFrame(99);
+    act(() => listeners.onJob?.({
+      run_id: "run-1", job_id: "job-continuous", lane: "selected_node", mode: "continuous",
+      generation: 1, node_path: { indices: [] }, outcome: "progress", frame: late
+    }));
+    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("20");
+
+    act(() => listeners.onSnapshot?.({
+      revision: 3,
+      lifecycle: {
+        state: "error",
+        run: {
+          run_id: "run-1", profile_id: "profile-1", adapter_kind: "kata_go_analysis",
+          profile_snapshot: savedProfile.profile
+        },
+        failure: { operation: "job", run_id: "run-1", kind: "timeout", message: "target final never arrived" }
+      }
+    }));
+    const blocked = buttonNamed(host, "继续连续分析");
+    expect(blocked.disabled).toBe(true);
+    expect(blocked.title).toMatch(/重启引擎/);
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("20");
+  });
+
+  it("keeps admitted analysis through a departure decision and requires Resume after an aborted save", async () => {
+    const retained = { ...initialGame, dirty: true };
+    currentGameFixture.mockResolvedValue(retained);
+    const host = await renderApp();
+    await readyEngine(host);
+    backend.prepareDocumentReplacement.mockResolvedValueOnce({ status: "needs_decision", departure_id: 9 });
+    backend.resolveDocumentReplacement.mockResolvedValueOnce({
+      committed: false,
+      analysis_stopped: true,
+      current: retained,
+      message: "save failed; document retained"
+    });
+    await act(async () => {
+      buttonNamed(host, "开始连续分析").click();
+      await backend.startForegroundContinuousNodeAnalysis.mock.results.at(-1)?.value;
+    });
+
+    act(() => (host.querySelector('button[aria-label="新建"]') as HTMLButtonElement).click());
+    await act(async () => {
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).toBeInstanceOf(HTMLElement);
+    await publishContinuousProgress(28);
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("28");
+
+    await act(async () => {
+      (host.querySelector('button[aria-label="Save"]') as HTMLButtonElement).click();
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+      await Promise.resolve();
+    });
+    expect(host.textContent).toContain("save failed; document retained");
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("28");
+    expect(buttonNamed(host, "继续连续分析").disabled).toBe(false);
+    expect(backend.startForegroundContinuousNodeAnalysis).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replace a newer progress snapshot when older classification finishes later", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => {
+      buttonNamed(host, "开始连续分析").click();
+      await backend.startForegroundContinuousNodeAnalysis.mock.results.at(-1)?.value;
+    });
+    let finishFirst: ((value: never[]) => void) | undefined;
+    backend.classifyProblems.mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }));
+    const emit = (visits: number) => {
+      const frame = continuousFrame(visits);
+      listeners.onJob?.({
+        run_id: "run-1", job_id: "job-continuous", lane: "selected_node", mode: "continuous",
+        generation: 1, node_path: { indices: [] }, outcome: "progress", frame,
+        current_game: { ...initialGame, dirty: true, snapshot: { ...initialGame.snapshot, primary_analysis: frame } }
+      });
+    };
+    await act(async () => { emit(12); });
+    await act(async () => { emit(37); });
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("37");
+    await act(async () => { finishFirst?.([]); });
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("37");
+  });
+
 });

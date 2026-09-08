@@ -344,6 +344,21 @@ export async function startSelectedNodeAnalysis(input: {
     maxVisits: input.maxVisits
   });
 }
+export async function startForegroundContinuousNodeAnalysis(input: {
+  runId: string;
+  generation: number;
+  nodePath: NodePath;
+}): Promise<AnalysisJobStartedDto> {
+  if (!isTauriRuntime()) {
+    throw new Error("Continuous analysis requires a Ready Foreground Engine Run on the Tauri desktop backend.");
+  }
+  return await invoke<AnalysisJobStartedDto>("foreground_engine_start_continuous_node", {
+    runId: input.runId,
+    generation: input.generation,
+    nodePath: input.nodePath
+  });
+}
+
 
 export async function cancelSelectedNodeAnalysis(input: { runId: string; jobId: string }): Promise<void> {
   if (!isTauriRuntime()) return;

@@ -5,10 +5,12 @@
 ### English
 
 - Removed the legacy force-replace IPC and frontend wrapper. Native current-game replacement uses the shared candidate-validation and Save / Discard / Cancel workflow.
+- Added manual continuous current-node analysis with real KataGo progress, fixed 600-second search budgets, shared-Run queue liveness, target-final cancellation and bounded Run-failure cleanup. Accepted snapshots remain available to ordinary SGF Save and current-game recovery.
 
 ### 中文
 
 - 移除旧强制替换 IPC 及前端 wrapper；原生当前棋谱替换统一使用候选验证与保存/放弃/取消流程。
+- 新增手动连续当前节点分析：接入真实 KataGo 进度、固定 600 秒搜索预算、共享 Run 排队保活、目标 final 取消与有界故障清理；已接纳快照可普通保存到 SGF，并纳入当前棋谱恢复。
 
 ## [0.1.0] - 2026-05-01
 

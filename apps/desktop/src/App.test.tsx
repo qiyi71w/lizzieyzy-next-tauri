@@ -252,6 +252,8 @@ beforeEach(() => {
     run_id: "run-1",
     job_id: "job-1",
     lane: "selected_node",
+    mode: "finite",
+    state: "queued",
     generation: 1,
     node_path: { indices: [] }
   });
@@ -1057,7 +1059,7 @@ describe("App focus-safe review controls", () => {
     expect(backend.setCurrentGamePersonalComment).toHaveBeenLastCalledWith({ indices: [0, 1] }, "reviewer note");
   });
 
-  it("keeps unsupported baseline actions visible-disabled with 尚未接入 and does not claim analysis keys", async () => {
+  it("keeps unavailable editing tools disabled while Space remains stone-placement safe", async () => {
     const host = await renderApp();
     const hawkeye = buttonLabeled(host, "超级鹰眼");
     expect(hawkeye.disabled).toBe(true);
@@ -1080,7 +1082,6 @@ describe("App focus-safe review controls", () => {
     expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
     expect(backend.startKataGoGameAnalysis).not.toHaveBeenCalled();
     expect(backend.playCurrentGame).not.toHaveBeenCalled();
-    expect(requiredElement(host, ".nav-message").textContent).toContain("连续分析尚未接入");
   });
 
   it("opens the same searchable Shortcut Reference from Help and focus-safe ?", async () => {
@@ -1099,7 +1100,6 @@ describe("App focus-safe review controls", () => {
     expect(dialog.textContent).toContain("Ctrl+Home");
     expect(dialog.textContent).not.toContain("N, Ctrl+Home");
     expect(dialog.textContent).toContain("人机对局（未接入）");
-    expect(dialog.textContent).toContain("连续分析（未接入）");
     expect(dialog.textContent).toContain("Space");
 
     const search = requiredElement<HTMLInputElement>(dialog, 'input[aria-label="搜索快捷键"]');
@@ -1146,7 +1146,6 @@ describe("App focus-safe review controls", () => {
     expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
     pressKey(canvas, " ");
     expect(backend.playCurrentGame).not.toHaveBeenCalled();
-    expect(requiredElement(host, ".nav-message").textContent).toContain("连续分析尚未接入");
     pressKey(canvas, "Enter", { shiftKey: true });
     expect(backend.playCurrentGame).not.toHaveBeenCalled();
 
@@ -1852,6 +1851,8 @@ async function startSelectedNode(host: HTMLElement, jobId = "job-1") {
     run_id: "run-1",
     job_id: jobId,
     lane: "selected_node",
+    mode: "finite",
+    state: "queued",
     generation: 1,
     node_path: { indices: [] }
   });
@@ -1867,6 +1868,7 @@ async function completeSelectedNode(jobId: string, path: { indices: number[] }, 
       run_id: "run-1",
       job_id: jobId,
       lane: "selected_node",
+      mode: "finite",
       generation: 1,
       node_path: path,
       outcome: "completed",

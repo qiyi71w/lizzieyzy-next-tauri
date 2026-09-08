@@ -88,7 +88,7 @@ The browser preview is useful for layout and fallback checks. Real KataGo execut
 
 Use the desktop runtime for this flow:
 
-Use the `分析` menu for the analysis start/cancel steps below. With a Ready run, `分析当前节点` starts selected-node analysis and `分析第一子主线` starts whole-game analysis. `自动分析` and continuous analysis are unavailable follow-up features, not alternate start controls for this smoke.
+Use the `分析` menu for the analysis start/cancel steps below. With a Ready run, `分析当前节点` starts finite selected-node analysis and `分析第一子主线` starts whole-game analysis. Space and the visible continuous action share manual continuous Start/Stop/Resume. Continuous analysis uses a fixed 600-second search budget, without a visits limit; navigation stops it and retains accepted node results. Automatic following and durable default-on intent remain subsequent restoration work.
 
 ```bash
 cd apps/desktop
@@ -147,6 +147,7 @@ cargo test -p sgf selected_node --offline
 cargo test -p lizzieyzy-next-desktop selected_node --offline
 cargo test -p engine-manager --test foreground_engine_run selected_node_ --offline -- --test-threads=1
 cd apps/desktop && npx vitest run src/EngineLifecycle.test.tsx src/SelectedNodeAnalysis.test.tsx
+cd ../.. && cargo test -p engine-manager --test foreground_engine_run continuous_
 ```
 
 Optional real KataGo on a resident Run (ignored by default):

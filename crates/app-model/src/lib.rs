@@ -5,7 +5,8 @@ use uuid::Uuid;
 mod analysis_job;
 pub use analysis_job::{
     admits_analysis_attachment, admits_analysis_publication, AnalysisJobEventDto, AnalysisJobLaneDto,
-    AnalysisJobOutcomeDto, AnalysisJobStartedDto, AnalysisPublicationScopeDto,
+    AnalysisJobModeDto, AnalysisJobOutcomeDto, AnalysisJobStartedDto, AnalysisJobStateDto,
+    AnalysisPublicationScopeDto,
 };
 mod document_departure;
 pub use document_departure::{
@@ -786,6 +787,8 @@ mod foreground_engine_wire {
                 run_id: "run-1".into(),
                 job_id: "job-selected".into(),
                 lane: AnalysisJobLaneDto::SelectedNode,
+                mode: AnalysisJobModeDto::Finite,
+                state: AnalysisJobStateDto::Queued,
                 generation: 3,
                 node_path: NodePath { indices: vec![0] },
             }),
@@ -793,6 +796,8 @@ mod foreground_engine_wire {
                 run_id: "run-1".into(),
                 job_id: "job-whole".into(),
                 lane: AnalysisJobLaneDto::WholeGame,
+                mode: AnalysisJobModeDto::Finite,
+                state: AnalysisJobStateDto::Queued,
                 generation: 3,
                 node_path: NodePath { indices: vec![] },
             }),

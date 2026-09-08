@@ -417,6 +417,8 @@ async function startWholeGame(host: HTMLElement) {
     run_id: "run-1",
     job_id: "job-wg",
     lane: "whole_game",
+    mode: "finite",
+    state: "queued",
     generation: 1,
     node_path: { indices: [] }
   });
@@ -432,6 +434,7 @@ async function emitWholeGameProgress(path: NodePath, frame: AnalysisFrameDto) {
       run_id: "run-1",
       job_id: "job-wg",
       lane: "whole_game",
+      mode: "finite",
       generation: 1,
       node_path: path,
       outcome: "progress",
@@ -495,6 +498,8 @@ async function startSelectedNode(host: HTMLElement) {
     run_id: "run-1",
     job_id: "job-1",
     lane: "selected_node",
+    mode: "finite",
+    state: "queued",
     generation: 1,
     node_path: { indices: [] }
   });
@@ -510,6 +515,7 @@ async function completeSelectedNode(jobId: string, path: NodePath, frame: Analys
       run_id: "run-1",
       job_id: jobId,
       lane: "selected_node",
+      mode: "finite",
       generation: 1,
       node_path: path,
       outcome: "completed",
