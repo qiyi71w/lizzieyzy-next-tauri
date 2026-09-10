@@ -382,7 +382,7 @@ function emitContinuousSnapshot(phase: ForegroundEngineSnapshotDto["continuous"]
 async function publishContinuousProgress(visits: number, phase: "searching" | "time_limited" | "visits_limited" = "searching") {
   const frame = continuousFrame(visits);
   await act(async () => {
-    emitContinuousSnapshot(phase);
+    if (phase === "searching") emitContinuousSnapshot(phase);
     listeners.onJob?.({
       run_id: "run-1", job_id: "job-continuous", lane: "selected_node", mode: "continuous",
       generation: 1, node_path: { indices: [] }, outcome: phase === "searching" ? "progress" : phase,
@@ -393,6 +393,7 @@ async function publishContinuousProgress(visits: number, phase: "searching" | "t
         snapshot: { ...initialGame.snapshot, primary_analysis: { ...frame, job_id: "00000000-0000-0000-0000-000000000000" } }
       }
     });
+    if (phase !== "searching") emitContinuousSnapshot(phase);
     await Promise.resolve();
   });
 }
@@ -455,13 +456,19 @@ describe("authoritative continuous selected-node analysis", () => {
     await publishContinuousProgress(45, "time_limited");
     expect(host.querySelector(".cand-visits")?.textContent).toBe("45");
     expect(buttonNamed(host, "继续连续分析").disabled).toBe(false);
-    await publishContinuousProgress(64, "visits_limited");
-    expect(host.querySelector(".cand-visits")?.textContent).toBe("64");
-    expect(host.textContent).toContain("visits 限制");
-    expect(buttonNamed(host, "继续连续分析").disabled).toBe(false);
     act(() => emitContinuousSnapshot("empty_board", { job: false }));
     expect(host.textContent).toContain("空棋盘停止已启用");
     expect(buttonNamed(host, "停止连续分析").disabled).toBe(false);
+  });
+
+  it.each(["time_limited", "visits_limited"] as const)("adopts a first terminal frame before its %s snapshot", async (phase) => {
+    const host = await renderApp();
+    await readyEngine(host);
+    act(() => emitContinuousSnapshot("queued"));
+    await publishContinuousProgress(64, phase);
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("64");
+    expect(buttonNamed(host, "继续连续分析").disabled).toBe(false);
+    expect(backend.foregroundEngineContinuousAction).not.toHaveBeenCalled();
   });
 
   it("routes focus-safe Space, visible, and menu actions through the same contextual command", async () => {

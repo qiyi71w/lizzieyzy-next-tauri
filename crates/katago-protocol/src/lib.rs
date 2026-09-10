@@ -89,7 +89,8 @@ pub struct AnalysisResponse {
 }
 
 impl AnalysisResponse {
-    pub fn has_valid_analysis(&self, board_size: u8) -> bool {
+    /// Validates search accounting; publishing a frame additionally requires candidates.
+    pub fn has_valid_search_result(&self, board_size: u8) -> bool {
         let Some(root) = &self.root_info else {
             return false;
         };
@@ -116,7 +117,6 @@ impl AnalysisResponse {
             && root
                 .score_stdev
                 .is_none_or(|value| value.is_finite() && value >= 0.0)
-            && !self.move_infos.is_empty()
             && self.move_infos.iter().all(|info| {
                 info.move_.as_deref().is_some_and(valid_vertex)
                     && (0.0..=1.0).contains(&info.winrate)

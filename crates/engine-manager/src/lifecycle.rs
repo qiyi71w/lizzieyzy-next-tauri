@@ -2107,10 +2107,11 @@ impl Inner {
             return self.route_whole_game_line(&mut state, run_id, response_id, trimmed);
         }
         let during = response.is_during_search == Some(true);
-        let has_data = response.root_info.as_ref().is_some_and(|root| root.visits > 0)
-            && !response.move_infos.is_empty()
-            && !response.no_results;
-        if started.mode == AnalysisJobModeDto::Continuous && has_data && response.is_during_search.is_none() {
+        let visits = response.root_info.as_ref().map_or(0, |root| root.visits);
+        let has_result = visits > 0 && !response.no_results;
+        let has_data = has_result && !response.move_infos.is_empty();
+        if started.mode == AnalysisJobModeDto::Continuous && has_result && response.is_during_search.is_none()
+        {
             drop(state);
             self.fail_unresponsive_run(
                 run_id,
@@ -2119,7 +2120,7 @@ impl Inner {
             return None;
         }
         if started.mode == AnalysisJobModeDto::Continuous {
-            if has_data && !response.has_valid_analysis(state.jobs[index].board_size) {
+            if has_result && !response.has_valid_search_result(state.jobs[index].board_size) {
                 drop(state);
                 self.fail_unresponsive_run(
                     run_id,
@@ -2127,7 +2128,7 @@ impl Inner {
                 );
                 return None;
             }
-            if !during && !has_data {
+            if !during && !has_result {
                 let published = failure(
                     EngineOperationDto::Job,
                     EngineFailureKind::Protocol,
@@ -2171,11 +2172,7 @@ impl Inner {
                 let budget = state.jobs[index]
                     .continuous_budget
                     .expect("continuous job budget");
-                if budget.continuous_visits_limit_enabled
-                    && frame
-                        .as_ref()
-                        .is_some_and(|frame| frame.visits >= budget.continuous_visits_limit)
-                {
+                if budget.continuous_visits_limit_enabled && visits >= budget.continuous_visits_limit {
                     AnalysisJobOutcomeDto::VisitsLimited
                 } else if budget.continuous_time_limit_enabled {
                     AnalysisJobOutcomeDto::TimeLimited

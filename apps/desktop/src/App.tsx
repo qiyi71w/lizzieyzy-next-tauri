@@ -1344,9 +1344,9 @@ export function App() {
       const phase = engineSnapshotRef.current.continuous.phase;
       if (job.outcome === "progress" && (phase === "queued" || phase === "searching")) {
         if (admitsAnalysisAttachment(job)) void publishAuthoritativeContinuousFrame(job);
-      } else if ((job.outcome === "time_limited" || job.outcome === "visits_limited") && phase === job.outcome) {
+      } else if ((job.outcome === "time_limited" || job.outcome === "visits_limited") && (phase === "queued" || phase === "searching" || phase === job.outcome)) {
         if (admitsAnalysisAttachment(job)) void publishAuthoritativeContinuousFrame(job);
-        setMessage(`${continuousPhaseStatus(phase)}；可显式继续。`);
+        setMessage(`${continuousPhaseStatus(job.outcome)}；可显式继续。`);
       } else if ((job.outcome === "failed" || job.outcome === "timeout") && phase === "error") {
         setMessage(job.failure?.message ?? "连续分析失败；请显式继续或重启引擎。");
       }

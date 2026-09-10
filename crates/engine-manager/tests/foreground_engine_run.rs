@@ -3874,7 +3874,7 @@ def emit(value):
 def frame(identity, visits, during):
     return dict(id=identity, turnNumber=0, isDuringSearch=during,
         rootInfo=dict(visits=visits, winrate=0.6, scoreLead=2.5),
-        moveInfos=[dict(move="D4", visits=visits, winrate=0.6, scoreMean=2.5, pv=["D4"])])
+        moveInfos=[dict(move="D4", visits=visits, winrate=0.6, scoreMean=2.5, pv=["D4"])] if visits > 1 else [])
 def search(q, cancel):
     while not capacity.acquire(timeout=0.01):
         if cancel.is_set():
@@ -3975,6 +3975,48 @@ fn continuous_budgets_stop_at_first_limit_and_only_new_admissions_reset_it() {
         job.outcome == AnalysisJobOutcomeDto::Started
     });
     assert_ne!(fresh.run_id, run_id);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_one_visit_budget_limits_without_fabricating_candidates() {
+    use app_model::{ContinuousAnalysisBudgetDto, ContinuousAnalysisPhaseDto};
+    let temp = TestTempDir::new("continuous-budget-root-only");
+    let (manager, _, events, run_id) = ready_manager(&temp, budget_engine_script());
+    manager
+        .set_continuous_preferences(
+            true,
+            ContinuousAnalysisBudgetDto {
+                continuous_time_limit_enabled: false,
+                continuous_visits_limit_enabled: true,
+                continuous_visits_limit: 1,
+                ..ContinuousAnalysisBudgetDto::default()
+            },
+        )
+        .unwrap();
+    manager.follow_continuous_position(continuous_request(&run_id, 62, vec![]));
+    let terminal = wait_job(&events, Duration::from_secs(2), |job| {
+        !matches!(
+            job.outcome,
+            AnalysisJobOutcomeDto::Started | AnalysisJobOutcomeDto::Progress
+        )
+    });
+    assert_eq!(terminal.outcome, AnalysisJobOutcomeDto::VisitsLimited);
+    assert!(
+        terminal.frame.is_none(),
+        "root-only result must not fabricate candidates"
+    );
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        ContinuousAnalysisPhaseDto::VisitsLimited
+    );
+    assert_eq!(manager.snapshot().continuous.enabled, Some(true));
+    manager.resume_continuous().unwrap();
+    let resumed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::VisitsLimited
+    });
+    assert_ne!(resumed.job_id, terminal.job_id);
     manager.teardown().unwrap();
 }
 
