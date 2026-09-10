@@ -297,6 +297,7 @@ export function AppChrome(props: Props) {
         <div className="menu-cluster">
           <ChromeMenu label="分析" open={openMenu === "analyze"} onToggle={() => setOpenMenu(openMenu === "analyze" ? null : "analyze")}>
             <MenuItem label={props.continuousAnalysisAction.label} onClick={() => run(props.onContinuousAnalysis)} disabled={props.continuousAnalysisAction.disabled} title={props.continuousAnalysisAction.title} />
+            <MenuItem label="连续分析预算…" onClick={() => run(() => props.onToggleSheet("prefs"))} />
             <MenuItem label={AI_COMMENTARY_LABEL} disabled title={AI_COMMENTARY_UNAVAILABLE} />
             <div className="menu-sep" role="separator" />
             <MenuItem label="超级鹰眼" disabled title={later} />

@@ -301,6 +301,37 @@ pub struct EngineRunDto {
     pub capability_snapshot: Option<EngineCapabilitySnapshotDto>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ContinuousAnalysisBudgetDto {
+    pub continuous_time_limit_enabled: bool,
+    pub continuous_time_limit_seconds: u32,
+    pub continuous_visits_limit_enabled: bool,
+    pub continuous_visits_limit: u32,
+    pub continuous_stop_on_empty_board: bool,
+}
+
+impl Default for ContinuousAnalysisBudgetDto {
+    fn default() -> Self {
+        Self {
+            continuous_time_limit_enabled: true,
+            continuous_time_limit_seconds: 600,
+            continuous_visits_limit_enabled: false,
+            continuous_visits_limit: 100_000,
+            continuous_stop_on_empty_board: false,
+        }
+    }
+}
+
+impl ContinuousAnalysisBudgetDto {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.continuous_time_limit_seconds == 0 || self.continuous_visits_limit == 0 {
+            return Err("Continuous time and visits limits must be whole numbers from 1 to 4294967295; disabling a limit retains its value.".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContinuousAnalysisPhaseDto {
@@ -313,6 +344,8 @@ pub enum ContinuousAnalysisPhaseDto {
     Searching,
     Stopping,
     TimeLimited,
+    VisitsLimited,
+    EmptyBoard,
     Finite,
     Paused,
     Error,

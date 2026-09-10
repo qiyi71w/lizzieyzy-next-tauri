@@ -10,7 +10,9 @@ fn confirmed_departure_hold_survives_navigation_and_preference_reload() {
     );
     let state = CurrentGameState::default();
     state.connect_analysis_manager(manager.clone());
-    manager.set_continuous_intent(true);
+    manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
     let opened = state.replace("(;SZ[9];B[dd])", None).unwrap();
     let admission = state.prepare_replacement("(;SZ[9])", None).unwrap();
     let id = match admission {
@@ -24,8 +26,12 @@ fn confirmed_departure_hold_survives_navigation_and_preference_reload() {
     );
     state.abort_protected_commit(id, opened.selected_path).unwrap();
     state.select_path(NodePath { indices: vec![] }).unwrap();
-    manager.set_continuous_intent(false);
-    manager.set_continuous_intent(true);
+    manager
+        .set_continuous_preferences(false, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
+    manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
     assert_eq!(
         manager.snapshot().continuous.phase,
         app_model::ContinuousAnalysisPhaseDto::SafetyHold
@@ -171,4 +177,138 @@ fn authoritative_following_seals_old_progress_and_failed_write_preserves_search(
         state.attach_from_job_event(&next).is_none(),
         "durable Stop seals already queued progress"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_budget_write_failure_preserves_search_and_success_seals_old_identity() {
+    let engine = LiveFixture::new();
+    let state = CurrentGameState::default();
+    state.connect_analysis_manager(engine.manager.clone());
+    state.replace("(;SZ[9];B[dd]C[retained])", None).unwrap();
+    let preferences = crate::continuous_analysis::PreferencesState::default();
+    let path = engine.directory.join("preferences.json");
+    let mut settings = preferences.load(&path, &engine.manager).unwrap().preferences;
+    engine.manager.start("test").unwrap();
+    let first = engine.progress(None);
+    assert!(state.attach_from_job_event(&first).is_some());
+    settings.continuous_budget.continuous_time_limit_seconds = 2;
+    assert!(preferences
+        .save(&engine.directory, &engine.manager, settings.clone())
+        .is_err());
+    assert_eq!(
+        engine.manager.snapshot().selected_node_job.unwrap().job_id,
+        first.job_id
+    );
+    assert!(state.attach_from_job_event(&first).is_some());
+
+    let mut invalid = settings.clone();
+    invalid.continuous_budget.continuous_visits_limit = 0;
+    assert!(preferences.save(&path, &engine.manager, invalid).is_err());
+    assert_eq!(
+        engine.manager.snapshot().selected_node_job.unwrap().job_id,
+        first.job_id
+    );
+    preferences
+        .save(&path, &engine.manager, settings.clone())
+        .unwrap();
+    assert_eq!(
+        engine.manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::Stopping
+    );
+    assert!(state.attach_from_job_event(&first).is_none());
+    std::fs::write(engine.directory.join("release"), "").unwrap();
+    let replacement = engine.progress(Some(&first.job_id));
+    assert_ne!(replacement.job_id, first.job_id);
+    assert!(state.attach_from_job_event(&replacement).is_some());
+    assert!(state.serialize().unwrap().contains("C[retained]"));
+
+    engine.manager.begin_continuous_departure();
+    engine
+        .manager
+        .cancel_job(&replacement.run_id, &replacement.job_id)
+        .unwrap();
+    engine
+        .manager
+        .wait_for_job_cancellation(
+            &replacement.run_id,
+            &replacement.job_id,
+            std::time::Duration::from_secs(2),
+        )
+        .unwrap();
+    engine.manager.finish_continuous_departure(false);
+    settings.continuous_budget.continuous_time_limit_seconds = 3;
+    preferences.save(&path, &engine.manager, settings).unwrap();
+    assert_eq!(
+        engine.manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::SafetyHold
+    );
+    assert!(engine.manager.snapshot().selected_node_job.is_none());
+    preferences.primary(&path, &engine.manager).unwrap();
+    let resumed = engine.progress(Some(&replacement.job_id));
+    assert_ne!(resumed.job_id, replacement.job_id);
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_empty_board_uses_stones_not_root_or_move_number() {
+    let engine = LiveFixture::new();
+    std::fs::write(engine.directory.join("release"), "").unwrap();
+    let state = CurrentGameState::default();
+    state.connect_analysis_manager(engine.manager.clone());
+    let opened = state.replace("(;SZ[9]AB[dd]C[setup])", None).unwrap();
+    assert_eq!(opened.snapshot.position.move_number, 0);
+    let preferences = crate::continuous_analysis::PreferencesState::default();
+    let path = engine.directory.join("preferences.json");
+    let mut settings = preferences.load(&path, &engine.manager).unwrap().preferences;
+    settings.continuous_budget.continuous_stop_on_empty_board = true;
+    preferences
+        .save(&path, &engine.manager, settings.clone())
+        .unwrap();
+    engine.manager.start("test").unwrap();
+    let root_search = engine.progress(None);
+    assert_eq!(root_search.node_path.indices, Vec::<u32>::new());
+
+    let empty = state.replace("(;SZ[9]C[root];B[]C[empty])", None).unwrap();
+    assert_eq!(empty.snapshot.position.move_number, 1);
+    assert!(empty.snapshot.position.stones.is_empty());
+    engine
+        .manager
+        .wait_for_job_cancellation(
+            &root_search.run_id,
+            &root_search.job_id,
+            std::time::Duration::from_secs(2),
+        )
+        .unwrap();
+    let before = state.serialize().unwrap();
+    assert_eq!(
+        engine.manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::EmptyBoard
+    );
+    assert_eq!(engine.manager.snapshot().continuous.enabled, Some(true));
+    assert!(engine.manager.snapshot().selected_node_job.is_none());
+    assert_eq!(state.serialize().unwrap(), before);
+
+    settings.continuous_budget.continuous_stop_on_empty_board = false;
+    preferences
+        .save(&path, &engine.manager, settings.clone())
+        .unwrap();
+    let resumed = engine.progress(Some(&root_search.job_id));
+    assert_eq!(resumed.node_path, empty.selected_path);
+    settings.continuous_budget.continuous_stop_on_empty_board = true;
+    preferences.save(&path, &engine.manager, settings).unwrap();
+    engine
+        .manager
+        .wait_for_job_cancellation(
+            &resumed.run_id,
+            &resumed.job_id,
+            std::time::Duration::from_secs(2),
+        )
+        .unwrap();
+    assert_eq!(
+        engine.manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::EmptyBoard
+    );
+    state.replace("(;SZ[9]AB[dd]C[setup])", None).unwrap();
+    assert_ne!(engine.progress(Some(&resumed.job_id)).job_id, resumed.job_id);
 }

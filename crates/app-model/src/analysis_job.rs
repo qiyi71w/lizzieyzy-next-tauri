@@ -34,6 +34,13 @@ pub enum AnalysisJobStateDto {
     Searching,
     Stopping,
     TimeLimited,
+    VisitsLimited,
+}
+
+impl AnalysisJobStateDto {
+    pub fn is_limited(self) -> bool {
+        matches!(self, Self::TimeLimited | Self::VisitsLimited)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +50,7 @@ pub enum AnalysisJobOutcomeDto {
     Progress,
     Stopping,
     TimeLimited,
+    VisitsLimited,
     Completed,
     Cancelled,
     Superseded,
@@ -122,7 +130,9 @@ pub fn admits_analysis_publication(
         || (event.mode == AnalysisJobModeDto::Continuous
             && matches!(
                 event.outcome,
-                AnalysisJobOutcomeDto::Progress | AnalysisJobOutcomeDto::TimeLimited
+                AnalysisJobOutcomeDto::Progress
+                    | AnalysisJobOutcomeDto::TimeLimited
+                    | AnalysisJobOutcomeDto::VisitsLimited
             )))
         && event.frame.is_some()
         && event.run_id == current.run_id
@@ -144,7 +154,9 @@ pub fn admits_analysis_attachment(event: &AnalysisJobEventDto) -> bool {
                 || (event.mode == AnalysisJobModeDto::Continuous
                     && matches!(
                         event.outcome,
-                        AnalysisJobOutcomeDto::Progress | AnalysisJobOutcomeDto::TimeLimited
+                        AnalysisJobOutcomeDto::Progress
+                            | AnalysisJobOutcomeDto::TimeLimited
+                            | AnalysisJobOutcomeDto::VisitsLimited
                     ))
         }
         AnalysisJobLaneDto::WholeGame => event.outcome == AnalysisJobOutcomeDto::Progress,

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "../domain/preferences";
+import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "../domain/preferences";
 
 declare global {
   interface Window {
@@ -33,6 +33,8 @@ export async function loadAppPreferences(): Promise<AppPreferencesLoadResult> {
 }
 
 export async function saveAppPreferences(preferences: AppPreferences): Promise<AppPreferences> {
+  const error = continuousBudgetError(preferences);
+  if (error) throw new Error(error);
   const normalized = normalizeAppPreferences(preferences);
   if (!isTauriRuntime()) {
     saveBrowserPreferences(normalized);
@@ -46,7 +48,10 @@ function loadBrowserPreferences(): AppPreferencesLoadResult {
   const raw = window.localStorage.getItem(browserPreferencesKey);
   if (!raw) return { preferences: defaultAppPreferences };
   try {
-    return { preferences: normalizeAppPreferences(JSON.parse(raw) as Partial<AppPreferences>) };
+    const preferences = normalizeAppPreferences(JSON.parse(raw) as Partial<AppPreferences>);
+    const error = continuousBudgetError(preferences);
+    if (error) throw new Error(error);
+    return { preferences };
   } catch {
     window.localStorage.setItem(browserUnreadableKey, raw);
     window.localStorage.removeItem(browserPreferencesKey);

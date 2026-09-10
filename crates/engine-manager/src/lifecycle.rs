@@ -6,9 +6,10 @@ use crate::{
 };
 use app_model::{
     AnalysisJobLaneDto, AnalysisJobModeDto, AnalysisJobOutcomeDto, AnalysisJobStartedDto,
-    AnalysisJobStateDto, ContinuousAnalysisPhaseDto, ContinuousAnalysisSnapshotDto, EngineBackend,
-    EngineCapabilitySnapshotDto, EngineFailureDto, EngineFailureKind, EngineOperationDto, EngineRunDto,
-    ForegroundEngineEventDto, ForegroundEngineLifecycleDto, ForegroundEngineSnapshotDto, NodePath,
+    AnalysisJobStateDto, ContinuousAnalysisBudgetDto, ContinuousAnalysisPhaseDto,
+    ContinuousAnalysisSnapshotDto, EngineBackend, EngineCapabilitySnapshotDto, EngineFailureDto,
+    EngineFailureKind, EngineOperationDto, EngineRunDto, ForegroundEngineEventDto,
+    ForegroundEngineLifecycleDto, ForegroundEngineSnapshotDto, NodePath,
 };
 use katago_protocol::{normalize_response, parse_response_line, AnalysisQuery};
 use std::io;
@@ -91,6 +92,7 @@ pub struct SelectedNodeJobRequest {
     pub node_path: NodePath,
     pub query: AnalysisQuery,
     pub board_size: u8,
+    pub position_empty: bool,
 }
 
 #[derive(Clone)]
@@ -127,6 +129,7 @@ struct RegisteredJob {
     run_id: String,
     lane: AnalysisJobLane,
     mode: AnalysisJobModeDto,
+    continuous_budget: Option<ContinuousAnalysisBudgetDto>,
     state: AnalysisJobStateDto,
     cancel_deadline: Option<Instant>,
     cleanup_deadline: Option<Instant>,
@@ -183,8 +186,9 @@ struct ManagerState {
     jobs: Vec<RegisteredJob>,
     subscribers: Vec<Sender<ForegroundEngineEventDto>>,
     continuous_intent: Option<bool>,
+    continuous_budget: ContinuousAnalysisBudgetDto,
     continuous_target: Option<SelectedNodeJobRequest>,
-    continuous_limited: Option<ContinuousAdmission>,
+    continuous_limited: Option<(ContinuousAdmission, ContinuousAnalysisPhaseDto)>,
     continuous_paused: Option<ContinuousAdmission>,
     continuous_error: bool,
     continuous_safety_hold: bool,
@@ -221,6 +225,7 @@ impl ForegroundEngineManager {
                     last_activity: Instant::now(),
                     subscribers: Vec::new(),
                     continuous_intent: None,
+                    continuous_budget: ContinuousAnalysisBudgetDto::default(),
                     continuous_target: None,
                     continuous_limited: None,
                     continuous_paused: None,
@@ -242,26 +247,40 @@ impl ForegroundEngineManager {
         self.lock().subscribers.push(tx);
         rx
     }
-    pub fn set_continuous_intent(&self, enabled: bool) {
-        let cancel = {
+    pub fn set_continuous_preferences(
+        &self,
+        enabled: bool,
+        budget: ContinuousAnalysisBudgetDto,
+    ) -> Result<(), String> {
+        budget.validate()?;
+        {
             let mut state = self.lock();
-            if state.continuous_intent == Some(enabled) {
-                None
-            } else {
-                state.continuous_intent = Some(enabled);
-                let cancel = if enabled {
-                    None
-                } else {
-                    current_selected_job(&state).filter(|job| job.mode == AnalysisJobModeDto::Continuous)
-                };
-                publish_snapshot(&mut state);
-                cancel
+            let budget_changed = state.continuous_budget != budget;
+            if state.continuous_intent == Some(enabled) && !budget_changed {
+                return Ok(());
             }
-        };
-        if let Some(job) = cancel {
-            let _ = self.request_job_stop(&job.run_id, &job.job_id, JobDisposition::Cancelled);
+            state.continuous_intent = Some(enabled);
+            state.continuous_budget = budget;
+            if budget_changed {
+                clear_weak_holds_for_new_position(&mut state);
+            }
+            if let Some(job) = current_selected_job(&state).filter(|job| {
+                job.mode == AnalysisJobModeDto::Continuous
+                    && !job.state.is_limited()
+                    && (!enabled || budget_changed)
+            }) {
+                let disposition = if enabled {
+                    JobDisposition::Superseded
+                } else {
+                    JobDisposition::Cancelled
+                };
+                // Seal under the same lock as the new settings: an old final cannot re-latch its limit.
+                let _ = self.request_job_stop_locked(&mut state, &job.run_id, &job.job_id, disposition);
+            }
+            publish_snapshot(&mut state);
         }
         self.reconcile_continuous();
+        Ok(())
     }
 
     pub fn follow_continuous_position(&self, mut request: SelectedNodeJobRequest) {
@@ -382,9 +401,9 @@ impl ForegroundEngineManager {
                         .as_ref()
                         .is_some_and(|capability| capability.selected_node_analysis)
                 })
-                || current_selected_job(&state)
-                    .is_some_and(|job| job.state != AnalysisJobStateDto::TimeLimited)
+                || current_selected_job(&state).is_some_and(|job| !job.state.is_limited())
                 || state.continuous_target.is_none()
+                || continuous_empty_board(&state)
             {
                 return Err(continuous_invalid_state(
                     &state,
@@ -644,6 +663,7 @@ impl ForegroundEngineManager {
             lane,
             generation: 0,
             mode: AnalysisJobModeDto::Finite,
+            continuous_budget: None,
             state: AnalysisJobStateDto::Queued,
             cancel_deadline: None,
             cleanup_deadline: None,
@@ -673,8 +693,7 @@ impl ForegroundEngineManager {
                     "selected-node admission is already pending",
                 ));
             }
-            let old =
-                current_selected_job(&state).filter(|job| job.state != AnalysisJobStateDto::TimeLimited);
+            let old = current_selected_job(&state).filter(|job| !job.state.is_limited());
             if old
                 .as_ref()
                 .is_some_and(|job| job.state == AnalysisJobStateDto::Stopping)
@@ -727,7 +746,7 @@ impl ForegroundEngineManager {
                     "selected-node position changed during finite admission",
                 ));
             }
-            if current_selected_job(&state).is_some_and(|job| job.state != AnalysisJobStateDto::TimeLimited) {
+            if current_selected_job(&state).is_some_and(|job| !job.state.is_limited()) {
                 return Err(continuous_invalid_state(
                     &state,
                     "selected-node lane changed during admission",
@@ -757,7 +776,7 @@ impl ForegroundEngineManager {
             .jobs
             .retain(|job| !(job.lane == AnalysisJobLane::SelectedNode && job.terminal));
         if request.mode == AnalysisJobModeDto::Continuous {
-            request.query.continuous();
+            request.query.continuous(state.continuous_budget);
         } else {
             request.query.report_during_search_every = Some(0.1);
         }
@@ -788,6 +807,8 @@ impl ForegroundEngineManager {
             run_id: request.run_id,
             lane: AnalysisJobLane::SelectedNode,
             mode: request.mode,
+            continuous_budget: (request.mode == AnalysisJobModeDto::Continuous)
+                .then_some(state.continuous_budget),
             state: AnalysisJobStateDto::Queued,
             cancel_deadline: None,
             cleanup_deadline: None,
@@ -915,6 +936,7 @@ impl ForegroundEngineManager {
                 run_id: request.run_id.clone(),
                 lane: AnalysisJobLane::WholeGame,
                 mode: AnalysisJobModeDto::Finite,
+                continuous_budget: None,
                 state: AnalysisJobStateDto::Queued,
                 cancel_deadline: None,
                 cleanup_deadline: None,
@@ -1012,8 +1034,17 @@ impl ForegroundEngineManager {
         job_id: &str,
         disposition: JobDisposition,
     ) -> Result<(), EngineFailureDto> {
+        self.request_job_stop_locked(&mut self.lock(), run_id, job_id, disposition)
+    }
+
+    fn request_job_stop_locked(
+        &self,
+        state: &mut ManagerState,
+        run_id: &str,
+        job_id: &str,
+        disposition: JobDisposition,
+    ) -> Result<(), EngineFailureDto> {
         {
-            let mut state = self.lock();
             let Some(job) = state
                 .jobs
                 .iter_mut()
@@ -1052,8 +1083,8 @@ impl ForegroundEngineManager {
                     None,
                 )
             };
-            publish_event(&mut state, ForegroundEngineEventDto::Job { job: event });
-            publish_snapshot(&mut state);
+            publish_event(state, ForegroundEngineEventDto::Job { job: event });
+            publish_snapshot(state);
         }
         let manager = self.clone();
         let run_id = run_id.to_string();
@@ -1198,9 +1229,7 @@ impl ForegroundEngineManager {
             {
                 return;
             }
-            if let Some(active) =
-                current_selected_job(&state).filter(|job| job.state != AnalysisJobStateDto::TimeLimited)
-            {
+            if let Some(active) = current_selected_job(&state).filter(|job| !job.state.is_limited()) {
                 let target = state
                     .continuous_target
                     .as_ref()
@@ -1216,7 +1245,7 @@ impl ForegroundEngineManager {
                 ContinuousReconcileWork::Cancel(active)
             } else {
                 let current_run_id = current_admitting_run(&state.phase).map(|run| run.run_id);
-                let limited_matches = state.continuous_limited.as_ref().is_some_and(|hold| {
+                let limited_matches = state.continuous_limited.as_ref().is_some_and(|(hold, _)| {
                     hold.matches_target(current_run_id.as_deref(), state.continuous_target.as_ref())
                 });
                 let paused_matches = state.continuous_paused.as_ref().is_some_and(|hold| {
@@ -1228,7 +1257,7 @@ impl ForegroundEngineManager {
                 if state.continuous_paused.is_some() && !paused_matches {
                     state.continuous_paused = None;
                 }
-                let limited = state.continuous_limited.clone();
+                let limited = state.continuous_limited.as_ref().map(|(hold, _)| hold.clone());
                 state.jobs.retain(|job| {
                     !(job.lane == AnalysisJobLane::SelectedNode
                         && job.terminal
@@ -1239,6 +1268,7 @@ impl ForegroundEngineManager {
                     || state.continuous_safety_hold
                     || state.continuous_limited.is_some()
                     || state.continuous_paused.is_some()
+                    || continuous_empty_board(&state)
                 {
                     return;
                 }
@@ -2138,7 +2168,31 @@ impl Inner {
             publish_snapshot(&mut state);
         } else {
             let outcome = if started.mode == AnalysisJobModeDto::Continuous {
-                AnalysisJobOutcomeDto::TimeLimited
+                let budget = state.jobs[index]
+                    .continuous_budget
+                    .expect("continuous job budget");
+                if budget.continuous_visits_limit_enabled
+                    && frame
+                        .as_ref()
+                        .is_some_and(|frame| frame.visits >= budget.continuous_visits_limit)
+                {
+                    AnalysisJobOutcomeDto::VisitsLimited
+                } else if budget.continuous_time_limit_enabled {
+                    AnalysisJobOutcomeDto::TimeLimited
+                } else {
+                    let published = failure(
+                        EngineOperationDto::Job,
+                        EngineFailureKind::Protocol,
+                        "continuous search ended before an enabled limit".into(),
+                        Some(run_id),
+                        None,
+                        None,
+                    )
+                    .with_job_id(&started.job_id);
+                    finish_failed_job(&mut state, &started, published);
+                    publish_snapshot(&mut state);
+                    return None;
+                }
             } else {
                 AnalysisJobOutcomeDto::Completed
             };
@@ -2619,7 +2673,7 @@ fn current_non_terminal_job(state: &ManagerState, lane: AnalysisJobLane) -> Opti
         .jobs
         .iter()
         .rev()
-        .find(|job| job.lane == lane && (!job.terminal || job.state == AnalysisJobStateDto::TimeLimited))
+        .find(|job| job.lane == lane && (!job.terminal || job.state.is_limited()))
         .map(started_from)
 }
 
@@ -2643,11 +2697,25 @@ fn finish_selected_node_job(
         return;
     };
     match (mode, outcome) {
-        (AnalysisJobModeDto::Continuous, AnalysisJobOutcomeDto::TimeLimited) => {
-            state.continuous_limited = Some(admission);
+        (
+            AnalysisJobModeDto::Continuous,
+            AnalysisJobOutcomeDto::TimeLimited | AnalysisJobOutcomeDto::VisitsLimited,
+        ) => {
+            state.continuous_limited = Some((
+                admission,
+                if outcome == AnalysisJobOutcomeDto::VisitsLimited {
+                    ContinuousAnalysisPhaseDto::VisitsLimited
+                } else {
+                    ContinuousAnalysisPhaseDto::TimeLimited
+                },
+            ));
             if let Some(job) = state.jobs.iter_mut().find(|job| job.job_id == started.job_id) {
                 job.terminal = true;
-                job.state = AnalysisJobStateDto::TimeLimited;
+                job.state = if outcome == AnalysisJobOutcomeDto::VisitsLimited {
+                    AnalysisJobStateDto::VisitsLimited
+                } else {
+                    AnalysisJobStateDto::TimeLimited
+                };
             }
         }
         (AnalysisJobModeDto::Continuous, AnalysisJobOutcomeDto::Failed) => {
@@ -2713,10 +2781,7 @@ fn current_selected_job(state: &ManagerState) -> Option<AnalysisJobStartedDto> {
         .jobs
         .iter()
         .rev()
-        .find(|job| {
-            job.lane == AnalysisJobLane::SelectedNode
-                && (!job.terminal || job.state == AnalysisJobStateDto::TimeLimited)
-        })
+        .find(|job| job.lane == AnalysisJobLane::SelectedNode && (!job.terminal || job.state.is_limited()))
         .map(started_from)
 }
 
@@ -2794,6 +2859,14 @@ fn continuous_invalid_state(state: &ManagerState, message: &str) -> EngineFailur
     )
 }
 
+fn continuous_empty_board(state: &ManagerState) -> bool {
+    state.continuous_budget.continuous_stop_on_empty_board
+        && state
+            .continuous_target
+            .as_ref()
+            .is_some_and(|target| target.position_empty)
+}
+
 fn continuous_snapshot(state: &ManagerState) -> ContinuousAnalysisSnapshotDto {
     let enabled = state.continuous_intent;
     let phase = if state.continuous_departing {
@@ -2802,9 +2875,9 @@ fn continuous_snapshot(state: &ManagerState) -> ContinuousAnalysisSnapshotDto {
         ContinuousAnalysisPhaseDto::Error
     } else if current_selected_job(state).is_some_and(|job| job.state == AnalysisJobStateDto::Stopping) {
         ContinuousAnalysisPhaseDto::Stopping
-    } else if current_selected_job(state).is_some_and(|job| {
-        job.mode == AnalysisJobModeDto::Finite && !matches!(job.state, AnalysisJobStateDto::TimeLimited)
-    }) {
+    } else if current_selected_job(state)
+        .is_some_and(|job| job.mode == AnalysisJobModeDto::Finite && !job.state.is_limited())
+    {
         ContinuousAnalysisPhaseDto::Finite
     } else if enabled.is_none() {
         ContinuousAnalysisPhaseDto::Loading
@@ -2822,11 +2895,14 @@ fn continuous_snapshot(state: &ManagerState) -> ContinuousAnalysisSnapshotDto {
             AnalysisJobStateDto::Searching => ContinuousAnalysisPhaseDto::Searching,
             AnalysisJobStateDto::Stopping => ContinuousAnalysisPhaseDto::Stopping,
             AnalysisJobStateDto::TimeLimited => ContinuousAnalysisPhaseDto::TimeLimited,
+            AnalysisJobStateDto::VisitsLimited => ContinuousAnalysisPhaseDto::VisitsLimited,
         }
-    } else if state.continuous_limited.is_some() {
-        ContinuousAnalysisPhaseDto::TimeLimited
+    } else if let Some((_, phase)) = state.continuous_limited.as_ref() {
+        *phase
     } else if state.continuous_paused.is_some() {
         ContinuousAnalysisPhaseDto::Paused
+    } else if continuous_empty_board(state) {
+        ContinuousAnalysisPhaseDto::EmptyBoard
     } else {
         match &state.phase {
             Phase::Ready(run) | Phase::Switching { primary: run, .. } => {

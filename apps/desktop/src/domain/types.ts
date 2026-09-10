@@ -134,6 +134,13 @@ export type ForegroundEngineLifecycleDto =
   | { state: "switching"; primary: EngineRunDto; candidate: EngineRunDto; switch_id: string }
   | { state: "stopping"; run: EngineRunDto }
   | { state: "error"; run: EngineRunDto; failure: EngineFailureDto };
+export type ContinuousAnalysisBudgetDto = {
+  continuousTimeLimitEnabled: boolean;
+  continuousTimeLimitSeconds: number;
+  continuousVisitsLimitEnabled: boolean;
+  continuousVisitsLimit: number;
+  continuousStopOnEmptyBoard: boolean;
+};
 export type ContinuousAnalysisPhaseDto =
   | "loading"
   | "off"
@@ -143,6 +150,8 @@ export type ContinuousAnalysisPhaseDto =
   | "searching"
   | "stopping"
   | "time_limited"
+  | "visits_limited"
+  | "empty_board"
   | "finite"
   | "paused"
   | "error"
@@ -161,7 +170,7 @@ export type ForegroundEngineSnapshotDto = {
 };
 export type AnalysisJobLaneDto = "selected_node" | "whole_game";
 export type AnalysisJobModeDto = "finite" | "continuous";
-export type AnalysisJobStateDto = "queued" | "searching" | "stopping" | "time_limited";
+export type AnalysisJobStateDto = "queued" | "searching" | "stopping" | "time_limited" | "visits_limited";
 export type AnalysisJobOutcomeDto =
   | "started"
   | "progress"
@@ -171,6 +180,7 @@ export type AnalysisJobOutcomeDto =
   | "timeout"
   | "stopping"
   | "time_limited"
+  | "visits_limited"
   | "failed";
 export type AnalysisJobStartedDto = {
   run_id: string;

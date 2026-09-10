@@ -1,4 +1,5 @@
-import type { AppPreferences, BoardTheme, GraphPerspective, NextMoveReviewMarkerMode, ReviewMode, SubBoardContentMode } from "../domain/preferences";
+import { useState } from "react";
+import { continuousBudgetError, type AppPreferences, type BoardTheme, type GraphPerspective, type NextMoveReviewMarkerMode, type ReviewMode, type SubBoardContentMode } from "../domain/preferences";
 import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
 
 type Props = {
@@ -94,6 +95,7 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
           onChange={(checked) => update({ continuousAnalysisEnabled: checked })}
         />
       </fieldset>
+      <ContinuousBudgetEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       <fieldset className="preferences-grid">
         <legend>复盘</legend>
         <label>
@@ -173,6 +175,61 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
         </label>
       </fieldset>
     </section>
+  );
+}
+
+function ContinuousBudgetEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
+  const [edited, setEdited] = useState<{
+    timeEnabled: boolean; seconds: string; visitsEnabled: boolean; visits: string; stopOnEmpty: boolean;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const draft = edited ?? {
+    timeEnabled: preferences.continuousTimeLimitEnabled,
+    seconds: String(preferences.continuousTimeLimitSeconds),
+    visitsEnabled: preferences.continuousVisitsLimitEnabled,
+    visits: String(preferences.continuousVisitsLimit),
+    stopOnEmpty: preferences.continuousStopOnEmptyBoard
+  };
+  function apply() {
+    const next = {
+      ...preferences,
+      continuousTimeLimitEnabled: draft.timeEnabled,
+      continuousTimeLimitSeconds: Number(draft.seconds),
+      continuousVisitsLimitEnabled: draft.visitsEnabled,
+      continuousVisitsLimit: Number(draft.visits),
+      continuousStopOnEmptyBoard: draft.stopOnEmpty
+    };
+    const invalid = continuousBudgetError(next);
+    setError(invalid);
+    if (invalid) return;
+    onChange(next);
+    setEdited(null);
+  }
+  return (
+    <fieldset className="preferences-grid" disabled={disabled}>
+      <legend>连续分析预算</legend>
+      <Toggle label="限制连续分析时间" checked={draft.timeEnabled} disabled={disabled}
+        onChange={(timeEnabled) => setEdited({ ...draft, timeEnabled })} />
+      <label>
+        <span>连续分析时间（秒）</span>
+        <input type="number" min={1} max={4294967295} step={1} value={draft.seconds}
+          disabled={disabled || !draft.timeEnabled}
+          onChange={(event) => setEdited({ ...draft, seconds: event.target.value })} />
+      </label>
+      <Toggle label="限制连续分析 visits" checked={draft.visitsEnabled} disabled={disabled}
+        onChange={(visitsEnabled) => setEdited({ ...draft, visitsEnabled })} />
+      <label>
+        <span>连续分析 visits 上限</span>
+        <input type="number" min={1} max={4294967295} step={1} value={draft.visits}
+          disabled={disabled || !draft.visitsEnabled}
+          onChange={(event) => setEdited({ ...draft, visits: event.target.value })} />
+      </label>
+      <Toggle label="空棋盘停止连续分析" checked={draft.stopOnEmpty} disabled={disabled}
+        onChange={(stopOnEmpty) => setEdited({ ...draft, stopOnEmpty })} />
+      <button type="button" disabled={disabled || edited === null} onClick={apply}>应用连续预算</button>
+      <p>任一启用上限先到即停止。关闭上限保留数值；保存成功后才重新开始当前连续搜索，不修改有限分析或整盘请求。</p>
+      {error ? <p role="alert">{error}</p> : null}
+    </fieldset>
   );
 }
 

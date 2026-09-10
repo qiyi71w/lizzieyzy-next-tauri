@@ -4,7 +4,7 @@ export function admitsAnalysisPublication(
   event: AnalysisJobEventDto,
   current: AnalysisPublicationScopeDto
 ): boolean {
-  return (event.outcome === "completed" || (event.mode === "continuous" && (event.outcome === "progress" || event.outcome === "time_limited")))
+  return (event.outcome === "completed" || (event.mode === "continuous" && (event.outcome === "progress" || event.outcome === "time_limited" || event.outcome === "visits_limited")))
     && event.frame != null
     && event.run_id === current.run_id
     && event.job_id === current.job_id
@@ -37,7 +37,7 @@ export function admitsAnalysisAttachment(event: AnalysisJobEventDto): boolean {
   if (frame == null || frame.visits === 0 || frame.candidates.length === 0) return false;
   if (event.lane === "selected_node") {
     return event.mode === "continuous"
-      ? event.outcome === "progress" || event.outcome === "completed" || event.outcome === "time_limited"
+      ? event.outcome === "progress" || event.outcome === "completed" || event.outcome === "time_limited" || event.outcome === "visits_limited"
       : event.outcome === "completed";
   }
   return event.lane === "whole_game" && event.outcome === "progress";

@@ -177,11 +177,8 @@ beforeEach(() => {
     node_path: { indices: [] }
   });
   backend.foregroundEngineContinuousAction.mockResolvedValue({
-    showOwnership: true, showPolicy: true, showCandidates: true, candidateLimit: 8,
-    defaultMaxVisits: 800, reviewMode: "quick", boardTheme: "classic", graphPerspective: "black",
-    winrateLine: true, scoreLeadLine: true, blunderBar: false, graphHover: true, scoreLeadScale: 15,
-    nextMoveReviewMarker: "variations", subBoardContentMode: "variation", variationReplayEnabled: false,
-    variationReplayIntervalMs: 500, restoreLastSession: false, continuousAnalysisEnabled: false
+    ...defaultAppPreferences,
+    continuousAnalysisEnabled: false
   });
   backend.classifyProblems.mockResolvedValue([]);
   backend.subscribeForegroundEngine.mockImplementation(async (onSnapshot, _onFailure, onJob) => {
@@ -359,7 +356,7 @@ function emitContinuousSnapshot(phase: ForegroundEngineSnapshotDto["continuous"]
   enabled?: boolean;
   job?: boolean;
   jobMode?: "continuous" | "finite";
-  jobState?: "queued" | "searching" | "stopping" | "time_limited";
+  jobState?: "queued" | "searching" | "stopping" | "time_limited" | "visits_limited";
   lifecycle?: ForegroundEngineSnapshotDto["lifecycle"];
 } = {}) {
   snapshotRevision += 1;
@@ -376,19 +373,19 @@ function emitContinuousSnapshot(phase: ForegroundEngineSnapshotDto["continuous"]
     continuous: { enabled: options.enabled ?? true, phase },
     selected_node_job: options.job === false ? null : {
       run_id: "run-1", job_id: "job-continuous", lane: "selected_node", mode: options.jobMode ?? "continuous",
-      state: options.jobState ?? (phase === "searching" ? "searching" : phase === "stopping" ? "stopping" : phase === "time_limited" ? "time_limited" : "queued"),
+      state: options.jobState ?? (phase === "searching" ? "searching" : phase === "stopping" ? "stopping" : phase === "time_limited" || phase === "visits_limited" ? phase : "queued"),
       generation: 1, node_path: { indices: [] }
     }
   });
 }
 
-async function publishContinuousProgress(visits: number, phase: "searching" | "time_limited" = "searching") {
+async function publishContinuousProgress(visits: number, phase: "searching" | "time_limited" | "visits_limited" = "searching") {
   const frame = continuousFrame(visits);
   await act(async () => {
     emitContinuousSnapshot(phase);
     listeners.onJob?.({
       run_id: "run-1", job_id: "job-continuous", lane: "selected_node", mode: "continuous",
-      generation: 1, node_path: { indices: [] }, outcome: phase === "time_limited" ? "time_limited" : "progress",
+      generation: 1, node_path: { indices: [] }, outcome: phase === "searching" ? "progress" : phase,
       frame,
       current_game: {
         ...initialGame,
@@ -458,6 +455,13 @@ describe("authoritative continuous selected-node analysis", () => {
     await publishContinuousProgress(45, "time_limited");
     expect(host.querySelector(".cand-visits")?.textContent).toBe("45");
     expect(buttonNamed(host, "继续连续分析").disabled).toBe(false);
+    await publishContinuousProgress(64, "visits_limited");
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("64");
+    expect(host.textContent).toContain("visits 限制");
+    expect(buttonNamed(host, "继续连续分析").disabled).toBe(false);
+    act(() => emitContinuousSnapshot("empty_board", { job: false }));
+    expect(host.textContent).toContain("空棋盘停止已启用");
+    expect(buttonNamed(host, "停止连续分析").disabled).toBe(false);
   });
 
   it("routes focus-safe Space, visible, and menu actions through the same contextual command", async () => {

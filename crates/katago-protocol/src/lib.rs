@@ -1,5 +1,6 @@
 use app_model::{
-    AnalysisFrameDto, AnalysisJobId, CandidateMoveDto, GameDto, MoveDto, MoveVertex, PlayerColor, PointDto,
+    AnalysisFrameDto, AnalysisJobId, CandidateMoveDto, ContinuousAnalysisBudgetDto, GameDto, MoveDto,
+    MoveVertex, PlayerColor, PointDto,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -182,13 +183,21 @@ impl AnalysisQuery {
         Ok(format!("{}\n", serde_json::to_string(self)?))
     }
 
-    pub fn continuous(&mut self) {
+    pub fn continuous(&mut self, budget: ContinuousAnalysisBudgetDto) {
         self.max_visits = None;
         self.report_during_search_every = Some(0.1);
         self.override_settings = Some(ContinuousSearchSettings {
-            max_time: 600.0,
+            max_time: if budget.continuous_time_limit_enabled {
+                f64::from(budget.continuous_time_limit_seconds)
+            } else {
+                1e20
+            },
             // KataGo's unbounded search sentinel, overriding finite config limits.
-            max_visits: 1 << 50,
+            max_visits: if budget.continuous_visits_limit_enabled {
+                u64::from(budget.continuous_visits_limit)
+            } else {
+                1 << 50
+            },
             max_playouts: 1 << 50,
         });
     }

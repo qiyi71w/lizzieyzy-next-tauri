@@ -20,7 +20,10 @@ impl PreferencesState {
             return Ok(loaded.clone());
         }
         let loaded = app_preferences::load_from_path(path)?;
-        manager.set_continuous_intent(loaded.preferences.continuous_analysis_enabled);
+        manager.set_continuous_preferences(
+            loaded.preferences.continuous_analysis_enabled,
+            loaded.preferences.continuous_budget,
+        )?;
         *committed = Some(loaded.clone());
         Ok(loaded)
     }
@@ -33,7 +36,7 @@ impl PreferencesState {
     ) -> Result<AppPreferencesDto, String> {
         let mut committed = self.0.lock().expect("preferences transaction");
         let saved = app_preferences::save_to_path(path, preferences)?;
-        manager.set_continuous_intent(saved.continuous_analysis_enabled);
+        manager.set_continuous_preferences(saved.continuous_analysis_enabled, saved.continuous_budget)?;
         *committed = Some(AppPreferencesLoadResultDto {
             preferences: saved.clone(),
             recovery: None,
@@ -66,7 +69,7 @@ impl PreferencesState {
                     .is_some_and(|job| job.mode == AnalysisJobModeDto::Finite);
                 preferences.continuous_analysis_enabled = start;
                 preferences = app_preferences::save_to_path(path, preferences)?;
-                manager.set_continuous_intent(start);
+                manager.set_continuous_preferences(start, preferences.continuous_budget)?;
                 if start && !finite {
                     manager.authorize_continuous_start();
                 }
@@ -121,6 +124,7 @@ pub fn position_request(
         node_path,
         query,
         board_size,
+        position_empty: snapshot.position.stones.is_empty(),
     })
 }
 

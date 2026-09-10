@@ -64,7 +64,7 @@ import {
 } from "./domain/foregroundEngine";
 import { loadAppPreferences, saveAppPreferences } from "./api/preferences";
 import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition } from "./domain/board";
-import { defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "./domain/preferences";
+import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "./domain/preferences";
 import { buildNextMoveReviewMarkers, cycleNextMoveReviewMarker } from "./domain/nextMoveReviewMarker";
 import { admitsChartSeriesChange, buildWinrateChartModel, displayedWinrate } from "./domain/winrateChart";
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
@@ -388,7 +388,7 @@ export function App() {
     if (!continuousEnabled) {
       return { label: CONTINUOUS_ANALYSIS_START_LABEL, disabled: continuousActionPending, status: continuousPhaseStatus(continuousPhase) };
     }
-    if (continuousPhase === "time_limited" || continuousPhase === "paused" || continuousPhase === "error" || continuousPhase === "safety_hold") {
+    if (continuousPhase === "time_limited" || continuousPhase === "visits_limited" || continuousPhase === "paused" || continuousPhase === "error" || continuousPhase === "safety_hold") {
       const resumable = nativeRuntime && engineReady && Boolean(currentGame);
       return {
         label: CONTINUOUS_ANALYSIS_RESUME_LABEL,
@@ -674,6 +674,11 @@ export function App() {
   function handlePreferencesChange(nextPreferences: AppPreferences) {
     if (continuousActionInFlightRef.current) return;
     if (!preferencesLoadSettledRef.current) return;
+    const budgetError = continuousBudgetError(nextPreferences);
+    if (budgetError) {
+      setPreferencesStatus(budgetError);
+      return;
+    }
     const normalized = normalizeAppPreferences(nextPreferences);
     const seriesChanged = normalized.winrateLine !== preferences.winrateLine
       || normalized.scoreLeadLine !== preferences.scoreLeadLine;
@@ -1296,7 +1301,7 @@ export function App() {
   function publishAuthoritativeContinuousFrame(job: AnalysisJobEventDto) {
     const pending = selectedNodeJobRef.current;
     if (!pending || pending.mode !== "continuous" || !matchesPendingAnalysisJob(pending, job)) return;
-    if (!(["queued", "searching", "time_limited"] as ContinuousAnalysisPhaseDto[]).includes(engineSnapshotRef.current.continuous.phase)) return;
+    if (!(["queued", "searching", "time_limited", "visits_limited"] as ContinuousAnalysisPhaseDto[]).includes(engineSnapshotRef.current.continuous.phase)) return;
     if (departurePendingRef.current || navigatingRef.current) return;
     const refreshed = job.current_game;
     if (!refreshed || !isCurrentDocumentGeneration(refreshed.generation) || !samePath(refreshed.selected_path, job.node_path)) return;
@@ -1339,9 +1344,9 @@ export function App() {
       const phase = engineSnapshotRef.current.continuous.phase;
       if (job.outcome === "progress" && (phase === "queued" || phase === "searching")) {
         if (admitsAnalysisAttachment(job)) void publishAuthoritativeContinuousFrame(job);
-      } else if (job.outcome === "time_limited" && phase === "time_limited") {
+      } else if ((job.outcome === "time_limited" || job.outcome === "visits_limited") && phase === job.outcome) {
         if (admitsAnalysisAttachment(job)) void publishAuthoritativeContinuousFrame(job);
-        setMessage("连续分析已达到时间限制；可显式继续。");
+        setMessage(`${continuousPhaseStatus(phase)}；可显式继续。`);
       } else if ((job.outcome === "failed" || job.outcome === "timeout") && phase === "error") {
         setMessage(job.failure?.message ?? "连续分析失败；请显式继续或重启引擎。");
       }
@@ -1453,7 +1458,7 @@ export function App() {
       setMessage("浏览器预览只保存连续分析偏好，不会启动分析任务。");
       return;
     }
-    if ((phase === "time_limited" || phase === "paused" || phase === "error" || phase === "safety_hold")
+    if ((phase === "time_limited" || phase === "visits_limited" || phase === "paused" || phase === "error" || phase === "safety_hold")
       && (!admitsForegroundEngineJobs(snapshot) || !currentGameRef.current)) {
       setMessage("继续连续分析需要可用的前台引擎和当前棋谱。");
       return;
@@ -2092,6 +2097,8 @@ function continuousPhaseStatus(phase: ContinuousAnalysisPhaseDto): string {
     case "searching": return "连续分析：搜索中";
     case "stopping": return "连续分析：正在停止";
     case "time_limited": return "连续分析：已达时间限制";
+    case "visits_limited": return "连续分析：已达 visits 限制";
+    case "empty_board": return "连续分析：空棋盘停止已启用；请选择非空局面或关闭此设置";
     case "finite": return "连续分析：有限分析运行中";
     case "paused": return "连续分析：有限分析停止后已暂停";
     case "error": return "连续分析：已因错误停止";

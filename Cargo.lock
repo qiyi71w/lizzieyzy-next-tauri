@@ -81,6 +81,7 @@ dependencies = [
 name = "app-preferences"
 version = "0.1.0"
 dependencies = [
+ "app-model",
  "serde",
  "serde_json",
 ]

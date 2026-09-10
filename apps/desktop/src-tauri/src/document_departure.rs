@@ -17,7 +17,7 @@ pub fn jobs_from_snapshot(snapshot: &ForegroundEngineSnapshotDto) -> Vec<Analysi
     if let Some(job) = snapshot
         .selected_node_job
         .clone()
-        .filter(|job| job.state != app_model::AnalysisJobStateDto::TimeLimited)
+        .filter(|job| !job.state.is_limited())
     {
         jobs.push(job);
     }

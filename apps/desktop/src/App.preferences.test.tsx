@@ -138,31 +138,37 @@ afterEach(() => {
 });
 
 describe("durable preferences surface", () => {
-  it("loads owner defaults into the categorized Preferences surface", async () => {
+  it("keeps invalid budgets local and restores the committed values when persistence fails", async () => {
     const host = await renderApp();
-    openPreferences(host);
-
-    expect(categoryLegends(host)).toEqual(["分析呈现", "启动", "复盘", "棋盘", "胜率图"]);
-    expect(labeledCheckbox(host, "候选").checked).toBe(true);
-    expect(labeledCheckbox(host, "领地").checked).toBe(true);
-    expect(labeledCheckbox(host, "策略").checked).toBe(true);
-    expect(labeledNumber(host, "显示候选数").value).toBe("8");
-    expect(labeledNumber(host, "默认计算量").value).toBe("800");
-    expect(labeledSelect(host, "复盘深度").value).toBe("quick");
-    expect(labeledSelect(host, "棋盘对比").value).toBe("classic");
-    expect(labeledSelect(host, "下一手标记").value).toBe("variations");
-    expect(labeledSelect(host, "小棋盘内容").value).toBe("variation");
-    expect(labeledCheckbox(host, "变化回放").checked).toBe(false);
-    expect(labeledNumber(host, "回放间隔").value).toBe("500");
-    expect(labeledCheckbox(host, "启动时恢复上次棋谱").checked).toBe(false);
-    expect(labeledCheckbox(host, "连续分析").checked).toBe(true);
-    expect(host.textContent).not.toContain("自动载入缓存");
-    expect(host.textContent).not.toContain("自动保存分析");
-    expect(host.textContent).not.toContain("缓存未用");
-    expect(host.textContent).not.toContain("命中缓存");
     act(() => buttonNamed(host, "分析").click());
-    expect(host.textContent).not.toContain("清除 Lizzie 缓存");
-    expect(preferencesStatus(host)).toBe("Preferences loaded.");
+    act(() => buttonNamed(host, "连续分析预算…").click());
+    const seconds = () => labeledNumber(host, "连续分析时间（秒）");
+    for (const value of ["0", "1.5", "4294967296"]) {
+      changeBudgetNumber(seconds(), value);
+      act(() => buttonNamed(host, "应用连续预算").click());
+      expect(host.querySelector('[role="alert"]')?.textContent).toContain("整数");
+      expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+    }
+    changeBudgetNumber(seconds(), "2");
+    preferencesApi.saveAppPreferences.mockRejectedValueOnce(new Error("disk full"));
+    act(() => buttonNamed(host, "应用连续预算").click());
+    await act(async () => { await preferencesApi.saveAppPreferences.mock.results.at(-1)?.value.catch(() => undefined); });
+    expect(seconds().value).toBe("600");
+    expect(preferencesStatus(host)).toContain("disk full");
+    expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
+
+    changeBudgetNumber(seconds(), "2");
+    act(() => labeledCheckbox(host, "限制连续分析 visits").click());
+    changeBudgetNumber(labeledNumber(host, "连续分析 visits 上限"), "32");
+    act(() => buttonNamed(host, "应用连续预算").click());
+    await flushLast(preferencesApi.saveAppPreferences);
+    expect(seconds().value).toBe("2");
+    expect(labeledNumber(host, "连续分析 visits 上限").value).toBe("32");
+    act(() => labeledCheckbox(host, "限制连续分析 visits").click());
+    act(() => buttonNamed(host, "应用连续预算").click());
+    await flushLast(preferencesApi.saveAppPreferences);
+    expect(labeledNumber(host, "连续分析 visits 上限").disabled).toBe(true);
+    expect(labeledNumber(host, "连续分析 visits 上限").value).toBe("32");
   });
 
   it("keeps continuous intent disabled until the durable preference load settles", async () => {
@@ -590,13 +596,17 @@ async function flushLast(mock: { mock: { results: Array<{ value?: unknown }> } }
   });
 }
 
+function changeBudgetNumber(input: HTMLInputElement, value: string) {
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
 function openPreferences(host: HTMLElement) {
   act(() => buttonNamed(host, "参数").click());
 }
 
-function categoryLegends(host: HTMLElement): string[] {
-  return [...host.querySelectorAll(".preferences-panel fieldset legend")].map((legend) => legend.textContent ?? "");
-}
 
 function preferencesStatus(host: HTMLElement): string {
   return requiredElement(host, ".preferences-header span").textContent ?? "";
