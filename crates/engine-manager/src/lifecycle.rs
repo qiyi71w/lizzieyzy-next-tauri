@@ -686,7 +686,7 @@ impl ForegroundEngineManager {
     ) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
         let old = {
             let mut state = self.lock();
-            validate_selected_admission(&state, &request.run_id)?;
+            validate_selected_admission(&state, &request)?;
             if state.finite_admission_pending {
                 return Err(continuous_invalid_state(
                     &state,
@@ -732,20 +732,7 @@ impl ForegroundEngineManager {
         let result = (|| {
             let mut state = self.lock();
             state.finite_admission_pending = false;
-            validate_selected_admission(&state, &request.run_id)?;
-            if state.continuous_target.as_ref().is_some_and(|target| {
-                !same_position(
-                    request.generation,
-                    &request.node_path,
-                    target.generation,
-                    &target.node_path,
-                )
-            }) {
-                return Err(continuous_invalid_state(
-                    &state,
-                    "selected-node position changed during finite admission",
-                ));
-            }
+            validate_selected_admission(&state, &request)?;
             if current_selected_job(&state).is_some_and(|job| !job.state.is_limited()) {
                 return Err(continuous_invalid_state(
                     &state,
@@ -771,7 +758,7 @@ impl ForegroundEngineManager {
         state: &mut ManagerState,
         mut request: SelectedNodeJobRequest,
     ) -> Result<SelectedSubmission, EngineFailureDto> {
-        validate_selected_admission(state, &request.run_id)?;
+        validate_selected_admission(state, &request)?;
         state
             .jobs
             .retain(|job| !(job.lane == AnalysisJobLane::SelectedNode && job.terminal));
@@ -2723,7 +2710,7 @@ fn finish_selected_node_job(
             state.continuous_error = true;
             state.jobs.retain(|job| job.job_id != started.job_id);
         }
-        (AnalysisJobModeDto::Finite, _) => {
+        (AnalysisJobModeDto::Finite, AnalysisJobOutcomeDto::Cancelled) => {
             state.continuous_paused = Some(admission);
             state.jobs.retain(|job| job.job_id != started.job_id);
         }
@@ -2790,7 +2777,30 @@ fn current_admitting_run(phase: &Phase) -> Option<EngineRunDto> {
     }
 }
 
-fn validate_selected_admission(state: &ManagerState, run_id: &str) -> Result<EngineRunDto, EngineFailureDto> {
+fn validate_selected_admission(
+    state: &ManagerState,
+    request: &SelectedNodeJobRequest,
+) -> Result<EngineRunDto, EngineFailureDto> {
+    let run_id = request.run_id.as_str();
+    if state.continuous_departing {
+        return Err(continuous_invalid_state(
+            state,
+            "document departure is in progress",
+        ));
+    }
+    if state.continuous_target.as_ref().is_some_and(|target| {
+        !same_position(
+            request.generation,
+            &request.node_path,
+            target.generation,
+            &target.node_path,
+        )
+    }) {
+        return Err(continuous_invalid_state(
+            state,
+            "selected-node position changed during admission",
+        ));
+    }
     let run = admitting_run(&state.phase, run_id).ok_or_else(|| {
         failure(
             EngineOperationDto::Job,

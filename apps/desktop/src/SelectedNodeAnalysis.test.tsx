@@ -180,6 +180,15 @@ beforeEach(() => {
     ...defaultAppPreferences,
     continuousAnalysisEnabled: false
   });
+  backend.startKataGoGameAnalysis.mockResolvedValue({
+    run_id: "run-1",
+    job_id: "job-wg",
+    lane: "whole_game",
+    mode: "finite",
+    state: "queued",
+    generation: 1,
+    node_path: { indices: [] }
+  });
   backend.classifyProblems.mockResolvedValue([]);
   backend.subscribeForegroundEngine.mockImplementation(async (onSnapshot, _onFailure, onJob) => {
     listeners.onSnapshot = onSnapshot;
@@ -357,6 +366,7 @@ function emitContinuousSnapshot(phase: ForegroundEngineSnapshotDto["continuous"]
   job?: boolean;
   jobMode?: "continuous" | "finite";
   jobState?: "queued" | "searching" | "stopping" | "time_limited" | "visits_limited";
+  wholeGameJob?: boolean;
   lifecycle?: ForegroundEngineSnapshotDto["lifecycle"];
 } = {}) {
   snapshotRevision += 1;
@@ -375,7 +385,11 @@ function emitContinuousSnapshot(phase: ForegroundEngineSnapshotDto["continuous"]
       run_id: "run-1", job_id: "job-continuous", lane: "selected_node", mode: options.jobMode ?? "continuous",
       state: options.jobState ?? (phase === "searching" ? "searching" : phase === "stopping" ? "stopping" : phase === "time_limited" || phase === "visits_limited" ? phase : "queued"),
       generation: 1, node_path: { indices: [] }
-    }
+    },
+    whole_game_job: options.wholeGameJob ? {
+      run_id: "run-1", job_id: "job-wg", lane: "whole_game", mode: "finite", state: "searching",
+      generation: 1, node_path: { indices: [] }
+    } : undefined
   });
 }
 
@@ -432,6 +446,71 @@ describe("authoritative finite selected-node completion", () => {
     expect(host.querySelector(".cand-visits")?.textContent).toBe("64");
     expect(host.textContent).not.toContain("此手分析中");
     expect(Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "取消此手")).toBeUndefined();
+  });
+
+  it("keeps a fresh continuous owner and frame when the finite invoke and classification resolve late", async () => {
+    let resolveStart!: (job: {
+      run_id: string; job_id: string; lane: "selected_node"; mode: "finite"; state: "queued";
+      generation: number; node_path: { indices: number[] };
+    }) => void;
+    const pendingStart = new Promise<Parameters<typeof resolveStart>[0]>((resolve) => { resolveStart = resolve; });
+    let resolveClassification!: (markers: []) => void;
+    const pendingClassification = new Promise<[]>((resolve) => { resolveClassification = resolve; });
+    backend.startSelectedNodeAnalysis.mockReturnValueOnce(pendingStart);
+    backend.classifyProblems.mockReturnValueOnce(pendingClassification);
+    const host = await renderApp();
+    await readyEngine(host);
+    act(() => buttonNamed(host, "分析当前节点").click());
+
+    const finiteFrame = { ...continuousFrame(64), job_id: "job-finite" };
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-1", job_id: "job-finite", lane: "selected_node", mode: "finite",
+        generation: 1, node_path: { indices: [] }, outcome: "started"
+      });
+      listeners.onJob?.({
+        run_id: "run-1", job_id: "job-finite", lane: "selected_node", mode: "finite",
+        generation: 1, node_path: { indices: [] }, outcome: "completed", frame: finiteFrame
+      });
+      await Promise.resolve();
+    });
+
+    const continuous = continuousFrame(91);
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-1", job_id: "job-continuous", lane: "selected_node", mode: "continuous",
+        generation: 1, node_path: { indices: [] }, outcome: "started"
+      });
+      emitContinuousSnapshot("searching");
+      listeners.onJob?.({
+        run_id: "run-1", job_id: "job-continuous", lane: "selected_node", mode: "continuous",
+        generation: 1, node_path: { indices: [] }, outcome: "progress", frame: continuous,
+        current_game: {
+          ...initialGame,
+          dirty: true,
+          snapshot: { ...initialGame.snapshot, primary_analysis: { ...continuous, job_id: "00000000-0000-0000-0000-000000000000" } }
+        }
+      });
+      await Promise.resolve();
+    });
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("91");
+    expect(host.textContent).toContain("连续分析：搜索中");
+
+    await act(async () => {
+      resolveStart({
+        run_id: "run-1", job_id: "job-finite", lane: "selected_node", mode: "finite", state: "queued",
+        generation: 1, node_path: { indices: [] }
+      });
+      resolveClassification([]);
+      await Promise.all([pendingStart, pendingClassification]);
+      await Promise.resolve();
+    });
+
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("91");
+    expect(host.textContent).toContain("连续分析：搜索中");
+    expect(buttonNamed(host, "取消此手")).toBeInstanceOf(HTMLButtonElement);
+    expect(backend.startSelectedNodeAnalysis).toHaveBeenCalledTimes(1);
+    expect(backend.foregroundEngineContinuousAction).not.toHaveBeenCalled();
   });
 });
 
@@ -678,5 +757,58 @@ describe("authoritative continuous selected-node analysis", () => {
       current_game: { ...initialGame, dirty: true, snapshot: { ...initialGame.snapshot, primary_analysis: stale } }
     }));
     expect(host.querySelector(".cand-visits")?.textContent).toBe("37");
+  });
+
+  it("presents the latest accepted frame across continuous and whole-game lanes regardless of visits", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await publishContinuousProgress(80);
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("80");
+
+    await act(async () => {
+      buttonNamed(host, "分析第一子主线").click();
+      await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
+    });
+    const wholeGameFrame = { ...continuousFrame(44), job_id: "job-wg" };
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-1", job_id: "job-wg", lane: "whole_game", mode: "finite",
+        generation: 1, node_path: { indices: [] }, outcome: "progress",
+        completed: 1, expected: 1, remaining: 0, frame: wholeGameFrame
+      });
+      await Promise.resolve();
+    });
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("44");
+
+    const laterContinuousFrame = continuousFrame(12);
+    await act(async () => {
+      emitContinuousSnapshot("searching", { wholeGameJob: true });
+      listeners.onJob?.({
+        run_id: "run-1", job_id: "job-continuous", lane: "selected_node", mode: "continuous",
+        generation: 1, node_path: { indices: [] }, outcome: "progress", frame: laterContinuousFrame,
+        current_game: {
+          ...initialGame,
+          dirty: true,
+          snapshot: { ...initialGame.snapshot, primary_analysis: { ...laterContinuousFrame, job_id: "00000000-0000-0000-0000-000000000000" } }
+        }
+      });
+      await Promise.resolve();
+    });
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("12");
+
+    const cancelledFrame = { ...continuousFrame(99), job_id: "job-wg" };
+    act(() => listeners.onJob?.({
+      run_id: "run-1", job_id: "job-wg", lane: "whole_game", mode: "finite",
+      generation: 1, node_path: { indices: [] }, outcome: "cancelled", frame: cancelledFrame,
+      completed: 1, expected: 1, remaining: 0,
+      current_game: {
+        ...initialGame,
+        dirty: true,
+        snapshot: { ...initialGame.snapshot, primary_analysis: cancelledFrame }
+      }
+    }));
+
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("12");
+    expect(buttonNamed(host, "取消整局")).toBeUndefined();
   });
 });

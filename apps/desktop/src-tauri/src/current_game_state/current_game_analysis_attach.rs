@@ -494,39 +494,122 @@ fn continuous_attachment_observes_selected_path_and_sealed_job_cutoff() {
 }
 
 #[test]
-fn whole_game_attachment_does_not_displace_continuous_selected_node() {
+fn latest_admitted_lane_result_wins_primary_and_survives_save_and_recovery() {
     let state = CurrentGameState::default();
-    let opened = state.replace(BRANCHING, None).unwrap();
-    state.select_path(path(&[])).unwrap();
-    assert!(state
+    state.replace(BRANCHING, None).unwrap();
+    let opened = state.select_path(path(&[])).unwrap();
+    let personal_comment = opened.snapshot.personal_comment.clone();
+    let secondary_visits = opened.snapshot.secondary_analysis.as_ref().unwrap().visits;
+
+    let continuous = state
         .attach_from_job_event(&continuous_job_event(
             AnalysisJobOutcomeDto::Progress,
             opened.generation,
             &[],
-            Some(projectable_frame(100, 3, 3)),
+            Some(projectable_frame(600, 3, 3)),
         ))
-        .is_some());
-    assert!(state
-        .attach_from_job_event(&job_event(
-            AnalysisJobLaneDto::WholeGame,
-            AnalysisJobOutcomeDto::Progress,
-            opened.generation,
-            &[0],
-            Some(projectable_frame(200, 4, 4)),
-        ))
-        .is_some());
-    assert!(state
-        .attach_from_job_event(&continuous_job_event(
-            AnalysisJobOutcomeDto::Progress,
-            opened.generation,
-            &[],
-            Some(projectable_frame(300, 5, 5)),
-        ))
-        .is_some());
-    assert_eq!(
-        state.take_due_recovery_write(u64::MAX).unwrap().selected_path,
-        path(&[])
+        .unwrap();
+    assert_eq!(continuous.snapshot.primary_analysis.unwrap().visits, 600);
+
+    let mut whole_game_completed_node = job_event(
+        AnalysisJobLaneDto::WholeGame,
+        AnalysisJobOutcomeDto::Progress,
+        opened.generation,
+        &[],
+        Some(projectable_frame(900, 4, 4)),
     );
+    whole_game_completed_node.job_id = "whole-game-job".into();
+    whole_game_completed_node.completed = Some(1);
+    whole_game_completed_node.expected = Some(2);
+    whole_game_completed_node.remaining = Some(1);
+    let whole_game = state.attach_from_job_event(&whole_game_completed_node).unwrap();
+    assert_eq!(whole_game.snapshot.primary_analysis.unwrap().visits, 900);
+
+    let mut later_continuous = continuous_job_event(
+        AnalysisJobOutcomeDto::Progress,
+        opened.generation,
+        &[],
+        Some(projectable_frame(75, 5, 5)),
+    );
+    later_continuous.job_id = "later-continuous-job".into();
+    let latest = state.attach_from_job_event(&later_continuous).unwrap();
+    assert_eq!(latest.snapshot.primary_analysis.as_ref().unwrap().visits, 75);
+    assert_eq!(latest.snapshot.personal_comment, personal_comment);
+    assert_eq!(
+        latest.snapshot.secondary_analysis.as_ref().unwrap().visits,
+        secondary_visits
+    );
+
+    let started = app_model::AnalysisJobStartedDto {
+        run_id: later_continuous.run_id.clone(),
+        job_id: later_continuous.job_id.clone(),
+        lane: later_continuous.lane,
+        mode: later_continuous.mode,
+        state: app_model::AnalysisJobStateDto::Searching,
+        generation: later_continuous.generation,
+        node_path: later_continuous.node_path.clone(),
+    };
+    state.seal_job(&started);
+    let mut after_cutoff = later_continuous.clone();
+    after_cutoff.frame = Some(projectable_frame(1_200, 6, 6));
+    assert!(state.attach_from_job_event(&after_cutoff).is_none());
+
+    for outcome in [AnalysisJobOutcomeDto::Cancelled, AnalysisJobOutcomeDto::Failed] {
+        let rejected = job_event(
+            AnalysisJobLaneDto::SelectedNode,
+            outcome,
+            opened.generation,
+            &[],
+            Some(projectable_frame(1_300, 7, 7)),
+        );
+        assert!(state.attach_from_job_event(&rejected).is_none());
+    }
+    let mut stale = continuous_job_event(
+        AnalysisJobOutcomeDto::Progress,
+        opened.generation + 1,
+        &[],
+        Some(projectable_frame(1_400, 8, 8)),
+    );
+    stale.job_id = "stale-generation-job".into();
+    assert!(state.attach_from_job_event(&stale).is_none());
+
+    let authoritative = state.select_path(path(&[])).unwrap();
+    assert_eq!(
+        authoritative.snapshot.primary_analysis.as_ref().unwrap().visits,
+        75
+    );
+    assert_eq!(authoritative.snapshot.personal_comment, personal_comment);
+    assert_eq!(
+        authoritative.snapshot.secondary_analysis.as_ref().unwrap().visits,
+        secondary_visits
+    );
+
+    let recovery = state
+        .take_due_recovery_write(u64::MAX)
+        .expect("admitted analysis reaches recovery");
+    let recovered_state = CurrentGameState::default();
+    recovered_state.replace(&recovery.sgf_text, None).unwrap();
+    let recovered = recovered_state.select_path(path(&[])).unwrap();
+
+    let save_path = unique_sgf("two-lane-admission-order");
+    state
+        .save_to_path(save_path.to_string_lossy().into_owned(), path(&[]))
+        .unwrap();
+    let reopened_state = CurrentGameState::default();
+    reopened_state
+        .replace(&fs::read_to_string(&save_path).unwrap(), None)
+        .unwrap();
+    let reopened = reopened_state.select_path(path(&[])).unwrap();
+    let _ = fs::remove_file(save_path);
+
+    for snapshot in [recovered.snapshot, reopened.snapshot] {
+        assert_eq!(snapshot.primary_analysis.as_ref().unwrap().visits, 75);
+        assert_eq!(snapshot.personal_comment, personal_comment);
+        assert_eq!(
+            snapshot.secondary_analysis.as_ref().unwrap().visits,
+            secondary_visits
+        );
+    }
 }
 
 #[test]

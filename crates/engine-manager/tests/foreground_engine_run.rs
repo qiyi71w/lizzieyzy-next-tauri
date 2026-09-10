@@ -3745,31 +3745,213 @@ fn failed_finite_owner_latches_error_across_intent_and_navigation() {
 
 #[cfg(unix)]
 #[test]
-fn successful_finite_completion_remains_paused_until_explicit_resume() {
-    let temp = TestTempDir::new("continuous-finite-complete");
-    let (manager, _, events, run_id) = ready_manager(&temp, &resident_selected_node_result_script());
-    manager.follow_continuous_position(continuous_request(&run_id, 32, vec![]));
-    manager
-        .set_continuous_preferences(false, app_model::ContinuousAnalysisBudgetDto::default())
-        .unwrap();
-    let finite = manager
-        .start_selected_node_job(selected_request(&run_id, 32, vec![]))
-        .unwrap();
-    wait_job(&events, Duration::from_secs(2), |job| {
-        job.job_id == finite.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
-    });
+fn finite_stale_position_is_rejected_without_stopping_current_continuous_work() {
+    let temp = TestTempDir::new("finite-stale-admission");
+    let (manager, _, events, run_id) = ready_manager(&temp, budget_engine_script());
     manager
         .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
         .unwrap();
+    manager.follow_continuous_position(continuous_request(&run_id, 32, vec![0]));
+    let progress = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::Progress
+    });
+    let rejected = manager
+        .start_selected_node_job(selected_request(&run_id, 32, vec![]))
+        .unwrap_err();
+    assert_eq!(rejected.kind, EngineFailureKind::InvalidState);
+    let active = manager.snapshot().selected_node_job.unwrap();
+    assert_eq!(active.job_id, progress.job_id);
+    assert_eq!(active.state, app_model::AnalysisJobStateDto::Searching);
+    let next = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == progress.job_id && job.outcome == AnalysisJobOutcomeDto::Progress
+    });
+    assert!(next.frame.unwrap().visits > progress.frame.unwrap().visits);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn successful_finite_handoff_restores_once_with_latest_continuous_budget() {
+    let temp = TestTempDir::new("continuous-finite-complete");
+    let (manager, _, events, run_id) = ready_manager(&temp, budget_engine_script());
+    let mut budget = app_model::ContinuousAnalysisBudgetDto::default();
+    manager.set_continuous_preferences(true, budget).unwrap();
+    manager.follow_continuous_position(continuous_request(&run_id, 32, vec![]));
+    let continuous = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::Progress
+    });
+    let mut request = selected_request(&run_id, 32, vec![]);
+    request.query.max_visits = Some(128);
+    let finite = manager.start_selected_node_job(request).unwrap();
+    assert_ne!(finite.job_id, continuous.job_id);
+    assert_eq!(manager.snapshot().continuous.enabled, Some(true));
+    budget.continuous_visits_limit_enabled = true;
+    budget.continuous_visits_limit = 16;
+    manager.set_continuous_preferences(true, budget).unwrap();
+    let completed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == finite.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+    assert_eq!(completed.frame.unwrap().visits, 128);
+    let restored = wait_job(&events, Duration::from_secs(2), |job| {
+        job.mode == app_model::AnalysisJobModeDto::Continuous && job.outcome == AnalysisJobOutcomeDto::Started
+    });
+    let limited = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == restored.job_id && job.outcome == AnalysisJobOutcomeDto::VisitsLimited
+    });
+    assert_ne!(restored.job_id, continuous.job_id);
+    assert_ne!(restored.job_id, finite.job_id);
+    assert_eq!(limited.frame.unwrap().visits, 16);
+    assert!(
+        collect_job_events(&events, Instant::now() + Duration::from_millis(100))
+            .iter()
+            .all(|job| job.outcome != AnalysisJobOutcomeDto::Started)
+    );
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn finite_completion_observes_off_without_cancelling_or_leaving_a_pause() {
+    let temp = TestTempDir::new("finite-off-complete");
+    let (manager, _, events, run_id) = ready_manager(&temp, budget_engine_script());
+    let mut budget = app_model::ContinuousAnalysisBudgetDto::default();
+    manager.follow_continuous_position(continuous_request(&run_id, 33, vec![]));
+    let mut request = selected_request(&run_id, 33, vec![]);
+    request.query.max_visits = Some(128);
+    let finite = manager.start_selected_node_job(request).unwrap();
+    manager.set_continuous_preferences(true, budget).unwrap();
+    manager.set_continuous_preferences(false, budget).unwrap();
+    let completed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == finite.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+    assert_eq!(completed.frame.unwrap().visits, 128);
     assert_eq!(
         manager.snapshot().continuous.phase,
-        app_model::ContinuousAnalysisPhaseDto::Paused
+        app_model::ContinuousAnalysisPhaseDto::Off
     );
-    manager.resume_continuous().unwrap();
+    assert!(manager.snapshot().selected_node_job.is_none());
+    budget.continuous_visits_limit_enabled = true;
+    budget.continuous_visits_limit = 16;
+    manager.set_continuous_preferences(true, budget).unwrap();
+    let restored = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::VisitsLimited
+    });
+    assert_eq!(restored.frame.unwrap().visits, 16);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn finite_navigation_supersession_resumes_only_latest_position_and_keeps_whole_game() {
+    let temp = TestTempDir::new("finite-navigation");
+    let (manager, _, events, run_id) = ready_manager(&temp, budget_engine_script());
+    manager.follow_continuous_position(continuous_request(&run_id, 34, vec![]));
+    let mut request = selected_request(&run_id, 34, vec![]);
+    request.query.max_visits = Some(10000);
+    let finite = manager.start_selected_node_job(request).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while manager.snapshot().selected_node_job.as_ref().unwrap().state
+        != app_model::AnalysisJobStateDto::Searching
+    {
+        assert!(
+            Instant::now() < deadline,
+            "finite request never obtained search capacity"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut whole_request = whole_game_request(&run_id, 34, 2);
+    for item in &mut whole_request.work_items {
+        item.query.max_visits = Some(10000);
+    }
+    let whole = manager.start_whole_game_analysis(whole_request).unwrap();
+    manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
+    manager.follow_continuous_position(continuous_request(&run_id, 34, vec![0, 1]));
+    let superseded = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == finite.job_id && job.outcome == AnalysisJobOutcomeDto::Superseded
+    });
+    assert!(superseded.frame.is_none());
+    let restored = wait_job(&events, Duration::from_secs(2), |job| {
+        job.mode == app_model::AnalysisJobModeDto::Continuous && job.outcome == AnalysisJobOutcomeDto::Started
+    });
+    assert_eq!(restored.node_path.indices, vec![0, 1]);
+    assert_eq!(manager.snapshot().whole_game_job.unwrap().job_id, whole.job_id);
     assert_eq!(
-        manager.snapshot().selected_node_job.unwrap().mode,
-        app_model::AnalysisJobModeDto::Continuous
+        manager
+            .start_whole_game_analysis(whole_game_request(&run_id, 34, 2))
+            .unwrap_err()
+            .kind,
+        EngineFailureKind::Occupied
     );
+    manager.cancel_job(&run_id, &whole.job_id).unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == restored.job_id && job.outcome == AnalysisJobOutcomeDto::Progress
+    });
+    assert_eq!(
+        manager.snapshot().selected_node_job.unwrap().job_id,
+        restored.job_id
+    );
+    assert!(
+        collect_job_events(&events, Instant::now() + Duration::from_millis(100))
+            .iter()
+            .all(|job| {
+                job.outcome != AnalysisJobOutcomeDto::Started
+                    && !(job.job_id == finite.job_id && job.outcome == AnalysisJobOutcomeDto::Completed)
+            })
+    );
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn finite_admission_cannot_cross_a_confirmed_departure() {
+    let temp = TestTempDir::new("finite-admission-departure");
+    let release = temp.path().join("release-cancellation");
+    let script = streaming_engine_script().replace(
+        "        time.sleep(0.05)",
+        &format!(
+            "        while not os.path.exists({:?}): time.sleep(0.01)",
+            release
+        ),
+    );
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
+    manager.follow_continuous_position(continuous_request(&run_id, 35, vec![]));
+    let old = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::Progress
+    });
+    let request = selected_request(&run_id, 35, vec![]);
+    let admitting = manager.clone();
+    let finite = std::thread::spawn(move || {
+        admitting
+            .start_selected_node_job(request)
+            .map_err(|error| error.kind)
+    });
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == old.job_id && job.outcome == AnalysisJobOutcomeDto::Stopping
+    });
+    manager.begin_continuous_departure();
+    std::fs::write(&release, "release").unwrap();
+    assert_eq!(
+        finite.join().unwrap().unwrap_err(),
+        EngineFailureKind::InvalidState
+    );
+    assert!(manager.snapshot().selected_node_job.is_none());
+    manager.finish_continuous_departure(false);
+    manager.follow_continuous_position(continuous_request(&run_id, 35, vec![0]));
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::SafetyHold
+    );
+    assert!(manager.snapshot().selected_node_job.is_none());
+    manager.resume_continuous().unwrap();
+    let resumed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::Progress && job.job_id != old.job_id
+    });
+    assert_eq!(resumed.node_path.indices, vec![0]);
     manager.teardown().unwrap();
 }
 
