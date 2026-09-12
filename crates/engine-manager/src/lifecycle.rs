@@ -7,7 +7,8 @@ use crate::{
 use app_model::{
     AnalysisJobLaneDto, AnalysisJobModeDto, AnalysisJobOutcomeDto, AnalysisJobStartedDto,
     AnalysisJobStateDto, AnalysisScopeDto, AnalysisScopeModeDto, AnalysisStageConditionsDto, AnalysisTaskDto,
-    AnalysisTaskLimitDto, AnalysisTaskStateDto, ContinuousAnalysisBudgetDto, ContinuousAnalysisPhaseDto,
+    AnalysisTaskLimitDto, AnalysisTaskOverviewDto, AnalysisTaskStageDto, AnalysisTaskStateDto,
+    AnalysisTaskStrategyDto, ContinuousAnalysisBudgetDto, ContinuousAnalysisPhaseDto,
     ContinuousAnalysisSnapshotDto, EngineBackend, EngineCapabilitySnapshotDto, EngineFailureDto,
     EngineFailureKind, EngineOperationDto, EngineRunDto, ForegroundEngineEventDto,
     ForegroundEngineLifecycleDto, ForegroundEngineSnapshotDto, NodePath,
@@ -913,25 +914,54 @@ impl ForegroundEngineManager {
 
     pub fn start_analysis_task(
         &self,
+        request: WholeGameJobRequest,
+        scope: AnalysisScopeDto,
+        conditions: AnalysisStageConditionsDto,
+    ) -> Result<AnalysisTaskDto, EngineFailureDto> {
+        conditions
+            .validate_single_stage()
+            .map_err(|message| invalid_task_conditions(&request.run_id, message))?;
+        self.start_analysis_task_with_strategy(
+            request,
+            scope,
+            AnalysisTaskStrategyDto::SingleStage,
+            None,
+            conditions,
+        )
+    }
+
+    pub fn start_all_positions_analysis_task(
+        &self,
+        request: WholeGameJobRequest,
+        scope: AnalysisScopeDto,
+        overview_conditions: AnalysisStageConditionsDto,
+        deep_conditions: AnalysisStageConditionsDto,
+    ) -> Result<AnalysisTaskDto, EngineFailureDto> {
+        AnalysisStageConditionsDto::validate_all_positions_two_stage(&overview_conditions, &deep_conditions)
+            .map_err(|message| invalid_task_conditions(&request.run_id, message))?;
+        self.start_analysis_task_with_strategy(
+            request,
+            scope,
+            AnalysisTaskStrategyDto::AllPositionsTwoStage,
+            Some(overview_conditions),
+            deep_conditions,
+        )
+    }
+
+    fn start_analysis_task_with_strategy(
+        &self,
         mut request: WholeGameJobRequest,
         scope: AnalysisScopeDto,
+        strategy: AnalysisTaskStrategyDto,
+        overview_conditions: Option<AnalysisStageConditionsDto>,
         conditions: AnalysisStageConditionsDto,
     ) -> Result<AnalysisTaskDto, EngineFailureDto> {
         if request.work_items.is_empty() {
             return Err(empty_whole_game_failure(&request.run_id));
         }
-        conditions.validate_single_stage().map_err(|message| {
-            failure(
-                EngineOperationDto::Job,
-                EngineFailureKind::InvalidState,
-                message,
-                Some(request.run_id.as_str()),
-                None,
-                None,
-            )
-        })?;
+        let initial_conditions = overview_conditions.as_ref().unwrap_or(&conditions);
         for item in &mut request.work_items {
-            item.query.task(&conditions);
+            item.query.task(initial_conditions);
         }
 
         let cancel = AnalysisCancelToken::new();
@@ -1019,10 +1049,18 @@ impl ForegroundEngineManager {
                 job_id: job_id.clone(),
                 generation: request.generation,
                 scope,
-                stage: "single_stage".into(),
+                strategy,
+                stage: if strategy == AnalysisTaskStrategyDto::AllPositionsTwoStage {
+                    AnalysisTaskStageDto::Overview
+                } else {
+                    AnalysisTaskStageDto::SingleStage
+                },
                 conditions,
+                overview_conditions,
                 requested,
+                overview_completed: Vec::new(),
                 completed: Vec::new(),
+                overview_summaries: Vec::new(),
                 ending_conditions: Vec::new(),
                 state: AnalysisTaskStateDto::Queued,
                 reason: None,
@@ -2593,7 +2631,8 @@ impl Inner {
             .analysis_task
             .as_ref()
             .filter(|task| task.job_id == started.job_id)
-            .map(|task| task.conditions.clone())?;
+            .and_then(active_task_conditions)
+            .cloned()?;
         match parse_response_line(trimmed) {
             Ok(response) if response.id == response_id => {
                 if response.action.is_some() {
@@ -2684,7 +2723,13 @@ impl Inner {
                 state.jobs[job_index].pending_ending_conditions.clear();
                 state.jobs[job_index].cancel_deadline = None;
                 state.jobs[job_index].disposition = JobDisposition::Running;
-                record_analysis_task_completion(state, &started.job_id, &item.node_path, ending_conditions);
+                record_analysis_task_completion(
+                    state,
+                    &started.job_id,
+                    &item.node_path,
+                    &frame,
+                    ending_conditions,
+                );
                 publish_event(
                     state,
                     ForegroundEngineEventDto::Job {
@@ -2701,19 +2746,45 @@ impl Inner {
                     },
                 );
                 if completed >= expected {
-                    finish_whole_game_job(
-                        state,
-                        &started,
-                        AnalysisJobOutcomeDto::Completed,
-                        Some(completed),
-                        Some(expected),
-                        Some(0),
-                        None,
-                    );
-                    return None;
+                    let begins_deep = state.analysis_task.as_ref().is_some_and(|task| {
+                        task.job_id == started.job_id
+                            && task.strategy == AnalysisTaskStrategyDto::AllPositionsTwoStage
+                            && task.stage == AnalysisTaskStageDto::Overview
+                    });
+                    if !begins_deep {
+                        finish_whole_game_job(
+                            state,
+                            &started,
+                            AnalysisJobOutcomeDto::Completed,
+                            Some(completed),
+                            Some(expected),
+                            Some(0),
+                            None,
+                        );
+                        return None;
+                    }
+
+                    let deep_conditions = state
+                        .analysis_task
+                        .as_ref()
+                        .expect("two-stage task")
+                        .conditions
+                        .clone();
+                    let job = &mut state.jobs[job_index];
+                    for work_item in &mut job.work_items {
+                        work_item.query.task(&deep_conditions);
+                    }
+                    job.current_index = 0;
+                    if let Some(task) = state.analysis_task.as_mut() {
+                        task.stage = AnalysisTaskStageDto::Deep;
+                        task.state = AnalysisTaskStateDto::Queued;
+                        task.reason = None;
+                        task.ending_conditions.clear();
+                    }
                 }
 
-                let next = state.jobs[job_index].work_items[completed].clone();
+                let next_index = state.jobs[job_index].current_index;
+                let next = state.jobs[job_index].work_items[next_index].clone();
                 let query_id = target_query_id(&started.job_id);
                 let jsonl = match bound_work_item_query(&next, &query_id, &started.job_id) {
                     Ok(jsonl) => jsonl,
@@ -2722,9 +2793,9 @@ impl Inner {
                             state,
                             &started,
                             AnalysisJobOutcomeDto::Failed,
-                            Some(completed),
+                            Some(next_index),
                             Some(expected),
-                            Some(remaining),
+                            Some(expected.saturating_sub(next_index)),
                             Some(error),
                         );
                         return None;
@@ -3152,10 +3223,18 @@ fn mark_analysis_task_searching(state: &mut ManagerState, job_id: &str) {
     }
 }
 
+fn active_task_conditions(task: &AnalysisTaskDto) -> Option<&AnalysisStageConditionsDto> {
+    match task.stage {
+        AnalysisTaskStageDto::Overview => task.overview_conditions.as_ref(),
+        AnalysisTaskStageDto::SingleStage | AnalysisTaskStageDto::Deep => Some(&task.conditions),
+    }
+}
+
 fn record_analysis_task_completion(
     state: &mut ManagerState,
     job_id: &str,
     node_path: &NodePath,
+    frame: &app_model::AnalysisFrameDto,
     ending_conditions: Vec<String>,
 ) {
     if let Some(task) = state.analysis_task.as_mut().filter(|task| {
@@ -3165,11 +3244,22 @@ fn record_analysis_task_completion(
                 AnalysisTaskStateDto::Queued | AnalysisTaskStateDto::Searching
             )
     }) {
-        if task.requested.contains(node_path) && !task.completed.contains(node_path) {
-            task.completed.push(node_path.clone());
-            task.ending_conditions = ending_conditions;
-            task.reason = None;
+        if !task.requested.contains(node_path) {
+            return;
         }
+        if task.stage == AnalysisTaskStageDto::Overview {
+            if !task.overview_completed.contains(node_path) {
+                task.overview_completed.push(node_path.clone());
+                task.overview_summaries.push(AnalysisTaskOverviewDto {
+                    node_path: node_path.clone(),
+                    frame: frame.clone(),
+                });
+            }
+        } else if !task.completed.contains(node_path) {
+            task.completed.push(node_path.clone());
+        }
+        task.ending_conditions = ending_conditions;
+        task.reason = None;
     }
 }
 
@@ -3698,6 +3788,17 @@ fn empty_whole_game_failure(run_id: &str) -> EngineFailureDto {
         EngineOperationDto::Job,
         EngineFailureKind::InvalidState,
         "whole-game analysis requires a captured first-child mainline worklist".into(),
+        Some(run_id),
+        None,
+        None,
+    )
+}
+
+fn invalid_task_conditions(run_id: &str, message: String) -> EngineFailureDto {
+    failure(
+        EngineOperationDto::Job,
+        EngineFailureKind::InvalidState,
+        message,
         Some(run_id),
         None,
         None,

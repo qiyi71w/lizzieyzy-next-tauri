@@ -1,9 +1,9 @@
 use app_model::{
     admits_analysis_publication, AnalysisJobEventDto, AnalysisJobOutcomeDto, AnalysisPositionIntervalDto,
     AnalysisPublicationScopeDto, AnalysisScopeDto, AnalysisScopeModeDto, AnalysisStageConditionsDto,
-    AnalysisTaskLimitDto, AnalysisTaskStateDto, EngineBackend, EngineCapabilitySnapshotDto,
-    EngineFailureKind, EngineOperationDto, EngineProfileDto, ForegroundEngineEventDto,
-    ForegroundEngineLifecycleDto, MoveVertex, NodePath, PointDto,
+    AnalysisTaskLimitDto, AnalysisTaskStageDto, AnalysisTaskStateDto, AnalysisTaskStrategyDto, EngineBackend,
+    EngineCapabilitySnapshotDto, EngineFailureKind, EngineOperationDto, EngineProfileDto,
+    ForegroundEngineEventDto, ForegroundEngineLifecycleDto, MoveVertex, NodePath, PointDto,
 };
 use engine_manager::{
     AnalysisCancelToken, AnalysisJobCancel, AnalysisJobLane, EngineProfileCatalog, ForegroundEngineConfig,
@@ -1360,6 +1360,250 @@ fn analysis_task_freezes_scope_budget_and_legitimate_completions() {
 
 #[cfg(unix)]
 #[test]
+fn all_positions_two_stage_completes_overview_before_deep_and_retains_summaries() {
+    let temp = TestTempDir::new("task-two-stage-complete");
+    std::fs::write(temp.path().join("finish"), "go").unwrap();
+    let (manager, _, _, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    let task = manager
+        .start_all_positions_analysis_task(
+            whole_game_request(&run_id, 80, 2),
+            analysis_scope(),
+            task_conditions(32),
+            task_conditions(500),
+        )
+        .unwrap();
+    assert_eq!(task.strategy, AnalysisTaskStrategyDto::AllPositionsTwoStage);
+    assert_eq!(task.stage, AnalysisTaskStageDto::Overview);
+
+    let completed = wait_task(&manager, AnalysisTaskStateDto::Completed);
+    assert_eq!(completed.stage, AnalysisTaskStageDto::Deep);
+    assert_eq!(completed.overview_completed, completed.requested);
+    assert_eq!(completed.completed, completed.requested);
+    assert_eq!(completed.overview_summaries.len(), 2);
+    assert!(completed
+        .overview_summaries
+        .iter()
+        .all(|summary| summary.frame.visits == 32));
+
+    let queries: Vec<serde_json::Value> = std::fs::read_to_string(temp.path().join("queries.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(queries.len(), 4);
+    assert_eq!(
+        queries
+            .iter()
+            .map(|query| query["overrideSettings"]["maxVisits"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![32, 32, 500, 500]
+    );
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn all_positions_two_stage_applies_time_and_leading_conditions_in_both_stages() {
+    for (mode, conditions, expected_ending) in [
+        (
+            "time_seconds",
+            budget_conditions(Some(1), None, None),
+            vec!["time_seconds"],
+        ),
+        (
+            "leading_candidate_visits",
+            budget_conditions(Some(10), Some(800), Some(5)),
+            vec!["leading_candidate_visits"],
+        ),
+    ] {
+        let temp = TestTempDir::new(&format!("task-two-stage-{mode}"));
+        std::fs::write(temp.path().join("budget-smoke"), mode).unwrap();
+        std::fs::write(temp.path().join("cancel-final"), "go").unwrap();
+        let (manager, _, _, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+        let task = manager
+            .start_all_positions_analysis_task(
+                whole_game_request(&run_id, 82, 1),
+                analysis_scope(),
+                conditions.clone(),
+                conditions.clone(),
+            )
+            .unwrap();
+        let completed = wait_task(&manager, AnalysisTaskStateDto::Completed);
+        assert_eq!(completed.stage, AnalysisTaskStageDto::Deep, "{mode}");
+        assert_eq!(completed.overview_completed, completed.requested, "{mode}");
+        assert_eq!(completed.completed, completed.requested, "{mode}");
+        assert_eq!(
+            completed.overview_conditions.as_ref(),
+            Some(&conditions),
+            "{mode}"
+        );
+        assert_eq!(completed.conditions, conditions, "{mode}");
+        assert_eq!(completed.ending_conditions, expected_ending, "{mode}");
+        let queries = std::fs::read_to_string(temp.path().join("queries.jsonl")).unwrap();
+        assert_eq!(count_job_queries(&queries, &task.job_id), 2, "{mode}");
+        manager.teardown().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn all_positions_two_stage_pause_continue_restarts_only_interrupted_stage_work() {
+    for (label, pause_stage) in [
+        ("overview", AnalysisTaskStageDto::Overview),
+        ("deep", AnalysisTaskStageDto::Deep),
+    ] {
+        let temp = TestTempDir::new(&format!("task-two-stage-pause-{label}"));
+        if pause_stage == AnalysisTaskStageDto::Overview {
+            std::fs::write(temp.path().join("hold-first"), "go").unwrap();
+        } else {
+            std::fs::write(temp.path().join("finish"), "go").unwrap();
+            std::fs::write(temp.path().join("hold-deep"), "go").unwrap();
+        }
+        let (manager, _, _, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+        let task = manager
+            .start_all_positions_analysis_task(
+                whole_game_request(&run_id, 81, 2),
+                analysis_scope(),
+                task_conditions(32),
+                task_conditions(500),
+            )
+            .unwrap();
+        let searching = wait_task_stage(&manager, pause_stage, AnalysisTaskStateDto::Searching);
+        if pause_stage == AnalysisTaskStageDto::Deep {
+            assert_eq!(searching.overview_completed, searching.requested);
+            assert_eq!(searching.overview_summaries.len(), 2);
+            assert!(searching.completed.is_empty());
+        }
+        let pausing = manager.pause_analysis_task(&run_id, &task.task_id).unwrap();
+        assert_eq!(pausing.stage, pause_stage);
+        assert_eq!(pausing.state, AnalysisTaskStateDto::Pausing);
+        std::fs::write(temp.path().join("cancel-final"), "go").unwrap();
+        let paused = wait_task_stage(&manager, pause_stage, AnalysisTaskStateDto::Paused);
+        assert_eq!(paused.overview_completed, searching.overview_completed);
+        assert_eq!(paused.completed, searching.completed);
+
+        let continued = manager
+            .continue_analysis_task(&run_id, &task.task_id, 81)
+            .unwrap();
+        assert_eq!(continued.task_id, task.task_id);
+        assert_ne!(continued.job_id, task.job_id);
+        assert_eq!(continued.stage, pause_stage);
+        std::fs::write(temp.path().join("finish"), "go").unwrap();
+        let _ = std::fs::remove_file(temp.path().join("hold-deep"));
+        let completed = wait_task(&manager, AnalysisTaskStateDto::Completed);
+        assert_eq!(completed.overview_completed, completed.requested);
+        assert_eq!(completed.completed, completed.requested);
+
+        let queries: Vec<serde_json::Value> = std::fs::read_to_string(temp.path().join("queries.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            queries.len(),
+            5,
+            "{label} interrupted one position and must repeat only that stage target"
+        );
+        let visits = queries
+            .iter()
+            .map(|query| query["overrideSettings"]["maxVisits"].as_u64().unwrap())
+            .collect::<Vec<_>>();
+        if pause_stage == AnalysisTaskStageDto::Overview {
+            assert_eq!(visits, vec![32, 32, 32, 500, 500]);
+        } else {
+            assert_eq!(visits, vec![32, 32, 500, 500, 500]);
+        }
+        manager.teardown().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn all_positions_two_stage_boundary_pause_blocks_unsent_deep_and_late_overview() {
+    let temp = TestTempDir::new("task-two-stage-boundary-pause");
+    let script = format!(
+        r#"exec python3 -u -c '
+import json,pathlib,sys,threading,time
+root=pathlib.Path("{}")
+lock=threading.Lock()
+def emit(q):
+    visits=q.get("overrideSettings",{{}}).get("maxVisits",q.get("maxVisits",2))
+    with lock:
+        print(json.dumps(dict(id=q["id"],isDuringSearch=False,turnNumber=0,
+            rootInfo=dict(visits=visits,winrate=0.6),
+            moveInfos=[dict(move="D4",order=0,visits=visits,winrate=0.6)])),flush=True)
+emit(json.loads(sys.stdin.readline()))
+overview=json.loads(sys.stdin.readline())
+with lock:
+    print(json.dumps(dict(id=overview["id"],isDuringSearch=True,turnNumber=0,
+        rootInfo=dict(visits=16,winrate=0.6),
+        moveInfos=[dict(move="D4",order=0,visits=16,winrate=0.6)])),flush=True)
+def release_overview():
+    while not (root/"release-overview").exists(): time.sleep(0.005)
+    emit(overview)
+    while not (root/"late-overview").exists(): time.sleep(0.005)
+    emit(overview)
+threading.Thread(target=release_overview,daemon=True).start()
+while not (root/"release-reader").exists(): time.sleep(0.005)
+for line in sys.stdin:
+    with (root/"delivered.jsonl").open("a") as log: log.write(line)
+    emit(json.loads(line))
+'"#,
+        temp.path().display()
+    );
+    let (manager, _, _, run_id) = ready_manager(&temp, &script);
+    let task = manager
+        .start_all_positions_analysis_task(
+            whole_game_request(&run_id, 83, 1),
+            analysis_scope(),
+            task_conditions(32),
+            task_conditions(500),
+        )
+        .unwrap();
+    wait_task_stage(
+        &manager,
+        AnalysisTaskStageDto::Overview,
+        AnalysisTaskStateDto::Searching,
+    );
+
+    let mut selected = selected_request(&run_id, 83, vec![]);
+    selected.query.moves = (0..20000)
+        .map(|index| (if index % 2 == 0 { "B" } else { "W" }.into(), "pass".into()))
+        .collect();
+    let writer = manager.clone();
+    let selected_thread = std::thread::spawn(move || writer.start_selected_node_job(selected));
+    std::thread::sleep(Duration::from_millis(100));
+    std::fs::write(temp.path().join("release-overview"), "go").unwrap();
+    let boundary = wait_task_stage(&manager, AnalysisTaskStageDto::Deep, AnalysisTaskStateDto::Queued);
+    assert_eq!(boundary.overview_completed, boundary.requested);
+    assert!(boundary.completed.is_empty());
+    let paused = manager.pause_analysis_task(&run_id, &task.task_id).unwrap();
+    assert_eq!(paused.stage, AnalysisTaskStageDto::Deep);
+    assert_eq!(paused.state, AnalysisTaskStateDto::Paused);
+    std::fs::write(temp.path().join("late-overview"), "go").unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    let after_late = manager.analysis_task_snapshot().unwrap();
+    assert_eq!(after_late, paused);
+
+    let continued = manager
+        .continue_analysis_task(&run_id, &task.task_id, 83)
+        .unwrap();
+    assert_eq!(continued.stage, AnalysisTaskStageDto::Deep);
+    assert_ne!(continued.job_id, task.job_id);
+    std::fs::write(temp.path().join("release-reader"), "go").unwrap();
+    selected_thread.join().unwrap().unwrap();
+    let completed = wait_task(&manager, AnalysisTaskStateDto::Completed);
+    assert_eq!(completed.overview_completed, completed.requested);
+    assert_eq!(completed.completed, completed.requested);
+    assert_eq!(completed.overview_summaries.len(), 1);
+    let delivered = std::fs::read_to_string(temp.path().join("delivered.jsonl")).unwrap();
+    assert!(!delivered.contains(&task.job_id));
+    assert_eq!(count_job_queries(&delivered, &continued.job_id), 1);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn analysis_task_rejects_invalid_conditions_without_replacing_active_task() {
     let temp = TestTempDir::new("analysis-task-admission");
     let release = temp.path().join("release");
@@ -1375,6 +1619,16 @@ fn analysis_task_rejects_invalid_conditions_without_replacing_active_task() {
     unsupported.total_visits.enabled = false;
     let error = manager
         .start_analysis_task(whole_game_request(&run_id, 41, 2), analysis_scope(), unsupported)
+        .unwrap_err();
+    assert_eq!(error.kind, EngineFailureKind::InvalidState);
+    assert_eq!(manager.analysis_task_snapshot().unwrap().task_id, active.task_id);
+    let error = manager
+        .start_all_positions_analysis_task(
+            whole_game_request(&run_id, 41, 2),
+            analysis_scope(),
+            task_conditions(32),
+            task_conditions(499),
+        )
         .unwrap_err();
     assert_eq!(error.kind, EngineFailureKind::InvalidState);
     assert_eq!(manager.analysis_task_snapshot().unwrap().task_id, active.task_id);
@@ -1463,6 +1717,26 @@ fn wait_task(
             return task;
         }
         assert!(Instant::now() < deadline, "expected {expected:?}, got {task:?}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+fn wait_task_stage(
+    manager: &ForegroundEngineManager,
+    stage: AnalysisTaskStageDto,
+    state: AnalysisTaskStateDto,
+) -> app_model::AnalysisTaskDto {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let task = manager.analysis_task_snapshot().unwrap();
+        if task.stage == stage && task.state == state {
+            return task;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "expected {stage:?}/{state:?}, got {task:?}"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
 }

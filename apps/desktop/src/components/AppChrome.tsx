@@ -55,6 +55,7 @@ type Props = {
   engineSwitcher: EngineSwitcherProps;
   onEngineCommand: (kind: "once" | "game") => void;
   onQuickAnalysis: () => void;
+  onAllPositionsAnalysis: () => void;
   continuousAnalysisAction: ContinuousAnalysisAction;
   onContinuousAnalysis: () => void;
   preferences: AppPreferences;
@@ -305,7 +306,7 @@ export function AppChrome(props: Props) {
             <MenuItem label={SELECTED_NODE_ANALYSIS_LABEL} onClick={() => run(() => props.onEngineCommand("once"))} disabled={!props.engineReady} />
             <MenuItem label={FIRST_CHILD_MAINLINE_ANALYSIS_LABEL} onClick={() => run(() => props.onEngineCommand("game"))} disabled={!props.engineReady || props.wholeGameRunning} />
             <MenuItem label={AUTO_ANALYZE_LABEL} disabled title={later} />
-            <MenuItem label="批量分析" disabled title={later} />
+            <MenuItem label={actionLabelFromRegistry("analysis.all-positions", "批量分析")} onClick={() => run(props.onAllPositionsAnalysis)} disabled={!props.engineReady || props.wholeGameRunning} />
             <MenuItem label={actionLabelFromRegistry("analysis.quick", LIGHTNING_ANALYSIS_MENU_LABEL)} onClick={() => run(props.onQuickAnalysis)} disabled={!props.engineReady || props.wholeGameRunning} />
             <MenuItem label={actionLabelFromRegistry("view.policy-overlay", "纯网络")} onClick={() => run(() => props.onOverlayMode("policy"))} />
             <MenuItem label="形势判断" onClick={() => run(() => props.onOverlayMode("ownership"))} />

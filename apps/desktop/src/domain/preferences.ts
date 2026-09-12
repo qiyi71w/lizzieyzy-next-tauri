@@ -13,7 +13,9 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   showCandidates: boolean;
   candidateLimit: number;
   defaultMaxVisits: number;
-  taskConditions: AnalysisStageConditionsDto;
+  taskSingleStageConditions: AnalysisStageConditionsDto;
+  taskOverviewConditions: AnalysisStageConditionsDto;
+  taskDeepConditions: AnalysisStageConditionsDto;
   reviewMode: ReviewMode;
   boardTheme: BoardTheme;
   graphPerspective: GraphPerspective;
@@ -36,7 +38,17 @@ export const defaultAppPreferences: AppPreferences = {
   showCandidates: true,
   candidateLimit: 8,
   defaultMaxVisits: 800,
-  taskConditions: {
+  taskSingleStageConditions: {
+    time_seconds: { enabled: false, value: 10 },
+    total_visits: { enabled: true, value: 800 },
+    leading_candidate_visits: { enabled: false, value: 500 }
+  },
+  taskOverviewConditions: {
+    time_seconds: { enabled: false, value: 10 },
+    total_visits: { enabled: true, value: 32 },
+    leading_candidate_visits: { enabled: false, value: 32 }
+  },
+  taskDeepConditions: {
     time_seconds: { enabled: false, value: 10 },
     total_visits: { enabled: true, value: 800 },
     leading_candidate_visits: { enabled: false, value: 500 }
@@ -62,7 +74,11 @@ export const defaultAppPreferences: AppPreferences = {
   continuousStopOnEmptyBoard: false
 };
 
-export function normalizeAppPreferences(value: Partial<AppPreferences> | null | undefined): AppPreferences {
+type StoredAppPreferences = Partial<AppPreferences> & {
+  taskConditions?: AnalysisStageConditionsDto;
+};
+
+export function normalizeAppPreferences(value: StoredAppPreferences | null | undefined): AppPreferences {
   const winrateLine = booleanValue(value?.winrateLine, defaultAppPreferences.winrateLine);
   const scoreLeadLine = booleanValue(value?.scoreLeadLine, defaultAppPreferences.scoreLeadLine);
   const defaultMaxVisits = integerValue(value?.defaultMaxVisits, defaultAppPreferences.defaultMaxVisits, 1, 1_000_000);
@@ -72,7 +88,12 @@ export function normalizeAppPreferences(value: Partial<AppPreferences> | null | 
     showCandidates: booleanValue(value?.showCandidates, defaultAppPreferences.showCandidates),
     candidateLimit: integerValue(value?.candidateLimit, defaultAppPreferences.candidateLimit, 1, 20),
     defaultMaxVisits,
-    taskConditions: normalizeTaskConditions(value?.taskConditions, defaultMaxVisits),
+    taskSingleStageConditions: normalizeSingleStageTaskConditions(value, defaultMaxVisits),
+    taskOverviewConditions: normalizeTaskConditions(
+      value?.taskOverviewConditions,
+      defaultAppPreferences.taskOverviewConditions
+    ),
+    taskDeepConditions: normalizeDeepTaskConditions(value, defaultMaxVisits),
     reviewMode: value?.reviewMode === "deep" ? "deep" : "quick",
     boardTheme: value?.boardTheme === "high-contrast" ? "high-contrast" : "classic",
     graphPerspective: value?.graphPerspective === "sideToPlay" ? "sideToPlay" : "black",
@@ -120,21 +141,58 @@ export function taskConditionsError(value: AnalysisStageConditionsDto): string |
   return null;
 }
 
+export function taskStageConditionsError(
+  overview: AnalysisStageConditionsDto,
+  deep: AnalysisStageConditionsDto
+): string | null {
+  const error = taskConditionsError(overview) ?? taskConditionsError(deep);
+  if (error) return error;
+  if (deep.total_visits.value < 500) {
+    return "All-position deep total visits must be at least 500.";
+  }
+  return null;
+}
+
 function normalizeTaskConditions(
   value: AnalysisStageConditionsDto | undefined,
-  legacyDefaultMaxVisits: number
+  fallback: AnalysisStageConditionsDto
 ): AnalysisStageConditionsDto {
-  if (!value) {
-    return {
-      time_seconds: { enabled: false, value: 10 },
-      total_visits: { enabled: true, value: legacyDefaultMaxVisits },
-      leading_candidate_visits: { enabled: false, value: 500 }
-    };
-  }
+  if (!value) return cloneTaskConditions(fallback);
   return {
     time_seconds: normalizeTaskLimit(value.time_seconds),
     total_visits: normalizeTaskLimit(value.total_visits),
     leading_candidate_visits: normalizeTaskLimit(value.leading_candidate_visits)
+  };
+}
+
+function normalizeSingleStageTaskConditions(
+  value: StoredAppPreferences | null | undefined,
+  defaultMaxVisits: number
+): AnalysisStageConditionsDto {
+  const fallback = cloneTaskConditions(defaultAppPreferences.taskSingleStageConditions);
+  fallback.total_visits.value = defaultMaxVisits;
+  return normalizeTaskConditions(value?.taskSingleStageConditions ?? value?.taskConditions, fallback);
+}
+
+function normalizeDeepTaskConditions(value: StoredAppPreferences | null | undefined, defaultMaxVisits: number) {
+  if (value?.taskDeepConditions) {
+    return normalizeTaskConditions(value.taskDeepConditions, defaultAppPreferences.taskDeepConditions);
+  }
+  if (value?.taskConditions) {
+    const migrated = normalizeTaskConditions(value.taskConditions, defaultAppPreferences.taskDeepConditions);
+    migrated.total_visits.value = Math.max(500, migrated.total_visits.value);
+    return migrated;
+  }
+  const fallback = cloneTaskConditions(defaultAppPreferences.taskDeepConditions);
+  fallback.total_visits.value = Math.max(500, defaultMaxVisits);
+  return fallback;
+}
+
+function cloneTaskConditions(value: AnalysisStageConditionsDto): AnalysisStageConditionsDto {
+  return {
+    time_seconds: { ...value.time_seconds },
+    total_visits: { ...value.total_visits },
+    leading_candidate_visits: { ...value.leading_candidate_visits }
   };
 }
 

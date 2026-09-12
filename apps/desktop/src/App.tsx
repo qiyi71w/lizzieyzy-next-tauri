@@ -70,7 +70,7 @@ import {
 } from "./domain/foregroundEngine";
 import { loadAppPreferences, saveAppPreferences } from "./api/preferences";
 import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition } from "./domain/board";
-import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, taskConditionsError, type AppPreferences } from "./domain/preferences";
+import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, taskConditionsError, taskStageConditionsError, type AppPreferences } from "./domain/preferences";
 import { buildNextMoveReviewMarkers, cycleNextMoveReviewMarker } from "./domain/nextMoveReviewMarker";
 import { admitsChartSeriesChange, buildWinrateChartModel, displayedWinrate } from "./domain/winrateChart";
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
@@ -91,7 +91,7 @@ import {
   variationReplayIdentityKey,
   variationReplayPointSteps
 } from "./domain/variationReplay";
-import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisTaskDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, SgfTreeNodeDto } from "./domain/types";
+import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisTaskDto, AnalysisTaskStrategyDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, SgfTreeNodeDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
@@ -107,17 +107,30 @@ type PendingPreferencesSave = {
 };
 type CandidatePreview = { index: number; scope: ReviewPresentationScope };
 const defaultAnalysisScopeDraft: AnalysisScopeDraft = {
+  strategy: "all_positions_two_stage",
   mode: "first_child_mainline",
   intervalEnabled: false,
   intervalStart: "0",
   intervalEnd: "0",
   toPlay: "both",
-  timeEnabled: defaultAppPreferences.taskConditions.time_seconds.enabled,
-  timeSeconds: String(defaultAppPreferences.taskConditions.time_seconds.value),
-  totalVisitsEnabled: defaultAppPreferences.taskConditions.total_visits.enabled,
-  totalVisits: String(defaultAppPreferences.taskConditions.total_visits.value),
-  leadingCandidateVisitsEnabled: defaultAppPreferences.taskConditions.leading_candidate_visits.enabled,
-  leadingCandidateVisits: String(defaultAppPreferences.taskConditions.leading_candidate_visits.value)
+  overviewTimeEnabled: defaultAppPreferences.taskOverviewConditions.time_seconds.enabled,
+  overviewTimeSeconds: String(defaultAppPreferences.taskOverviewConditions.time_seconds.value),
+  overviewTotalVisitsEnabled: defaultAppPreferences.taskOverviewConditions.total_visits.enabled,
+  overviewTotalVisits: String(defaultAppPreferences.taskOverviewConditions.total_visits.value),
+  overviewLeadingCandidateVisitsEnabled: defaultAppPreferences.taskOverviewConditions.leading_candidate_visits.enabled,
+  overviewLeadingCandidateVisits: String(defaultAppPreferences.taskOverviewConditions.leading_candidate_visits.value),
+  singleTimeEnabled: defaultAppPreferences.taskSingleStageConditions.time_seconds.enabled,
+  singleTimeSeconds: String(defaultAppPreferences.taskSingleStageConditions.time_seconds.value),
+  singleTotalVisitsEnabled: defaultAppPreferences.taskSingleStageConditions.total_visits.enabled,
+  singleTotalVisits: String(defaultAppPreferences.taskSingleStageConditions.total_visits.value),
+  singleLeadingCandidateVisitsEnabled: defaultAppPreferences.taskSingleStageConditions.leading_candidate_visits.enabled,
+  singleLeadingCandidateVisits: String(defaultAppPreferences.taskSingleStageConditions.leading_candidate_visits.value),
+  timeEnabled: defaultAppPreferences.taskDeepConditions.time_seconds.enabled,
+  timeSeconds: String(defaultAppPreferences.taskDeepConditions.time_seconds.value),
+  totalVisitsEnabled: defaultAppPreferences.taskDeepConditions.total_visits.enabled,
+  totalVisits: String(defaultAppPreferences.taskDeepConditions.total_visits.value),
+  leadingCandidateVisitsEnabled: defaultAppPreferences.taskDeepConditions.leading_candidate_visits.enabled,
+  leadingCandidateVisits: String(defaultAppPreferences.taskDeepConditions.leading_candidate_visits.value)
 };
 
 
@@ -470,6 +483,9 @@ export function App() {
     shortcutRegistry.bind("analysis.quick", () => {
       void handleQuickAnalysisTask();
     });
+    shortcutRegistry.bind("analysis.all-positions", () => {
+      void handleAllPositionsAnalysisTask();
+    });
     shortcutRegistry.bind("file.open", () => {
       if (openEnabled) void handleOpenSgfDocument();
     });
@@ -753,12 +769,24 @@ export function App() {
     if (!analysisConditionsDraftEditedRef.current) {
       setAnalysisScopeDraft((current) => ({
         ...current,
-        timeEnabled: loaded.taskConditions.time_seconds.enabled,
-        timeSeconds: String(loaded.taskConditions.time_seconds.value),
-        totalVisitsEnabled: loaded.taskConditions.total_visits.enabled,
-        totalVisits: String(loaded.taskConditions.total_visits.value),
-        leadingCandidateVisitsEnabled: loaded.taskConditions.leading_candidate_visits.enabled,
-        leadingCandidateVisits: String(loaded.taskConditions.leading_candidate_visits.value)
+        overviewTimeEnabled: loaded.taskOverviewConditions.time_seconds.enabled,
+        overviewTimeSeconds: String(loaded.taskOverviewConditions.time_seconds.value),
+        overviewTotalVisitsEnabled: loaded.taskOverviewConditions.total_visits.enabled,
+        overviewTotalVisits: String(loaded.taskOverviewConditions.total_visits.value),
+        overviewLeadingCandidateVisitsEnabled: loaded.taskOverviewConditions.leading_candidate_visits.enabled,
+        overviewLeadingCandidateVisits: String(loaded.taskOverviewConditions.leading_candidate_visits.value),
+        singleTimeEnabled: loaded.taskSingleStageConditions.time_seconds.enabled,
+        singleTimeSeconds: String(loaded.taskSingleStageConditions.time_seconds.value),
+        singleTotalVisitsEnabled: loaded.taskSingleStageConditions.total_visits.enabled,
+        singleTotalVisits: String(loaded.taskSingleStageConditions.total_visits.value),
+        singleLeadingCandidateVisitsEnabled: loaded.taskSingleStageConditions.leading_candidate_visits.enabled,
+        singleLeadingCandidateVisits: String(loaded.taskSingleStageConditions.leading_candidate_visits.value),
+        timeEnabled: loaded.taskDeepConditions.time_seconds.enabled,
+        timeSeconds: String(loaded.taskDeepConditions.time_seconds.value),
+        totalVisitsEnabled: loaded.taskDeepConditions.total_visits.enabled,
+        totalVisits: String(loaded.taskDeepConditions.total_visits.value),
+        leadingCandidateVisitsEnabled: loaded.taskDeepConditions.leading_candidate_visits.enabled,
+        leadingCandidateVisits: String(loaded.taskDeepConditions.leading_candidate_visits.value)
       }));
     }
     setPreferencesStatus(status);
@@ -1599,14 +1627,27 @@ export function App() {
 
   function handleAnalysisScopeDraftChange(next: AnalysisScopeDraft) {
     const current = analysisScopeDraft;
-    const conditionsChanged = next.timeEnabled !== current.timeEnabled
+    const conditionsChanged = next.overviewTimeEnabled !== current.overviewTimeEnabled
+      || next.overviewTimeSeconds !== current.overviewTimeSeconds
+      || next.overviewTotalVisitsEnabled !== current.overviewTotalVisitsEnabled
+      || next.overviewTotalVisits !== current.overviewTotalVisits
+      || next.overviewLeadingCandidateVisitsEnabled !== current.overviewLeadingCandidateVisitsEnabled
+      || next.overviewLeadingCandidateVisits !== current.overviewLeadingCandidateVisits
+      || next.singleTimeEnabled !== current.singleTimeEnabled
+      || next.singleTimeSeconds !== current.singleTimeSeconds
+      || next.singleTotalVisitsEnabled !== current.singleTotalVisitsEnabled
+      || next.singleTotalVisits !== current.singleTotalVisits
+      || next.singleLeadingCandidateVisitsEnabled !== current.singleLeadingCandidateVisitsEnabled
+      || next.singleLeadingCandidateVisits !== current.singleLeadingCandidateVisits
+      || next.timeEnabled !== current.timeEnabled
       || next.timeSeconds !== current.timeSeconds
       || next.totalVisitsEnabled !== current.totalVisitsEnabled
       || next.totalVisits !== current.totalVisits
       || next.leadingCandidateVisitsEnabled !== current.leadingCandidateVisitsEnabled
       || next.leadingCandidateVisits !== current.leadingCandidateVisits;
     if (conditionsChanged) analysisConditionsDraftEditedRef.current = true;
-    const scopeChanged = next.mode !== current.mode
+    const scopeChanged = next.strategy !== current.strategy
+      || next.mode !== current.mode
       || next.intervalEnabled !== current.intervalEnabled
       || next.intervalStart !== current.intervalStart
       || next.intervalEnd !== current.intervalEnd
@@ -1652,10 +1693,11 @@ export function App() {
     if (!next) return;
     const acceptsJobEvents = next.state === "queued" || next.state === "searching";
     setWholeGameRunning(isAnalysisTaskReserved(next));
+    const stageCompleted = next.stage === "overview" ? next.overview_completed.length : next.completed.length;
     setWholeGameProgress({
-      completed: next.completed.length,
+      completed: stageCompleted,
       expected: next.requested.length,
-      remaining: Math.max(0, next.requested.length - next.completed.length)
+      remaining: Math.max(0, next.requested.length - stageCompleted)
     });
     wholeGameJobRef.current = acceptsJobEvents ? {
       run_id: next.run_id,
@@ -1683,7 +1725,9 @@ export function App() {
   async function runAnalysisTask(input: {
     runId: string;
     scope: AnalysisScopeDto;
+    strategy: AnalysisTaskStrategyDto;
     conditions: AnalysisStageConditionsDto;
+    overviewConditions?: AnalysisStageConditionsDto | null;
     preview?: AnalysisScopePreviewDto | null;
     persistConditions?: boolean;
   }) {
@@ -1692,24 +1736,47 @@ export function App() {
     if (isAnalysisTaskReserved(analysisTaskRef.current)) {
       throw new Error("An analysis task is already active.");
     }
-    const conditionsError = taskConditionsError(input.conditions);
+    const conditionsError = input.strategy === "all_positions_two_stage" && input.overviewConditions
+      ? taskStageConditionsError(input.overviewConditions, input.conditions)
+      : taskConditionsError(input.conditions);
     if (conditionsError) throw new Error(conditionsError);
     const preview = input.preview ?? await previewAnalysisScope({ generation: game.generation, scope: input.scope });
     if (preview.generation !== game.generation || JSON.stringify(preview.scope) !== JSON.stringify(input.scope)) {
       throw new Error("The scope preview is no longer current. Preview again before starting.");
     }
-    if (input.persistConditions
-      && JSON.stringify(input.conditions) !== JSON.stringify(committedPreferencesRef.current.taskConditions)) {
-      if (preferencesSaveInFlightRef.current || pendingPreferencesSaveRef.current || continuousActionInFlightRef.current) {
-        throw new Error("Wait for the current preference save before starting.");
+    if (input.persistConditions) {
+      const changed = input.strategy === "all_positions_two_stage"
+        ? input.overviewConditions != null
+          && (JSON.stringify(input.overviewConditions) !== JSON.stringify(committedPreferencesRef.current.taskOverviewConditions)
+            || JSON.stringify(input.conditions) !== JSON.stringify(committedPreferencesRef.current.taskDeepConditions))
+        : JSON.stringify(input.conditions) !== JSON.stringify(committedPreferencesRef.current.taskSingleStageConditions);
+      if (input.strategy === "all_positions_two_stage" && !input.overviewConditions) {
+        throw new Error("All-position analysis requires overview conditions.");
       }
-      await new Promise<AppPreferences>((resolve, reject) => {
-        const pending = queuePreferencesSave(committedPreferencesRef.current, { taskConditions: input.conditions });
-        pending.onSaved = resolve;
-        pending.onFailed = reject;
-      });
+      if (changed) {
+        if (preferencesSaveInFlightRef.current || pendingPreferencesSaveRef.current || continuousActionInFlightRef.current) {
+          throw new Error("Wait for the current preference save before starting.");
+        }
+        const patch: Partial<AppPreferences> = input.strategy === "all_positions_two_stage"
+          ? {
+              taskOverviewConditions: input.overviewConditions!,
+              taskDeepConditions: input.conditions
+            }
+          : { taskSingleStageConditions: input.conditions };
+        await new Promise<AppPreferences>((resolve, reject) => {
+          const pending = queuePreferencesSave(committedPreferencesRef.current, patch);
+          pending.onSaved = resolve;
+          pending.onFailed = reject;
+        });
+      }
     }
-    const started = await startAnalysisTask({ runId: input.runId, preview, conditions: input.conditions });
+    const started = await startAnalysisTask({
+      runId: input.runId,
+      preview,
+      strategy: input.strategy,
+      conditions: input.conditions,
+      overviewConditions: input.overviewConditions
+    });
     ++analysisTaskSnapshotRequestRef.current;
     setAnalysisScopePreview(preview);
     adoptAnalysisTask(started);
@@ -1724,21 +1791,22 @@ export function App() {
     setAnalysisTaskError(null);
     try {
       const scope = analysisScopeFromDraft(analysisScopeDraft);
-      const conditions: AnalysisStageConditionsDto = {
-        time_seconds: {
-          enabled: analysisScopeDraft.timeEnabled,
-          value: parseU32(analysisScopeDraft.timeSeconds, "Search time", false)
-        },
-        total_visits: {
-          enabled: analysisScopeDraft.totalVisitsEnabled,
-          value: parseU32(analysisScopeDraft.totalVisits, "Total visits", false)
-        },
-        leading_candidate_visits: {
-          enabled: analysisScopeDraft.leadingCandidateVisitsEnabled,
-          value: parseU32(analysisScopeDraft.leadingCandidateVisits, "Leading candidate visits", false)
-        }
-      };
-      await runAnalysisTask({ runId: run.run_id, scope, conditions, preview: analysisScopePreview, persistConditions: true });
+      const conditions = taskConditionsFromDraft(
+        analysisScopeDraft,
+        analysisScopeDraft.strategy === "single_stage" ? "single" : "deep"
+      );
+      const overviewConditions = analysisScopeDraft.strategy === "all_positions_two_stage"
+        ? taskConditionsFromDraft(analysisScopeDraft, "overview")
+        : null;
+      await runAnalysisTask({
+        runId: run.run_id,
+        scope,
+        strategy: analysisScopeDraft.strategy,
+        conditions,
+        overviewConditions,
+        preview: analysisScopePreview,
+        persistConditions: true
+      });
     } catch (error) {
       const detail = errorMessage(error);
       setAnalysisTaskError(detail);
@@ -1758,11 +1826,35 @@ export function App() {
       await runAnalysisTask({
         runId: run.run_id,
         scope: presetAnalysisScope(game.selected_path, chosenChildren),
+        strategy: "single_stage",
         conditions: {
           time_seconds: { enabled: false, value: 10 },
           total_visits: { enabled: true, value: 1 },
           leading_candidate_visits: { enabled: false, value: 500 }
         }
+      });
+    } catch (error) {
+      const detail = errorMessage(error);
+      setAnalysisTaskError(detail);
+      setMessage(detail);
+    } finally {
+      setAnalysisTaskRequestPending(false);
+    }
+  }
+
+  async function handleAllPositionsAnalysisTask() {
+    const run = runFromSnapshot(engineSnapshotRef.current);
+    const game = currentGameRef.current;
+    if (!run || !game || !admitsForegroundEngineJobs(engineSnapshotRef.current) || departurePendingRef.current || isAnalysisTaskReserved(analysisTaskRef.current)) return;
+    setAnalysisTaskRequestPending(true);
+    setAnalysisTaskError(null);
+    try {
+      await runAnalysisTask({
+        runId: run.run_id,
+        scope: presetAnalysisScope(game.selected_path, chosenChildren),
+        strategy: "all_positions_two_stage",
+        overviewConditions: committedPreferencesRef.current.taskOverviewConditions,
+        conditions: committedPreferencesRef.current.taskDeepConditions
       });
     } catch (error) {
       const detail = errorMessage(error);
@@ -2204,6 +2296,7 @@ export function App() {
       }}
       onEngineCommand={handleEngineCommand}
       onQuickAnalysis={() => void handleQuickAnalysisTask()}
+      onAllPositionsAnalysis={() => void handleAllPositionsAnalysisTask()}
       continuousAnalysisAction={continuousAnalysisAction}
       onContinuousAnalysis={() => void handleContinuousAnalysisAction()}
       preferences={preferences}
@@ -2490,7 +2583,7 @@ function continuousPhaseStatus(phase: ContinuousAnalysisPhaseDto): string {
 function preferencePatch(from: AppPreferences, to: AppPreferences): Partial<AppPreferences> {
   const patch: Partial<AppPreferences> = {};
   (Object.keys(to) as Array<keyof AppPreferences>).forEach((key) => {
-    const unchanged = key === "taskConditions"
+    const unchanged = key === "taskOverviewConditions" || key === "taskDeepConditions"
       ? JSON.stringify(from[key]) === JSON.stringify(to[key])
       : from[key] === to[key];
     if (!unchanged) Object.assign(patch, { [key]: to[key] });
@@ -2636,4 +2729,55 @@ function chosenLeafPath(root: SgfTreeNodeDto, start: NodePath, chosen: Map<strin
     node = node.children[index];
   }
   return { indices };
+}
+
+function taskConditionsFromDraft(
+  draft: AnalysisScopeDraft,
+  stage: "overview" | "single" | "deep"
+): AnalysisStageConditionsDto {
+  const prefix = stage === "overview" ? "Overview" : stage === "single" ? "Single-stage" : "Deep";
+  const timeEnabled = stage === "overview"
+    ? draft.overviewTimeEnabled
+    : stage === "single"
+      ? draft.singleTimeEnabled
+      : draft.timeEnabled;
+  const timeSeconds = stage === "overview"
+    ? draft.overviewTimeSeconds
+    : stage === "single"
+      ? draft.singleTimeSeconds
+      : draft.timeSeconds;
+  const totalVisitsEnabled = stage === "overview"
+    ? draft.overviewTotalVisitsEnabled
+    : stage === "single"
+      ? draft.singleTotalVisitsEnabled
+      : draft.totalVisitsEnabled;
+  const totalVisits = stage === "overview"
+    ? draft.overviewTotalVisits
+    : stage === "single"
+      ? draft.singleTotalVisits
+      : draft.totalVisits;
+  const leadingCandidateVisitsEnabled = stage === "overview"
+    ? draft.overviewLeadingCandidateVisitsEnabled
+    : stage === "single"
+      ? draft.singleLeadingCandidateVisitsEnabled
+      : draft.leadingCandidateVisitsEnabled;
+  const leadingCandidateVisits = stage === "overview"
+    ? draft.overviewLeadingCandidateVisits
+    : stage === "single"
+      ? draft.singleLeadingCandidateVisits
+      : draft.leadingCandidateVisits;
+  return {
+    time_seconds: {
+      enabled: timeEnabled,
+      value: parseU32(timeSeconds, `${prefix} search time`, false)
+    },
+    total_visits: {
+      enabled: totalVisitsEnabled,
+      value: parseU32(totalVisits, `${prefix} total visits`, false)
+    },
+    leading_candidate_visits: {
+      enabled: leadingCandidateVisitsEnabled,
+      value: parseU32(leadingCandidateVisits, `${prefix} leading candidate visits`, false)
+    }
+  };
 }

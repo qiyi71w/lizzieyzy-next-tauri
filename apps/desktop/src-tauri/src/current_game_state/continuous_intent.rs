@@ -202,6 +202,26 @@ fn wait_live_task(
 }
 
 #[cfg(unix)]
+fn wait_live_task_stage(
+    engine: &LiveFixture,
+    expected_stage: app_model::AnalysisTaskStageDto,
+    expected_state: app_model::AnalysisTaskStateDto,
+) -> app_model::AnalysisTaskDto {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    loop {
+        let task = engine.manager.analysis_task_snapshot().unwrap();
+        if task.stage == expected_stage && task.state == expected_state {
+            return task;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "expected {expected_stage:?}/{expected_state:?}, got {task:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn analysis_task_pause_continue_controllable_engine_smoke() {
     use app_model::AnalysisTaskStateDto;
@@ -290,6 +310,238 @@ fn analysis_task_pause_continue_controllable_engine_smoke() {
             .as_ref()
             .is_some_and(|frame| frame.visits == 32)));
     println!("Pause/Continue smoke: target ACK held Pausing; final released Paused; same task/Run, fresh Job; root skipped, two remaining nodes searched at 32 visits; late old frame fenced; navigation/comment/Save/recovery retained SGF without runtime work.");
+}
+
+#[cfg(unix)]
+#[test]
+fn all_positions_two_stage_pause_continue_controllable_engine_smoke() {
+    use app_model::{
+        AnalysisJobModeDto, AnalysisScopeDto, AnalysisScopeModeDto, AnalysisStageConditionsDto,
+        AnalysisTaskLimitDto, AnalysisTaskStageDto, AnalysisTaskStateDto,
+    };
+    let engine = task_fixture();
+    let state = CurrentGameState::default();
+    state.connect_analysis_manager(engine.manager.clone());
+    let opened = state.replace("(;SZ[9];B[dd])", None).unwrap();
+    state
+        .set_personal_comment(NodePath::default(), "two-stage review note".into())
+        .unwrap();
+    engine.manager.start("test").unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    let run_id = loop {
+        if let app_model::ForegroundEngineLifecycleDto::Ready { run } = engine.manager.snapshot().lifecycle {
+            break run.run_id;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let selected = engine
+        .manager
+        .start_selected_node_job(
+            crate::bind_selected_node_job(
+                &state,
+                run_id.clone(),
+                opened.generation,
+                NodePath::default(),
+                AnalysisJobModeDto::Continuous,
+                Some(999),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    loop {
+        let event = engine.progress(None);
+        if event.job_id == selected.job_id {
+            state.attach_from_job_event(&event).unwrap();
+            break;
+        }
+    }
+    let scope = AnalysisScopeDto {
+        mode: AnalysisScopeModeDto::FirstChildMainline,
+        current_node: NodePath::default(),
+        branch_choices: Vec::new(),
+        interval: None,
+        to_play: None,
+    };
+    let preview = state.preview_analysis_scope(opened.generation, scope).unwrap();
+    let conditions = |visits| AnalysisStageConditionsDto {
+        time_seconds: AnalysisTaskLimitDto {
+            enabled: false,
+            value: 10,
+        },
+        total_visits: AnalysisTaskLimitDto {
+            enabled: true,
+            value: visits,
+        },
+        leading_candidate_visits: AnalysisTaskLimitDto {
+            enabled: false,
+            value: visits,
+        },
+    };
+    std::fs::write(engine.directory.join("finish"), "go").unwrap();
+    std::fs::write(engine.directory.join("hold-deep"), "go").unwrap();
+    let task = state
+        .start_all_positions_analysis_task(
+            &engine.manager,
+            run_id.clone(),
+            preview,
+            conditions(32),
+            conditions(500),
+        )
+        .unwrap();
+
+    let mut deep_progress_attached = false;
+    while !deep_progress_attached {
+        let event = engine.progress(None);
+        if event.job_id == task.job_id
+            && state.attach_from_job_event(&event).is_some()
+            && engine
+                .manager
+                .analysis_task_snapshot()
+                .is_some_and(|snapshot| snapshot.stage == AnalysisTaskStageDto::Deep)
+        {
+            deep_progress_attached = true;
+        }
+    }
+    let deep = wait_live_task_stage(
+        &engine,
+        AnalysisTaskStageDto::Deep,
+        AnalysisTaskStateDto::Searching,
+    );
+    assert_eq!(deep.overview_completed, deep.requested);
+    assert!(deep.completed.is_empty());
+    assert_eq!(deep.overview_summaries.len(), 2);
+    assert!(deep
+        .overview_summaries
+        .iter()
+        .all(|summary| summary.frame.visits == 32));
+
+    let overview_identity = (
+        deep.overview_completed.clone(),
+        deep.completed.clone(),
+        deep.overview_summaries.clone(),
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    loop {
+        let event = engine
+            .events
+            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .unwrap();
+        let app_model::ForegroundEngineEventDto::Job { job } = event else {
+            continue;
+        };
+        if job.job_id == selected.job_id && job.outcome == app_model::AnalysisJobOutcomeDto::Progress {
+            state.attach_from_job_event(&job).unwrap();
+            break;
+        }
+        state.attach_from_job_event(&job);
+    }
+    assert_eq!(
+        state
+            .select_path(NodePath::default())
+            .unwrap()
+            .snapshot
+            .primary_analysis
+            .unwrap()
+            .visits,
+        999
+    );
+    let after_selected = engine.manager.analysis_task_snapshot().unwrap();
+    assert_eq!(
+        (
+            after_selected.overview_completed,
+            after_selected.completed,
+            after_selected.overview_summaries,
+        ),
+        overview_identity
+    );
+
+    let pausing = state
+        .pause_analysis_task(&engine.manager, &task.run_id, &task.task_id)
+        .unwrap();
+    assert_eq!(pausing.stage, AnalysisTaskStageDto::Deep);
+    assert_eq!(pausing.state, AnalysisTaskStateDto::Pausing);
+    assert_eq!(
+        engine
+            .manager
+            .snapshot()
+            .selected_node_job
+            .as_ref()
+            .map(|job| job.job_id.as_str()),
+        Some(selected.job_id.as_str())
+    );
+    state.seal_job(&selected);
+    engine
+        .manager
+        .cancel_job(&selected.run_id, &selected.job_id)
+        .unwrap();
+    std::fs::write(engine.directory.join("cancel-final"), "go").unwrap();
+    let paused = wait_live_task_stage(&engine, AnalysisTaskStageDto::Deep, AnalysisTaskStateDto::Paused);
+    assert!(paused.completed.is_empty());
+    assert_eq!(paused.overview_completed, paused.requested);
+
+    let continued = state
+        .continue_analysis_task(&engine.manager, &task.run_id, &task.task_id)
+        .unwrap();
+    assert_eq!(continued.task_id, task.task_id);
+    assert_ne!(continued.job_id, task.job_id);
+    assert_eq!(continued.stage, AnalysisTaskStageDto::Deep);
+    std::fs::remove_file(engine.directory.join("hold-deep")).unwrap();
+    let mut deep_paths = Vec::new();
+    while deep_paths.len() < 2 {
+        let event = engine.progress(Some(&task.job_id));
+        if state.attach_from_job_event(&event).is_some() {
+            deep_paths.push(event.node_path.indices);
+        }
+    }
+    assert_eq!(deep_paths, vec![Vec::<u32>::new(), vec![0]]);
+    let completed = wait_live_task(&engine, AnalysisTaskStateDto::Completed);
+    assert_eq!(completed.stage, AnalysisTaskStageDto::Deep);
+    assert_eq!(completed.overview_completed, completed.requested);
+    assert_eq!(completed.completed, completed.requested);
+    assert!(completed
+        .overview_summaries
+        .iter()
+        .all(|summary| summary.frame.visits == 32));
+
+    let saved_path = engine
+        .directory
+        .join("two-stage.sgf")
+        .to_string_lossy()
+        .into_owned();
+    state
+        .save_to_path(saved_path.clone(), NodePath::default())
+        .unwrap();
+    let reopened = CurrentSgfDocument::open(&std::fs::read_to_string(&saved_path).unwrap()).unwrap();
+    assert_eq!(
+        reopened.snapshot(&NodePath::default()).unwrap().personal_comment,
+        "two-stage review note"
+    );
+    assert!(reopened
+        .first_child_mainline_snapshots()
+        .unwrap()
+        .iter()
+        .all(|node| node
+            .primary_analysis
+            .as_ref()
+            .is_some_and(|frame| frame.visits == 500)));
+    let envelope = state
+        .recovery_flush(app_model::ApplicationExitDispositionDto::ExitIncomplete)
+        .unwrap();
+    let recovered = CurrentGameState::default();
+    let recovered_manager = ForegroundEngineManager::new(
+        Arc::new(InMemoryEngineProfileCatalog::new()),
+        ForegroundEngineConfig::for_tests(),
+    );
+    recovered.connect_analysis_manager(recovered_manager.clone());
+    recovered
+        .replace(&envelope.sgf_text, envelope.source_path)
+        .unwrap();
+    assert!(recovered_manager.analysis_task_snapshot().is_none());
+    assert!(recovered.analysis_jobs().unwrap().is_empty());
+    println!(
+        "two-stage smoke: all overview targets completed at 32 visits before deep; deep Pause fenced the interrupted target; Continue used a fresh Job and completed both targets at 500 visits; Save/reopen retained comment and accepted analysis; recovery restored no runtime task."
+    );
 }
 
 #[cfg(unix)]
@@ -995,14 +1247,14 @@ fn task_search_budgets_controllable_engine_smoke() {
         let path = engine.directory.join("preferences.json");
         let mut preset = app_preferences::default_app_preferences();
         preset.continuous_analysis_enabled = false;
-        preset.task_conditions = Some(AnalysisStageConditionsDto::default());
+        preset.task_deep_conditions = Some(AnalysisStageConditionsDto::default());
         preferences.save(&path, &engine.manager, preset.clone()).unwrap();
         assert_eq!(
             engine.manager.analysis_task_snapshot().unwrap().conditions,
             conditions
         );
         let mut rejected = preset.clone();
-        rejected.task_conditions.as_mut().unwrap().time_seconds.value = 0;
+        rejected.task_deep_conditions.as_mut().unwrap().time_seconds.value = 0;
         assert!(preferences.save(&path, &engine.manager, rejected).is_err());
         assert!(preferences
             .save(&engine.directory, &engine.manager, preset.clone())

@@ -321,6 +321,44 @@ impl CurrentGameState {
         )
     }
 
+    pub fn start_all_positions_analysis_task(
+        &self,
+        manager: &engine_manager::ForegroundEngineManager,
+        run_id: String,
+        preview: app_model::AnalysisScopePreviewDto,
+        overview_conditions: app_model::AnalysisStageConditionsDto,
+        deep_conditions: app_model::AnalysisStageConditionsDto,
+    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
+        let invalid =
+            |message| crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message);
+        app_model::AnalysisStageConditionsDto::validate_all_positions_two_stage(
+            &overview_conditions,
+            &deep_conditions,
+        )
+        .map_err(&invalid)?;
+        let holder = self.holder.lock().expect("current game state");
+        let admitted = holder
+            .analysis_scope_admission(preview.generation, &preview.scope)
+            .map_err(|error| invalid(error.message))?;
+        if scope_preview(&admitted, preview.scope.clone()) != preview {
+            return Err(invalid(
+                "Analysis scope preview no longer matches the current game.".into(),
+            ));
+        }
+        let work_items =
+            crate::whole_game_work_items(&admitted, deep_conditions.total_visits.value, &run_id)?;
+        manager.start_all_positions_analysis_task(
+            engine_manager::WholeGameJobRequest {
+                run_id,
+                generation: admitted.generation,
+                work_items,
+            },
+            preview.scope,
+            overview_conditions,
+            deep_conditions,
+        )
+    }
+
     pub fn pause_analysis_task(
         &self,
         manager: &engine_manager::ForegroundEngineManager,

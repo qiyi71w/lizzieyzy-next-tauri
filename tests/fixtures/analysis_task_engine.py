@@ -128,6 +128,15 @@ def search(query):
             dict(move="E5", order=0, visits=5, winrate=0.6, scoreMean=2.5, pv=["E5"])
         ]))
         return
+    if (root / "hold-deep").exists() and configured_visits(query) >= 500:
+        while (root / "hold-deep").exists() and identity in active:
+            emit(frame(query, True, visits=max(1, configured_visits(query) // 2)))
+            time.sleep(query.get("reportDuringSearchEvery", 0.1))
+        if identity not in active:
+            return
+        active.discard(identity)
+        emit(frame(query))
+        return
     while not (root / "finish").exists():
         if identity not in active:
             return

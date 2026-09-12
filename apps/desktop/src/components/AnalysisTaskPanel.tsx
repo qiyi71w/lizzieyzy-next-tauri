@@ -2,15 +2,29 @@ import type {
   AnalysisScopeModeDto,
   AnalysisScopePreviewDto,
   AnalysisTaskDto,
+  AnalysisTaskStrategyDto,
   PlayerColor
 } from "../domain/types";
 
 export type AnalysisScopeDraft = {
+  strategy: AnalysisTaskStrategyDto;
   mode: AnalysisScopeModeDto;
   intervalEnabled: boolean;
   intervalStart: string;
   intervalEnd: string;
   toPlay: PlayerColor | "both";
+  overviewTimeEnabled: boolean;
+  overviewTimeSeconds: string;
+  overviewTotalVisitsEnabled: boolean;
+  overviewTotalVisits: string;
+  overviewLeadingCandidateVisitsEnabled: boolean;
+  overviewLeadingCandidateVisits: string;
+  singleTimeEnabled: boolean;
+  singleTimeSeconds: string;
+  singleTotalVisitsEnabled: boolean;
+  singleTotalVisits: string;
+  singleLeadingCandidateVisitsEnabled: boolean;
+  singleLeadingCandidateVisits: string;
   timeEnabled: boolean;
   timeSeconds: string;
   totalVisitsEnabled: boolean;
@@ -49,6 +63,7 @@ export function AnalysisTaskPanel(props: Props) {
   const requested = props.task?.requested.length ?? 0;
   const first = props.preview?.targets[0];
   const last = props.preview?.targets.at(-1);
+  const singleStage = props.draft.strategy === "single_stage";
 
   function update(patch: Partial<AnalysisScopeDraft>) {
     props.onDraftChange({ ...props.draft, ...patch });
@@ -59,6 +74,17 @@ export function AnalysisTaskPanel(props: Props) {
       <div className="sgf-tools">
         <div className="document-row">
           <strong>Analysis task</strong>
+          <label>
+            Strategy
+            <select
+              aria-label="Analysis strategy"
+              value={props.draft.strategy}
+              onChange={(event) => update({ strategy: event.target.value as AnalysisTaskStrategyDto })}
+            >
+              <option value="all_positions_two_stage">All positions · overview then deep</option>
+              <option value="single_stage">Single stage</option>
+            </select>
+          </label>
           <label>
             Scope
             <select
@@ -114,14 +140,36 @@ export function AnalysisTaskPanel(props: Props) {
               <option value="white">White</option>
             </select>
           </label>
+          {props.draft.strategy === "all_positions_two_stage" ? (
+            <fieldset>
+              <legend>Overview conditions (any enabled condition ends the search)</legend>
+              <label>
+                <input aria-label="Enable overview search time" type="checkbox" checked={props.draft.overviewTimeEnabled} onChange={(event) => update({ overviewTimeEnabled: event.target.checked })} />
+                Time (seconds)
+                <input aria-label="Overview search time seconds" type="number" min={1} max={4294967295} step={1} value={props.draft.overviewTimeSeconds} onChange={(event) => update({ overviewTimeSeconds: event.target.value })} />
+              </label>
+              <label>
+                <input aria-label="Enable overview total visits" type="checkbox" checked={props.draft.overviewTotalVisitsEnabled} onChange={(event) => update({ overviewTotalVisitsEnabled: event.target.checked })} />
+                Total visits
+                <input aria-label="Overview total visits" type="number" min={1} max={4294967295} step={1} value={props.draft.overviewTotalVisits} onChange={(event) => update({ overviewTotalVisits: event.target.value })} />
+              </label>
+              <label>
+                <input aria-label="Enable overview leading candidate visits" type="checkbox" checked={props.draft.overviewLeadingCandidateVisitsEnabled} onChange={(event) => update({ overviewLeadingCandidateVisitsEnabled: event.target.checked })} />
+                Leading candidate visits
+                <input aria-label="Overview leading candidate visits" type="number" min={1} max={4294967295} step={1} value={props.draft.overviewLeadingCandidateVisits} onChange={(event) => update({ overviewLeadingCandidateVisits: event.target.value })} />
+              </label>
+            </fieldset>
+          ) : null}
           <fieldset>
-            <legend>Ending conditions (any enabled condition ends the search)</legend>
+            <legend>{props.draft.strategy === "all_positions_two_stage" ? "Deep" : "Single-stage"} conditions (any enabled condition ends the search)</legend>
             <label>
               <input
                 aria-label="Enable search time"
                 type="checkbox"
-                checked={props.draft.timeEnabled}
-                onChange={(event) => update({ timeEnabled: event.target.checked })}
+                checked={singleStage ? props.draft.singleTimeEnabled : props.draft.timeEnabled}
+                onChange={(event) => singleStage
+                  ? update({ singleTimeEnabled: event.target.checked })
+                  : update({ timeEnabled: event.target.checked })}
               />
               Time (seconds)
               <input
@@ -130,16 +178,20 @@ export function AnalysisTaskPanel(props: Props) {
                 min={1}
                 max={4294967295}
                 step={1}
-                value={props.draft.timeSeconds}
-                onChange={(event) => update({ timeSeconds: event.target.value })}
+                value={singleStage ? props.draft.singleTimeSeconds : props.draft.timeSeconds}
+                onChange={(event) => singleStage
+                  ? update({ singleTimeSeconds: event.target.value })
+                  : update({ timeSeconds: event.target.value })}
               />
             </label>
             <label>
               <input
                 aria-label="Enable total visits"
                 type="checkbox"
-                checked={props.draft.totalVisitsEnabled}
-                onChange={(event) => update({ totalVisitsEnabled: event.target.checked })}
+                checked={singleStage ? props.draft.singleTotalVisitsEnabled : props.draft.totalVisitsEnabled}
+                onChange={(event) => singleStage
+                  ? update({ singleTotalVisitsEnabled: event.target.checked })
+                  : update({ totalVisitsEnabled: event.target.checked })}
               />
               Total visits
               <input
@@ -148,16 +200,22 @@ export function AnalysisTaskPanel(props: Props) {
                 min={1}
                 max={4294967295}
                 step={1}
-                value={props.draft.totalVisits}
-                onChange={(event) => update({ totalVisits: event.target.value })}
+                value={singleStage ? props.draft.singleTotalVisits : props.draft.totalVisits}
+                onChange={(event) => singleStage
+                  ? update({ singleTotalVisits: event.target.value })
+                  : update({ totalVisits: event.target.value })}
               />
             </label>
             <label>
               <input
                 aria-label="Enable leading candidate visits"
                 type="checkbox"
-                checked={props.draft.leadingCandidateVisitsEnabled}
-                onChange={(event) => update({ leadingCandidateVisitsEnabled: event.target.checked })}
+                checked={singleStage
+                  ? props.draft.singleLeadingCandidateVisitsEnabled
+                  : props.draft.leadingCandidateVisitsEnabled}
+                onChange={(event) => singleStage
+                  ? update({ singleLeadingCandidateVisitsEnabled: event.target.checked })
+                  : update({ leadingCandidateVisitsEnabled: event.target.checked })}
               />
               Leading candidate visits
               <input
@@ -166,8 +224,12 @@ export function AnalysisTaskPanel(props: Props) {
                 min={1}
                 max={4294967295}
                 step={1}
-                value={props.draft.leadingCandidateVisits}
-                onChange={(event) => update({ leadingCandidateVisits: event.target.value })}
+                value={singleStage
+                  ? props.draft.singleLeadingCandidateVisits
+                  : props.draft.leadingCandidateVisits}
+                onChange={(event) => singleStage
+                  ? update({ singleLeadingCandidateVisits: event.target.value })
+                  : update({ leadingCandidateVisits: event.target.value })}
               />
             </label>
           </fieldset>
@@ -189,8 +251,14 @@ export function AnalysisTaskPanel(props: Props) {
         {props.error ? <p role="alert">{props.error}</p> : null}
         {props.task ? (
           <p role="status" data-analysis-task-state={props.task.state}>
-            {formatTaskStage(props.task.stage)} · {props.task.state} · {completed}/{requested} completed
-            {` · conditions ${formatTaskConditions(props.task.conditions)}`}
+            {formatTaskStage(props.task.stage)} · {props.task.state}
+            {props.task.strategy === "all_positions_two_stage"
+              ? ` · overview ${props.task.overview_completed.length}/${requested} · deep ${completed}/${requested}`
+              : ` · ${completed}/${requested} completed`}
+            {props.task.overview_conditions
+              ? ` · overview conditions ${formatTaskConditions(props.task.overview_conditions)}`
+              : ""}
+            {` · ${props.task.stage === "deep" ? "deep " : ""}conditions ${formatTaskConditions(props.task.conditions)}`}
             {props.task.ending_conditions.length > 0
               ? ` · ended by ${props.task.ending_conditions.map(formatEndingCondition).join(" + ")}`
               : ""}
@@ -207,8 +275,9 @@ function formatTarget(target: AnalysisScopePreviewDto["targets"][number]): strin
   return `move ${target.move_number} (${path}, ${target.to_play} to play)`;
 }
 
-function formatTaskStage(stage: string): string {
-  return stage === "single_stage" ? "single-stage" : stage;
+function formatTaskStage(stage: AnalysisTaskDto["stage"]): string {
+  if (stage === "single_stage") return "single-stage";
+  return stage;
 }
 
 function formatEndingCondition(condition: string): string {

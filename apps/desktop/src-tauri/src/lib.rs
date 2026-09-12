@@ -49,6 +49,7 @@ use session_recovery::{
     restore_current_game_recovery, retry_current_game_recovery, spawn_recovery_writer,
 };
 use std::sync::Mutex;
+#[cfg(test)]
 use uuid::Uuid;
 
 const ENGINE_PROFILE_FILE: &str = "lizzieyzy-next-engine-profile.json";
@@ -731,9 +732,31 @@ fn start_analysis_task(
     current_game: State<'_, CurrentGameState>,
     run_id: String,
     preview: app_model::AnalysisScopePreviewDto,
+    strategy: app_model::AnalysisTaskStrategyDto,
     conditions: app_model::AnalysisStageConditionsDto,
+    overview_conditions: Option<app_model::AnalysisStageConditionsDto>,
 ) -> Result<app_model::AnalysisTaskDto, EngineFailureDto> {
-    current_game.start_analysis_task(&manager, run_id, preview, conditions)
+    match strategy {
+        app_model::AnalysisTaskStrategyDto::SingleStage => {
+            current_game.start_analysis_task(&manager, run_id, preview, conditions)
+        }
+        app_model::AnalysisTaskStrategyDto::AllPositionsTwoStage => {
+            let overview_conditions = overview_conditions.ok_or_else(|| {
+                job_failure(
+                    &run_id,
+                    EngineFailureKind::InvalidState,
+                    "All-position analysis requires overview conditions.".into(),
+                )
+            })?;
+            current_game.start_all_positions_analysis_task(
+                &manager,
+                run_id,
+                preview,
+                overview_conditions,
+                conditions,
+            )
+        }
+    }
 }
 
 #[tauri::command]

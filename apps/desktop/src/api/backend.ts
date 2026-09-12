@@ -9,6 +9,7 @@ import type {
   AnalysisScopePreviewDto,
   AnalysisStageConditionsDto,
   AnalysisTaskDto,
+  AnalysisTaskStrategyDto,
   AppHealthDto,
   AssetCheckDto,
   CandidateMoveDto,
@@ -307,7 +308,9 @@ export async function previewAnalysisScope(input: {
 export async function startAnalysisTask(input: {
   runId: string;
   preview: AnalysisScopePreviewDto;
+  strategy: AnalysisTaskStrategyDto;
   conditions: AnalysisStageConditionsDto;
+  overviewConditions?: AnalysisStageConditionsDto | null;
 }): Promise<AnalysisTaskDto> {
   if (!isTauriRuntime()) {
     throw new Error("Analysis tasks require the Tauri desktop backend.");

@@ -176,17 +176,27 @@ beforeEach(() => {
       { node_path: { indices: [0] }, move_number: 1, to_play: "white" }
     ]
   }));
-  backend.startAnalysisTask.mockImplementation(async ({ runId, preview, conditions }: { runId: string; preview: AnalysisScopePreviewDto; conditions: AnalysisStageConditionsDto }) => {
+  backend.startAnalysisTask.mockImplementation(async ({ runId, preview, strategy, conditions, overviewConditions }: {
+    runId: string;
+    preview: AnalysisScopePreviewDto;
+    strategy: AnalysisTaskDto["strategy"];
+    conditions: AnalysisStageConditionsDto;
+    overviewConditions?: AnalysisStageConditionsDto | null;
+  }) => {
     const task: AnalysisTaskDto = {
       task_id: "task-1",
       run_id: runId,
       job_id: "job-task-1",
       generation: preview.generation,
       scope: preview.scope,
-      stage: "single_stage",
+      strategy,
+      stage: strategy === "all_positions_two_stage" ? "overview" : "single_stage",
       conditions,
+      overview_conditions: overviewConditions,
       requested: preview.targets.map((target) => target.node_path),
-      completed: [preview.targets[0].node_path],
+      overview_completed: strategy === "all_positions_two_stage" ? [preview.targets[0].node_path] : [],
+      completed: strategy === "single_stage" ? [preview.targets[0].node_path] : [],
+      overview_summaries: [],
       state: "searching",
       reason: null,
       ending_conditions: []
@@ -445,7 +455,7 @@ describe("truthful native analysis actions", () => {
     await readyEngine(host);
     const visits = host.querySelector('input[aria-label="Total visits"]') as HTMLInputElement;
     await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(visits, "32");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(visits, "500");
       visits.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => { buttonNamed(host, "Preview scope").click(); });
@@ -463,7 +473,8 @@ describe("truthful native analysis actions", () => {
       await Promise.resolve();
     });
     expect(preferencesApi.saveAppPreferences).toHaveBeenLastCalledWith(expect.objectContaining({
-      taskConditions: expect.objectContaining({ total_visits: { enabled: true, value: 32 } }),
+      taskDeepConditions: expect.objectContaining({ total_visits: { enabled: true, value: 500 } }),
+      taskOverviewConditions: defaultAppPreferences.taskOverviewConditions,
       showCandidates: false
     }));
     expect(backend.startAnalysisTask).toHaveBeenCalledTimes(1);
@@ -474,7 +485,7 @@ describe("truthful native analysis actions", () => {
   it("does not leak a failed task preset through a concurrent preference save", async () => {
     const host = await renderApp();
     await readyEngine(host);
-    await changeNumber(inputNamed(host, "Total visits"), "32");
+    await changeNumber(inputNamed(host, "Total visits"), "500");
     await act(async () => { buttonNamed(host, "Preview scope").click(); });
     let rejectTaskSave!: (error: Error) => void;
     preferencesApi.saveAppPreferences.mockImplementationOnce(() => new Promise<AppPreferences>((_, reject) => {
@@ -495,7 +506,8 @@ describe("truthful native analysis actions", () => {
     expect(backend.startAnalysisTask).not.toHaveBeenCalled();
     expect(preferencesApi.saveAppPreferences).toHaveBeenCalledTimes(2);
     expect(preferencesApi.saveAppPreferences.mock.calls[1][0]).toEqual(expect.objectContaining({
-      taskConditions: defaultAppPreferences.taskConditions,
+      taskOverviewConditions: defaultAppPreferences.taskOverviewConditions,
+      taskDeepConditions: defaultAppPreferences.taskDeepConditions,
       showCandidates: false
     }));
   });
@@ -525,7 +537,7 @@ describe("truthful native analysis actions", () => {
     expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
 
     await changeNumber(time, "12");
-    await changeNumber(total, "41");
+    await changeNumber(total, "500");
     await changeNumber(leading, "7");
     await act(async () => { buttonNamed(host, "Preview scope").click(); });
     await act(async () => {
@@ -535,11 +547,18 @@ describe("truthful native analysis actions", () => {
     });
     const conditions = {
       time_seconds: { enabled: true, value: 12 },
-      total_visits: { enabled: false, value: 41 },
+      total_visits: { enabled: false, value: 500 },
       leading_candidate_visits: { enabled: true, value: 7 }
     };
-    expect(preferencesApi.saveAppPreferences).toHaveBeenCalledWith(expect.objectContaining({ taskConditions: conditions }));
-    expect(backend.startAnalysisTask).toHaveBeenCalledWith(expect.objectContaining({ conditions }));
+    expect(preferencesApi.saveAppPreferences).toHaveBeenCalledWith(expect.objectContaining({
+      taskOverviewConditions: defaultAppPreferences.taskOverviewConditions,
+      taskDeepConditions: conditions
+    }));
+    expect(backend.startAnalysisTask).toHaveBeenCalledWith(expect.objectContaining({
+      strategy: "all_positions_two_stage",
+      overviewConditions: defaultAppPreferences.taskOverviewConditions,
+      conditions
+    }));
     expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent)
       .toContain("conditions 12s OR 7 leading candidate visits");
 
@@ -553,9 +572,9 @@ describe("truthful native analysis actions", () => {
       preferences: {
         ...defaultAppPreferences,
         defaultMaxVisits: 999,
-        taskConditions: {
+        taskDeepConditions: {
           time_seconds: { enabled: true, value: 15 },
-          total_visits: { enabled: false, value: 64 },
+          total_visits: { enabled: false, value: 640 },
           leading_candidate_visits: { enabled: true, value: 8 }
         }
       }
@@ -565,7 +584,7 @@ describe("truthful native analysis actions", () => {
     expect(inputNamed(host, "Enable search time").checked).toBe(true);
     expect(inputNamed(host, "Search time seconds").value).toBe("15");
     expect(inputNamed(host, "Enable total visits").checked).toBe(false);
-    expect(inputNamed(host, "Total visits").value).toBe("64");
+    expect(inputNamed(host, "Total visits").value).toBe("640");
     expect(inputNamed(host, "Enable leading candidate visits").checked).toBe(true);
     expect(inputNamed(host, "Leading candidate visits").value).toBe("8");
   });
@@ -583,9 +602,9 @@ describe("truthful native analysis actions", () => {
         preferences: {
           ...defaultAppPreferences,
           defaultMaxVisits: 999,
-          taskConditions: {
+          taskDeepConditions: {
             time_seconds: { enabled: true, value: 15 },
-            total_visits: { enabled: false, value: 64 },
+            total_visits: { enabled: false, value: 640 },
             leading_candidate_visits: { enabled: true, value: 8 }
           }
         }
@@ -711,7 +730,7 @@ describe("truthful native analysis actions", () => {
       releasePause({ ...searching, state: "pausing" });
       await Promise.resolve();
     });
-    expect(host.querySelector('[data-analysis-task-state="pausing"]')?.textContent).toContain("1/2 completed");
+    expect(host.querySelector('[data-analysis-task-state="pausing"]')?.textContent).toContain("overview 1/2 · deep 0/2");
     expect(buttonNamed(host, "Continue task").disabled).toBe(true);
     expect(buttonNamed(host, "Cancel task").disabled).toBe(false);
     expect(host.querySelectorAll(".cand-row")).toHaveLength(0);
@@ -725,7 +744,7 @@ describe("truthful native analysis actions", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(host.querySelector('[data-analysis-task-state="paused"]')?.textContent).toContain("1/2 completed");
+    expect(host.querySelector('[data-analysis-task-state="paused"]')?.textContent).toContain("overview 1/2 · deep 0/2");
 
     let releasePausedSnapshot!: (task: AnalysisTaskDto) => void;
     backend.analysisTaskSnapshot.mockImplementationOnce(() => new Promise<AnalysisTaskDto>((resolve) => {
@@ -767,7 +786,7 @@ describe("truthful native analysis actions", () => {
       await Promise.resolve();
       releasePausedSnapshot({ ...searching, state: "paused" });
     });
-    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent).toContain("1/2 completed");
+    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent).toContain("overview 1/2 · deep 0/2");
     expect(buttonNamed(host, "Pause task").disabled).toBe(false);
 
     await act(async () => {
@@ -785,7 +804,7 @@ describe("truthful native analysis actions", () => {
       });
       await Promise.resolve();
     });
-    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent).toContain("1/2 completed");
+    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent).toContain("overview 1/2 · deep 0/2");
     expect(host.textContent).not.toContain("整局 2/2");
   });
 
@@ -832,11 +851,11 @@ describe("truthful native analysis actions", () => {
     });
     await act(async () => { buttonNamed(host, "Cancel task").click(); });
     expect(backend.cancelKataGoAnalysis).toHaveBeenCalledWith("run-1", "job-task-1");
-    expect(host.querySelector('[data-analysis-task-state="cancelled"]')?.textContent).toContain("1/2 completed");
+    expect(host.querySelector('[data-analysis-task-state="cancelled"]')?.textContent).toContain("overview 1/2 · deep 0/2");
     expect(buttonNamed(host, "Cancel task").disabled).toBe(true);
   });
 
-  it("previews, starts, reports, cancels, and focus-guards a quick task", async () => {
+  it("previews and starts two stages, persists both budgets, and focus-guards the quick shortcut", async () => {
     const host = await renderApp();
     await readyEngine(host);
 
@@ -857,7 +876,7 @@ describe("truthful native analysis actions", () => {
       scope.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await act(async () => { interval.click(); });
-    for (const [input, value] of [[start, "0"], [end, "1"], [visits, "32"]] as const) {
+    for (const [input, value] of [[start, "0"], [end, "1"], [visits, "500"]] as const) {
       await act(async () => {
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
         input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -889,9 +908,9 @@ describe("truthful native analysis actions", () => {
     });
     expect(backend.startAnalysisTask).not.toHaveBeenCalled();
     expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
-    expect(host.textContent).toContain("Total visits must be a whole number");
+    expect(host.textContent).toContain("Deep total visits must be a whole number");
     await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(visits, "32");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(visits, "500");
       visits.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => {
@@ -912,19 +931,22 @@ describe("truthful native analysis actions", () => {
       buttonNamed(host, "Start task").click();
       await backend.startAnalysisTask.mock.results.at(-1)?.value;
     });
-    expect(host.textContent).toContain("single-stage · searching · 1/2 completed");
+    expect(host.textContent).toContain("overview · searching · overview 1/2 · deep 0/2");
     expect(backend.startAnalysisTask).toHaveBeenCalledWith(expect.objectContaining({
       runId: "run-1",
+      strategy: "all_positions_two_stage",
+      overviewConditions: defaultAppPreferences.taskOverviewConditions,
       conditions: {
         time_seconds: { enabled: false, value: 10 },
-        total_visits: { enabled: true, value: 32 },
+        total_visits: { enabled: true, value: 500 },
         leading_candidate_visits: { enabled: false, value: 500 }
       }
     }));
     expect(preferencesApi.saveAppPreferences).toHaveBeenCalledWith(expect.objectContaining({
-      taskConditions: {
+      taskOverviewConditions: defaultAppPreferences.taskOverviewConditions,
+      taskDeepConditions: {
         time_seconds: { enabled: false, value: 10 },
-        total_visits: { enabled: true, value: 32 },
+        total_visits: { enabled: true, value: 500 },
         leading_candidate_visits: { enabled: false, value: 500 }
       }
     }));
@@ -936,7 +958,7 @@ describe("truthful native analysis actions", () => {
       await Promise.resolve();
     });
     expect(backend.cancelKataGoAnalysis).toHaveBeenCalledWith("run-1", "job-task-1");
-    expect(host.textContent).toContain("cancelled · 1/2 completed");
+    expect(host.textContent).toContain("cancelled · overview 1/2 · deep 0/2");
 
     backend.startAnalysisTask.mockClear();
     visits.focus();
@@ -950,8 +972,150 @@ describe("truthful native analysis actions", () => {
       await backend.startAnalysisTask.mock.results.at(-1)?.value;
     });
     expect(backend.startAnalysisTask).toHaveBeenCalledWith(expect.objectContaining({
+      strategy: "single_stage",
       conditions: expect.objectContaining({ total_visits: { enabled: true, value: 1 } })
     }));
+  });
+
+  it("runs the all-position strategy from Ctrl+Shift+B with text-focus suppression", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    const visits = host.querySelector('input[aria-label="Total visits"]') as HTMLInputElement;
+
+    visits.focus();
+    act(() => visits.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "b",
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true
+    })));
+    expect(backend.previewAnalysisScope).not.toHaveBeenCalled();
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+
+    visits.blur();
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "b",
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true
+      }));
+      await backend.previewAnalysisScope.mock.results.at(-1)?.value;
+      await backend.startAnalysisTask.mock.results.at(-1)?.value;
+    });
+    expect(backend.startAnalysisTask).toHaveBeenCalledWith(expect.objectContaining({
+      strategy: "all_positions_two_stage",
+      overviewConditions: defaultAppPreferences.taskOverviewConditions,
+      conditions: defaultAppPreferences.taskDeepConditions
+    }));
+    expect(host.textContent).toContain("overview · searching · overview 1/2 · deep 0/2");
+  });
+
+  it("persists an explicit single-stage preset before admission", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    const strategy = host.querySelector('select[aria-label="Analysis strategy"]') as HTMLSelectElement;
+    await act(async () => {
+      strategy.value = "single_stage";
+      strategy.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await changeNumber(inputNamed(host, "Total visits"), "32");
+    await act(async () => {
+      buttonNamed(host, "Preview scope").click();
+      await backend.previewAnalysisScope.mock.results.at(-1)?.value;
+    });
+
+    preferencesApi.saveAppPreferences.mockRejectedValueOnce(new Error("preferences disk full"));
+    await act(async () => {
+      buttonNamed(host, "Start task").click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("preferences disk full");
+
+    await act(async () => {
+      buttonNamed(host, "Start task").click();
+      await backend.startAnalysisTask.mock.results.at(-1)?.value;
+    });
+    const singleStage = {
+      time_seconds: { enabled: false, value: 10 },
+      total_visits: { enabled: true, value: 32 },
+      leading_candidate_visits: { enabled: false, value: 500 }
+    };
+    expect(preferencesApi.saveAppPreferences).toHaveBeenLastCalledWith(expect.objectContaining({
+      taskSingleStageConditions: singleStage,
+      taskOverviewConditions: defaultAppPreferences.taskOverviewConditions,
+      taskDeepConditions: defaultAppPreferences.taskDeepConditions
+    }));
+    expect(backend.startAnalysisTask).toHaveBeenCalledWith(expect.objectContaining({
+      strategy: "single_stage",
+      conditions: singleStage,
+      overviewConditions: null
+    }));
+  });
+
+  it("renders the Deep transition and Pause/Continue with stage-local counts", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    const overview = taskRuntime.snapshot!;
+    const deep: AnalysisTaskDto = {
+      ...overview,
+      stage: "deep",
+      state: "searching",
+      overview_completed: overview.requested,
+      completed: [overview.requested[0]],
+      overview_summaries: []
+    };
+    taskRuntime.snapshot = deep;
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: deep.run_id,
+        job_id: deep.job_id,
+        lane: "whole_game",
+        mode: "finite",
+        generation: deep.generation,
+        node_path: deep.requested[0],
+        outcome: "progress"
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent)
+      .toContain("deep · searching · overview 2/2 · deep 1/2");
+
+    await act(async () => {
+      buttonNamed(host, "Pause task").click();
+      await backend.pauseAnalysisTask.mock.results.at(-1)?.value;
+    });
+    expect(host.querySelector('[data-analysis-task-state="pausing"]')?.textContent)
+      .toContain("overview 2/2 · deep 1/2");
+    taskRuntime.snapshot = { ...deep, state: "paused" };
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: deep.run_id,
+        job_id: deep.job_id,
+        lane: "whole_game",
+        mode: "finite",
+        generation: deep.generation,
+        node_path: deep.requested[1],
+        outcome: "cancelled"
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-analysis-task-state="paused"]')?.textContent)
+      .toContain("overview 2/2 · deep 1/2");
+
+    await act(async () => {
+      buttonNamed(host, "Continue task").click();
+      await backend.continueAnalysisTask.mock.results.at(-1)?.value;
+    });
+    expect(backend.continueAnalysisTask).toHaveBeenCalledWith({ runId: "run-1", taskId: "task-1" });
+    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent)
+      .toContain("deep · searching · overview 2/2 · deep 1/2");
   });
 
   it("shows the observed normal ending conditions", async () => {

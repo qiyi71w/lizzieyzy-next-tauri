@@ -29,14 +29,34 @@ describe("browser preference storage", () => {
     expect(loaded.recovery).toBeUndefined();
   });
 
-  it("derives a missing task preset from the legacy selected-node visit preference", async () => {
+  it("derives missing stage presets from the legacy selected-node visit preference", async () => {
     window.localStorage.setItem(storageKey, JSON.stringify({ defaultMaxVisits: 321 }));
     const loaded = await loadAppPreferences();
-    expect(loaded.preferences.taskConditions).toEqual({
+    expect(loaded.preferences.taskSingleStageConditions.total_visits).toEqual({ enabled: true, value: 321 });
+    expect(loaded.preferences.taskOverviewConditions.total_visits).toEqual({ enabled: true, value: 32 });
+    expect(loaded.preferences.taskDeepConditions).toEqual({
       time_seconds: { enabled: false, value: 10 },
-      total_visits: { enabled: true, value: 321 },
+      total_visits: { enabled: true, value: 500 },
       leading_candidate_visits: { enabled: false, value: 500 }
     });
+  });
+
+  it("migrates the legacy task preset without losing unrelated preferences", async () => {
+    window.localStorage.setItem(storageKey, JSON.stringify({
+      continuousAnalysisEnabled: false,
+      defaultMaxVisits: 32,
+      taskConditions: {
+        time_seconds: { enabled: false, value: 10 },
+        total_visits: { enabled: true, value: 32 },
+        leading_candidate_visits: { enabled: false, value: 32 }
+      }
+    }));
+    const loaded = await loadAppPreferences();
+    expect(loaded.recovery).toBeUndefined();
+    expect(loaded.preferences.continuousAnalysisEnabled).toBe(false);
+    expect(loaded.preferences.taskSingleStageConditions.total_visits.value).toBe(32);
+    expect(loaded.preferences.taskOverviewConditions.total_visits.value).toBe(32);
+    expect(loaded.preferences.taskDeepConditions.total_visits.value).toBe(500);
   });
 
   it("fills missing Sub-Board content mode as Variation", async () => {
@@ -89,34 +109,52 @@ describe("browser preference storage", () => {
     expect(loaded.preferences).toEqual(saved);
     expect(loaded.recovery).toBeUndefined();
   });
-  it("reloads an explicit task preset independently from selected-node visits", async () => {
-    const taskConditions = {
+  it("reloads independent overview and deep task presets", async () => {
+    const overview = {
+      time_seconds: { enabled: true, value: 3 },
+      total_visits: { enabled: true, value: 32 },
+      leading_candidate_visits: { enabled: false, value: 32 }
+    };
+    const deep = {
       time_seconds: { enabled: true, value: 12 },
-      total_visits: { enabled: false, value: 64 },
+      total_visits: { enabled: false, value: 640 },
       leading_candidate_visits: { enabled: true, value: 7 }
     };
-    await saveAppPreferences({ ...defaultAppPreferences, defaultMaxVisits: 999, taskConditions });
+    await saveAppPreferences({
+      ...defaultAppPreferences,
+      defaultMaxVisits: 999,
+      taskOverviewConditions: overview,
+      taskDeepConditions: deep
+    });
     const loaded = await loadAppPreferences();
     expect(loaded.preferences.defaultMaxVisits).toBe(999);
-    expect(loaded.preferences.taskConditions).toEqual(taskConditions);
+    expect(loaded.preferences.taskOverviewConditions).toEqual(overview);
+    expect(loaded.preferences.taskDeepConditions).toEqual(deep);
   });
 
-  it("rejects invalid disabled values and an all-disabled task preset without writing", async () => {
+  it("rejects invalid stage values, all-disabled stages, and shallow deep presets without writing", async () => {
     await expect(saveAppPreferences({
       ...defaultAppPreferences,
-      taskConditions: {
-        ...defaultAppPreferences.taskConditions,
+      taskOverviewConditions: {
+        ...defaultAppPreferences.taskOverviewConditions,
         time_seconds: { enabled: false, value: 0 }
       }
     })).rejects.toThrow("whole numbers");
     await expect(saveAppPreferences({
       ...defaultAppPreferences,
-      taskConditions: {
+      taskOverviewConditions: {
         time_seconds: { enabled: false, value: 10 },
-        total_visits: { enabled: false, value: 800 },
-        leading_candidate_visits: { enabled: false, value: 500 }
+        total_visits: { enabled: false, value: 32 },
+        leading_candidate_visits: { enabled: false, value: 32 }
       }
     })).rejects.toThrow("at least one");
+    await expect(saveAppPreferences({
+      ...defaultAppPreferences,
+      taskDeepConditions: {
+        ...defaultAppPreferences.taskDeepConditions,
+        total_visits: { enabled: true, value: 499 }
+      }
+    })).rejects.toThrow("at least 500");
     expect(window.localStorage.getItem(storageKey)).toBeNull();
   });
 });

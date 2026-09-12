@@ -239,6 +239,8 @@ export type AnalysisStageConditionsDto = {
   total_visits: AnalysisTaskLimitDto;
   leading_candidate_visits: AnalysisTaskLimitDto;
 };
+export type AnalysisTaskStrategyDto = "single_stage" | "all_positions_two_stage";
+export type AnalysisTaskStageDto = "single_stage" | "overview" | "deep";
 export type AnalysisScopeTargetDto = {
   node_path: NodePath;
   move_number: number;
@@ -258,16 +260,21 @@ export type AnalysisTaskStateDto =
   | "cancelled"
   | "failed"
   | "invalidated";
+export type AnalysisTaskOverviewDto = { node_path: NodePath; frame: AnalysisFrameDto };
 export type AnalysisTaskDto = {
   task_id: string;
   run_id: string;
   job_id: string;
   generation: number;
   scope: AnalysisScopeDto;
-  stage: string;
+  strategy: AnalysisTaskStrategyDto;
+  stage: AnalysisTaskStageDto;
   conditions: AnalysisStageConditionsDto;
+  overview_conditions?: AnalysisStageConditionsDto | null;
   requested: NodePath[];
+  overview_completed: NodePath[];
   completed: NodePath[];
+  overview_summaries: AnalysisTaskOverviewDto[];
   state: AnalysisTaskStateDto;
   reason?: string | null;
   ending_conditions: string[];

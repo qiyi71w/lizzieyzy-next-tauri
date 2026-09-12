@@ -95,14 +95,16 @@ cd apps/desktop
 npm run tauri:dev
 ```
 
-Single-stage task Pause/Continue repository smoke (controlled Python engine, not real-KataGo/native acceptance):
+Analysis-task repository smokes (controlled Python engine, not real-KataGo/native acceptance):
 
 ```bash
 unset DISPLAY && cargo test -p lizzieyzy-next-desktop --lib analysis_task_pause_continue_controllable_engine_smoke -- --nocapture
+unset DISPLAY && cargo test -p lizzieyzy-next-desktop --lib all_positions_two_stage_pause_continue_controllable_engine_smoke -- --nocapture
 cargo test -p engine-manager --test foreground_engine_run analysis_task_
+cargo test -p engine-manager --test foreground_engine_run all_positions_two_stage_
 ```
 
-The task controls show Pausing until target-final cleanup and Paused afterward. Continue retains the task's completed set on the same Run; it does not restore a task from SGF/recovery. One-thread queueing and two-thread lane independence use the controllable-engine checks. Exact Windows standalone/real-KataGo integrated evidence remains ticket 07's gate.
+The single-stage task controls show Pausing until target-final cleanup and Paused afterward. Continue retains the task's completed set on the same Run; it does not restore a task from SGF/recovery. The all-position strategy completes every 32-visit overview before starting the independently configured deep stage (minimum retained total-visits value 500). Pause/Continue keeps stage-local completions, restarts only the interrupted target with a fresh Job, and preserves task-owned overview summaries while deep results replace SGF primary analysis. One-thread queueing and two-thread lane independence use the controllable-engine checks. Exact Windows standalone/real-KataGo integrated evidence remains ticket 07's gate.
 
 ### 1. Open Or Load SGF
 
