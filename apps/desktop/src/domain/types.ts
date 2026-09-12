@@ -73,8 +73,8 @@ export type ApplicationExitOutcomeDto = {
   recovery_persist_error?: string | null;
 };
 export type CandidateMoveDto = { vertex: MoveVertex; visits: number; winrate_black: number; score_mean_black: number; policy_prior?: number | null; pv: MoveVertex[] };
-export type AnalysisFrameDto = { job_id: string; game_id?: string | null; node_id?: string | null; turn: number; visits: number; winrate_black: number; score_mean_black: number; score_stdev?: number | null; candidates: CandidateMoveDto[]; ownership?: number[] | null; policy?: number[] | null };
-export type ProblemMarkerDto = { turn: number; severity: "info" | "inaccuracy" | "mistake" | "blunder"; winrate_loss: number; score_loss: number; label: string };
+export type AnalysisFrameDto = { job_id: string; game_id?: string | null; node_id?: string | null; turn: number; visits: number; winrate_black: number; score_mean_black?: number | null; score_stdev?: number | null; candidates: CandidateMoveDto[]; ownership?: number[] | null; policy?: number[] | null };
+export type ProblemMarkerDto = { turn: number; severity: "info" | "inaccuracy" | "mistake" | "blunder"; winrate_loss: number; score_loss?: number | null; label: string };
 export type EngineBackendDto = "kata_go_analysis";
 export type EngineProfileDto = { name: string; engine_path: string; model_path?: string | null; config_path?: string | null; working_dir?: string | null; backend: EngineBackendDto };
 export type EngineProfileSettingsDto = { profile: EngineProfileDto; max_visits: number };
@@ -120,6 +120,7 @@ export type EngineCapabilitySnapshotDto = {
   adapter_kind: EngineBackendDto;
   selected_node_analysis: boolean;
   whole_game_analysis: boolean;
+  root_score: boolean;
   protocol_cancel: boolean;
 };
 export type EngineRunDto = {
@@ -239,8 +240,23 @@ export type AnalysisStageConditionsDto = {
   total_visits: AnalysisTaskLimitDto;
   leading_candidate_visits: AnalysisTaskLimitDto;
 };
-export type AnalysisTaskStrategyDto = "single_stage" | "all_positions_two_stage";
+export type AnalysisTaskStrategyDto =
+  | "single_stage"
+  | "all_positions_two_stage"
+  | "swing_selected_two_stage";
 export type AnalysisTaskStageDto = "single_stage" | "overview" | "deep";
+export type AnalysisMoveActorFilterDto = "both" | "black" | "white";
+export type AnalysisSwingThresholdDto = { enabled: boolean; value: number };
+export type AnalysisSwingCriteriaDto = {
+  move_actors: AnalysisMoveActorFilterDto;
+  winrate_change_percentage_points: AnalysisSwingThresholdDto;
+  score_change_points: AnalysisSwingThresholdDto;
+};
+export type AnalysisSwingComparisonDto = {
+  before: NodePath;
+  after: NodePath;
+  move_actor: PlayerColor;
+};
 export type AnalysisScopeTargetDto = {
   node_path: NodePath;
   move_number: number;
@@ -250,6 +266,9 @@ export type AnalysisScopePreviewDto = {
   generation: number;
   scope: AnalysisScopeDto;
   targets: AnalysisScopeTargetDto[];
+  supporting_targets: AnalysisScopeTargetDto[];
+  swing_comparisons: AnalysisSwingComparisonDto[];
+  swing_criteria?: AnalysisSwingCriteriaDto | null;
 };
 export type AnalysisTaskStateDto =
   | "queued"
@@ -260,7 +279,10 @@ export type AnalysisTaskStateDto =
   | "cancelled"
   | "failed"
   | "invalidated";
-export type AnalysisTaskOverviewDto = { node_path: NodePath; frame: AnalysisFrameDto };
+export type AnalysisTaskOverviewDto = {
+  node_path: NodePath;
+  frame: AnalysisFrameDto;
+};
 export type AnalysisTaskDto = {
   task_id: string;
   run_id: string;
@@ -272,6 +294,10 @@ export type AnalysisTaskDto = {
   conditions: AnalysisStageConditionsDto;
   overview_conditions?: AnalysisStageConditionsDto | null;
   requested: NodePath[];
+  supporting: NodePath[];
+  swing_comparisons: AnalysisSwingComparisonDto[];
+  swing_criteria?: AnalysisSwingCriteriaDto | null;
+  selected_for_deep?: NodePath[] | null;
   overview_completed: NodePath[];
   completed: NodePath[];
   overview_summaries: AnalysisTaskOverviewDto[];

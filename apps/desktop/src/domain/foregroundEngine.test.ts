@@ -29,6 +29,7 @@ const run: EngineRunDto = {
     adapter_kind: "kata_go_analysis",
     selected_node_analysis: true,
     whole_game_analysis: true,
+    root_score: true,
     protocol_cancel: true
   }
 };

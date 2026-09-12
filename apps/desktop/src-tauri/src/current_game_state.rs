@@ -28,6 +28,10 @@ pub struct WholeGameAdmission {
     pub komi: f32,
     pub rules: String,
     pub nodes: Vec<SelectedNodeSnapshotDto>,
+    pub requested: Vec<NodePath>,
+    pub supporting: Vec<NodePath>,
+    pub swing_comparisons: Vec<app_model::AnalysisSwingComparisonDto>,
+    pub swing_criteria: Option<app_model::AnalysisSwingCriteriaDto>,
 }
 
 #[derive(Default)]
@@ -248,6 +252,7 @@ impl CurrentGameState {
                 interval: None,
                 to_play: None,
             },
+            None,
         )
     }
 
@@ -267,7 +272,7 @@ impl CurrentGameState {
             to_play: None,
         };
         let admitted = holder
-            .analysis_scope_admission(generation, &scope)
+            .analysis_scope_admission(generation, &scope, None)
             .map_err(|error| {
                 crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, error.message)
             })?;
@@ -283,9 +288,10 @@ impl CurrentGameState {
         &self,
         generation: u64,
         scope: app_model::AnalysisScopeDto,
+        swing_criteria: Option<app_model::AnalysisSwingCriteriaDto>,
     ) -> Result<app_model::AnalysisScopePreviewDto, CurrentGameError> {
         let holder = self.holder.lock().expect("current game state");
-        let admission = holder.analysis_scope_admission(generation, &scope)?;
+        let admission = holder.analysis_scope_admission(generation, &scope, swing_criteria.as_ref())?;
         Ok(scope_preview(&admission, scope))
     }
 
@@ -302,7 +308,7 @@ impl CurrentGameState {
         // Keep semantic revalidation and manager admission under the same owner lock.
         let holder = self.holder.lock().expect("current game state");
         let admitted = holder
-            .analysis_scope_admission(preview.generation, &preview.scope)
+            .analysis_scope_admission(preview.generation, &preview.scope, None)
             .map_err(|error| invalid(error.message))?;
         if scope_preview(&admitted, preview.scope.clone()) != preview {
             return Err(invalid(
@@ -338,7 +344,7 @@ impl CurrentGameState {
         .map_err(&invalid)?;
         let holder = self.holder.lock().expect("current game state");
         let admitted = holder
-            .analysis_scope_admission(preview.generation, &preview.scope)
+            .analysis_scope_admission(preview.generation, &preview.scope, None)
             .map_err(|error| invalid(error.message))?;
         if scope_preview(&admitted, preview.scope.clone()) != preview {
             return Err(invalid(
@@ -354,6 +360,50 @@ impl CurrentGameState {
                 work_items,
             },
             preview.scope,
+            overview_conditions,
+            deep_conditions,
+        )
+    }
+
+    pub fn start_swing_analysis_task(
+        &self,
+        manager: &engine_manager::ForegroundEngineManager,
+        run_id: String,
+        preview: app_model::AnalysisScopePreviewDto,
+        overview_conditions: app_model::AnalysisStageConditionsDto,
+        deep_conditions: app_model::AnalysisStageConditionsDto,
+    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
+        let invalid =
+            |message| crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message);
+        overview_conditions.validate_single_stage().map_err(&invalid)?;
+        deep_conditions.validate_single_stage().map_err(&invalid)?;
+        let criteria = preview
+            .swing_criteria
+            .clone()
+            .ok_or_else(|| invalid("Swing-selected analysis requires swing criteria.".into()))?;
+        criteria.validate().map_err(&invalid)?;
+        let holder = self.holder.lock().expect("current game state");
+        let admitted = holder
+            .analysis_scope_admission(preview.generation, &preview.scope, Some(&criteria))
+            .map_err(|error| invalid(error.message))?;
+        if scope_preview(&admitted, preview.scope.clone()) != preview {
+            return Err(invalid(
+                "Analysis scope preview no longer matches the current game.".into(),
+            ));
+        }
+        let work_items =
+            crate::whole_game_work_items(&admitted, deep_conditions.total_visits.value, &run_id)?;
+        manager.start_swing_analysis_task(
+            engine_manager::WholeGameJobRequest {
+                run_id,
+                generation: admitted.generation,
+                work_items,
+            },
+            preview.scope,
+            admitted.requested,
+            admitted.supporting,
+            admitted.swing_comparisons,
+            criteria,
             overview_conditions,
             deep_conditions,
         )
@@ -531,18 +581,38 @@ fn scope_preview(
     admitted: &WholeGameAdmission,
     scope: app_model::AnalysisScopeDto,
 ) -> app_model::AnalysisScopePreviewDto {
+    let target = |snapshot: &SelectedNodeSnapshotDto| app_model::AnalysisScopeTargetDto {
+        node_path: snapshot.path.clone(),
+        move_number: snapshot.position.move_number,
+        to_play: snapshot.position.to_play,
+    };
+    let requested = admitted
+        .requested
+        .iter()
+        .map(|path| &path.indices)
+        .collect::<HashSet<_>>();
+    let supporting = admitted
+        .supporting
+        .iter()
+        .map(|path| &path.indices)
+        .collect::<HashSet<_>>();
     app_model::AnalysisScopePreviewDto {
         generation: admitted.generation,
         scope,
         targets: admitted
             .nodes
             .iter()
-            .map(|snapshot| app_model::AnalysisScopeTargetDto {
-                node_path: snapshot.path.clone(),
-                move_number: snapshot.position.move_number,
-                to_play: snapshot.position.to_play,
-            })
+            .filter(|snapshot| requested.contains(&snapshot.path.indices))
+            .map(target)
             .collect(),
+        supporting_targets: admitted
+            .nodes
+            .iter()
+            .filter(|snapshot| supporting.contains(&snapshot.path.indices))
+            .map(target)
+            .collect(),
+        swing_comparisons: admitted.swing_comparisons.clone(),
+        swing_criteria: admitted.swing_criteria.clone(),
     }
 }
 
@@ -558,6 +628,7 @@ impl CurrentGameHolder {
         &self,
         generation: u64,
         scope: &app_model::AnalysisScopeDto,
+        swing_criteria: Option<&app_model::AnalysisSwingCriteriaDto>,
     ) -> Result<WholeGameAdmission, CurrentGameError> {
         self.ensure_editable()?;
         let document = self.document.as_ref().ok_or_else(no_current_game)?;
@@ -567,12 +638,40 @@ impl CurrentGameHolder {
                 message: "Current game semantics changed; preview a new analysis task.".into(),
             });
         }
+        let (nodes, requested, supporting, swing_comparisons) = if let Some(criteria) = swing_criteria {
+            criteria.validate().map_err(|message| CurrentGameError {
+                kind: CurrentGameErrorKind::InvalidNodePath,
+                message,
+            })?;
+            let resolved = document.swing_analysis_scope(scope, criteria.move_actors)?;
+            let requested = resolved
+                .requested
+                .iter()
+                .map(|snapshot| snapshot.path.clone())
+                .collect();
+            let supporting = resolved
+                .supporting
+                .iter()
+                .map(|snapshot| snapshot.path.clone())
+                .collect();
+            let mut nodes = resolved.requested;
+            nodes.extend(resolved.supporting);
+            (nodes, requested, supporting, resolved.comparisons)
+        } else {
+            let nodes = document.analysis_scope_snapshots(scope)?;
+            let requested = nodes.iter().map(|snapshot| snapshot.path.clone()).collect();
+            (nodes, requested, Vec::new(), Vec::new())
+        };
         Ok(WholeGameAdmission {
             generation: self.generation,
             board_size: document.board_size(),
             komi: document.komi(),
             rules: document.rules(),
-            nodes: document.analysis_scope_snapshots(scope)?,
+            nodes,
+            requested,
+            supporting,
+            swing_comparisons,
+            swing_criteria: swing_criteria.cloned(),
         })
     }
 

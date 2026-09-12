@@ -7,6 +7,7 @@ import type {
   AnalysisJobStartedDto,
   AnalysisScopeDto,
   AnalysisScopePreviewDto,
+  AnalysisSwingCriteriaDto,
   AnalysisStageConditionsDto,
   AnalysisTaskDto,
   AnalysisTaskStrategyDto,
@@ -298,6 +299,7 @@ export async function startKataGoGameAnalysis(input: {
 export async function previewAnalysisScope(input: {
   generation: number;
   scope: AnalysisScopeDto;
+  swingCriteria?: AnalysisSwingCriteriaDto | null;
 }): Promise<AnalysisScopePreviewDto> {
   if (!isTauriRuntime()) {
     throw new Error("Analysis task preview requires the Tauri desktop backend.");

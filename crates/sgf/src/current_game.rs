@@ -1,6 +1,7 @@
 use app_model::{
-    CurrentGameError, CurrentGameErrorKind, GameDto, MoveDto, MoveVertex, NodePath, PlayerColor, PositionDto,
-    SelectedNodeSnapshotDto, SgfPropertyDto, SgfTreeNodeDto,
+    AnalysisMoveActorFilterDto, AnalysisSwingComparisonDto, CurrentGameError, CurrentGameErrorKind, GameDto,
+    MoveDto, MoveVertex, NodePath, PlayerColor, PositionDto, SelectedNodeSnapshotDto, SgfPropertyDto,
+    SgfTreeNodeDto,
 };
 
 use crate::{
@@ -13,6 +14,13 @@ use go_core::{Board, RuleError};
 #[derive(Debug, Clone)]
 pub struct CurrentSgfDocument {
     document: SgfDocument,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwingAnalysisScopeResolution {
+    pub requested: Vec<SelectedNodeSnapshotDto>,
+    pub supporting: Vec<SelectedNodeSnapshotDto>,
+    pub comparisons: Vec<AnalysisSwingComparisonDto>,
 }
 
 impl CurrentSgfDocument {
@@ -172,6 +180,55 @@ impl CurrentSgfDocument {
             return Err(invalid("The selected scope and filters contain no positions."));
         }
         Ok(snapshots)
+    }
+
+    pub fn swing_analysis_scope(
+        &self,
+        scope: &app_model::AnalysisScopeDto,
+        move_actors: AnalysisMoveActorFilterDto,
+    ) -> Result<SwingAnalysisScopeResolution, CurrentGameError> {
+        let requested = self.analysis_scope_snapshots(scope)?;
+        let requested_paths = requested
+            .iter()
+            .map(|snapshot| snapshot.path.indices.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut supporting_paths = std::collections::BTreeSet::new();
+        let mut supporting = Vec::new();
+        let mut comparisons = Vec::new();
+
+        for snapshot in &requested {
+            let nodes = self.nodes_on_path(&snapshot.path)?;
+            let node = nodes.last().expect("path walk includes the root");
+            let move_actor = node
+                .properties
+                .iter()
+                .find_map(|property| match property.key.as_str() {
+                    "B" => Some(PlayerColor::Black),
+                    "W" => Some(PlayerColor::White),
+                    _ => None,
+                });
+            let Some(move_actor) = move_actor.filter(|color| move_actors.admits(*color)) else {
+                continue;
+            };
+            let mut before = snapshot.path.clone();
+            if before.indices.pop().is_none() {
+                continue;
+            }
+            comparisons.push(AnalysisSwingComparisonDto {
+                before: before.clone(),
+                after: snapshot.path.clone(),
+                move_actor,
+            });
+            if !requested_paths.contains(&before.indices) && supporting_paths.insert(before.indices.clone()) {
+                supporting.push(self.snapshot(&before)?);
+            }
+        }
+
+        Ok(SwingAnalysisScopeResolution {
+            requested,
+            supporting,
+            comparisons,
+        })
     }
 
     pub fn serialize(&self) -> Result<String, CurrentGameError> {

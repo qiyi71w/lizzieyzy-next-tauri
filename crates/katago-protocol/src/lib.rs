@@ -116,7 +116,7 @@ impl AnalysisResponse {
         !self.no_results
             && root.visits > 0
             && (0.0..=1.0).contains(&root.winrate)
-            && root.score_lead.unwrap_or(root.score_mean).is_finite()
+            && root.score_lead.or(root.score_mean).is_none_or(f32::is_finite)
             && root
                 .score_stdev
                 .is_none_or(|value| value.is_finite() && value >= 0.0)
@@ -147,7 +147,7 @@ pub struct RootInfo {
     #[serde(default)]
     pub winrate: f32,
     #[serde(default)]
-    pub score_mean: f32,
+    pub score_mean: Option<f32>,
     #[serde(default)]
     pub score_lead: Option<f32>,
     #[serde(default)]
@@ -448,7 +448,7 @@ pub fn normalize_response(
     let root = response.root_info.unwrap_or(RootInfo {
         visits: 0,
         winrate: 0.5,
-        score_mean: 0.0,
+        score_mean: None,
         score_lead: None,
         score_stdev: None,
     });
@@ -459,7 +459,7 @@ pub fn normalize_response(
         turn: response.turn_number,
         visits: root.visits,
         winrate_black: root.winrate,
-        score_mean_black: root.score_lead.unwrap_or(root.score_mean),
+        score_mean_black: root.score_lead.or(root.score_mean),
         score_stdev: root.score_stdev,
         candidates: response
             .move_infos
@@ -570,7 +570,7 @@ mod tests {
             root_info: Some(RootInfo {
                 visits,
                 winrate: 0.5,
-                score_mean: 0.0,
+                score_mean: Some(0.0),
                 score_lead: None,
                 score_stdev: None,
             }),
@@ -606,6 +606,19 @@ mod tests {
         assert_eq!(response.id, "query-1");
         assert_eq!(response.turn_number, 2);
         assert_eq!(response.root_info.unwrap().visits, 64);
+    }
+
+    #[test]
+    fn valid_search_result_preserves_missing_root_score_as_unavailable() {
+        let response = parse_response_line(
+            r#"{"id":"query-1","rootInfo":{"visits":64,"winrate":0.52},"moveInfos":[{"move":"D4","visits":64,"winrate":0.52,"scoreMean":1.5}]}"#,
+        )
+        .unwrap();
+
+        assert!(response.has_valid_search_result(19));
+        assert_eq!(response.root_info.as_ref().unwrap().score_mean, None);
+        let frame = normalize_response(AnalysisJobId::nil(), response, 19);
+        assert_eq!(frame.score_mean_black, None);
     }
 
     #[test]

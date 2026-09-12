@@ -31,6 +31,79 @@ pub struct AnalysisScopeDto {
     pub to_play: Option<PlayerColor>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalysisMoveActorFilterDto {
+    Both,
+    Black,
+    White,
+}
+
+impl AnalysisMoveActorFilterDto {
+    pub fn admits(self, color: PlayerColor) -> bool {
+        match self {
+            Self::Both => true,
+            Self::Black => color == PlayerColor::Black,
+            Self::White => color == PlayerColor::White,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnalysisSwingComparisonDto {
+    pub before: NodePath,
+    pub after: NodePath,
+    pub move_actor: PlayerColor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AnalysisSwingThresholdDto {
+    pub enabled: bool,
+    pub value: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnalysisSwingCriteriaDto {
+    pub move_actors: AnalysisMoveActorFilterDto,
+    pub winrate_change_percentage_points: AnalysisSwingThresholdDto,
+    pub score_change_points: AnalysisSwingThresholdDto,
+}
+
+impl AnalysisSwingCriteriaDto {
+    pub fn validate(&self) -> Result<(), String> {
+        let thresholds = [self.winrate_change_percentage_points, self.score_change_points];
+        if thresholds
+            .iter()
+            .any(|threshold| !threshold.value.is_finite() || threshold.value <= 0.0)
+        {
+            return Err(
+                "Swing thresholds must be positive finite numbers, including retained disabled values."
+                    .into(),
+            );
+        }
+        if !thresholds.iter().any(|threshold| threshold.enabled) {
+            return Err("Enable at least one swing selection threshold.".into());
+        }
+        Ok(())
+    }
+}
+
+impl Default for AnalysisSwingCriteriaDto {
+    fn default() -> Self {
+        Self {
+            move_actors: AnalysisMoveActorFilterDto::Both,
+            winrate_change_percentage_points: AnalysisSwingThresholdDto {
+                enabled: true,
+                value: 10.0,
+            },
+            score_change_points: AnalysisSwingThresholdDto {
+                enabled: false,
+                value: 3.0,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnalysisTaskLimitDto {
     pub enabled: bool,
@@ -49,6 +122,7 @@ pub struct AnalysisStageConditionsDto {
 pub enum AnalysisTaskStrategyDto {
     SingleStage,
     AllPositionsTwoStage,
+    SwingSelectedTwoStage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,11 +190,17 @@ pub struct AnalysisScopeTargetDto {
     pub to_play: PlayerColor,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnalysisScopePreviewDto {
     pub generation: u64,
     pub scope: AnalysisScopeDto,
     pub targets: Vec<AnalysisScopeTargetDto>,
+    #[serde(default)]
+    pub supporting_targets: Vec<AnalysisScopeTargetDto>,
+    #[serde(default)]
+    pub swing_comparisons: Vec<AnalysisSwingComparisonDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swing_criteria: Option<AnalysisSwingCriteriaDto>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,6 +235,14 @@ pub struct AnalysisTaskDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overview_conditions: Option<AnalysisStageConditionsDto>,
     pub requested: Vec<NodePath>,
+    #[serde(default)]
+    pub supporting: Vec<NodePath>,
+    #[serde(default)]
+    pub swing_comparisons: Vec<AnalysisSwingComparisonDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swing_criteria: Option<AnalysisSwingCriteriaDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_for_deep: Option<Vec<NodePath>>,
     #[serde(default)]
     pub overview_completed: Vec<NodePath>,
     pub completed: Vec<NodePath>,
@@ -228,5 +316,31 @@ mod tests {
         let mut disabled = overview.clone();
         disabled.total_visits.enabled = false;
         assert!(AnalysisStageConditionsDto::validate_all_positions_two_stage(&disabled, &deep).is_err());
+    }
+}
+
+#[cfg(test)]
+mod swing_tests {
+    use super::*;
+
+    #[test]
+    fn swing_criteria_defaults_and_enabled_or_validation_are_explicit() {
+        let defaults = AnalysisSwingCriteriaDto::default();
+        assert_eq!(defaults.move_actors, AnalysisMoveActorFilterDto::Both);
+        assert!(defaults.winrate_change_percentage_points.enabled);
+        assert_eq!(defaults.winrate_change_percentage_points.value, 10.0);
+        assert!(!defaults.score_change_points.enabled);
+        assert_eq!(defaults.score_change_points.value, 3.0);
+        assert!(defaults.validate().is_ok());
+
+        let mut score_only = defaults.clone();
+        score_only.winrate_change_percentage_points.enabled = false;
+        score_only.score_change_points.enabled = true;
+        assert!(score_only.validate().is_ok());
+
+        score_only.score_change_points.enabled = false;
+        assert!(score_only.validate().is_err());
+        score_only.score_change_points.value = f32::NAN;
+        assert!(score_only.validate().is_err());
     }
 }

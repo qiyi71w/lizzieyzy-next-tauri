@@ -1,6 +1,6 @@
 use app_model::{
-    AnalysisBranchChoiceDto, AnalysisPositionIntervalDto, AnalysisScopeDto, AnalysisScopeModeDto, NodePath,
-    PlayerColor,
+    AnalysisBranchChoiceDto, AnalysisMoveActorFilterDto, AnalysisPositionIntervalDto, AnalysisScopeDto,
+    AnalysisScopeModeDto, NodePath, PlayerColor,
 };
 use sgf::CurrentSgfDocument;
 
@@ -111,4 +111,44 @@ fn invalid_or_empty_scope_never_becomes_another_request() {
         child: 2,
     });
     assert!(document.analysis_scope_snapshots(&request).is_err());
+}
+
+#[test]
+fn swing_scope_adds_actual_out_of_filter_predecessor_without_setup_comparison() {
+    let document = CurrentSgfDocument::open("(;SZ[5];B[aa];C[note];W[bb];AB[cc]PL[B];B[dd])").unwrap();
+    let mut request = scope(AnalysisScopeModeDto::FirstChildMainline);
+    request.interval = Some(AnalysisPositionIntervalDto { start: 3, end: 3 });
+    request.to_play = Some(PlayerColor::White);
+
+    let resolved = document
+        .swing_analysis_scope(&request, AnalysisMoveActorFilterDto::Black)
+        .unwrap();
+
+    assert_eq!(
+        resolved
+            .requested
+            .iter()
+            .map(|node| node.path.indices.clone())
+            .collect::<Vec<_>>(),
+        vec![vec![0, 0, 0, 0, 0]]
+    );
+    assert_eq!(
+        resolved
+            .supporting
+            .iter()
+            .map(|node| node.path.indices.clone())
+            .collect::<Vec<_>>(),
+        vec![vec![0, 0, 0, 0]]
+    );
+    assert_eq!(resolved.comparisons.len(), 1);
+    assert_eq!(resolved.comparisons[0].before.indices, vec![0, 0, 0, 0]);
+    assert_eq!(resolved.comparisons[0].after.indices, vec![0, 0, 0, 0, 0]);
+    assert_eq!(resolved.comparisons[0].move_actor, PlayerColor::Black);
+
+    let white_actor_only = document
+        .swing_analysis_scope(&request, AnalysisMoveActorFilterDto::White)
+        .unwrap();
+    assert_eq!(white_actor_only.requested, resolved.requested);
+    assert!(white_actor_only.supporting.is_empty());
+    assert!(white_actor_only.comparisons.is_empty());
 }

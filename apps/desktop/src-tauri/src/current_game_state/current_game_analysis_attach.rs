@@ -331,7 +331,7 @@ fn projectable_frame(visits: u32, x: u8, y: u8) -> AnalysisFrameDto {
         turn: 0,
         visits,
         winrate_black: 0.61,
-        score_mean_black: 2.25,
+        score_mean_black: Some(2.25),
         score_stdev: Some(0.5),
         candidates: vec![CandidateMoveDto {
             vertex: MoveVertex::Point(PointDto { x, y }),

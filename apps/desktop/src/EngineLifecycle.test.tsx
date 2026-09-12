@@ -178,6 +178,7 @@ const capability = {
   adapter_kind: "kata_go_analysis" as const,
   selected_node_analysis: true,
   whole_game_analysis: true,
+  root_score: true,
   protocol_cancel: true
 };
 
@@ -315,6 +316,7 @@ async function readyEngine(host: HTMLElement) {
             adapter_kind: "kata_go_analysis",
             selected_node_analysis: true,
             whole_game_analysis: true,
+            root_score: true,
             protocol_cancel: true
           }
         }
@@ -380,6 +382,7 @@ describe("foreground engine lifecycle UI", () => {
               adapter_kind: "kata_go_analysis",
               selected_node_analysis: true,
               whole_game_analysis: true,
+              root_score: true,
               protocol_cancel: true
             }
           }
@@ -420,6 +423,7 @@ describe("foreground engine lifecycle UI", () => {
               adapter_kind: "kata_go_analysis",
               selected_node_analysis: true,
               whole_game_analysis: true,
+              root_score: true,
               protocol_cancel: true
             }
           }
@@ -459,6 +463,7 @@ describe("foreground engine lifecycle UI", () => {
               adapter_kind: "kata_go_analysis",
               selected_node_analysis: true,
               whole_game_analysis: true,
+              root_score: true,
               protocol_cancel: true
             }
           }
@@ -565,6 +570,7 @@ describe("foreground engine lifecycle UI", () => {
               adapter_kind: "kata_go_analysis",
               selected_node_analysis: true,
               whole_game_analysis: true,
+              root_score: true,
               protocol_cancel: true
             }
           }

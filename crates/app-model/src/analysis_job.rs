@@ -198,7 +198,7 @@ mod tests {
                 turn: 0,
                 visits: 2,
                 winrate_black: 0.5,
-                score_mean_black: 0.0,
+                score_mean_black: Some(0.0),
                 score_stdev: None,
                 candidates: vec![],
                 ownership: None,
@@ -397,7 +397,7 @@ mod tests {
             turn: 0,
             visits: 32,
             winrate_black: 0.55,
-            score_mean_black: 1.5,
+            score_mean_black: Some(1.5),
             score_stdev: Some(0.2),
             candidates: vec![CandidateMoveDto {
                 vertex: MoveVertex::Point(PointDto { x: 3, y: 3 }),

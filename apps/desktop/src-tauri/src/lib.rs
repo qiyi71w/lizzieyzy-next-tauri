@@ -722,8 +722,9 @@ fn preview_analysis_scope(
     current_game: State<'_, CurrentGameState>,
     generation: u64,
     scope: app_model::AnalysisScopeDto,
+    swing_criteria: Option<app_model::AnalysisSwingCriteriaDto>,
 ) -> Result<app_model::AnalysisScopePreviewDto, app_model::CurrentGameError> {
-    current_game.preview_analysis_scope(generation, scope)
+    current_game.preview_analysis_scope(generation, scope, swing_criteria)
 }
 
 #[tauri::command]
@@ -755,6 +756,16 @@ fn start_analysis_task(
                 overview_conditions,
                 conditions,
             )
+        }
+        app_model::AnalysisTaskStrategyDto::SwingSelectedTwoStage => {
+            let overview_conditions = overview_conditions.ok_or_else(|| {
+                job_failure(
+                    &run_id,
+                    EngineFailureKind::InvalidState,
+                    "Swing-selected analysis requires overview conditions.".into(),
+                )
+            })?;
+            current_game.start_swing_analysis_task(&manager, run_id, preview, overview_conditions, conditions)
         }
     }
 }

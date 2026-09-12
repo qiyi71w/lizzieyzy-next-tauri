@@ -6,12 +6,13 @@ use crate::{
 };
 use app_model::{
     AnalysisJobLaneDto, AnalysisJobModeDto, AnalysisJobOutcomeDto, AnalysisJobStartedDto,
-    AnalysisJobStateDto, AnalysisScopeDto, AnalysisScopeModeDto, AnalysisStageConditionsDto, AnalysisTaskDto,
-    AnalysisTaskLimitDto, AnalysisTaskOverviewDto, AnalysisTaskStageDto, AnalysisTaskStateDto,
-    AnalysisTaskStrategyDto, ContinuousAnalysisBudgetDto, ContinuousAnalysisPhaseDto,
-    ContinuousAnalysisSnapshotDto, EngineBackend, EngineCapabilitySnapshotDto, EngineFailureDto,
-    EngineFailureKind, EngineOperationDto, EngineRunDto, ForegroundEngineEventDto,
-    ForegroundEngineLifecycleDto, ForegroundEngineSnapshotDto, NodePath,
+    AnalysisJobStateDto, AnalysisScopeDto, AnalysisScopeModeDto, AnalysisStageConditionsDto,
+    AnalysisSwingComparisonDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, AnalysisTaskLimitDto,
+    AnalysisTaskOverviewDto, AnalysisTaskStageDto, AnalysisTaskStateDto, AnalysisTaskStrategyDto,
+    ContinuousAnalysisBudgetDto, ContinuousAnalysisPhaseDto, ContinuousAnalysisSnapshotDto, EngineBackend,
+    EngineCapabilitySnapshotDto, EngineFailureDto, EngineFailureKind, EngineOperationDto, EngineRunDto,
+    ForegroundEngineEventDto, ForegroundEngineLifecycleDto, ForegroundEngineSnapshotDto, NodePath,
+    PlayerColor,
 };
 use katago_protocol::{normalize_response, parse_response_line, AnalysisQuery};
 use std::io;
@@ -121,6 +122,14 @@ pub struct WholeGameJobRequest {
     pub run_id: String,
     pub generation: u64,
     pub work_items: Vec<WholeGameWorkItem>,
+}
+
+#[derive(Default)]
+struct AnalysisTaskTargets {
+    requested: Option<Vec<NodePath>>,
+    supporting: Vec<NodePath>,
+    swing_comparisons: Vec<AnalysisSwingComparisonDto>,
+    swing_criteria: Option<AnalysisSwingCriteriaDto>,
 }
 
 enum WholeGameAdvance {
@@ -927,6 +936,7 @@ impl ForegroundEngineManager {
             AnalysisTaskStrategyDto::SingleStage,
             None,
             conditions,
+            AnalysisTaskTargets::default(),
         )
     }
 
@@ -945,6 +955,38 @@ impl ForegroundEngineManager {
             AnalysisTaskStrategyDto::AllPositionsTwoStage,
             Some(overview_conditions),
             deep_conditions,
+            AnalysisTaskTargets::default(),
+        )
+    }
+
+    pub fn start_swing_analysis_task(
+        &self,
+        request: WholeGameJobRequest,
+        scope: AnalysisScopeDto,
+        requested: Vec<NodePath>,
+        supporting: Vec<NodePath>,
+        swing_comparisons: Vec<AnalysisSwingComparisonDto>,
+        swing_criteria: AnalysisSwingCriteriaDto,
+        overview_conditions: AnalysisStageConditionsDto,
+        deep_conditions: AnalysisStageConditionsDto,
+    ) -> Result<AnalysisTaskDto, EngineFailureDto> {
+        overview_conditions
+            .validate_single_stage()
+            .and_then(|_| deep_conditions.validate_single_stage())
+            .and_then(|_| swing_criteria.validate())
+            .map_err(|message| invalid_task_conditions(&request.run_id, message))?;
+        self.start_analysis_task_with_strategy(
+            request,
+            scope,
+            AnalysisTaskStrategyDto::SwingSelectedTwoStage,
+            Some(overview_conditions),
+            deep_conditions,
+            AnalysisTaskTargets {
+                requested: Some(requested),
+                supporting,
+                swing_comparisons,
+                swing_criteria: Some(swing_criteria),
+            },
         )
     }
 
@@ -955,6 +997,7 @@ impl ForegroundEngineManager {
         strategy: AnalysisTaskStrategyDto,
         overview_conditions: Option<AnalysisStageConditionsDto>,
         conditions: AnalysisStageConditionsDto,
+        targets: AnalysisTaskTargets,
     ) -> Result<AnalysisTaskDto, EngineFailureDto> {
         if request.work_items.is_empty() {
             return Err(empty_whole_game_failure(&request.run_id));
@@ -989,6 +1032,25 @@ impl ForegroundEngineManager {
                     EngineOperationDto::Job,
                     EngineFailureKind::UnsupportedCapability,
                     "current Ready Run does not admit whole-game analysis".into(),
+                    Some(request.run_id.as_str()),
+                    Some(run.profile_id.as_str()),
+                    None,
+                ));
+            }
+            let requires_root_score = targets
+                .swing_criteria
+                .as_ref()
+                .is_some_and(|criteria| criteria.score_change_points.enabled);
+            if requires_root_score
+                && !run
+                    .capability_snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.root_score)
+            {
+                return Err(failure(
+                    EngineOperationDto::Job,
+                    EngineFailureKind::UnsupportedCapability,
+                    "current Ready Run does not admit root-score comparisons".into(),
                     Some(request.run_id.as_str()),
                     Some(run.profile_id.as_str()),
                     None,
@@ -1038,11 +1100,13 @@ impl ForegroundEngineManager {
                 generation: request.generation,
                 node_path: first_node_path.clone(),
             };
-            let requested = request
-                .work_items
-                .iter()
-                .map(|item| item.node_path.clone())
-                .collect();
+            let requested = targets.requested.unwrap_or_else(|| {
+                request
+                    .work_items
+                    .iter()
+                    .map(|item| item.node_path.clone())
+                    .collect()
+            });
             let task = AnalysisTaskDto {
                 task_id,
                 run_id: request.run_id.clone(),
@@ -1050,14 +1114,18 @@ impl ForegroundEngineManager {
                 generation: request.generation,
                 scope,
                 strategy,
-                stage: if strategy == AnalysisTaskStrategyDto::AllPositionsTwoStage {
-                    AnalysisTaskStageDto::Overview
-                } else {
+                stage: if strategy == AnalysisTaskStrategyDto::SingleStage {
                     AnalysisTaskStageDto::SingleStage
+                } else {
+                    AnalysisTaskStageDto::Overview
                 },
                 conditions,
                 overview_conditions,
                 requested,
+                supporting: targets.supporting,
+                swing_comparisons: targets.swing_comparisons,
+                swing_criteria: targets.swing_criteria,
+                selected_for_deep: None,
                 overview_completed: Vec::new(),
                 completed: Vec::new(),
                 overview_summaries: Vec::new(),
@@ -2066,6 +2134,7 @@ impl Inner {
             adapter_kind: EngineBackend::KataGoAnalysis,
             selected_node_analysis: true,
             whole_game_analysis: self.config.admit_whole_game_analysis,
+            root_score: true,
             protocol_cancel: true,
         });
         invalidate_analysis_task_locked(
@@ -2114,6 +2183,7 @@ impl Inner {
                 adapter_kind: EngineBackend::KataGoAnalysis,
                 selected_node_analysis: true,
                 whole_game_analysis: self.config.admit_whole_game_analysis,
+                root_score: true,
                 protocol_cancel: true,
             });
             invalidate_analysis_task_locked(
@@ -2717,6 +2787,28 @@ impl Inner {
                 let job_uuid = Uuid::parse_str(&started.job_id).unwrap_or_else(|_| Uuid::nil());
                 let mut frame = normalize_response(job_uuid, response, item.board_size);
                 frame.turn = item.move_number;
+                let requires_root_score = state.analysis_task.as_ref().is_some_and(|task| {
+                    task.job_id == started.job_id
+                        && task.stage == AnalysisTaskStageDto::Overview
+                        && task
+                            .swing_criteria
+                            .as_ref()
+                            .is_some_and(|criteria| criteria.score_change_points.enabled)
+                });
+                if requires_root_score && frame.score_mean_black.is_none() {
+                    let published = failure(
+                        EngineOperationDto::Job,
+                        EngineFailureKind::Protocol,
+                        "swing overview result omitted the required root score".into(),
+                        Some(run_id),
+                        None,
+                        None,
+                    )
+                    .with_job_id(&started.job_id);
+                    finish_failed_job(state, &started, published);
+                    publish_snapshot(state);
+                    return None;
+                }
                 let completed = current_index + 1;
                 let remaining = expected.saturating_sub(completed);
                 state.jobs[job_index].current_index = completed;
@@ -2748,7 +2840,7 @@ impl Inner {
                 if completed >= expected {
                     let begins_deep = state.analysis_task.as_ref().is_some_and(|task| {
                         task.job_id == started.job_id
-                            && task.strategy == AnalysisTaskStrategyDto::AllPositionsTwoStage
+                            && task.strategy != AnalysisTaskStrategyDto::SingleStage
                             && task.stage == AnalysisTaskStageDto::Overview
                     });
                     if !begins_deep {
@@ -2764,26 +2856,75 @@ impl Inner {
                         return None;
                     }
 
-                    let deep_conditions = state
-                        .analysis_task
-                        .as_ref()
-                        .expect("two-stage task")
-                        .conditions
-                        .clone();
-                    let job = &mut state.jobs[job_index];
-                    for work_item in &mut job.work_items {
-                        work_item.query.task(&deep_conditions);
+                    let (deep_conditions, selected, selection_reason) = {
+                        let task = state.analysis_task.as_ref().expect("two-stage task");
+                        let (selected, reason) =
+                            if task.strategy == AnalysisTaskStrategyDto::SwingSelectedTwoStage {
+                                let selected = select_swing_deep_paths(task);
+                                let reason = selected.is_empty().then(|| swing_zero_selection_reason(task));
+                                (selected, reason)
+                            } else {
+                                (task.requested.clone(), None)
+                            };
+                        (task.conditions.clone(), selected, reason)
+                    };
+                    let selected_work_items = selected
+                        .iter()
+                        .filter_map(|path| {
+                            state.jobs[job_index]
+                                .work_items
+                                .iter()
+                                .find(|item| item.node_path == *path)
+                                .cloned()
+                        })
+                        .collect::<Vec<_>>();
+                    if selected_work_items.len() != selected.len() {
+                        let published = failure(
+                            EngineOperationDto::Job,
+                            EngineFailureKind::InvalidState,
+                            "Frozen swing selection did not match the admitted overview positions.".into(),
+                            Some(run_id),
+                            None,
+                            None,
+                        )
+                        .with_job_id(&started.job_id);
+                        finish_failed_job(state, &started, published);
+                        publish_snapshot(state);
+                        return None;
                     }
-                    job.current_index = 0;
-                    if let Some(task) = state.analysis_task.as_mut() {
+                    {
+                        let task = state.analysis_task.as_mut().expect("two-stage task");
+                        task.selected_for_deep = Some(selected.clone());
                         task.stage = AnalysisTaskStageDto::Deep;
                         task.state = AnalysisTaskStateDto::Queued;
-                        task.reason = None;
+                        task.reason = selection_reason;
                         task.ending_conditions.clear();
+                    }
+                    {
+                        let job = &mut state.jobs[job_index];
+                        job.work_items = selected_work_items;
+                        job.expected = Some(selected.len());
+                        job.current_index = 0;
+                        for work_item in &mut job.work_items {
+                            work_item.query.task(&deep_conditions);
+                        }
+                    }
+                    if selected.is_empty() {
+                        finish_whole_game_job(
+                            state,
+                            &started,
+                            AnalysisJobOutcomeDto::Completed,
+                            Some(0),
+                            Some(0),
+                            Some(0),
+                            None,
+                        );
+                        return None;
                     }
                 }
 
                 let next_index = state.jobs[job_index].current_index;
+                let expected = state.jobs[job_index].expected.unwrap_or_default();
                 let next = state.jobs[job_index].work_items[next_index].clone();
                 let query_id = target_query_id(&started.job_id);
                 let jsonl = match bound_work_item_query(&next, &query_id, &started.job_id) {
@@ -3230,6 +3371,79 @@ fn active_task_conditions(task: &AnalysisTaskDto) -> Option<&AnalysisStageCondit
     }
 }
 
+fn select_swing_deep_paths(task: &AnalysisTaskDto) -> Vec<NodePath> {
+    let criteria = task.swing_criteria.as_ref().expect("swing task criteria");
+    let mut selected = Vec::new();
+    for comparison in &task.swing_comparisons {
+        if !criteria.move_actors.admits(comparison.move_actor) {
+            continue;
+        }
+        let Some(before) = task
+            .overview_summaries
+            .iter()
+            .find(|summary| summary.node_path == comparison.before)
+        else {
+            continue;
+        };
+        let Some(after) = task
+            .overview_summaries
+            .iter()
+            .find(|summary| summary.node_path == comparison.after)
+        else {
+            continue;
+        };
+        let player_winrate = |winrate_black: f32| match comparison.move_actor {
+            PlayerColor::Black => winrate_black,
+            PlayerColor::White => 1.0 - winrate_black,
+        };
+        let winrate_change =
+            (player_winrate(after.frame.winrate_black) - player_winrate(before.frame.winrate_black)).abs()
+                * 100.0;
+        let mut qualifies = criteria.winrate_change_percentage_points.enabled
+            && meets_swing_threshold(winrate_change, criteria.winrate_change_percentage_points.value);
+        if criteria.score_change_points.enabled {
+            let (before_score, after_score) = (
+                before
+                    .frame
+                    .score_mean_black
+                    .expect("validated overview root score"),
+                after
+                    .frame
+                    .score_mean_black
+                    .expect("validated overview root score"),
+            );
+            let player_score = |score_black: f32| match comparison.move_actor {
+                PlayerColor::Black => score_black,
+                PlayerColor::White => -score_black,
+            };
+            qualifies |= meets_swing_threshold(
+                (player_score(after_score) - player_score(before_score)).abs(),
+                criteria.score_change_points.value,
+            );
+        }
+        if qualifies {
+            for path in [&comparison.before, &comparison.after] {
+                if !selected.contains(path) {
+                    selected.push(path.clone());
+                }
+            }
+        }
+    }
+    selected
+}
+
+fn meets_swing_threshold(observed: f32, threshold: f32) -> bool {
+    observed >= threshold || (observed - threshold).abs() <= f32::EPSILON * threshold.abs().max(1.0) * 4.0
+}
+
+fn swing_zero_selection_reason(task: &AnalysisTaskDto) -> String {
+    if task.swing_comparisons.is_empty() {
+        return "Overview completed; no played-move predecessor comparisons were available in the requested scope."
+            .into();
+    }
+    "Overview completed; no moves met the swing thresholds.".into()
+}
+
 fn record_analysis_task_completion(
     state: &mut ManagerState,
     job_id: &str,
@@ -3244,7 +3458,15 @@ fn record_analysis_task_completion(
                 AnalysisTaskStateDto::Queued | AnalysisTaskStateDto::Searching
             )
     }) {
-        if !task.requested.contains(node_path) {
+        let admitted = if task.stage == AnalysisTaskStageDto::Overview {
+            task.requested.contains(node_path) || task.supporting.contains(node_path)
+        } else {
+            task.selected_for_deep
+                .as_ref()
+                .unwrap_or(&task.requested)
+                .contains(node_path)
+        };
+        if !admitted {
             return;
         }
         if task.stage == AnalysisTaskStageDto::Overview {
@@ -3279,9 +3501,10 @@ fn finish_analysis_task_locked(
         return;
     }
     match outcome {
-        AnalysisJobOutcomeDto::Completed if task.completed.len() == task.requested.len() => {
+        AnalysisJobOutcomeDto::Completed
+            if task.completed.len() == task.selected_for_deep.as_ref().unwrap_or(&task.requested).len() =>
+        {
             task.state = AnalysisTaskStateDto::Completed;
-            task.reason = None;
         }
         AnalysisJobOutcomeDto::Cancelled if task.state == AnalysisTaskStateDto::Pausing => {
             task.state = AnalysisTaskStateDto::Paused;
@@ -3839,5 +4062,121 @@ fn failure(
         kind,
         message,
         diagnostic_summary,
+    }
+}
+
+#[cfg(test)]
+mod swing_selection_tests {
+    use super::*;
+    use app_model::{AnalysisMoveActorFilterDto, AnalysisSwingThresholdDto};
+
+    fn path(indices: &[u32]) -> NodePath {
+        NodePath {
+            indices: indices.to_vec(),
+        }
+    }
+
+    fn summary(
+        indices: &[u32],
+        winrate_black: f32,
+        score_mean_black: Option<f32>,
+    ) -> AnalysisTaskOverviewDto {
+        AnalysisTaskOverviewDto {
+            node_path: path(indices),
+            frame: app_model::AnalysisFrameDto {
+                job_id: Uuid::nil(),
+                game_id: None,
+                node_id: None,
+                turn: indices.len() as u32,
+                visits: 32,
+                winrate_black,
+                score_mean_black,
+                score_stdev: None,
+                candidates: Vec::new(),
+                ownership: None,
+                policy: None,
+            },
+        }
+    }
+
+    fn task(criteria: AnalysisSwingCriteriaDto) -> AnalysisTaskDto {
+        let requested = vec![path(&[0]), path(&[0, 0])];
+        AnalysisTaskDto {
+            task_id: "task".into(),
+            run_id: "run".into(),
+            job_id: "job".into(),
+            generation: 1,
+            scope: AnalysisScopeDto {
+                mode: AnalysisScopeModeDto::FirstChildMainline,
+                current_node: NodePath::default(),
+                branch_choices: Vec::new(),
+                interval: None,
+                to_play: None,
+            },
+            strategy: AnalysisTaskStrategyDto::SwingSelectedTwoStage,
+            stage: AnalysisTaskStageDto::Overview,
+            conditions: AnalysisStageConditionsDto::default(),
+            overview_conditions: Some(AnalysisStageConditionsDto::default()),
+            requested: requested.clone(),
+            supporting: vec![NodePath::default()],
+            swing_comparisons: vec![
+                AnalysisSwingComparisonDto {
+                    before: NodePath::default(),
+                    after: requested[0].clone(),
+                    move_actor: PlayerColor::Black,
+                },
+                AnalysisSwingComparisonDto {
+                    before: requested[0].clone(),
+                    after: requested[1].clone(),
+                    move_actor: PlayerColor::White,
+                },
+            ],
+            swing_criteria: Some(criteria),
+            selected_for_deep: None,
+            overview_completed: vec![NodePath::default(), requested[0].clone(), requested[1].clone()],
+            completed: Vec::new(),
+            overview_summaries: vec![
+                summary(&[], 0.5, Some(0.0)),
+                summary(&[0], 0.4, Some(5.0)),
+                summary(&[0, 0], 0.5, Some(4.0)),
+            ],
+            state: AnalysisTaskStateDto::Searching,
+            reason: None,
+            ending_conditions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn swing_predicates_cover_equality_both_directions_score_only_and_or() {
+        let criteria = AnalysisSwingCriteriaDto {
+            move_actors: AnalysisMoveActorFilterDto::Both,
+            winrate_change_percentage_points: AnalysisSwingThresholdDto {
+                enabled: true,
+                value: 10.0,
+            },
+            score_change_points: AnalysisSwingThresholdDto {
+                enabled: false,
+                value: 5.0,
+            },
+        };
+        let winrate_only = select_swing_deep_paths(&task(criteria.clone()));
+        assert_eq!(winrate_only, vec![path(&[]), path(&[0]), path(&[0, 0])]);
+
+        let mut score_only = criteria.clone();
+        score_only.winrate_change_percentage_points.enabled = false;
+        score_only.score_change_points.enabled = true;
+        let selected = select_swing_deep_paths(&task(score_only));
+        assert_eq!(selected, vec![path(&[]), path(&[0])]);
+
+        let mut either = criteria;
+        either.winrate_change_percentage_points.value = 100.0;
+        either.score_change_points.enabled = true;
+        let selected = select_swing_deep_paths(&task(either));
+        assert_eq!(selected, vec![path(&[]), path(&[0])]);
+
+        let mut unformable = task(AnalysisSwingCriteriaDto::default());
+        unformable.swing_comparisons.clear();
+        assert!(swing_zero_selection_reason(&unformable)
+            .contains("no played-move predecessor comparisons were available"));
     }
 }

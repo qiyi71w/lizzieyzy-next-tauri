@@ -1,5 +1,5 @@
 import type { NextMoveReviewMarkerMode } from "./nextMoveReviewMarker";
-import type { AnalysisStageConditionsDto, ContinuousAnalysisBudgetDto } from "./types";
+import type { AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, ContinuousAnalysisBudgetDto } from "./types";
 
 export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
@@ -16,6 +16,9 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   taskSingleStageConditions: AnalysisStageConditionsDto;
   taskOverviewConditions: AnalysisStageConditionsDto;
   taskDeepConditions: AnalysisStageConditionsDto;
+  taskSwingOverviewConditions: AnalysisStageConditionsDto;
+  taskSwingDeepConditions: AnalysisStageConditionsDto;
+  taskSwingCriteria: AnalysisSwingCriteriaDto;
   reviewMode: ReviewMode;
   boardTheme: BoardTheme;
   graphPerspective: GraphPerspective;
@@ -52,6 +55,21 @@ export const defaultAppPreferences: AppPreferences = {
     time_seconds: { enabled: false, value: 10 },
     total_visits: { enabled: true, value: 800 },
     leading_candidate_visits: { enabled: false, value: 500 }
+  },
+  taskSwingOverviewConditions: {
+    time_seconds: { enabled: false, value: 10 },
+    total_visits: { enabled: true, value: 32 },
+    leading_candidate_visits: { enabled: false, value: 32 }
+  },
+  taskSwingDeepConditions: {
+    time_seconds: { enabled: true, value: 10 },
+    total_visits: { enabled: false, value: 800 },
+    leading_candidate_visits: { enabled: false, value: 500 }
+  },
+  taskSwingCriteria: {
+    move_actors: "both",
+    winrate_change_percentage_points: { enabled: true, value: 10 },
+    score_change_points: { enabled: false, value: 3 }
   },
   reviewMode: "quick",
   boardTheme: "classic",
@@ -94,6 +112,15 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
       defaultAppPreferences.taskOverviewConditions
     ),
     taskDeepConditions: normalizeDeepTaskConditions(value, defaultMaxVisits),
+    taskSwingOverviewConditions: normalizeTaskConditions(
+      value?.taskSwingOverviewConditions,
+      defaultAppPreferences.taskSwingOverviewConditions
+    ),
+    taskSwingDeepConditions: normalizeTaskConditions(
+      value?.taskSwingDeepConditions,
+      defaultAppPreferences.taskSwingDeepConditions
+    ),
+    taskSwingCriteria: normalizeSwingCriteria(value?.taskSwingCriteria),
     reviewMode: value?.reviewMode === "deep" ? "deep" : "quick",
     boardTheme: value?.boardTheme === "high-contrast" ? "high-contrast" : "classic",
     graphPerspective: value?.graphPerspective === "sideToPlay" ? "sideToPlay" : "black",
@@ -153,6 +180,17 @@ export function taskStageConditionsError(
   return null;
 }
 
+export function swingCriteriaError(value: AnalysisSwingCriteriaDto): string | null {
+  const thresholds = [value.winrate_change_percentage_points, value.score_change_points];
+  if (thresholds.some((threshold) => !Number.isFinite(threshold.value) || threshold.value <= 0)) {
+    return "Swing threshold values must be positive finite numbers; disabled thresholds retain their values.";
+  }
+  if (!thresholds.some((threshold) => threshold.enabled)) {
+    return "Enable at least one swing selection threshold.";
+  }
+  return null;
+}
+
 function normalizeTaskConditions(
   value: AnalysisStageConditionsDto | undefined,
   fallback: AnalysisStageConditionsDto
@@ -193,6 +231,33 @@ function cloneTaskConditions(value: AnalysisStageConditionsDto): AnalysisStageCo
     time_seconds: { ...value.time_seconds },
     total_visits: { ...value.total_visits },
     leading_candidate_visits: { ...value.leading_candidate_visits }
+  };
+}
+
+function normalizeSwingCriteria(value: AnalysisSwingCriteriaDto | undefined): AnalysisSwingCriteriaDto {
+  const fallback = defaultAppPreferences.taskSwingCriteria;
+  return {
+    move_actors: value?.move_actors === "black" || value?.move_actors === "white"
+      ? value.move_actors
+      : "both",
+    winrate_change_percentage_points: normalizeSwingThreshold(
+      value?.winrate_change_percentage_points,
+      fallback.winrate_change_percentage_points
+    ),
+    score_change_points: normalizeSwingThreshold(
+      value?.score_change_points,
+      fallback.score_change_points
+    )
+  };
+}
+
+function normalizeSwingThreshold(
+  value: AnalysisSwingCriteriaDto["winrate_change_percentage_points"] | undefined,
+  fallback: AnalysisSwingCriteriaDto["winrate_change_percentage_points"]
+) {
+  return {
+    enabled: typeof value?.enabled === "boolean" ? value.enabled : fallback.enabled,
+    value: typeof value?.value === "number" ? value.value : fallback.value
   };
 }
 

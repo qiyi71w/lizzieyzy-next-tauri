@@ -783,7 +783,7 @@ fn selected_node_completion_publishes_normalized_candidates_pv_ownership_policy_
     assert_eq!(completed.node_path.indices, vec![0, 1]);
     assert_eq!(frame.visits, 8);
     assert!((frame.winrate_black - 0.61).abs() < f32::EPSILON);
-    assert!((frame.score_mean_black - 2.5).abs() < f32::EPSILON);
+    assert_eq!(frame.score_mean_black, Some(2.5));
     assert_eq!(frame.score_stdev, Some(4.0));
     assert_eq!(frame.candidates.len(), 1);
     assert_eq!(
@@ -1058,6 +1058,7 @@ fn selected_node_unsupported_capability_does_not_write_protocol() {
         adapter_kind: EngineBackend::KataGoAnalysis,
         selected_node_analysis: false,
         whole_game_analysis: true,
+        root_score: true,
         protocol_cancel: true,
     });
     let error = manager
@@ -4665,7 +4666,7 @@ fn continuous_progress_remains_owned_until_target_final_and_releases_compute() {
         assert_eq!(event.outcome, AnalysisJobOutcomeDto::Progress);
         let frame = event.frame.unwrap();
         assert_eq!(frame.visits, visits);
-        assert_eq!(frame.score_mean_black, 2.5);
+        assert_eq!(frame.score_mean_black, Some(2.5));
         assert_eq!(frame.ownership, Some(vec![0.1; 81]));
         assert_eq!(frame.policy, Some(vec![0.01; 82]));
         assert_eq!(

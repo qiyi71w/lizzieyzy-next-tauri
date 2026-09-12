@@ -59,6 +59,7 @@ export function AnalysisPanel({
     setCommentDraft(personalComment);
   }, [personalComment]);
   const hasOwnership = (frame?.ownership?.length ?? 0) >= boardSize * boardSize;
+  const rootScore = frame?.score_mean_black;
 
   const candidates = frame?.candidates ?? [];
   const activeCandidateIndex = previewCandidateIndex ?? selectedCandidateIndex ?? 0;
@@ -159,10 +160,12 @@ export function AnalysisPanel({
         </div>
         <div className="score-lead-box">
           <div className="score-lead-val">
-            {frame ? (frame.score_mean_black >= 0 ? `+${frame.score_mean_black.toFixed(1)}` : frame.score_mean_black.toFixed(1)) : "—"}
+            {rootScore != null ? (rootScore >= 0 ? `+${rootScore.toFixed(1)}` : rootScore.toFixed(1)) : "—"}
           </div>
           <div className="score-lead-desc">
-            {frame ? (frame.score_mean_black > 0.5 ? "黑稍优" : frame.score_mean_black < -0.5 ? "白稍优" : "形势接近") : "待评估"}
+            {rootScore != null
+              ? (rootScore > 0.5 ? "黑稍优" : rootScore < -0.5 ? "白稍优" : "形势接近")
+              : frame ? "目数不可用" : "待评估"}
           </div>
         </div>
         <div className="player-stat">
@@ -224,7 +227,7 @@ export function AnalysisPanel({
               {frame ? (
                 <div className="commentary-metrics">
                   <p className="commentary-text">
-                    第 {currentMove} 手 KataGo 推荐首选 {activeCandidate && isPoint(activeCandidate.vertex) ? vertexLabel(activeCandidate.vertex, boardSize) : "推荐点"}，胜率 {(frame.winrate_black * 100).toFixed(1)}%，目差 {(frame.score_mean_black >= 0 ? "+" : "") + frame.score_mean_black.toFixed(1)} 目。
+                    第 {currentMove} 手 KataGo 推荐首选 {activeCandidate && isPoint(activeCandidate.vertex) ? vertexLabel(activeCandidate.vertex, boardSize) : "推荐点"}，胜率 {(frame.winrate_black * 100).toFixed(1)}%，{rootScore != null ? `目差 ${rootScore >= 0 ? "+" : ""}${rootScore.toFixed(1)} 目` : "目差不可用"}。
                   </p>
                   <div className="stats-badges">
                     <span>计算量: {frame.visits.toLocaleString()} visits</span>

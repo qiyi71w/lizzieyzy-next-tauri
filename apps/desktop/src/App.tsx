@@ -70,7 +70,7 @@ import {
 } from "./domain/foregroundEngine";
 import { loadAppPreferences, saveAppPreferences } from "./api/preferences";
 import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition } from "./domain/board";
-import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, taskConditionsError, taskStageConditionsError, type AppPreferences } from "./domain/preferences";
+import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "./domain/preferences";
 import { buildNextMoveReviewMarkers, cycleNextMoveReviewMarker } from "./domain/nextMoveReviewMarker";
 import { admitsChartSeriesChange, buildWinrateChartModel, displayedWinrate } from "./domain/winrateChart";
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
@@ -91,7 +91,7 @@ import {
   variationReplayIdentityKey,
   variationReplayPointSteps
 } from "./domain/variationReplay";
-import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisTaskDto, AnalysisTaskStrategyDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, SgfTreeNodeDto } from "./domain/types";
+import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, AnalysisTaskStrategyDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, SgfTreeNodeDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
@@ -113,6 +113,11 @@ const defaultAnalysisScopeDraft: AnalysisScopeDraft = {
   intervalStart: "0",
   intervalEnd: "0",
   toPlay: "both",
+  moveActors: defaultAppPreferences.taskSwingCriteria.move_actors,
+  winrateChangeEnabled: defaultAppPreferences.taskSwingCriteria.winrate_change_percentage_points.enabled,
+  winrateChangeThreshold: String(defaultAppPreferences.taskSwingCriteria.winrate_change_percentage_points.value),
+  scoreChangeEnabled: defaultAppPreferences.taskSwingCriteria.score_change_points.enabled,
+  scoreChangeThreshold: String(defaultAppPreferences.taskSwingCriteria.score_change_points.value),
   overviewTimeEnabled: defaultAppPreferences.taskOverviewConditions.time_seconds.enabled,
   overviewTimeSeconds: String(defaultAppPreferences.taskOverviewConditions.time_seconds.value),
   overviewTotalVisitsEnabled: defaultAppPreferences.taskOverviewConditions.total_visits.enabled,
@@ -232,6 +237,7 @@ export function App() {
   const handleWholeGameJobRef = useRef<(job: AnalysisJobEventDto) => void>(() => undefined);
   const analysisTaskRef = useRef<AnalysisTaskDto | null>(null);
   const analysisTaskSnapshotRequestRef = useRef(0);
+  const analysisScopePreviewRequestRef = useRef(0);
   const analysisTaskActionInFlightRef = useRef(false);
   const analysisTaskPauseFenceRef = useRef<{ taskId: string; jobId: string; continued: boolean } | null>(null);
   const analysisConditionsDraftEditedRef = useRef(false);
@@ -786,7 +792,12 @@ export function App() {
         totalVisitsEnabled: loaded.taskDeepConditions.total_visits.enabled,
         totalVisits: String(loaded.taskDeepConditions.total_visits.value),
         leadingCandidateVisitsEnabled: loaded.taskDeepConditions.leading_candidate_visits.enabled,
-        leadingCandidateVisits: String(loaded.taskDeepConditions.leading_candidate_visits.value)
+        leadingCandidateVisits: String(loaded.taskDeepConditions.leading_candidate_visits.value),
+        moveActors: loaded.taskSwingCriteria.move_actors,
+        winrateChangeEnabled: loaded.taskSwingCriteria.winrate_change_percentage_points.enabled,
+        winrateChangeThreshold: String(loaded.taskSwingCriteria.winrate_change_percentage_points.value),
+        scoreChangeEnabled: loaded.taskSwingCriteria.score_change_points.enabled,
+        scoreChangeThreshold: String(loaded.taskSwingCriteria.score_change_points.value),
       }));
     }
     setPreferencesStatus(status);
@@ -1625,8 +1636,24 @@ export function App() {
     };
   }
 
-  function handleAnalysisScopeDraftChange(next: AnalysisScopeDraft) {
+  function handleAnalysisScopeDraftChange(incoming: AnalysisScopeDraft) {
     const current = analysisScopeDraft;
+    let next = incoming;
+    if (incoming.strategy !== current.strategy && incoming.strategy !== "single_stage") {
+      const swing = incoming.strategy === "swing_selected_two_stage";
+      next = {
+        ...incoming,
+        ...analysisTaskStageDraft(
+          swing
+            ? committedPreferencesRef.current.taskSwingOverviewConditions
+            : committedPreferencesRef.current.taskOverviewConditions,
+          swing
+            ? committedPreferencesRef.current.taskSwingDeepConditions
+            : committedPreferencesRef.current.taskDeepConditions
+        ),
+        ...(swing ? swingCriteriaDraft(committedPreferencesRef.current.taskSwingCriteria) : {})
+      };
+    }
     const conditionsChanged = next.overviewTimeEnabled !== current.overviewTimeEnabled
       || next.overviewTimeSeconds !== current.overviewTimeSeconds
       || next.overviewTotalVisitsEnabled !== current.overviewTotalVisitsEnabled
@@ -1644,16 +1671,29 @@ export function App() {
       || next.totalVisitsEnabled !== current.totalVisitsEnabled
       || next.totalVisits !== current.totalVisits
       || next.leadingCandidateVisitsEnabled !== current.leadingCandidateVisitsEnabled
-      || next.leadingCandidateVisits !== current.leadingCandidateVisits;
+      || next.leadingCandidateVisits !== current.leadingCandidateVisits
+      || next.moveActors !== current.moveActors
+      || next.winrateChangeEnabled !== current.winrateChangeEnabled
+      || next.winrateChangeThreshold !== current.winrateChangeThreshold
+      || next.scoreChangeEnabled !== current.scoreChangeEnabled
+      || next.scoreChangeThreshold !== current.scoreChangeThreshold;
     if (conditionsChanged) analysisConditionsDraftEditedRef.current = true;
     const scopeChanged = next.strategy !== current.strategy
       || next.mode !== current.mode
       || next.intervalEnabled !== current.intervalEnabled
       || next.intervalStart !== current.intervalStart
       || next.intervalEnd !== current.intervalEnd
-      || next.toPlay !== current.toPlay;
+      || next.toPlay !== current.toPlay
+      || next.moveActors !== current.moveActors
+      || next.winrateChangeEnabled !== current.winrateChangeEnabled
+      || next.winrateChangeThreshold !== current.winrateChangeThreshold
+      || next.scoreChangeEnabled !== current.scoreChangeEnabled
+      || next.scoreChangeThreshold !== current.scoreChangeThreshold;
     setAnalysisScopeDraft(next);
-    if (scopeChanged) setAnalysisScopePreview(null);
+    if (scopeChanged) {
+      ++analysisScopePreviewRequestRef.current;
+      setAnalysisScopePreview(null);
+    }
     setAnalysisTaskError(null);
   }
 
@@ -1663,13 +1703,24 @@ export function App() {
       setAnalysisTaskError(nativeRuntime ? "Analysis preview requires a current game." : nativeCurrentGameUnavailable);
       return;
     }
+    const request = ++analysisScopePreviewRequestRef.current;
+    const draft = analysisScopeDraft;
     setAnalysisTaskRequestPending(true);
     setAnalysisTaskError(null);
     try {
-      const preview = await previewAnalysisScope({ generation: game.generation, scope: analysisScopeFromDraft(analysisScopeDraft) });
-      setAnalysisScopePreview(preview);
+      const swingCriteria = draft.strategy === "swing_selected_two_stage"
+        ? swingCriteriaFromDraft(draft)
+        : null;
+      const criteriaError = swingCriteria ? swingCriteriaError(swingCriteria) : null;
+      if (criteriaError) throw new Error(criteriaError);
+      const preview = await previewAnalysisScope({
+        generation: game.generation,
+        scope: analysisScopeFromDraft(draft),
+        swingCriteria
+      });
+      if (request === analysisScopePreviewRequestRef.current) setAnalysisScopePreview(preview);
     } catch (error) {
-      setAnalysisTaskError(errorMessage(error));
+      if (request === analysisScopePreviewRequestRef.current) setAnalysisTaskError(errorMessage(error));
     } finally {
       setAnalysisTaskRequestPending(false);
     }
@@ -1694,10 +1745,13 @@ export function App() {
     const acceptsJobEvents = next.state === "queued" || next.state === "searching";
     setWholeGameRunning(isAnalysisTaskReserved(next));
     const stageCompleted = next.stage === "overview" ? next.overview_completed.length : next.completed.length;
+    const expected = next.stage === "overview"
+      ? next.requested.length + next.supporting.length
+      : next.selected_for_deep?.length ?? next.requested.length;
     setWholeGameProgress({
       completed: stageCompleted,
-      expected: next.requested.length,
-      remaining: Math.max(0, next.requested.length - stageCompleted)
+      expected,
+      remaining: Math.max(0, expected - stageCompleted)
     });
     wholeGameJobRef.current = acceptsJobEvents ? {
       run_id: next.run_id,
@@ -1728,6 +1782,7 @@ export function App() {
     strategy: AnalysisTaskStrategyDto;
     conditions: AnalysisStageConditionsDto;
     overviewConditions?: AnalysisStageConditionsDto | null;
+    swingCriteria?: AnalysisSwingCriteriaDto | null;
     preview?: AnalysisScopePreviewDto | null;
     persistConditions?: boolean;
   }) {
@@ -1738,21 +1793,37 @@ export function App() {
     }
     const conditionsError = input.strategy === "all_positions_two_stage" && input.overviewConditions
       ? taskStageConditionsError(input.overviewConditions, input.conditions)
-      : taskConditionsError(input.conditions);
+      : input.strategy === "swing_selected_two_stage" && input.overviewConditions && input.swingCriteria
+        ? taskConditionsError(input.overviewConditions)
+          ?? taskConditionsError(input.conditions)
+          ?? swingCriteriaError(input.swingCriteria)
+        : taskConditionsError(input.conditions);
     if (conditionsError) throw new Error(conditionsError);
-    const preview = input.preview ?? await previewAnalysisScope({ generation: game.generation, scope: input.scope });
-    if (preview.generation !== game.generation || JSON.stringify(preview.scope) !== JSON.stringify(input.scope)) {
+    if (input.strategy !== "single_stage" && !input.overviewConditions) {
+      throw new Error("Two-stage analysis requires overview conditions.");
+    }
+    if (input.strategy === "swing_selected_two_stage" && !input.swingCriteria) {
+      throw new Error("Swing-selected analysis requires swing criteria.");
+    }
+    const preview = input.preview ?? await previewAnalysisScope({
+      generation: game.generation,
+      scope: input.scope,
+      swingCriteria: input.swingCriteria
+    });
+    if (preview.generation !== game.generation
+      || JSON.stringify(preview.scope) !== JSON.stringify(input.scope)
+      || JSON.stringify(preview.swing_criteria ?? null) !== JSON.stringify(input.swingCriteria ?? null)) {
       throw new Error("The scope preview is no longer current. Preview again before starting.");
     }
     if (input.persistConditions) {
       const changed = input.strategy === "all_positions_two_stage"
-        ? input.overviewConditions != null
-          && (JSON.stringify(input.overviewConditions) !== JSON.stringify(committedPreferencesRef.current.taskOverviewConditions)
-            || JSON.stringify(input.conditions) !== JSON.stringify(committedPreferencesRef.current.taskDeepConditions))
-        : JSON.stringify(input.conditions) !== JSON.stringify(committedPreferencesRef.current.taskSingleStageConditions);
-      if (input.strategy === "all_positions_two_stage" && !input.overviewConditions) {
-        throw new Error("All-position analysis requires overview conditions.");
-      }
+        ? JSON.stringify(input.overviewConditions) !== JSON.stringify(committedPreferencesRef.current.taskOverviewConditions)
+          || JSON.stringify(input.conditions) !== JSON.stringify(committedPreferencesRef.current.taskDeepConditions)
+        : input.strategy === "swing_selected_two_stage"
+          ? JSON.stringify(input.overviewConditions) !== JSON.stringify(committedPreferencesRef.current.taskSwingOverviewConditions)
+            || JSON.stringify(input.conditions) !== JSON.stringify(committedPreferencesRef.current.taskSwingDeepConditions)
+            || JSON.stringify(input.swingCriteria) !== JSON.stringify(committedPreferencesRef.current.taskSwingCriteria)
+          : JSON.stringify(input.conditions) !== JSON.stringify(committedPreferencesRef.current.taskSingleStageConditions);
       if (changed) {
         if (preferencesSaveInFlightRef.current || pendingPreferencesSaveRef.current || continuousActionInFlightRef.current) {
           throw new Error("Wait for the current preference save before starting.");
@@ -1762,7 +1833,13 @@ export function App() {
               taskOverviewConditions: input.overviewConditions!,
               taskDeepConditions: input.conditions
             }
-          : { taskSingleStageConditions: input.conditions };
+          : input.strategy === "swing_selected_two_stage"
+            ? {
+                taskSwingOverviewConditions: input.overviewConditions!,
+                taskSwingDeepConditions: input.conditions,
+                taskSwingCriteria: input.swingCriteria!
+              }
+            : { taskSingleStageConditions: input.conditions };
         await new Promise<AppPreferences>((resolve, reject) => {
           const pending = queuePreferencesSave(committedPreferencesRef.current, patch);
           pending.onSaved = resolve;
@@ -1780,7 +1857,7 @@ export function App() {
     ++analysisTaskSnapshotRequestRef.current;
     setAnalysisScopePreview(preview);
     adoptAnalysisTask(started);
-    setMessage(`Analysis task ${started.state}: 0/${started.requested.length} completed.`);
+    setMessage(`Analysis task ${started.state}: ${analysisTaskProgress(started)} completed.`);
     void refreshAnalysisTaskSnapshot();
   }
 
@@ -1795,8 +1872,11 @@ export function App() {
         analysisScopeDraft,
         analysisScopeDraft.strategy === "single_stage" ? "single" : "deep"
       );
-      const overviewConditions = analysisScopeDraft.strategy === "all_positions_two_stage"
+      const overviewConditions = analysisScopeDraft.strategy !== "single_stage"
         ? taskConditionsFromDraft(analysisScopeDraft, "overview")
+        : null;
+      const swingCriteria = analysisScopeDraft.strategy === "swing_selected_two_stage"
+        ? swingCriteriaFromDraft(analysisScopeDraft)
         : null;
       await runAnalysisTask({
         runId: run.run_id,
@@ -1804,6 +1884,7 @@ export function App() {
         strategy: analysisScopeDraft.strategy,
         conditions,
         overviewConditions,
+        swingCriteria,
         preview: analysisScopePreview,
         persistConditions: true
       });
@@ -1885,7 +1966,7 @@ export function App() {
     try {
       const paused = await pauseAnalysisTask({ runId: task.run_id, taskId: task.task_id });
       adoptAnalysisTask(paused);
-      setMessage(`Analysis task ${paused.state}: ${paused.completed.length}/${paused.requested.length} completed.`);
+      setMessage(`Analysis task ${paused.state}: ${analysisTaskProgress(paused)} completed.`);
     } catch (error) {
       analysisTaskPauseFenceRef.current = null;
       adoptAnalysisTask(task);
@@ -1916,7 +1997,7 @@ export function App() {
     try {
       const continued = await continueAnalysisTask({ runId: task.run_id, taskId: task.task_id });
       adoptAnalysisTask(continued);
-      setMessage(`Analysis task ${continued.state}: ${continued.completed.length}/${continued.requested.length} completed.`);
+      setMessage(`Analysis task ${continued.state}: ${analysisTaskProgress(continued)} completed.`);
     } catch (error) {
       const detail = errorMessage(error);
       setAnalysisTaskError(detail);
@@ -2780,4 +2861,63 @@ function taskConditionsFromDraft(
       value: parseU32(leadingCandidateVisits, `${prefix} leading candidate visits`, false)
     }
   };
+}
+
+function analysisTaskStageDraft(
+  overview: AnalysisStageConditionsDto,
+  deep: AnalysisStageConditionsDto
+): Partial<AnalysisScopeDraft> {
+  return {
+    overviewTimeEnabled: overview.time_seconds.enabled,
+    overviewTimeSeconds: String(overview.time_seconds.value),
+    overviewTotalVisitsEnabled: overview.total_visits.enabled,
+    overviewTotalVisits: String(overview.total_visits.value),
+    overviewLeadingCandidateVisitsEnabled: overview.leading_candidate_visits.enabled,
+    overviewLeadingCandidateVisits: String(overview.leading_candidate_visits.value),
+    timeEnabled: deep.time_seconds.enabled,
+    timeSeconds: String(deep.time_seconds.value),
+    totalVisitsEnabled: deep.total_visits.enabled,
+    totalVisits: String(deep.total_visits.value),
+    leadingCandidateVisitsEnabled: deep.leading_candidate_visits.enabled,
+    leadingCandidateVisits: String(deep.leading_candidate_visits.value)
+  };
+}
+
+function swingCriteriaDraft(criteria: AnalysisSwingCriteriaDto): Partial<AnalysisScopeDraft> {
+  return {
+    moveActors: criteria.move_actors,
+    winrateChangeEnabled: criteria.winrate_change_percentage_points.enabled,
+    winrateChangeThreshold: String(criteria.winrate_change_percentage_points.value),
+    scoreChangeEnabled: criteria.score_change_points.enabled,
+    scoreChangeThreshold: String(criteria.score_change_points.value)
+  };
+}
+
+function swingCriteriaFromDraft(draft: AnalysisScopeDraft): AnalysisSwingCriteriaDto {
+  const positive = (value: string, label: string) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error(`${label} must be a positive finite number.`);
+    }
+    return parsed;
+  };
+  return {
+    move_actors: draft.moveActors,
+    winrate_change_percentage_points: {
+      enabled: draft.winrateChangeEnabled,
+      value: positive(draft.winrateChangeThreshold, "Winrate swing threshold")
+    },
+    score_change_points: {
+      enabled: draft.scoreChangeEnabled,
+      value: positive(draft.scoreChangeThreshold, "Score swing threshold")
+    }
+  };
+}
+
+function analysisTaskProgress(task: AnalysisTaskDto): string {
+  const completed = task.stage === "overview" ? task.overview_completed.length : task.completed.length;
+  const expected = task.stage === "overview"
+    ? task.requested.length + task.supporting.length
+    : task.selected_for_deep?.length ?? task.requested.length;
+  return `${completed}/${expected}`;
 }

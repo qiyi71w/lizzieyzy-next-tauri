@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisTaskDto, CurrentGameResultDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
+import type { AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, CurrentGameResultDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
 import { defaultAppPreferences, type AppPreferences } from "./domain/preferences";
 
 const runtime = vi.hoisted(() => ({
@@ -168,13 +168,24 @@ beforeEach(() => {
     generation: 1,
     node_path: { indices: [] }
   });
-  backend.previewAnalysisScope.mockImplementation(async ({ generation, scope }: { generation: number; scope: AnalysisScopeDto }) => ({
+  backend.previewAnalysisScope.mockImplementation(async ({ generation, scope, swingCriteria }: {
+    generation: number;
+    scope: AnalysisScopeDto;
+    swingCriteria?: AnalysisSwingCriteriaDto | null;
+  }) => ({
     generation,
     scope,
     targets: [
       { node_path: { indices: [] }, move_number: 0, to_play: "black" },
       { node_path: { indices: [0] }, move_number: 1, to_play: "white" }
-    ]
+    ],
+    supporting_targets: swingCriteria
+      ? [{ node_path: { indices: [2] }, move_number: 2, to_play: "black" }]
+      : [],
+    swing_comparisons: swingCriteria
+      ? [{ before: { indices: [2] }, after: { indices: [0] }, move_actor: "white" }]
+      : [],
+    swing_criteria: swingCriteria ?? null
   }));
   backend.startAnalysisTask.mockImplementation(async ({ runId, preview, strategy, conditions, overviewConditions }: {
     runId: string;
@@ -190,11 +201,15 @@ beforeEach(() => {
       generation: preview.generation,
       scope: preview.scope,
       strategy,
-      stage: strategy === "all_positions_two_stage" ? "overview" : "single_stage",
+      stage: strategy === "single_stage" ? "single_stage" : "overview",
       conditions,
       overview_conditions: overviewConditions,
       requested: preview.targets.map((target) => target.node_path),
-      overview_completed: strategy === "all_positions_two_stage" ? [preview.targets[0].node_path] : [],
+      supporting: preview.supporting_targets.map((target) => target.node_path),
+      swing_comparisons: preview.swing_comparisons,
+      swing_criteria: preview.swing_criteria,
+      selected_for_deep: null,
+      overview_completed: strategy !== "single_stage" ? [preview.targets[0].node_path] : [],
       completed: strategy === "single_stage" ? [preview.targets[0].node_path] : [],
       overview_summaries: [],
       state: "searching",
@@ -289,6 +304,7 @@ async function readyEngine(host: HTMLElement) {
             adapter_kind: "kata_go_analysis",
             selected_node_analysis: true,
             whole_game_analysis: true,
+            root_score: true,
             protocol_cancel: true
           }
         }
@@ -890,7 +906,7 @@ describe("truthful native analysis actions", () => {
       buttonNamed(host, "Preview scope").click();
       await backend.previewAnalysisScope.mock.results.at(-1)?.value;
     });
-    expect(host.textContent).toContain("2 targets");
+    expect(host.textContent).toContain("2 requested targets");
     expect(host.textContent).toContain("move 0 (root, black to play)");
     expect(host.textContent).toContain("move 1 (0, white to play)");
 
@@ -1009,6 +1025,110 @@ describe("truthful native analysis actions", () => {
       conditions: defaultAppPreferences.taskDeepConditions
     }));
     expect(host.textContent).toContain("overview · searching · overview 1/2 · deep 0/2");
+  });
+
+  it("previews swing support separately and persists independent selection and stage presets", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    const strategy = host.querySelector('select[aria-label="Analysis strategy"]') as HTMLSelectElement;
+    await act(async () => {
+      strategy.value = "swing_selected_two_stage";
+      strategy.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect((host.querySelector('input[aria-label="Enable search time"]') as HTMLInputElement).checked).toBe(true);
+    expect((host.querySelector('input[aria-label="Enable total visits"]') as HTMLInputElement).checked).toBe(false);
+    const actor = host.querySelector('select[aria-label="Swing move actor"]') as HTMLSelectElement;
+    const winrate = host.querySelector('input[aria-label="Winrate swing threshold"]') as HTMLInputElement;
+    const scoreEnabled = host.querySelector('input[aria-label="Enable score swing threshold"]') as HTMLInputElement;
+    await act(async () => {
+      actor.value = "white";
+      actor.dispatchEvent(new Event("change", { bubbles: true }));
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(winrate, "12");
+      winrate.dispatchEvent(new Event("input", { bubbles: true }));
+      scoreEnabled.click();
+    });
+    await act(async () => {
+      buttonNamed(host, "Preview scope").click();
+      await backend.previewAnalysisScope.mock.results.at(-1)?.value;
+    });
+    const criteria = {
+      move_actors: "white",
+      winrate_change_percentage_points: { enabled: true, value: 12 },
+      score_change_points: { enabled: true, value: 3 }
+    } as const;
+    expect(host.textContent).toContain("supporting first move 2 (2, black to play)");
+    expect(backend.previewAnalysisScope).toHaveBeenLastCalledWith(expect.objectContaining({ swingCriteria: criteria }));
+    expect(host.textContent).toContain("2 requested targets · 1 supporting predecessor targets");
+
+    await act(async () => {
+      buttonNamed(host, "Start task").click();
+      await backend.startAnalysisTask.mock.results.at(-1)?.value;
+    });
+    expect(backend.startAnalysisTask).toHaveBeenLastCalledWith(expect.objectContaining({
+      strategy: "swing_selected_two_stage",
+      overviewConditions: defaultAppPreferences.taskSwingOverviewConditions,
+      conditions: defaultAppPreferences.taskSwingDeepConditions,
+      preview: expect.objectContaining({ swing_criteria: criteria })
+    }));
+    expect(preferencesApi.saveAppPreferences).toHaveBeenLastCalledWith(expect.objectContaining({
+      taskSwingOverviewConditions: defaultAppPreferences.taskSwingOverviewConditions,
+      taskSwingDeepConditions: defaultAppPreferences.taskSwingDeepConditions,
+      taskSwingCriteria: criteria,
+      taskOverviewConditions: defaultAppPreferences.taskOverviewConditions,
+      taskDeepConditions: defaultAppPreferences.taskDeepConditions
+    }));
+    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent)
+      .toContain("overview 1/3 (requested 1/2, supporting 0/1) · deep 0/2");
+    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent)
+      .toContain("move actor white · swing 12pp winrate OR 3 score");
+    taskRuntime.snapshot = {
+      ...taskRuntime.snapshot!,
+      stage: "deep",
+      overview_completed: [{ indices: [] }, { indices: [0] }, { indices: [2] }],
+      selected_for_deep: [{ indices: [] }, { indices: [2] }],
+      completed: [{ indices: [2] }]
+    };
+    await act(async () => { buttonNamed(host, "Pause task").click(); });
+    expect(host.querySelector('[data-analysis-task-state="pausing"]')?.textContent)
+      .toContain("deep 1/2 (requested 0/1, supporting 1/1)");
+  });
+
+
+  it("discards a delayed swing preview after its predicate changes", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    const strategy = host.querySelector('select[aria-label="Analysis strategy"]') as HTMLSelectElement;
+    await act(async () => {
+      strategy.value = "swing_selected_two_stage";
+      strategy.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    let resolvePreview!: () => void;
+    backend.previewAnalysisScope.mockImplementationOnce(({ generation, scope, swingCriteria }) =>
+      new Promise<AnalysisScopePreviewDto>((resolve) => {
+        resolvePreview = () => resolve({
+          generation,
+          scope,
+          targets: [{ node_path: { indices: [0] }, move_number: 1, to_play: "white" }],
+          supporting_targets: [{ node_path: { indices: [] }, move_number: 0, to_play: "black" }],
+          swing_comparisons: [{ before: { indices: [] }, after: { indices: [0] }, move_actor: "black" }],
+          swing_criteria: swingCriteria ?? null
+        });
+      })
+    );
+    act(() => { buttonNamed(host, "Preview scope").click(); });
+    const winrate = host.querySelector('input[aria-label="Winrate swing threshold"]') as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(winrate, "20");
+      winrate.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      resolvePreview();
+      await backend.previewAnalysisScope.mock.results.at(-1)?.value;
+    });
+
+    expect(buttonNamed(host, "Start task").disabled).toBe(true);
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
   });
 
   it("persists an explicit single-stage preset before admission", async () => {

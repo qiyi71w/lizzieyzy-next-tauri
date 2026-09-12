@@ -115,6 +115,7 @@ fn canonical_encode_uses_lzop_at_root_and_lz_elsewhere() {
         reparsed.candidates[0].policy_prior,
         parsed.candidates[0].policy_prior
     );
+    assert_eq!(reparsed.to_frame(0).score_mean_black, None);
 }
 
 #[test]
@@ -141,7 +142,7 @@ fn current_game_projects_java_primary_and_secondary_on_exact_nodes() {
     let secondary = root.secondary_analysis.expect("root secondary");
     assert_eq!(primary.visits, 1500);
     assert_close(primary.winrate_black, 0.56);
-    assert_close(primary.score_mean_black, 3.5);
+    assert_close(primary.score_mean_black.unwrap(), 3.5);
     assert_eq!(primary.ownership.as_deref(), Some(&[0.1, -0.2, 0.3][..]));
     assert_eq!(primary.candidates[0].vertex, point(3, 3));
     assert_eq!(secondary.visits, 150);
@@ -188,7 +189,7 @@ fn save_reopen_preserves_secondary_unknown_comment_and_malformed_payloads() {
     let restored = reopened_root.primary_analysis.unwrap();
     assert_eq!(restored.visits, original.visits);
     assert_close(restored.winrate_black, original.winrate_black);
-    assert_close(restored.score_mean_black, original.score_mean_black);
+    assert_eq!(restored.score_mean_black, original.score_mean_black);
     assert_eq!(restored.candidates[0].vertex, original.candidates[0].vertex);
     assert_eq!(reopened_root.secondary_analysis.unwrap().visits, 150);
     assert_eq!(reopened_root.personal_comment, "root personal");

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, taskConditionsError, taskStageConditionsError, type AppPreferences } from "../domain/preferences";
+import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "../domain/preferences";
 
 declare global {
   interface Window {
@@ -35,7 +35,10 @@ export async function loadAppPreferences(): Promise<AppPreferencesLoadResult> {
 export async function saveAppPreferences(preferences: AppPreferences): Promise<AppPreferences> {
   const error = continuousBudgetError(preferences)
     ?? taskConditionsError(preferences.taskSingleStageConditions)
-    ?? taskStageConditionsError(preferences.taskOverviewConditions, preferences.taskDeepConditions);
+    ?? taskStageConditionsError(preferences.taskOverviewConditions, preferences.taskDeepConditions)
+    ?? taskConditionsError(preferences.taskSwingOverviewConditions)
+    ?? taskConditionsError(preferences.taskSwingDeepConditions)
+    ?? swingCriteriaError(preferences.taskSwingCriteria);
   if (error) throw new Error(error);
   const normalized = normalizeAppPreferences(preferences);
   if (!isTauriRuntime()) {
@@ -53,7 +56,10 @@ function loadBrowserPreferences(): AppPreferencesLoadResult {
     const preferences = normalizeAppPreferences(JSON.parse(raw) as Partial<AppPreferences>);
     const error = continuousBudgetError(preferences)
       ?? taskConditionsError(preferences.taskSingleStageConditions)
-      ?? taskStageConditionsError(preferences.taskOverviewConditions, preferences.taskDeepConditions);
+      ?? taskStageConditionsError(preferences.taskOverviewConditions, preferences.taskDeepConditions)
+      ?? taskConditionsError(preferences.taskSwingOverviewConditions)
+      ?? taskConditionsError(preferences.taskSwingDeepConditions)
+      ?? swingCriteriaError(preferences.taskSwingCriteria);
     if (error) throw new Error(error);
     return { preferences };
   } catch {

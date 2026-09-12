@@ -28,6 +28,16 @@ def frame(query, during=False, visits=None, candidates=None):
                 rootInfo=dict(visits=visits, winrate=0.6, scoreLead=2.5),
                 moveInfos=candidates)
 
+def swing_frame(query, winrate, score=None):
+    visits = configured_visits(query)
+    root_info = dict(visits=visits, winrate=winrate)
+    if score is not None:
+        root_info["scoreLead"] = score
+    return dict(id=query["id"], turnNumber=0, isDuringSearch=False,
+                rootInfo=root_info,
+                moveInfos=[dict(move="D4", order=0, visits=visits,
+                                winrate=winrate, scoreMean=score or 0.0, pv=["D4"])])
+
 def invalid_final(query, kind):
     result = frame(query, visits=8)
     if kind == "unmarked":
@@ -128,7 +138,7 @@ def search(query):
             dict(move="E5", order=0, visits=5, winrate=0.6, scoreMean=2.5, pv=["E5"])
         ]))
         return
-    if (root / "hold-deep").exists() and configured_visits(query) >= 500:
+    if (root / "hold-deep").exists() and (configured_visits(query) >= 500 or mode == "swing"):
         while (root / "hold-deep").exists() and identity in active:
             emit(frame(query, True, visits=max(1, configured_visits(query) // 2)))
             time.sleep(query.get("reportDuringSearchEvery", 0.1))
@@ -166,6 +176,21 @@ for line in sys.stdin:
         if is_task:
             task_count += 1
             query["fixtureIndex"] = task_count
+        if is_task and mode == "swing":
+            overview_winrates = [0.6, 0.4, 0.5, 0.5]
+            overview_scores = [2.0, None, -1.0, 0.0]
+            index = task_count - 1
+            if index < len(overview_winrates):
+                emit(swing_frame(query, overview_winrates[index], overview_scores[index]))
+            elif (root / "hold-deep").exists():
+                active.add(query["id"])
+                threading.Thread(target=search, args=(query,), daemon=True).start()
+            else:
+                emit(swing_frame(query, 0.99, 99.0))
+            continue
+        if is_task and mode == "swing_zero":
+            emit(swing_frame(query, 0.5))
+            continue
         if is_task and mode == "natural_race" and task_count % 2 == 1:
             emit(frame(query, True, visits=8))
             emit(frame(query, visits=8))

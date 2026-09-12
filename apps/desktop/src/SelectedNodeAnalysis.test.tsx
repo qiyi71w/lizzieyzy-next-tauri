@@ -242,6 +242,7 @@ async function readyEngine(host: HTMLElement) {
             adapter_kind: "kata_go_analysis",
             selected_node_analysis: true,
             whole_game_analysis: true,
+            root_score: true,
             protocol_cancel: true
           }
         }
@@ -378,7 +379,13 @@ function emitContinuousSnapshot(phase: ForegroundEngineSnapshotDto["continuous"]
       run: {
         run_id: "run-1", profile_id: "profile-1", adapter_kind: "kata_go_analysis",
         profile_snapshot: savedProfile.profile,
-        capability_snapshot: { adapter_kind: "kata_go_analysis", selected_node_analysis: true, whole_game_analysis: true, protocol_cancel: true }
+        capability_snapshot: {
+          adapter_kind: "kata_go_analysis",
+          selected_node_analysis: true,
+          whole_game_analysis: true,
+          root_score: true,
+          protocol_cancel: true
+        }
       }
     },
     continuous: { enabled: options.enabled ?? true, phase },
@@ -720,7 +727,13 @@ describe("authoritative continuous selected-node analysis", () => {
     const runA = {
       run_id: "run-1", profile_id: "profile-1", adapter_kind: "kata_go_analysis" as const,
       profile_snapshot: savedProfile.profile,
-      capability_snapshot: { adapter_kind: "kata_go_analysis" as const, selected_node_analysis: true, whole_game_analysis: true, protocol_cancel: true }
+      capability_snapshot: {
+        adapter_kind: "kata_go_analysis" as const,
+        selected_node_analysis: true,
+        whole_game_analysis: true,
+        root_score: true,
+        protocol_cancel: true
+      }
     };
     act(() => emitContinuousSnapshot("searching", {
       lifecycle: {

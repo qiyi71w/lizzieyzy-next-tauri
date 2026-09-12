@@ -189,7 +189,7 @@ pub struct AnalysisFrameDto {
     pub turn: u32,
     pub visits: u32,
     pub winrate_black: f32,
-    pub score_mean_black: f32,
+    pub score_mean_black: Option<f32>,
     pub score_stdev: Option<f32>,
     pub candidates: Vec<CandidateMoveDto>,
     pub ownership: Option<Vec<f32>>,
@@ -201,7 +201,7 @@ pub struct ProblemMarkerDto {
     pub turn: u32,
     pub severity: ProblemSeverity,
     pub winrate_loss: f32,
-    pub score_loss: f32,
+    pub score_loss: Option<f32>,
     pub label: String,
 }
 
@@ -294,6 +294,7 @@ pub struct EngineCapabilitySnapshotDto {
     pub adapter_kind: EngineBackend,
     pub selected_node_analysis: bool,
     pub whole_game_analysis: bool,
+    pub root_score: bool,
     pub protocol_cancel: bool,
 }
 
@@ -848,6 +849,7 @@ mod foreground_engine_wire {
                         adapter_kind: EngineBackend::KataGoAnalysis,
                         selected_node_analysis: true,
                         whole_game_analysis: true,
+                        root_score: true,
                         protocol_cancel: true,
                     }),
                 },

@@ -56,6 +56,24 @@ fn replace_primary_on_root_writes_lzop_and_preserves_secondary_unknown_and_comme
 }
 
 #[test]
+fn save_reopen_preserves_unavailable_root_score() {
+    let mut document = CurrentSgfDocument::open(BRANCHING).unwrap();
+    let mut payload = replacement_payload("KataGo", 400, 3, 3);
+    payload.score_mean_black = None;
+    document.replace_primary_analysis(&path(&[]), &payload).unwrap();
+
+    let serialized = document.serialize().unwrap();
+    let reopened = CurrentSgfDocument::open(&serialized).unwrap();
+    let primary = reopened
+        .snapshot(&path(&[]))
+        .unwrap()
+        .primary_analysis
+        .expect("root primary");
+    assert_eq!(primary.score_mean_black, None);
+    assert_eq!(primary.candidates[0].score_mean_black, 2.25);
+}
+
+#[test]
 fn replace_primary_on_move_node_writes_lz_and_preserves_lz2_comment_and_unknown() {
     let mut document = CurrentSgfDocument::open(BRANCHING).unwrap();
     let payload = replacement_payload("KataGo", 900, 15, 3);

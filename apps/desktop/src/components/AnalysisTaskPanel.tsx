@@ -1,4 +1,5 @@
 import type {
+  AnalysisMoveActorFilterDto,
   AnalysisScopeModeDto,
   AnalysisScopePreviewDto,
   AnalysisTaskDto,
@@ -13,6 +14,11 @@ export type AnalysisScopeDraft = {
   intervalStart: string;
   intervalEnd: string;
   toPlay: PlayerColor | "both";
+  moveActors: AnalysisMoveActorFilterDto;
+  winrateChangeEnabled: boolean;
+  winrateChangeThreshold: string;
+  scoreChangeEnabled: boolean;
+  scoreChangeThreshold: string;
   overviewTimeEnabled: boolean;
   overviewTimeSeconds: string;
   overviewTotalVisitsEnabled: boolean;
@@ -61,9 +67,33 @@ export function AnalysisTaskPanel(props: Props) {
   const continuable = props.task?.state === "paused";
   const completed = props.task?.completed.length ?? 0;
   const requested = props.task?.requested.length ?? 0;
+  const overviewExpected = requested + (props.task?.supporting.length ?? 0);
+  const deepTargets = props.task?.selected_for_deep ?? props.task?.requested ?? [];
+  const deepExpected = deepTargets.length;
+  const requestedDeepTargets = deepTargets.filter((path) =>
+    props.task?.requested.some((requestedPath) => sameNodePath(path, requestedPath))
+  );
+  const supportingDeepTargets = deepTargets.filter((path) =>
+    props.task?.supporting.some((supportingPath) => sameNodePath(path, supportingPath))
+  );
+  const requestedDeepCompleted = requestedDeepTargets.filter((path) =>
+    props.task?.completed.some((completedPath) => sameNodePath(path, completedPath))
+  ).length;
+  const supportingDeepCompleted = supportingDeepTargets.filter((path) =>
+    props.task?.completed.some((completedPath) => sameNodePath(path, completedPath))
+  ).length;
+  const requestedOverviewCompleted = props.task?.requested.filter((path) =>
+    props.task?.overview_completed.some((completedPath) => sameNodePath(path, completedPath))
+  ).length ?? 0;
+  const supportingOverviewCompleted = props.task?.supporting.filter((path) =>
+    props.task?.overview_completed.some((completedPath) => sameNodePath(path, completedPath))
+  ).length ?? 0;
   const first = props.preview?.targets[0];
   const last = props.preview?.targets.at(-1);
+  const supportingFirst = props.preview?.supporting_targets[0];
+  const supportingLast = props.preview?.supporting_targets.at(-1);
   const singleStage = props.draft.strategy === "single_stage";
+  const swingSelected = props.draft.strategy === "swing_selected_two_stage";
 
   function update(patch: Partial<AnalysisScopeDraft>) {
     props.onDraftChange({ ...props.draft, ...patch });
@@ -82,6 +112,7 @@ export function AnalysisTaskPanel(props: Props) {
               onChange={(event) => update({ strategy: event.target.value as AnalysisTaskStrategyDto })}
             >
               <option value="all_positions_two_stage">All positions · overview then deep</option>
+              <option value="swing_selected_two_stage">Swing-selected · overview then deep</option>
               <option value="single_stage">Single stage</option>
             </select>
           </label>
@@ -140,7 +171,34 @@ export function AnalysisTaskPanel(props: Props) {
               <option value="white">White</option>
             </select>
           </label>
-          {props.draft.strategy === "all_positions_two_stage" ? (
+          {swingSelected ? (
+            <fieldset>
+              <legend>Swing selection (enabled thresholds use OR)</legend>
+              <label>
+                Move actor
+                <select
+                  aria-label="Swing move actor"
+                  value={props.draft.moveActors}
+                  onChange={(event) => update({ moveActors: event.target.value as AnalysisMoveActorFilterDto })}
+                >
+                  <option value="both">Both</option>
+                  <option value="black">Black</option>
+                  <option value="white">White</option>
+                </select>
+              </label>
+              <label>
+                <input aria-label="Enable winrate swing threshold" type="checkbox" checked={props.draft.winrateChangeEnabled} onChange={(event) => update({ winrateChangeEnabled: event.target.checked })} />
+                Winrate change (percentage points)
+                <input aria-label="Winrate swing threshold" type="number" min="0.000001" step="any" value={props.draft.winrateChangeThreshold} onChange={(event) => update({ winrateChangeThreshold: event.target.value })} />
+              </label>
+              <label>
+                <input aria-label="Enable score swing threshold" type="checkbox" checked={props.draft.scoreChangeEnabled} onChange={(event) => update({ scoreChangeEnabled: event.target.checked })} />
+                Score change (points)
+                <input aria-label="Score swing threshold" type="number" min="0.000001" step="any" value={props.draft.scoreChangeThreshold} onChange={(event) => update({ scoreChangeThreshold: event.target.value })} />
+              </label>
+            </fieldset>
+          ) : null}
+          {!singleStage ? (
             <fieldset>
               <legend>Overview conditions (any enabled condition ends the search)</legend>
               <label>
@@ -161,7 +219,7 @@ export function AnalysisTaskPanel(props: Props) {
             </fieldset>
           ) : null}
           <fieldset>
-            <legend>{props.draft.strategy === "all_positions_two_stage" ? "Deep" : "Single-stage"} conditions (any enabled condition ends the search)</legend>
+            <legend>{singleStage ? "Single-stage" : "Deep"} conditions (any enabled condition ends the search)</legend>
             <label>
               <input
                 aria-label="Enable search time"
@@ -243,7 +301,14 @@ export function AnalysisTaskPanel(props: Props) {
         </div>
         {props.preview ? (
           <p role="status">
-            {props.preview.targets.length} targets
+            {props.preview.targets.length} requested targets
+            {props.preview.supporting_targets.length > 0
+              ? ` · ${props.preview.supporting_targets.length} supporting predecessor targets`
+              : ""}
+            {supportingFirst ? ` · supporting first ${formatTarget(supportingFirst)}` : ""}
+            {supportingLast && supportingLast !== supportingFirst
+              ? ` · supporting last ${formatTarget(supportingLast)}`
+              : ""}
             {first ? ` · first ${formatTarget(first)}` : ""}
             {last && last !== first ? ` · last ${formatTarget(last)}` : ""}
           </p>
@@ -252,9 +317,14 @@ export function AnalysisTaskPanel(props: Props) {
         {props.task ? (
           <p role="status" data-analysis-task-state={props.task.state}>
             {formatTaskStage(props.task.stage)} · {props.task.state}
-            {props.task.strategy === "all_positions_two_stage"
-              ? ` · overview ${props.task.overview_completed.length}/${requested} · deep ${completed}/${requested}`
-              : ` · ${completed}/${requested} completed`}
+            {props.task.strategy === "swing_selected_two_stage"
+              ? ` · overview ${props.task.overview_completed.length}/${overviewExpected} (requested ${requestedOverviewCompleted}/${requested}, supporting ${supportingOverviewCompleted}/${props.task.supporting.length}) · deep ${completed}/${deepExpected} (requested ${requestedDeepCompleted}/${requestedDeepTargets.length}, supporting ${supportingDeepCompleted}/${supportingDeepTargets.length})`
+              : props.task.strategy === "all_positions_two_stage"
+                ? ` · overview ${props.task.overview_completed.length}/${overviewExpected} · deep ${completed}/${deepExpected}`
+                : ` · ${completed}/${requested} completed`}
+            {props.task.swing_criteria
+              ? ` · ${formatSwingCriteria(props.task.swing_criteria)}`
+              : ""}
             {props.task.overview_conditions
               ? ` · overview conditions ${formatTaskConditions(props.task.overview_conditions)}`
               : ""}
@@ -295,4 +365,20 @@ function formatTaskConditions(conditions: AnalysisTaskDto["conditions"]): string
     enabled.push(`${conditions.leading_candidate_visits.value} leading candidate visits`);
   }
   return enabled.join(" OR ");
+}
+
+function formatSwingCriteria(criteria: NonNullable<AnalysisTaskDto["swing_criteria"]>): string {
+  const thresholds: string[] = [];
+  if (criteria.winrate_change_percentage_points.enabled) {
+    thresholds.push(`${criteria.winrate_change_percentage_points.value}pp winrate`);
+  }
+  if (criteria.score_change_points.enabled) {
+    thresholds.push(`${criteria.score_change_points.value} score`);
+  }
+  return `move actor ${criteria.move_actors} · swing ${thresholds.join(" OR ")}`;
+}
+
+function sameNodePath(left: { indices: number[] }, right: { indices: number[] }): boolean {
+  return left.indices.length === right.indices.length
+    && left.indices.every((index, offset) => index === right.indices[offset]);
 }

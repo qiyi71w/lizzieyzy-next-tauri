@@ -25,7 +25,7 @@ impl SgfAnalysisPayload {
             engine_name: engine_name.into(),
             visits: frame.visits,
             winrate_black: frame.winrate_black,
-            score_mean_black: Some(frame.score_mean_black),
+            score_mean_black: frame.score_mean_black,
             score_stdev: frame.score_stdev,
             pda: None,
             candidates: frame.candidates.clone(),
@@ -41,7 +41,7 @@ impl SgfAnalysisPayload {
             turn,
             visits: self.visits,
             winrate_black: self.winrate_black,
-            score_mean_black: self.score_mean_black.unwrap_or(0.0),
+            score_mean_black: self.score_mean_black,
             score_stdev: self.score_stdev,
             candidates: self.candidates.clone(),
             ownership: self.ownership.clone(),
@@ -367,7 +367,7 @@ fn format_detail_line(payload: &SgfAnalysisPayload, board_size: u8) -> String {
     let mut detail = payload
         .candidates
         .iter()
-        .map(|candidate| format_candidate(candidate, payload.score_mean_black.is_some(), board_size))
+        .map(|candidate| format_candidate(candidate, board_size))
         .collect::<Vec<_>>()
         .join(" info ");
     if let Some(ownership) = &payload.ownership {
@@ -385,7 +385,7 @@ fn format_detail_line(payload: &SgfAnalysisPayload, board_size: u8) -> String {
     detail
 }
 
-fn format_candidate(candidate: &CandidateMoveDto, kata: bool, board_size: u8) -> String {
+fn format_candidate(candidate: &CandidateMoveDto, board_size: u8) -> String {
     let mut body = format!(
         "move {} visits {} winrate {} prior {}",
         vertex_to_gtp(&candidate.vertex, board_size),
@@ -393,9 +393,7 @@ fn format_candidate(candidate: &CandidateMoveDto, kata: bool, board_size: u8) ->
         (candidate.winrate_black * 10_000.0).round() as i32,
         (candidate.policy_prior.unwrap_or(0.0) * 10_000.0).round() as i32
     );
-    if kata {
-        body.push_str(&format!(" scoreMean {:.2}", candidate.score_mean_black));
-    }
+    body.push_str(&format!(" scoreMean {:.2}", candidate.score_mean_black));
     body.push_str(" pv");
     let pv = if candidate.pv.is_empty() {
         vec![candidate.vertex.clone()]

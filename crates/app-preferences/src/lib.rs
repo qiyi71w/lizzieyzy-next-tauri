@@ -1,4 +1,4 @@
-use app_model::{AnalysisStageConditionsDto, ContinuousAnalysisBudgetDto};
+use app_model::{AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, ContinuousAnalysisBudgetDto};
 use serde::ser::Serialize as SerTrait;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const APP_PREFERENCES_FILE: &str = "lizzieyzy-next-app-preferences.json";
 pub const UNREADABLE_RECOVERY_MESSAGE: &str = "Unreadable preferences isolated; restored defaults.";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppPreferencesDto {
     #[serde(default = "default_continuous_analysis_enabled")]
@@ -32,6 +32,12 @@ pub struct AppPreferencesDto {
     pub task_overview_conditions: Option<AnalysisStageConditionsDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_deep_conditions: Option<AnalysisStageConditionsDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_swing_overview_conditions: Option<AnalysisStageConditionsDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_swing_deep_conditions: Option<AnalysisStageConditionsDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_swing_criteria: Option<AnalysisSwingCriteriaDto>,
     #[serde(default = "default_review_mode")]
     pub review_mode: String,
     #[serde(default = "default_board_theme")]
@@ -67,7 +73,7 @@ pub struct AppPreferencesRecoveryDto {
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppPreferencesLoadResultDto {
     pub preferences: AppPreferencesDto,
@@ -87,6 +93,9 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         task_single_stage_conditions: Some(default_task_single_stage_conditions(default_max_visits())),
         task_overview_conditions: Some(default_task_overview_conditions()),
         task_deep_conditions: Some(default_task_deep_conditions(default_max_visits())),
+        task_swing_overview_conditions: Some(default_task_overview_conditions()),
+        task_swing_deep_conditions: Some(default_task_swing_deep_conditions()),
+        task_swing_criteria: Some(AnalysisSwingCriteriaDto::default()),
         review_mode: default_review_mode(),
         board_theme: default_board_theme(),
         graph_perspective: default_graph_perspective(),
@@ -143,6 +152,15 @@ pub fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPrefe
         deep
     });
     preferences
+        .task_swing_overview_conditions
+        .get_or_insert_with(default_task_overview_conditions);
+    preferences
+        .task_swing_deep_conditions
+        .get_or_insert_with(default_task_swing_deep_conditions);
+    preferences
+        .task_swing_criteria
+        .get_or_insert_with(AnalysisSwingCriteriaDto::default);
+    preferences
 }
 
 pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String> {
@@ -161,7 +179,18 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
                         .is_some_and(|(overview, deep)| {
                             AnalysisStageConditionsDto::validate_all_positions_two_stage(overview, deep)
                                 .is_ok()
-                        });
+                        })
+                    && preferences
+                        .task_swing_overview_conditions
+                        .as_ref()
+                        .zip(preferences.task_swing_deep_conditions.as_ref())
+                        .is_some_and(|(overview, deep)| {
+                            overview.validate_single_stage().is_ok() && deep.validate_single_stage().is_ok()
+                        })
+                    && preferences
+                        .task_swing_criteria
+                        .as_ref()
+                        .is_some_and(|criteria| criteria.validate().is_ok());
                 if valid {
                     Ok(AppPreferencesLoadResultDto {
                         preferences,
@@ -194,6 +223,18 @@ pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPr
         .zip(preferences.task_deep_conditions.as_ref())
         .ok_or_else(|| "Both overview and deep task conditions are required.".to_string())?;
     AnalysisStageConditionsDto::validate_all_positions_two_stage(overview, deep)?;
+    let (swing_overview, swing_deep) = preferences
+        .task_swing_overview_conditions
+        .as_ref()
+        .zip(preferences.task_swing_deep_conditions.as_ref())
+        .ok_or_else(|| "Both swing overview and deep task conditions are required.".to_string())?;
+    swing_overview.validate_single_stage()?;
+    swing_deep.validate_single_stage()?;
+    preferences
+        .task_swing_criteria
+        .as_ref()
+        .ok_or_else(|| "Swing selection criteria are required.".to_string())?
+        .validate()?;
     let preferences = normalize_app_preferences(preferences);
     replace_json_file(path, &preferences)?;
     Ok(preferences)
@@ -334,6 +375,23 @@ fn default_task_deep_conditions(total_visits: u32) -> AnalysisStageConditionsDto
     }
 }
 
+fn default_task_swing_deep_conditions() -> AnalysisStageConditionsDto {
+    AnalysisStageConditionsDto {
+        time_seconds: app_model::AnalysisTaskLimitDto {
+            enabled: true,
+            value: 10,
+        },
+        total_visits: app_model::AnalysisTaskLimitDto {
+            enabled: false,
+            value: 800,
+        },
+        leading_candidate_visits: app_model::AnalysisTaskLimitDto {
+            enabled: false,
+            value: 500,
+        },
+    }
+}
+
 fn default_review_mode() -> String {
     "quick".to_string()
 }
@@ -431,6 +489,9 @@ mod tests {
             task_single_stage_conditions: Some(default_task_single_stage_conditions(200)),
             task_overview_conditions: Some(default_task_overview_conditions()),
             task_deep_conditions: Some(default_task_deep_conditions(800)),
+            task_swing_overview_conditions: Some(default_task_overview_conditions()),
+            task_swing_deep_conditions: Some(default_task_swing_deep_conditions()),
+            task_swing_criteria: Some(AnalysisSwingCriteriaDto::default()),
             review_mode: "deep".to_string(),
             board_theme: "high-contrast".to_string(),
             graph_perspective: "sideToPlay".to_string(),
@@ -467,6 +528,11 @@ mod tests {
         assert_eq!(loaded["taskOverviewConditions"], value["taskOverviewConditions"]);
         assert_eq!(loaded["taskDeepConditions"], value["taskDeepConditions"]);
         let durable = fs::read(&path).unwrap();
+        let mut invalid_swing = value.clone();
+        invalid_swing["taskSwingCriteria"]["winrate_change_percentage_points"]["enabled"] =
+            serde_json::json!(false);
+        assert!(save_to_path(&path, serde_json::from_value(invalid_swing).unwrap()).is_err());
+        assert_eq!(fs::read(&path).unwrap(), durable);
 
         value["taskDeepConditions"]["total_visits"]["value"] = serde_json::json!(499);
         assert!(save_to_path(&path, serde_json::from_value(value).unwrap()).is_err());
@@ -505,6 +571,14 @@ mod tests {
                 .value,
             900
         );
+        let swing_deep = migrated.preferences.task_swing_deep_conditions.as_ref().unwrap();
+        assert!(swing_deep.time_seconds.enabled);
+        assert_eq!(swing_deep.time_seconds.value, 10);
+        assert!(!swing_deep.total_visits.enabled);
+        assert_eq!(
+            migrated.preferences.task_swing_criteria,
+            Some(AnalysisSwingCriteriaDto::default())
+        );
 
         fs::write(&path, r#"{"continuousAnalysisEnabled":false,"defaultMaxVisits":32,"taskConditions":{"time_seconds":{"enabled":false,"value":10},"total_visits":{"enabled":true,"value":32},"leading_candidate_visits":{"enabled":false,"value":32}}}"#).unwrap();
         let migrated = load_from_path(&path).unwrap();
@@ -536,6 +610,9 @@ mod tests {
         assert!(serialized.get("taskSingleStageConditions").is_some());
         assert!(serialized.get("taskOverviewConditions").is_some());
         assert!(serialized.get("taskDeepConditions").is_some());
+        assert!(serialized.get("taskSwingOverviewConditions").is_some());
+        assert!(serialized.get("taskSwingDeepConditions").is_some());
+        assert!(serialized.get("taskSwingCriteria").is_some());
         fs::remove_dir_all(dir).unwrap();
     }
 

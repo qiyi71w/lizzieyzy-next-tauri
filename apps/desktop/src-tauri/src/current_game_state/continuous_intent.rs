@@ -363,7 +363,9 @@ fn all_positions_two_stage_pause_continue_controllable_engine_smoke() {
         interval: None,
         to_play: None,
     };
-    let preview = state.preview_analysis_scope(opened.generation, scope).unwrap();
+    let preview = state
+        .preview_analysis_scope(opened.generation, scope, None)
+        .unwrap();
     let conditions = |visits| AnalysisStageConditionsDto {
         time_seconds: AnalysisTaskLimitDto {
             enabled: false,
@@ -542,6 +544,244 @@ fn all_positions_two_stage_pause_continue_controllable_engine_smoke() {
     println!(
         "two-stage smoke: all overview targets completed at 32 visits before deep; deep Pause fenced the interrupted target; Continue used a fresh Job and completed both targets at 500 visits; Save/reopen retained comment and accepted analysis; recovery restored no runtime task."
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn swing_selected_two_stage_freezes_exact_paths_after_complete_overview() {
+    use app_model::{
+        AnalysisMoveActorFilterDto, AnalysisPositionIntervalDto, AnalysisScopeDto, AnalysisScopeModeDto,
+        AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisSwingThresholdDto,
+        AnalysisTaskLimitDto, AnalysisTaskStateDto,
+    };
+    let engine = task_fixture();
+    std::fs::write(engine.directory.join("budget-smoke"), "swing").unwrap();
+    std::fs::write(engine.directory.join("hold-deep"), "go").unwrap();
+    let state = CurrentGameState::default();
+    state.connect_analysis_manager(engine.manager.clone());
+    let opened = state.replace("(;SZ[9];B[dd];W[ee];B[ff])", None).unwrap();
+    engine.manager.start("test").unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    let run_id = loop {
+        if let app_model::ForegroundEngineLifecycleDto::Ready { run } = engine.manager.snapshot().lifecycle {
+            break run.run_id;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let scope = AnalysisScopeDto {
+        mode: AnalysisScopeModeDto::FirstChildMainline,
+        current_node: NodePath::default(),
+        branch_choices: Vec::new(),
+        interval: Some(AnalysisPositionIntervalDto { start: 1, end: 3 }),
+        to_play: None,
+    };
+    let criteria = AnalysisSwingCriteriaDto {
+        move_actors: AnalysisMoveActorFilterDto::Both,
+        winrate_change_percentage_points: AnalysisSwingThresholdDto {
+            enabled: true,
+            value: 10.0,
+        },
+        score_change_points: AnalysisSwingThresholdDto {
+            enabled: false,
+            value: 100.0,
+        },
+    };
+    let preview = state
+        .preview_analysis_scope(opened.generation, scope, Some(criteria.clone()))
+        .unwrap();
+    assert_eq!(
+        preview
+            .targets
+            .iter()
+            .map(|target| target.node_path.indices.clone())
+            .collect::<Vec<_>>(),
+        vec![vec![0], vec![0, 0], vec![0, 0, 0]]
+    );
+    assert_eq!(
+        preview
+            .supporting_targets
+            .iter()
+            .map(|target| target.node_path.indices.clone())
+            .collect::<Vec<_>>(),
+        vec![Vec::<u32>::new()]
+    );
+    assert_eq!(preview.swing_comparisons.len(), 3);
+    let overview = AnalysisStageConditionsDto {
+        time_seconds: AnalysisTaskLimitDto {
+            enabled: false,
+            value: 10,
+        },
+        total_visits: AnalysisTaskLimitDto {
+            enabled: true,
+            value: 32,
+        },
+        leading_candidate_visits: AnalysisTaskLimitDto {
+            enabled: false,
+            value: 32,
+        },
+    };
+    let deep = AnalysisStageConditionsDto {
+        time_seconds: AnalysisTaskLimitDto {
+            enabled: true,
+            value: 10,
+        },
+        total_visits: AnalysisTaskLimitDto {
+            enabled: false,
+            value: 800,
+        },
+        leading_candidate_visits: AnalysisTaskLimitDto {
+            enabled: false,
+            value: 500,
+        },
+    };
+    let started = state
+        .start_swing_analysis_task(&engine.manager, run_id, preview, overview, deep)
+        .unwrap();
+    let deep_searching = wait_live_task_stage(
+        &engine,
+        app_model::AnalysisTaskStageDto::Deep,
+        AnalysisTaskStateDto::Searching,
+    );
+    let frozen = vec![
+        NodePath::default(),
+        NodePath { indices: vec![0] },
+        NodePath { indices: vec![0, 0] },
+        NodePath {
+            indices: vec![0, 0, 0],
+        },
+    ];
+    assert_eq!(deep_searching.selected_for_deep.as_ref(), Some(&frozen));
+    let pausing = state
+        .pause_analysis_task(&engine.manager, &started.run_id, &started.task_id)
+        .unwrap();
+    assert_eq!(pausing.selected_for_deep.as_ref(), Some(&frozen));
+    std::fs::write(engine.directory.join("cancel-final"), "go").unwrap();
+    let paused = wait_live_task_stage(
+        &engine,
+        app_model::AnalysisTaskStageDto::Deep,
+        AnalysisTaskStateDto::Paused,
+    );
+    assert_eq!(paused.selected_for_deep.as_ref(), Some(&frozen));
+    let continued = state
+        .continue_analysis_task(&engine.manager, &started.run_id, &started.task_id)
+        .unwrap();
+    assert_eq!(continued.task_id, started.task_id);
+    assert_ne!(continued.job_id, started.job_id);
+    assert_eq!(continued.selected_for_deep.as_ref(), Some(&frozen));
+    std::fs::remove_file(engine.directory.join("hold-deep")).unwrap();
+
+    let completed = wait_live_task(&engine, AnalysisTaskStateDto::Completed);
+    assert_eq!(completed.task_id, started.task_id);
+    assert_eq!(
+        completed.overview_completed,
+        vec![
+            NodePath { indices: vec![0] },
+            NodePath { indices: vec![0, 0] },
+            NodePath {
+                indices: vec![0, 0, 0]
+            },
+            NodePath::default(),
+        ]
+    );
+    assert_eq!(completed.selected_for_deep.as_ref(), Some(&frozen));
+    assert_eq!(completed.completed, frozen);
+    assert_eq!(completed.overview_summaries[1].frame.score_mean_black, None);
+    assert_eq!(completed.reason, None);
+    let queries = std::fs::read_to_string(engine.directory.join("queries.jsonl")).unwrap();
+    assert_eq!(queries.lines().count(), 9);
+}
+
+#[cfg(unix)]
+#[test]
+fn swing_selected_missing_required_score_fails_without_fake_deep_search() {
+    use app_model::{
+        AnalysisMoveActorFilterDto, AnalysisPositionIntervalDto, AnalysisScopeDto, AnalysisScopeModeDto,
+        AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisSwingThresholdDto,
+        AnalysisTaskStateDto, EngineBackend, EngineCapabilitySnapshotDto, EngineFailureKind,
+    };
+    let engine = task_fixture();
+    std::fs::write(engine.directory.join("budget-smoke"), "swing_zero").unwrap();
+    let state = CurrentGameState::default();
+    state.connect_analysis_manager(engine.manager.clone());
+    let opened = state.replace("(;SZ[9];B[dd])", None).unwrap();
+    engine.manager.start("test").unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    let run_id = loop {
+        if let app_model::ForegroundEngineLifecycleDto::Ready { run } = engine.manager.snapshot().lifecycle {
+            break run.run_id;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let scope = AnalysisScopeDto {
+        mode: AnalysisScopeModeDto::FirstChildMainline,
+        current_node: NodePath::default(),
+        branch_choices: Vec::new(),
+        interval: Some(AnalysisPositionIntervalDto { start: 1, end: 1 }),
+        to_play: None,
+    };
+    let criteria = AnalysisSwingCriteriaDto {
+        move_actors: AnalysisMoveActorFilterDto::Both,
+        winrate_change_percentage_points: AnalysisSwingThresholdDto {
+            enabled: false,
+            value: 10.0,
+        },
+        score_change_points: AnalysisSwingThresholdDto {
+            enabled: true,
+            value: 3.0,
+        },
+    };
+    let preview = state
+        .preview_analysis_scope(opened.generation, scope, Some(criteria))
+        .unwrap();
+    engine
+        .manager
+        .set_capability_snapshot_for_tests(EngineCapabilitySnapshotDto {
+            adapter_kind: EngineBackend::KataGoAnalysis,
+            selected_node_analysis: true,
+            whole_game_analysis: true,
+            root_score: false,
+            protocol_cancel: true,
+        });
+    let unsupported = state
+        .start_swing_analysis_task(
+            &engine.manager,
+            run_id.clone(),
+            preview.clone(),
+            AnalysisStageConditionsDto::default(),
+            AnalysisStageConditionsDto::default(),
+        )
+        .unwrap_err();
+    assert_eq!(unsupported.kind, EngineFailureKind::UnsupportedCapability);
+    engine
+        .manager
+        .set_capability_snapshot_for_tests(EngineCapabilitySnapshotDto {
+            adapter_kind: EngineBackend::KataGoAnalysis,
+            selected_node_analysis: true,
+            whole_game_analysis: true,
+            root_score: true,
+            protocol_cancel: true,
+        });
+    let started = state
+        .start_swing_analysis_task(
+            &engine.manager,
+            run_id,
+            preview,
+            AnalysisStageConditionsDto::default(),
+            AnalysisStageConditionsDto::default(),
+        )
+        .unwrap();
+    let failed = wait_live_task(&engine, AnalysisTaskStateDto::Failed);
+    assert_eq!(failed.task_id, started.task_id);
+    assert_eq!(failed.selected_for_deep, None);
+    assert!(failed.completed.is_empty());
+    assert!(failed
+        .reason
+        .as_deref()
+        .is_some_and(|reason| reason.contains("required root score")));
+    let queries = std::fs::read_to_string(engine.directory.join("queries.jsonl")).unwrap();
+    assert_eq!(queries.lines().count(), 1);
 }
 
 #[cfg(unix)]
@@ -909,7 +1149,9 @@ fn explicit_analysis_scopes_controllable_engine_smoke() {
             interval,
             to_play,
         };
-        let preview = state.preview_analysis_scope(opened.generation, scope).unwrap();
+        let preview = state
+            .preview_analysis_scope(opened.generation, scope, None)
+            .unwrap();
         let mut stage_conditions = conditions.clone();
         if expected == vec![Vec::<u32>::new()] {
             stage_conditions.total_visits.value = 1;
@@ -1238,6 +1480,7 @@ fn task_search_budgets_controllable_engine_smoke() {
                     interval: None,
                     to_play: None,
                 },
+                None,
             )
             .unwrap();
         let task = state
