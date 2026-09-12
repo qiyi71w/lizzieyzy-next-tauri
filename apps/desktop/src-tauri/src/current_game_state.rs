@@ -226,6 +226,7 @@ impl CurrentGameState {
             selected_path,
             snapshot,
             generation: holder.generation,
+            snapshot_seq: holder.snapshot_seq,
             dirty: holder.dirty,
             native_path: holder.native_path.clone(),
         })
@@ -280,12 +281,13 @@ impl CurrentGameState {
     pub fn select_path(&self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
         let changed = holder.selected_path != path;
-        let result = holder.select_path(path)?;
+        let mut result = holder.select_path(path)?;
         if changed {
             holder.bump_snapshot();
             self.note_recovery(&holder);
         }
         self.follow_continuous_position(&mut holder);
+        result.snapshot_seq = holder.snapshot_seq;
         Ok(result)
     }
 
@@ -445,6 +447,7 @@ impl CurrentGameHolder {
             selected_path: snapshot.path.clone(),
             snapshot,
             generation: self.generation,
+            snapshot_seq: self.snapshot_seq,
             dirty: self.dirty,
             native_path: self.native_path.clone(),
         })
@@ -462,6 +465,7 @@ impl CurrentGameHolder {
             selected_path: path,
             snapshot,
             generation: self.generation,
+            snapshot_seq: self.snapshot_seq,
             dirty: self.dirty,
             native_path: self.native_path.clone(),
         })
@@ -481,7 +485,6 @@ impl CurrentGameHolder {
             (snapshot, document.tree()?, changed)
         };
         if changed {
-            self.generation += 1;
             self.mark_dirty();
             self.selected_path = path.clone();
             self.bump_snapshot();
@@ -491,6 +494,7 @@ impl CurrentGameHolder {
             selected_path: path,
             snapshot,
             generation: self.generation,
+            snapshot_seq: self.snapshot_seq,
             dirty: self.dirty,
             native_path: self.native_path.clone(),
         })
@@ -511,6 +515,7 @@ impl CurrentGameHolder {
             selected_path,
             snapshot,
             generation: self.generation,
+            snapshot_seq: self.snapshot_seq,
             dirty: self.dirty,
             native_path: self.native_path.clone(),
         })
@@ -546,6 +551,7 @@ impl CurrentGameHolder {
             selected_path: path,
             snapshot,
             generation: self.generation,
+            snapshot_seq: self.snapshot_seq,
             dirty: self.dirty,
             native_path: self.native_path.clone(),
         })
@@ -915,7 +921,6 @@ mod current_game_comment_edit {
         assert_eq!(edited.snapshot.path.indices, second_sibling.indices);
         assert_eq!(edited.snapshot.personal_comment, "sibling edited");
         assert!(edited.snapshot.generated_information.is_none());
-        assert_eq!(edited.generation, opened.generation + 1);
         assert!(edited.dirty);
         assert_eq!(edited.native_path, opened.native_path);
         assert!(state.serialize().unwrap().contains("C[sibling edited]"));
@@ -930,7 +935,6 @@ mod current_game_comment_edit {
         let noop = state
             .set_personal_comment(second_sibling.clone(), "sibling edited".to_string())
             .unwrap();
-        assert_eq!(noop.generation, edited.generation);
         assert_eq!(noop.dirty, edited.dirty);
         assert_eq!(noop.snapshot.personal_comment, "sibling edited");
         assert_eq!(state.inspect(), before_noop);
@@ -942,7 +946,6 @@ mod current_game_comment_edit {
             .unwrap();
         assert_eq!(root_edit.selected_path.indices, root.indices);
         assert_eq!(root_edit.snapshot.personal_comment, "root edited");
-        assert_eq!(root_edit.generation, edited.generation + 1);
         assert!(root_edit.dirty);
 
         let move_edit = state
@@ -950,7 +953,6 @@ mod current_game_comment_edit {
             .unwrap();
         assert_eq!(move_edit.selected_path.indices, move_node.indices);
         assert_eq!(move_edit.snapshot.personal_comment, "");
-        assert_eq!(move_edit.generation, root_edit.generation + 1);
 
         let before_invalid = state.inspect();
         let error = state

@@ -101,6 +101,7 @@ const initialGame: CurrentGameResultDto = {
   selected_path: { indices: [] },
   snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "" },
   generation: 1,
+  snapshot_seq: 1,
   dirty: false,
   native_path: null
 };
@@ -403,6 +404,7 @@ async function publishContinuousProgress(visits: number, phase: "searching" | "t
       frame,
       current_game: {
         ...initialGame,
+        snapshot_seq: visits,
         dirty: true,
         snapshot: { ...initialGame.snapshot, primary_analysis: { ...frame, job_id: "00000000-0000-0000-0000-000000000000" } }
       }
@@ -515,6 +517,37 @@ describe("authoritative finite selected-node completion", () => {
 });
 
 describe("authoritative continuous selected-node analysis", () => {
+  it("keeps newer comments and saved state when the same continuous job delivers an older snapshot", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await publishContinuousProgress(12);
+    const commented: CurrentGameResultDto = {
+      ...initialGame, snapshot_seq: 13, dirty: true,
+      snapshot: { ...initialGame.snapshot, personal_comment: "keep this note", primary_analysis: continuousFrame(12) }
+    };
+    backend.setCurrentGamePersonalComment.mockResolvedValue(commented);
+    const editor = host.querySelector('textarea[aria-label="个人评论"]') as HTMLTextAreaElement;
+    act(() => {
+      editor.focus();
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(editor, "keep this note");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      editor.blur();
+      await backend.setCurrentGamePersonalComment.mock.results.at(-1)?.value;
+    });
+    backend.saveCurrentGame.mockResolvedValue({ ...commented, snapshot_seq: 14, dirty: false, native_path: "/tmp/comment.sgf" });
+    await act(async () => {
+      (host.querySelector('button[aria-label="保存"]') as HTMLButtonElement).click();
+      await backend.saveCurrentGame.mock.results.at(-1)?.value;
+    });
+    await publishContinuousProgress(12);
+    expect(editor.value).toBe("keep this note");
+    expect(host.querySelector(".doc-name")?.textContent).not.toContain("*");
+    expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("12");
+  });
+
   it("adopts an automatic job without issuing browser-side work and renders waiting, searching, and limited phases", async () => {
     const host = await renderApp();
     await readyEngine(host);
@@ -788,6 +821,7 @@ describe("authoritative continuous selected-node analysis", () => {
         generation: 1, node_path: { indices: [] }, outcome: "progress", frame: laterContinuousFrame,
         current_game: {
           ...initialGame,
+          snapshot_seq: 81,
           dirty: true,
           snapshot: { ...initialGame.snapshot, primary_analysis: { ...laterContinuousFrame, job_id: "00000000-0000-0000-0000-000000000000" } }
         }

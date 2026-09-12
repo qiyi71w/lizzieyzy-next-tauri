@@ -130,7 +130,10 @@ pub struct CurrentGameResultDto {
     pub tree: SgfTreeNodeDto,
     pub selected_path: NodePath,
     pub snapshot: SelectedNodeSnapshotDto,
+    /// Semantic position/tree identity; comments, navigation and Save preserve it.
     pub generation: u64,
+    /// Document snapshot ordering within this semantic identity, including Save state.
+    pub snapshot_seq: u64,
     pub dirty: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_path: Option<String>,
@@ -759,6 +762,7 @@ mod current_game_wire {
                 secondary_analysis: None,
             },
             generation: 1,
+            snapshot_seq: 1,
             dirty: false,
             native_path: Some("/tmp/game.sgf".to_string()),
         };

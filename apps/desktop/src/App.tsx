@@ -745,6 +745,11 @@ export function App() {
 
 
 
+  function isCurrentGameSnapshot(result: CurrentGameResultDto): boolean {
+    const current = currentGameRef.current;
+    return current !== null && result.generation === current.generation && result.snapshot_seq >= current.snapshot_seq;
+  }
+
   function adoptCurrentGame(result: CurrentGameResultDto) {
     documentGenerationRef.current = result.generation;
     currentGameRef.current = result;
@@ -756,10 +761,14 @@ export function App() {
 
   async function refreshCurrentGameAfterAttach() {
     const game = currentGameRef.current;
-    if (!nativeRuntime || !game) return;
+    if (!nativeRuntime || !game || departurePendingRef.current || navigatingRef.current) return;
+    const requestToken = activeRequestTokenRef.current;
     try {
       const refreshed = await selectCurrentGameNode(game.selected_path);
-      if (!refreshed || !isCurrentDocumentGeneration(refreshed.generation)) return;
+      if (!refreshed || departurePendingRef.current || navigatingRef.current
+        || requestToken !== activeRequestTokenRef.current
+        || !samePath(game.selected_path, currentGameRef.current?.selected_path ?? { indices: [] })
+        || !isCurrentGameSnapshot(refreshed)) return;
       adoptCurrentGame(refreshed);
       setDirty(refreshed.dirty);
     } catch {
@@ -1212,6 +1221,7 @@ export function App() {
         setMessage("Save cancelled.");
         return;
       }
+      if (!isCurrentGameSnapshot(saved)) return;
       adoptCurrentGame(saved);
       setCurrentFilePath(saved.native_path ?? null);
       setDirty(saved.dirty);
@@ -1304,7 +1314,7 @@ export function App() {
     if (!(["queued", "searching", "time_limited", "visits_limited"] as ContinuousAnalysisPhaseDto[]).includes(engineSnapshotRef.current.continuous.phase)) return;
     if (departurePendingRef.current || navigatingRef.current) return;
     const refreshed = job.current_game;
-    if (!refreshed || !isCurrentDocumentGeneration(refreshed.generation) || !samePath(refreshed.selected_path, job.node_path)) return;
+    if (!refreshed || !isCurrentGameSnapshot(refreshed) || !samePath(refreshed.selected_path, job.node_path)) return;
     const frame = refreshed.snapshot.primary_analysis;
     if (!frame || frame.visits === 0 || frame.candidates.length === 0) return;
     adoptCurrentGame(refreshed);
@@ -1635,20 +1645,17 @@ export function App() {
       return;
     }
     if (comment === currentGame.snapshot.personal_comment) return;
-    const previousGeneration = currentGame.generation;
     const editedPath = currentGame.selected_path;
     try {
       const result = await setCurrentGamePersonalComment(editedPath, comment);
-      documentGenerationRef.current = result.generation;
+      if (!isCurrentGameSnapshot(result)) return;
       const latestPath = pendingSelectedPathRef.current ?? currentGameRef.current?.selected_path ?? editedPath;
       const stillOnEditedNode = samePath(latestPath, editedPath);
-      setCurrentGame((prev) => {
-        if (stillOnEditedNode || prev === null) return result;
-        return {
-          ...result,
-          selected_path: prev.selected_path,
-          snapshot: prev.snapshot
-        };
+      const previous = currentGameRef.current;
+      adoptCurrentGame(stillOnEditedNode || previous === null ? result : {
+        ...result,
+        selected_path: previous.selected_path,
+        snapshot: previous.snapshot
       });
       if (stillOnEditedNode) {
         setChosenChildren((prev) => rememberChosenChildren(prev, result.selected_path));
@@ -1656,11 +1663,6 @@ export function App() {
         setSelectedCandidateIndex(null);
       }
       setDirty(result.dirty);
-      if (result.generation === previousGeneration) return;
-      await abandonAnalysisSessions();
-      const artifacts = await artifactsFromCurrentGame();
-      setGame(artifacts.projection);
-      clearReviewData();
       setMessage("已更新选中节点的个人评论。");
     } catch (error) {
       setMessage(`评论更新失败: ${errorMessage(error)}`);
@@ -1678,23 +1680,18 @@ export function App() {
     navigatingRef.current = true;
     try {
       while (pendingSelectedPathRef.current) {
-        const requestedPath = pendingSelectedPathRef.current;
+        const requestedPath: NodePath = pendingSelectedPathRef.current;
         pendingSelectedPathRef.current = null;
         try {
           const result = await selectCurrentGameNode(requestedPath);
-          documentGenerationRef.current = Math.max(documentGenerationRef.current, result.generation);
-          setCurrentGame((previous) => {
-            if (previous !== null && previous.generation > result.generation) {
-              return { ...previous, selected_path: result.selected_path, snapshot: result.snapshot };
-            }
-            return result;
-          });
-          currentGameRef.current = {
-            ...(currentGameRef.current ?? result),
-            selected_path: result.selected_path,
-            snapshot: result.snapshot,
-            generation: Math.max(currentGameRef.current?.generation ?? 0, result.generation)
-          };
+          const current = currentGameRef.current;
+          if (!current || result.generation < current.generation) continue;
+          if (result.generation === current.generation && result.snapshot_seq < current.snapshot_seq) {
+            // Keep the latest cursor intent, but obtain its snapshot after the accepted edit/Save.
+            pendingSelectedPathRef.current ??= requestedPath;
+            continue;
+          }
+          adoptCurrentGame(result);
           setChosenChildren((previous) => rememberChosenChildren(previous, result.selected_path));
           if (result.snapshot.primary_analysis) presentCurrentGameAnalysis(result);
           else {

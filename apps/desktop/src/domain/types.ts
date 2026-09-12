@@ -30,7 +30,9 @@ export type CurrentGameResultDto = {
   tree: SgfTreeNodeDto;
   selected_path: NodePath;
   snapshot: SelectedNodeSnapshotDto;
+  /** Semantic position/tree identity; comments, navigation and Save preserve it. */
   generation: number;
+  snapshot_seq: number;
   dirty: boolean;
   native_path?: string | null;
 };

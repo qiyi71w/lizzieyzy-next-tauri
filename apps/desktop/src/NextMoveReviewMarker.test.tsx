@@ -167,6 +167,7 @@ function gameAt(path: NodePath): CurrentGameResultDto {
       primary_analysis: snapshotAnalysis
     },
     generation: 1,
+    snapshot_seq: 1,
     dirty: false,
     native_path: null
   };

@@ -74,6 +74,14 @@ for line in sys.stdin:
             time.sleep(0.005)
         print(json.dumps(dict(id=q["terminateId"], isDuringSearch=False, noResults=True)), flush=True)
     else:
+        if q.get("maxVisits", 0) == 32:
+            pathlib.Path("whole-started").touch()
+            while not pathlib.Path("whole-release").exists():
+                time.sleep(0.005)
+            print(json.dumps(dict(id=q["id"], isDuringSearch=False, turnNumber=0,
+                rootInfo=dict(visits=32, winrate=0.6, scoreMean=2.5),
+                moveInfos=[dict(move="E5", visits=32, winrate=0.6, scoreMean=2.5)])), flush=True)
+            continue
         for visits in [8,16]:
             print(json.dumps(dict(id=q["id"], isDuringSearch=True, turnNumber=0,
                 rootInfo=dict(visits=visits, winrate=0.6, scoreMean=2.5),
@@ -129,6 +137,90 @@ impl Drop for LiveFixture {
         let _ = self.manager.teardown();
         let _ = std::fs::remove_dir_all(&self.directory);
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn whole_game_comment_save_controllable_engine_smoke() {
+    let engine = LiveFixture::new();
+    let state = CurrentGameState::default();
+    state.connect_analysis_manager(engine.manager.clone());
+    let opened = state.replace("(;SZ[9];B[dd])", None).unwrap();
+    engine.manager.start("test").unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    let run_id = loop {
+        if let app_model::ForegroundEngineLifecycleDto::Ready { run } = engine.manager.snapshot().lifecycle {
+            break run.run_id;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let admission = state.admit_whole_game(opened.generation).unwrap();
+    let job = engine
+        .manager
+        .start_whole_game_analysis(engine_manager::WholeGameJobRequest {
+            run_id: run_id.clone(),
+            generation: admission.generation,
+            work_items: crate::whole_game_work_items(&admission, 32, &run_id).unwrap(),
+        })
+        .unwrap();
+    while !engine.directory.join("whole-started").exists() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    state
+        .set_personal_comment(opened.selected_path.clone(), "live whole-game note".into())
+        .unwrap();
+    let target = engine.directory.join("review.sgf");
+    assert!(
+        !state
+            .save_to_path(
+                target.to_string_lossy().into_owned(),
+                opened.selected_path.clone()
+            )
+            .unwrap()
+            .dirty
+    );
+    std::fs::write(engine.directory.join("whole-release"), "").unwrap();
+    let mut attached = 0;
+    loop {
+        let event = engine
+            .events
+            .recv_timeout(std::time::Duration::from_secs(4))
+            .unwrap();
+        if let app_model::ForegroundEngineEventDto::Job { job: event } = event {
+            if event.job_id != job.job_id {
+                continue;
+            }
+            if let Some(result) = state.attach_from_job_event(&event) {
+                assert!(result.dirty);
+                attached += 1;
+            }
+            if event.outcome == app_model::AnalysisJobOutcomeDto::Completed {
+                break;
+            }
+            assert!(!matches!(
+                event.outcome,
+                app_model::AnalysisJobOutcomeDto::Failed | app_model::AnalysisJobOutcomeDto::Timeout
+            ));
+        }
+    }
+    assert_eq!(attached, 2);
+    state
+        .save_to_path(
+            target.to_string_lossy().into_owned(),
+            opened.selected_path.clone(),
+        )
+        .unwrap();
+    let reopened = CurrentSgfDocument::open(&std::fs::read_to_string(target).unwrap()).unwrap();
+    assert_eq!(
+        reopened.snapshot(&opened.selected_path).unwrap().personal_comment,
+        "live whole-game note"
+    );
+    for node in reopened.first_child_mainline_snapshots().unwrap() {
+        assert_eq!(node.primary_analysis.unwrap().visits, 32);
+    }
+    println!("whole-game smoke: same Job attached both nodes across comment/Save; SGF reopened with note and results");
 }
 
 #[cfg(unix)]

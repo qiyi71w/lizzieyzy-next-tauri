@@ -136,6 +136,7 @@ impl CurrentGameState {
             selected_path: envelope.selected_path,
             snapshot,
             generation: holder.generation,
+            snapshot_seq: holder.snapshot_seq,
             dirty: holder.dirty,
             native_path: holder.native_path.clone(),
         })

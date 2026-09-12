@@ -158,6 +158,7 @@ function gameAt(path: NodePath): CurrentGameResultDto {
       personal_comment: ""
     },
     generation: 1,
+    snapshot_seq: 1,
     dirty: false,
     native_path: null
   };

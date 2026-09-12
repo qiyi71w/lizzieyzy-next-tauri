@@ -8,6 +8,7 @@
 - Added manual continuous current-node analysis with real KataGo progress, fixed 600-second search budgets, shared-Run queue liveness, target-final cancellation and bounded Run-failure cleanup. Accepted snapshots remain available to ordinary SGF Save and current-game recovery.
 - Added durable default-on continuous-analysis intent, manager-owned latest-node following, and contextual Start/Stop/Resume with limit, finite-job, error and document-departure inhibition.
 - Added durable independent continuous time/visits budgets and empty-board stopping, with explicit limit causes, retained results, fresh-budget Resume and write-before-replacement safety.
+- Personal comments preserve active analysis admission. Document snapshot ordering protects newer annotations and Save state from delayed analysis events.
 
 ### 中文
 
@@ -15,6 +16,7 @@
 - 新增手动连续当前节点分析：接入真实 KataGo 进度、固定 600 秒搜索预算、共享 Run 排队保活、目标 final 取消与有界故障清理；已接纳快照可普通保存到 SGF，并纳入当前棋谱恢复。
 - 连续分析意图默认开启并持久化；由 manager 跟随最新节点，统一开始/停止/继续动作，并保留到限、有限请求、错误及离开棋谱后的自动工作抑制。
 - 连续分析支持独立持久化的时间/visits 预算及空棋盘停止；显示到限原因、保留结果，继续时创建新预算，设置落盘成功后才替换搜索。
+- 个人评论保留正在运行的分析准入；文档快照排序防止延迟分析事件覆盖新批注与保存状态。
 
 ## [0.1.0] - 2026-05-01
 
