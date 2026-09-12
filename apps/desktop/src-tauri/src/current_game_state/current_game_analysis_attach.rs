@@ -390,7 +390,7 @@ fn continuous_progress_updates_same_node_and_save_reopens_latest_snapshot() {
         ))
         .unwrap();
     let mut policy_frame = projectable_frame(250, 4, 4);
-    let mut policy = vec![0.5 / 25.0; 26];
+    let mut policy = vec![0.5 / 361.0; 362];
     policy[0] = 0.5;
     policy_frame.policy = Some(policy);
     let second = state
