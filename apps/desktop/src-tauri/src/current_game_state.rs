@@ -321,6 +321,34 @@ impl CurrentGameState {
         )
     }
 
+    pub fn pause_analysis_task(
+        &self,
+        manager: &engine_manager::ForegroundEngineManager,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
+        // The holder lock orders Pause against attachment of already queued events.
+        let mut holder = self.holder.lock().expect("current game state");
+        let task = manager.pause_analysis_task(run_id, task_id)?;
+        holder
+            .closed_jobs
+            .insert((task.run_id.clone(), task.job_id.clone()));
+        Ok(task)
+    }
+
+    pub fn continue_analysis_task(
+        &self,
+        manager: &engine_manager::ForegroundEngineManager,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
+        let holder = self.holder.lock().expect("current game state");
+        holder.ensure_editable().map_err(|error| {
+            crate::job_failure(run_id, app_model::EngineFailureKind::InvalidState, error.message)
+        })?;
+        manager.continue_analysis_task(run_id, task_id, holder.generation)
+    }
+
     pub fn admit_selected_node(
         &self,
         generation: u64,

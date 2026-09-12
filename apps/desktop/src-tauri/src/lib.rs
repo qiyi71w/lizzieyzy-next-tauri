@@ -742,6 +742,26 @@ fn analysis_task_snapshot(manager: State<'_, ForegroundEngineManager>) -> Option
 }
 
 #[tauri::command]
+fn pause_analysis_task(
+    manager: State<'_, ForegroundEngineManager>,
+    current_game: State<'_, CurrentGameState>,
+    run_id: String,
+    task_id: String,
+) -> Result<app_model::AnalysisTaskDto, EngineFailureDto> {
+    current_game.pause_analysis_task(&manager, &run_id, &task_id)
+}
+
+#[tauri::command]
+fn continue_analysis_task(
+    manager: State<'_, ForegroundEngineManager>,
+    current_game: State<'_, CurrentGameState>,
+    run_id: String,
+    task_id: String,
+) -> Result<app_model::AnalysisTaskDto, EngineFailureDto> {
+    current_game.continue_analysis_task(&manager, &run_id, &task_id)
+}
+
+#[tauri::command]
 fn katago_cancel_analysis(
     manager: State<'_, ForegroundEngineManager>,
     current_game: State<'_, CurrentGameState>,
@@ -1028,6 +1048,8 @@ pub fn run() {
             preview_analysis_scope,
             start_analysis_task,
             analysis_task_snapshot,
+            pause_analysis_task,
+            continue_analysis_task,
             katago_cancel_analysis,
             foreground_engine_snapshot,
             foreground_engine_start,
@@ -1194,7 +1216,6 @@ for line in sys.stdin:
         assert_eq!(items[0].query.rules, "japanese");
         assert_eq!(items[1].query.rules, "japanese");
     }
-
 
     fn registered_tauri_commands(source: &str) -> Vec<&str> {
         let list = source

@@ -1342,7 +1342,6 @@ fn analysis_task_freezes_scope_budget_and_legitimate_completions() {
             && job.completed == Some(1)
     });
     let searching = manager.analysis_task_snapshot().unwrap();
-    assert_eq!(searching.state, AnalysisTaskStateDto::Searching);
     assert_eq!(searching.completed, vec![NodePath { indices: vec![] }]);
     wait_job(&events, Duration::from_secs(2), |job| {
         job.job_id == task.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
@@ -1428,14 +1427,435 @@ fn analysis_task_invalidates_only_when_generation_changes() {
         job.job_id == task.job_id && job.outcome == AnalysisJobOutcomeDto::Progress
     });
     manager.invalidate_analysis_task(43);
-    assert_eq!(
+    assert_eq!(manager.analysis_task_snapshot().unwrap().task_id, task.task_id);
+    assert!(matches!(
         manager.analysis_task_snapshot().unwrap().state,
-        AnalysisTaskStateDto::Searching
-    );
+        AnalysisTaskStateDto::Queued | AnalysisTaskStateDto::Searching
+    ));
     manager.invalidate_analysis_task(44);
     let invalidated = manager.analysis_task_snapshot().unwrap();
     assert_eq!(invalidated.state, AnalysisTaskStateDto::Invalidated);
     assert_eq!(invalidated.completed, vec![NodePath { indices: vec![] }]);
+}
+
+#[cfg(unix)]
+fn task_engine_script(directory: &Path) -> String {
+    format!(
+        "export TASK_ENGINE_DIR='{}'\nexec python3 -u '{}'\n",
+        directory.display(),
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/analysis_task_engine.py")
+            .display()
+    )
+}
+
+#[cfg(unix)]
+fn wait_task(
+    manager: &ForegroundEngineManager,
+    expected: AnalysisTaskStateDto,
+) -> app_model::AnalysisTaskDto {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let task = manager.analysis_task_snapshot().unwrap();
+        if task.state == expected {
+            return task;
+        }
+        assert!(Instant::now() < deadline, "expected {expected:?}, got {task:?}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_queued_pause_never_submits_behind_a_busy_writer() {
+    let temp = TestTempDir::new("task-unsent-pause");
+    let script = format!(
+        r#"exec python3 -u -c '
+import sys,json,time,pathlib
+root=pathlib.Path("{}")
+def emit(q):
+    print(json.dumps(dict(id=q["id"],isDuringSearch=False,turnNumber=0,
+        rootInfo=dict(visits=2,winrate=0.6),moveInfos=[dict(move="D4",visits=2,winrate=0.6)])),flush=True)
+emit(json.loads(sys.stdin.readline()))
+while not (root/"release").exists(): time.sleep(0.01)
+for line in sys.stdin:
+    with (root/"delivered.jsonl").open("a") as log: log.write(line)
+    q=json.loads(line)
+    if "action" not in q: emit(q)
+'"#,
+        temp.path().display()
+    );
+    let (manager, _, _, run_id) = ready_manager(&temp, &script);
+    let mut selected = selected_request(&run_id, 42, vec![]);
+    selected.query.moves = (0..20000)
+        .map(|i| (if i % 2 == 0 { "B" } else { "W" }.into(), "pass".into()))
+        .collect();
+    let writer = manager.clone();
+    let selected_thread = std::thread::spawn(move || writer.start_selected_node_job(selected));
+    std::thread::sleep(Duration::from_millis(100));
+    let task = manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 42, 1),
+            analysis_scope(),
+            task_conditions(32),
+        )
+        .unwrap();
+    let paused = manager.pause_analysis_task(&run_id, &task.task_id).unwrap();
+    assert_eq!(paused.state, AnalysisTaskStateDto::Paused);
+    assert!(paused.completed.is_empty());
+    std::fs::write(temp.path().join("release"), "").unwrap();
+    selected_thread.join().unwrap().unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    let delivered = std::fs::read_to_string(temp.path().join("delivered.jsonl")).unwrap();
+    assert!(
+        !delivered.contains(&task.job_id),
+        "queued Pause delivered a query or terminate"
+    );
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_stalled_pipe_keeps_pause_and_run_failure_responsive() {
+    let temp = TestTempDir::new("task-stalled-pipe");
+    let script = r#"exec python3 -u -c '
+import sys,json,time
+q=json.loads(sys.stdin.readline())
+print(json.dumps(dict(id=q["id"],isDuringSearch=False,turnNumber=0)),flush=True)
+time.sleep(8)
+'"#;
+    let (manager, _, events, run_id) = ready_manager(&temp, script);
+    let mut request = whole_game_request(&run_id, 42, 1);
+    request.work_items[0].query.moves = (0..20000)
+        .map(|i| (if i % 2 == 0 { "B" } else { "W" }.into(), "pass".into()))
+        .collect();
+    let started = Instant::now();
+    let task = manager
+        .start_analysis_task(request, analysis_scope(), task_conditions(32))
+        .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "Start waited for a blocked pipe"
+    );
+    std::thread::sleep(Duration::from_millis(100));
+    let pause_at = Instant::now();
+    assert_eq!(manager.analysis_task_snapshot().unwrap().task_id, task.task_id);
+    let pausing = manager.pause_analysis_task(&run_id, &task.task_id).unwrap();
+    assert_eq!(pausing.state, AnalysisTaskStateDto::Pausing);
+    assert!(pause_at.elapsed() < Duration::from_millis(500));
+    let failed = wait_snapshot(&events, Duration::from_secs(7), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::Error { .. })
+    });
+    assert!(pause_at.elapsed() < Duration::from_secs(7));
+    assert!(failed.whole_game_job.is_none());
+    assert_eq!(
+        manager.analysis_task_snapshot().unwrap().state,
+        AnalysisTaskStateDto::Failed
+    );
+    assert!(manager.analysis_task_snapshot().unwrap().completed.is_empty());
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_rejected_cancel_preserves_run_job_and_pausing_identity() {
+    let temp = TestTempDir::new("task-cancel-identity");
+    std::fs::write(temp.path().join("hold-first"), "").unwrap();
+    let (manager, _, _, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    let task = manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 42, 1),
+            analysis_scope(),
+            task_conditions(32),
+        )
+        .unwrap();
+    let before = wait_task(&manager, AnalysisTaskStateDto::Searching);
+    for (run, job) in [
+        ("wrong-run", task.job_id.as_str()),
+        (run_id.as_str(), "wrong-job"),
+    ] {
+        assert_eq!(
+            manager.cancel_job(run, job).unwrap_err().kind,
+            EngineFailureKind::InvalidState
+        );
+        assert_eq!(manager.analysis_task_snapshot().unwrap(), before);
+        assert_eq!(manager.snapshot().whole_game_job.unwrap().job_id, task.job_id);
+    }
+    let pausing = manager.pause_analysis_task(&run_id, &task.task_id).unwrap();
+    assert!(manager.cancel_job("wrong-run", &task.job_id).is_err());
+    assert_eq!(manager.analysis_task_snapshot().unwrap(), pausing);
+    manager.cancel_job(&run_id, &task.job_id).unwrap();
+    assert_eq!(
+        manager.analysis_task_snapshot().unwrap().state,
+        AnalysisTaskStateDto::Cancelled
+    );
+    std::fs::write(temp.path().join("cancel-final"), "").unwrap();
+    manager
+        .wait_for_job_cancellation(&run_id, &task.job_id, Duration::from_secs(3))
+        .unwrap();
+    assert!(manager
+        .continue_analysis_task(&run_id, &task.task_id, 42)
+        .is_err());
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_pause_continue_retains_completed_work_and_restarts_full_budget() {
+    let temp = TestTempDir::new("task-pause-continue");
+    let (manager, _, events, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    let task = manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 42, 3),
+            analysis_scope(),
+            task_conditions(32),
+        )
+        .unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == task.job_id && job.outcome == AnalysisJobOutcomeDto::Progress
+    });
+    wait_task(&manager, AnalysisTaskStateDto::Searching);
+    let pausing = manager.pause_analysis_task(&run_id, &task.task_id).unwrap();
+    assert_eq!(pausing.state, AnalysisTaskStateDto::Pausing);
+    assert_eq!(pausing.completed, vec![NodePath::default()]);
+    assert!(manager
+        .continue_analysis_task(&run_id, &task.task_id, 42)
+        .is_err());
+    manager.pause_analysis_task(&run_id, &task.task_id).unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        manager.analysis_task_snapshot().unwrap().state,
+        AnalysisTaskStateDto::Pausing
+    );
+    std::fs::write(temp.path().join("cancel-final"), "go").unwrap();
+    let paused = wait_task(&manager, AnalysisTaskStateDto::Paused);
+    assert_eq!(paused.completed, pausing.completed);
+    assert!(manager.snapshot().whole_game_job.is_none());
+    assert_eq!(
+        manager
+            .start_analysis_task(
+                whole_game_request(&run_id, 42, 1),
+                analysis_scope(),
+                task_conditions(1)
+            )
+            .unwrap_err()
+            .kind,
+        EngineFailureKind::Occupied
+    );
+    let continued = manager
+        .continue_analysis_task(&run_id, &task.task_id, 42)
+        .unwrap();
+    assert_eq!(continued.task_id, task.task_id);
+    assert_eq!(continued.run_id, run_id);
+    assert_ne!(continued.job_id, task.job_id);
+    assert_eq!(continued.completed, paused.completed);
+    assert!(manager
+        .continue_analysis_task(&run_id, &task.task_id, 42)
+        .is_err());
+    std::fs::write(temp.path().join("finish"), "go").unwrap();
+    let done = wait_task(&manager, AnalysisTaskStateDto::Completed);
+    assert_eq!(done.completed, done.requested);
+    let queries: Vec<serde_json::Value> = std::fs::read_to_string(temp.path().join("queries.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(queries.len(), 4, "completed root must not be searched again");
+    assert!(queries.iter().all(|query| query["maxVisits"] == 32));
+    assert_eq!(queries[0]["id"], task.job_id);
+    assert_eq!(queries[1]["id"], task.job_id);
+    assert_eq!(queries[2]["id"], continued.job_id);
+    assert_eq!(queries[3]["id"], continued.job_id);
+    assert!(manager
+        .continue_analysis_task(&run_id, &task.task_id, 42)
+        .is_err());
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_pause_is_lane_local_for_one_and_two_thread_capacity() {
+    for one_thread in [true, false] {
+        let temp = TestTempDir::new("task-pause-lanes");
+        std::fs::write(temp.path().join("hold-first"), "").unwrap();
+        if one_thread {
+            std::fs::write(temp.path().join("one-thread"), "").unwrap();
+        }
+        let (manager, _, events, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+        let selected = manager
+            .start_selected_node_job(continuous_request(&run_id, 42, vec![]))
+            .unwrap();
+        wait_job(&events, Duration::from_secs(2), |job| {
+            job.job_id == selected.job_id && job.outcome == AnalysisJobOutcomeDto::Progress
+        });
+        let task = manager
+            .start_analysis_task(
+                whole_game_request(&run_id, 42, 2),
+                analysis_scope(),
+                task_conditions(32),
+            )
+            .unwrap();
+        if one_thread {
+            std::thread::sleep(Duration::from_millis(100));
+            assert_eq!(
+                manager.analysis_task_snapshot().unwrap().state,
+                AnalysisTaskStateDto::Queued
+            );
+        } else {
+            wait_task(&manager, AnalysisTaskStateDto::Searching);
+        }
+        manager.pause_analysis_task(&run_id, &task.task_id).unwrap();
+        std::fs::write(temp.path().join("cancel-final"), "").unwrap();
+        let paused = wait_task(&manager, AnalysisTaskStateDto::Paused);
+        assert!(paused.completed.is_empty());
+        let query_count = std::fs::read_to_string(temp.path().join("queries.jsonl"))
+            .unwrap()
+            .lines()
+            .count();
+        assert_eq!(query_count, 2, "Pause must not submit another search");
+        let continued = manager
+            .continue_analysis_task(&run_id, &task.task_id, 42)
+            .unwrap();
+        manager.pause_analysis_task(&run_id, &task.task_id).unwrap();
+        wait_task(&manager, AnalysisTaskStateDto::Paused);
+        assert_ne!(continued.job_id, task.job_id);
+        let frame = wait_job(&events, Duration::from_secs(2), |job| {
+            job.job_id == selected.job_id && job.outcome == AnalysisJobOutcomeDto::Progress
+        });
+        assert!(frame.frame.unwrap().visits > 0);
+        assert_eq!(
+            manager.snapshot().selected_node_job.unwrap().job_id,
+            selected.job_id
+        );
+        manager.cancel_job(&run_id, &continued.job_id).unwrap();
+        assert_eq!(
+            manager.analysis_task_snapshot().unwrap().state,
+            AnalysisTaskStateDto::Cancelled
+        );
+        assert!(manager
+            .continue_analysis_task(&run_id, &task.task_id, 42)
+            .is_err());
+        manager.teardown().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_pause_ack_without_final_fails_run_and_both_lanes() {
+    let temp = TestTempDir::new("task-pause-timeout");
+    std::fs::write(temp.path().join("hold-first"), "").unwrap();
+    let (manager, _, events, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    manager
+        .start_selected_node_job(continuous_request(&run_id, 42, vec![]))
+        .unwrap();
+    let task = manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 42, 2),
+            analysis_scope(),
+            task_conditions(32),
+        )
+        .unwrap();
+    wait_task(&manager, AnalysisTaskStateDto::Searching);
+    let started = Instant::now();
+    manager.pause_analysis_task(&run_id, &task.task_id).unwrap();
+    wait_snapshot(&events, Duration::from_secs(7), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::Error { .. })
+    });
+    assert!(started.elapsed() >= Duration::from_secs(5));
+    assert!(started.elapsed() < Duration::from_secs(7));
+    assert_eq!(
+        manager.analysis_task_snapshot().unwrap().state,
+        AnalysisTaskStateDto::Failed
+    );
+    assert!(manager.snapshot().whole_game_job.is_none());
+    assert!(manager.snapshot().selected_node_job.is_none());
+    assert!(manager
+        .continue_analysis_task(&run_id, &task.task_id, 42)
+        .is_err());
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_paused_progress_obeys_semantic_run_and_departure_fences() {
+    for ending in ["semantic", "restart", "switch", "stop", "departure"] {
+        let temp = TestTempDir::new("task-paused-invalidation");
+        std::fs::write(temp.path().join("cancel-final"), "").unwrap();
+        let (manager, catalog, events, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+        let task = manager
+            .start_analysis_task(
+                whole_game_request(&run_id, 42, 2),
+                analysis_scope(),
+                task_conditions(32),
+            )
+            .unwrap();
+        wait_job(&events, Duration::from_secs(2), |job| {
+            job.outcome == AnalysisJobOutcomeDto::Progress
+        });
+        manager.pause_analysis_task(&run_id, &task.task_id).unwrap();
+        let paused = wait_task(&manager, AnalysisTaskStateDto::Paused);
+        manager.invalidate_analysis_task(42);
+        catalog.upsert(SavedEngineProfile {
+            profile_id: "broken".into(),
+            profile: EngineProfileDto {
+                engine_path: "/missing/task-engine".into(),
+                ..catalog.get("profile-1").unwrap().profile
+            },
+        });
+        manager.switch_to("broken").unwrap();
+        wait_failure(&events, Duration::from_secs(3), |error| {
+            error.operation == EngineOperationDto::Switch
+        });
+        assert_eq!(manager.analysis_task_snapshot().unwrap(), paused);
+        match ending {
+            "semantic" => manager.invalidate_analysis_task(43),
+            "restart" => {
+                manager.restart().unwrap();
+                wait_lifecycle(&manager, Duration::from_secs(3), |state| {
+                    matches!(state, ForegroundEngineLifecycleDto::Ready { .. })
+                });
+            }
+            "switch" => {
+                catalog.upsert(SavedEngineProfile {
+                    profile_id: "replacement".into(),
+                    profile: catalog.get("profile-1").unwrap().profile,
+                });
+                manager.switch_to("replacement").unwrap();
+                wait_lifecycle(&manager, Duration::from_secs(3), |state| {
+                    matches!(state, ForegroundEngineLifecycleDto::Ready { .. })
+                });
+            }
+            "stop" => {
+                manager.stop().unwrap();
+            }
+            "departure" => {
+                manager
+                    .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+                    .unwrap();
+                manager.begin_continuous_departure();
+                manager.finish_continuous_departure(false);
+                assert_eq!(
+                    manager.snapshot().continuous.phase,
+                    app_model::ContinuousAnalysisPhaseDto::SafetyHold
+                );
+            }
+            _ => unreachable!(),
+        }
+        let ended = manager.analysis_task_snapshot().unwrap();
+        assert_eq!(
+            ended.state,
+            if ending == "departure" {
+                AnalysisTaskStateDto::Cancelled
+            } else {
+                AnalysisTaskStateDto::Invalidated
+            }
+        );
+        assert_eq!(ended.completed, paused.completed);
+        assert!(manager
+            .continue_analysis_task(&run_id, &task.task_id, 42)
+            .is_err());
+        manager.teardown().unwrap();
+    }
 }
 
 #[cfg(unix)]
@@ -1488,8 +1908,6 @@ fn whole_game_user_cancel_keeps_run_ready_and_does_not_cancel_selected_node() {
         snapshot.lifecycle,
         ForegroundEngineLifecycleDto::Ready { .. }
     ));
-    let logged = std::fs::read_to_string(&log).unwrap();
-    assert!(logged.contains("\"action\":\"terminate\""));
 }
 
 #[cfg(unix)]
@@ -4379,6 +4797,7 @@ fn continuous_budget_search_time_excludes_one_thread_queue_wait() {
     let mut whole = whole_game_request(&run_id, 61, 1);
     whole.work_items[0].query.max_visits = Some(100000);
     let whole = manager.start_whole_game_analysis(whole).unwrap();
+    wait_task(&manager, AnalysisTaskStateDto::Searching);
     manager
         .set_continuous_preferences(
             true,

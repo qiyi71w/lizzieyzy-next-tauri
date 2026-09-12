@@ -142,6 +142,356 @@ impl Drop for LiveFixture {
 }
 
 #[cfg(unix)]
+fn task_fixture() -> LiveFixture {
+    let engine = LiveFixture::new();
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../tests/fixtures/analysis_task_engine.py");
+    std::fs::write(
+        engine.directory.join("engine"),
+        format!(
+            "#!/bin/sh\nexport TASK_ENGINE_DIR='{}'\nexec python3 -u '{}'\n",
+            engine.directory.display(),
+            script.display()
+        ),
+    )
+    .unwrap();
+    engine
+}
+
+#[cfg(unix)]
+fn start_live_task(
+    engine: &LiveFixture,
+    state: &CurrentGameState,
+    generation: u64,
+) -> app_model::AnalysisTaskDto {
+    engine.manager.start("test").unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    let run_id = loop {
+        if let app_model::ForegroundEngineLifecycleDto::Ready { run } = engine.manager.snapshot().lifecycle {
+            break run.run_id;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let job = state
+        .start_first_child_analysis(&engine.manager, run_id, generation, 32)
+        .unwrap();
+    let task = engine.manager.analysis_task_snapshot().unwrap();
+    assert_eq!(job.job_id, task.job_id);
+    task
+}
+
+#[cfg(unix)]
+fn wait_live_task(
+    engine: &LiveFixture,
+    expected: app_model::AnalysisTaskStateDto,
+) -> app_model::AnalysisTaskDto {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    loop {
+        let task = engine.manager.analysis_task_snapshot().unwrap();
+        if task.state == expected {
+            return task;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "expected {expected:?}, got {task:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_pause_continue_controllable_engine_smoke() {
+    use app_model::AnalysisTaskStateDto;
+    let engine = task_fixture();
+    let state = CurrentGameState::default();
+    state.connect_analysis_manager(engine.manager.clone());
+    let opened = state.replace("(;SZ[9];B[dd];W[ee])", None).unwrap();
+    let task = start_live_task(&engine, &state, opened.generation);
+    let first = engine.progress(None);
+    assert!(state.attach_from_job_event(&first).is_some());
+    wait_live_task(&engine, AnalysisTaskStateDto::Searching);
+    let pausing = state
+        .pause_analysis_task(&engine.manager, &task.run_id, &task.task_id)
+        .unwrap();
+    assert_eq!(pausing.state, AnalysisTaskStateDto::Pausing);
+    assert!(state.attach_from_job_event(&first).is_none());
+    assert!(state
+        .continue_analysis_task(&engine.manager, &task.run_id, &task.task_id)
+        .is_err());
+    std::fs::write(engine.directory.join("cancel-final"), "").unwrap();
+    let paused = wait_live_task(&engine, AnalysisTaskStateDto::Paused);
+    assert_eq!(paused.completed, vec![NodePath::default()]);
+    state.select_path(NodePath::default()).unwrap();
+    state
+        .set_personal_comment(NodePath::default(), "paused review note".into())
+        .unwrap();
+    let saved_path = engine.directory.join("paused.sgf").to_string_lossy().into_owned();
+    let saved = state
+        .save_to_path(saved_path.clone(), NodePath::default())
+        .unwrap();
+    assert!(!saved.dirty);
+    assert_eq!(saved.generation, task.generation);
+    assert_eq!(engine.manager.analysis_task_snapshot().unwrap(), paused);
+    assert!(
+        state.attach_from_job_event(&first).is_none(),
+        "late pre-Pause frame cannot dirty the saved document"
+    );
+    let envelope = state
+        .recovery_flush(app_model::ApplicationExitDispositionDto::ExitIncomplete)
+        .unwrap();
+    let recovered = CurrentGameState::default();
+    let recovered_manager = ForegroundEngineManager::new(
+        Arc::new(InMemoryEngineProfileCatalog::new()),
+        ForegroundEngineConfig::for_tests(),
+    );
+    recovered.connect_analysis_manager(recovered_manager.clone());
+    recovered
+        .replace(&envelope.sgf_text, envelope.source_path)
+        .unwrap();
+    assert!(recovered_manager.analysis_task_snapshot().is_none());
+    assert!(recovered.analysis_jobs().unwrap().is_empty());
+    assert!(matches!(
+        recovered_manager.snapshot().lifecycle,
+        app_model::ForegroundEngineLifecycleDto::NoEngine { .. }
+    ));
+    let continued = state
+        .continue_analysis_task(&engine.manager, &task.run_id, &task.task_id)
+        .unwrap();
+    assert_eq!(continued.task_id, task.task_id);
+    assert_ne!(continued.job_id, task.job_id);
+    std::fs::write(engine.directory.join("finish"), "").unwrap();
+    let mut attached = Vec::new();
+    while attached.len() < 2 {
+        let event = engine.progress(Some(&task.job_id));
+        if let Some(game) = state.attach_from_job_event(&event) {
+            assert!(game.dirty);
+            attached.push(event.node_path.indices);
+        }
+    }
+    assert_eq!(attached, vec![vec![0], vec![0, 0]]);
+    wait_live_task(&engine, AnalysisTaskStateDto::Completed);
+    state
+        .save_to_path(saved_path.clone(), NodePath::default())
+        .unwrap();
+    let reopened = CurrentSgfDocument::open(&std::fs::read_to_string(saved_path).unwrap()).unwrap();
+    assert_eq!(
+        reopened.snapshot(&NodePath::default()).unwrap().personal_comment,
+        "paused review note"
+    );
+    assert!(reopened
+        .first_child_mainline_snapshots()
+        .unwrap()
+        .iter()
+        .all(|node| node
+            .primary_analysis
+            .as_ref()
+            .is_some_and(|frame| frame.visits == 32)));
+    println!("Pause/Continue smoke: target ACK held Pausing; final released Paused; same task/Run, fresh Job; root skipped, two remaining nodes searched at 32 visits; late old frame fenced; navigation/comment/Save/recovery retained SGF without runtime work.");
+}
+
+#[cfg(unix)]
+#[test]
+fn paused_task_does_not_resume_after_departure_save_cancellation_or_failure() {
+    for fail_save in [false, true] {
+        let engine = task_fixture();
+        let state = CurrentGameState::default();
+        state.connect_analysis_manager(engine.manager.clone());
+        let opened = state.replace("(;SZ[9];B[dd])", None).unwrap();
+        let task = start_live_task(&engine, &state, opened.generation);
+        let first = engine.progress(None);
+        state.attach_from_job_event(&first).unwrap();
+        state
+            .pause_analysis_task(&engine.manager, &task.run_id, &task.task_id)
+            .unwrap();
+        std::fs::write(engine.directory.join("cancel-final"), "").unwrap();
+        let paused = wait_live_task(&engine, app_model::AnalysisTaskStateDto::Paused);
+        let admission = state.prepare_replacement("(;SZ[13])", None).unwrap();
+        let departure_id = match admission {
+            app_model::DocumentDepartureAdmissionDto::Ready { departure_id }
+            | app_model::DocumentDepartureAdmissionDto::NeedsDecision { departure_id } => departure_id,
+        };
+        state.cancel_replacement(departure_id).unwrap();
+        assert_eq!(engine.manager.analysis_task_snapshot().unwrap(), paused);
+        let admission = state.prepare_replacement("(;SZ[13])", None).unwrap();
+        let departure_id = match admission {
+            app_model::DocumentDepartureAdmissionDto::Ready { departure_id }
+            | app_model::DocumentDepartureAdmissionDto::NeedsDecision { departure_id } => departure_id,
+        };
+        let outcome = crate::document_departure::resolve_replacement(
+            &state,
+            departure_id,
+            app_model::DocumentDepartureActionDto::Save,
+            opened.selected_path.clone(),
+            &[],
+            |job| {
+                engine
+                    .manager
+                    .cancel_job(&job.run_id, &job.job_id)
+                    .map_err(|error| error.to_string())
+            },
+            |job, budget| {
+                engine
+                    .manager
+                    .wait_for_job_cancellation(&job.run_id, &job.job_id, budget)
+                    .map_err(|error| error.to_string())
+            },
+            || {
+                Ok(if fail_save {
+                    Some(engine.directory.to_string_lossy().into_owned())
+                } else {
+                    None
+                })
+            },
+        )
+        .unwrap();
+        assert!(!outcome.committed);
+        assert_eq!(
+            engine.manager.analysis_task_snapshot().unwrap().state,
+            app_model::AnalysisTaskStateDto::Cancelled
+        );
+        assert!(state
+            .continue_analysis_task(&engine.manager, &task.run_id, &task.task_id)
+            .is_err());
+        assert_eq!(
+            state
+                .select_path(NodePath::default())
+                .unwrap()
+                .snapshot
+                .position
+                .board_size,
+            9
+        );
+        assert!(state.attach_from_job_event(&first).is_none());
+        assert!(matches!(
+            engine.manager.snapshot().lifecycle,
+            app_model::ForegroundEngineLifecycleDto::Ready { .. }
+        ));
+        assert!(engine.manager.snapshot().whole_game_job.is_none());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn task_pause_cleanup_failure_aborts_departure_and_retains_game() {
+    for delivery_failure in [false, true] {
+        let engine = task_fixture();
+        if delivery_failure {
+            std::fs::write(engine.directory.join("close-input"), "").unwrap();
+        }
+        let state = CurrentGameState::default();
+        state.connect_analysis_manager(engine.manager.clone());
+        let opened = state.replace("(;SZ[9];B[dd])", None).unwrap();
+        let task = start_live_task(&engine, &state, opened.generation);
+        state.attach_from_job_event(&engine.progress(None)).unwrap();
+        wait_live_task(&engine, app_model::AnalysisTaskStateDto::Searching);
+        if delivery_failure {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while !engine.directory.join("input-closed").exists() {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        state
+            .pause_analysis_task(&engine.manager, &task.run_id, &task.task_id)
+            .unwrap();
+        let admission = state.prepare_replacement("(;SZ[13])", None).unwrap();
+        let departure_id = match admission {
+            app_model::DocumentDepartureAdmissionDto::Ready { departure_id }
+            | app_model::DocumentDepartureAdmissionDto::NeedsDecision { departure_id } => departure_id,
+        };
+        let save_called = std::cell::Cell::new(false);
+        let outcome = crate::document_departure::resolve_replacement(
+            &state,
+            departure_id,
+            app_model::DocumentDepartureActionDto::Save,
+            opened.selected_path,
+            &[],
+            |job| {
+                engine
+                    .manager
+                    .cancel_job(&job.run_id, &job.job_id)
+                    .map_err(|error| error.to_string())
+            },
+            |job, budget| {
+                engine
+                    .manager
+                    .wait_for_job_cancellation(&job.run_id, &job.job_id, budget)
+                    .map_err(|error| error.to_string())
+            },
+            || {
+                save_called.set(true);
+                Ok(Some(
+                    engine
+                        .directory
+                        .join("must-not-save.sgf")
+                        .to_string_lossy()
+                        .into_owned(),
+                ))
+            },
+        )
+        .unwrap();
+        assert!(!outcome.committed);
+        assert!(!save_called.get());
+        assert!(matches!(
+            engine.manager.snapshot().lifecycle,
+            app_model::ForegroundEngineLifecycleDto::Error { .. }
+        ));
+        assert_ne!(
+            engine.manager.analysis_task_snapshot().unwrap().state,
+            app_model::AnalysisTaskStateDto::Paused
+        );
+        assert!(state
+            .continue_analysis_task(&engine.manager, &task.run_id, &task.task_id)
+            .is_err());
+        assert_eq!(
+            state
+                .select_path(NodePath::default())
+                .unwrap()
+                .snapshot
+                .position
+                .board_size,
+            9
+        );
+        assert!(engine.manager.snapshot().whole_game_job.is_none());
+        assert!(engine.manager.snapshot().selected_node_job.is_none());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn paused_task_invalidates_on_edit_outside_its_frozen_mainline() {
+    let engine = task_fixture();
+    let state = CurrentGameState::default();
+    state.connect_analysis_manager(engine.manager.clone());
+    let opened = state.replace("(;SZ[9];B[dd](;W[ee])(;W[ff]))", None).unwrap();
+    let task = start_live_task(&engine, &state, opened.generation);
+    let first = engine.progress(None);
+    state.attach_from_job_event(&first).unwrap();
+    state
+        .pause_analysis_task(&engine.manager, &task.run_id, &task.task_id)
+        .unwrap();
+    std::fs::write(engine.directory.join("cancel-final"), "").unwrap();
+    wait_live_task(&engine, app_model::AnalysisTaskStateDto::Paused);
+    state.remove_variation(NodePath { indices: vec![0, 1] }).unwrap();
+    assert_eq!(
+        engine.manager.analysis_task_snapshot().unwrap().state,
+        app_model::AnalysisTaskStateDto::Invalidated
+    );
+    assert!(state
+        .continue_analysis_task(&engine.manager, &task.run_id, &task.task_id)
+        .is_err());
+    assert!(state.attach_from_job_event(&first).is_none());
+    assert!(state
+        .select_path(NodePath::default())
+        .unwrap()
+        .snapshot
+        .primary_analysis
+        .is_some());
+}
+
+#[cfg(unix)]
 #[test]
 fn whole_game_comment_save_controllable_engine_smoke() {
     let engine = LiveFixture::new();

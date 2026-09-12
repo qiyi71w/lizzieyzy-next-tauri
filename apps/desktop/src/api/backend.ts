@@ -315,6 +315,26 @@ export async function startAnalysisTask(input: {
   return invoke<AnalysisTaskDto>("start_analysis_task", input);
 }
 
+export async function pauseAnalysisTask(input: {
+  runId: string;
+  taskId: string;
+}): Promise<AnalysisTaskDto> {
+  if (!isTauriRuntime()) {
+    throw new Error("Analysis tasks require the Tauri desktop backend.");
+  }
+  return invoke<AnalysisTaskDto>("pause_analysis_task", input);
+}
+
+export async function continueAnalysisTask(input: {
+  runId: string;
+  taskId: string;
+}): Promise<AnalysisTaskDto> {
+  if (!isTauriRuntime()) {
+    throw new Error("Analysis tasks require the Tauri desktop backend.");
+  }
+  return invoke<AnalysisTaskDto>("continue_analysis_task", input);
+}
+
 export async function analysisTaskSnapshot(): Promise<AnalysisTaskDto | null> {
   if (!isTauriRuntime()) return null;
   return invoke<AnalysisTaskDto | null>("analysis_task_snapshot");

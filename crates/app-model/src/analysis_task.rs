@@ -75,6 +75,8 @@ pub struct AnalysisScopePreviewDto {
 pub enum AnalysisTaskStateDto {
     Queued,
     Searching,
+    Pausing,
+    Paused,
     Completed,
     Cancelled,
     Failed,

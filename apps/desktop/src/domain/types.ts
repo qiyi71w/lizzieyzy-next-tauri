@@ -252,6 +252,8 @@ export type AnalysisScopePreviewDto = {
 export type AnalysisTaskStateDto =
   | "queued"
   | "searching"
+  | "pausing"
+  | "paused"
   | "completed"
   | "cancelled"
   | "failed"

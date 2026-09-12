@@ -24,6 +24,8 @@ type Props = {
   onDraftChange: (draft: AnalysisScopeDraft) => void;
   onPreview: () => void;
   onStart: () => void;
+  onPause: () => void;
+  onContinue: () => void;
   onCancel: () => void;
 };
 
@@ -35,7 +37,9 @@ const modes: Array<{ value: AnalysisScopeModeDto; label: string }> = [
 ];
 
 export function AnalysisTaskPanel(props: Props) {
-  const active = props.task?.state === "queued" || props.task?.state === "searching";
+  const reserved = props.task != null && ["queued", "searching", "pausing", "paused"].includes(props.task.state);
+  const pauseable = props.task?.state === "queued" || props.task?.state === "searching";
+  const continuable = props.task?.state === "paused";
   const completed = props.task?.completed.length ?? 0;
   const requested = props.task?.requested.length ?? 0;
   const first = props.preview?.targets[0];
@@ -120,8 +124,10 @@ export function AnalysisTaskPanel(props: Props) {
         </div>
         <div className="button-row">
           <button type="button" onClick={props.onPreview} disabled={!props.canRun || props.busy}>Preview scope</button>
-          <button type="button" onClick={props.onStart} disabled={!props.canRun || props.busy || active || !props.preview}>Start task</button>
-          <button type="button" onClick={props.onCancel} disabled={!active}>Cancel task</button>
+          <button type="button" onClick={props.onStart} disabled={!props.canRun || props.busy || reserved || !props.preview}>Start task</button>
+          <button type="button" onClick={props.onPause} disabled={!props.canRun || props.busy || !pauseable}>Pause task</button>
+          <button type="button" onClick={props.onContinue} disabled={!props.canRun || props.busy || !continuable}>Continue task</button>
+          <button type="button" onClick={props.onCancel} disabled={props.busy || !reserved}>Cancel task</button>
         </div>
         {props.preview ? (
           <p role="status">

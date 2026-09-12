@@ -1123,23 +1123,19 @@ describe("foreground engine lifecycle UI", () => {
     expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
   });
 
-  it("rejects a second whole-game start as occupied without clearing the first job or blocking selected-node", async () => {
+  it("disables a second whole-game start without clearing the first job or blocking selected-node", async () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
       buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
-    backend.startKataGoGameAnalysis.mockRejectedValueOnce({
-      operation: "job",
-      kind: "occupied",
-      message: "whole-game analysis is already running on this Foreground Engine Run"
-    });
     await act(async () => {
       buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value.catch(() => undefined);
     });
-    expect(host.textContent).toContain("whole-game analysis is already running on this Foreground Engine Run");
+    expect(buttonNamed(host, "分析第一子主线").disabled).toBe(true);
+    expect(backend.startKataGoGameAnalysis).toHaveBeenCalledTimes(1);
     await act(async () => {
       buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;

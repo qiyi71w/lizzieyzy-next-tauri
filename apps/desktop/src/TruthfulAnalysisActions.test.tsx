@@ -48,6 +48,8 @@ const backend = vi.hoisted(() => ({
   cancelKataGoAnalysis: vi.fn(),
   previewAnalysisScope: vi.fn(),
   startAnalysisTask: vi.fn(),
+  pauseAnalysisTask: vi.fn(),
+  continueAnalysisTask: vi.fn(),
   analysisTaskSnapshot: vi.fn(),
   classifyProblems: vi.fn(),
   fakeAnalyze: vi.fn(),
@@ -190,6 +192,18 @@ beforeEach(() => {
     };
     taskRuntime.snapshot = task;
     return task;
+  });
+  backend.pauseAnalysisTask.mockImplementation(async ({ runId, taskId }: { runId: string; taskId: string }) => {
+    const task = taskRuntime.snapshot;
+    if (!task || task.run_id !== runId || task.task_id !== taskId) throw new Error("Task not found");
+    taskRuntime.snapshot = { ...task, state: "pausing" };
+    return taskRuntime.snapshot;
+  });
+  backend.continueAnalysisTask.mockImplementation(async ({ runId, taskId }: { runId: string; taskId: string }) => {
+    const task = taskRuntime.snapshot;
+    if (!task || task.run_id !== runId || task.task_id !== taskId) throw new Error("Task not found");
+    taskRuntime.snapshot = { ...task, job_id: "job-task-2", state: "searching" };
+    return taskRuntime.snapshot;
   });
   backend.analysisTaskSnapshot.mockImplementation(async () => taskRuntime.snapshot);
   backend.classifyProblems.mockResolvedValue([]);
@@ -490,6 +504,193 @@ describe("truthful native analysis actions", () => {
     await act(async () => { releaseSnapshot(searching); });
     expect(buttonNamed(host, "Cancel task").disabled).toBe(true);
     expect(host.querySelector('[data-analysis-task-state="cancelled"]')).not.toBeNull();
+  });
+
+  it("fences stale snapshots and frames across Pause and Continue without duplicate commands", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    const searching = taskRuntime.snapshot!;
+
+    let releaseOldSnapshot!: (task: AnalysisTaskDto) => void;
+    backend.analysisTaskSnapshot.mockImplementationOnce(() => new Promise<AnalysisTaskDto>((resolve) => {
+      releaseOldSnapshot = resolve;
+    }));
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: searching.run_id,
+        job_id: searching.job_id,
+        lane: "whole_game",
+        mode: "finite",
+        generation: searching.generation,
+        node_path: { indices: [] },
+        outcome: "started"
+      });
+      await Promise.resolve();
+    });
+
+    let releasePause!: (task: AnalysisTaskDto) => void;
+    backend.pauseAnalysisTask.mockImplementationOnce(() => new Promise<AnalysisTaskDto>((resolve) => {
+      releasePause = resolve;
+    }));
+    const pauseButton = buttonNamed(host, "Pause task");
+    await act(async () => {
+      pauseButton.click();
+      pauseButton.click();
+      await Promise.resolve();
+    });
+    expect(backend.pauseAnalysisTask).toHaveBeenCalledTimes(1);
+    expect(backend.pauseAnalysisTask).toHaveBeenCalledWith({ runId: "run-1", taskId: "task-1" });
+    expect(buttonNamed(host, "Continue task").disabled).toBe(true);
+
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: searching.run_id,
+        job_id: searching.job_id,
+        lane: "whole_game",
+        mode: "finite",
+        generation: searching.generation,
+        node_path: { indices: [0] },
+        outcome: "progress",
+        completed: 2,
+        expected: 2,
+        remaining: 0,
+        frame: {
+          job_id: searching.job_id,
+          turn: 1,
+          visits: 32,
+          winrate_black: 0.9,
+          score_mean_black: 10,
+          candidates: [{ vertex: "pass", visits: 32, winrate_black: 0.9, score_mean_black: 10, pv: [] }]
+        }
+      });
+      releasePause({ ...searching, state: "pausing" });
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-analysis-task-state="pausing"]')?.textContent).toContain("1/2 completed");
+    expect(buttonNamed(host, "Continue task").disabled).toBe(true);
+    expect(buttonNamed(host, "Cancel task").disabled).toBe(false);
+    expect(host.querySelectorAll(".cand-row")).toHaveLength(0);
+
+    await act(async () => { releaseOldSnapshot(searching); });
+    expect(host.querySelector('[data-analysis-task-state="pausing"]')).not.toBeNull();
+
+    taskRuntime.snapshot = { ...searching, state: "paused" };
+    await act(async () => {
+      listeners.onJob?.({ ...searching, lane: "whole_game", mode: "finite", node_path: { indices: [] }, outcome: "progress" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-analysis-task-state="paused"]')?.textContent).toContain("1/2 completed");
+
+    let releasePausedSnapshot!: (task: AnalysisTaskDto) => void;
+    backend.analysisTaskSnapshot.mockImplementationOnce(() => new Promise<AnalysisTaskDto>((resolve) => {
+      releasePausedSnapshot = resolve;
+    }));
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 3,
+        continuous: { enabled: true, phase: "waiting" },
+        lifecycle: {
+          state: "ready",
+          run: {
+            run_id: "run-1",
+            profile_id: "profile-1",
+            adapter_kind: "kata_go_analysis",
+            profile_snapshot: savedProfile.profile
+          }
+        }
+      });
+      await Promise.resolve();
+    });
+    let releaseContinue!: (task: AnalysisTaskDto) => void;
+    backend.continueAnalysisTask.mockImplementationOnce(() => new Promise<AnalysisTaskDto>((resolve) => {
+      releaseContinue = resolve;
+    }));
+    const continueButton = buttonNamed(host, "Continue task");
+    await act(async () => {
+      continueButton.click();
+      continueButton.click();
+      await Promise.resolve();
+    });
+    expect(backend.continueAnalysisTask).toHaveBeenCalledTimes(1);
+    expect(backend.continueAnalysisTask).toHaveBeenCalledWith({ runId: "run-1", taskId: "task-1" });
+
+    const continued = { ...searching, job_id: "job-task-2", state: "searching" as const };
+    taskRuntime.snapshot = continued;
+    await act(async () => {
+      releaseContinue(continued);
+      await Promise.resolve();
+      releasePausedSnapshot({ ...searching, state: "paused" });
+    });
+    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent).toContain("1/2 completed");
+    expect(buttonNamed(host, "Pause task").disabled).toBe(false);
+
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: searching.run_id,
+        job_id: searching.job_id,
+        lane: "whole_game",
+        mode: "finite",
+        generation: searching.generation,
+        node_path: { indices: [0] },
+        outcome: "progress",
+        completed: 2,
+        expected: 2,
+        remaining: 0
+      });
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent).toContain("1/2 completed");
+    expect(host.textContent).not.toContain("整局 2/2");
+  });
+
+  it("reserves only the whole-game lane while paused and lets Cancel make it terminal", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    const searching = taskRuntime.snapshot!;
+    await act(async () => { buttonNamed(host, "Pause task").click(); });
+    taskRuntime.snapshot = { ...searching, state: "paused" };
+    await act(async () => {
+      listeners.onJob?.({ ...searching, lane: "whole_game", mode: "finite", node_path: { indices: [] }, outcome: "progress" });
+      await Promise.resolve();
+    });
+
+    expect(buttonNamed(host, "Start task").disabled).toBe(true);
+    expect(buttonNamed(host, "闪电分析").disabled).toBe(true);
+    expect(Array.from(host.querySelectorAll("button")).filter((button) => button.textContent === "分析第一子主线").every((button) => button.disabled)).toBe(true);
+    expect(buttonNamed(host, "分析当前节点").disabled).toBe(false);
+    await act(async () => { buttonNamed(host, "分析当前节点").click(); });
+    expect(backend.startSelectedNodeAnalysis).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 3,
+        continuous: { enabled: true, phase: "error" },
+        lifecycle: {
+          state: "error",
+          run: {
+            run_id: "run-1",
+            profile_id: "profile-1",
+            adapter_kind: "kata_go_analysis",
+            profile_snapshot: savedProfile.profile
+          },
+          failure: { operation: "job", kind: "protocol", message: "engine held" }
+        }
+      });
+    });
+    expect(buttonNamed(host, "Continue task").disabled).toBe(true);
+
+    backend.cancelKataGoAnalysis.mockImplementationOnce(async () => {
+      taskRuntime.snapshot = { ...searching, state: "cancelled", reason: "Cancelled by user." };
+    });
+    await act(async () => { buttonNamed(host, "Cancel task").click(); });
+    expect(backend.cancelKataGoAnalysis).toHaveBeenCalledWith("run-1", "job-task-1");
+    expect(host.querySelector('[data-analysis-task-state="cancelled"]')?.textContent).toContain("1/2 completed");
+    expect(buttonNamed(host, "Cancel task").disabled).toBe(true);
   });
 
   it("previews, starts, reports, cancels, and focus-guards a quick task", async () => {

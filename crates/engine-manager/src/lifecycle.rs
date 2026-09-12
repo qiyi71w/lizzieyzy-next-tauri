@@ -68,6 +68,7 @@ impl ForegroundEngineConfig {
 enum JobDisposition {
     Running,
     Superseded,
+    Paused,
     Cancelled,
     TimedOut,
 }
@@ -428,6 +429,10 @@ impl ForegroundEngineManager {
         let mut state = self.lock();
         if !state.continuous_departing {
             state.continuous_departing = true;
+            if let Some(job_id) = state.analysis_task.as_ref().map(|task| task.job_id.clone()) {
+                cancel_analysis_task_locked(&mut state, &job_id);
+                state.jobs.retain(|job| !(job.job_id == job_id && job.terminal));
+            }
             publish_snapshot(&mut state);
         }
     }
@@ -945,6 +950,21 @@ impl ForegroundEngineManager {
                     None,
                 ));
             }
+            if state.analysis_task.as_ref().is_some_and(|task| {
+                matches!(
+                    task.state,
+                    AnalysisTaskStateDto::Pausing | AnalysisTaskStateDto::Paused
+                )
+            }) {
+                return Err(failure(
+                    EngineOperationDto::Job,
+                    EngineFailureKind::Occupied,
+                    "The paused analysis task still owns this lane; Continue or Cancel it.".into(),
+                    Some(&request.run_id),
+                    None,
+                    None,
+                ));
+            }
             if let Some(occupied) = state.jobs.iter().find(|job| {
                 job.run_id == request.run_id && job.lane == AnalysisJobLane::WholeGame && !job.terminal
             }) {
@@ -1001,7 +1021,7 @@ impl ForegroundEngineManager {
                 state: AnalysisJobStateDto::Queued,
                 cancel_deadline: None,
                 cleanup_deadline: None,
-                submitted: true,
+                submitted: false,
                 submitted_at: Instant::now(),
                 generation: request.generation,
                 node_path: first_node_path,
@@ -1032,12 +1052,176 @@ impl ForegroundEngineManager {
             publish_snapshot(&mut state);
             (task, bound_query)
         };
-        if let Err(published) = self.write_live_jsonl(&task.run_id, &bound_query) {
-            let published = published.with_job_id(&task.job_id);
-            self.abandon_job(&task.run_id, &task.job_id, published.clone());
-            return Err(published);
-        }
+        self.dispatch_whole_game_query(task.run_id.clone(), task.job_id.clone(), bound_query);
         Ok(task)
+    }
+
+    pub fn pause_analysis_task(
+        &self,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<AnalysisTaskDto, EngineFailureDto> {
+        let mut state = self.lock();
+        let task = state
+            .analysis_task
+            .as_ref()
+            .filter(|task| task.run_id == run_id && task.task_id == task_id)
+            .ok_or_else(|| {
+                continuous_invalid_state(&state, "Analysis task identity is no longer current.")
+            })?;
+        if matches!(
+            task.state,
+            AnalysisTaskStateDto::Pausing | AnalysisTaskStateDto::Paused
+        ) {
+            return Ok(task.clone());
+        }
+        if !matches!(
+            task.state,
+            AnalysisTaskStateDto::Queued | AnalysisTaskStateDto::Searching
+        ) {
+            return Err(continuous_invalid_state(
+                &state,
+                "Pause requires an active analysis task.",
+            ));
+        }
+        let job_id = task.job_id.clone();
+        self.request_job_stop_locked(&mut state, run_id, &job_id, JobDisposition::Paused)?;
+        Ok(state.analysis_task.as_ref().unwrap().clone())
+    }
+
+    pub fn continue_analysis_task(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        generation: u64,
+    ) -> Result<AnalysisTaskDto, EngineFailureDto> {
+        let (task, jsonl) = {
+            let mut state = self.lock();
+            let task = state
+                .analysis_task
+                .as_ref()
+                .filter(|task| {
+                    task.run_id == run_id
+                        && task.task_id == task_id
+                        && task.generation == generation
+                        && task.state == AnalysisTaskStateDto::Paused
+                })
+                .ok_or_else(|| {
+                    continuous_invalid_state(&state, "Continue requires the same paused task and game.")
+                })?;
+            if admitting_run(&state.phase, run_id).is_none()
+                || state.continuous_departing
+                || state.continuous_safety_hold
+            {
+                return Err(continuous_invalid_state(
+                    &state,
+                    "Continue is blocked by Run or departure state.",
+                ));
+            }
+            let old_job_id = task.job_id.clone();
+            let index = state
+                .jobs
+                .iter()
+                .position(|job| job.job_id == old_job_id && job.run_id == run_id && job.terminal)
+                .ok_or_else(|| continuous_invalid_state(&state, "Paused task cleanup has not finished."))?;
+            let job_id = Uuid::new_v4().to_string();
+            let job = &mut state.jobs[index];
+            let jsonl = bound_work_item_query(&job.work_items[job.current_index], &job_id)?;
+            job.job_id = job_id.clone();
+            job.state = AnalysisJobStateDto::Queued;
+            job.submitted = false;
+            job.submitted_at = Instant::now();
+            job.cancel_deadline = None;
+            job.cleanup_deadline = None;
+            job.cancel = Arc::new(AnalysisCancelToken::new());
+            job.disposition = JobDisposition::Running;
+            job.terminal = false;
+            let started = started_from(job);
+            let counts = whole_game_progress_counts(job);
+            let task = state.analysis_task.as_mut().unwrap();
+            task.job_id = job_id;
+            task.state = AnalysisTaskStateDto::Queued;
+            task.reason = None;
+            let task = task.clone();
+            publish_event(
+                &mut state,
+                ForegroundEngineEventDto::Job {
+                    job: whole_game_job_event(
+                        &started,
+                        AnalysisJobOutcomeDto::Started,
+                        started.node_path.clone(),
+                        counts.0,
+                        counts.1,
+                        counts.2,
+                        None,
+                        None,
+                    ),
+                },
+            );
+            publish_snapshot(&mut state);
+            (task, jsonl)
+        };
+        self.dispatch_whole_game_query(task.run_id.clone(), task.job_id.clone(), jsonl);
+        Ok(task)
+    }
+
+    fn dispatch_whole_game_query(&self, run_id: String, job_id: String, jsonl: String) {
+        let manager = self.clone();
+        // Neither the current-game holder nor the stdout deadline pump waits for pipe IO.
+        thread::spawn(move || {
+            if let Err(error) = manager.submit_whole_game_query(&run_id, &job_id, &jsonl) {
+                manager.abandon_job(&run_id, &job_id, error.with_job_id(&job_id));
+            }
+        });
+    }
+
+    fn submit_whole_game_query(
+        &self,
+        run_id: &str,
+        job_id: &str,
+        jsonl: &str,
+    ) -> Result<(), EngineFailureDto> {
+        loop {
+            let mut state = self.lock();
+            let Some(index) = state.jobs.iter().position(|job| {
+                job.run_id == run_id
+                    && job.job_id == job_id
+                    && !job.terminal
+                    && job.disposition == JobDisposition::Running
+                    && !job.submitted
+            }) else {
+                return Ok(());
+            };
+            let stdin = engine_stdin(&state, run_id)
+                .ok_or_else(|| continuous_invalid_state(&state, "Run process is not available."))?;
+            match stdin.try_lock() {
+                Ok(mut guard) => {
+                    let writer = guard
+                        .as_mut()
+                        .ok_or_else(|| continuous_invalid_state(&state, "Run stdin is closed."))?;
+                    // Commit delivery atomically with cancellation admission. The stdin guard
+                    // orders this query before its terminate; blocking IO holds no owner lock.
+                    state.jobs[index].submitted = true;
+                    drop(state);
+                    return write_jsonl(writer, jsonl).map_err(|error| {
+                        failure(
+                            EngineOperationDto::Job,
+                            EngineFailureKind::Protocol,
+                            format!("failed to write analysis query: {error}"),
+                            Some(run_id),
+                            None,
+                            None,
+                        )
+                    });
+                }
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    return Err(continuous_invalid_state(&state, "Run stdin lock is poisoned."));
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {}
+            }
+            drop(state);
+            thread::sleep(Duration::from_millis(1));
+        }
     }
 
     pub fn invalidate_analysis_task(&self, generation: u64) {
@@ -1116,7 +1300,16 @@ impl ForegroundEngineManager {
     }
 
     pub fn cancel_job(&self, run_id: &str, job_id: &str) -> Result<(), EngineFailureDto> {
-        self.request_job_stop(run_id, job_id, JobDisposition::Cancelled)
+        let mut state = self.lock();
+        if state.analysis_task.as_ref().is_some_and(|task| {
+            task.run_id == run_id && task.job_id == job_id && task.state == AnalysisTaskStateDto::Paused
+        }) {
+            cancel_analysis_task_locked(&mut state, job_id);
+            state.jobs.retain(|job| job.job_id != job_id);
+            publish_snapshot(&mut state);
+            return Ok(());
+        }
+        self.request_job_stop_locked(&mut state, run_id, job_id, JobDisposition::Cancelled)
     }
 
     fn request_job_stop(
@@ -1136,10 +1329,10 @@ impl ForegroundEngineManager {
         disposition: JobDisposition,
     ) -> Result<(), EngineFailureDto> {
         {
-            let Some(job) = state
+            let Some(index) = state
                 .jobs
-                .iter_mut()
-                .find(|job| job.job_id == job_id && job.run_id == run_id && !job.terminal)
+                .iter()
+                .position(|job| job.job_id == job_id && job.run_id == run_id && !job.terminal)
             else {
                 return Err(failure(
                     EngineOperationDto::Job,
@@ -1151,6 +1344,32 @@ impl ForegroundEngineManager {
                 )
                 .with_job_id(job_id));
             };
+            if disposition == JobDisposition::Cancelled {
+                cancel_analysis_task_locked(state, job_id);
+            }
+            let job = &mut state.jobs[index];
+            if job.lane == AnalysisJobLane::WholeGame && !job.submitted {
+                let started = started_from(job);
+                let counts = whole_game_progress_counts(job);
+                if disposition == JobDisposition::Paused {
+                    state.analysis_task.as_mut().unwrap().state = AnalysisTaskStateDto::Pausing;
+                }
+                finish_whole_game_job(
+                    state,
+                    &started,
+                    match disposition {
+                        JobDisposition::TimedOut => AnalysisJobOutcomeDto::Timeout,
+                        JobDisposition::Superseded => AnalysisJobOutcomeDto::Superseded,
+                        _ => AnalysisJobOutcomeDto::Cancelled,
+                    },
+                    counts.0,
+                    counts.1,
+                    counts.2,
+                    None,
+                );
+                publish_snapshot(state);
+                return Ok(());
+            }
             if job.state == AnalysisJobStateDto::Stopping {
                 return Ok(());
             }
@@ -1174,8 +1393,8 @@ impl ForegroundEngineManager {
                     None,
                 )
             };
-            if disposition == JobDisposition::Cancelled {
-                cancel_analysis_task_locked(state, job_id);
+            if disposition == JobDisposition::Paused {
+                state.analysis_task.as_mut().unwrap().state = AnalysisTaskStateDto::Pausing;
             }
             publish_event(state, ForegroundEngineEventDto::Job { job: event });
             publish_snapshot(state);
@@ -2409,7 +2628,12 @@ impl Inner {
                 };
                 state.jobs[job_index].node_path = next.node_path;
                 state.jobs[job_index].state = AnalysisJobStateDto::Queued;
+                state.jobs[job_index].submitted = false;
                 state.jobs[job_index].submitted_at = Instant::now();
+                if let Some(task) = state.analysis_task.as_mut() {
+                    task.state = AnalysisTaskStateDto::Queued;
+                }
+                publish_snapshot(state);
                 Some(WholeGameAdvance { started, jsonl })
             }
             Ok(_) => None,
@@ -2445,9 +2669,7 @@ impl Inner {
         let manager = ForegroundEngineManager {
             inner: Arc::clone(self),
         };
-        if let Err(published) = manager.write_live_jsonl(&pending.started.run_id, &pending.jsonl) {
-            manager.abandon_job(&pending.started.run_id, &pending.started.job_id, published);
-        }
+        manager.dispatch_whole_game_query(pending.started.run_id, pending.started.job_id, pending.jsonl);
     }
 
     fn check_job_deadlines(self: &Arc<Self>, run_id: &str) {
@@ -2502,6 +2724,7 @@ impl Inner {
         let Some(run) = admitting_run(&state.phase, run_id) else {
             return published;
         };
+        fail_analysis_task_locked(&mut state, None, message);
         state.operation += 1;
         let deadline = state
             .jobs
@@ -2768,7 +2991,21 @@ fn finish_whole_game_job(
         })
         .unwrap_or_else(|| started.node_path.clone());
     finish_analysis_task_locked(state, &started.job_id, outcome, failure.as_ref());
-    state.jobs.retain(|job| job.job_id != started.job_id);
+    if state
+        .analysis_task
+        .as_ref()
+        .is_some_and(|task| task.job_id == started.job_id && task.state == AnalysisTaskStateDto::Paused)
+    {
+        let job = state
+            .jobs
+            .iter_mut()
+            .find(|job| job.job_id == started.job_id)
+            .unwrap();
+        job.terminal = true;
+        job.cancel_deadline = None;
+    } else {
+        state.jobs.retain(|job| job.job_id != started.job_id);
+    }
     publish_event(
         state,
         ForegroundEngineEventDto::Job {
@@ -2823,6 +3060,10 @@ fn finish_analysis_task_locked(
             task.state = AnalysisTaskStateDto::Completed;
             task.reason = None;
         }
+        AnalysisJobOutcomeDto::Cancelled if task.state == AnalysisTaskStateDto::Pausing => {
+            task.state = AnalysisTaskStateDto::Paused;
+            task.reason = None;
+        }
         AnalysisJobOutcomeDto::Cancelled => {
             task.state = AnalysisTaskStateDto::Cancelled;
             task.reason = Some("Analysis task was cancelled.".into());
@@ -2853,7 +3094,10 @@ fn cancel_analysis_task_locked(state: &mut ManagerState, job_id: &str) {
         task.job_id == job_id
             && matches!(
                 task.state,
-                AnalysisTaskStateDto::Queued | AnalysisTaskStateDto::Searching
+                AnalysisTaskStateDto::Queued
+                    | AnalysisTaskStateDto::Searching
+                    | AnalysisTaskStateDto::Pausing
+                    | AnalysisTaskStateDto::Paused
             )
     }) {
         task.state = AnalysisTaskStateDto::Cancelled;
@@ -2867,12 +3111,17 @@ fn invalidate_analysis_task_locked(state: &mut ManagerState, reason: &str) {
             task.state,
             AnalysisTaskStateDto::Queued
                 | AnalysisTaskStateDto::Searching
+                | AnalysisTaskStateDto::Pausing
+                | AnalysisTaskStateDto::Paused
                 | AnalysisTaskStateDto::Completed
                 | AnalysisTaskStateDto::Failed
         )
     }) {
         task.state = AnalysisTaskStateDto::Invalidated;
         task.reason = Some(reason.into());
+        state
+            .jobs
+            .retain(|job| !(job.job_id == task.job_id && job.terminal));
     }
 }
 
@@ -2881,11 +3130,17 @@ fn fail_analysis_task_locked(state: &mut ManagerState, job_id: Option<&str>, rea
         job_id.is_none_or(|job_id| task.job_id == job_id)
             && matches!(
                 task.state,
-                AnalysisTaskStateDto::Queued | AnalysisTaskStateDto::Searching
+                AnalysisTaskStateDto::Queued
+                    | AnalysisTaskStateDto::Searching
+                    | AnalysisTaskStateDto::Pausing
+                    | AnalysisTaskStateDto::Paused
             )
     }) {
         task.state = AnalysisTaskStateDto::Failed;
         task.reason = Some(reason.into());
+        state
+            .jobs
+            .retain(|job| !(job.job_id == task.job_id && job.terminal));
     }
 }
 

@@ -14,6 +14,7 @@ import { ProviderPanel } from "./components/ProviderPanel";
 import {
   analysisTaskSnapshot,
   cancelKataGoAnalysis,
+  continueAnalysisTask,
   cancelSelectedNodeAnalysis,
   classifyProblems,
   fakeAnalyze,
@@ -27,6 +28,7 @@ import {
   playCurrentGame,
   prepareApplicationExit,
   prepareDocumentReplacement,
+  pauseAnalysisTask,
   previewAnalysisScope,
   projectCurrentGameMainline,
   replaySgfPositions,
@@ -212,6 +214,8 @@ export function App() {
   const handleWholeGameJobRef = useRef<(job: AnalysisJobEventDto) => void>(() => undefined);
   const analysisTaskRef = useRef<AnalysisTaskDto | null>(null);
   const analysisTaskSnapshotRequestRef = useRef(0);
+  const analysisTaskActionInFlightRef = useRef(false);
+  const analysisTaskPauseFenceRef = useRef<{ taskId: string; jobId: string; continued: boolean } | null>(null);
 
   useEffect(() => {
     getHealth()
@@ -646,9 +650,20 @@ export function App() {
         if (snapshot.selected_node_job?.mode === "continuous") {
           adoptAutomaticJobToken(snapshot.selected_node_job);
         }
-        wholeGameJobRef.current = snapshot.whole_game_job ?? null;
-        setWholeGameRunning(snapshot.whole_game_job?.state === "queued" || snapshot.whole_game_job?.state === "searching" || snapshot.whole_game_job?.state === "stopping");
-        if (!snapshot.whole_game_job) setWholeGameProgress(null);
+        const snapshotWholeGameJob = snapshot.whole_game_job ?? null;
+        const taskReserved = isAnalysisTaskReserved(analysisTaskRef.current);
+        const pauseFence = analysisTaskPauseFenceRef.current;
+        const fencedJob = snapshotWholeGameJob != null
+          && pauseFence != null && pauseFence.taskId === analysisTaskRef.current?.task_id
+          && pauseFence.jobId === snapshotWholeGameJob.job_id;
+        if (!fencedJob && (snapshotWholeGameJob || !taskReserved)) {
+          wholeGameJobRef.current = snapshotWholeGameJob;
+        }
+        const snapshotWholeGameActive = snapshotWholeGameJob?.state === "queued"
+          || snapshotWholeGameJob?.state === "searching"
+          || snapshotWholeGameJob?.state === "stopping";
+        setWholeGameRunning(taskReserved || (!fencedJob && snapshotWholeGameActive));
+        if (!snapshotWholeGameJob && !taskReserved) setWholeGameProgress(null);
         void refreshAnalysisTaskSnapshot();
       },
       (failure) => {
@@ -1041,6 +1056,8 @@ export function App() {
     setSelectedNodeRunning(false);
     resetWholeGameSession();
     analysisTaskRef.current = null;
+    analysisTaskPauseFenceRef.current = null;
+    ++analysisTaskSnapshotRequestRef.current;
     setAnalysisTask(null);
     setAnalysisScopePreview(null);
     setAnalysisTaskError(null);
@@ -1579,17 +1596,29 @@ export function App() {
   }
 
   function adoptAnalysisTask(next: AnalysisTaskDto | null) {
+    const fence = analysisTaskPauseFenceRef.current;
+    if (fence && !next) return;
+    if (fence && next?.task_id === fence.taskId && next.job_id === fence.jobId) {
+      if (fence.continued || next.state === "queued" || next.state === "searching") return;
+    }
+    if (fence && next) {
+      if (next.task_id === fence.taskId && next.job_id !== fence.jobId && isAnalysisTaskReserved(next)) {
+        fence.continued = true;
+      } else if (next.task_id !== fence.taskId || !isAnalysisTaskReserved(next)) {
+        analysisTaskPauseFenceRef.current = null;
+      }
+    }
     analysisTaskRef.current = next;
     setAnalysisTask(next);
     if (!next) return;
-    const active = next.state === "queued" || next.state === "searching";
-    setWholeGameRunning(active);
+    const acceptsJobEvents = next.state === "queued" || next.state === "searching";
+    setWholeGameRunning(isAnalysisTaskReserved(next));
     setWholeGameProgress({
       completed: next.completed.length,
       expected: next.requested.length,
       remaining: Math.max(0, next.requested.length - next.completed.length)
     });
-    wholeGameJobRef.current = active ? {
+    wholeGameJobRef.current = acceptsJobEvents ? {
       run_id: next.run_id,
       job_id: next.job_id,
       lane: "whole_game",
@@ -1600,8 +1629,8 @@ export function App() {
     } : null;
   }
 
-  async function refreshAnalysisTaskSnapshot() {
-    if (!nativeRuntime) return null;
+  async function refreshAnalysisTaskSnapshot(force = false) {
+    if (!nativeRuntime || (analysisTaskActionInFlightRef.current && !force)) return analysisTaskRef.current;
     const request = ++analysisTaskSnapshotRequestRef.current;
     try {
       const next = await analysisTaskSnapshot();
@@ -1621,7 +1650,7 @@ export function App() {
   }) {
     const game = currentGameRef.current;
     if (!nativeRuntime || !game) throw new Error("Analysis task requires a current game.");
-    if (analysisTaskRef.current?.state === "queued" || analysisTaskRef.current?.state === "searching") {
+    if (isAnalysisTaskReserved(analysisTaskRef.current)) {
       throw new Error("An analysis task is already active.");
     }
     const visits = parseU32(String(input.visits), "Total visits", false);
@@ -1673,7 +1702,7 @@ export function App() {
   async function handleQuickAnalysisTask() {
     const run = runFromSnapshot(engineSnapshotRef.current);
     const game = currentGameRef.current;
-    if (!run || !game || !engineReady) return;
+    if (!run || !game || !admitsForegroundEngineJobs(engineSnapshotRef.current) || departurePendingRef.current || isAnalysisTaskReserved(analysisTaskRef.current)) return;
     setAnalysisTaskRequestPending(true);
     setAnalysisTaskError(null);
     try {
@@ -1689,6 +1718,69 @@ export function App() {
     } finally {
       setAnalysisTaskRequestPending(false);
     }
+  }
+
+  async function handlePauseAnalysisTask() {
+    const task = analysisTaskRef.current;
+    const run = runFromSnapshot(engineSnapshotRef.current);
+    if (analysisTaskActionInFlightRef.current
+      || !task
+      || (task.state !== "queued" && task.state !== "searching")
+      || !run
+      || run.run_id !== task.run_id
+      || !admitsForegroundEngineJobs(engineSnapshotRef.current)
+      || departurePendingRef.current
+      || departurePrompt) return;
+    analysisTaskActionInFlightRef.current = true;
+    setAnalysisTaskRequestPending(true);
+    setAnalysisTaskError(null);
+    ++analysisTaskSnapshotRequestRef.current;
+    analysisTaskPauseFenceRef.current = { taskId: task.task_id, jobId: task.job_id, continued: false };
+    wholeGameJobRef.current = null;
+    try {
+      const paused = await pauseAnalysisTask({ runId: task.run_id, taskId: task.task_id });
+      adoptAnalysisTask(paused);
+      setMessage(`Analysis task ${paused.state}: ${paused.completed.length}/${paused.requested.length} completed.`);
+    } catch (error) {
+      analysisTaskPauseFenceRef.current = null;
+      adoptAnalysisTask(task);
+      const detail = errorMessage(error);
+      setAnalysisTaskError(detail);
+      setMessage(`Pause failed: ${detail}`);
+    } finally {
+      analysisTaskActionInFlightRef.current = false;
+      setAnalysisTaskRequestPending(false);
+    }
+    void refreshAnalysisTaskSnapshot();
+  }
+
+  async function handleContinueAnalysisTask() {
+    const task = analysisTaskRef.current;
+    const run = runFromSnapshot(engineSnapshotRef.current);
+    if (analysisTaskActionInFlightRef.current
+      || task?.state !== "paused"
+      || !run
+      || run.run_id !== task.run_id
+      || !admitsForegroundEngineJobs(engineSnapshotRef.current)
+      || departurePendingRef.current
+      || departurePrompt) return;
+    analysisTaskActionInFlightRef.current = true;
+    setAnalysisTaskRequestPending(true);
+    setAnalysisTaskError(null);
+    ++analysisTaskSnapshotRequestRef.current;
+    try {
+      const continued = await continueAnalysisTask({ runId: task.run_id, taskId: task.task_id });
+      adoptAnalysisTask(continued);
+      setMessage(`Analysis task ${continued.state}: ${continued.completed.length}/${continued.requested.length} completed.`);
+    } catch (error) {
+      const detail = errorMessage(error);
+      setAnalysisTaskError(detail);
+      setMessage(`Continue failed: ${detail}`);
+    } finally {
+      analysisTaskActionInFlightRef.current = false;
+      setAnalysisTaskRequestPending(false);
+    }
+    void refreshAnalysisTaskSnapshot();
   }
 
   handleWholeGameJobRef.current = (job: AnalysisJobEventDto) => {
@@ -1722,6 +1814,7 @@ export function App() {
 
   async function handleAnalyzeKataGoGame(runId: string, maxVisits: number) {
     const game = currentGameRef.current;
+    if (isAnalysisTaskReserved(analysisTaskRef.current)) return;
     if (!nativeRuntime || !game) {
       setMessage(nativeRuntime ? "整局分析需要当前游戏。" : nativeCurrentGameUnavailable);
       return;
@@ -1759,18 +1852,25 @@ export function App() {
   }
 
   async function handleCancelWholeGameAnalysis() {
+    if (analysisTaskActionInFlightRef.current) return;
     const task = analysisTaskRef.current;
     const pending = wholeGameJobRef.current;
-    const activeTask = task?.state === "queued" || task?.state === "searching" ? task : null;
+    const activeTask = isAnalysisTaskReserved(task) ? task : null;
     const runId = pending?.run_id ?? activeTask?.run_id;
     const jobId = pending?.job_id ?? activeTask?.job_id;
     if (!runId || !jobId) return;
+    analysisTaskActionInFlightRef.current = true;
+    setAnalysisTaskRequestPending(true);
+    ++analysisTaskSnapshotRequestRef.current;
     try {
       setMessage("Cancelling analysis task...");
       await cancelKataGoAnalysis(runId, jobId);
-      await refreshAnalysisTaskSnapshot();
+      await refreshAnalysisTaskSnapshot(true);
     } catch (error) {
       setMessage(`Cancel failed: ${errorMessage(error)}`);
+    } finally {
+      analysisTaskActionInFlightRef.current = false;
+      setAnalysisTaskRequestPending(false);
     }
   }
 
@@ -2180,12 +2280,14 @@ export function App() {
       draft={analysisScopeDraft}
       preview={analysisScopePreview}
       task={analysisTask}
-      canRun={nativeRuntime && engineReady && Boolean(currentGame)}
+      canRun={nativeRuntime && engineReady && Boolean(currentGame) && !departurePending && !departurePrompt}
       busy={analysisTaskRequestPending}
       error={analysisTaskError}
       onDraftChange={handleAnalysisScopeDraftChange}
       onPreview={() => void handlePreviewAnalysisScope()}
       onStart={() => void handleStartAnalysisTask()}
+      onPause={() => void handlePauseAnalysisTask()}
+      onContinue={() => void handleContinueAnalysisTask()}
       onCancel={() => void handleCancelWholeGameAnalysis()}
     />
     </div>
@@ -2303,6 +2405,13 @@ export function App() {
       />
     ) : null}
   </main>;
+}
+
+function isAnalysisTaskReserved(task: AnalysisTaskDto | null): boolean {
+  return task != null && (task.state === "queued"
+    || task.state === "searching"
+    || task.state === "pausing"
+    || task.state === "paused");
 }
 
 function continuousPhaseStatus(phase: ContinuousAnalysisPhaseDto): string {
