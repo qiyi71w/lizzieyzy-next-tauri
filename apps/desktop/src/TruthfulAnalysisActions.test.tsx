@@ -57,6 +57,7 @@ const backend = vi.hoisted(() => ({
   restartForegroundEngine: vi.fn(() => Promise.resolve()),
   switchForegroundEngine: vi.fn(() => Promise.resolve()),
   getForegroundEngineSnapshot: vi.fn(),
+  foregroundEngineContinuousAction: vi.fn(),
   subscribeForegroundEngine: vi.fn()
 }));
 
@@ -138,11 +139,13 @@ beforeEach(() => {
     autoload_profile_id: null,
     profiles: [savedProfile]
   });
-  backend.getForegroundEngineSnapshot.mockResolvedValue({ revision: 0, lifecycle: { state: "no_engine" } });
+  backend.getForegroundEngineSnapshot.mockResolvedValue({ revision: 0, lifecycle: { state: "no_engine" }, continuous: { enabled: null, phase: "loading" } });
   backend.startSelectedNodeAnalysis.mockResolvedValue({
     run_id: "run-1",
     job_id: "job-1",
     lane: "selected_node",
+    mode: "finite",
+    state: "queued",
     generation: 1,
     node_path: { indices: [] }
   });
@@ -150,6 +153,8 @@ beforeEach(() => {
     run_id: "run-1",
     job_id: "job-wg",
     lane: "whole_game",
+    mode: "finite",
+    state: "queued",
     generation: 1,
     node_path: { indices: [] }
   });
@@ -175,7 +180,7 @@ beforeEach(() => {
   backend.subscribeForegroundEngine.mockImplementation(async (onSnapshot, _onFailure, onJob) => {
     listeners.onSnapshot = onSnapshot;
     listeners.onJob = onJob;
-    onSnapshot({ revision: 0, lifecycle: { state: "no_engine" } });
+    onSnapshot({ revision: 0, lifecycle: { state: "no_engine" }, continuous: { enabled: null, phase: "loading" } });
     return () => undefined;
   });
 });
@@ -213,6 +218,7 @@ async function readyEngine(host: HTMLElement) {
   await act(async () => {
     listeners.onSnapshot?.({
       revision: 2,
+      continuous: { enabled: true, phase: "waiting" },
       lifecycle: {
         state: "ready",
         run: {
@@ -270,9 +276,6 @@ describe("truthful native analysis actions", () => {
     expect((host.querySelector('button[aria-label="闪电分析"]') as HTMLButtonElement).disabled).toBe(true);
 
     openAnalyzeMenu(host);
-    const continuous = buttonNamed(host, "开始/停止 分析");
-    expect(continuous.disabled).toBe(true);
-    expect(continuous.title).toMatch(/连续分析尚未接入/);
     const lightning = buttonNamed(host, "试复盘 / 闪电分析");
     expect(lightning.disabled).toBe(true);
     expect(lightning.title).toMatch(/尚未接入|闪电分析/);
@@ -289,7 +292,6 @@ describe("truthful native analysis actions", () => {
     act(() => {
       buttonNamed(host, "AI 解说").click();
       buttonNamed(host, "闪电分析").click();
-      continuous.click();
       lightning.click();
       autoAnalyze.click();
     });
@@ -353,6 +355,8 @@ describe("truthful native analysis actions", () => {
       run_id: "run-1",
       job_id: "job-fail",
       lane: "selected_node",
+      mode: "finite",
+      state: "queued",
       generation: 1,
       node_path: { indices: [] }
     });
@@ -365,6 +369,7 @@ describe("truthful native analysis actions", () => {
         run_id: "run-1",
         job_id: "job-fail",
         lane: "selected_node",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "failed",

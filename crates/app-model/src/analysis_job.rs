@@ -22,9 +22,35 @@ pub enum AnalysisJobLaneDto {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum AnalysisJobModeDto {
+    Finite,
+    Continuous,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalysisJobStateDto {
+    Queued,
+    Searching,
+    Stopping,
+    TimeLimited,
+    VisitsLimited,
+}
+
+impl AnalysisJobStateDto {
+    pub fn is_limited(self) -> bool {
+        matches!(self, Self::TimeLimited | Self::VisitsLimited)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AnalysisJobOutcomeDto {
     Started,
     Progress,
+    Stopping,
+    TimeLimited,
+    VisitsLimited,
     Completed,
     Cancelled,
     Superseded,
@@ -37,6 +63,8 @@ pub struct AnalysisJobStartedDto {
     pub run_id: String,
     pub job_id: String,
     pub lane: AnalysisJobLaneDto,
+    pub mode: AnalysisJobModeDto,
+    pub state: AnalysisJobStateDto,
     pub generation: u64,
     pub node_path: NodePath,
 }
@@ -54,6 +82,7 @@ pub struct AnalysisJobEventDto {
     pub run_id: String,
     pub job_id: String,
     pub lane: AnalysisJobLaneDto,
+    pub mode: AnalysisJobModeDto,
     pub generation: u64,
     pub node_path: NodePath,
     pub outcome: AnalysisJobOutcomeDto,
@@ -67,6 +96,8 @@ pub struct AnalysisJobEventDto {
     pub frame: Option<AnalysisFrameDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<EngineFailureDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_game: Option<crate::CurrentGameResultDto>,
 }
 
 impl AnalysisJobStartedDto {
@@ -95,7 +126,14 @@ pub fn admits_analysis_publication(
     event: &AnalysisJobEventDto,
     current: &AnalysisPublicationScopeDto,
 ) -> bool {
-    event.outcome == AnalysisJobOutcomeDto::Completed
+    (event.outcome == AnalysisJobOutcomeDto::Completed
+        || (event.mode == AnalysisJobModeDto::Continuous
+            && matches!(
+                event.outcome,
+                AnalysisJobOutcomeDto::Progress
+                    | AnalysisJobOutcomeDto::TimeLimited
+                    | AnalysisJobOutcomeDto::VisitsLimited
+            )))
         && event.frame.is_some()
         && event.run_id == current.run_id
         && event.job_id == current.job_id
@@ -111,7 +149,16 @@ pub fn admits_analysis_attachment(event: &AnalysisJobEventDto) -> bool {
         return false;
     }
     match event.lane {
-        AnalysisJobLaneDto::SelectedNode => event.outcome == AnalysisJobOutcomeDto::Completed,
+        AnalysisJobLaneDto::SelectedNode => {
+            event.outcome == AnalysisJobOutcomeDto::Completed
+                || (event.mode == AnalysisJobModeDto::Continuous
+                    && matches!(
+                        event.outcome,
+                        AnalysisJobOutcomeDto::Progress
+                            | AnalysisJobOutcomeDto::TimeLimited
+                            | AnalysisJobOutcomeDto::VisitsLimited
+                    ))
+        }
         AnalysisJobLaneDto::WholeGame => event.outcome == AnalysisJobOutcomeDto::Progress,
     }
 }
@@ -137,6 +184,7 @@ mod tests {
             run_id: run_id.into(),
             job_id: job_id.into(),
             lane: AnalysisJobLaneDto::SelectedNode,
+            mode: AnalysisJobModeDto::Finite,
             generation,
             node_path: NodePath { indices },
             outcome,
@@ -157,6 +205,7 @@ mod tests {
                 policy: None,
             }),
             failure: None,
+            current_game: None,
         }
     }
 
@@ -166,6 +215,8 @@ mod tests {
             run_id: "run-1".into(),
             job_id: "job-1".into(),
             lane: AnalysisJobLaneDto::SelectedNode,
+            mode: AnalysisJobModeDto::Finite,
+            state: AnalysisJobStateDto::Queued,
             generation: 7,
             node_path: NodePath { indices: vec![0, 1] },
         };
@@ -307,6 +358,7 @@ mod tests {
             run_id: "run-1".into(),
             job_id: "job-9".into(),
             lane: AnalysisJobLaneDto::WholeGame,
+            mode: AnalysisJobModeDto::Finite,
             generation: 4,
             node_path: NodePath { indices: vec![] },
             outcome: AnalysisJobOutcomeDto::Progress,
@@ -315,6 +367,7 @@ mod tests {
             remaining: Some(2),
             frame: None,
             failure: None,
+            current_game: None,
         };
         let wrapped = ForegroundEngineEventDto::Job { job: event.clone() };
         let json = serde_json::to_value(&wrapped).unwrap();

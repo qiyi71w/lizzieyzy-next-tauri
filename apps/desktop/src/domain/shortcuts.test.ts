@@ -109,13 +109,6 @@ describe("shortcut registry catalog", () => {
       aliases: [],
       focusRule: "focus-safe"
     });
-    expect(catalog.find((item) => item.id === "analysis.continuous")).toEqual({
-      id: "analysis.continuous",
-      label: "连续分析（未接入）",
-      primary: { key: " " },
-      aliases: [],
-      focusRule: "focus-safe"
-    });
     expect(catalog.find((item) => item.id === "review.remove-variation")?.aliases).toEqual([
       { key: "Backspace", shift: true }
     ]);
@@ -215,11 +208,6 @@ describe("shortcut reference and dispatch", () => {
       id: "game.human-vs-engine",
       label: "人机对局（未接入）",
       keys: "N"
-    });
-    expect(entries.find((entry) => entry.id === "analysis.continuous")).toEqual({
-      id: "analysis.continuous",
-      label: "连续分析（未接入）",
-      keys: "Space"
     });
     expect(entries.find((entry) => entry.id === "review.next-move-marker")).toEqual({
       id: "review.next-move-marker",

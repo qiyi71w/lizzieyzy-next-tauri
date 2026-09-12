@@ -58,6 +58,7 @@ const backend = vi.hoisted(() => ({
   restartForegroundEngine: vi.fn(() => Promise.resolve()),
   switchForegroundEngine: vi.fn(() => Promise.resolve()),
   getForegroundEngineSnapshot: vi.fn(),
+  foregroundEngineContinuousAction: vi.fn(),
   subscribeForegroundEngine: vi.fn(),
   inspectCurrentGameRecovery: vi.fn(async (): Promise<{ status: "none" | "abnormal" | "normal" | "unreadable"; envelope?: unknown; message?: string }> => ({ status: "none" })),
   restoreCurrentGameRecovery: vi.fn(),
@@ -169,11 +170,13 @@ beforeEach(() => {
     autoload_profile_id: null,
     profiles: [savedProfile]
   });
-  backend.getForegroundEngineSnapshot.mockResolvedValue({ revision: 0, lifecycle: { state: "no_engine" } });
+  backend.getForegroundEngineSnapshot.mockResolvedValue({ revision: 0, lifecycle: { state: "no_engine" }, continuous: { enabled: null, phase: "loading" } });
   backend.startSelectedNodeAnalysis.mockResolvedValue({
     run_id: "run-1",
     job_id: "job-1",
     lane: "selected_node",
+    mode: "finite",
+    state: "queued",
     generation: 1,
     node_path: { indices: [] }
   });
@@ -181,6 +184,8 @@ beforeEach(() => {
     run_id: "run-1",
     job_id: "job-wg",
     lane: "whole_game",
+    mode: "finite",
+    state: "queued",
     generation: 1,
     node_path: { indices: [] }
   });
@@ -188,7 +193,7 @@ beforeEach(() => {
   backend.subscribeForegroundEngine.mockImplementation(async (onSnapshot, _onFailure, onJob) => {
     listeners.onSnapshot = onSnapshot;
     listeners.onJob = onJob;
-    onSnapshot({ revision: 0, lifecycle: { state: "no_engine" } });
+    onSnapshot({ revision: 0, lifecycle: { state: "no_engine" }, continuous: { enabled: null, phase: "loading" } });
     return () => undefined;
   });
 });
@@ -226,6 +231,7 @@ async function readyEngine(host: HTMLElement, runId = "run-1") {
   await act(async () => {
     listeners.onSnapshot?.({
       revision: 2,
+      continuous: { enabled: true, phase: "waiting" },
       lifecycle: {
         state: "ready",
         run: {
@@ -279,6 +285,8 @@ async function startSelectedNode(host: HTMLElement, jobId = "job-1", path: NodeP
     run_id: "run-1",
     job_id: jobId,
     lane: "selected_node",
+    mode: "finite",
+    state: "queued",
     generation: 1,
     node_path: path
   });
@@ -294,6 +302,7 @@ async function completeSelectedNode(jobId: string, path: NodePath, frame: Analys
       run_id: "run-1",
       job_id: jobId,
       lane: "selected_node",
+      mode: "finite",
       generation: 1,
       node_path: path,
       outcome: "completed",
@@ -312,6 +321,7 @@ async function emitWholeGameProgress(path: NodePath, frame: AnalysisFrameDto, pr
       run_id: "run-1",
       job_id: "job-wg",
       lane: "whole_game",
+      mode: "finite",
       generation: 1,
       node_path: path,
       outcome: "progress",
@@ -560,6 +570,7 @@ describe("analysis presentation bound to exact nodes", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: { state: "no_engine" }
       });
     });
@@ -640,6 +651,7 @@ describe("attached SGF analysis as the active persistence path", () => {
         run_id: "run-1",
         job_id: "job-1",
         lane: "selected_node",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "cancelled"
@@ -648,6 +660,7 @@ describe("attached SGF analysis as the active persistence path", () => {
         run_id: "run-1",
         job_id: "job-1",
         lane: "selected_node",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "failed",
@@ -657,6 +670,7 @@ describe("attached SGF analysis as the active persistence path", () => {
         run_id: "run-1",
         job_id: "job-1",
         lane: "selected_node",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "completed",

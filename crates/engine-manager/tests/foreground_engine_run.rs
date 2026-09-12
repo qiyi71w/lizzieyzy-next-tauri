@@ -166,16 +166,20 @@ fn sample_query() -> AnalysisQuery {
         max_visits: Some(2),
         include_ownership: None,
         include_policy: None,
+        report_during_search_every: None,
+        override_settings: None,
     }
 }
 
 fn selected_request(run_id: &str, generation: u64, indices: Vec<u32>) -> SelectedNodeJobRequest {
     SelectedNodeJobRequest {
         run_id: run_id.into(),
+        mode: app_model::AnalysisJobModeDto::Finite,
         generation,
         node_path: NodePath { indices },
         query: sample_query(),
         board_size: 9,
+        position_empty: true,
     }
 }
 
@@ -235,6 +239,10 @@ while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   [ -z "$id" ] && id="ok"
   if printf '%s' "$line" | grep -q '"action":"terminate"'; then
+    target=$(printf '%s' "$line" | sed -n 's/.*"terminateId":"\([^"]*\)".*/\1/p')
+    [ -n "$target" ] && [ "$target" != "$id" ] || exit 20
+    printf '%s\n' "$line"
+    printf '{"id":"%s","turnNumber":0,"isDuringSearch":false,"noResults":true}\n' "$target"
     holding=0
     continue
   fi
@@ -261,9 +269,10 @@ while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   [ -z "$id" ] && id="ok"
   if printf '%s' "$line" | grep -q '"action":"terminate"'; then
-    if [ -n "$pending" ] && [ "$pending" != "$id" ]; then
-      printf '{"id":"%s","turnNumber":0,"rootInfo":{"visits":4,"winrate":0.6,"scoreMean":1.25}}\n' "$pending"
-    fi
+    target=$(printf '%s' "$line" | sed -n 's/.*"terminateId":"\([^"]*\)".*/\1/p')
+    [ -n "$target" ] && [ "$target" != "$id" ] || exit 20
+    printf '%s\n' "$line"
+    printf '{"id":"%s","turnNumber":0,"isDuringSearch":false,"noResults":true}\n' "$target"
     pending=""
     mode=echo
     continue
@@ -277,7 +286,7 @@ while IFS= read -r line; do
     pending="$id"
     continue
   fi
-  printf '{"id":"%s","turnNumber":0,"rootInfo":{"visits":4,"winrate":0.6,"scoreMean":1.25}}\n' "$id"
+  printf '{"id":"%s","turnNumber":0,"isDuringSearch":false,"rootInfo":{"visits":4,"winrate":0.6,"scoreMean":1.25},"moveInfos":[{"move":"D4","visits":4,"winrate":0.6,"scoreMean":1.25}]}\n' "$id"
 done
 "#
     .into()
@@ -313,7 +322,14 @@ while IFS= read -r line; do
   fi
   id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   [ -z "$id" ] && id="ok"
-  printf '{"id":"%s","turnNumber":0}\n' "$id"
+  if printf '%s' "$line" | grep -q '"action":"terminate"'; then
+    target=$(printf '%s' "$line" | sed -n 's/.*"terminateId":"\([^"]*\)".*/\1/p')
+    [ -n "$target" ] && [ "$target" != "$id" ] || exit 20
+    printf '%s\n' "$line"
+    printf '{"id":"%s","turnNumber":0,"isDuringSearch":false,"noResults":true}\n' "$target"
+    continue
+  fi
+  printf '{"id":"%s","turnNumber":0,"isDuringSearch":false,"rootInfo":{"visits":4,"winrate":0.6,"scoreMean":1.25},"moveInfos":[{"move":"D4","visits":4,"winrate":0.6,"scoreMean":1.25}]}\n' "$id"
   if [ "${EXIT_AFTER:-}" = "first" ]; then
     exit "${EXIT_CODE:-1}"
   fi
@@ -721,10 +737,12 @@ fn selected_node_completion_publishes_normalized_candidates_pv_ownership_policy_
     let started = manager
         .start_selected_node_job(SelectedNodeJobRequest {
             run_id: run_id.clone(),
+            mode: app_model::AnalysisJobModeDto::Finite,
             generation: 4,
             node_path: NodePath { indices: vec![0, 1] },
             query,
             board_size: 9,
+            position_empty: true,
         })
         .unwrap();
     let completed = wait_job(&events, Duration::from_secs(2), |job| {
@@ -1176,34 +1194,40 @@ fn resident_whole_game_script() -> String {
 
 #[cfg(unix)]
 fn echo_first_then_hold_script(release: &Path) -> String {
-    format!(
-        r#"
-first=1
-while IFS= read -r line; do
-  if [ -n "$ENGINE_LOG" ]; then
-    printf '%s\n' "$line" >> "$ENGINE_LOG"
-  fi
-  printf '%s' "$line" | grep -q '"action":"terminate"' && continue
-  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
-  [ -z "$id" ] && id="ok"
-  case "$id" in
-    lifecycle-readiness-*)
-      printf '{{"id":"%s","turnNumber":0}}\n' "$id"
-      ;;
-    *)
-      if [ "$first" = 1 ]; then
-        first=0
-        printf '{{"id":"%s","turnNumber":0}}\n' "$id"
-      else
-        while [ ! -f '{release}' ]; do sleep 0.01; done
-        printf '{{"id":"%s","turnNumber":1}}\n' "$id"
-      fi
-      ;;
-  esac
-done
-"#,
-        release = release.display(),
-    )
+    r#"
+export ENGINE_LOG
+exec python3 -u -c '
+import json, os, sys, threading, time
+cancelled = set()
+first = True
+def emit(identity):
+    print(json.dumps(dict(id=identity, turnNumber=0, isDuringSearch=False,
+        rootInfo=dict(visits=4, winrate=0.6, scoreMean=1.25),
+        moveInfos=[dict(move="D4", visits=4, winrate=0.6, scoreMean=1.25)])), flush=True)
+def held(identity):
+    while not os.path.isfile("$RELEASE_PATH"):
+        if identity in cancelled: return
+        time.sleep(0.01)
+    if identity not in cancelled: emit(identity)
+for line in sys.stdin:
+    log = os.environ.get("ENGINE_LOG")
+    if log:
+        with open(log, "a") as output: output.write(line)
+    q = json.loads(line)
+    if q.get("action") == "terminate":
+        assert "terminateId" in q and q["id"] != q["terminateId"]
+        cancelled.add(q["terminateId"])
+        print(json.dumps(q), flush=True)
+        print(json.dumps(dict(id=q["terminateId"], turnNumber=0, isDuringSearch=False, noResults=True)), flush=True)
+    elif q["id"].startswith("lifecycle-readiness-"):
+        emit(q["id"])
+    elif first:
+        first = False
+        emit(q["id"])
+    else:
+        threading.Thread(target=held, args=(q["id"],), daemon=True).start()
+'
+"#.replace("$RELEASE_PATH", &release.to_string_lossy())
 }
 
 #[cfg(unix)]
@@ -1270,33 +1294,8 @@ fn whole_game_user_cancel_keeps_run_ready_and_does_not_cancel_selected_node() {
     let log = temp.path().join("engine.log");
     let release = temp.path().join("release");
     let selected_cancelled = temp.path().join("selected-cancelled");
-    let script = format!(
-        r#"
-ENGINE_LOG='{log}'
-while IFS= read -r line; do
-  printf '%s\n' "$line" >> "$ENGINE_LOG"
-  printf '%s' "$line" | grep -q '"action":"terminate"' && continue
-  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
-  [ -z "$id" ] && id="ok"
-  case "$id" in
-    lifecycle-readiness-*)
-      printf '{{"id":"%s","turnNumber":0}}\n' "$id"
-      ;;
-    *)
-      if [ "${{WG_FIRST:-1}}" = 1 ]; then
-        WG_FIRST=0
-        printf '{{"id":"%s","turnNumber":0}}\n' "$id"
-      else
-        while [ ! -f '{release}' ]; do sleep 0.01; done
-        printf '{{"id":"%s","turnNumber":1}}\n' "$id"
-      fi
-      ;;
-  esac
-done
-"#,
-        log = log.display(),
-        release = release.display(),
-    );
+    let mut script = format!("ENGINE_LOG='{}'\n", log.display());
+    script.push_str(&echo_first_then_hold_script(&release));
     let (manager, _, events, run_id) = ready_manager(&temp, &script);
     struct FileCancel(std::path::PathBuf);
     impl AnalysisJobCancel for FileCancel {
@@ -3214,4 +3213,1103 @@ exit 9
             Arc::new(AnalysisCancelToken::new()),
         )
         .expect_err("a new session must not restore the previous Error Run identity");
+}
+
+#[cfg(unix)]
+fn streaming_engine_script() -> String {
+    r#"
+exec python3 -u -c '
+import json, os, sys, threading, time
+scenario = os.environ.get("SCENARIO", "stream")
+active = set()
+queued = []
+def search(identity):
+    visits = 16
+    while identity in active:
+        time.sleep(0.1)
+        visits += 8
+        if identity in active: emit(frame(identity, visits, True))
+def emit(value):
+    print(json.dumps(value), flush=True)
+def frame(identity, visits, during):
+    return dict(id=identity, turnNumber=0, isDuringSearch=during,
+        ownership=[0.1] * 81, policy=[0.01] * 82,
+        rootInfo=dict(visits=visits, winrate=0.6, scoreLead=2.5),
+        moveInfos=[dict(move="D4", visits=visits, winrate=0.6, scoreMean=2.5, pv=["D4", "E5"])])
+first = True
+for line in sys.stdin:
+    q = json.loads(line)
+    if q.get("action") == "terminate":
+        assert "terminateId" in q and q["id"] != q["terminateId"]
+        emit(q)
+        if scenario == "ack-only": continue
+        active.discard(q["terminateId"])
+        emit(frame(q["terminateId"], 999, True))
+        time.sleep(0.05)
+        emit(dict(id=q["terminateId"], isDuringSearch=False, noResults=True, turnNumber=0))
+        for identity in queued: emit(frame(identity, 32, False))
+        queued.clear()
+    elif first:
+        first = False
+        emit(frame(q["id"], 2, False))
+    elif "overrideSettings" in q:
+        assert q["reportDuringSearchEvery"] == 0.1
+        assert q["overrideSettings"]["maxTime"] == 600
+        assert q["overrideSettings"]["maxVisits"] == 2**50
+        assert q["overrideSettings"]["maxPlayouts"] == 2**50
+        assert "maxVisits" not in q
+        emit(dict(id=q["id"], warning="informational warning", field="rules"))
+        if scenario == "ignored":
+            emit(dict(id=q["id"], warning="setting ignored", field="overrideSettings.maxTime"))
+            continue
+        emit(dict(id=q["id"], action="terminate", terminateId="unrelated"))
+        emit(frame(q["id"], 0, True))
+        emit(frame(q["id"], 8, True))
+        time.sleep(0.05)
+        emit(frame(q["id"], 16, True))
+        if scenario == "limited":
+            emit(frame(q["id"], 24, False))
+            emit(frame(q["id"], 999, False))
+        if scenario == "queued":
+            active.add(q["id"])
+            threading.Thread(target=search, args=(q["id"],), daemon=True).start()
+    else:
+        if scenario in ["queued", "ack-only"]: queued.append(q["id"])
+        else: emit(frame(q["id"], 32, False))
+'
+"#
+    .into()
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_progress_remains_owned_until_target_final_and_releases_compute() {
+    let temp = TestTempDir::new("continuous-progress");
+    let (manager, _, events, run_id) = ready_manager(&temp, &streaming_engine_script());
+    let mut request = selected_request(&run_id, 7, vec![0, 1]);
+    request.mode = app_model::AnalysisJobModeDto::Continuous;
+    let started = manager.start_selected_node_job(request).unwrap();
+    for visits in [8, 16] {
+        let event = wait_job(&events, Duration::from_secs(2), |job| {
+            job.job_id == started.job_id && job.outcome != AnalysisJobOutcomeDto::Started
+        });
+        assert_eq!(event.outcome, AnalysisJobOutcomeDto::Progress);
+        let frame = event.frame.unwrap();
+        assert_eq!(frame.visits, visits);
+        assert_eq!(frame.score_mean_black, 2.5);
+        assert_eq!(frame.ownership, Some(vec![0.1; 81]));
+        assert_eq!(frame.policy, Some(vec![0.01; 82]));
+        assert_eq!(
+            manager.snapshot().selected_node_job.unwrap().job_id,
+            started.job_id
+        );
+    }
+    manager.cancel_job(&run_id, &started.job_id).unwrap();
+    let stopping = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id
+    });
+    assert_eq!(stopping.outcome, AnalysisJobOutcomeDto::Stopping);
+    let stopped = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id
+    });
+    assert_eq!(stopped.outcome, AnalysisJobOutcomeDto::Cancelled);
+    assert!(stopped.frame.is_none());
+    assert!(manager.snapshot().selected_node_job.is_none());
+    let finite = manager
+        .start_selected_node_job(selected_request(&run_id, 7, vec![0, 1]))
+        .unwrap();
+    let final_event = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == finite.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+    assert_eq!(final_event.frame.unwrap().visits, 32);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_ack_without_target_final_fails_both_lanes_at_five_seconds() {
+    let temp = TestTempDir::new("continuous-ack-only");
+    let script = format!("export SCENARIO=ack-only\n{}", streaming_engine_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let mut request = selected_request(&run_id, 7, vec![]);
+    request.mode = app_model::AnalysisJobModeDto::Continuous;
+    let started = manager.start_selected_node_job(request).unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.frame.as_ref().is_some_and(|frame| frame.visits == 16)
+    });
+    let whole = manager
+        .start_whole_game_analysis(whole_game_request(&run_id, 7, 1))
+        .unwrap();
+    let before = Instant::now();
+    manager.cancel_job(&run_id, &started.job_id).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        manager.snapshot().selected_node_job.unwrap().state,
+        app_model::AnalysisJobStateDto::Stopping
+    );
+    let failed = wait_job(&events, Duration::from_secs(6), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    assert!(before.elapsed() >= Duration::from_secs(4));
+    assert!(before.elapsed() < Duration::from_secs(6));
+    assert!(failed.frame.is_none());
+    let whole_failed = wait_job(&events, Duration::from_secs(1), |job| {
+        job.job_id == whole.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    assert!(whole_failed.frame.is_none());
+    let snapshot = manager.snapshot();
+    assert!(matches!(
+        snapshot.lifecycle,
+        ForegroundEngineLifecycleDto::Error { .. }
+    ));
+    assert!(snapshot.selected_node_job.is_none() && snapshot.whole_game_job.is_none());
+    assert!(manager
+        .start_selected_node_job(selected_request(&run_id, 7, vec![]))
+        .is_err());
+    assert!(manager
+        .wait_for_job_cancellation(&run_id, &started.job_id, Duration::from_secs(1))
+        .is_err());
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_shared_activity_keeps_one_thread_queued_lane_alive() {
+    let temp = TestTempDir::new("continuous-queued");
+    let script = format!("export SCENARIO=queued\n{}", streaming_engine_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let mut request = selected_request(&run_id, 7, vec![]);
+    request.mode = app_model::AnalysisJobModeDto::Continuous;
+    let started = manager.start_selected_node_job(request).unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.frame.as_ref().is_some_and(|frame| frame.visits == 16)
+    });
+    let whole = manager
+        .start_whole_game_analysis(whole_game_request(&run_id, 7, 1))
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(1300));
+    let snapshot = manager.snapshot();
+    assert_eq!(
+        snapshot.selected_node_job.unwrap().state,
+        app_model::AnalysisJobStateDto::Searching
+    );
+    assert_eq!(
+        snapshot.whole_game_job.unwrap().state,
+        app_model::AnalysisJobStateDto::Queued
+    );
+    manager.cancel_job(&run_id, &started.job_id).unwrap();
+    let progress = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == whole.job_id && job.outcome != AnalysisJobOutcomeDto::Started
+    });
+    assert_eq!(progress.outcome, AnalysisJobOutcomeDto::Progress);
+    assert_eq!(progress.completed, Some(1));
+    assert_eq!(progress.frame.unwrap().visits, 32);
+    wait_job(&events, Duration::from_secs(1), |job| {
+        job.job_id == whole.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_time_limit_retains_final_snapshot_without_resubmission() {
+    let temp = TestTempDir::new("continuous-limited");
+    let script = format!("export SCENARIO=limited\n{}", streaming_engine_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let mut request = selected_request(&run_id, 7, vec![]);
+    request.mode = app_model::AnalysisJobModeDto::Continuous;
+    let started = manager.start_selected_node_job(request).unwrap();
+    let limited = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::TimeLimited
+    });
+    assert_eq!(limited.frame.unwrap().visits, 24);
+    assert!(limited.failure.is_none());
+    std::thread::sleep(Duration::from_millis(900));
+    let snapshot = manager.snapshot();
+    assert!(matches!(
+        snapshot.lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+    let retained = snapshot.selected_node_job.unwrap();
+    assert_eq!(retained.job_id, started.job_id);
+    assert_eq!(retained.state, app_model::AnalysisJobStateDto::TimeLimited);
+    assert!(collect_job_events(&events, Instant::now() + Duration::from_millis(100)).is_empty());
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_ignored_required_budget_fails_visibly_without_analysis() {
+    let temp = TestTempDir::new("continuous-ignored");
+    let script = format!("export SCENARIO=ignored\n{}", streaming_engine_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let mut request = selected_request(&run_id, 7, vec![]);
+    request.mode = app_model::AnalysisJobModeDto::Continuous;
+    let started = manager.start_selected_node_job(request).unwrap();
+    let failed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome != AnalysisJobOutcomeDto::Started
+    });
+    assert_eq!(failed.outcome, AnalysisJobOutcomeDto::Failed);
+    assert!(failed.frame.is_none());
+    assert!(failed.failure.unwrap().message.contains("ignored"));
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_cleanup_failure_remains_visible_and_blocks_new_work() {
+    let temp = TestTempDir::new("continuous-cleanup-failure");
+    let script = format!("export SCENARIO=ack-only\n{}", streaming_engine_script());
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-1".into(),
+        profile: setup_profile(&temp, &script),
+    });
+    let mut config = ForegroundEngineConfig::for_tests();
+    config.stop_drain_timeout = Duration::ZERO;
+    let manager = ForegroundEngineManager::new(catalog, config);
+    let events = manager.subscribe();
+    manager.start("profile-1").unwrap();
+    let ready = wait_snapshot(&events, Duration::from_secs(2), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    let run_id = run_from_ready(&ready.lifecycle).run_id.clone();
+    let mut request = selected_request(&run_id, 7, vec![]);
+    request.mode = app_model::AnalysisJobModeDto::Continuous;
+    let started = manager.start_selected_node_job(request).unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.frame.as_ref().is_some_and(|frame| frame.visits == 16)
+    });
+    manager.cancel_job(&run_id, &started.job_id).unwrap();
+    let failed = wait_snapshot(&events, Duration::from_secs(6), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::Error { .. })
+    });
+    let ForegroundEngineLifecycleDto::Error { failure, .. } = failed.lifecycle else {
+        unreachable!()
+    };
+    assert!(failure.message.contains("cleanup failed"));
+    assert!(manager.start("profile-1").is_err());
+    assert!(manager
+        .start_selected_node_job(selected_request(&run_id, 7, vec![]))
+        .is_err());
+    assert!(manager.assert_profile_deletable("profile-1").is_err());
+    std::thread::sleep(Duration::from_millis(100));
+    manager.teardown().unwrap();
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine { .. }
+    ));
+}
+
+fn continuous_request(run_id: &str, generation: u64, indices: Vec<u32>) -> SelectedNodeJobRequest {
+    let mut request = selected_request(run_id, generation, indices);
+    request.mode = app_model::AnalysisJobModeDto::Continuous;
+    request
+}
+
+#[cfg(unix)]
+fn wait_continuous_phase(
+    manager: &ForegroundEngineManager,
+    expected: app_model::ContinuousAnalysisPhaseDto,
+) -> app_model::ForegroundEngineSnapshotDto {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let snapshot = manager.snapshot();
+        if snapshot.continuous.phase == expected {
+            return snapshot;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {expected:?}, last={snapshot:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn continuous_intent_without_an_engine_waits_without_creating_a_job() {
+    let manager = ForegroundEngineManager::new(
+        Arc::new(InMemoryEngineProfileCatalog::new()),
+        ForegroundEngineConfig::for_tests(),
+    );
+    manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
+    manager.follow_continuous_position(continuous_request("ignored", 1, vec![]));
+
+    let snapshot = manager.snapshot();
+    assert_eq!(snapshot.continuous.enabled, Some(true));
+    assert_eq!(
+        snapshot.continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::Waiting
+    );
+    assert!(snapshot.selected_node_job.is_none());
+    assert!(matches!(
+        snapshot.lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine { .. }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_navigation_coalesces_to_the_latest_position_during_target_cleanup() {
+    let temp = TestTempDir::new("continuous-follow-latest");
+    let script = format!("export SCENARIO=queued\n{}", streaming_engine_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
+    manager.follow_continuous_position(continuous_request("stale-wire-run", 20, vec![0]));
+    let first = manager.snapshot().selected_node_job.unwrap();
+    assert_eq!(first.run_id, run_id);
+
+    manager.follow_continuous_position(continuous_request("ignored", 20, vec![1]));
+    manager.follow_continuous_position(continuous_request("ignored", 20, vec![2]));
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut started_paths = Vec::new();
+    while Instant::now() < deadline {
+        if let Ok(ForegroundEngineEventDto::Job { job }) = events.recv_timeout(Duration::from_millis(100)) {
+            if job.outcome == AnalysisJobOutcomeDto::Started && job.job_id != first.job_id {
+                started_paths.push(job.node_path.indices.clone());
+                if job.node_path.indices == vec![2] {
+                    break;
+                }
+            }
+        }
+    }
+    assert_eq!(started_paths, vec![vec![2]]);
+    assert_eq!(
+        manager.snapshot().selected_node_job.unwrap().node_path.indices,
+        vec![2]
+    );
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_limit_survives_duplicate_ready_intent_and_reselection_but_not_navigation() {
+    let temp = TestTempDir::new("continuous-managed-limit");
+    let script = format!("export SCENARIO=limited\n{}", streaming_engine_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
+    manager.follow_continuous_position(continuous_request(&run_id, 21, vec![]));
+    let limited = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::TimeLimited
+    });
+
+    manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
+    manager.follow_continuous_position(continuous_request("ignored", 21, vec![]));
+    std::thread::sleep(Duration::from_millis(200));
+    let held = manager.snapshot();
+    assert_eq!(
+        held.continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::TimeLimited
+    );
+    assert_eq!(held.selected_node_job.unwrap().job_id, limited.job_id);
+    assert!(
+        collect_job_events(&events, Instant::now() + Duration::from_millis(150))
+            .iter()
+            .all(|job| job.outcome != AnalysisJobOutcomeDto::Started)
+    );
+
+    manager.follow_continuous_position(continuous_request("ignored", 21, vec![0]));
+    let restarted = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::Started && job.node_path.indices == vec![0]
+    });
+    assert_ne!(restarted.job_id, limited.job_id);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_error_is_not_cleared_by_navigation_and_explicit_resume_reauthorizes_it() {
+    let temp = TestTempDir::new("continuous-managed-error");
+    let script = r#"
+first=1
+failed=0
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  [ -z "$id" ] && id="ok"
+  if printf '%s' "$line" | grep -q '"action":"terminate"'; then
+    target=$(printf '%s' "$line" | sed -n 's/.*"terminateId":"\([^"]*\)".*/\1/p')
+    [ -n "$target" ] && [ "$target" != "$id" ] || exit 20
+    printf '%s\n' "$line"
+    printf '{"id":"%s","isDuringSearch":false,"noResults":true,"turnNumber":0}\n' "$target"
+  elif [ "$first" = 1 ]; then
+    printf '{"id":"%s","turnNumber":0}\n' "$id"
+    first=0
+  elif [ "$failed" = 0 ]; then
+    printf '{"id":"%s","isDuringSearch":false,"noResults":true,"turnNumber":0}\n' "$id"
+    failed=1
+  fi
+done
+"#;
+    let (manager, _, events, run_id) = ready_manager(&temp, script);
+    manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
+    manager.follow_continuous_position(continuous_request(&run_id, 22, vec![]));
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    wait_continuous_phase(&manager, app_model::ContinuousAnalysisPhaseDto::Error);
+
+    manager.follow_continuous_position(continuous_request("ignored", 22, vec![0]));
+    manager
+        .set_continuous_preferences(
+            true,
+            app_model::ContinuousAnalysisBudgetDto {
+                continuous_time_limit_seconds: 2,
+                ..app_model::ContinuousAnalysisBudgetDto::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::Error
+    );
+    assert_eq!(
+        manager.continuous_primary_action().unwrap(),
+        engine_manager::ContinuousPrimaryAction::Resume
+    );
+    manager.resume_continuous().unwrap();
+    let resumed = manager.snapshot().selected_node_job.unwrap();
+    assert_eq!(resumed.node_path.indices, vec![0]);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn finite_owner_blocks_automatic_work_and_cancel_pauses_only_the_same_admission() {
+    let temp = TestTempDir::new("continuous-finite-cancel");
+    let (manager, _, events, run_id) = ready_manager(&temp, &hold_after_probe_script());
+    manager.follow_continuous_position(continuous_request(&run_id, 30, vec![]));
+    let finite = manager
+        .start_selected_node_job(selected_request(&run_id, 30, vec![]))
+        .unwrap();
+    manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
+    let active = manager.snapshot();
+    assert_eq!(
+        active.continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::Finite
+    );
+    assert_eq!(active.selected_node_job.unwrap().job_id, finite.job_id);
+
+    manager.cancel_job(&run_id, &finite.job_id).unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == finite.job_id && job.outcome == AnalysisJobOutcomeDto::Cancelled
+    });
+    let paused = wait_continuous_phase(&manager, app_model::ContinuousAnalysisPhaseDto::Paused);
+    assert!(paused.selected_node_job.is_none());
+
+    manager.follow_continuous_position(continuous_request("ignored", 30, vec![0]));
+    let restarted = manager.snapshot().selected_node_job.unwrap();
+    assert_eq!(restarted.mode, app_model::AnalysisJobModeDto::Continuous);
+    assert_eq!(restarted.node_path.indices, vec![0]);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_finite_owner_latches_error_across_intent_and_navigation() {
+    let temp = TestTempDir::new("continuous-finite-failure");
+    let (manager, _, events, run_id) = ready_manager(&temp, &selected_node_protocol_error_script());
+    manager.follow_continuous_position(continuous_request(&run_id, 31, vec![]));
+    let finite = manager
+        .start_selected_node_job(selected_request(&run_id, 31, vec![]))
+        .unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == finite.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
+    wait_continuous_phase(&manager, app_model::ContinuousAnalysisPhaseDto::Error);
+
+    manager.follow_continuous_position(continuous_request("ignored", 31, vec![0]));
+    let held = manager.snapshot();
+    assert_eq!(
+        held.continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::Error
+    );
+    assert!(held.selected_node_job.is_none());
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn finite_stale_position_is_rejected_without_stopping_current_continuous_work() {
+    let temp = TestTempDir::new("finite-stale-admission");
+    let (manager, _, events, run_id) = ready_manager(&temp, budget_engine_script());
+    manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
+    manager.follow_continuous_position(continuous_request(&run_id, 32, vec![0]));
+    let progress = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::Progress
+    });
+    let rejected = manager
+        .start_selected_node_job(selected_request(&run_id, 32, vec![]))
+        .unwrap_err();
+    assert_eq!(rejected.kind, EngineFailureKind::InvalidState);
+    let active = manager.snapshot().selected_node_job.unwrap();
+    assert_eq!(active.job_id, progress.job_id);
+    assert_eq!(active.state, app_model::AnalysisJobStateDto::Searching);
+    let next = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == progress.job_id && job.outcome == AnalysisJobOutcomeDto::Progress
+    });
+    assert!(next.frame.unwrap().visits > progress.frame.unwrap().visits);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn successful_finite_handoff_restores_once_with_latest_continuous_budget() {
+    let temp = TestTempDir::new("continuous-finite-complete");
+    let (manager, _, events, run_id) = ready_manager(&temp, budget_engine_script());
+    let mut budget = app_model::ContinuousAnalysisBudgetDto::default();
+    manager.set_continuous_preferences(true, budget).unwrap();
+    manager.follow_continuous_position(continuous_request(&run_id, 32, vec![]));
+    let continuous = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::Progress
+    });
+    let mut request = selected_request(&run_id, 32, vec![]);
+    request.query.max_visits = Some(128);
+    let finite = manager.start_selected_node_job(request).unwrap();
+    assert_ne!(finite.job_id, continuous.job_id);
+    assert_eq!(manager.snapshot().continuous.enabled, Some(true));
+    budget.continuous_visits_limit_enabled = true;
+    budget.continuous_visits_limit = 16;
+    manager.set_continuous_preferences(true, budget).unwrap();
+    let completed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == finite.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+    assert_eq!(completed.frame.unwrap().visits, 128);
+    let restored = wait_job(&events, Duration::from_secs(2), |job| {
+        job.mode == app_model::AnalysisJobModeDto::Continuous && job.outcome == AnalysisJobOutcomeDto::Started
+    });
+    let limited = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == restored.job_id && job.outcome == AnalysisJobOutcomeDto::VisitsLimited
+    });
+    assert_ne!(restored.job_id, continuous.job_id);
+    assert_ne!(restored.job_id, finite.job_id);
+    assert_eq!(limited.frame.unwrap().visits, 16);
+    assert!(
+        collect_job_events(&events, Instant::now() + Duration::from_millis(100))
+            .iter()
+            .all(|job| job.outcome != AnalysisJobOutcomeDto::Started)
+    );
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn finite_completion_observes_off_without_cancelling_or_leaving_a_pause() {
+    let temp = TestTempDir::new("finite-off-complete");
+    let (manager, _, events, run_id) = ready_manager(&temp, budget_engine_script());
+    let mut budget = app_model::ContinuousAnalysisBudgetDto::default();
+    manager.follow_continuous_position(continuous_request(&run_id, 33, vec![]));
+    let mut request = selected_request(&run_id, 33, vec![]);
+    request.query.max_visits = Some(128);
+    let finite = manager.start_selected_node_job(request).unwrap();
+    manager.set_continuous_preferences(true, budget).unwrap();
+    manager.set_continuous_preferences(false, budget).unwrap();
+    let completed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == finite.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+    assert_eq!(completed.frame.unwrap().visits, 128);
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::Off
+    );
+    assert!(manager.snapshot().selected_node_job.is_none());
+    budget.continuous_visits_limit_enabled = true;
+    budget.continuous_visits_limit = 16;
+    manager.set_continuous_preferences(true, budget).unwrap();
+    let restored = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::VisitsLimited
+    });
+    assert_eq!(restored.frame.unwrap().visits, 16);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn finite_navigation_supersession_resumes_only_latest_position_and_keeps_whole_game() {
+    let temp = TestTempDir::new("finite-navigation");
+    let (manager, _, events, run_id) = ready_manager(&temp, budget_engine_script());
+    manager.follow_continuous_position(continuous_request(&run_id, 34, vec![]));
+    let mut request = selected_request(&run_id, 34, vec![]);
+    request.query.max_visits = Some(10000);
+    let finite = manager.start_selected_node_job(request).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while manager.snapshot().selected_node_job.as_ref().unwrap().state
+        != app_model::AnalysisJobStateDto::Searching
+    {
+        assert!(
+            Instant::now() < deadline,
+            "finite request never obtained search capacity"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut whole_request = whole_game_request(&run_id, 34, 2);
+    for item in &mut whole_request.work_items {
+        item.query.max_visits = Some(10000);
+    }
+    let whole = manager.start_whole_game_analysis(whole_request).unwrap();
+    manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
+    manager.follow_continuous_position(continuous_request(&run_id, 34, vec![0, 1]));
+    let superseded = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == finite.job_id && job.outcome == AnalysisJobOutcomeDto::Superseded
+    });
+    assert!(superseded.frame.is_none());
+    let restored = wait_job(&events, Duration::from_secs(2), |job| {
+        job.mode == app_model::AnalysisJobModeDto::Continuous && job.outcome == AnalysisJobOutcomeDto::Started
+    });
+    assert_eq!(restored.node_path.indices, vec![0, 1]);
+    assert_eq!(manager.snapshot().whole_game_job.unwrap().job_id, whole.job_id);
+    assert_eq!(
+        manager
+            .start_whole_game_analysis(whole_game_request(&run_id, 34, 2))
+            .unwrap_err()
+            .kind,
+        EngineFailureKind::Occupied
+    );
+    manager.cancel_job(&run_id, &whole.job_id).unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == restored.job_id && job.outcome == AnalysisJobOutcomeDto::Progress
+    });
+    assert_eq!(
+        manager.snapshot().selected_node_job.unwrap().job_id,
+        restored.job_id
+    );
+    assert!(
+        collect_job_events(&events, Instant::now() + Duration::from_millis(100))
+            .iter()
+            .all(|job| {
+                job.outcome != AnalysisJobOutcomeDto::Started
+                    && !(job.job_id == finite.job_id && job.outcome == AnalysisJobOutcomeDto::Completed)
+            })
+    );
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn finite_admission_cannot_cross_a_confirmed_departure() {
+    let temp = TestTempDir::new("finite-admission-departure");
+    let release = temp.path().join("release-cancellation");
+    let script = streaming_engine_script().replace(
+        "        time.sleep(0.05)",
+        &format!(
+            "        while not os.path.exists({:?}): time.sleep(0.01)",
+            release
+        ),
+    );
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
+    manager.follow_continuous_position(continuous_request(&run_id, 35, vec![]));
+    let old = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::Progress
+    });
+    let request = selected_request(&run_id, 35, vec![]);
+    let admitting = manager.clone();
+    let finite = std::thread::spawn(move || {
+        admitting
+            .start_selected_node_job(request)
+            .map_err(|error| error.kind)
+    });
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == old.job_id && job.outcome == AnalysisJobOutcomeDto::Stopping
+    });
+    manager.begin_continuous_departure();
+    std::fs::write(&release, "release").unwrap();
+    assert_eq!(
+        finite.join().unwrap().unwrap_err(),
+        EngineFailureKind::InvalidState
+    );
+    assert!(manager.snapshot().selected_node_job.is_none());
+    manager.finish_continuous_departure(false);
+    manager.follow_continuous_position(continuous_request(&run_id, 35, vec![0]));
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::SafetyHold
+    );
+    assert!(manager.snapshot().selected_node_job.is_none());
+    manager.resume_continuous().unwrap();
+    let resumed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::Progress && job.job_id != old.job_id
+    });
+    assert_eq!(resumed.node_path.indices, vec![0]);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn safety_hold_survives_navigation_readiness_and_authorization_during_departure() {
+    let temp = TestTempDir::new("continuous-safety-readiness");
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-1".into(),
+        profile: setup_profile(&temp, &streaming_engine_script()),
+    });
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    let events = manager.subscribe();
+    manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
+    manager.follow_continuous_position(continuous_request("ignored", 40, vec![]));
+    manager.begin_continuous_departure();
+    manager.finish_continuous_departure(false);
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::SafetyHold
+    );
+
+    manager.begin_continuous_departure();
+    manager.authorize_continuous_start();
+    manager.finish_continuous_departure(false);
+    manager.follow_continuous_position(continuous_request("ignored", 40, vec![0]));
+    manager.start("profile-1").unwrap();
+    wait_snapshot(&events, Duration::from_secs(2), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    let held = manager.snapshot();
+    assert_eq!(
+        held.continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::SafetyHold
+    );
+    assert!(held.selected_node_job.is_none());
+
+    manager.resume_continuous().unwrap();
+    assert_eq!(
+        manager.snapshot().selected_node_job.unwrap().node_path.indices,
+        vec![0]
+    );
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_snapshot_prioritizes_pending_target_cleanup_over_intent_and_finite_owner() {
+    let continuous_temp = TestTempDir::new("continuous-stop-priority");
+    let script = format!("export SCENARIO=ack-only\n{}", streaming_engine_script());
+    let (manager, _, events, run_id) = ready_manager(&continuous_temp, &script);
+    manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
+    manager.follow_continuous_position(continuous_request(&run_id, 50, vec![]));
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.mode == app_model::AnalysisJobModeDto::Continuous
+            && job.frame.as_ref().is_some_and(|frame| frame.visits == 16)
+    });
+    manager
+        .set_continuous_preferences(false, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::Stopping
+    );
+    assert!(manager.continuous_primary_action().is_err());
+    manager.teardown().unwrap();
+
+    let finite_temp = TestTempDir::new("finite-stop-priority");
+    let script = format!("export SCENARIO=ack-only\n{}", streaming_engine_script());
+    let (manager, _, _, run_id) = ready_manager(&finite_temp, &script);
+    manager.follow_continuous_position(continuous_request(&run_id, 51, vec![]));
+    let finite = manager
+        .start_selected_node_job(selected_request(&run_id, 51, vec![]))
+        .unwrap();
+    manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
+    manager.cancel_job(&run_id, &finite.job_id).unwrap();
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::Stopping
+    );
+    assert!(manager.continuous_primary_action().is_err());
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+fn budget_engine_script() -> &'static str {
+    r#"
+exec python3 -u -c '
+import json, sys, threading, time
+capacity = threading.Lock()
+output = threading.Lock()
+cancels = {}
+def emit(value):
+    with output: print(json.dumps(value), flush=True)
+def frame(identity, visits, during):
+    return dict(id=identity, turnNumber=0, isDuringSearch=during,
+        rootInfo=dict(visits=visits, winrate=0.6, scoreLead=2.5),
+        moveInfos=[dict(move="D4", visits=visits, winrate=0.6, scoreMean=2.5, pv=["D4"])] if visits > 1 else [])
+def search(q, cancel):
+    while not capacity.acquire(timeout=0.01):
+        if cancel.is_set():
+            emit(dict(id=q["id"], isDuringSearch=False, noResults=True))
+            return
+    try:
+        # Like KataGo, start search time only after obtaining analysis capacity.
+        start = time.monotonic()
+        settings = q.get("overrideSettings", {})
+        cap = settings.get("maxVisits", q.get("maxVisits", 500))
+        seconds = settings.get("maxTime", 1e20)
+        visits = 0
+        while not cancel.is_set():
+            time.sleep(0.02)
+            visits = min(visits + 8, cap)
+            limited = visits >= cap or time.monotonic() - start >= seconds
+            emit(frame(q["id"], visits, not limited))
+            if limited: return
+        emit(dict(id=q["id"], isDuringSearch=False, noResults=True))
+    finally:
+        capacity.release()
+first = True
+for line in sys.stdin:
+    q = json.loads(line)
+    if q.get("action") == "terminate":
+        assert q["id"] != q["terminateId"]
+        emit(q)
+        cancels[q["terminateId"]].set()
+    elif first:
+        first = False
+        emit(frame(q["id"], 2, False))
+    else:
+        cancel = threading.Event()
+        cancels[q["id"]] = cancel
+        threading.Thread(target=search, args=(q,cancel), daemon=True).start()
+'
+"#
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_budgets_stop_at_first_limit_and_only_new_admissions_reset_it() {
+    use app_model::{ContinuousAnalysisBudgetDto, ContinuousAnalysisPhaseDto};
+    let temp = TestTempDir::new("continuous-budget-or");
+    let (manager, _, events, run_id) = ready_manager(&temp, budget_engine_script());
+    let mut budget = ContinuousAnalysisBudgetDto {
+        continuous_time_limit_seconds: 1,
+        continuous_visits_limit_enabled: true,
+        continuous_visits_limit: 8,
+        ..ContinuousAnalysisBudgetDto::default()
+    };
+    manager.set_continuous_preferences(true, budget).unwrap();
+    manager.follow_continuous_position(continuous_request(&run_id, 60, vec![]));
+    let visits = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::VisitsLimited
+    });
+    assert_eq!(visits.frame.unwrap().visits, 8);
+    manager.set_continuous_preferences(true, budget).unwrap();
+    manager.follow_continuous_position(continuous_request(&run_id, 60, vec![]));
+    assert_eq!(
+        manager.snapshot().selected_node_job.unwrap().job_id,
+        visits.job_id
+    );
+    assert!(
+        collect_job_events(&events, Instant::now() + Duration::from_millis(100))
+            .iter()
+            .all(|job| job.outcome != AnalysisJobOutcomeDto::Started)
+    );
+
+    manager.resume_continuous().unwrap();
+    let resumed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::VisitsLimited
+    });
+    assert_ne!(resumed.job_id, visits.job_id);
+    manager.follow_continuous_position(continuous_request(&run_id, 60, vec![0]));
+    let navigated = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::VisitsLimited
+    });
+    assert_ne!(navigated.job_id, resumed.job_id);
+
+    budget.continuous_visits_limit = 10000;
+    manager.set_continuous_preferences(true, budget).unwrap();
+    let timed = wait_job(&events, Duration::from_secs(3), |job| {
+        job.outcome == AnalysisJobOutcomeDto::TimeLimited
+    });
+    assert!(timed.frame.unwrap().visits < 10000);
+    assert_ne!(timed.job_id, navigated.job_id);
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        ContinuousAnalysisPhaseDto::TimeLimited
+    );
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+    manager.restart().unwrap();
+    let fresh = wait_job(&events, Duration::from_secs(3), |job| {
+        job.outcome == AnalysisJobOutcomeDto::Started
+    });
+    assert_ne!(fresh.run_id, run_id);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_one_visit_budget_limits_without_fabricating_candidates() {
+    use app_model::{ContinuousAnalysisBudgetDto, ContinuousAnalysisPhaseDto};
+    let temp = TestTempDir::new("continuous-budget-root-only");
+    let (manager, _, events, run_id) = ready_manager(&temp, budget_engine_script());
+    manager
+        .set_continuous_preferences(
+            true,
+            ContinuousAnalysisBudgetDto {
+                continuous_time_limit_enabled: false,
+                continuous_visits_limit_enabled: true,
+                continuous_visits_limit: 1,
+                ..ContinuousAnalysisBudgetDto::default()
+            },
+        )
+        .unwrap();
+    manager.follow_continuous_position(continuous_request(&run_id, 62, vec![]));
+    let terminal = wait_job(&events, Duration::from_secs(2), |job| {
+        !matches!(
+            job.outcome,
+            AnalysisJobOutcomeDto::Started | AnalysisJobOutcomeDto::Progress
+        )
+    });
+    assert_eq!(terminal.outcome, AnalysisJobOutcomeDto::VisitsLimited);
+    assert!(
+        terminal.frame.is_none(),
+        "root-only result must not fabricate candidates"
+    );
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        ContinuousAnalysisPhaseDto::VisitsLimited
+    );
+    assert_eq!(manager.snapshot().continuous.enabled, Some(true));
+    manager.resume_continuous().unwrap();
+    let resumed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::VisitsLimited
+    });
+    assert_ne!(resumed.job_id, terminal.job_id);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_budget_search_time_excludes_one_thread_queue_wait() {
+    let temp = TestTempDir::new("continuous-budget-queue");
+    let (manager, _, events, run_id) = ready_manager(&temp, budget_engine_script());
+    let mut whole = whole_game_request(&run_id, 61, 1);
+    whole.work_items[0].query.max_visits = Some(100000);
+    let whole = manager.start_whole_game_analysis(whole).unwrap();
+    manager
+        .set_continuous_preferences(
+            true,
+            app_model::ContinuousAnalysisBudgetDto {
+                continuous_time_limit_seconds: 1,
+                ..app_model::ContinuousAnalysisBudgetDto::default()
+            },
+        )
+        .unwrap();
+    manager.follow_continuous_position(continuous_request(&run_id, 61, vec![]));
+    let queued = manager.snapshot().selected_node_job.unwrap();
+    std::thread::sleep(Duration::from_millis(1200));
+    assert_eq!(
+        manager.snapshot().selected_node_job.unwrap().state,
+        app_model::AnalysisJobStateDto::Queued
+    );
+    manager.cancel_job(&run_id, &whole.job_id).unwrap();
+    let released = Instant::now();
+    let limited = wait_job(&events, Duration::from_secs(3), |job| {
+        job.outcome == AnalysisJobOutcomeDto::TimeLimited
+    });
+    assert_eq!(limited.job_id, queued.job_id);
+    assert!(
+        released.elapsed() >= Duration::from_millis(900),
+        "queue wait was charged as search time"
+    );
+    assert!(limited.frame.unwrap().visits > 0);
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_unlimited_budget_ignores_config_cap_and_remains_cancellable() {
+    let temp = TestTempDir::new("continuous-unlimited");
+    let (manager, _, events, run_id) = ready_manager(&temp, budget_engine_script());
+    let unlimited = app_model::ContinuousAnalysisBudgetDto {
+        continuous_time_limit_enabled: false,
+        continuous_visits_limit_enabled: false,
+        ..app_model::ContinuousAnalysisBudgetDto::default()
+    };
+    manager.set_continuous_preferences(true, unlimited).unwrap();
+    manager.follow_continuous_position(continuous_request(&run_id, 62, vec![]));
+    let progress = wait_job(&events, Duration::from_secs(3), |job| {
+        job.frame.as_ref().is_some_and(|frame| frame.visits > 500)
+    });
+    assert_eq!(progress.outcome, AnalysisJobOutcomeDto::Progress);
+    manager.set_continuous_preferences(false, unlimited).unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == progress.job_id && job.outcome == AnalysisJobOutcomeDto::Cancelled
+    });
+    assert_eq!(manager.snapshot().continuous.enabled, Some(false));
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_budget_updates_leave_finite_and_whole_game_requests_unchanged() {
+    let temp = TestTempDir::new("continuous-budget-independent");
+    let (manager, _, events, run_id) = ready_manager(&temp, budget_engine_script());
+    let mut budget = app_model::ContinuousAnalysisBudgetDto {
+        continuous_visits_limit_enabled: true,
+        continuous_visits_limit: 8,
+        ..app_model::ContinuousAnalysisBudgetDto::default()
+    };
+    manager.set_continuous_preferences(false, budget).unwrap();
+    manager.follow_continuous_position(continuous_request(&run_id, 63, vec![]));
+    let mut request = selected_request(&run_id, 63, vec![]);
+    request.query.max_visits = Some(128);
+    let finite = manager.start_selected_node_job(request).unwrap();
+    budget.continuous_visits_limit = 16;
+    manager.set_continuous_preferences(false, budget).unwrap();
+    let completed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+    assert_eq!(completed.job_id, finite.job_id);
+    assert_eq!(completed.frame.unwrap().visits, 128);
+
+    let mut request = whole_game_request(&run_id, 63, 1);
+    request.work_items[0].query.max_visits = Some(64);
+    let whole = manager.start_whole_game_analysis(request).unwrap();
+    budget.continuous_visits_limit = 24;
+    manager.set_continuous_preferences(false, budget).unwrap();
+    let node = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == whole.job_id && job.frame.is_some()
+    });
+    assert_eq!(node.frame.unwrap().visits, 64);
+    assert!(manager.snapshot().selected_node_job.is_none());
+    manager.set_continuous_preferences(true, budget).unwrap();
+    let continuous = wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::VisitsLimited
+    });
+    assert_eq!(continuous.frame.unwrap().visits, 24);
+    assert_ne!(continuous.job_id, finite.job_id);
+    manager.teardown().unwrap();
 }

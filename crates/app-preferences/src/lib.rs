@@ -1,3 +1,4 @@
+use app_model::ContinuousAnalysisBudgetDto;
 use serde::ser::Serialize as SerTrait;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -11,6 +12,10 @@ pub const UNREADABLE_RECOVERY_MESSAGE: &str = "Unreadable preferences isolated; 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppPreferencesDto {
+    #[serde(default = "default_continuous_analysis_enabled")]
+    pub continuous_analysis_enabled: bool,
+    #[serde(flatten)]
+    pub continuous_budget: ContinuousAnalysisBudgetDto,
     #[serde(default = "default_show_ownership")]
     pub show_ownership: bool,
     #[serde(default = "default_show_policy")]
@@ -66,6 +71,8 @@ pub struct AppPreferencesLoadResultDto {
 
 pub fn default_app_preferences() -> AppPreferencesDto {
     AppPreferencesDto {
+        continuous_analysis_enabled: default_continuous_analysis_enabled(),
+        continuous_budget: ContinuousAnalysisBudgetDto::default(),
         show_ownership: default_show_ownership(),
         show_policy: default_show_policy(),
         show_candidates: default_show_candidates(),
@@ -120,11 +127,13 @@ pub fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPrefe
 pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String> {
     match fs::read_to_string(path) {
         Ok(contents) => match serde_json::from_str::<AppPreferencesDto>(&contents) {
-            Ok(preferences) => Ok(AppPreferencesLoadResultDto {
-                preferences: normalize_app_preferences(preferences),
-                recovery: None,
-            }),
-            Err(_) => recover_unreadable(path),
+            Ok(preferences) if preferences.continuous_budget.validate().is_ok() => {
+                Ok(AppPreferencesLoadResultDto {
+                    preferences: normalize_app_preferences(preferences),
+                    recovery: None,
+                })
+            }
+            _ => recover_unreadable(path),
         },
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(AppPreferencesLoadResultDto {
             preferences: default_app_preferences(),
@@ -135,6 +144,7 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
 }
 
 pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPreferencesDto, String> {
+    preferences.continuous_budget.validate()?;
     let preferences = normalize_app_preferences(preferences);
     replace_json_file(path, &preferences)?;
     Ok(preferences)
@@ -212,6 +222,10 @@ fn tmp_path(path: &Path) -> PathBuf {
     let mut tmp = path.as_os_str().to_os_string();
     tmp.push(".tmp");
     PathBuf::from(tmp)
+}
+
+fn default_continuous_analysis_enabled() -> bool {
+    true
 }
 
 fn default_show_ownership() -> bool {
@@ -315,6 +329,14 @@ mod tests {
 
     fn sample_preferences() -> AppPreferencesDto {
         AppPreferencesDto {
+            continuous_analysis_enabled: false,
+            continuous_budget: ContinuousAnalysisBudgetDto {
+                continuous_time_limit_enabled: false,
+                continuous_time_limit_seconds: 7,
+                continuous_visits_limit_enabled: true,
+                continuous_visits_limit: 123,
+                continuous_stop_on_empty_board: true,
+            },
             show_ownership: false,
             show_policy: false,
             show_candidates: false,
@@ -352,6 +374,7 @@ mod tests {
         fs::write(&path, r#"{"showCandidates":false,"candidateLimit":2}"#).unwrap();
 
         let loaded = load_from_path(&path).unwrap();
+        assert!(loaded.preferences.continuous_analysis_enabled);
         assert!(!loaded.preferences.show_candidates);
         assert_eq!(loaded.preferences.candidate_limit, 2);
         assert!(loaded.preferences.show_ownership);
@@ -450,6 +473,31 @@ mod tests {
         assert!(reloaded.recovery.is_none());
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn invalid_continuous_budget_preserves_durable_settings() {
+        let (dir, path) = temp_prefs();
+        let original = save_to_path(&path, sample_preferences()).unwrap();
+        for (key, value) in [
+            ("continuousTimeLimitSeconds", serde_json::json!(0)),
+            ("continuousVisitsLimit", serde_json::json!(0)),
+            ("continuousTimeLimitSeconds", serde_json::json!(1.5)),
+            ("continuousVisitsLimit", serde_json::json!(4_294_967_296u64)),
+        ] {
+            let mut input = serde_json::to_value(&original).unwrap();
+            input["continuousTimeLimitEnabled"] = serde_json::json!(true);
+            input["continuousVisitsLimitEnabled"] = serde_json::json!(true);
+            input[key] = value;
+            if let Ok(preferences) = serde_json::from_value(input) {
+                assert!(
+                    save_to_path(&path, preferences).is_err(),
+                    "accepted invalid {key}"
+                );
+            }
+            assert_eq!(load_from_path(&path).unwrap().preferences, original);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -130,6 +130,7 @@ impl CurrentGameState {
         holder.snapshot_seq = envelope.snapshot_seq;
         holder.edits_blocked = false;
         holder.closed_jobs.clear();
+        self.follow_continuous_position(&mut holder);
         Ok(CurrentGameResultDto {
             tree,
             selected_path: envelope.selected_path,

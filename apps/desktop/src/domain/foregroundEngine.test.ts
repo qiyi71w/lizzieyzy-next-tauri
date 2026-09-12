@@ -34,7 +34,7 @@ const run: EngineRunDto = {
 };
 
 function snapshot(revision: number, lifecycle: ForegroundEngineSnapshotDto["lifecycle"]): ForegroundEngineSnapshotDto {
-  return { revision, lifecycle };
+  return { revision, lifecycle, continuous: { enabled: null, phase: "loading" } };
 }
 
 describe("foreground engine snapshot merge", () => {

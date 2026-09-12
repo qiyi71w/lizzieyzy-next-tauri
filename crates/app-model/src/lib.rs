@@ -5,7 +5,8 @@ use uuid::Uuid;
 mod analysis_job;
 pub use analysis_job::{
     admits_analysis_attachment, admits_analysis_publication, AnalysisJobEventDto, AnalysisJobLaneDto,
-    AnalysisJobOutcomeDto, AnalysisJobStartedDto, AnalysisPublicationScopeDto,
+    AnalysisJobModeDto, AnalysisJobOutcomeDto, AnalysisJobStartedDto, AnalysisJobStateDto,
+    AnalysisPublicationScopeDto,
 };
 mod document_departure;
 pub use document_departure::{
@@ -300,10 +301,70 @@ pub struct EngineRunDto {
     pub capability_snapshot: Option<EngineCapabilitySnapshotDto>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ContinuousAnalysisBudgetDto {
+    pub continuous_time_limit_enabled: bool,
+    pub continuous_time_limit_seconds: u32,
+    pub continuous_visits_limit_enabled: bool,
+    pub continuous_visits_limit: u32,
+    pub continuous_stop_on_empty_board: bool,
+}
+
+impl Default for ContinuousAnalysisBudgetDto {
+    fn default() -> Self {
+        Self {
+            continuous_time_limit_enabled: true,
+            continuous_time_limit_seconds: 600,
+            continuous_visits_limit_enabled: false,
+            continuous_visits_limit: 100_000,
+            continuous_stop_on_empty_board: false,
+        }
+    }
+}
+
+impl ContinuousAnalysisBudgetDto {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.continuous_time_limit_seconds == 0 || self.continuous_visits_limit == 0 {
+            return Err("Continuous time and visits limits must be whole numbers from 1 to 4294967295; disabling a limit retains its value.".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContinuousAnalysisPhaseDto {
+    #[default]
+    Loading,
+    Off,
+    Waiting,
+    Unavailable,
+    Queued,
+    Searching,
+    Stopping,
+    TimeLimited,
+    VisitsLimited,
+    EmptyBoard,
+    Finite,
+    Paused,
+    Error,
+    SafetyHold,
+    Departing,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContinuousAnalysisSnapshotDto {
+    pub enabled: Option<bool>,
+    pub phase: ContinuousAnalysisPhaseDto,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ForegroundEngineSnapshotDto {
     pub revision: u64,
     pub lifecycle: ForegroundEngineLifecycleDto,
+    #[serde(default)]
+    pub continuous: ContinuousAnalysisSnapshotDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_node_job: Option<AnalysisJobStartedDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -315,6 +376,7 @@ impl ForegroundEngineSnapshotDto {
         Self {
             revision,
             lifecycle,
+            continuous: ContinuousAnalysisSnapshotDto::default(),
             selected_node_job: None,
             whole_game_job: None,
         }
@@ -768,6 +830,7 @@ mod foreground_engine_wire {
     fn foreground_engine_snapshot_and_failure_keep_snake_case_identities() {
         let snapshot = ForegroundEngineSnapshotDto {
             revision: 4,
+            continuous: ContinuousAnalysisSnapshotDto::default(),
             lifecycle: ForegroundEngineLifecycleDto::Ready {
                 run: EngineRunDto {
                     run_id: "run-1".into(),
@@ -786,6 +849,8 @@ mod foreground_engine_wire {
                 run_id: "run-1".into(),
                 job_id: "job-selected".into(),
                 lane: AnalysisJobLaneDto::SelectedNode,
+                mode: AnalysisJobModeDto::Finite,
+                state: AnalysisJobStateDto::Queued,
                 generation: 3,
                 node_path: NodePath { indices: vec![0] },
             }),
@@ -793,6 +858,8 @@ mod foreground_engine_wire {
                 run_id: "run-1".into(),
                 job_id: "job-whole".into(),
                 lane: AnalysisJobLaneDto::WholeGame,
+                mode: AnalysisJobModeDto::Finite,
+                state: AnalysisJobStateDto::Queued,
                 generation: 3,
                 node_path: NodePath { indices: vec![] },
             }),
@@ -861,6 +928,7 @@ mod foreground_engine_wire {
         };
         let snapshot = ForegroundEngineSnapshotDto {
             revision: 1,
+            continuous: ContinuousAnalysisSnapshotDto::default(),
             lifecycle: ForegroundEngineLifecycleDto::Switching {
                 primary: run.clone(),
                 candidate: EngineRunDto {
@@ -885,6 +953,7 @@ mod foreground_engine_wire {
     fn no_engine_omits_clean_failure_and_keeps_attempt_scoped_payload() {
         let clean = ForegroundEngineSnapshotDto {
             revision: 1,
+            continuous: ContinuousAnalysisSnapshotDto::default(),
             lifecycle: ForegroundEngineLifecycleDto::NoEngine { failure: None },
             selected_node_job: None,
             whole_game_job: None,
@@ -910,6 +979,7 @@ mod foreground_engine_wire {
         };
         let failed = ForegroundEngineSnapshotDto {
             revision: 3,
+            continuous: ContinuousAnalysisSnapshotDto::default(),
             lifecycle: ForegroundEngineLifecycleDto::NoEngine {
                 failure: Some(failure.clone()),
             },

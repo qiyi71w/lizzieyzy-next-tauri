@@ -134,13 +134,43 @@ export type ForegroundEngineLifecycleDto =
   | { state: "switching"; primary: EngineRunDto; candidate: EngineRunDto; switch_id: string }
   | { state: "stopping"; run: EngineRunDto }
   | { state: "error"; run: EngineRunDto; failure: EngineFailureDto };
+export type ContinuousAnalysisBudgetDto = {
+  continuousTimeLimitEnabled: boolean;
+  continuousTimeLimitSeconds: number;
+  continuousVisitsLimitEnabled: boolean;
+  continuousVisitsLimit: number;
+  continuousStopOnEmptyBoard: boolean;
+};
+export type ContinuousAnalysisPhaseDto =
+  | "loading"
+  | "off"
+  | "waiting"
+  | "unavailable"
+  | "queued"
+  | "searching"
+  | "stopping"
+  | "time_limited"
+  | "visits_limited"
+  | "empty_board"
+  | "finite"
+  | "paused"
+  | "error"
+  | "safety_hold"
+  | "departing";
+export type ContinuousAnalysisSnapshotDto = {
+  enabled: boolean | null;
+  phase: ContinuousAnalysisPhaseDto;
+};
 export type ForegroundEngineSnapshotDto = {
   revision: number;
   lifecycle: ForegroundEngineLifecycleDto;
+  continuous: ContinuousAnalysisSnapshotDto;
   selected_node_job?: AnalysisJobStartedDto | null;
   whole_game_job?: AnalysisJobStartedDto | null;
 };
 export type AnalysisJobLaneDto = "selected_node" | "whole_game";
+export type AnalysisJobModeDto = "finite" | "continuous";
+export type AnalysisJobStateDto = "queued" | "searching" | "stopping" | "time_limited" | "visits_limited";
 export type AnalysisJobOutcomeDto =
   | "started"
   | "progress"
@@ -148,11 +178,16 @@ export type AnalysisJobOutcomeDto =
   | "cancelled"
   | "superseded"
   | "timeout"
+  | "stopping"
+  | "time_limited"
+  | "visits_limited"
   | "failed";
 export type AnalysisJobStartedDto = {
   run_id: string;
   job_id: string;
   lane: AnalysisJobLaneDto;
+  mode: AnalysisJobModeDto;
+  state: AnalysisJobStateDto;
   generation: number;
   node_path: NodePath;
 };
@@ -166,6 +201,8 @@ export type AnalysisJobEventDto = {
   run_id: string;
   job_id: string;
   lane: AnalysisJobLaneDto;
+  current_game?: CurrentGameResultDto | null;
+  mode: AnalysisJobModeDto;
   generation: number;
   node_path: NodePath;
   outcome: AnalysisJobOutcomeDto;

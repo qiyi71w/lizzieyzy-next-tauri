@@ -7,11 +7,13 @@ describe("frontend analysis API ownership", () => {
     expect("analyzeKataGoGame" in backend).toBe(false);
     expect("listenToKataGoAnalysisEvents" in backend).toBe(false);
     expect("replaceCurrentGame" in backend).toBe(false);
+    expect("startForegroundContinuousNodeAnalysis" in backend).toBe(false);
   });
 
   it("keeps manager-owned analysis entry points and browser-only demonstration analysis", () => {
     expect(typeof backend.startSelectedNodeAnalysis).toBe("function");
     expect(typeof backend.startKataGoGameAnalysis).toBe("function");
+    expect(typeof backend.foregroundEngineContinuousAction).toBe("function");
     expect(typeof backend.fakeAnalyze).toBe("function");
   });
 });

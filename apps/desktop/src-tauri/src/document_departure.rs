@@ -9,12 +9,16 @@ use current_game_recovery::FileRecoveryStore;
 use engine_manager::ForegroundEngineManager;
 use save_as_dialog::persist_save_as;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
 pub fn jobs_from_snapshot(snapshot: &ForegroundEngineSnapshotDto) -> Vec<AnalysisJobStartedDto> {
     let mut jobs = Vec::new();
-    if let Some(job) = snapshot.selected_node_job.clone() {
+    if let Some(job) = snapshot
+        .selected_node_job
+        .clone()
+        .filter(|job| !job.state.is_limited())
+    {
         jobs.push(job);
     }
     if let Some(job) = snapshot.whole_game_job.clone() {
@@ -27,13 +31,49 @@ pub fn confirm_departure(
     state: &CurrentGameState,
     departure_id: u64,
     closed_jobs: &[AnalysisJobStartedDto],
-    cancel_job: impl Fn(&AnalysisJobStartedDto),
-) -> Result<(), CurrentGameError> {
-    state.begin_protected_commit(departure_id, closed_jobs)?;
+    cancel_job: impl Fn(&AnalysisJobStartedDto) -> Result<(), String>,
+    wait_for_job: impl Fn(&AnalysisJobStartedDto, Duration) -> Result<(), String>,
+    budget: Duration,
+) -> Result<(), String> {
+    state
+        .begin_protected_commit(departure_id, closed_jobs)
+        .map_err(|error| error.to_string())?;
+    // Suppression is established by begin_protected_commit before taking this snapshot.
+    // Include jobs admitted after the caller's earlier snapshot, before the cutoff.
+    let owned_jobs = state.analysis_jobs();
+    let closed_jobs = owned_jobs.as_deref().unwrap_or(closed_jobs);
     for job in closed_jobs {
-        cancel_job(job);
+        state.seal_job(job);
+    }
+    let deadline = Instant::now() + budget;
+    let mut delivery_error = None;
+    for job in closed_jobs {
+        if let Err(error) = cancel_job(job) {
+            delivery_error.get_or_insert(error);
+        }
+    }
+    if let Some(error) = delivery_error {
+        return Err(error);
+    }
+    for job in closed_jobs {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(format!("timed out while stopping analysis job {}", job.job_id));
+        }
+        wait_for_job(job, remaining)?;
     }
     Ok(())
+}
+
+fn abort_cancellation_failure(
+    state: &CurrentGameState,
+    departure_id: u64,
+    selected_path: NodePath,
+    error: String,
+) -> Result<DocumentDepartureOutcomeDto, CurrentGameError> {
+    let mut outcome = state.abort_protected_commit(departure_id, selected_path)?;
+    outcome.message = format!("Failed to stop analysis: {error}");
+    Ok(outcome)
 }
 
 pub fn complete_save(
@@ -58,18 +98,28 @@ pub fn resolve_replacement(
     action: DocumentDepartureActionDto,
     selected_path: NodePath,
     closed_jobs: &[AnalysisJobStartedDto],
-    cancel_job: impl Fn(&AnalysisJobStartedDto),
+    cancel_job: impl Fn(&AnalysisJobStartedDto) -> Result<(), String>,
+    wait_for_job: impl Fn(&AnalysisJobStartedDto, Duration) -> Result<(), String>,
     save_destination: impl FnOnce() -> Result<Option<String>, String>,
 ) -> Result<DocumentDepartureOutcomeDto, CurrentGameError> {
     match action {
         DocumentDepartureActionDto::Cancel => state.cancel_replacement(departure_id),
-        DocumentDepartureActionDto::Discard => {
-            confirm_departure(state, departure_id, closed_jobs, cancel_job)?;
-            state.commit_replacement(departure_id)
-        }
-        DocumentDepartureActionDto::Save => {
-            confirm_departure(state, departure_id, closed_jobs, cancel_job)?;
-            complete_save(state, departure_id, selected_path, save_destination())
+        DocumentDepartureActionDto::Discard | DocumentDepartureActionDto::Save => {
+            if let Err(error) = confirm_departure(
+                state,
+                departure_id,
+                closed_jobs,
+                &cancel_job,
+                &wait_for_job,
+                APPLICATION_TEARDOWN_BUDGET,
+            ) {
+                return abort_cancellation_failure(state, departure_id, selected_path, error);
+            }
+            if matches!(action, DocumentDepartureActionDto::Discard) {
+                state.commit_replacement(departure_id)
+            } else {
+                complete_save(state, departure_id, selected_path, save_destination())
+            }
         }
     }
 }
@@ -104,7 +154,7 @@ pub fn stop_foreground_resources(manager: &ForegroundEngineManager, budget: Dura
     let manager = manager.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let _ = manager.teardown();
+        let teardown = manager.teardown();
         let snapshot = manager.snapshot();
         let mut outstanding = Vec::new();
         if snapshot.selected_node_job.is_some() {
@@ -118,6 +168,9 @@ pub fn stop_foreground_resources(manager: &ForegroundEngineManager, budget: Dura
             app_model::ForegroundEngineLifecycleDto::NoEngine { .. }
         ) {
             outstanding.push("foreground engine".to_string());
+        }
+        if let Err(failure) = teardown {
+            outstanding.push(format!("foreground engine cleanup failed: {}", failure.message));
         }
         let _ = tx.send(outstanding);
     });
@@ -199,57 +252,67 @@ pub fn resolve_exit(
     action: ApplicationExitActionDto,
     selected_path: NodePath,
     closed_jobs: &[AnalysisJobStartedDto],
-    cancel_job: impl Fn(&AnalysisJobStartedDto),
+    cancel_job: impl Fn(&AnalysisJobStartedDto) -> Result<(), String>,
+    wait_for_job: impl Fn(&AnalysisJobStartedDto, Duration) -> Result<(), String>,
     save_destination: impl FnOnce() -> Result<Option<String>, String>,
     teardown: impl FnOnce(Duration) -> Vec<String>,
     budget: Duration,
 ) -> Result<ApplicationExitOutcomeDto, CurrentGameError> {
+    if matches!(action, ApplicationExitActionDto::Cancel) {
+        let cancelled = state.cancel_replacement(departure_id)?;
+        return Ok(ApplicationExitOutcomeDto {
+            committed: false,
+            analysis_stopped: false,
+            current: cancelled.current,
+            message: "Exit cancelled.".to_string(),
+            disposition: None,
+            teardown: None,
+            recovery_persist_error: None,
+        });
+    }
+
+    let deadline = Instant::now() + budget;
+    if let Err(error) = confirm_departure(
+        state,
+        departure_id,
+        closed_jobs,
+        &cancel_job,
+        &wait_for_job,
+        deadline.saturating_duration_since(Instant::now()),
+    ) {
+        return Ok(exit_from_departure(
+            abort_cancellation_failure(state, departure_id, selected_path, error)?,
+            None,
+            None,
+        ));
+    }
+    let remaining = || deadline.saturating_duration_since(Instant::now());
     match action {
-        ApplicationExitActionDto::Cancel => {
-            let cancelled = state.cancel_replacement(departure_id)?;
-            Ok(ApplicationExitOutcomeDto {
-                committed: false,
-                analysis_stopped: false,
-                current: cancelled.current,
-                message: "Exit cancelled.".to_string(),
-                disposition: None,
-                teardown: None,
-                recovery_persist_error: None,
-            })
-        }
-        ApplicationExitActionDto::Discard => {
-            confirm_departure(state, departure_id, closed_jobs, cancel_job)?;
-            complete_exit(
-                state,
-                departure_id,
-                selected_path,
-                ApplicationExitDispositionDto::ExplicitDiscard,
-                teardown,
-                budget,
-            )
-        }
-        ApplicationExitActionDto::Continue => {
-            confirm_departure(state, departure_id, closed_jobs, cancel_job)?;
-            complete_exit(
-                state,
-                departure_id,
-                selected_path,
-                ApplicationExitDispositionDto::ExitIncomplete,
-                teardown,
-                budget,
-            )
-        }
-        ApplicationExitActionDto::Save => {
-            confirm_departure(state, departure_id, closed_jobs, cancel_job)?;
-            finish_exit_save(
-                state,
-                departure_id,
-                selected_path,
-                save_destination(),
-                teardown,
-                budget,
-            )
-        }
+        ApplicationExitActionDto::Discard => complete_exit(
+            state,
+            departure_id,
+            selected_path,
+            ApplicationExitDispositionDto::ExplicitDiscard,
+            teardown,
+            remaining(),
+        ),
+        ApplicationExitActionDto::Continue => complete_exit(
+            state,
+            departure_id,
+            selected_path,
+            ApplicationExitDispositionDto::ExitIncomplete,
+            teardown,
+            remaining(),
+        ),
+        ApplicationExitActionDto::Save => finish_exit_save(
+            state,
+            departure_id,
+            selected_path,
+            save_destination(),
+            teardown,
+            remaining(),
+        ),
+        ApplicationExitActionDto::Cancel => unreachable!(),
     }
 }
 
@@ -326,12 +389,29 @@ pub async fn resolve_document_replacement(
 ) -> Result<DocumentDepartureOutcomeDto, CurrentGameError> {
     let closed_jobs = jobs_from_snapshot(&manager.snapshot());
     let cancel_job = |job: &AnalysisJobStartedDto| {
-        let _ = manager.cancel_job(&job.run_id, &job.job_id);
+        manager
+            .cancel_job(&job.run_id, &job.job_id)
+            .map_err(|failure| failure.message)
+    };
+    let wait_for_job = |job: &AnalysisJobStartedDto, budget: Duration| {
+        manager
+            .wait_for_job_cancellation(&job.run_id, &job.job_id, budget)
+            .map_err(|failure| failure.message)
     };
     let outcome = if matches!(action, DocumentDepartureActionDto::Save) && state.native_path().is_none() {
-        confirm_departure(&state, departure_id, &closed_jobs, cancel_job)?;
-        let destination = pick_untitled_save_destination(app.clone(), default_file_name).await;
-        complete_save(&state, departure_id, selected_path, destination)?
+        if let Err(error) = confirm_departure(
+            &state,
+            departure_id,
+            &closed_jobs,
+            cancel_job,
+            wait_for_job,
+            APPLICATION_TEARDOWN_BUDGET,
+        ) {
+            abort_cancellation_failure(&state, departure_id, selected_path, error)?
+        } else {
+            let destination = pick_untitled_save_destination(app.clone(), default_file_name).await;
+            complete_save(&state, departure_id, selected_path, destination)?
+        }
     } else {
         let save_path = state.native_path();
         resolve_replacement(
@@ -341,6 +421,7 @@ pub async fn resolve_document_replacement(
             selected_path,
             &closed_jobs,
             cancel_job,
+            wait_for_job,
             || Ok(save_path),
         )?
     };
@@ -379,19 +460,41 @@ pub async fn resolve_application_exit(
 ) -> Result<ApplicationExitOutcomeDto, CurrentGameError> {
     let closed_jobs = jobs_from_snapshot(&manager.snapshot());
     let cancel_job = |job: &AnalysisJobStartedDto| {
-        let _ = manager.cancel_job(&job.run_id, &job.job_id);
+        manager
+            .cancel_job(&job.run_id, &job.job_id)
+            .map_err(|failure| failure.message)
+    };
+    let wait_for_job = |job: &AnalysisJobStartedDto, budget: Duration| {
+        manager
+            .wait_for_job_cancellation(&job.run_id, &job.job_id, budget)
+            .map_err(|failure| failure.message)
     };
     let outcome = if matches!(action, ApplicationExitActionDto::Save) && state.native_path().is_none() {
-        confirm_departure(&state, departure_id, &closed_jobs, cancel_job)?;
-        let destination = pick_untitled_save_destination(app.clone(), default_file_name).await;
-        finish_exit_save(
+        let deadline = Instant::now() + APPLICATION_TEARDOWN_BUDGET;
+        if let Err(error) = confirm_departure(
             &state,
             departure_id,
-            selected_path,
-            destination,
-            |budget| stop_foreground_resources(&manager, budget),
-            APPLICATION_TEARDOWN_BUDGET,
-        )?
+            &closed_jobs,
+            cancel_job,
+            wait_for_job,
+            deadline.saturating_duration_since(Instant::now()),
+        ) {
+            exit_from_departure(
+                abort_cancellation_failure(&state, departure_id, selected_path, error)?,
+                None,
+                None,
+            )
+        } else {
+            let destination = pick_untitled_save_destination(app.clone(), default_file_name).await;
+            finish_exit_save(
+                &state,
+                departure_id,
+                selected_path,
+                destination,
+                |budget| stop_foreground_resources(&manager, budget),
+                deadline.saturating_duration_since(Instant::now()),
+            )?
+        }
     } else {
         let save_path = state.native_path();
         resolve_exit(
@@ -401,6 +504,7 @@ pub async fn resolve_application_exit(
             selected_path,
             &closed_jobs,
             cancel_job,
+            wait_for_job,
             || Ok(save_path),
             |budget| stop_foreground_resources(&manager, budget),
             APPLICATION_TEARDOWN_BUDGET,
@@ -449,10 +553,10 @@ mod tests {
     use super::*;
     use crate::current_game_state::CurrentGameState;
     use app_model::{
-        AnalysisJobLaneDto, AnalysisJobStartedDto, ApplicationExitActionDto, ApplicationExitDispositionDto,
-        ApplicationTeardownAttemptDto, CurrentGameErrorKind, DocumentDepartureActionDto,
-        DocumentDepartureAdmissionDto, ForegroundEngineLifecycleDto, ForegroundEngineSnapshotDto, MoveVertex,
-        NodePath,
+        AnalysisJobLaneDto, AnalysisJobModeDto, AnalysisJobStartedDto, AnalysisJobStateDto,
+        ApplicationExitActionDto, ApplicationExitDispositionDto, ApplicationTeardownAttemptDto,
+        CurrentGameErrorKind, DocumentDepartureActionDto, DocumentDepartureAdmissionDto,
+        ForegroundEngineLifecycleDto, ForegroundEngineSnapshotDto, MoveVertex, NodePath,
     };
     use std::cell::RefCell;
     use std::fs;
@@ -466,11 +570,21 @@ mod tests {
         std::env::temp_dir().join(format!("lizzieyzy-departure-coord-{label}-{unique}.sgf"))
     }
 
+    fn wait_succeeds(_: &AnalysisJobStartedDto, _: Duration) -> Result<(), String> {
+        Ok(())
+    }
+
     fn job(run_id: &str, job_id: &str, lane: AnalysisJobLaneDto) -> AnalysisJobStartedDto {
         AnalysisJobStartedDto {
             run_id: run_id.to_string(),
             job_id: job_id.to_string(),
             lane,
+            mode: if lane == AnalysisJobLaneDto::SelectedNode {
+                AnalysisJobModeDto::Continuous
+            } else {
+                AnalysisJobModeDto::Finite
+            },
+            state: AnalysisJobStateDto::Searching,
             generation: 1,
             node_path: NodePath { indices: Vec::new() },
         }
@@ -512,7 +626,11 @@ mod tests {
             DocumentDepartureActionDto::Cancel,
             opened.selected_path.clone(),
             &[job("run-1", "job-1", AnalysisJobLaneDto::SelectedNode)],
-            |job| cancelled.borrow_mut().push(job.job_id.clone()),
+            |job| {
+                cancelled.borrow_mut().push(job.job_id.clone());
+                Ok(())
+            },
+            wait_succeeds,
             || panic!("cancel must not save"),
         )
         .unwrap();
@@ -537,7 +655,11 @@ mod tests {
             DocumentDepartureActionDto::Discard,
             opened.selected_path,
             &[job("run-1", "job-1", AnalysisJobLaneDto::SelectedNode)],
-            |job| cancelled.borrow_mut().push(job.job_id.clone()),
+            |job| {
+                cancelled.borrow_mut().push(job.job_id.clone());
+                Ok(())
+            },
+            wait_succeeds,
             || panic!("discard must not save"),
         )
         .unwrap();
@@ -566,7 +688,11 @@ mod tests {
             DocumentDepartureActionDto::Save,
             opened.selected_path.clone(),
             &[job("run-1", "job-1", AnalysisJobLaneDto::SelectedNode)],
-            |job| cancelled.borrow_mut().push(job.job_id.clone()),
+            |job| {
+                cancelled.borrow_mut().push(job.job_id.clone());
+                Ok(())
+            },
+            wait_succeeds,
             || Ok(None),
         )
         .unwrap();
@@ -594,7 +720,8 @@ mod tests {
             DocumentDepartureActionDto::Save,
             opened.selected_path.clone(),
             &[],
-            |_| {},
+            |_| Ok(()),
+            wait_succeeds,
             || Err("disk full".to_string()),
         )
         .unwrap();
@@ -620,7 +747,8 @@ mod tests {
             DocumentDepartureActionDto::Save,
             opened.selected_path,
             &[],
-            |_| {},
+            |_| Ok(()),
+            wait_succeeds,
             || Ok(Some(source.to_string_lossy().into_owned())),
         )
         .unwrap();
@@ -660,7 +788,11 @@ mod tests {
             ApplicationExitActionDto::Cancel,
             opened.selected_path.clone(),
             &[job("run-1", "job-1", AnalysisJobLaneDto::SelectedNode)],
-            |job| cancelled.borrow_mut().push(job.job_id.clone()),
+            |job| {
+                cancelled.borrow_mut().push(job.job_id.clone());
+                Ok(())
+            },
+            wait_succeeds,
             || panic!("cancel must not save"),
             |_| {
                 *torn_down.borrow_mut() = true;
@@ -693,7 +825,11 @@ mod tests {
             ApplicationExitActionDto::Save,
             opened.selected_path.clone(),
             &[job("run-1", "job-1", AnalysisJobLaneDto::SelectedNode)],
-            |job| cancelled.borrow_mut().push(job.job_id.clone()),
+            |job| {
+                cancelled.borrow_mut().push(job.job_id.clone());
+                Ok(())
+            },
+            wait_succeeds,
             || Ok(None),
             |_| {
                 *torn_down.borrow_mut() = true;
@@ -727,7 +863,8 @@ mod tests {
             ApplicationExitActionDto::Save,
             opened.selected_path.clone(),
             &[],
-            |_| {},
+            |_| Ok(()),
+            wait_succeeds,
             || Err("disk full".to_string()),
             |_| {
                 *torn_down.borrow_mut() = true;
@@ -757,7 +894,8 @@ mod tests {
             ApplicationExitActionDto::Continue,
             opened.selected_path.clone(),
             &[job("run-1", "job-1", AnalysisJobLaneDto::SelectedNode)],
-            |_| {},
+            |_| Ok(()),
+            wait_succeeds,
             || panic!("clean exit must not save"),
             |_| Vec::new(),
             Duration::from_secs(10),
@@ -792,7 +930,8 @@ mod tests {
             ApplicationExitActionDto::Discard,
             opened.selected_path,
             &[job("run-1", "job-1", AnalysisJobLaneDto::SelectedNode)],
-            |_| {},
+            |_| Ok(()),
+            wait_succeeds,
             || panic!("discard must not save"),
             |_| Vec::new(),
             Duration::from_secs(10),
@@ -835,7 +974,8 @@ mod tests {
             ApplicationExitActionDto::Continue,
             opened.selected_path.clone(),
             &[],
-            |_| {},
+            |_| Ok(()),
+            wait_succeeds,
             || panic!("clean exit must not save"),
             |_| {
                 *attempts.borrow_mut() += 1;
@@ -890,7 +1030,8 @@ mod tests {
             ApplicationExitActionDto::Continue,
             opened.selected_path.clone(),
             &[],
-            |_| {},
+            |_| Ok(()),
+            wait_succeeds,
             || panic!("clean exit must not save"),
             |_| vec!["foreground engine".to_string()],
             Duration::from_secs(10),
@@ -911,5 +1052,200 @@ mod tests {
             incomplete.application_exit_disposition(),
             Some(ApplicationExitDispositionDto::ExitIncomplete)
         );
+    }
+}
+
+#[cfg(test)]
+mod cancellation_failure_tests {
+    use super::*;
+    use crate::current_game_state::CurrentGameState;
+    use app_model::{
+        AnalysisJobLaneDto, AnalysisJobModeDto, AnalysisJobStartedDto, AnalysisJobStateDto,
+        ApplicationExitActionDto, DocumentDepartureActionDto, DocumentDepartureAdmissionDto, NodePath,
+    };
+    use std::cell::{Cell, RefCell};
+
+    const SOURCE: &str = "(;GM[1]FF[4]SZ[19]KM[7.5]C[personal])";
+    const CANDIDATE: &str = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[new])";
+
+    fn departure_id(admission: DocumentDepartureAdmissionDto) -> u64 {
+        match admission {
+            DocumentDepartureAdmissionDto::NeedsDecision { departure_id }
+            | DocumentDepartureAdmissionDto::Ready { departure_id } => departure_id,
+        }
+    }
+
+    fn continuous_job() -> AnalysisJobStartedDto {
+        AnalysisJobStartedDto {
+            run_id: "run-1".to_string(),
+            job_id: "job-1".to_string(),
+            lane: AnalysisJobLaneDto::SelectedNode,
+            mode: AnalysisJobModeDto::Continuous,
+            state: AnalysisJobStateDto::Searching,
+            generation: 1,
+            node_path: NodePath { indices: Vec::new() },
+        }
+    }
+
+    #[test]
+    fn cancellation_failure_aborts_replacement_without_save_or_install() {
+        let state = CurrentGameState::default();
+        let opened = state
+            .replace(SOURCE, Some("/tmp/source.sgf".to_string()))
+            .unwrap();
+        state.force_dirty();
+        let id = departure_id(state.prepare_replacement(CANDIDATE, None).unwrap());
+        let save_called = Cell::new(false);
+
+        let outcome = resolve_replacement(
+            &state,
+            id,
+            DocumentDepartureActionDto::Save,
+            opened.selected_path.clone(),
+            &[continuous_job()],
+            |_| Ok(()),
+            |_, _| Err("target final did not arrive".to_string()),
+            || {
+                save_called.set(true);
+                Ok(Some("/tmp/must-not-write.sgf".to_string()))
+            },
+        )
+        .unwrap();
+
+        assert!(!outcome.committed);
+        assert!(outcome.analysis_stopped);
+        assert!(outcome.message.contains("target final did not arrive"));
+        assert!(!save_called.get());
+        assert!(state.serialize().unwrap().contains("C[personal]"));
+        assert!(!state.serialize().unwrap().contains("PB[new]"));
+    }
+
+    #[test]
+    fn confirmed_exit_waits_for_stop_before_save_and_failure_skips_all_finalization() {
+        let state = CurrentGameState::default();
+        let opened = state
+            .replace(SOURCE, Some("/tmp/source.sgf".to_string()))
+            .unwrap();
+        state.force_dirty();
+        let id = departure_id(state.prepare_exit().unwrap());
+        let order = RefCell::new(Vec::new());
+
+        let outcome = resolve_exit(
+            &state,
+            id,
+            ApplicationExitActionDto::Save,
+            opened.selected_path,
+            &[continuous_job()],
+            |_| {
+                order.borrow_mut().push("cancel");
+                Ok(())
+            },
+            |_, _| {
+                order.borrow_mut().push("wait");
+                Err("cleanup failed".to_string())
+            },
+            || {
+                order.borrow_mut().push("save");
+                Ok(Some("/tmp/must-not-write.sgf".to_string()))
+            },
+            |_| {
+                order.borrow_mut().push("teardown");
+                Vec::new()
+            },
+            APPLICATION_TEARDOWN_BUDGET,
+        )
+        .unwrap();
+
+        assert_eq!(order.into_inner(), ["cancel", "wait"]);
+        assert!(!outcome.committed);
+        assert!(outcome.analysis_stopped);
+        assert!(outcome.message.contains("cleanup failed"));
+        assert!(outcome.disposition.is_none());
+        assert!(outcome.teardown.is_none());
+        assert!(state.serialize().unwrap().contains("C[personal]"));
+    }
+
+    #[test]
+    fn confirmed_replacement_waits_for_stopped_job_before_saving() {
+        let state = CurrentGameState::default();
+        let opened = state.replace(SOURCE, None).unwrap();
+        state.force_dirty();
+        let id = departure_id(state.prepare_replacement(CANDIDATE, None).unwrap());
+        let order = RefCell::new(Vec::new());
+        let path = std::env::temp_dir().join(format!(
+            "lizzieyzy-stopped-before-save-{}.sgf",
+            uuid::Uuid::new_v4()
+        ));
+
+        let outcome = resolve_replacement(
+            &state,
+            id,
+            DocumentDepartureActionDto::Save,
+            opened.selected_path,
+            &[continuous_job()],
+            |_| {
+                order.borrow_mut().push("cancel");
+                Ok(())
+            },
+            |_, _| {
+                order.borrow_mut().push("stopped");
+                Ok(())
+            },
+            || {
+                order.borrow_mut().push("save");
+                Ok(Some(path.to_string_lossy().into_owned()))
+            },
+        )
+        .unwrap();
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(order.into_inner(), ["cancel", "stopped", "save"]);
+        assert!(outcome.committed);
+    }
+
+    #[test]
+    fn cancellation_delivery_failure_still_dispatches_all_jobs_and_aborts() {
+        let state = CurrentGameState::default();
+        let opened = state.replace(SOURCE, None).unwrap();
+        state.force_dirty();
+        let id = departure_id(state.prepare_replacement(CANDIDATE, None).unwrap());
+        let mut whole = continuous_job();
+        whole.job_id = "job-2".to_string();
+        whole.lane = AnalysisJobLaneDto::WholeGame;
+        whole.mode = AnalysisJobModeDto::Finite;
+        let dispatched = RefCell::new(Vec::new());
+        let wait_called = Cell::new(false);
+        let save_called = Cell::new(false);
+
+        let outcome = resolve_replacement(
+            &state,
+            id,
+            DocumentDepartureActionDto::Save,
+            opened.selected_path,
+            &[continuous_job(), whole],
+            |job| {
+                dispatched.borrow_mut().push(job.job_id.clone());
+                if job.job_id == "job-1" {
+                    Err("cancel delivery failed".to_string())
+                } else {
+                    Ok(())
+                }
+            },
+            |_, _| {
+                wait_called.set(true);
+                Ok(())
+            },
+            || {
+                save_called.set(true);
+                Ok(None)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(dispatched.into_inner(), ["job-1", "job-2"]);
+        assert!(!wait_called.get());
+        assert!(!save_called.get());
+        assert!(!outcome.committed);
+        assert!(outcome.message.contains("cancel delivery failed"));
     }
 }

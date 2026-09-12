@@ -88,7 +88,7 @@ The browser preview is useful for layout and fallback checks. Real KataGo execut
 
 Use the desktop runtime for this flow:
 
-Use the `分析` menu for the analysis start/cancel steps below. With a Ready run, `分析当前节点` starts selected-node analysis and `分析第一子主线` starts whole-game analysis. `自动分析` and continuous analysis are unavailable follow-up features, not alternate start controls for this smoke.
+Use the `分析` menu for the analysis start/cancel steps below. With a Ready run, `分析当前节点` starts finite selected-node analysis and `分析第一子主线` starts whole-game analysis. Space and the visible continuous action share contextual Start/Stop/Resume. Continuous intent defaults on and is durable; it follows accepted navigation and edits on an independently Ready engine. `分析 → 连续分析预算…` opens the categorized Preferences controls: independent enabled time/visits limits, retained numeric values and empty-board stop. Apply a 1-second or small visits limit to check normal limited status, retained results, same-node inhibition and explicit Resume. Time counts actual engine search, not queue wait; either enabled limit suffices. Failed/cancelled departure Save requires explicit Resume. Preferences writes must succeed before changing intent or replacing continuous work; checkbox/budget changes do not release safety/error holds. Finite and whole-game requests keep their own budgets.
 
 ```bash
 cd apps/desktop
@@ -147,6 +147,7 @@ cargo test -p sgf selected_node --offline
 cargo test -p lizzieyzy-next-desktop selected_node --offline
 cargo test -p engine-manager --test foreground_engine_run selected_node_ --offline -- --test-threads=1
 cd apps/desktop && npx vitest run src/EngineLifecycle.test.tsx src/SelectedNodeAnalysis.test.tsx
+cd ../.. && cargo test -p engine-manager --test foreground_engine_run continuous_
 ```
 
 Optional real KataGo on a resident Run (ignored by default):

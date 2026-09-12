@@ -57,6 +57,7 @@ const backend = vi.hoisted(() => ({
   restartForegroundEngine: vi.fn(() => Promise.resolve()),
   switchForegroundEngine: vi.fn(() => Promise.resolve()),
   getForegroundEngineSnapshot: vi.fn(),
+  foregroundEngineContinuousAction: vi.fn(),
   subscribeForegroundEngine: vi.fn(),
   inspectCurrentGameRecovery: vi.fn(async (): Promise<{ status: "none" | "abnormal" | "normal" | "unreadable"; envelope?: unknown; message?: string }> => ({ status: "none" })),
   restoreCurrentGameRecovery: vi.fn(),
@@ -238,11 +239,13 @@ beforeEach(() => {
     profiles: [savedProfile, savedProfileB]
   });
   backend.saveEngineProfilesSettings.mockImplementation(async (settings) => settings);
-  backend.getForegroundEngineSnapshot.mockResolvedValue({ revision: 0, lifecycle: { state: "no_engine" } });
+  backend.getForegroundEngineSnapshot.mockResolvedValue({ revision: 0, lifecycle: { state: "no_engine" }, continuous: { enabled: null, phase: "loading" } });
   backend.startSelectedNodeAnalysis.mockResolvedValue({
     run_id: "run-1",
     job_id: "job-1",
     lane: "selected_node",
+    mode: "finite",
+    state: "queued",
     generation: 1,
     node_path: { indices: [] }
   });
@@ -251,13 +254,15 @@ beforeEach(() => {
     listeners.onSnapshot = onSnapshot;
     listeners.onFailure = onFailure;
     listeners.onJob = onJob;
-    onSnapshot({ revision: 0, lifecycle: { state: "no_engine" } });
+    onSnapshot({ revision: 0, lifecycle: { state: "no_engine" }, continuous: { enabled: null, phase: "loading" } });
     return () => undefined;
   });
   backend.startKataGoGameAnalysis.mockResolvedValue({
     run_id: "run-1",
     job_id: "job-wg",
     lane: "whole_game",
+    mode: "finite",
+    state: "queued",
     generation: 1,
     node_path: { indices: [] }
   });
@@ -297,6 +302,7 @@ async function readyEngine(host: HTMLElement) {
   await act(async () => {
     listeners.onSnapshot?.({
       revision: 2,
+      continuous: { enabled: true, phase: "waiting" },
       lifecycle: {
         state: "ready",
         run: {
@@ -361,6 +367,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 2,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "ready",
           run: {
@@ -400,6 +407,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 2,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "ready",
           run: {
@@ -438,6 +446,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 2,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "ready",
           run: {
@@ -480,6 +489,8 @@ describe("foreground engine lifecycle UI", () => {
       run_id: "run-1",
       job_id: "job-comment",
       lane: "selected_node",
+      mode: "finite",
+      state: "queued",
       generation: 2,
       node_path: { indices: [] }
     });
@@ -514,6 +525,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-comment",
         lane: "selected_node",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "completed",
@@ -534,6 +546,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-comment",
         lane: "selected_node",
+        mode: "finite",
         generation: 2,
         node_path: { indices: [] },
         outcome: "completed",
@@ -562,6 +575,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 2,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "ready",
           run: {
@@ -584,6 +598,8 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-old",
         lane: "selected_node",
+        mode: "finite",
+        state: "queued",
         generation: 1,
         node_path: { indices: [] }
       })
@@ -591,6 +607,8 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-new",
         lane: "selected_node",
+        mode: "finite",
+        state: "queued",
         generation: 1,
         node_path: { indices: [] }
       });
@@ -609,6 +627,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-old",
         lane: "selected_node",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "completed",
@@ -628,6 +647,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-new",
         lane: "selected_node",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "completed",
@@ -658,6 +678,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-1",
         lane: "selected_node",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "timeout"
@@ -680,6 +701,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: { state: "no_engine" }
       });
     });
@@ -688,6 +710,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-1",
         lane: "selected_node",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "timeout"
@@ -700,6 +723,8 @@ describe("foreground engine lifecycle UI", () => {
       run_id: "run-1",
       job_id: "job-2",
       lane: "selected_node",
+      mode: "finite",
+      state: "queued",
       generation: 1,
       node_path: { indices: [] }
     });
@@ -710,6 +735,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 4,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: { state: "ready", run: readyRun("run-b", savedProfileB) }
       });
     });
@@ -718,6 +744,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-2",
         lane: "selected_node",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "timeout"
@@ -743,6 +770,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-wg",
         lane: "whole_game",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "progress",
@@ -774,6 +802,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-wg",
         lane: "whole_game",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "cancelled",
@@ -802,6 +831,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-wg",
         lane: "whole_game",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "progress",
@@ -864,6 +894,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-wg",
         lane: "whole_game",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "progress",
@@ -953,6 +984,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-1",
         lane: "selected_node",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "completed",
@@ -994,6 +1026,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-wg",
         lane: "whole_game",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "cancelled",
@@ -1005,6 +1038,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-wg",
         lane: "whole_game",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "completed",
@@ -1015,6 +1049,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-old",
         job_id: "job-wg",
         lane: "whole_game",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "completed",
@@ -1025,6 +1060,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-other",
         lane: "whole_game",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "completed",
@@ -1035,6 +1071,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-wg",
         lane: "whole_game",
+        mode: "finite",
         generation: 99,
         node_path: { indices: [] },
         outcome: "completed",
@@ -1045,6 +1082,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-wg",
         lane: "whole_game",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [0] },
         outcome: "completed",
@@ -1079,6 +1117,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-1",
         lane: "selected_node",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "cancelled"
@@ -1087,6 +1126,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-wg",
         lane: "whole_game",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "progress",
@@ -1149,6 +1189,8 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-old",
         lane: "selected_node",
+        mode: "finite",
+        state: "queued",
         generation: 1,
         node_path: { indices: [] }
       })
@@ -1156,6 +1198,8 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-new",
         lane: "selected_node",
+        mode: "finite",
+        state: "queued",
         generation: 1,
         node_path: { indices: [] }
       });
@@ -1203,6 +1247,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-wg",
         lane: "whole_game",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "progress",
@@ -1216,6 +1261,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-1",
         lane: "whole_game",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "progress",
@@ -1226,6 +1272,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-wg",
         lane: "whole_game",
+        mode: "finite",
         generation: 99,
         node_path: { indices: [] },
         outcome: "progress",
@@ -1236,6 +1283,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-wg",
         lane: "whole_game",
+        mode: "finite",
         generation: 99,
         node_path: { indices: [] },
         outcome: "completed",
@@ -1246,6 +1294,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-1",
         job_id: "job-1",
         lane: "selected_node",
+        mode: "finite",
         generation: 99,
         node_path: { indices: [] },
         outcome: "completed",
@@ -1281,6 +1330,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "switching",
           primary: readyRun("run-1", savedProfile),
@@ -1334,6 +1384,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 4,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "ready",
           run: readyRun("run-b", savedProfileB)
@@ -1407,6 +1458,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "switching",
           primary: readyRun("run-1", savedProfile),
@@ -1421,6 +1473,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 4,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: { state: "ready", run: readyRun("run-1", savedProfile) }
       });
       listeners.onFailure?.({
@@ -1453,6 +1506,7 @@ describe("foreground engine lifecycle UI", () => {
         run_id: "run-b",
         job_id: "job-b",
         lane: "selected_node",
+        mode: "finite",
         generation: 1,
         node_path: { indices: [] },
         outcome: "completed",
@@ -1488,6 +1542,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "switching",
           primary: readyRun("run-1", savedProfile),
@@ -1509,6 +1564,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 5,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "switching",
           primary: readyRun("run-1", savedProfile),
@@ -1523,6 +1579,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 6,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: { state: "ready", run: readyRun("run-c", savedProfileC) }
       });
       listeners.onFailure?.({
@@ -1556,6 +1613,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "switching",
           primary: readyRun("run-1", savedProfile),
@@ -1580,6 +1638,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 4,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: { state: "ready", run: readyRun("run-1", savedProfile) }
       });
     });
@@ -1595,6 +1654,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "switching",
           primary: readyRun("run-1", savedProfile),
@@ -1609,6 +1669,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 4,
+        continuous: { enabled: true, phase: "error" },
         lifecycle: {
           state: "error",
           run: readyRun("run-1", savedProfile),
@@ -1642,6 +1703,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 2,
+        continuous: { enabled: null, phase: "loading" },
         lifecycle: {
           state: "no_engine",
           failure: {
@@ -1676,7 +1738,7 @@ describe("foreground engine lifecycle UI", () => {
       });
     });
     await act(async () => {
-      listeners.onSnapshot?.({ revision: 9, lifecycle: { state: "no_engine" } });
+      listeners.onSnapshot?.({ revision: 9, lifecycle: { state: "no_engine" }, continuous: { enabled: true, phase: "waiting" } });
     });
     expect(host.querySelector(".engine-chip-label")?.textContent).toBe("未加载引擎");
     expect(host.querySelector(".engine-failure")).toBeNull();
@@ -1754,6 +1816,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "error" },
         lifecycle: {
           state: "error",
           run: readyRun("run-1", savedProfile),
@@ -1786,6 +1849,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "error" },
         lifecycle: { state: "error", run: readyRun("run-1", savedProfile), failure: crashFailure }
       });
     });
@@ -1796,6 +1860,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 6,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "ready",
           run: {
@@ -1814,6 +1879,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "error" },
         lifecycle: { state: "error", run: readyRun("run-1", savedProfile), failure: crashFailure }
       });
     });
@@ -1824,6 +1890,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 5,
+        continuous: { enabled: true, phase: "waiting" },
         lifecycle: {
           state: "no_engine",
           failure: {
@@ -1862,6 +1929,7 @@ describe("foreground engine lifecycle UI", () => {
     await act(async () => {
       listeners.onSnapshot?.({
         revision: 3,
+        continuous: { enabled: true, phase: "error" },
         lifecycle: { state: "error", run: readyRun("run-1", savedProfile), failure: crashFailure }
       });
     });

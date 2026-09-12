@@ -50,7 +50,8 @@ const backend = vi.hoisted(() => ({
   stopForegroundEngine: vi.fn(),
   restartForegroundEngine: vi.fn(),
   switchForegroundEngine: vi.fn(),
-  getForegroundEngineSnapshot: vi.fn(() => Promise.resolve({ revision: 0, lifecycle: { state: "no_engine" } })),
+  getForegroundEngineSnapshot: vi.fn(() => Promise.resolve({ revision: 0, lifecycle: { state: "no_engine" }, continuous: { enabled: null, phase: "loading" } })),
+  foregroundEngineContinuousAction: vi.fn(),
   inspectCurrentGameRecovery: vi.fn(async (): Promise<RecoveryStartupDto> => ({ status: "none" })),
   restoreCurrentGameRecovery: vi.fn(),
   discardCurrentGameRecovery: vi.fn(async () => undefined),
@@ -85,6 +86,7 @@ vi.mock("./components/WinrateChart", () => ({
 }));
 
 import { App } from "./App";
+import { defaultAppPreferences } from "./domain/preferences";
 
 const emptyPosition = {
   board_size: 9,
@@ -247,11 +249,14 @@ beforeEach(() => {
   });
   currentGameFixture.mockResolvedValue(initialGame);
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
+  backend.foregroundEngineContinuousAction.mockResolvedValue(defaultAppPreferences);
   backend.startForegroundEngine.mockResolvedValue(undefined);
   backend.startSelectedNodeAnalysis.mockResolvedValue({
     run_id: "run-1",
     job_id: "job-1",
     lane: "selected_node",
+    mode: "finite",
+    state: "queued",
     generation: 1,
     node_path: { indices: [] }
   });
@@ -267,7 +272,7 @@ beforeEach(() => {
   ) => {
     listeners.onSnapshot = onSnapshot;
     listeners.onJob = onJob;
-    onSnapshot({ revision: 0, lifecycle: { state: "no_engine" } });
+    onSnapshot({ revision: 0, lifecycle: { state: "no_engine" }, continuous: { enabled: null, phase: "loading" } });
     return () => undefined;
   });
 });
@@ -1057,7 +1062,7 @@ describe("App focus-safe review controls", () => {
     expect(backend.setCurrentGamePersonalComment).toHaveBeenLastCalledWith({ indices: [0, 1] }, "reviewer note");
   });
 
-  it("keeps unsupported baseline actions visible-disabled with 尚未接入 and does not claim analysis keys", async () => {
+  it("keeps unavailable editing tools disabled while Space remains stone-placement safe", async () => {
     const host = await renderApp();
     const hawkeye = buttonLabeled(host, "超级鹰眼");
     expect(hawkeye.disabled).toBe(true);
@@ -1080,7 +1085,6 @@ describe("App focus-safe review controls", () => {
     expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
     expect(backend.startKataGoGameAnalysis).not.toHaveBeenCalled();
     expect(backend.playCurrentGame).not.toHaveBeenCalled();
-    expect(requiredElement(host, ".nav-message").textContent).toContain("连续分析尚未接入");
   });
 
   it("opens the same searchable Shortcut Reference from Help and focus-safe ?", async () => {
@@ -1099,7 +1103,6 @@ describe("App focus-safe review controls", () => {
     expect(dialog.textContent).toContain("Ctrl+Home");
     expect(dialog.textContent).not.toContain("N, Ctrl+Home");
     expect(dialog.textContent).toContain("人机对局（未接入）");
-    expect(dialog.textContent).toContain("连续分析（未接入）");
     expect(dialog.textContent).toContain("Space");
 
     const search = requiredElement<HTMLInputElement>(dialog, 'input[aria-label="搜索快捷键"]');
@@ -1146,7 +1149,6 @@ describe("App focus-safe review controls", () => {
     expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
     pressKey(canvas, " ");
     expect(backend.playCurrentGame).not.toHaveBeenCalled();
-    expect(requiredElement(host, ".nav-message").textContent).toContain("连续分析尚未接入");
     pressKey(canvas, "Enter", { shiftKey: true });
     expect(backend.playCurrentGame).not.toHaveBeenCalled();
 
@@ -1778,6 +1780,38 @@ function installCandidateAnalysis() {
   });
 }
 
+describe("accepted navigation coalescing", () => {
+  it("shows only the latest path requested while an earlier native selection is pending", async () => {
+    currentGameFixture.mockResolvedValue(branchingGame);
+    let resolveFirstSelection!: (value: CurrentGameResultDto) => void;
+    const firstSelection = new Promise<CurrentGameResultDto>((resolve) => { resolveFirstSelection = resolve; });
+    const host = await renderApp();
+    backend.selectCurrentGameNode.mockClear();
+    backend.selectCurrentGameNode
+      .mockReturnValueOnce(firstSelection)
+      .mockResolvedValueOnce(initialGame);
+
+    act(() => buttonNamed(host, "父节点").click());
+    const jump = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
+    act(() => {
+      const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      valueSetter?.call(jump, "0");
+      jump.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(backend.selectCurrentGameNode).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFirstSelection({ ...branchingGame, selected_path: { indices: [0] }, snapshot: navigableChild.snapshot });
+      await firstSelection;
+      await Promise.resolve();
+    });
+    expect(backend.selectCurrentGameNode).toHaveBeenCalledTimes(2);
+    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] });
+    expect(jump.value).toBe("0");
+    expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+  });
+});
+
 function pressKey(target: EventTarget, key: string, init: KeyboardEventInit = {}) {
   act(() => {
     target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }));
@@ -1828,6 +1862,7 @@ async function readyEngine(host: HTMLElement) {
   await act(async () => {
     listeners.onSnapshot?.({
       revision: 2,
+      continuous: { enabled: true, phase: "waiting" },
       lifecycle: {
         state: "ready",
         run: {
@@ -1852,6 +1887,8 @@ async function startSelectedNode(host: HTMLElement, jobId = "job-1") {
     run_id: "run-1",
     job_id: jobId,
     lane: "selected_node",
+    mode: "finite",
+    state: "queued",
     generation: 1,
     node_path: { indices: [] }
   });
@@ -1867,6 +1904,7 @@ async function completeSelectedNode(jobId: string, path: { indices: number[] }, 
       run_id: "run-1",
       job_id: jobId,
       lane: "selected_node",
+      mode: "finite",
       generation: 1,
       node_path: path,
       outcome: "completed",

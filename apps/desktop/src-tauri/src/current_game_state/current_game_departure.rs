@@ -1,8 +1,8 @@
 use super::*;
 use app_model::{
-    AnalysisJobEventDto, AnalysisJobLaneDto, AnalysisJobOutcomeDto, AnalysisJobStartedDto,
-    ApplicationExitDispositionDto, ApplicationTeardownAttemptDto, CurrentGameErrorKind,
-    DocumentDepartureAdmissionDto, MoveVertex, NodePath, PointDto,
+    AnalysisJobEventDto, AnalysisJobLaneDto, AnalysisJobModeDto, AnalysisJobOutcomeDto,
+    AnalysisJobStartedDto, AnalysisJobStateDto, ApplicationExitDispositionDto, ApplicationTeardownAttemptDto,
+    CurrentGameErrorKind, DocumentDepartureAdmissionDto, MoveVertex, NodePath, PointDto,
 };
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -56,6 +56,7 @@ fn job_event(
         run_id: "run-1".into(),
         job_id: job_id.into(),
         lane,
+        mode: AnalysisJobModeDto::Finite,
         generation,
         node_path: path(indices),
         outcome,
@@ -64,7 +65,27 @@ fn job_event(
         remaining: None,
         frame,
         failure: None,
+        current_game: None,
     }
+}
+
+fn continuous_event(
+    job_id: &str,
+    outcome: AnalysisJobOutcomeDto,
+    generation: u64,
+    indices: &[u32],
+    frame: Option<app_model::AnalysisFrameDto>,
+) -> AnalysisJobEventDto {
+    let mut event = job_event(
+        job_id,
+        AnalysisJobLaneDto::SelectedNode,
+        outcome,
+        generation,
+        indices,
+        frame,
+    );
+    event.mode = AnalysisJobModeDto::Continuous;
+    event
 }
 
 fn started(job_id: &str, generation: u64) -> AnalysisJobStartedDto {
@@ -72,6 +93,8 @@ fn started(job_id: &str, generation: u64) -> AnalysisJobStartedDto {
         run_id: "run-1".into(),
         job_id: job_id.into(),
         lane: AnalysisJobLaneDto::SelectedNode,
+        mode: AnalysisJobModeDto::Continuous,
+        state: AnalysisJobStateDto::Searching,
         generation,
         node_path: path(&[]),
     }
@@ -155,12 +178,11 @@ fn duplicate_replacement_is_rejected_and_initial_cancel_does_not_seal_jobs() {
     assert_eq!(state.inspect(), before);
 
     let attached = state
-        .attach_from_job_event(&job_event(
+        .attach_from_job_event(&continuous_event(
             "job-live",
-            AnalysisJobLaneDto::SelectedNode,
-            AnalysisJobOutcomeDto::Completed,
+            AnalysisJobOutcomeDto::Progress,
             opened.generation,
-            &[],
+            &opened.selected_path.indices,
             Some(projectable_frame(400, 3, 3)),
         ))
         .unwrap();
@@ -175,12 +197,11 @@ fn save_and_leave_seals_accepted_results_and_commits_candidate() {
         .replace(BRANCHING, Some("/tmp/branching.sgf".to_string()))
         .unwrap();
     let attached = state
-        .attach_from_job_event(&job_event(
+        .attach_from_job_event(&continuous_event(
             "job-accepted",
-            AnalysisJobLaneDto::SelectedNode,
-            AnalysisJobOutcomeDto::Completed,
+            AnalysisJobOutcomeDto::Progress,
             opened.generation,
-            &[],
+            &opened.selected_path.indices,
             Some(projectable_frame(400, 3, 3)),
         ))
         .unwrap();
@@ -193,12 +214,11 @@ fn save_and_leave_seals_accepted_results_and_commits_candidate() {
 
     let before_save = state.inspect();
     assert!(state
-        .attach_from_job_event(&job_event(
+        .attach_from_job_event(&continuous_event(
             "job-late",
-            AnalysisJobLaneDto::SelectedNode,
-            AnalysisJobOutcomeDto::Completed,
+            AnalysisJobOutcomeDto::Progress,
             opened.generation,
-            &[],
+            &opened.selected_path.indices,
             Some(projectable_frame(50, 1, 1)),
         ))
         .is_none());

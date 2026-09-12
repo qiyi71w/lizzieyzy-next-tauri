@@ -1,5 +1,6 @@
 use app_model::{
-    AnalysisFrameDto, AnalysisJobId, CandidateMoveDto, GameDto, MoveDto, MoveVertex, PlayerColor, PointDto,
+    AnalysisFrameDto, AnalysisJobId, CandidateMoveDto, ContinuousAnalysisBudgetDto, GameDto, MoveDto,
+    MoveVertex, PlayerColor, PointDto,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -25,6 +26,18 @@ pub struct AnalysisQuery {
     pub include_ownership: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_policy: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_during_search_every: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_settings: Option<ContinuousSearchSettings>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContinuousSearchSettings {
+    pub max_time: f64,
+    pub max_visits: u64,
+    pub max_playouts: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +78,62 @@ pub struct AnalysisResponse {
     pub error: Option<String>,
     #[serde(default)]
     pub warning: Option<String>,
+    #[serde(default)]
+    pub is_during_search: Option<bool>,
+    #[serde(default)]
+    pub no_results: bool,
+    #[serde(default)]
+    pub action: Option<String>,
+    #[serde(default)]
+    pub field: Option<String>,
+}
+
+impl AnalysisResponse {
+    /// Validates search accounting; publishing a frame additionally requires candidates.
+    pub fn has_valid_search_result(&self, board_size: u8) -> bool {
+        let Some(root) = &self.root_info else {
+            return false;
+        };
+        let valid_vertex = |vertex: &str| {
+            if vertex.eq_ignore_ascii_case("pass") {
+                return true;
+            }
+            let bytes = vertex.as_bytes();
+            if bytes.len() < 2 || !bytes[0].is_ascii_alphabetic() || bytes[0].eq_ignore_ascii_case(&b'I') {
+                return false;
+            }
+            let col = bytes[0].to_ascii_uppercase();
+            let x = col - b'A' - u8::from(col > b'I');
+            x < board_size
+                && vertex[1..]
+                    .parse::<u8>()
+                    .is_ok_and(|row| row > 0 && row <= board_size)
+        };
+        let area = usize::from(board_size).pow(2);
+        !self.no_results
+            && root.visits > 0
+            && (0.0..=1.0).contains(&root.winrate)
+            && root.score_lead.unwrap_or(root.score_mean).is_finite()
+            && root
+                .score_stdev
+                .is_none_or(|value| value.is_finite() && value >= 0.0)
+            && self.move_infos.iter().all(|info| {
+                info.move_.as_deref().is_some_and(valid_vertex)
+                    && (0.0..=1.0).contains(&info.winrate)
+                    && info.score_mean.is_finite()
+                    && info.prior.is_none_or(|value| (0.0..=1.0).contains(&value))
+                    && info.pv.iter().all(|vertex| valid_vertex(vertex))
+            })
+            && self.ownership.as_ref().is_none_or(|values| {
+                values.len() == area && values.iter().all(|value| (-1.0..=1.0).contains(value))
+            })
+            && self.policy.as_ref().is_none_or(|values| {
+                values.len() == area + 1
+                    && values
+                        .iter()
+                        .all(|value| *value == -1.0 || (0.0..=1.0).contains(value))
+            })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +145,8 @@ pub struct RootInfo {
     pub winrate: f32,
     #[serde(default)]
     pub score_mean: f32,
+    #[serde(default)]
+    pub score_lead: Option<f32>,
     #[serde(default)]
     pub score_stdev: Option<f32>,
 }
@@ -110,6 +181,25 @@ pub enum ProtocolError {
 impl AnalysisQuery {
     pub fn to_jsonl(&self) -> Result<String, ProtocolError> {
         Ok(format!("{}\n", serde_json::to_string(self)?))
+    }
+
+    pub fn continuous(&mut self, budget: ContinuousAnalysisBudgetDto) {
+        self.max_visits = None;
+        self.report_during_search_every = Some(0.1);
+        self.override_settings = Some(ContinuousSearchSettings {
+            max_time: if budget.continuous_time_limit_enabled {
+                f64::from(budget.continuous_time_limit_seconds)
+            } else {
+                1e20
+            },
+            // KataGo's unbounded search sentinel, overriding finite config limits.
+            max_visits: if budget.continuous_visits_limit_enabled {
+                u64::from(budget.continuous_visits_limit)
+            } else {
+                1 << 50
+            },
+            max_playouts: 1 << 50,
+        });
     }
 }
 
@@ -146,6 +236,8 @@ pub fn analysis_query_from_game(
         max_visits: options.max_visits,
         include_ownership: options.include_ownership,
         include_policy: options.include_policy,
+        report_during_search_every: None,
+        override_settings: None,
     })
 }
 
@@ -189,11 +281,14 @@ pub fn analysis_query_from_position(
         max_visits: options.max_visits,
         include_ownership: options.include_ownership,
         include_policy: options.include_policy,
+        report_during_search_every: None,
+        override_settings: None,
     })
 }
 
-pub fn terminate_action_jsonl(id: &str) -> String {
-    let mut line = serde_json::json!({ "id": id, "action": "terminate" }).to_string();
+pub fn terminate_action_jsonl(control_id: &str, target_id: &str) -> String {
+    let mut line =
+        serde_json::json!({ "id": control_id, "action": "terminate", "terminateId": target_id }).to_string();
     line.push('\n');
     line
 }
@@ -222,6 +317,8 @@ pub fn analysis_batch_query_from_game(
         max_visits: options.max_visits,
         include_ownership: options.include_ownership,
         include_policy: options.include_policy,
+        report_during_search_every: None,
+        override_settings: None,
     })
 }
 
@@ -301,6 +398,7 @@ pub fn normalize_response(
         visits: 0,
         winrate: 0.5,
         score_mean: 0.0,
+        score_lead: None,
         score_stdev: None,
     });
     AnalysisFrameDto {
@@ -310,7 +408,7 @@ pub fn normalize_response(
         turn: response.turn_number,
         visits: root.visits,
         winrate_black: root.winrate,
-        score_mean_black: root.score_mean,
+        score_mean_black: root.score_lead.unwrap_or(root.score_mean),
         score_stdev: root.score_stdev,
         candidates: response
             .move_infos
@@ -422,6 +520,7 @@ mod tests {
                 visits,
                 winrate: 0.5,
                 score_mean: 0.0,
+                score_lead: None,
                 score_stdev: None,
             }),
             move_infos: Vec::new(),
@@ -429,6 +528,10 @@ mod tests {
             policy: None,
             error: None,
             warning: None,
+            is_during_search: Some(false),
+            no_results: false,
+            action: None,
+            field: None,
         }
     }
 
@@ -594,10 +697,11 @@ mod tests {
 
     #[test]
     fn terminate_action_jsonl_uses_protocol_id_and_action() {
-        let line = terminate_action_jsonl("job-42");
+        let line = terminate_action_jsonl("control-42", "job-42");
         assert!(line.ends_with('\n'));
         let value: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
-        assert_eq!(value["id"], "job-42");
+        assert_eq!(value["id"], "control-42");
+        assert_eq!(value["terminateId"], "job-42");
         assert_eq!(value["action"], "terminate");
     }
 

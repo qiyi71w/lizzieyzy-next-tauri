@@ -1,4 +1,5 @@
 import type { NextMoveReviewMarkerMode } from "./nextMoveReviewMarker";
+import type { ContinuousAnalysisBudgetDto } from "./types";
 
 export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
@@ -6,7 +7,7 @@ export type GraphPerspective = "black" | "sideToPlay";
 export type SubBoardContentMode = "variation" | "raw";
 export type { NextMoveReviewMarkerMode };
 
-export type AppPreferences = {
+export type AppPreferences = ContinuousAnalysisBudgetDto & {
   showOwnership: boolean;
   showPolicy: boolean;
   showCandidates: boolean;
@@ -25,6 +26,7 @@ export type AppPreferences = {
   variationReplayEnabled: boolean;
   variationReplayIntervalMs: number;
   restoreLastSession: boolean;
+  continuousAnalysisEnabled: boolean;
 };
 
 export const defaultAppPreferences: AppPreferences = {
@@ -45,7 +47,13 @@ export const defaultAppPreferences: AppPreferences = {
   subBoardContentMode: "variation",
   variationReplayEnabled: false,
   variationReplayIntervalMs: 500,
-  restoreLastSession: false
+  restoreLastSession: false,
+  continuousAnalysisEnabled: true,
+  continuousTimeLimitEnabled: true,
+  continuousTimeLimitSeconds: 600,
+  continuousVisitsLimitEnabled: false,
+  continuousVisitsLimit: 100000,
+  continuousStopOnEmptyBoard: false
 };
 
 export function normalizeAppPreferences(value: Partial<AppPreferences> | null | undefined): AppPreferences {
@@ -74,8 +82,23 @@ export function normalizeAppPreferences(value: Partial<AppPreferences> | null | 
       100,
       5000
     ),
-    restoreLastSession: booleanValue(value?.restoreLastSession, defaultAppPreferences.restoreLastSession)
+    restoreLastSession: booleanValue(value?.restoreLastSession, defaultAppPreferences.restoreLastSession),
+    continuousAnalysisEnabled: booleanValue(value?.continuousAnalysisEnabled, defaultAppPreferences.continuousAnalysisEnabled),
+    continuousTimeLimitEnabled: booleanValue(value?.continuousTimeLimitEnabled, defaultAppPreferences.continuousTimeLimitEnabled),
+    continuousTimeLimitSeconds: value?.continuousTimeLimitSeconds ?? defaultAppPreferences.continuousTimeLimitSeconds,
+    continuousVisitsLimitEnabled: booleanValue(value?.continuousVisitsLimitEnabled, defaultAppPreferences.continuousVisitsLimitEnabled),
+    continuousVisitsLimit: value?.continuousVisitsLimit ?? defaultAppPreferences.continuousVisitsLimit,
+    continuousStopOnEmptyBoard: booleanValue(value?.continuousStopOnEmptyBoard, defaultAppPreferences.continuousStopOnEmptyBoard)
   };
+}
+
+export function continuousBudgetError(value: ContinuousAnalysisBudgetDto): string | null {
+  for (const limit of [value.continuousTimeLimitSeconds, value.continuousVisitsLimit]) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 4294967295) {
+      return "连续分析时间和 visits 上限须为 1–4294967295 的整数；关闭上限会保留原数值。";
+    }
+  }
+  return null;
 }
 
 function nextMoveReviewMarkerValue(value: unknown): NextMoveReviewMarkerMode {

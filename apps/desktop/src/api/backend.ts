@@ -32,6 +32,7 @@ import type {
 } from "../domain/types";
 import { emptyForegroundEngineSnapshot, mergeForegroundEngineSnapshot } from "../domain/foregroundEngine";
 import { ensureInitialPosition, replayGamePositions } from "../domain/board";
+import { normalizeAppPreferences, type AppPreferences } from "../domain/preferences";
 
 const letters = "abcdefghijklmnopqrstuvwxyz";
 const sampleGameId = "browser-sgf";
@@ -345,6 +346,7 @@ export async function startSelectedNodeAnalysis(input: {
   });
 }
 
+
 export async function cancelSelectedNodeAnalysis(input: { runId: string; jobId: string }): Promise<void> {
   if (!isTauriRuntime()) return;
   await invoke<void>("foreground_engine_cancel_job", { runId: input.runId, jobId: input.jobId });
@@ -379,6 +381,13 @@ export async function switchForegroundEngine(profileId: string): Promise<void> {
     throw new Error("Switching a Foreground Engine Run requires the Tauri desktop backend.");
   }
   await invoke<void>("foreground_engine_switch", { profileId });
+}
+
+export async function foregroundEngineContinuousAction(): Promise<AppPreferences> {
+  if (!isTauriRuntime()) {
+    throw new Error("Continuous analysis runtime actions require the Tauri desktop backend.");
+  }
+  return normalizeAppPreferences(await invoke<AppPreferences>("foreground_engine_continuous_action"));
 }
 
 export async function listenToForegroundEngineEvents(
