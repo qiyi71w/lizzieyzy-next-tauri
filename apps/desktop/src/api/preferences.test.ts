@@ -29,6 +29,16 @@ describe("browser preference storage", () => {
     expect(loaded.recovery).toBeUndefined();
   });
 
+  it("derives a missing task preset from the legacy selected-node visit preference", async () => {
+    window.localStorage.setItem(storageKey, JSON.stringify({ defaultMaxVisits: 321 }));
+    const loaded = await loadAppPreferences();
+    expect(loaded.preferences.taskConditions).toEqual({
+      time_seconds: { enabled: false, value: 10 },
+      total_visits: { enabled: true, value: 321 },
+      leading_candidate_visits: { enabled: false, value: 500 }
+    });
+  });
+
   it("fills missing Sub-Board content mode as Variation", async () => {
     window.localStorage.setItem(storageKey, JSON.stringify({ showCandidates: false }));
     const loaded = await loadAppPreferences();
@@ -78,5 +88,35 @@ describe("browser preference storage", () => {
     const loaded = await loadAppPreferences();
     expect(loaded.preferences).toEqual(saved);
     expect(loaded.recovery).toBeUndefined();
+  });
+  it("reloads an explicit task preset independently from selected-node visits", async () => {
+    const taskConditions = {
+      time_seconds: { enabled: true, value: 12 },
+      total_visits: { enabled: false, value: 64 },
+      leading_candidate_visits: { enabled: true, value: 7 }
+    };
+    await saveAppPreferences({ ...defaultAppPreferences, defaultMaxVisits: 999, taskConditions });
+    const loaded = await loadAppPreferences();
+    expect(loaded.preferences.defaultMaxVisits).toBe(999);
+    expect(loaded.preferences.taskConditions).toEqual(taskConditions);
+  });
+
+  it("rejects invalid disabled values and an all-disabled task preset without writing", async () => {
+    await expect(saveAppPreferences({
+      ...defaultAppPreferences,
+      taskConditions: {
+        ...defaultAppPreferences.taskConditions,
+        time_seconds: { enabled: false, value: 0 }
+      }
+    })).rejects.toThrow("whole numbers");
+    await expect(saveAppPreferences({
+      ...defaultAppPreferences,
+      taskConditions: {
+        time_seconds: { enabled: false, value: 10 },
+        total_visits: { enabled: false, value: 800 },
+        leading_candidate_visits: { enabled: false, value: 500 }
+      }
+    })).rejects.toThrow("at least one");
+    expect(window.localStorage.getItem(storageKey)).toBeNull();
   });
 });

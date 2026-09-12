@@ -216,7 +216,7 @@ fn task_conditions(total_visits: u32) -> AnalysisStageConditionsDto {
     AnalysisStageConditionsDto {
         time_seconds: AnalysisTaskLimitDto {
             enabled: false,
-            value: 0,
+            value: 10,
         },
         total_visits: AnalysisTaskLimitDto {
             enabled: true,
@@ -224,7 +224,7 @@ fn task_conditions(total_visits: u32) -> AnalysisStageConditionsDto {
         },
         leading_candidate_visits: AnalysisTaskLimitDto {
             enabled: false,
-            value: 0,
+            value: 500,
         },
     }
 }
@@ -1351,14 +1351,16 @@ fn analysis_task_freezes_scope_budget_and_legitimate_completions() {
     assert_eq!(completed.completed, completed.requested);
     assert_eq!(completed.scope, analysis_scope());
     assert_eq!(completed.conditions, task_conditions(4));
+    assert_eq!(completed.ending_conditions, vec!["total_visits"]);
     let logged = std::fs::read_to_string(log).unwrap();
     assert_eq!(count_job_queries(&logged, &task.job_id), 2);
     assert_eq!(logged.matches("\"maxVisits\":4").count(), 2);
+    assert_eq!(logged.matches("\"maxTime\":1e+20").count(), 2);
 }
 
 #[cfg(unix)]
 #[test]
-fn analysis_task_rejects_unsupported_conditions_without_replacing_active_task() {
+fn analysis_task_rejects_invalid_conditions_without_replacing_active_task() {
     let temp = TestTempDir::new("analysis-task-admission");
     let release = temp.path().join("release");
     let (manager, _, _, run_id) = ready_manager(&temp, &echo_first_then_hold_script(&release));
@@ -1370,7 +1372,7 @@ fn analysis_task_rejects_unsupported_conditions_without_replacing_active_task() 
         )
         .unwrap();
     let mut unsupported = task_conditions(4);
-    unsupported.time_seconds.enabled = true;
+    unsupported.total_visits.enabled = false;
     let error = manager
         .start_analysis_task(whole_game_request(&run_id, 41, 2), analysis_scope(), unsupported)
         .unwrap_err();
@@ -1661,11 +1663,15 @@ fn analysis_task_pause_continue_retains_completed_work_and_restarts_full_budget(
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     assert_eq!(queries.len(), 4, "completed root must not be searched again");
-    assert!(queries.iter().all(|query| query["maxVisits"] == 32));
-    assert_eq!(queries[0]["id"], task.job_id);
-    assert_eq!(queries[1]["id"], task.job_id);
-    assert_eq!(queries[2]["id"], continued.job_id);
-    assert_eq!(queries[3]["id"], continued.job_id);
+    assert!(queries
+        .iter()
+        .all(|query| query["overrideSettings"]["maxVisits"] == 32));
+    assert!(queries[0]["id"].as_str().unwrap().starts_with(&task.job_id));
+    assert!(queries[1]["id"].as_str().unwrap().starts_with(&task.job_id));
+    assert!(queries[2]["id"].as_str().unwrap().starts_with(&continued.job_id));
+    assert!(queries[3]["id"].as_str().unwrap().starts_with(&continued.job_id));
+    assert_ne!(queries[0]["id"], queries[1]["id"]);
+    assert_ne!(queries[2]["id"], queries[3]["id"]);
     assert!(manager
         .continue_analysis_task(&run_id, &task.task_id, 42)
         .is_err());
@@ -1859,6 +1865,502 @@ fn analysis_task_paused_progress_obeys_semantic_run_and_departure_fences() {
 }
 
 #[cfg(unix)]
+fn budget_conditions(
+    time: Option<u32>,
+    total: Option<u32>,
+    leading: Option<u32>,
+) -> AnalysisStageConditionsDto {
+    AnalysisStageConditionsDto {
+        time_seconds: AnalysisTaskLimitDto {
+            enabled: time.is_some(),
+            value: time.unwrap_or(10),
+        },
+        total_visits: AnalysisTaskLimitDto {
+            enabled: total.is_some(),
+            value: total.unwrap_or(800),
+        },
+        leading_candidate_visits: AnalysisTaskLimitDto {
+            enabled: leading.is_some(),
+            value: leading.unwrap_or(500),
+        },
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_file(path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !path.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {}",
+            path.display()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_engine_time_starts_after_query_admission() {
+    let temp = TestTempDir::new("task-time-budget");
+    std::fs::write(temp.path().join("budget-smoke"), "time_seconds").unwrap();
+    let (manager, _, _, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    let admitted = Instant::now();
+    manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 70, 1),
+            analysis_scope(),
+            budget_conditions(Some(1), None, None),
+        )
+        .unwrap();
+
+    let completed = wait_task(&manager, AnalysisTaskStateDto::Completed);
+
+    assert!(admitted.elapsed() >= Duration::from_millis(900));
+    assert_eq!(completed.ending_conditions, vec!["time_seconds"]);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_total_budget_waits_for_target_final_not_control_ack() {
+    let temp = TestTempDir::new("task-total-budget-cleanup");
+    std::fs::write(temp.path().join("budget-smoke"), "total_visits").unwrap();
+    let (manager, _, _, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 71, 2),
+            analysis_scope(),
+            budget_conditions(None, Some(8), None),
+        )
+        .unwrap();
+    wait_for_file(&temp.path().join("cancel-seen"));
+
+    let cleaning = manager.analysis_task_snapshot().unwrap();
+    assert!(cleaning.completed.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("queries.jsonl"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    assert!(cleaning
+        .reason
+        .as_deref()
+        .is_some_and(|reason| reason.contains("total_visits")));
+    std::fs::write(temp.path().join("cancel-final"), "go").unwrap();
+    let completed = wait_task(&manager, AnalysisTaskStateDto::Completed);
+    assert_eq!(completed.ending_conditions, vec!["total_visits"]);
+    assert_eq!(completed.completed.len(), 2);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_malformed_budget_final_fails_run_without_releasing_live_query() {
+    let temp = TestTempDir::new("task-malformed-budget-final");
+    std::fs::write(temp.path().join("budget-smoke"), "total_visits").unwrap();
+    std::fs::write(temp.path().join("malformed-final"), "").unwrap();
+    std::fs::write(temp.path().join("cancel-final"), "").unwrap();
+    let (manager, _, _, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 71, 1),
+            analysis_scope(),
+            budget_conditions(None, Some(8), None),
+        )
+        .unwrap();
+    let failed = wait_task(&manager, AnalysisTaskStateDto::Failed);
+    assert!(failed.completed.is_empty());
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Error { .. }
+    ));
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn review_semantic_budget_final_keeps_run_failure_cleanup() {
+    for variant in ["semantic", "no_results", "empty", "unmarked"] {
+        let temp = TestTempDir::new("task-semantic-budget-final");
+        std::fs::write(temp.path().join("budget-smoke"), "total_visits").unwrap();
+        std::fs::write(temp.path().join("malformed-final"), variant).unwrap();
+        std::fs::write(temp.path().join("cancel-final"), "").unwrap();
+        let (manager, _, events, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+        let task = manager
+            .start_analysis_task(
+                whole_game_request(&run_id, 71, 2),
+                analysis_scope(),
+                budget_conditions(None, Some(8), None),
+            )
+            .unwrap();
+        let terminal = wait_job(&events, Duration::from_secs(3), |job| {
+            job.job_id == task.job_id
+                && matches!(
+                    job.outcome,
+                    AnalysisJobOutcomeDto::Failed | AnalysisJobOutcomeDto::Completed
+                )
+        });
+        assert_eq!(terminal.outcome, AnalysisJobOutcomeDto::Failed, "{variant}");
+        assert!(terminal.frame.is_none());
+        assert!(manager.analysis_task_snapshot().unwrap().completed.is_empty());
+        assert!(
+            matches!(
+                manager.snapshot().lifecycle,
+                ForegroundEngineLifecycleDto::Error { .. }
+            ),
+            "{variant}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("queries.jsonl"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        manager.teardown().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn review_unmarked_natural_response_cannot_infer_time_completion() {
+    let temp = TestTempDir::new("task-unmarked-natural-final");
+    std::fs::write(temp.path().join("budget-smoke"), "unmarked").unwrap();
+    let (manager, _, events, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    let task = manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 71, 1),
+            analysis_scope(),
+            budget_conditions(Some(1), None, None),
+        )
+        .unwrap();
+    let terminal = wait_job(&events, Duration::from_secs(3), |job| {
+        job.job_id == task.job_id
+            && matches!(
+                job.outcome,
+                AnalysisJobOutcomeDto::Failed | AnalysisJobOutcomeDto::Completed
+            )
+    });
+    assert_eq!(terminal.outcome, AnalysisJobOutcomeDto::Failed);
+    assert!(terminal.frame.is_none());
+    assert!(manager.analysis_task_snapshot().unwrap().completed.is_empty());
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn review_empty_candidate_final_cannot_complete_unattachable_result() {
+    let temp = TestTempDir::new("task-empty-natural-final");
+    std::fs::write(temp.path().join("budget-smoke"), "empty").unwrap();
+    let (manager, _, events, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    let task = manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 71, 1),
+            analysis_scope(),
+            budget_conditions(None, Some(8), None),
+        )
+        .unwrap();
+    let terminal = wait_job(&events, Duration::from_secs(3), |job| {
+        job.job_id == task.job_id
+            && matches!(
+                job.outcome,
+                AnalysisJobOutcomeDto::Failed | AnalysisJobOutcomeDto::Completed
+            )
+    });
+    assert_eq!(terminal.outcome, AnalysisJobOutcomeDto::Failed);
+    assert!(terminal.frame.is_none());
+    assert!(manager.analysis_task_snapshot().unwrap().completed.is_empty());
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn review_natural_final_cannot_retarget_deferred_termination() {
+    let temp = TestTempDir::new("task-natural-final-termination-race");
+    std::fs::write(temp.path().join("budget-smoke"), "natural_race").unwrap();
+    std::fs::write(temp.path().join("cancel-final"), "").unwrap();
+    let (manager, _, events, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    for _ in 0..32 {
+        let task = manager
+            .start_analysis_task(
+                whole_game_request(&run_id, 71, 2),
+                analysis_scope(),
+                budget_conditions(None, Some(8), None),
+            )
+            .unwrap();
+        let terminal = wait_job(&events, Duration::from_secs(3), |job| {
+            job.job_id == task.job_id
+                && matches!(
+                    job.outcome,
+                    AnalysisJobOutcomeDto::Failed | AnalysisJobOutcomeDto::Completed
+                )
+        });
+        assert!(
+            !temp.path().join("stale-terminate").exists(),
+            "a previous target's termination reached the next target"
+        );
+        assert_eq!(terminal.outcome, AnalysisJobOutcomeDto::Completed);
+        assert_eq!(manager.analysis_task_snapshot().unwrap().completed.len(), 2);
+    }
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_invalid_candidate_report_cannot_trigger_budget_termination() {
+    let temp = TestTempDir::new("task-invalid-budget-report");
+    std::fs::write(temp.path().join("budget-smoke"), "invalid_report").unwrap();
+    let (manager, _, _, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 71, 1),
+            analysis_scope(),
+            budget_conditions(None, None, Some(8)),
+        )
+        .unwrap();
+    wait_for_file(&temp.path().join("invalid-sent"));
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(!temp.path().join("cancel-seen").exists());
+    assert!(manager.analysis_task_snapshot().unwrap().completed.is_empty());
+    std::fs::write(temp.path().join("finish"), "").unwrap();
+    let completed = wait_task(&manager, AnalysisTaskStateDto::Completed);
+    assert_eq!(completed.ending_conditions, vec!["leading_candidate_visits"]);
+    manager.teardown().unwrap();
+}
+#[cfg(unix)]
+#[test]
+fn analysis_task_time_budget_excludes_engine_queue_wait() {
+    let temp = TestTempDir::new("task-time-budget-queue");
+    std::fs::write(temp.path().join("budget-smoke"), "time_seconds").unwrap();
+    std::fs::write(temp.path().join("one-thread"), "").unwrap();
+    std::fs::write(temp.path().join("hold-first"), "").unwrap();
+    let (manager, _, events, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    let blocker = manager
+        .start_selected_node_job(continuous_request(&run_id, 70, vec![]))
+        .unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == blocker.job_id && job.outcome == AnalysisJobOutcomeDto::Progress
+    });
+    manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 70, 1),
+            analysis_scope(),
+            budget_conditions(Some(1), None, None),
+        )
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(1200));
+    assert_eq!(
+        manager.analysis_task_snapshot().unwrap().state,
+        AnalysisTaskStateDto::Queued
+    );
+    manager.cancel_job(&run_id, &blocker.job_id).unwrap();
+    std::fs::write(temp.path().join("cancel-final"), "go").unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == blocker.job_id && job.outcome == AnalysisJobOutcomeDto::Cancelled
+    });
+
+    let released = Instant::now();
+    let completed = wait_task(&manager, AnalysisTaskStateDto::Completed);
+    assert!(released.elapsed() >= Duration::from_millis(900));
+    assert_eq!(completed.ending_conditions, vec!["time_seconds"]);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_leading_budget_tracks_current_order_zero_candidate() {
+    let temp = TestTempDir::new("task-leading-budget");
+    std::fs::write(temp.path().join("budget-smoke"), "leading_candidate_visits").unwrap();
+    let (manager, _, _, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 72, 1),
+            analysis_scope(),
+            budget_conditions(None, None, Some(5)),
+        )
+        .unwrap();
+    wait_for_file(&temp.path().join("cancel-seen"));
+    std::fs::write(temp.path().join("cancel-final"), "go").unwrap();
+
+    let completed = wait_task(&manager, AnalysisTaskStateDto::Completed);
+    assert_eq!(completed.ending_conditions, vec!["leading_candidate_visits"]);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_reports_all_conditions_from_same_first_observation() {
+    let temp = TestTempDir::new("task-budget-or-tie");
+    std::fs::write(temp.path().join("budget-smoke"), "total_visits").unwrap();
+    let (manager, _, _, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 73, 1),
+            analysis_scope(),
+            budget_conditions(Some(10), Some(8), Some(8)),
+        )
+        .unwrap();
+    wait_for_file(&temp.path().join("cancel-seen"));
+    std::fs::write(temp.path().join("cancel-final"), "go").unwrap();
+
+    let completed = wait_task(&manager, AnalysisTaskStateDto::Completed);
+    assert_eq!(
+        completed.ending_conditions,
+        vec!["total_visits", "leading_candidate_visits"]
+    );
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn pause_overrides_budget_stop_before_final_and_fences_completion() {
+    let temp = TestTempDir::new("task-budget-pause-race");
+    std::fs::write(temp.path().join("budget-smoke"), "total_visits").unwrap();
+    let (manager, _, _, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    let task = manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 74, 1),
+            analysis_scope(),
+            budget_conditions(None, Some(8), None),
+        )
+        .unwrap();
+    wait_for_file(&temp.path().join("cancel-seen"));
+    let pausing = manager.pause_analysis_task(&run_id, &task.task_id).unwrap();
+    assert_eq!(pausing.state, AnalysisTaskStateDto::Pausing);
+    std::fs::write(temp.path().join("cancel-final"), "go").unwrap();
+
+    let paused = wait_task(&manager, AnalysisTaskStateDto::Paused);
+    assert!(paused.completed.is_empty());
+    assert!(paused.ending_conditions.is_empty());
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_fails_when_engine_ignores_required_budget_settings() {
+    let temp = TestTempDir::new("task-ignored-budget-setting");
+    std::fs::write(temp.path().join("budget-smoke"), "ignored_setting").unwrap();
+    let (manager, _, _, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 75, 1),
+            analysis_scope(),
+            budget_conditions(Some(1), None, None),
+        )
+        .unwrap();
+
+    let failed = wait_task(&manager, AnalysisTaskStateDto::Failed);
+    assert!(failed.completed.is_empty());
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Error { .. }
+    ));
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn budget_cleanup_deadline_fails_run_without_completing_position() {
+    let temp = TestTempDir::new("task-budget-final-timeout");
+    std::fs::write(temp.path().join("budget-smoke"), "total_visits").unwrap();
+    let (manager, _, events, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 75, 1),
+            analysis_scope(),
+            budget_conditions(None, Some(8), None),
+        )
+        .unwrap();
+    wait_for_file(&temp.path().join("cancel-seen"));
+
+    wait_snapshot(&events, Duration::from_secs(7), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::Error { .. })
+    });
+    let failed = manager.analysis_task_snapshot().unwrap();
+    assert_eq!(failed.state, AnalysisTaskStateDto::Failed);
+    assert!(failed.completed.is_empty());
+    assert!(failed.ending_conditions.is_empty());
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn cancel_overrides_budget_stop_before_final_and_stays_terminal() {
+    let temp = TestTempDir::new("task-budget-cancel-race");
+    std::fs::write(temp.path().join("budget-smoke"), "leading_candidate_visits").unwrap();
+    let (manager, _, _, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    let task = manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 75, 1),
+            analysis_scope(),
+            budget_conditions(None, None, Some(5)),
+        )
+        .unwrap();
+    wait_for_file(&temp.path().join("cancel-seen"));
+    manager.cancel_job(&run_id, &task.job_id).unwrap();
+    assert_eq!(
+        manager.analysis_task_snapshot().unwrap().state,
+        AnalysisTaskStateDto::Cancelled
+    );
+    std::fs::write(temp.path().join("cancel-final"), "go").unwrap();
+    manager
+        .wait_for_job_cancellation(&run_id, &task.job_id, Duration::from_secs(2))
+        .unwrap();
+
+    let cancelled = manager.analysis_task_snapshot().unwrap();
+    assert_eq!(cancelled.state, AnalysisTaskStateDto::Cancelled);
+    assert!(cancelled.completed.is_empty());
+    assert!(cancelled.ending_conditions.is_empty());
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_rejects_duplicate_and_late_reports_from_prior_position_identity() {
+    let temp = TestTempDir::new("task-late-position-report");
+    std::fs::write(temp.path().join("budget-smoke"), "duplicate_late").unwrap();
+    let (manager, _, events, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    let task = manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 75, 2),
+            analysis_scope(),
+            budget_conditions(None, Some(8), None),
+        )
+        .unwrap();
+
+    let completed = wait_task(&manager, AnalysisTaskStateDto::Completed);
+    assert_eq!(completed.completed, completed.requested);
+    assert_eq!(completed.ending_conditions, vec!["total_visits"]);
+    let progress = collect_job_events(&events, Instant::now() + Duration::from_millis(100))
+        .into_iter()
+        .filter(|job| job.job_id == task.job_id && job.outcome == AnalysisJobOutcomeDto::Progress)
+        .collect::<Vec<_>>();
+    assert!(
+        progress.len() <= 2,
+        "duplicates must not publish or double-count: {progress:?}"
+    );
+    let queries = std::fs::read_to_string(temp.path().join("queries.jsonl")).unwrap();
+    let identities = queries
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<serde_json::Value>(line).unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(identities.len(), 2);
+    assert_ne!(identities[0], identities[1]);
+    assert!(identities
+        .iter()
+        .all(|identity| identity.starts_with(&task.job_id)));
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
 #[test]
 fn whole_game_user_cancel_keeps_run_ready_and_does_not_cancel_selected_node() {
     let temp = TestTempDir::new("whole-game-cancel");
@@ -1928,10 +2430,10 @@ while IFS= read -r line; do
     *)
       if [ "${{WG_FIRST:-1}}" = 1 ]; then
         WG_FIRST=0
-        printf '{{"id":"%s","turnNumber":0,"rootInfo":{{"visits":4,"winrate":0.5}},"moveInfos":[{{"move":"E5","visits":4,"winrate":0.5}}]}}\n' "$id"
+        printf '{{"id":"%s","isDuringSearch":false,"turnNumber":0,"rootInfo":{{"visits":4,"winrate":0.5}},"moveInfos":[{{"move":"E5","visits":4,"winrate":0.5}}]}}\n' "$id"
       else
         while [ ! -f '{release}' ]; do sleep 0.01; done
-        printf '{{"id":"%s","turnNumber":1,"rootInfo":{{"visits":4,"winrate":0.5}},"moveInfos":[{{"move":"E5","visits":4,"winrate":0.5}}]}}\n' "$id"
+        printf '{{"id":"%s","isDuringSearch":false,"turnNumber":1,"rootInfo":{{"visits":4,"winrate":0.5}},"moveInfos":[{{"move":"E5","visits":4,"winrate":0.5}}]}}\n' "$id"
       fi
       ;;
   esac
@@ -1983,7 +2485,7 @@ while IFS= read -r line; do
     *)
       if [ "${{WG_FIRST:-1}}" = 1 ]; then
         WG_FIRST=0
-        printf '{{"id":"%s","turnNumber":0,"rootInfo":{{"visits":4,"winrate":0.5}},"moveInfos":[{{"move":"E5","visits":4,"winrate":0.5}}]}}\n' "$id"
+        printf '{{"id":"%s","isDuringSearch":false,"turnNumber":0,"rootInfo":{{"visits":4,"winrate":0.5}},"moveInfos":[{{"move":"E5","visits":4,"winrate":0.5}}]}}\n' "$id"
       else
         while [ ! -f '{crash}' ]; do sleep 0.01; done
         exit 9
@@ -2645,7 +3147,7 @@ while IFS= read -r line; do
     printf '{{"id":"%s","turnNumber":0}}\n' "$id"
     continue
   fi
-  printf '{{"id":"%s","turnNumber":0,"rootInfo":{{"visits":4,"winrate":0.5}},"moveInfos":[{{"move":"E5","visits":4,"winrate":0.5}}]}}\n' "$id"
+  printf '{{"id":"%s","isDuringSearch":false,"turnNumber":0,"rootInfo":{{"visits":4,"winrate":0.5}},"moveInfos":[{{"move":"E5","visits":4,"winrate":0.5}}]}}\n' "$id"
 done
 "#,
         release = release_path.display()
@@ -3839,6 +4341,12 @@ for line in sys.stdin:
     elif first:
         first = False
         emit(frame(q["id"], 2, False))
+    elif ":" in q["id"]:
+        if scenario in ["queued", "ack-only"]:
+            queued.append(q["id"])
+        else:
+            cap = q["overrideSettings"]["maxVisits"]
+            emit(frame(q["id"], min(cap, 32), False))
     elif "overrideSettings" in q:
         assert q["reportDuringSearchEvery"] == 0.1
         assert q["overrideSettings"]["maxTime"] == 600

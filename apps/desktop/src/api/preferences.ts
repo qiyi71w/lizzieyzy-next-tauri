@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "../domain/preferences";
+import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, taskConditionsError, type AppPreferences } from "../domain/preferences";
 
 declare global {
   interface Window {
@@ -33,7 +33,7 @@ export async function loadAppPreferences(): Promise<AppPreferencesLoadResult> {
 }
 
 export async function saveAppPreferences(preferences: AppPreferences): Promise<AppPreferences> {
-  const error = continuousBudgetError(preferences);
+  const error = continuousBudgetError(preferences) ?? taskConditionsError(preferences.taskConditions);
   if (error) throw new Error(error);
   const normalized = normalizeAppPreferences(preferences);
   if (!isTauriRuntime()) {
@@ -49,7 +49,7 @@ function loadBrowserPreferences(): AppPreferencesLoadResult {
   if (!raw) return { preferences: defaultAppPreferences };
   try {
     const preferences = normalizeAppPreferences(JSON.parse(raw) as Partial<AppPreferences>);
-    const error = continuousBudgetError(preferences);
+    const error = continuousBudgetError(preferences) ?? taskConditionsError(preferences.taskConditions);
     if (error) throw new Error(error);
     return { preferences };
   } catch {

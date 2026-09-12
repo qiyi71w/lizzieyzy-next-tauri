@@ -70,7 +70,7 @@ import {
 } from "./domain/foregroundEngine";
 import { loadAppPreferences, saveAppPreferences } from "./api/preferences";
 import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition } from "./domain/board";
-import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "./domain/preferences";
+import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, taskConditionsError, type AppPreferences } from "./domain/preferences";
 import { buildNextMoveReviewMarkers, cycleNextMoveReviewMarker } from "./domain/nextMoveReviewMarker";
 import { admitsChartSeriesChange, buildWinrateChartModel, displayedWinrate } from "./domain/winrateChart";
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
@@ -112,7 +112,12 @@ const defaultAnalysisScopeDraft: AnalysisScopeDraft = {
   intervalStart: "0",
   intervalEnd: "0",
   toPlay: "both",
-  totalVisits: String(defaultAppPreferences.defaultMaxVisits)
+  timeEnabled: defaultAppPreferences.taskConditions.time_seconds.enabled,
+  timeSeconds: String(defaultAppPreferences.taskConditions.time_seconds.value),
+  totalVisitsEnabled: defaultAppPreferences.taskConditions.total_visits.enabled,
+  totalVisits: String(defaultAppPreferences.taskConditions.total_visits.value),
+  leadingCandidateVisitsEnabled: defaultAppPreferences.taskConditions.leading_candidate_visits.enabled,
+  leadingCandidateVisits: String(defaultAppPreferences.taskConditions.leading_candidate_visits.value)
 };
 
 
@@ -216,6 +221,7 @@ export function App() {
   const analysisTaskSnapshotRequestRef = useRef(0);
   const analysisTaskActionInFlightRef = useRef(false);
   const analysisTaskPauseFenceRef = useRef<{ taskId: string; jobId: string; continued: boolean } | null>(null);
+  const analysisConditionsDraftEditedRef = useRef(false);
 
   useEffect(() => {
     getHealth()
@@ -744,9 +750,17 @@ export function App() {
     setPreferencesLoaded(true);
     committedPreferencesRef.current = loaded;
     setPreferences(loaded);
-    setAnalysisScopeDraft((current) => current.totalVisits === defaultAnalysisScopeDraft.totalVisits
-      ? { ...current, totalVisits: String(loaded.defaultMaxVisits) }
-      : current);
+    if (!analysisConditionsDraftEditedRef.current) {
+      setAnalysisScopeDraft((current) => ({
+        ...current,
+        timeEnabled: loaded.taskConditions.time_seconds.enabled,
+        timeSeconds: String(loaded.taskConditions.time_seconds.value),
+        totalVisitsEnabled: loaded.taskConditions.total_visits.enabled,
+        totalVisits: String(loaded.taskConditions.total_visits.value),
+        leadingCandidateVisitsEnabled: loaded.taskConditions.leading_candidate_visits.enabled,
+        leadingCandidateVisits: String(loaded.taskConditions.leading_candidate_visits.value)
+      }));
+    }
     setPreferencesStatus(status);
   }
 
@@ -782,11 +796,23 @@ export function App() {
           }
         } catch (error) {
           pending.onFailed?.(error);
-          if (pendingPreferencesSaveRef.current?.version === pending.version) {
+          const queued = pendingPreferencesSaveRef.current;
+          if (queued?.version === pending.version) {
             pendingPreferencesSaveRef.current = null;
             setPreferencesStatus(`Save failed: ${errorMessage(error)}`);
-          } else {
-            setPreferencesStatus("Saving preferences...");
+          } else if (queued) {
+            for (const key of Object.keys(pending.patch) as Array<keyof AppPreferences>) {
+              if (JSON.stringify(queued.patch[key]) === JSON.stringify(pending.patch[key])) {
+                delete queued.patch[key];
+              }
+            }
+            if (Object.keys(queued.patch).length === 0) {
+              pendingPreferencesSaveRef.current = null;
+              setPreferencesStatus(`Save failed: ${errorMessage(error)}`);
+            } else {
+              queued.preferences = applyPreferencePatches(committedPreferencesRef.current, [queued.patch]);
+              setPreferencesStatus("Saving preferences...");
+            }
           }
         }
       }
@@ -1572,8 +1598,21 @@ export function App() {
   }
 
   function handleAnalysisScopeDraftChange(next: AnalysisScopeDraft) {
+    const current = analysisScopeDraft;
+    const conditionsChanged = next.timeEnabled !== current.timeEnabled
+      || next.timeSeconds !== current.timeSeconds
+      || next.totalVisitsEnabled !== current.totalVisitsEnabled
+      || next.totalVisits !== current.totalVisits
+      || next.leadingCandidateVisitsEnabled !== current.leadingCandidateVisitsEnabled
+      || next.leadingCandidateVisits !== current.leadingCandidateVisits;
+    if (conditionsChanged) analysisConditionsDraftEditedRef.current = true;
+    const scopeChanged = next.mode !== current.mode
+      || next.intervalEnabled !== current.intervalEnabled
+      || next.intervalStart !== current.intervalStart
+      || next.intervalEnd !== current.intervalEnd
+      || next.toPlay !== current.toPlay;
     setAnalysisScopeDraft(next);
-    setAnalysisScopePreview(null);
+    if (scopeChanged) setAnalysisScopePreview(null);
     setAnalysisTaskError(null);
   }
 
@@ -1644,36 +1683,33 @@ export function App() {
   async function runAnalysisTask(input: {
     runId: string;
     scope: AnalysisScopeDto;
-    visits: number;
+    conditions: AnalysisStageConditionsDto;
     preview?: AnalysisScopePreviewDto | null;
-    persistVisits?: boolean;
+    persistConditions?: boolean;
   }) {
     const game = currentGameRef.current;
     if (!nativeRuntime || !game) throw new Error("Analysis task requires a current game.");
     if (isAnalysisTaskReserved(analysisTaskRef.current)) {
       throw new Error("An analysis task is already active.");
     }
-    const visits = parseU32(String(input.visits), "Total visits", false);
+    const conditionsError = taskConditionsError(input.conditions);
+    if (conditionsError) throw new Error(conditionsError);
     const preview = input.preview ?? await previewAnalysisScope({ generation: game.generation, scope: input.scope });
     if (preview.generation !== game.generation || JSON.stringify(preview.scope) !== JSON.stringify(input.scope)) {
       throw new Error("The scope preview is no longer current. Preview again before starting.");
     }
-    if (input.persistVisits && visits !== committedPreferencesRef.current.defaultMaxVisits) {
+    if (input.persistConditions
+      && JSON.stringify(input.conditions) !== JSON.stringify(committedPreferencesRef.current.taskConditions)) {
       if (preferencesSaveInFlightRef.current || pendingPreferencesSaveRef.current || continuousActionInFlightRef.current) {
         throw new Error("Wait for the current preference save before starting.");
       }
       await new Promise<AppPreferences>((resolve, reject) => {
-        const pending = queuePreferencesSave(committedPreferencesRef.current, { defaultMaxVisits: visits });
+        const pending = queuePreferencesSave(committedPreferencesRef.current, { taskConditions: input.conditions });
         pending.onSaved = resolve;
         pending.onFailed = reject;
       });
     }
-    const conditions: AnalysisStageConditionsDto = {
-      time_seconds: { enabled: false, value: 0 },
-      total_visits: { enabled: true, value: visits },
-      leading_candidate_visits: { enabled: false, value: 0 }
-    };
-    const started = await startAnalysisTask({ runId: input.runId, preview, conditions });
+    const started = await startAnalysisTask({ runId: input.runId, preview, conditions: input.conditions });
     ++analysisTaskSnapshotRequestRef.current;
     setAnalysisScopePreview(preview);
     adoptAnalysisTask(started);
@@ -1688,8 +1724,21 @@ export function App() {
     setAnalysisTaskError(null);
     try {
       const scope = analysisScopeFromDraft(analysisScopeDraft);
-      const visits = parseU32(analysisScopeDraft.totalVisits, "Total visits", false);
-      await runAnalysisTask({ runId: run.run_id, scope, visits, preview: analysisScopePreview, persistVisits: true });
+      const conditions: AnalysisStageConditionsDto = {
+        time_seconds: {
+          enabled: analysisScopeDraft.timeEnabled,
+          value: parseU32(analysisScopeDraft.timeSeconds, "Search time", false)
+        },
+        total_visits: {
+          enabled: analysisScopeDraft.totalVisitsEnabled,
+          value: parseU32(analysisScopeDraft.totalVisits, "Total visits", false)
+        },
+        leading_candidate_visits: {
+          enabled: analysisScopeDraft.leadingCandidateVisitsEnabled,
+          value: parseU32(analysisScopeDraft.leadingCandidateVisits, "Leading candidate visits", false)
+        }
+      };
+      await runAnalysisTask({ runId: run.run_id, scope, conditions, preview: analysisScopePreview, persistConditions: true });
     } catch (error) {
       const detail = errorMessage(error);
       setAnalysisTaskError(detail);
@@ -1709,7 +1758,11 @@ export function App() {
       await runAnalysisTask({
         runId: run.run_id,
         scope: presetAnalysisScope(game.selected_path, chosenChildren),
-        visits: 1
+        conditions: {
+          time_seconds: { enabled: false, value: 10 },
+          total_visits: { enabled: true, value: 1 },
+          leading_candidate_visits: { enabled: false, value: 500 }
+        }
       });
     } catch (error) {
       const detail = errorMessage(error);
@@ -2437,9 +2490,10 @@ function continuousPhaseStatus(phase: ContinuousAnalysisPhaseDto): string {
 function preferencePatch(from: AppPreferences, to: AppPreferences): Partial<AppPreferences> {
   const patch: Partial<AppPreferences> = {};
   (Object.keys(to) as Array<keyof AppPreferences>).forEach((key) => {
-    if (from[key] !== to[key]) {
-      Object.assign(patch, { [key]: to[key] });
-    }
+    const unchanged = key === "taskConditions"
+      ? JSON.stringify(from[key]) === JSON.stringify(to[key])
+      : from[key] === to[key];
+    if (!unchanged) Object.assign(patch, { [key]: to[key] });
   });
   return patch;
 }
@@ -2541,7 +2595,7 @@ function rememberChosenChildren(previous: Map<string, number>, path: NodePath): 
 function parseU32(value: string, label: string, allowZero: boolean): number {
   const parsed = Number(value);
   const minimum = allowZero ? 0 : 1;
-  const maximum = allowZero ? 4294967295 : 1000000;
+  const maximum = 4294967295;
   if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
     throw new Error(`${label} must be a whole number from ${minimum} to ${maximum}.`);
   }

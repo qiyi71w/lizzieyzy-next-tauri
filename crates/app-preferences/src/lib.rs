@@ -1,4 +1,4 @@
-use app_model::ContinuousAnalysisBudgetDto;
+use app_model::{AnalysisStageConditionsDto, ContinuousAnalysisBudgetDto};
 use serde::ser::Serialize as SerTrait;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -26,6 +26,8 @@ pub struct AppPreferencesDto {
     pub candidate_limit: u32,
     #[serde(default = "default_max_visits")]
     pub default_max_visits: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_conditions: Option<AnalysisStageConditionsDto>,
     #[serde(default = "default_review_mode")]
     pub review_mode: String,
     #[serde(default = "default_board_theme")]
@@ -78,6 +80,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         show_candidates: default_show_candidates(),
         candidate_limit: default_candidate_limit(),
         default_max_visits: default_max_visits(),
+        task_conditions: None,
         review_mode: default_review_mode(),
         board_theme: default_board_theme(),
         graph_perspective: default_graph_perspective(),
@@ -127,7 +130,13 @@ pub fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPrefe
 pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String> {
     match fs::read_to_string(path) {
         Ok(contents) => match serde_json::from_str::<AppPreferencesDto>(&contents) {
-            Ok(preferences) if preferences.continuous_budget.validate().is_ok() => {
+            Ok(preferences)
+                if preferences.continuous_budget.validate().is_ok()
+                    && preferences
+                        .task_conditions
+                        .as_ref()
+                        .is_none_or(|conditions| conditions.validate_single_stage().is_ok()) =>
+            {
                 Ok(AppPreferencesLoadResultDto {
                     preferences: normalize_app_preferences(preferences),
                     recovery: None,
@@ -145,6 +154,9 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
 
 pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPreferencesDto, String> {
     preferences.continuous_budget.validate()?;
+    if let Some(conditions) = &preferences.task_conditions {
+        conditions.validate_single_stage()?;
+    }
     let preferences = normalize_app_preferences(preferences);
     replace_json_file(path, &preferences)?;
     Ok(preferences)
@@ -342,6 +354,7 @@ mod tests {
             show_candidates: false,
             candidate_limit: 3,
             default_max_visits: 200,
+            task_conditions: None,
             review_mode: "deep".to_string(),
             board_theme: "high-contrast".to_string(),
             graph_perspective: "sideToPlay".to_string(),
@@ -356,6 +369,44 @@ mod tests {
             variation_replay_interval_ms: 250,
             restore_last_session: true,
         }
+    }
+
+    #[test]
+    fn task_presets_roundtrip_and_reject_invalid_writes_without_mutation() {
+        let (dir, path) = temp_prefs();
+        let original = save_to_path(&path, sample_preferences()).unwrap();
+        let mut value = serde_json::to_value(&original).unwrap();
+        value["taskConditions"] = serde_json::json!({
+            "time_seconds": {"enabled": true, "value": 10},
+            "total_visits": {"enabled": false, "value": 4294967295_u32},
+            "leading_candidate_visits": {"enabled": true, "value": 500}
+        });
+        let preset: AppPreferencesDto = serde_json::from_value(value.clone()).unwrap();
+        save_to_path(&path, preset).unwrap();
+        let loaded = serde_json::to_value(load_from_path(&path).unwrap().preferences).unwrap();
+        assert_eq!(loaded["taskConditions"], value["taskConditions"]);
+        let durable = fs::read(&path).unwrap();
+        for invalid in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!(4294967296_u64),
+            serde_json::json!("oops"),
+        ] {
+            let mut rejected = value.clone();
+            rejected["taskConditions"]["total_visits"]["value"] = invalid;
+            let result = serde_json::from_value::<AppPreferencesDto>(rejected)
+                .map_err(|error| error.to_string())
+                .and_then(|preferences| save_to_path(&path, preferences));
+            assert!(result.is_err());
+            assert_eq!(fs::read(&path).unwrap(), durable);
+        }
+        for key in ["time_seconds", "total_visits", "leading_candidate_visits"] {
+            value["taskConditions"][key]["enabled"] = serde_json::json!(false);
+        }
+        assert!(save_to_path(&path, serde_json::from_value(value).unwrap()).is_err());
+        assert_eq!(fs::read(&path).unwrap(), durable);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

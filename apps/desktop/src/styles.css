@@ -1018,6 +1018,11 @@ button[aria-pressed="true"] {
 .analysis-task-panel input[type="number"] { width: 7em; }
 .analysis-task-panel p { margin: 0; }
 
+.analysis-task-panel .button-row {
+  display: flex;
+  flex-wrap: wrap;
+}
+
 .sgf-tools {
   display: grid;
   grid-template-columns: 1fr 160px;

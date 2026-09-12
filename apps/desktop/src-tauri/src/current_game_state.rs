@@ -298,7 +298,7 @@ impl CurrentGameState {
     ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
         let invalid =
             |message| crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message);
-        let visits = conditions.validate_single_stage().map_err(&invalid)?;
+        conditions.validate_single_stage().map_err(&invalid)?;
         // Keep semantic revalidation and manager admission under the same owner lock.
         let holder = self.holder.lock().expect("current game state");
         let admitted = holder
@@ -309,7 +309,7 @@ impl CurrentGameState {
                 "Analysis scope preview no longer matches the current game.".into(),
             ));
         }
-        let work_items = crate::whole_game_work_items(&admitted, visits, &run_id)?;
+        let work_items = crate::whole_game_work_items(&admitted, conditions.total_visits.value, &run_id)?;
         manager.start_analysis_task(
             engine_manager::WholeGameJobRequest {
                 run_id,

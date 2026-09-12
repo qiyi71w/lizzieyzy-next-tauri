@@ -11,7 +11,12 @@ export type AnalysisScopeDraft = {
   intervalStart: string;
   intervalEnd: string;
   toPlay: PlayerColor | "both";
+  timeEnabled: boolean;
+  timeSeconds: string;
+  totalVisitsEnabled: boolean;
   totalVisits: string;
+  leadingCandidateVisitsEnabled: boolean;
+  leadingCandidateVisits: string;
 };
 
 type Props = {
@@ -109,18 +114,63 @@ export function AnalysisTaskPanel(props: Props) {
               <option value="white">White</option>
             </select>
           </label>
-          <label>
-            Total visits
-            <input
-              aria-label="Total visits"
-              type="number"
-              min={1}
-              max={1000000}
-              step={1}
-              value={props.draft.totalVisits}
-              onChange={(event) => update({ totalVisits: event.target.value })}
-            />
-          </label>
+          <fieldset>
+            <legend>Ending conditions (any enabled condition ends the search)</legend>
+            <label>
+              <input
+                aria-label="Enable search time"
+                type="checkbox"
+                checked={props.draft.timeEnabled}
+                onChange={(event) => update({ timeEnabled: event.target.checked })}
+              />
+              Time (seconds)
+              <input
+                aria-label="Search time seconds"
+                type="number"
+                min={1}
+                max={4294967295}
+                step={1}
+                value={props.draft.timeSeconds}
+                onChange={(event) => update({ timeSeconds: event.target.value })}
+              />
+            </label>
+            <label>
+              <input
+                aria-label="Enable total visits"
+                type="checkbox"
+                checked={props.draft.totalVisitsEnabled}
+                onChange={(event) => update({ totalVisitsEnabled: event.target.checked })}
+              />
+              Total visits
+              <input
+                aria-label="Total visits"
+                type="number"
+                min={1}
+                max={4294967295}
+                step={1}
+                value={props.draft.totalVisits}
+                onChange={(event) => update({ totalVisits: event.target.value })}
+              />
+            </label>
+            <label>
+              <input
+                aria-label="Enable leading candidate visits"
+                type="checkbox"
+                checked={props.draft.leadingCandidateVisitsEnabled}
+                onChange={(event) => update({ leadingCandidateVisitsEnabled: event.target.checked })}
+              />
+              Leading candidate visits
+              <input
+                aria-label="Leading candidate visits"
+                type="number"
+                min={1}
+                max={4294967295}
+                step={1}
+                value={props.draft.leadingCandidateVisits}
+                onChange={(event) => update({ leadingCandidateVisits: event.target.value })}
+              />
+            </label>
+          </fieldset>
         </div>
         <div className="button-row">
           <button type="button" onClick={props.onPreview} disabled={!props.canRun || props.busy}>Preview scope</button>
@@ -140,6 +190,10 @@ export function AnalysisTaskPanel(props: Props) {
         {props.task ? (
           <p role="status" data-analysis-task-state={props.task.state}>
             {formatTaskStage(props.task.stage)} · {props.task.state} · {completed}/{requested} completed
+            {` · conditions ${formatTaskConditions(props.task.conditions)}`}
+            {props.task.ending_conditions.length > 0
+              ? ` · ended by ${props.task.ending_conditions.map(formatEndingCondition).join(" + ")}`
+              : ""}
             {props.task.reason ? ` · ${props.task.reason}` : ""}
           </p>
         ) : null}
@@ -155,4 +209,21 @@ function formatTarget(target: AnalysisScopePreviewDto["targets"][number]): strin
 
 function formatTaskStage(stage: string): string {
   return stage === "single_stage" ? "single-stage" : stage;
+}
+
+function formatEndingCondition(condition: string): string {
+  if (condition === "time_seconds") return "time";
+  if (condition === "total_visits") return "total visits";
+  if (condition === "leading_candidate_visits") return "leading candidate visits";
+  return condition;
+}
+
+function formatTaskConditions(conditions: AnalysisTaskDto["conditions"]): string {
+  const enabled: string[] = [];
+  if (conditions.time_seconds.enabled) enabled.push(`${conditions.time_seconds.value}s`);
+  if (conditions.total_visits.enabled) enabled.push(`${conditions.total_visits.value} total visits`);
+  if (conditions.leading_candidate_visits.enabled) {
+    enabled.push(`${conditions.leading_candidate_visits.value} leading candidate visits`);
+  }
+  return enabled.join(" OR ");
 }

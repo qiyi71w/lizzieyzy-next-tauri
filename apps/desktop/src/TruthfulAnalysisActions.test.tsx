@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisTaskDto, CurrentGameResultDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
-import type { AppPreferences } from "./domain/preferences";
+import { defaultAppPreferences, type AppPreferences } from "./domain/preferences";
 
 const runtime = vi.hoisted(() => ({
   native: true,
@@ -18,7 +18,7 @@ const listeners: {
 
 const currentGameFixture = vi.hoisted(() => vi.fn());
 const preferencesApi = vi.hoisted(() => ({
-  loadAppPreferences: vi.fn(() => Promise.reject(new Error("preferences unavailable in test"))),
+  loadAppPreferences: vi.fn((): Promise<{ preferences: AppPreferences }> => Promise.reject(new Error("preferences unavailable in test"))),
   saveAppPreferences: vi.fn(async (preferences: AppPreferences) => preferences)
 }));
 const taskRuntime = vi.hoisted(() => ({ snapshot: null as AnalysisTaskDto | null }));
@@ -188,7 +188,8 @@ beforeEach(() => {
       requested: preview.targets.map((target) => target.node_path),
       completed: [preview.targets[0].node_path],
       state: "searching",
-      reason: null
+      reason: null,
+      ending_conditions: []
     };
     taskRuntime.snapshot = task;
     return task;
@@ -294,6 +295,19 @@ function buttonNamed(host: HTMLElement, label: string) {
 
 function openAnalyzeMenu(host: HTMLElement) {
   act(() => buttonNamed(host, "分析").click());
+}
+
+function inputNamed(host: HTMLElement, label: string) {
+  const input = host.querySelector(`input[aria-label="${label}"]`);
+  if (!(input instanceof HTMLInputElement)) throw new Error(`Missing input: ${label}`);
+  return input;
+}
+
+async function changeNumber(input: HTMLInputElement, value: string) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
 }
 
 function canvasContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
@@ -448,12 +462,141 @@ describe("truthful native analysis actions", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(preferencesApi.saveAppPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ defaultMaxVisits: 32, showCandidates: false }));
+    expect(preferencesApi.saveAppPreferences).toHaveBeenLastCalledWith(expect.objectContaining({
+      taskConditions: expect.objectContaining({ total_visits: { enabled: true, value: 32 } }),
+      showCandidates: false
+    }));
     expect(backend.startAnalysisTask).toHaveBeenCalledTimes(1);
     await act(async () => { buttonNamed(host, "显示").click(); });
     const savedCandidates = Array.from(host.querySelectorAll('[role="menuitemcheckbox"]')).find((item) => item.textContent?.includes("候选"));
     expect(savedCandidates?.getAttribute("aria-checked")).toBe("false");
   });
+  it("does not leak a failed task preset through a concurrent preference save", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await changeNumber(inputNamed(host, "Total visits"), "32");
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    let rejectTaskSave!: (error: Error) => void;
+    preferencesApi.saveAppPreferences.mockImplementationOnce(() => new Promise<AppPreferences>((_, reject) => {
+      rejectTaskSave = reject;
+    }));
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    await act(async () => { buttonNamed(host, "显示").click(); });
+    const candidates = Array.from(host.querySelectorAll('[role="menuitemcheckbox"]'))
+      .find((item) => item.textContent?.includes("候选")) as HTMLElement;
+    await act(async () => { candidates.click(); });
+
+    await act(async () => {
+      rejectTaskSave(new Error("task preset write failed"));
+      await preferencesApi.saveAppPreferences.mock.results[0]?.value.catch(() => undefined);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+    expect(preferencesApi.saveAppPreferences).toHaveBeenCalledTimes(2);
+    expect(preferencesApi.saveAppPreferences.mock.calls[1][0]).toEqual(expect.objectContaining({
+      taskConditions: defaultAppPreferences.taskConditions,
+      showCandidates: false
+    }));
+  });
+
+  it("validates and persists independent OR task conditions before starting", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+
+    const timeEnabled = inputNamed(host, "Enable search time");
+    const totalEnabled = inputNamed(host, "Enable total visits");
+    const leadingEnabled = inputNamed(host, "Enable leading candidate visits");
+    const time = inputNamed(host, "Search time seconds");
+    const total = inputNamed(host, "Total visits");
+    const leading = inputNamed(host, "Leading candidate visits");
+    expect([time.value, total.value, leading.value]).toEqual(["10", "800", "500"]);
+
+    await act(async () => { totalEnabled.click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+
+    await act(async () => { timeEnabled.click(); leadingEnabled.click(); });
+    await changeNumber(time, "1.5");
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+
+    await changeNumber(time, "12");
+    await changeNumber(total, "41");
+    await changeNumber(leading, "7");
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => {
+      buttonNamed(host, "Start task").click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const conditions = {
+      time_seconds: { enabled: true, value: 12 },
+      total_visits: { enabled: false, value: 41 },
+      leading_candidate_visits: { enabled: true, value: 7 }
+    };
+    expect(preferencesApi.saveAppPreferences).toHaveBeenCalledWith(expect.objectContaining({ taskConditions: conditions }));
+    expect(backend.startAnalysisTask).toHaveBeenCalledWith(expect.objectContaining({ conditions }));
+    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent)
+      .toContain("conditions 12s OR 7 leading candidate visits");
+
+    await changeNumber(time, "99");
+    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent)
+      .toContain("conditions 12s OR 7 leading candidate visits");
+  });
+
+  it("restores the durable task preset into the rendered controls", async () => {
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({
+      preferences: {
+        ...defaultAppPreferences,
+        defaultMaxVisits: 999,
+        taskConditions: {
+          time_seconds: { enabled: true, value: 15 },
+          total_visits: { enabled: false, value: 64 },
+          leading_candidate_visits: { enabled: true, value: 8 }
+        }
+      }
+    });
+    const host = await renderApp();
+    await act(async () => { await preferencesApi.loadAppPreferences.mock.results[0]?.value; });
+    expect(inputNamed(host, "Enable search time").checked).toBe(true);
+    expect(inputNamed(host, "Search time seconds").value).toBe("15");
+    expect(inputNamed(host, "Enable total visits").checked).toBe(false);
+    expect(inputNamed(host, "Total visits").value).toBe("64");
+    expect(inputNamed(host, "Enable leading candidate visits").checked).toBe(true);
+    expect(inputNamed(host, "Leading candidate visits").value).toBe("8");
+  });
+
+  it("loads a durable task preset without overwriting an in-progress draft edit", async () => {
+    let resolveLoad!: (value: { preferences: AppPreferences }) => void;
+    const load = new Promise<{ preferences: AppPreferences }>((resolve) => { resolveLoad = resolve; });
+    preferencesApi.loadAppPreferences.mockReturnValueOnce(load);
+    const host = await renderApp();
+    const time = inputNamed(host, "Search time seconds");
+    await changeNumber(time, "27");
+
+    await act(async () => {
+      resolveLoad({
+        preferences: {
+          ...defaultAppPreferences,
+          defaultMaxVisits: 999,
+          taskConditions: {
+            time_seconds: { enabled: true, value: 15 },
+            total_visits: { enabled: false, value: 64 },
+            leading_candidate_visits: { enabled: true, value: 8 }
+          }
+        }
+      });
+      await load;
+    });
+    expect(time.value).toBe("27");
+    expect(inputNamed(host, "Total visits").value).toBe("800");
+    expect(inputNamed(host, "Leading candidate visits").value).toBe("500");
+  });
+
 
   it("cancels the newly started legacy task before its snapshot arrives", async () => {
     const host = await renderApp();
@@ -733,7 +876,7 @@ describe("truthful native analysis actions", () => {
     expect(host.textContent).toContain("move 1 (0, white to play)");
 
     await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(visits, "1000001");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(visits, "4294967296");
       visits.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => {
@@ -773,12 +916,18 @@ describe("truthful native analysis actions", () => {
     expect(backend.startAnalysisTask).toHaveBeenCalledWith(expect.objectContaining({
       runId: "run-1",
       conditions: {
-        time_seconds: { enabled: false, value: 0 },
+        time_seconds: { enabled: false, value: 10 },
         total_visits: { enabled: true, value: 32 },
-        leading_candidate_visits: { enabled: false, value: 0 }
+        leading_candidate_visits: { enabled: false, value: 500 }
       }
     }));
-    expect(preferencesApi.saveAppPreferences).toHaveBeenCalledWith(expect.objectContaining({ defaultMaxVisits: 32 }));
+    expect(preferencesApi.saveAppPreferences).toHaveBeenCalledWith(expect.objectContaining({
+      taskConditions: {
+        time_seconds: { enabled: false, value: 10 },
+        total_visits: { enabled: true, value: 32 },
+        leading_candidate_visits: { enabled: false, value: 500 }
+      }
+    }));
 
     taskRuntime.snapshot = { ...taskRuntime.snapshot!, state: "cancelled", reason: "Cancelled by user." };
     await act(async () => {
@@ -803,6 +952,34 @@ describe("truthful native analysis actions", () => {
     expect(backend.startAnalysisTask).toHaveBeenCalledWith(expect.objectContaining({
       conditions: expect.objectContaining({ total_visits: { enabled: true, value: 1 } })
     }));
+  });
+
+  it("shows the observed normal ending conditions", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    taskRuntime.snapshot = {
+      ...taskRuntime.snapshot!,
+      state: "completed",
+      ending_conditions: ["time_seconds", "leading_candidate_visits"],
+      reason: "Budget reached."
+    };
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-1",
+        job_id: "job-task-1",
+        lane: "whole_game",
+        mode: "finite",
+        generation: 1,
+        node_path: { indices: [0] },
+        outcome: "completed"
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-analysis-task-state="completed"]')?.textContent)
+      .toContain("ended by time + leading candidate visits");
   });
 
 });

@@ -76,18 +76,19 @@ for line in sys.stdin:
             time.sleep(0.005)
         print(json.dumps(dict(id=q["terminateId"], isDuringSearch=False, noResults=True)), flush=True)
     else:
-        if q.get("maxVisits", 0) in (1, 32):
+        limit = q.get("overrideSettings", {}).get("maxVisits", q.get("maxVisits", 0))
+        if limit in (1, 32):
             pathlib.Path("whole-started").touch()
             while not pathlib.Path("whole-release").exists():
                 time.sleep(0.005)
             print(json.dumps(dict(id=q["id"], isDuringSearch=False, turnNumber=0,
-                rootInfo=dict(visits=q["maxVisits"], winrate=0.6, scoreMean=2.5),
-                moveInfos=[dict(move="E5", visits=q["maxVisits"], winrate=0.6, scoreMean=2.5)])), flush=True)
+                rootInfo=dict(visits=limit, winrate=0.6, scoreMean=2.5),
+                moveInfos=[dict(move="E5", order=0, visits=limit, winrate=0.6, scoreMean=2.5)])), flush=True)
             continue
         for visits in [8,16]:
             print(json.dumps(dict(id=q["id"], isDuringSearch=True, turnNumber=0,
                 rootInfo=dict(visits=visits, winrate=0.6, scoreMean=2.5),
-                moveInfos=[dict(move="E5", visits=visits, winrate=0.6, scoreMean=2.5)])), flush=True)
+                moveInfos=[dict(move="E5", order=0, visits=visits, winrate=0.6, scoreMean=2.5)])), flush=True)
 "##,
         )
         .unwrap();
@@ -713,15 +714,21 @@ fn explicit_analysis_scopes_controllable_engine_smoke() {
         .unwrap()
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
-        .filter(|query: &serde_json::Value| task_jobs.iter().any(|id| query["id"] == *id))
+        .filter(|query: &serde_json::Value| {
+            query["id"]
+                .as_str()
+                .is_some_and(|wire_id| task_jobs.iter().any(|id| wire_id.starts_with(id)))
+        })
         .collect();
     assert_eq!(
         queries.len(),
         15,
         "each new task recomputes positions even with existing SGF results"
     );
-    assert!(queries[..14].iter().all(|query| query["maxVisits"] == 32));
-    assert_eq!(queries[14]["maxVisits"], 1);
+    assert!(queries[..14]
+        .iter()
+        .all(|query| query["overrideSettings"]["maxVisits"] == 32));
+    assert_eq!(queries[14]["overrideSettings"]["maxVisits"], 1);
     assert_eq!(queries[13]["moves"], serde_json::json!([["B", "pass"]]));
     assert_eq!(queries[14]["moves"], serde_json::json!([]));
     let saved = engine.directory.join("scopes.sgf");
@@ -937,4 +944,135 @@ fn continuous_empty_board_uses_stones_not_root_or_move_number() {
     );
     state.replace("(;SZ[9]AB[dd]C[setup])", None).unwrap();
     assert_ne!(engine.progress(Some(&resumed.job_id)).job_id, resumed.job_id);
+}
+
+#[cfg(unix)]
+#[test]
+fn task_search_budgets_controllable_engine_smoke() {
+    use app_model::{
+        AnalysisScopeDto, AnalysisScopeModeDto, AnalysisStageConditionsDto, AnalysisTaskStateDto,
+    };
+    let engine = task_fixture();
+    let state = CurrentGameState::default();
+    state.connect_analysis_manager(engine.manager.clone());
+    let opened = state.replace("(;SZ[9]C[budget smoke];B[dd])", None).unwrap();
+    engine.manager.start("test").unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    let run_id = loop {
+        if let app_model::ForegroundEngineLifecycleDto::Ready { run } = engine.manager.snapshot().lifecycle {
+            break run.run_id;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    for condition in ["time_seconds", "total_visits", "leading_candidate_visits"] {
+        std::fs::write(engine.directory.join("budget-smoke"), condition).unwrap();
+        let _ = std::fs::remove_file(engine.directory.join("cancel-final"));
+        let _ = std::fs::remove_file(engine.directory.join("cancel-seen"));
+        let mut conditions = AnalysisStageConditionsDto::default();
+        conditions.time_seconds.enabled = condition == "time_seconds";
+        conditions.time_seconds.value = 1;
+        conditions.total_visits.enabled = condition == "total_visits";
+        conditions.total_visits.value = 8;
+        conditions.leading_candidate_visits.enabled = condition == "leading_candidate_visits";
+        conditions.leading_candidate_visits.value = 5;
+        let preview = state
+            .preview_analysis_scope(
+                opened.generation,
+                AnalysisScopeDto {
+                    mode: AnalysisScopeModeDto::CurrentNode,
+                    current_node: NodePath { indices: vec![] },
+                    branch_choices: vec![],
+                    interval: None,
+                    to_play: None,
+                },
+            )
+            .unwrap();
+        let task = state
+            .start_analysis_task(&engine.manager, run_id.clone(), preview, conditions.clone())
+            .unwrap();
+        let preferences = crate::continuous_analysis::PreferencesState::default();
+        let path = engine.directory.join("preferences.json");
+        let mut preset = app_preferences::default_app_preferences();
+        preset.continuous_analysis_enabled = false;
+        preset.task_conditions = Some(AnalysisStageConditionsDto::default());
+        preferences.save(&path, &engine.manager, preset.clone()).unwrap();
+        assert_eq!(
+            engine.manager.analysis_task_snapshot().unwrap().conditions,
+            conditions
+        );
+        let mut rejected = preset.clone();
+        rejected.task_conditions.as_mut().unwrap().time_seconds.value = 0;
+        assert!(preferences.save(&path, &engine.manager, rejected).is_err());
+        assert!(preferences
+            .save(&engine.directory, &engine.manager, preset.clone())
+            .is_err());
+        assert_eq!(
+            preferences.load(&path, &engine.manager).unwrap().preferences,
+            preset
+        );
+        assert_eq!(
+            app_preferences::load_from_path(&path).unwrap().preferences,
+            preset
+        );
+        assert_eq!(
+            engine.manager.analysis_task_snapshot().unwrap().conditions,
+            conditions
+        );
+        if condition != "time_seconds" {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+            while !engine.directory.join("cancel-seen").exists() {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(engine
+                .manager
+                .analysis_task_snapshot()
+                .unwrap()
+                .completed
+                .is_empty());
+            std::fs::write(engine.directory.join("cancel-final"), "").unwrap();
+        }
+        let mut attached = Vec::new();
+        loop {
+            let event = engine
+                .events
+                .recv_timeout(std::time::Duration::from_secs(4))
+                .unwrap();
+            if let app_model::ForegroundEngineEventDto::Job { job } = event {
+                if job.job_id != task.job_id {
+                    continue;
+                }
+                if state.attach_from_job_event(&job).is_some() {
+                    attached.push(job.node_path.indices.clone());
+                }
+                assert!(
+                    !matches!(
+                        job.outcome,
+                        app_model::AnalysisJobOutcomeDto::Failed | app_model::AnalysisJobOutcomeDto::Timeout
+                    ),
+                    "{job:?}"
+                );
+                if job.outcome == app_model::AnalysisJobOutcomeDto::Completed {
+                    break;
+                }
+            }
+        }
+        let completed = wait_live_task(&engine, AnalysisTaskStateDto::Completed);
+        assert_eq!(completed.ending_conditions, vec![condition]);
+        assert_eq!(completed.completed, vec![NodePath { indices: vec![] }]);
+        assert_eq!(attached, vec![Vec::<u32>::new()]);
+        println!(
+            "budget {condition}: actual query finished, ending={:?}, attached={attached:?}",
+            completed.ending_conditions
+        );
+    }
+    let saved = engine.directory.join("budgets.sgf");
+    state
+        .save_to_path(saved.to_string_lossy().into(), opened.selected_path)
+        .unwrap();
+    let reopened = CurrentSgfDocument::open(&std::fs::read_to_string(saved).unwrap()).unwrap();
+    let root = reopened.snapshot(&NodePath { indices: vec![] }).unwrap();
+    assert_eq!(root.personal_comment, "budget smoke");
+    assert!(root.primary_analysis.is_some());
 }

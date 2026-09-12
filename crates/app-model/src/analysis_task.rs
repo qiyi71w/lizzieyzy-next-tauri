@@ -45,14 +45,41 @@ pub struct AnalysisStageConditionsDto {
 }
 
 impl AnalysisStageConditionsDto {
-    pub fn validate_single_stage(&self) -> Result<u32, String> {
-        if self.time_seconds.enabled || self.leading_candidate_visits.enabled {
-            return Err("Only total-visit conditions are supported for this task.".into());
+    pub fn validate_single_stage(&self) -> Result<(), String> {
+        let limits = [
+            &self.time_seconds,
+            &self.total_visits,
+            &self.leading_candidate_visits,
+        ];
+        if limits.iter().any(|limit| limit.value == 0) {
+            return Err(
+                "Task limits must be whole numbers from 1 to 4294967295, including retained disabled values."
+                    .into(),
+            );
         }
-        if !self.total_visits.enabled || self.total_visits.value == 0 {
-            return Err("A positive total-visit budget is required.".into());
+        if !limits.iter().any(|limit| limit.enabled) {
+            return Err("Enable at least one task search condition.".into());
         }
-        Ok(self.total_visits.value)
+        Ok(())
+    }
+}
+
+impl Default for AnalysisStageConditionsDto {
+    fn default() -> Self {
+        Self {
+            time_seconds: AnalysisTaskLimitDto {
+                enabled: false,
+                value: 10,
+            },
+            total_visits: AnalysisTaskLimitDto {
+                enabled: true,
+                value: 800,
+            },
+            leading_candidate_visits: AnalysisTaskLimitDto {
+                enabled: false,
+                value: 500,
+            },
+        }
     }
 }
 
@@ -96,4 +123,50 @@ pub struct AnalysisTaskDto {
     pub completed: Vec<NodePath>,
     pub state: AnalysisTaskStateDto,
     pub reason: Option<String>,
+    #[serde(default)]
+    pub ending_conditions: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_stage_admits_each_independent_budget_and_rejects_invalid_retained_values() {
+        for enabled in 1..8 {
+            let conditions = AnalysisStageConditionsDto {
+                time_seconds: AnalysisTaskLimitDto {
+                    enabled: enabled & 1 != 0,
+                    value: 10,
+                },
+                total_visits: AnalysisTaskLimitDto {
+                    enabled: enabled & 2 != 0,
+                    value: u32::MAX,
+                },
+                leading_candidate_visits: AnalysisTaskLimitDto {
+                    enabled: enabled & 4 != 0,
+                    value: 500,
+                },
+            };
+            assert!(conditions.validate_single_stage().is_ok(), "{conditions:?}");
+            let mut invalid = conditions.clone();
+            invalid.time_seconds.value = 0;
+            assert!(invalid.validate_single_stage().is_err());
+        }
+        let disabled = AnalysisStageConditionsDto {
+            time_seconds: AnalysisTaskLimitDto {
+                enabled: false,
+                value: 10,
+            },
+            total_visits: AnalysisTaskLimitDto {
+                enabled: false,
+                value: 800,
+            },
+            leading_candidate_visits: AnalysisTaskLimitDto {
+                enabled: false,
+                value: 500,
+            },
+        };
+        assert!(disabled.validate_single_stage().is_err());
+    }
 }

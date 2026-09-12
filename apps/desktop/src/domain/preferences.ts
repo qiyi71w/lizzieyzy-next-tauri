@@ -1,5 +1,5 @@
 import type { NextMoveReviewMarkerMode } from "./nextMoveReviewMarker";
-import type { ContinuousAnalysisBudgetDto } from "./types";
+import type { AnalysisStageConditionsDto, ContinuousAnalysisBudgetDto } from "./types";
 
 export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
@@ -13,6 +13,7 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   showCandidates: boolean;
   candidateLimit: number;
   defaultMaxVisits: number;
+  taskConditions: AnalysisStageConditionsDto;
   reviewMode: ReviewMode;
   boardTheme: BoardTheme;
   graphPerspective: GraphPerspective;
@@ -35,6 +36,11 @@ export const defaultAppPreferences: AppPreferences = {
   showCandidates: true,
   candidateLimit: 8,
   defaultMaxVisits: 800,
+  taskConditions: {
+    time_seconds: { enabled: false, value: 10 },
+    total_visits: { enabled: true, value: 800 },
+    leading_candidate_visits: { enabled: false, value: 500 }
+  },
   reviewMode: "quick",
   boardTheme: "classic",
   graphPerspective: "black",
@@ -59,12 +65,14 @@ export const defaultAppPreferences: AppPreferences = {
 export function normalizeAppPreferences(value: Partial<AppPreferences> | null | undefined): AppPreferences {
   const winrateLine = booleanValue(value?.winrateLine, defaultAppPreferences.winrateLine);
   const scoreLeadLine = booleanValue(value?.scoreLeadLine, defaultAppPreferences.scoreLeadLine);
+  const defaultMaxVisits = integerValue(value?.defaultMaxVisits, defaultAppPreferences.defaultMaxVisits, 1, 1_000_000);
   return {
     showOwnership: booleanValue(value?.showOwnership, defaultAppPreferences.showOwnership),
     showPolicy: booleanValue(value?.showPolicy, defaultAppPreferences.showPolicy),
     showCandidates: booleanValue(value?.showCandidates, defaultAppPreferences.showCandidates),
     candidateLimit: integerValue(value?.candidateLimit, defaultAppPreferences.candidateLimit, 1, 20),
-    defaultMaxVisits: integerValue(value?.defaultMaxVisits, defaultAppPreferences.defaultMaxVisits, 1, 1_000_000),
+    defaultMaxVisits,
+    taskConditions: normalizeTaskConditions(value?.taskConditions, defaultMaxVisits),
     reviewMode: value?.reviewMode === "deep" ? "deep" : "quick",
     boardTheme: value?.boardTheme === "high-contrast" ? "high-contrast" : "classic",
     graphPerspective: value?.graphPerspective === "sideToPlay" ? "sideToPlay" : "black",
@@ -99,6 +107,42 @@ export function continuousBudgetError(value: ContinuousAnalysisBudgetDto): strin
     }
   }
   return null;
+}
+
+export function taskConditionsError(value: AnalysisStageConditionsDto): string | null {
+  const limits = [value.time_seconds, value.total_visits, value.leading_candidate_visits];
+  if (limits.some((limit) => !Number.isInteger(limit.value) || limit.value < 1 || limit.value > 4294967295)) {
+    return "Task condition values must be whole numbers from 1 to 4294967295; disabled conditions retain their values.";
+  }
+  if (!limits.some((limit) => limit.enabled)) {
+    return "Enable at least one task ending condition.";
+  }
+  return null;
+}
+
+function normalizeTaskConditions(
+  value: AnalysisStageConditionsDto | undefined,
+  legacyDefaultMaxVisits: number
+): AnalysisStageConditionsDto {
+  if (!value) {
+    return {
+      time_seconds: { enabled: false, value: 10 },
+      total_visits: { enabled: true, value: legacyDefaultMaxVisits },
+      leading_candidate_visits: { enabled: false, value: 500 }
+    };
+  }
+  return {
+    time_seconds: normalizeTaskLimit(value.time_seconds),
+    total_visits: normalizeTaskLimit(value.total_visits),
+    leading_candidate_visits: normalizeTaskLimit(value.leading_candidate_visits)
+  };
+}
+
+function normalizeTaskLimit(value: AnalysisStageConditionsDto["time_seconds"] | undefined) {
+  return {
+    enabled: typeof value?.enabled === "boolean" ? value.enabled : false,
+    value: typeof value?.value === "number" ? value.value : Number.NaN
+  };
 }
 
 function nextMoveReviewMarkerValue(value: unknown): NextMoveReviewMarkerMode {

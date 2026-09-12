@@ -270,6 +270,7 @@ export type AnalysisTaskDto = {
   completed: NodePath[];
   state: AnalysisTaskStateDto;
   reason?: string | null;
+  ending_conditions: string[];
 };
 
 export type RecoveryEnvelopeDto = {
