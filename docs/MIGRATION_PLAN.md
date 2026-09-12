@@ -565,6 +565,22 @@ Current state: R4 has exited. `ANA-05` remains an immutable historical acceptanc
 
 Current state: R5 has not exited. Ticket 06 native closeout on candidate `4fd710e` (Windows 11, Ticket 07 KataGo, worktree `safe-current-game-06`) accepted `SGF-07` and successor `UI-06`, recorded successor `ANA-15` as Partial, and moved `APP-03`/`APP-04` from Missing to Partial. Native File Exit, WM_CLOSE Cancel, clean `clean_completed`, Restore/Discard without resurrecting engine or jobs, and Q9 Save As cancel (engine kept, analysis stopped) were exercised. Not run: stuck-resource 10s timeout / Retry / Exit anyway; recovery write-failure prompt; native analysis failure presentation. The `APP-01` semantic gate is not recorded. R9 still requires Accepted `APP-04`; R10 still requires Accepted `APP-03`.
 
+### Analysis Restoration — Continuous Current-node Analysis
+
+**Goal:** Restore continuously updated current-position review after the safety/input batch, before R6/R7 expansion, without reopening R4's historical exit.
+
+**Owns:** `ANA-06`, now Accepted after repository and Windows integrated verification on a06d600. This named supplemental batch preserves R0–R11 numbering and all existing owner scopes.
+
+**Migration Phase Gate:** The Matrix-owned Item Start Prerequisites are Accepted and the [continuous-analysis spec](../.scratch/continuous-analysis-restoration/spec.md) plus [ticket set](../.scratch/continuous-analysis-restoration/issues/) are approved. The already-available preference, shortcut, input and safe-document mechanisms are reused. Full R5 exit, final `APP-01` acceptance, and future file/drop workflows are not new start prerequisites.
+
+**Delivery Order:** 01 manual continuous streaming/cancellation/safe snapshots → 02 durable intent/following and holds → 03 configurable continuous budgets → 04 finite handoff and whole-game coexistence → 05 integrated native verification. Operational 06 is read-only ledger closeout and explicitly waits for terminal feature 04 and verification 05. The first slice already owns queue safety and fixed-limit completion; automatic following cannot ship before its inhibition rules.
+
+**Exit when:** `ANA-06` has the spec's repository and real-engine/native acceptance evidence. Valid progress, actual targeted cancellation, contextual controls, budgets, finite handoff, logical lane coexistence, Save and recovery agree under failure and stale identities. Q15 Run failure is distinguished from normal Q9/Q14 cancellation. A ready spec or completed Closeout is not this exit.
+
+**Current state:** Tickets 01–05 satisfy this exit on committed candidate `a06d600b0f16bd6bb61415a2907c5d839e53a0b1`. Windows real KataGo 1.16.4 evidence covers streaming, target-final cancellation, one/two-thread lanes, finite restoration, contextual controls, time/visits limits, Save/reopen, departure inhibition, controlled cancellation failure and last-successful-envelope recovery. The [verification record](../.scratch/continuous-analysis-restoration/issues/05-integrated-native-acceptance.md) separates reused repository checks from native observations and unrun platform/600-second soak checks. Ticket 06 remains the read-only ticket-set Closeout.
+
+The [independent R5 native failure-evidence ticket](../.scratch/r5-native-failure-evidence/issues/01-native-failure-evidence.md) can start separately and keeps `APP-03`, `APP-04`, and `ANA-15` evidence attribution. Neither batch silently accepts the other or admits a core-review replacement claim.
+
 ### R6 — SGF Authoring And Review
 
 **Goal:** Complete in-application SGF intake and the remaining no-engine authoring/review tools on top of `SGF-07`.
@@ -804,7 +820,6 @@ These items are stable and unnumbered. Each has an owner and a Plan-owned Promot
 | `ENG-08` | Engine catalog | — | User-directed catalog reorder persists identities without changing Settings selection, Autoload Default, active run, pending edits, or job binding. |
 | `SSH-01` | SSH engine execution | — | One shared catalog; non-secret SSH profile fields plus System Credential Store/session-only fallback; every admitted stdio adapter preserves its declared capabilities; explicit Autoload Default marking; standard run, typed failure, explicit Restart, no local fallback or restart recovery; bounded deadlines fixed on promotion; repository and per-Shipped-Platform live evidence. |
 | `CONTRIB-01` | Contribution service | — | Promote only for official `katagotraining.org` with a separate signed client component built from an admitted KataGo tag for Windows/Linux CUDA and macOS Metal. Require versioned consent, System Credential Store/session-only fallback, argv-safe ephemeral config, Contribution Network Policy, curated backend/device and 1–16 games (default 1), one globally exclusive typed run, terminal auth/config/version failures, one cancellable 60-second reconnect window, explicit Retry, 30-second graceful-to-force Stop, no respawn/recovery, explicit component repair, default-off user-directory per-game auto-save, narrow local-data clearing, sanitized repository evidence, and a real production upload plus lifecycle/component/proxy/credential/save evidence on every Shipped Platform. Other services, custom commands/SSH, ONNX, `+bs50`, ROCm, OpenCL, raw config, and raw console require a successor or remain excluded. Service actions appear only after acceptance. |
-| `ANA-06` | Analysis | — | Explicit default-off, run-scoped continuous current-node analysis. Never starts on launch, ready, restart, or switch. |
 | `ANA-07` | Analysis | `APP-02` | Session-only SGF queue. Must not replace or dirty the current game. Queue state is not restored after restart. |
 | `ANA-08` | Analysis | — | Frozen Java analysis-header import and Next export/reopen. No false SQLite↔SGF sync claim. |
 | `ANA-09` | Engine adapters | Named engine/version product evidence | Named engine/version fixtures into the existing analysis model. Missing fields stay unavailable. Interface existence does not start this item. |
