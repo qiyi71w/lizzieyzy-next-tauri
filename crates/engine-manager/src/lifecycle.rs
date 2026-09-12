@@ -6,7 +6,8 @@ use crate::{
 };
 use app_model::{
     AnalysisJobLaneDto, AnalysisJobModeDto, AnalysisJobOutcomeDto, AnalysisJobStartedDto,
-    AnalysisJobStateDto, ContinuousAnalysisBudgetDto, ContinuousAnalysisPhaseDto,
+    AnalysisJobStateDto, AnalysisScopeDto, AnalysisScopeModeDto, AnalysisStageConditionsDto, AnalysisTaskDto,
+    AnalysisTaskLimitDto, AnalysisTaskStateDto, ContinuousAnalysisBudgetDto, ContinuousAnalysisPhaseDto,
     ContinuousAnalysisSnapshotDto, EngineBackend, EngineCapabilitySnapshotDto, EngineFailureDto,
     EngineFailureKind, EngineOperationDto, EngineRunDto, ForegroundEngineEventDto,
     ForegroundEngineLifecycleDto, ForegroundEngineSnapshotDto, NodePath,
@@ -184,6 +185,7 @@ struct ManagerState {
     switch_seq: u64,
     last_activity: Instant,
     jobs: Vec<RegisteredJob>,
+    analysis_task: Option<AnalysisTaskDto>,
     subscribers: Vec<Sender<ForegroundEngineEventDto>>,
     continuous_intent: Option<bool>,
     continuous_budget: ContinuousAnalysisBudgetDto,
@@ -222,6 +224,7 @@ impl ForegroundEngineManager {
                     candidate: None,
                     switch_seq: 0,
                     jobs: Vec::new(),
+                    analysis_task: None,
                     last_activity: Instant::now(),
                     subscribers: Vec::new(),
                     continuous_intent: None,
@@ -240,6 +243,10 @@ impl ForegroundEngineManager {
 
     pub fn snapshot(&self) -> ForegroundEngineSnapshotDto {
         snapshot_from(&self.lock())
+    }
+
+    pub fn analysis_task_snapshot(&self) -> Option<AnalysisTaskDto> {
+        self.lock().analysis_task.clone()
     }
 
     pub fn subscribe(&self) -> Receiver<ForegroundEngineEventDto> {
@@ -553,6 +560,10 @@ impl ForegroundEngineManager {
             state.operation += 1;
             let profile_id = run.profile_id.clone();
             state.phase = Phase::Stopping(run);
+            invalidate_analysis_task_locked(
+                &mut state,
+                "The Foreground Engine Run restarted; start a new analysis task.",
+            );
             cancel_jobs_for_current(&mut state);
             publish_snapshot(&mut state);
             (state.operation, profile_id)
@@ -852,18 +863,60 @@ impl ForegroundEngineManager {
         &self,
         request: WholeGameJobRequest,
     ) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+        let Some(first) = request.work_items.first() else {
+            return Err(empty_whole_game_failure(&request.run_id));
+        };
+        let total_visits = first.query.max_visits.unwrap_or(0);
+        let scope = AnalysisScopeDto {
+            mode: AnalysisScopeModeDto::FirstChildMainline,
+            current_node: first.node_path.clone(),
+            branch_choices: Vec::new(),
+            interval: None,
+            to_play: None,
+        };
+        let conditions = single_stage_conditions(total_visits);
+        let task = self.start_analysis_task(request, scope, conditions)?;
+        let node_path = task
+            .requested
+            .first()
+            .cloned()
+            .unwrap_or(NodePath { indices: Vec::new() });
+        Ok(AnalysisJobStartedDto {
+            run_id: task.run_id,
+            job_id: task.job_id,
+            lane: AnalysisJobLaneDto::WholeGame,
+            mode: AnalysisJobModeDto::Finite,
+            state: AnalysisJobStateDto::Queued,
+            generation: task.generation,
+            node_path,
+        })
+    }
+
+    pub fn start_analysis_task(
+        &self,
+        mut request: WholeGameJobRequest,
+        scope: AnalysisScopeDto,
+        conditions: AnalysisStageConditionsDto,
+    ) -> Result<AnalysisTaskDto, EngineFailureDto> {
         if request.work_items.is_empty() {
-            return Err(failure(
+            return Err(empty_whole_game_failure(&request.run_id));
+        }
+        let total_visits = conditions.validate_single_stage().map_err(|message| {
+            failure(
                 EngineOperationDto::Job,
                 EngineFailureKind::InvalidState,
-                "whole-game analysis requires a captured first-child mainline worklist".into(),
+                message,
                 Some(request.run_id.as_str()),
                 None,
                 None,
-            ));
+            )
+        })?;
+        for item in &mut request.work_items {
+            item.query.max_visits = Some(total_visits);
         }
+
         let cancel = AnalysisCancelToken::new();
-        let (started, bound_query) = {
+        let (task, bound_query) = {
             let mut state = self.lock();
             let run = match admitting_run(&state.phase, &request.run_id) {
                 Some(run) => run,
@@ -905,9 +958,12 @@ impl ForegroundEngineManager {
                 )
                 .with_job_id(&occupied.job_id));
             }
+
+            let task_id = Uuid::new_v4().to_string();
             let job_id = Uuid::new_v4().to_string();
-            let first = &request.work_items[0];
-            let bound_query = bound_work_item_query(first, &job_id)?;
+            let first_node_path = request.work_items[0].node_path.clone();
+            let first_board_size = request.work_items[0].board_size;
+            let bound_query = bound_work_item_query(&request.work_items[0], &job_id)?;
             let started = AnalysisJobStartedDto {
                 run_id: request.run_id.clone(),
                 job_id: job_id.clone(),
@@ -915,7 +971,25 @@ impl ForegroundEngineManager {
                 mode: AnalysisJobModeDto::Finite,
                 state: AnalysisJobStateDto::Queued,
                 generation: request.generation,
-                node_path: first.node_path.clone(),
+                node_path: first_node_path.clone(),
+            };
+            let requested = request
+                .work_items
+                .iter()
+                .map(|item| item.node_path.clone())
+                .collect();
+            let task = AnalysisTaskDto {
+                task_id,
+                run_id: request.run_id.clone(),
+                job_id: job_id.clone(),
+                generation: request.generation,
+                scope,
+                stage: "single_stage".into(),
+                conditions,
+                requested,
+                completed: Vec::new(),
+                state: AnalysisTaskStateDto::Queued,
+                reason: None,
             };
             let expected = request.work_items.len();
             state.jobs.push(RegisteredJob {
@@ -930,8 +1004,8 @@ impl ForegroundEngineManager {
                 submitted: true,
                 submitted_at: Instant::now(),
                 generation: request.generation,
-                node_path: first.node_path.clone(),
-                board_size: first.board_size,
+                node_path: first_node_path,
+                board_size: first_board_size,
                 cancel: Arc::new(cancel),
                 disposition: JobDisposition::Running,
                 expected: Some(expected),
@@ -939,6 +1013,7 @@ impl ForegroundEngineManager {
                 current_index: 0,
                 terminal: false,
             });
+            state.analysis_task = Some(task.clone());
             publish_event(
                 &mut state,
                 ForegroundEngineEventDto::Job {
@@ -954,13 +1029,42 @@ impl ForegroundEngineManager {
                     ),
                 },
             );
-            (started, bound_query)
+            publish_snapshot(&mut state);
+            (task, bound_query)
         };
-        if let Err(published) = self.write_live_jsonl(&started.run_id, &bound_query) {
-            self.abandon_job(&started.run_id, &started.job_id, published.clone());
+        if let Err(published) = self.write_live_jsonl(&task.run_id, &bound_query) {
+            let published = published.with_job_id(&task.job_id);
+            self.abandon_job(&task.run_id, &task.job_id, published.clone());
             return Err(published);
         }
-        Ok(started)
+        Ok(task)
+    }
+
+    pub fn invalidate_analysis_task(&self, generation: u64) {
+        let mut state = self.lock();
+        let Some(task) = state.analysis_task.as_ref() else {
+            return;
+        };
+        if task.generation == generation
+            || matches!(
+                task.state,
+                AnalysisTaskStateDto::Cancelled | AnalysisTaskStateDto::Invalidated
+            )
+        {
+            return;
+        }
+        let run_id = task.run_id.clone();
+        let job_id = task.job_id.clone();
+        invalidate_analysis_task_locked(&mut state, "The current game changed; start a new analysis task.");
+        if state
+            .jobs
+            .iter()
+            .any(|job| job.run_id == run_id && job.job_id == job_id && !job.terminal)
+        {
+            let _ = self.request_job_stop_locked(&mut state, &run_id, &job_id, JobDisposition::Cancelled);
+        } else {
+            publish_snapshot(&mut state);
+        }
     }
 
     pub fn wait_for_job_cancellation(
@@ -1070,6 +1174,9 @@ impl ForegroundEngineManager {
                     None,
                 )
             };
+            if disposition == JobDisposition::Cancelled {
+                cancel_analysis_task_locked(state, job_id);
+            }
             publish_event(state, ForegroundEngineEventDto::Job { job: event });
             publish_snapshot(state);
         }
@@ -1338,6 +1445,10 @@ impl ForegroundEngineManager {
         };
         state.operation += 1;
         state.phase = Phase::Stopping(run);
+        invalidate_analysis_task_locked(
+            &mut state,
+            "The Foreground Engine Run stopped; start a new analysis task.",
+        );
         cancel_jobs_for_current(&mut state);
         publish_snapshot(&mut state);
         Ok(Some(state.operation))
@@ -1669,6 +1780,10 @@ impl Inner {
             whole_game_analysis: self.config.admit_whole_game_analysis,
             protocol_cancel: true,
         });
+        invalidate_analysis_task_locked(
+            &mut state,
+            "A new Foreground Engine Run is ready; start a new analysis task.",
+        );
         state.phase = Phase::Ready(ready);
         clear_holds_for_new_run(&mut state);
         publish_snapshot(&mut state);
@@ -1713,6 +1828,10 @@ impl Inner {
                 whole_game_analysis: self.config.admit_whole_game_analysis,
                 protocol_cancel: true,
             });
+            invalidate_analysis_task_locked(
+                &mut state,
+                "The Foreground Engine Run switched; start a new analysis task.",
+            );
             cancel_jobs_for_run(&mut state, &primary_run_id);
             let retiring = state.live.take();
             state.live = state.candidate.take();
@@ -1953,6 +2072,7 @@ impl Inner {
     }
 
     fn enter_primary_error(&self, state: &mut ManagerState, run: EngineRunDto, exit_code: Option<i32>) {
+        fail_analysis_task_locked(state, None, "The Foreground Engine Run exited unexpectedly.");
         cancel_jobs_for_current(state);
         if let Some(mut live) = state.live.take() {
             let _ = live.child.wait();
@@ -2209,14 +2329,31 @@ impl Inner {
                 if response.action.is_some() || response.warning.is_some() {
                     return None;
                 }
-                let has_data = response.root_info.as_ref().is_some_and(|root| root.visits > 0)
-                    && !response.move_infos.is_empty()
-                    && !response.no_results;
-                if has_data {
+                let visits = response.root_info.as_ref().map_or(0, |root| root.visits);
+                let required_visits = item.query.max_visits.unwrap_or(0);
+                let has_search_data = visits > 0 && !response.move_infos.is_empty() && !response.no_results;
+                let reached_budget = required_visits > 0 && visits >= required_visits;
+                if has_search_data {
                     state.last_activity = Instant::now();
                     state.jobs[job_index].state = AnalysisJobStateDto::Searching;
+                    mark_analysis_task_searching(state, &started.job_id);
                 }
                 if response.is_during_search == Some(true) {
+                    publish_snapshot(state);
+                    return None;
+                }
+                if !has_search_data || !reached_budget {
+                    let published = failure(
+                        EngineOperationDto::Job,
+                        EngineFailureKind::Protocol,
+                        "whole-game search ended without valid analysis reaching the requested total visits"
+                            .into(),
+                        Some(run_id),
+                        None,
+                        None,
+                    )
+                    .with_job_id(&started.job_id);
+                    finish_failed_job(state, &started, published);
                     publish_snapshot(state);
                     return None;
                 }
@@ -2226,6 +2363,7 @@ impl Inner {
                 let completed = current_index + 1;
                 let remaining = expected.saturating_sub(completed);
                 state.jobs[job_index].current_index = completed;
+                record_analysis_task_completion(state, &started.job_id, &item.node_path);
                 publish_event(
                     state,
                     ForegroundEngineEventDto::Job {
@@ -2236,7 +2374,7 @@ impl Inner {
                             Some(completed),
                             Some(expected),
                             Some(remaining),
-                            has_data.then_some(frame),
+                            Some(frame),
                             None,
                         ),
                     },
@@ -2629,6 +2767,7 @@ fn finish_whole_game_job(
                 .unwrap_or_else(|| job.node_path.clone())
         })
         .unwrap_or_else(|| started.node_path.clone());
+    finish_analysis_task_locked(state, &started.job_id, outcome, failure.as_ref());
     state.jobs.retain(|job| job.job_id != started.job_id);
     publish_event(
         state,
@@ -2638,6 +2777,116 @@ fn finish_whole_game_job(
             ),
         },
     );
+}
+
+fn mark_analysis_task_searching(state: &mut ManagerState, job_id: &str) {
+    if let Some(task) = state
+        .analysis_task
+        .as_mut()
+        .filter(|task| task.job_id == job_id && task.state == AnalysisTaskStateDto::Queued)
+    {
+        task.state = AnalysisTaskStateDto::Searching;
+    }
+}
+
+fn record_analysis_task_completion(state: &mut ManagerState, job_id: &str, node_path: &NodePath) {
+    if let Some(task) = state.analysis_task.as_mut().filter(|task| {
+        task.job_id == job_id
+            && matches!(
+                task.state,
+                AnalysisTaskStateDto::Queued | AnalysisTaskStateDto::Searching
+            )
+    }) {
+        if task.requested.contains(node_path) && !task.completed.contains(node_path) {
+            task.completed.push(node_path.clone());
+        }
+    }
+}
+
+fn finish_analysis_task_locked(
+    state: &mut ManagerState,
+    job_id: &str,
+    outcome: AnalysisJobOutcomeDto,
+    failure: Option<&EngineFailureDto>,
+) {
+    let Some(task) = state.analysis_task.as_mut().filter(|task| task.job_id == job_id) else {
+        return;
+    };
+    if matches!(
+        task.state,
+        AnalysisTaskStateDto::Cancelled | AnalysisTaskStateDto::Failed | AnalysisTaskStateDto::Invalidated
+    ) {
+        return;
+    }
+    match outcome {
+        AnalysisJobOutcomeDto::Completed if task.completed.len() == task.requested.len() => {
+            task.state = AnalysisTaskStateDto::Completed;
+            task.reason = None;
+        }
+        AnalysisJobOutcomeDto::Cancelled => {
+            task.state = AnalysisTaskStateDto::Cancelled;
+            task.reason = Some("Analysis task was cancelled.".into());
+        }
+        AnalysisJobOutcomeDto::Completed => {
+            task.state = AnalysisTaskStateDto::Failed;
+            task.reason =
+                Some("Analysis task ended before every requested position produced a result.".into());
+        }
+        AnalysisJobOutcomeDto::Failed | AnalysisJobOutcomeDto::Timeout => {
+            task.state = AnalysisTaskStateDto::Failed;
+            task.reason = Some(
+                failure
+                    .map(|failure| failure.message.clone())
+                    .unwrap_or_else(|| "Analysis task failed.".into()),
+            );
+        }
+        AnalysisJobOutcomeDto::Superseded => {
+            task.state = AnalysisTaskStateDto::Invalidated;
+            task.reason = Some("Analysis task was superseded.".into());
+        }
+        _ => {}
+    }
+}
+
+fn cancel_analysis_task_locked(state: &mut ManagerState, job_id: &str) {
+    if let Some(task) = state.analysis_task.as_mut().filter(|task| {
+        task.job_id == job_id
+            && matches!(
+                task.state,
+                AnalysisTaskStateDto::Queued | AnalysisTaskStateDto::Searching
+            )
+    }) {
+        task.state = AnalysisTaskStateDto::Cancelled;
+        task.reason = Some("Analysis task was cancelled.".into());
+    }
+}
+
+fn invalidate_analysis_task_locked(state: &mut ManagerState, reason: &str) {
+    if let Some(task) = state.analysis_task.as_mut().filter(|task| {
+        matches!(
+            task.state,
+            AnalysisTaskStateDto::Queued
+                | AnalysisTaskStateDto::Searching
+                | AnalysisTaskStateDto::Completed
+                | AnalysisTaskStateDto::Failed
+        )
+    }) {
+        task.state = AnalysisTaskStateDto::Invalidated;
+        task.reason = Some(reason.into());
+    }
+}
+
+fn fail_analysis_task_locked(state: &mut ManagerState, job_id: Option<&str>, reason: &str) {
+    if let Some(task) = state.analysis_task.as_mut().filter(|task| {
+        job_id.is_none_or(|job_id| task.job_id == job_id)
+            && matches!(
+                task.state,
+                AnalysisTaskStateDto::Queued | AnalysisTaskStateDto::Searching
+            )
+    }) {
+        task.state = AnalysisTaskStateDto::Failed;
+        task.reason = Some(reason.into());
+    }
 }
 
 fn started_from(job: &RegisteredJob) -> AnalysisJobStartedDto {
@@ -3053,6 +3302,34 @@ fn starting_run(saved: &SavedEngineProfile) -> EngineRunDto {
         adapter_kind: saved.profile.backend,
         profile_snapshot: saved.profile.clone(),
         capability_snapshot: None,
+    }
+}
+
+fn empty_whole_game_failure(run_id: &str) -> EngineFailureDto {
+    failure(
+        EngineOperationDto::Job,
+        EngineFailureKind::InvalidState,
+        "whole-game analysis requires a captured first-child mainline worklist".into(),
+        Some(run_id),
+        None,
+        None,
+    )
+}
+
+fn single_stage_conditions(total_visits: u32) -> AnalysisStageConditionsDto {
+    AnalysisStageConditionsDto {
+        time_seconds: AnalysisTaskLimitDto {
+            enabled: false,
+            value: 0,
+        },
+        total_visits: AnalysisTaskLimitDto {
+            enabled: true,
+            value: total_visits,
+        },
+        leading_candidate_visits: AnalysisTaskLimitDto {
+            enabled: false,
+            value: 0,
+        },
     }
 }
 

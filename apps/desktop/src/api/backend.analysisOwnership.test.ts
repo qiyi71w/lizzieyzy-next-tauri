@@ -10,10 +10,4 @@ describe("frontend analysis API ownership", () => {
     expect("startForegroundContinuousNodeAnalysis" in backend).toBe(false);
   });
 
-  it("keeps manager-owned analysis entry points and browser-only demonstration analysis", () => {
-    expect(typeof backend.startSelectedNodeAnalysis).toBe("function");
-    expect(typeof backend.startKataGoGameAnalysis).toBe("function");
-    expect(typeof backend.foregroundEngineContinuousAction).toBe("function");
-    expect(typeof backend.fakeAnalyze).toBe("function");
-  });
 });

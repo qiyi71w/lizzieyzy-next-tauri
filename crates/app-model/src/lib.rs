@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
+mod analysis_task;
+pub use analysis_task::*;
+
 mod analysis_job;
 pub use analysis_job::{
     admits_analysis_attachment, admits_analysis_publication, AnalysisJobEventDto, AnalysisJobLaneDto,

@@ -52,6 +52,7 @@ const CLAIMED_SHORTCUTS: ShortcutDefinition[] = [
   { id: "file.paste-sgf", label: "粘贴棋谱", primary: { key: "v", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "game.human-vs-engine", label: "人机对局（未接入）", primary: { key: "n" }, aliases: [], focusRule: "focus-safe" },
   { id: "analysis.continuous", label: "连续分析", primary: { key: " " }, aliases: [], focusRule: "focus-safe" },
+  { id: "analysis.quick", label: "Quick analysis", primary: { key: "b", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "review.pass", label: "停一手", primary: { key: "p" }, aliases: [], focusRule: "focus-safe" },
   { id: "review.remove-variation", label: "删除分支", primary: { key: "Delete", shift: true }, aliases: [{ key: "Backspace", shift: true }], focusRule: "focus-safe" },
   { id: "review.parent", label: "上一手", primary: { key: "ArrowUp" }, aliases: [], focusRule: "focus-safe" },

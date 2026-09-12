@@ -9,6 +9,7 @@
 - Added durable default-on continuous-analysis intent, manager-owned latest-node following, and contextual Start/Stop/Resume with limit, finite-job, error and document-departure inhibition.
 - Added durable independent continuous time/visits budgets and empty-board stopping, with explicit limit causes, retained results, fresh-budget Resume and write-before-replacement safety.
 - Personal comments preserve active analysis admission. Document snapshot ordering protects newer annotations and Save state from delayed analysis events.
+- Added explicit current-game analysis scopes with authoritative previews, finite total-visit tasks, progress, terminal cancellation and semantic/Run invalidation. Ctrl+B starts a one-visit overview; analysis results remain attached to their SGF nodes.
 
 ### 中文
 
@@ -17,6 +18,7 @@
 - 连续分析意图默认开启并持久化；由 manager 跟随最新节点，统一开始/停止/继续动作，并保留到限、有限请求、错误及离开棋谱后的自动工作抑制。
 - 连续分析支持独立持久化的时间/visits 预算及空棋盘停止；显示到限原因、保留结果，继续时创建新预算，设置落盘成功后才替换搜索。
 - 个人评论保留正在运行的分析准入；文档快照排序防止延迟分析事件覆盖新批注与保存状态。
+- 新增当前棋谱显式分析范围、Rust 权威预览、总访问预算任务、真实进度、终态取消及语义/Run 失效状态；Ctrl+B 启动一访问概览，结果保存在对应 SGF 节点。
 
 ## [0.1.0] - 2026-05-01
 

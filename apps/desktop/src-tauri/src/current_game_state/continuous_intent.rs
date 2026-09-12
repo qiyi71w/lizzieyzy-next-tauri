@@ -67,6 +67,8 @@ impl LiveFixture {
 import json, sys, time, pathlib
 for line in sys.stdin:
     q = json.loads(line)
+    with open("queries.jsonl", "a") as log:
+        log.write(json.dumps(q) + "\n")
     if q.get("action") == "terminate":
         assert "terminateId" in q and q["id"] != q["terminateId"]
         print(json.dumps(dict(id=q["id"], action="terminate")), flush=True)
@@ -74,13 +76,13 @@ for line in sys.stdin:
             time.sleep(0.005)
         print(json.dumps(dict(id=q["terminateId"], isDuringSearch=False, noResults=True)), flush=True)
     else:
-        if q.get("maxVisits", 0) == 32:
+        if q.get("maxVisits", 0) in (1, 32):
             pathlib.Path("whole-started").touch()
             while not pathlib.Path("whole-release").exists():
                 time.sleep(0.005)
             print(json.dumps(dict(id=q["id"], isDuringSearch=False, turnNumber=0,
-                rootInfo=dict(visits=32, winrate=0.6, scoreMean=2.5),
-                moveInfos=[dict(move="E5", visits=32, winrate=0.6, scoreMean=2.5)])), flush=True)
+                rootInfo=dict(visits=q["maxVisits"], winrate=0.6, scoreMean=2.5),
+                moveInfos=[dict(move="E5", visits=q["maxVisits"], winrate=0.6, scoreMean=2.5)])), flush=True)
             continue
         for visits in [8,16]:
             print(json.dumps(dict(id=q["id"], isDuringSearch=True, turnNumber=0,
@@ -221,6 +223,188 @@ fn whole_game_comment_save_controllable_engine_smoke() {
         assert_eq!(node.primary_analysis.unwrap().visits, 32);
     }
     println!("whole-game smoke: same Job attached both nodes across comment/Save; SGF reopened with note and results");
+}
+
+#[cfg(unix)]
+#[test]
+fn explicit_analysis_scopes_controllable_engine_smoke() {
+    use app_model::{
+        AnalysisScopeDto, AnalysisScopeModeDto, AnalysisStageConditionsDto, AnalysisTaskLimitDto,
+    };
+    let engine = LiveFixture::new();
+    let state = CurrentGameState::default();
+    state.connect_analysis_manager(engine.manager.clone());
+    let opened = state
+        .replace("(;SZ[9];B[dd];C[note](;W[];AB[aa]PL[W])(;W[ee]))", None)
+        .unwrap();
+    engine.manager.start("test").unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    let run_id = loop {
+        if let app_model::ForegroundEngineLifecycleDto::Ready { run } = engine.manager.snapshot().lifecycle {
+            break run.run_id;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    std::fs::write(engine.directory.join("whole-release"), "").unwrap();
+    let conditions = AnalysisStageConditionsDto {
+        time_seconds: AnalysisTaskLimitDto {
+            enabled: false,
+            value: 10,
+        },
+        total_visits: AnalysisTaskLimitDto {
+            enabled: true,
+            value: 32,
+        },
+        leading_candidate_visits: AnalysisTaskLimitDto {
+            enabled: false,
+            value: 1,
+        },
+    };
+    let cases = [
+        (AnalysisScopeModeDto::CurrentNode, None, None, vec![vec![0, 0]]),
+        (
+            AnalysisScopeModeDto::SelectedReviewLine,
+            None,
+            None,
+            vec![vec![], vec![0], vec![0, 0, 1]],
+        ),
+        (
+            AnalysisScopeModeDto::FirstChildMainline,
+            None,
+            None,
+            vec![vec![], vec![0], vec![0, 0, 0], vec![0, 0, 0, 0]],
+        ),
+        (
+            AnalysisScopeModeDto::AllBranches,
+            None,
+            None,
+            vec![vec![], vec![0], vec![0, 0, 0], vec![0, 0, 0, 0], vec![0, 0, 1]],
+        ),
+        (
+            AnalysisScopeModeDto::FirstChildMainline,
+            Some(app_model::AnalysisPositionIntervalDto { start: 2, end: 2 }),
+            Some(app_model::PlayerColor::White),
+            vec![vec![0, 0, 0, 0]],
+        ),
+        (
+            AnalysisScopeModeDto::AllBranches,
+            Some(app_model::AnalysisPositionIntervalDto { start: 0, end: 0 }),
+            None,
+            vec![vec![]],
+        ),
+    ];
+    let mut task_jobs = Vec::new();
+    for (mode, interval, to_play, expected) in cases {
+        let scope = AnalysisScopeDto {
+            mode,
+            current_node: NodePath { indices: vec![0, 0] },
+            branch_choices: vec![app_model::AnalysisBranchChoiceDto {
+                parent: NodePath { indices: vec![0, 0] },
+                child: 1,
+            }],
+            interval,
+            to_play,
+        };
+        let preview = state.preview_analysis_scope(opened.generation, scope).unwrap();
+        let mut stage_conditions = conditions.clone();
+        if expected == vec![Vec::<u32>::new()] {
+            stage_conditions.total_visits.value = 1;
+        }
+        assert_eq!(
+            preview
+                .targets
+                .iter()
+                .map(|target| target.node_path.indices.clone())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        let task = state
+            .start_analysis_task(&engine.manager, run_id.clone(), preview, stage_conditions)
+            .unwrap();
+        task_jobs.push(task.job_id.clone());
+        assert_ne!(task.task_id, task.job_id);
+        let mut attached = Vec::new();
+        loop {
+            let event = engine
+                .events
+                .recv_timeout(std::time::Duration::from_secs(4))
+                .unwrap();
+            if let app_model::ForegroundEngineEventDto::Job { job } = event {
+                if job.job_id != task.job_id {
+                    continue;
+                }
+                if state.attach_from_job_event(&job).is_some() {
+                    attached.push(job.node_path.indices.clone());
+                }
+                if job.outcome == app_model::AnalysisJobOutcomeDto::Completed {
+                    break;
+                }
+                assert!(!matches!(
+                    job.outcome,
+                    app_model::AnalysisJobOutcomeDto::Failed | app_model::AnalysisJobOutcomeDto::Timeout
+                ));
+            }
+        }
+        assert_eq!(attached, expected);
+        let completed = engine.manager.analysis_task_snapshot().unwrap();
+        assert_eq!(completed.state, app_model::AnalysisTaskStateDto::Completed);
+        assert_eq!(
+            completed
+                .completed
+                .iter()
+                .map(|path| path.indices.clone())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        println!("scope {mode:?}: searched and attached {attached:?}");
+    }
+    let queries: Vec<serde_json::Value> = std::fs::read_to_string(engine.directory.join("queries.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|query: &serde_json::Value| task_jobs.iter().any(|id| query["id"] == *id))
+        .collect();
+    assert_eq!(
+        queries.len(),
+        15,
+        "each new task recomputes positions even with existing SGF results"
+    );
+    assert!(queries[..14].iter().all(|query| query["maxVisits"] == 32));
+    assert_eq!(queries[14]["maxVisits"], 1);
+    assert_eq!(queries[13]["moves"], serde_json::json!([["B", "pass"]]));
+    assert_eq!(queries[14]["moves"], serde_json::json!([]));
+    let saved = engine.directory.join("scopes.sgf");
+    state
+        .save_to_path(saved.to_string_lossy().into(), opened.selected_path)
+        .unwrap();
+    let reopened = CurrentSgfDocument::open(&std::fs::read_to_string(saved).unwrap()).unwrap();
+    assert_eq!(
+        reopened
+            .snapshot(&NodePath { indices: vec![0, 0] })
+            .unwrap()
+            .personal_comment,
+        "note"
+    );
+    for path in [
+        vec![],
+        vec![0],
+        vec![0, 0],
+        vec![0, 0, 0],
+        vec![0, 0, 0, 0],
+        vec![0, 0, 1],
+    ] {
+        let expected_visits = if path.is_empty() { 1 } else { 32 };
+        assert_eq!(
+            reopened
+                .snapshot(&NodePath { indices: path })
+                .unwrap()
+                .primary_analysis
+                .unwrap()
+                .visits,
+            expected_visits
+        );
+    }
 }
 
 #[cfg(unix)]

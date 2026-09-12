@@ -1,7 +1,9 @@
 use app_model::{
-    admits_analysis_publication, AnalysisJobEventDto, AnalysisJobOutcomeDto, AnalysisPublicationScopeDto,
-    EngineBackend, EngineCapabilitySnapshotDto, EngineFailureKind, EngineOperationDto, EngineProfileDto,
-    ForegroundEngineEventDto, ForegroundEngineLifecycleDto, MoveVertex, NodePath, PointDto,
+    admits_analysis_publication, AnalysisJobEventDto, AnalysisJobOutcomeDto, AnalysisPositionIntervalDto,
+    AnalysisPublicationScopeDto, AnalysisScopeDto, AnalysisScopeModeDto, AnalysisStageConditionsDto,
+    AnalysisTaskLimitDto, AnalysisTaskStateDto, EngineBackend, EngineCapabilitySnapshotDto,
+    EngineFailureKind, EngineOperationDto, EngineProfileDto, ForegroundEngineEventDto,
+    ForegroundEngineLifecycleDto, MoveVertex, NodePath, PointDto,
 };
 use engine_manager::{
     AnalysisCancelToken, AnalysisJobCancel, AnalysisJobLane, EngineProfileCatalog, ForegroundEngineConfig,
@@ -197,6 +199,33 @@ fn whole_game_request(run_id: &str, generation: u64, expected_responses: usize) 
                 move_number: depth as u32,
             })
             .collect(),
+    }
+}
+
+fn analysis_scope() -> AnalysisScopeDto {
+    AnalysisScopeDto {
+        mode: AnalysisScopeModeDto::AllBranches,
+        current_node: NodePath { indices: vec![1] },
+        branch_choices: Vec::new(),
+        interval: Some(AnalysisPositionIntervalDto { start: 0, end: 10 }),
+        to_play: None,
+    }
+}
+
+fn task_conditions(total_visits: u32) -> AnalysisStageConditionsDto {
+    AnalysisStageConditionsDto {
+        time_seconds: AnalysisTaskLimitDto {
+            enabled: false,
+            value: 0,
+        },
+        total_visits: AnalysisTaskLimitDto {
+            enabled: true,
+            value: total_visits,
+        },
+        leading_candidate_visits: AnalysisTaskLimitDto {
+            enabled: false,
+            value: 0,
+        },
     }
 }
 
@@ -1289,6 +1318,128 @@ fn whole_game_job_completes_on_ready_run_without_spawning_another_process() {
 
 #[cfg(unix)]
 #[test]
+fn analysis_task_freezes_scope_budget_and_legitimate_completions() {
+    let temp = TestTempDir::new("analysis-task-complete");
+    let log = temp.path().join("engine.log");
+    let mut script = format!("ENGINE_LOG='{}'\n", log.display());
+    script.push_str(&resident_whole_game_script());
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let request = whole_game_request(&run_id, 40, 2);
+    let task = manager
+        .start_analysis_task(request, analysis_scope(), task_conditions(4))
+        .unwrap();
+
+    assert_ne!(task.task_id, task.job_id);
+    assert_eq!(task.state, AnalysisTaskStateDto::Queued);
+    assert_eq!(
+        task.requested,
+        vec![NodePath { indices: vec![] }, NodePath { indices: vec![0] }]
+    );
+    assert!(task.completed.is_empty());
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == task.job_id
+            && job.outcome == AnalysisJobOutcomeDto::Progress
+            && job.completed == Some(1)
+    });
+    let searching = manager.analysis_task_snapshot().unwrap();
+    assert_eq!(searching.state, AnalysisTaskStateDto::Searching);
+    assert_eq!(searching.completed, vec![NodePath { indices: vec![] }]);
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == task.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+    let completed = manager.analysis_task_snapshot().unwrap();
+    assert_eq!(completed.state, AnalysisTaskStateDto::Completed);
+    assert_eq!(completed.completed, completed.requested);
+    assert_eq!(completed.scope, analysis_scope());
+    assert_eq!(completed.conditions, task_conditions(4));
+    let logged = std::fs::read_to_string(log).unwrap();
+    assert_eq!(count_job_queries(&logged, &task.job_id), 2);
+    assert_eq!(logged.matches("\"maxVisits\":4").count(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_rejects_unsupported_conditions_without_replacing_active_task() {
+    let temp = TestTempDir::new("analysis-task-admission");
+    let release = temp.path().join("release");
+    let (manager, _, _, run_id) = ready_manager(&temp, &echo_first_then_hold_script(&release));
+    let active = manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 41, 2),
+            analysis_scope(),
+            task_conditions(4),
+        )
+        .unwrap();
+    let mut unsupported = task_conditions(4);
+    unsupported.time_seconds.enabled = true;
+    let error = manager
+        .start_analysis_task(whole_game_request(&run_id, 41, 2), analysis_scope(), unsupported)
+        .unwrap_err();
+    assert_eq!(error.kind, EngineFailureKind::InvalidState);
+    assert_eq!(manager.analysis_task_snapshot().unwrap().task_id, active.task_id);
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_cancel_is_terminal_and_late_final_cannot_complete_it() {
+    let temp = TestTempDir::new("analysis-task-cancel");
+    let release = temp.path().join("release");
+    let (manager, _, events, run_id) = ready_manager(&temp, &echo_first_then_hold_script(&release));
+    let task = manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 42, 2),
+            analysis_scope(),
+            task_conditions(4),
+        )
+        .unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == task.job_id && job.outcome == AnalysisJobOutcomeDto::Progress
+    });
+    manager.cancel_job(&run_id, &task.job_id).unwrap();
+    assert_eq!(
+        manager.analysis_task_snapshot().unwrap().state,
+        AnalysisTaskStateDto::Cancelled
+    );
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == task.job_id && job.outcome == AnalysisJobOutcomeDto::Cancelled
+    });
+    std::fs::write(release, "go").unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        manager.analysis_task_snapshot().unwrap().state,
+        AnalysisTaskStateDto::Cancelled
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn analysis_task_invalidates_only_when_generation_changes() {
+    let temp = TestTempDir::new("analysis-task-invalidate");
+    let release = temp.path().join("release");
+    let (manager, _, events, run_id) = ready_manager(&temp, &echo_first_then_hold_script(&release));
+    let task = manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 43, 2),
+            analysis_scope(),
+            task_conditions(4),
+        )
+        .unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == task.job_id && job.outcome == AnalysisJobOutcomeDto::Progress
+    });
+    manager.invalidate_analysis_task(43);
+    assert_eq!(
+        manager.analysis_task_snapshot().unwrap().state,
+        AnalysisTaskStateDto::Searching
+    );
+    manager.invalidate_analysis_task(44);
+    let invalidated = manager.analysis_task_snapshot().unwrap();
+    assert_eq!(invalidated.state, AnalysisTaskStateDto::Invalidated);
+    assert_eq!(invalidated.completed, vec![NodePath { indices: vec![] }]);
+}
+
+#[cfg(unix)]
+#[test]
 fn whole_game_user_cancel_keeps_run_ready_and_does_not_cancel_selected_node() {
     let temp = TestTempDir::new("whole-game-cancel");
     let log = temp.path().join("engine.log");
@@ -1359,10 +1510,10 @@ while IFS= read -r line; do
     *)
       if [ "${{WG_FIRST:-1}}" = 1 ]; then
         WG_FIRST=0
-        printf '{{"id":"%s","turnNumber":0}}\n' "$id"
+        printf '{{"id":"%s","turnNumber":0,"rootInfo":{{"visits":4,"winrate":0.5}},"moveInfos":[{{"move":"E5","visits":4,"winrate":0.5}}]}}\n' "$id"
       else
         while [ ! -f '{release}' ]; do sleep 0.01; done
-        printf '{{"id":"%s","turnNumber":1}}\n' "$id"
+        printf '{{"id":"%s","turnNumber":1,"rootInfo":{{"visits":4,"winrate":0.5}},"moveInfos":[{{"move":"E5","visits":4,"winrate":0.5}}]}}\n' "$id"
       fi
       ;;
   esac
@@ -1380,6 +1531,10 @@ done
             && job.completed == Some(1)
     });
     manager.stop().unwrap();
+    assert_eq!(
+        manager.analysis_task_snapshot().unwrap().state,
+        AnalysisTaskStateDto::Invalidated
+    );
     wait_job(&events, Duration::from_secs(2), |job| {
         job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Cancelled
     });
@@ -1410,7 +1565,7 @@ while IFS= read -r line; do
     *)
       if [ "${{WG_FIRST:-1}}" = 1 ]; then
         WG_FIRST=0
-        printf '{{"id":"%s","turnNumber":0}}\n' "$id"
+        printf '{{"id":"%s","turnNumber":0,"rootInfo":{{"visits":4,"winrate":0.5}},"moveInfos":[{{"move":"E5","visits":4,"winrate":0.5}}]}}\n' "$id"
       else
         while [ ! -f '{crash}' ]; do sleep 0.01; done
         exit 9
@@ -1840,6 +1995,9 @@ done
         failed.failure.as_ref().map(|failure| failure.kind),
         Some(EngineFailureKind::Protocol)
     );
+    let task = manager.analysis_task_snapshot().unwrap();
+    assert_eq!(task.state, AnalysisTaskStateDto::Failed);
+    assert!(task.completed.is_empty());
     let logged = std::fs::read_to_string(&log).unwrap();
     assert_eq!(count_job_queries(&logged, &started.job_id), 1);
 }
@@ -2069,8 +2227,7 @@ while IFS= read -r line; do
     printf '{{"id":"%s","turnNumber":0}}\n' "$id"
     continue
   fi
-  printf '{{"id":"%s","turnNumber":0}}\n' "$id"
-  printf '{{"id":"%s","turnNumber":1}}\n' "$id"
+  printf '{{"id":"%s","turnNumber":0,"rootInfo":{{"visits":4,"winrate":0.5}},"moveInfos":[{{"move":"E5","visits":4,"winrate":0.5}}]}}\n' "$id"
 done
 "#,
         release = release_path.display()
@@ -2492,6 +2649,10 @@ fn switch_rebinding_covers_whole_game_jobs() {
         |lifecycle| matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "profile-b"),
     );
     let run_b = run_from_ready(&promoted.lifecycle).run_id.clone();
+    assert_eq!(
+        manager.analysis_task_snapshot().unwrap().state,
+        AnalysisTaskStateDto::Invalidated
+    );
     let started_b = manager
         .start_whole_game_analysis(whole_game_request(&run_b, 2, 2))
         .unwrap();
@@ -2509,7 +2670,14 @@ fn switch_rebinding_covers_whole_game_jobs() {
 fn switch_asset_failure_keeps_ready_a_and_publishes_switch_scoped_failure() {
     let temp = TestTempDir::new("switch-asset");
     let (manager, catalog, events, run_a) =
-        ready_two_profiles(&temp, &resident_echo_script(), &resident_echo_script());
+        ready_two_profiles(&temp, &resident_whole_game_script(), &resident_echo_script());
+    let task_job = manager
+        .start_whole_game_analysis(whole_game_request(&run_a, 1, 2))
+        .unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == task_job.job_id && job.outcome == AnalysisJobOutcomeDto::Completed
+    });
+    let completed_task = manager.analysis_task_snapshot().unwrap();
     catalog.set_autoload_profile_id(Some("profile-a".into()));
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-b".into(),
@@ -2552,6 +2720,7 @@ fn switch_asset_failure_keeps_ready_a_and_publishes_switch_scoped_failure() {
     assert_eq!(after.profile_id, "profile-a");
     assert_eq!(after.profile_snapshot, before_run.profile_snapshot);
     assert_eq!(after.capability_snapshot, before_run.capability_snapshot);
+    assert_eq!(manager.analysis_task_snapshot().unwrap(), completed_task);
     manager.assert_profile_deletable("profile-a").unwrap_err();
     manager.assert_profile_deletable("profile-b").unwrap();
     assert_eq!(catalog.autoload_profile_id().as_deref(), Some("profile-a"));

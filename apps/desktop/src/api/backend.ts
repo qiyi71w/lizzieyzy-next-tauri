@@ -5,6 +5,10 @@ import type {
   AnalysisFrameDto,
   AnalysisJobEventDto,
   AnalysisJobStartedDto,
+  AnalysisScopeDto,
+  AnalysisScopePreviewDto,
+  AnalysisStageConditionsDto,
+  AnalysisTaskDto,
   AppHealthDto,
   AssetCheckDto,
   CandidateMoveDto,
@@ -288,6 +292,32 @@ export async function startKataGoGameAnalysis(input: {
     generation: input.generation,
     maxVisits: input.maxVisits
   });
+}
+
+export async function previewAnalysisScope(input: {
+  generation: number;
+  scope: AnalysisScopeDto;
+}): Promise<AnalysisScopePreviewDto> {
+  if (!isTauriRuntime()) {
+    throw new Error("Analysis task preview requires the Tauri desktop backend.");
+  }
+  return invoke<AnalysisScopePreviewDto>("preview_analysis_scope", input);
+}
+
+export async function startAnalysisTask(input: {
+  runId: string;
+  preview: AnalysisScopePreviewDto;
+  conditions: AnalysisStageConditionsDto;
+}): Promise<AnalysisTaskDto> {
+  if (!isTauriRuntime()) {
+    throw new Error("Analysis tasks require the Tauri desktop backend.");
+  }
+  return invoke<AnalysisTaskDto>("start_analysis_task", input);
+}
+
+export async function analysisTaskSnapshot(): Promise<AnalysisTaskDto | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke<AnalysisTaskDto | null>("analysis_task_snapshot");
 }
 
 export async function cancelKataGoAnalysis(runId: string, jobId: string): Promise<void> {

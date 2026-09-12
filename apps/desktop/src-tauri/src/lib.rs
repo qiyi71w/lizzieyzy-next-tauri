@@ -12,8 +12,7 @@ use engine_manager::{
     parse_engine_profiles, save_engine_profiles as persist_engine_profiles, AssetCheck, CommandSpec,
     EngineProfileCatalog, EngineProfileRecord as EngineProfileRecordDto,
     EngineProfilesSettings as EngineProfilesSettingsDto, ForegroundEngineConfig, ForegroundEngineManager,
-    SavedEngineProfile, SelectedNodeJobRequest, WholeGameJobRequest, WholeGameWorkItem,
-    DEFAULT_ENGINE_PROFILE_ID,
+    SavedEngineProfile, SelectedNodeJobRequest, WholeGameWorkItem, DEFAULT_ENGINE_PROFILE_ID,
 };
 use go_core::ReadBoardLocalContext;
 use katago_protocol::{analysis_query_from_position, AnalysisQueryOptions};
@@ -714,15 +713,32 @@ fn katago_start_analyze_game(
     generation: u64,
     max_visits: u32,
 ) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
-    let admitted = current_game
-        .admit_whole_game(generation)
-        .map_err(|error| job_failure(&run_id, EngineFailureKind::InvalidState, error.message))?;
-    let work_items = whole_game_work_items(&admitted, max_visits, &run_id)?;
-    manager.start_whole_game_analysis(WholeGameJobRequest {
-        run_id,
-        generation: admitted.generation,
-        work_items,
-    })
+    current_game.start_first_child_analysis(&manager, run_id, generation, max_visits)
+}
+
+#[tauri::command]
+fn preview_analysis_scope(
+    current_game: State<'_, CurrentGameState>,
+    generation: u64,
+    scope: app_model::AnalysisScopeDto,
+) -> Result<app_model::AnalysisScopePreviewDto, app_model::CurrentGameError> {
+    current_game.preview_analysis_scope(generation, scope)
+}
+
+#[tauri::command]
+fn start_analysis_task(
+    manager: State<'_, ForegroundEngineManager>,
+    current_game: State<'_, CurrentGameState>,
+    run_id: String,
+    preview: app_model::AnalysisScopePreviewDto,
+    conditions: app_model::AnalysisStageConditionsDto,
+) -> Result<app_model::AnalysisTaskDto, EngineFailureDto> {
+    current_game.start_analysis_task(&manager, run_id, preview, conditions)
+}
+
+#[tauri::command]
+fn analysis_task_snapshot(manager: State<'_, ForegroundEngineManager>) -> Option<app_model::AnalysisTaskDto> {
+    manager.analysis_task_snapshot()
 }
 
 #[tauri::command]
@@ -1009,6 +1025,9 @@ pub fn run() {
             load_engine_profiles_settings,
             save_engine_profiles_settings,
             katago_start_analyze_game,
+            preview_analysis_scope,
+            start_analysis_task,
+            analysis_task_snapshot,
             katago_cancel_analysis,
             foreground_engine_snapshot,
             foreground_engine_start,
@@ -1176,13 +1195,6 @@ for line in sys.stdin:
         assert_eq!(items[1].query.rules, "japanese");
     }
 
-    #[test]
-    fn whole_game_admission_rejects_stale_generation_before_worklist() {
-        let state = CurrentGameState::default();
-        let opened = state.replace("(;GM[1]FF[4]SZ[9])", None).unwrap();
-        let stale = state.admit_whole_game(opened.generation + 1).unwrap_err();
-        assert_eq!(stale.message, "current game generation does not match");
-    }
 
     fn registered_tauri_commands(source: &str) -> Vec<&str> {
         let list = source
@@ -1239,21 +1251,6 @@ for line in sys.stdin:
             commands.contains(&"katago_start_analyze_game"),
             "whole-game analysis must stay on the manager-owned run command"
         );
-    }
-
-    #[test]
-    fn whole_game_command_admits_current_game_instead_of_caller_sgf_batch() {
-        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
-        let command = source
-            .split("fn katago_start_analyze_game(")
-            .nth(1)
-            .and_then(|rest| rest.split("fn katago_cancel_analysis(").next())
-            .expect("katago_start_analyze_game");
-        assert!(command.contains("admit_whole_game"));
-        assert!(command.contains("generation: u64"));
-        assert!(!command.contains("sgf_text"));
-        assert!(!command.contains("analysis_batch_query_from_game"));
-        assert!(!command.contains("prepare_katago_batch_analysis"));
     }
 
     #[test]

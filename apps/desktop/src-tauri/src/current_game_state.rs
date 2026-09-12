@@ -70,6 +70,7 @@ impl CurrentGameState {
         let Some(manager) = self.analysis_manager.get() else {
             return;
         };
+        manager.invalidate_analysis_task(holder.generation);
         if holder.analysis_target.as_ref().is_some_and(|(generation, path)| {
             *generation == holder.generation && *path == holder.selected_path
         }) {
@@ -238,21 +239,86 @@ impl CurrentGameState {
 
     pub fn admit_whole_game(&self, generation: u64) -> Result<WholeGameAdmission, CurrentGameError> {
         let holder = self.holder.lock().expect("current game state");
-        holder.ensure_editable()?;
-        let document = holder.document.as_ref().ok_or_else(no_current_game)?;
-        if holder.generation != generation {
-            return Err(CurrentGameError {
-                kind: CurrentGameErrorKind::NoCurrentGame,
-                message: "current game generation does not match".to_string(),
-            });
-        }
-        Ok(WholeGameAdmission {
-            generation: holder.generation,
-            board_size: document.board_size(),
-            komi: document.komi(),
-            rules: document.rules(),
-            nodes: document.first_child_mainline_snapshots()?,
+        holder.analysis_scope_admission(
+            generation,
+            &app_model::AnalysisScopeDto {
+                mode: app_model::AnalysisScopeModeDto::FirstChildMainline,
+                current_node: holder.selected_path.clone(),
+                branch_choices: Vec::new(),
+                interval: None,
+                to_play: None,
+            },
+        )
+    }
+
+    pub fn start_first_child_analysis(
+        &self,
+        manager: &engine_manager::ForegroundEngineManager,
+        run_id: String,
+        generation: u64,
+        max_visits: u32,
+    ) -> Result<AnalysisJobStartedDto, app_model::EngineFailureDto> {
+        let holder = self.holder.lock().expect("current game state");
+        let scope = app_model::AnalysisScopeDto {
+            mode: app_model::AnalysisScopeModeDto::FirstChildMainline,
+            current_node: holder.selected_path.clone(),
+            branch_choices: Vec::new(),
+            interval: None,
+            to_play: None,
+        };
+        let admitted = holder
+            .analysis_scope_admission(generation, &scope)
+            .map_err(|error| {
+                crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, error.message)
+            })?;
+        let work_items = crate::whole_game_work_items(&admitted, max_visits, &run_id)?;
+        manager.start_whole_game_analysis(engine_manager::WholeGameJobRequest {
+            run_id,
+            generation,
+            work_items,
         })
+    }
+
+    pub fn preview_analysis_scope(
+        &self,
+        generation: u64,
+        scope: app_model::AnalysisScopeDto,
+    ) -> Result<app_model::AnalysisScopePreviewDto, CurrentGameError> {
+        let holder = self.holder.lock().expect("current game state");
+        let admission = holder.analysis_scope_admission(generation, &scope)?;
+        Ok(scope_preview(&admission, scope))
+    }
+
+    pub fn start_analysis_task(
+        &self,
+        manager: &engine_manager::ForegroundEngineManager,
+        run_id: String,
+        preview: app_model::AnalysisScopePreviewDto,
+        conditions: app_model::AnalysisStageConditionsDto,
+    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
+        let invalid =
+            |message| crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message);
+        let visits = conditions.validate_single_stage().map_err(&invalid)?;
+        // Keep semantic revalidation and manager admission under the same owner lock.
+        let holder = self.holder.lock().expect("current game state");
+        let admitted = holder
+            .analysis_scope_admission(preview.generation, &preview.scope)
+            .map_err(|error| invalid(error.message))?;
+        if scope_preview(&admitted, preview.scope.clone()) != preview {
+            return Err(invalid(
+                "Analysis scope preview no longer matches the current game.".into(),
+            ));
+        }
+        let work_items = crate::whole_game_work_items(&admitted, visits, &run_id)?;
+        manager.start_analysis_task(
+            engine_manager::WholeGameJobRequest {
+                run_id,
+                generation: admitted.generation,
+                work_items,
+            },
+            preview.scope,
+            conditions,
+        )
     }
 
     pub fn admit_selected_node(
@@ -395,6 +461,25 @@ impl CurrentGameState {
     }
 }
 
+fn scope_preview(
+    admitted: &WholeGameAdmission,
+    scope: app_model::AnalysisScopeDto,
+) -> app_model::AnalysisScopePreviewDto {
+    app_model::AnalysisScopePreviewDto {
+        generation: admitted.generation,
+        scope,
+        targets: admitted
+            .nodes
+            .iter()
+            .map(|snapshot| app_model::AnalysisScopeTargetDto {
+                node_path: snapshot.path.clone(),
+                move_number: snapshot.position.move_number,
+                to_play: snapshot.position.to_play,
+            })
+            .collect(),
+    }
+}
+
 fn no_current_game() -> CurrentGameError {
     CurrentGameError {
         kind: CurrentGameErrorKind::NoCurrentGame,
@@ -403,6 +488,28 @@ fn no_current_game() -> CurrentGameError {
 }
 
 impl CurrentGameHolder {
+    fn analysis_scope_admission(
+        &self,
+        generation: u64,
+        scope: &app_model::AnalysisScopeDto,
+    ) -> Result<WholeGameAdmission, CurrentGameError> {
+        self.ensure_editable()?;
+        let document = self.document.as_ref().ok_or_else(no_current_game)?;
+        if self.generation != generation {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::InvalidNodePath,
+                message: "Current game semantics changed; preview a new analysis task.".into(),
+            });
+        }
+        Ok(WholeGameAdmission {
+            generation: self.generation,
+            board_size: document.board_size(),
+            komi: document.komi(),
+            rules: document.rules(),
+            nodes: document.analysis_scope_snapshots(scope)?,
+        })
+    }
+
     #[cfg(test)]
     fn replace(
         &mut self,
@@ -735,8 +842,7 @@ mod current_game_replacement {
             MoveVertex::Pass
         );
 
-        let stale = state.admit_whole_game(opened.generation + 1).unwrap_err();
-        assert_eq!(stale.message, "current game generation does not match");
+        assert!(state.admit_whole_game(opened.generation + 1).is_err());
     }
 }
 

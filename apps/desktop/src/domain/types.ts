@@ -219,6 +219,57 @@ export type ForegroundEngineEventDto =
   | { type: "failure"; failure: EngineFailureDto }
   | { type: "job"; job: AnalysisJobEventDto };
 
+export type AnalysisScopeModeDto =
+  | "current_node"
+  | "selected_review_line"
+  | "first_child_mainline"
+  | "all_branches";
+export type AnalysisBranchChoiceDto = { parent: NodePath; child: number };
+export type AnalysisPositionIntervalDto = { start: number; end: number };
+export type AnalysisScopeDto = {
+  mode: AnalysisScopeModeDto;
+  current_node: NodePath;
+  branch_choices: AnalysisBranchChoiceDto[];
+  interval?: AnalysisPositionIntervalDto | null;
+  to_play?: PlayerColor | null;
+};
+export type AnalysisTaskLimitDto = { enabled: boolean; value: number };
+export type AnalysisStageConditionsDto = {
+  time_seconds: AnalysisTaskLimitDto;
+  total_visits: AnalysisTaskLimitDto;
+  leading_candidate_visits: AnalysisTaskLimitDto;
+};
+export type AnalysisScopeTargetDto = {
+  node_path: NodePath;
+  move_number: number;
+  to_play: PlayerColor;
+};
+export type AnalysisScopePreviewDto = {
+  generation: number;
+  scope: AnalysisScopeDto;
+  targets: AnalysisScopeTargetDto[];
+};
+export type AnalysisTaskStateDto =
+  | "queued"
+  | "searching"
+  | "completed"
+  | "cancelled"
+  | "failed"
+  | "invalidated";
+export type AnalysisTaskDto = {
+  task_id: string;
+  run_id: string;
+  job_id: string;
+  generation: number;
+  scope: AnalysisScopeDto;
+  stage: string;
+  conditions: AnalysisStageConditionsDto;
+  requested: NodePath[];
+  completed: NodePath[];
+  state: AnalysisTaskStateDto;
+  reason?: string | null;
+};
+
 export type RecoveryEnvelopeDto = {
   document_seq: number;
   snapshot_seq: number;
