@@ -34,6 +34,8 @@ Frozen baselines: Java `7b4027531c2b26062d0bfc27a040cc550cfbea4d`; Next inventor
 - R4 promotes `ANA-08` SGF analysis exchange and adds `ANA-14` as the successor to the frozen Accepted `ANA-05` runtime. Java-compatible SGF node properties are the only new durable analysis source; the unshipped SQLite cache product path is removed.
 - Next-move grading follows Java-compatible positive-visit parent/Primary-Child comparison and the fixed Java default six-level Move Rank, without an Analysis Context gate.
 
+Approved capability preservation and delivery policy is recorded in the [Migration Plan](MIGRATION_PLAN.md#capability-preservation-policy). Historical dispositions do not erase non-equivalent remaining workflows; accepted scopes and evidence remain fixed. ANA-16 below records the accepted current-game analysis successor.
+
 ## Current Phase Map
 
 | Phase | Workflow | Owner items |
@@ -45,6 +47,7 @@ Frozen baselines: Java `7b4027531c2b26062d0bfc27a040cc550cfbea4d`; Next inventor
 | R4 | Analysis | `ANA-01`–`ANA-04`, promoted `ANA-08`, `ANA-10`–`ANA-14`; `ANA-05` remains frozen Accepted history and is superseded at runtime by `ANA-14` |
 | R5 | Safe Current Game / Application Shell | `PREF-01`, `SGF-07`, `APP-02`–`APP-05`, `APP-01` semantic gate; successors `UI-06`, `ANA-15` |
 | Analysis restoration | Supplemental continuous-review batch; R4 historical exit unchanged | `ANA-06` |
+| Analysis task restoration | Supplemental current-game task batch; R4 historical exit unchanged | `ANA-16` |
 | R6 | SGF Authoring / Review | `SGF-08`–`SGF-14`, `REVIEW-01`–`REVIEW-03`, `REVIEW-07`–`REVIEW-09` |
 | R7 | Adaptive Workspace | `LAYOUT-01`–`LAYOUT-04`, `WINDOW-01`, `WINDOW-02`, `APPEAR-01` |
 | R8 | Engine Adapters | `ENG-09`, `ENG-10` |
@@ -151,6 +154,14 @@ The [approved spec](../.scratch/continuous-analysis-restoration/spec.md) is impl
 | ID | Status | Capability | Current repository evidence | Current live/environment evidence | Remaining gap | Acceptance | Depends on | Phase |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | ANA-06 | Accepted | Continuous current-node analysis | Restoration tickets 01–04 implement manager-owned streaming, durable following, budgets, finite restoration and target-final cancellation. Their focused Rust owner/native-seam and rendered App checks, including terminal-only budget regression and Q13/Q14 interleavings, are recorded in the ticket completion records; ticket 04 reviewed integrated commit a06d600. | Ticket 05 Windows native candidate a06d600 with KataGo 1.16.4 EigenCPU and zhizi_hzy_b28_muonfd2 passed streaming/Stop, navigation/input, persisted intent, limit/Resume, finite handoff, Save/reopen and recovery. Same-commit ticket 04 supplies one/two-thread queue and independent-cancel evidence. Owned-engine suspension produced stopping then Run error after 5-second target wait plus teardown (5.134 s observed), ended both lanes and aborted departure. Locked-file Save/recovery failures preserved data; crash Restore matched the last successful envelope exactly without Run/Job resurrection. | None for the approved Windows integrated gate. Default 600-second uninterrupted soak and macOS/Linux native runs were not performed; smaller time-limit expiry was exercised. Independent APP-03/APP-04/ANA-15 evidence ownership remains with R5. | Persist initially enabled user intent before automatic submission; use the admitted Ready Run and exact node without engine autoload/restart. Publish and attach valid streaming snapshots; keep ordinary Save and recovery semantics. Preserve frozen continuous budget controls and same-admission at-limit holds. Contextual Space/control/menu obey the Q16 Start/Stop/Resume table and do not bypass departure/error holds. An explicit finite request temporarily owns selected-node and may restore continuous after successful completion; whole-game starts only explicitly and cancels independently in normal operation, with truthful queueing on limited engine concurrency. Target cancellation retains cleanup ownership until final; Q15 delivery failure or 5-second expiry invokes visible bounded Run teardown, ends both lanes, retains the game, aborts pending departure and never auto-restarts. Complete the spec repository and native gates before acceptance. | ANA-01, ANA-03, ENG-05 | Analysis restoration |
+
+## Analysis Task Restoration — Current-game Analysis Tasks
+
+The [approved spec](../.scratch/current-game-analysis-tasks/spec.md) is published in the [local tracker](../.scratch/current-game-analysis-tasks/tracker.md). Tickets 01–06 provide the repository implementation for semantic identity, explicit scopes, Pause/Continue, search-condition budgets, all-position two-stage and swing-selected two-stage strategies. Ticket 07 accepts the integrated workflow on exact Windows candidate `5e59353`; R5 remains independently open.
+
+| ID | Status | Capability | Current repository evidence | Current live/environment evidence | Remaining gap | Acceptance | Depends on | Phase |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ANA-16 | Accepted | Current-game Analysis Tasks | Tickets 01–06 implement semantic snapshot identity; authoritative scope preview with interval/color filtering and Supporting Positions; stage-independent OR budgets including leading-candidate visits; immediate Pause/Continue; all-position Overview/Deep; and swing-selected Deep with common-perspective thresholds, task-owned summaries and a frozen deduplicated deep set. Ticket 07 repairs stale invalidated-task progress and legitimate root-only final handling. Serial engine-manager passed 124 tests; app-model/protocol/SGF passed 89; desktop lib passed 104; final rendered App passed 252 tests and the production build. | Ticket 07 Windows standalone candidate `5e593537f702af0c651a2c3bf0f0fd77758052e2`, KataGo 1.16.4 EigenCPU: representative scopes/range/color/supporting positions; quick, all-position and swing-selected stages; time/total/leading visits; queued and active Pause/Continue; one/two-thread lanes, finite handoff, lane-local Cancel and keyboard focus; identity invalidation; Save/reopen; protected departure Save cancel/write failure safety holds; genuine engine exit; and owned target-final timeout/cleanup all passed. | None for this successor. Independent R5 `APP-03`, `APP-04`, and `ANA-15` gaps remain with their owners. | Complete approved spec with repository and exact-candidate Windows real-KataGo evidence; requested/supporting positions, stages, all budget kinds, Pause/Continue, lane coexistence, identity invalidation, persistence, departure, and failure behavior all pass before promotion. | SGF-03, ANA-02, ANA-03, ANA-06, ANA-14, PREF-01, APP-05, SGF-07 | Supplemental analysis restoration |
 
 ## R6 — SGF Authoring And Review
 
@@ -274,7 +285,7 @@ These items are stable, unnumbered, and stay `Deferred` until explicitly started
 
 Independent reconstruction: [research 09](../.scratch/migration-baseline-v1-capability-audit/research/09-reconcile-matrix-accepted-contracts.md). This file owns status, repository and live evidence, remaining gap, acceptance, and `Depends on`. Inventory mappings and Plan sequencing were not edited.
 
-**Computed unique Parity Items: 111.** Duplicate IDs: none. Status split: 37 Accepted, 15 Partial, 34 Missing, 25 Deferred. Ticket 06 added successor rows `UI-06` and `ANA-15`; continuous-analysis restoration accepts `ANA-06` after repository and Windows integrated verification. Counts are observations, not completion targets.
+**Computed unique Parity Items: 112.** Duplicate IDs: none. Status split: 38 Accepted, 15 Partial, 34 Missing, 25 Deferred. Ticket 06 added successor rows `UI-06` and `ANA-15`; continuous-analysis restoration accepted `ANA-06`; current-game task ticket 07 accepts successor `ANA-16` after repository and exact-candidate Windows verification. Counts are observations, not completion targets.
 
 Every Inventory supported mapping target exists exactly once in this matrix. Mapping Parity IDs absent from this file: none. `SET-FIRST-LAUNCH` names Frozen `SHELL-06` as a Domain 01 link, not a Matrix target.
 
@@ -295,11 +306,11 @@ The original sixteen Accepted contracts at `18c6d189b8b01069975c4c40ead63a010249
 
 ## Item completeness index
 
-Rebuilt from the computed item set. **111** unique IDs; each appears once.
+Rebuilt from the computed item set. **112** unique IDs; each appears once.
 
-### Accepted (37)
+### Accepted (38)
 
-`BASE-01` `BASE-02` `SGF-01` `SGF-02` `SGF-03` `SGF-04` `SGF-05` `SGF-06` `RULE-01` `UI-01` `UI-03` `UI-04` `UI-05` `ENG-01` `ENG-02` `ENG-03` `ENG-04` `ENG-05` `ENG-06` `ENG-07` `ANA-01` `ANA-02` `ANA-03` `ANA-04` `ANA-05` `ANA-08` `ANA-10` `ANA-11` `ANA-12` `ANA-13` `ANA-14` `PREF-01` `APP-05` `READ-03` `SGF-07` `UI-06` `ANA-06`
+`BASE-01` `BASE-02` `SGF-01` `SGF-02` `SGF-03` `SGF-04` `SGF-05` `SGF-06` `RULE-01` `UI-01` `UI-03` `UI-04` `UI-05` `ENG-01` `ENG-02` `ENG-03` `ENG-04` `ENG-05` `ENG-06` `ENG-07` `ANA-01` `ANA-02` `ANA-03` `ANA-04` `ANA-05` `ANA-08` `ANA-10` `ANA-11` `ANA-12` `ANA-13` `ANA-14` `PREF-01` `APP-05` `READ-03` `SGF-07` `UI-06` `ANA-06` `ANA-16`
 
 ### Partial (15)
 
