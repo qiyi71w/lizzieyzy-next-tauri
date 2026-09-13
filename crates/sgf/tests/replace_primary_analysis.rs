@@ -110,6 +110,40 @@ fn replace_primary_is_idempotent_for_the_same_canonical_payload() {
 }
 
 #[test]
+fn root_only_one_visit_analysis_saves_and_reopens_without_candidates() {
+    let mut document = CurrentSgfDocument::open(BRANCHING).unwrap();
+    let payload = SgfAnalysisPayload {
+        engine_name: "KataGo".to_string(),
+        visits: 1,
+        winrate_black: 0.56,
+        score_mean_black: Some(1.25),
+        score_stdev: Some(0.5),
+        pda: None,
+        candidates: Vec::new(),
+        ownership: None,
+    };
+
+    let (snapshot, changed) = document.replace_primary_analysis(&path(&[]), &payload).unwrap();
+    assert!(changed);
+    assert_eq!(snapshot.primary_analysis.as_ref().unwrap().visits, 1);
+    assert!(snapshot.primary_analysis.unwrap().candidates.is_empty());
+
+    let serialized = document.serialize().unwrap();
+    let reopened = CurrentSgfDocument::open(&serialized).unwrap();
+    let restored = reopened
+        .snapshot(&path(&[]))
+        .unwrap()
+        .primary_analysis
+        .expect("root-only primary analysis");
+    assert_eq!(restored.visits, 1);
+    assert!(restored.candidates.is_empty());
+    assert_eq!(
+        reopened.snapshot(&path(&[])).unwrap().personal_comment,
+        "root personal"
+    );
+}
+
+#[test]
 fn non_projectable_payload_and_invalid_path_do_not_rewrite_the_tree() {
     let mut document = CurrentSgfDocument::open(BRANCHING).unwrap();
     let before = document.serialize().unwrap();

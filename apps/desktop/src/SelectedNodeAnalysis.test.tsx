@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CurrentGameResultDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
+import type { AnalysisFrameDto, CurrentGameResultDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
 import { defaultAppPreferences } from "./domain/preferences";
 
 const listeners: {
@@ -401,8 +401,12 @@ function emitContinuousSnapshot(phase: ForegroundEngineSnapshotDto["continuous"]
   });
 }
 
-async function publishContinuousProgress(visits: number, phase: "searching" | "time_limited" | "visits_limited" = "searching") {
-  const frame = continuousFrame(visits);
+async function publishContinuousProgress(
+  visits: number,
+  phase: "searching" | "time_limited" | "visits_limited" = "searching",
+  overrides: Partial<AnalysisFrameDto> = {}
+) {
+  const frame = { ...continuousFrame(visits), ...overrides };
   await act(async () => {
     if (phase === "searching") emitContinuousSnapshot(phase);
     listeners.onJob?.({
@@ -555,7 +559,7 @@ describe("authoritative continuous selected-node analysis", () => {
     expect(host.querySelector(".cand-visits")?.textContent).toBe("12");
   });
 
-  it("adopts an automatic job without issuing browser-side work and renders waiting, searching, and limited phases", async () => {
+  it("adopts root-only progress and renders waiting, searching, and limited phases", async () => {
     const host = await renderApp();
     await readyEngine(host);
     expect(buttonNamed(host, "停止连续分析")).toBeInstanceOf(HTMLButtonElement);
@@ -569,8 +573,9 @@ describe("authoritative continuous selected-node analysis", () => {
         generation: 1, node_path: { indices: [] }, outcome: "started"
       });
     });
-    await publishContinuousProgress(12);
-    expect(host.querySelector(".cand-visits")?.textContent).toBe("12");
+    await publishContinuousProgress(1, "searching", { candidates: [] });
+    expect(host.querySelector(".cand-row")).toBeNull();
+    expect(host.querySelector(".doc-name")?.textContent).toContain("*");
     expect(host.textContent).toContain("连续分析：搜索中");
     await publishContinuousProgress(45, "time_limited");
     expect(host.querySelector(".cand-visits")?.textContent).toBe("45");

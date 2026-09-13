@@ -961,7 +961,7 @@ export function App() {
   }
   function presentCurrentGameAnalysis(result: CurrentGameResultDto) {
     const frame = result.snapshot.primary_analysis;
-    if (!frame || frame.visits === 0 || frame.candidates.length === 0) return;
+    if (!frame || frame.visits === 0) return;
     const captured: ReviewPresentationScope = {
       generation: result.generation,
       selectedPath: [...result.selected_path.indices],
@@ -1439,7 +1439,7 @@ export function App() {
     const refreshed = job.current_game;
     if (!refreshed || !isCurrentGameSnapshot(refreshed) || !samePath(refreshed.selected_path, job.node_path)) return;
     const frame = refreshed.snapshot.primary_analysis;
-    if (!frame || frame.visits === 0 || frame.candidates.length === 0) return;
+    if (!frame || frame.visits === 0) return;
     adoptCurrentGame(refreshed);
     setDirty(refreshed.dirty);
     const captured: ReviewPresentationScope = {

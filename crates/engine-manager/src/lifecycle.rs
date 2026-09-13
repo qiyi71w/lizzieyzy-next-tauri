@@ -2572,10 +2572,7 @@ impl Inner {
             let job = &state.jobs[index];
             let invalid_budget_final = job.disposition == JobDisposition::BudgetReached
                 && response.is_during_search == Some(false)
-                && (response.no_results
-                    || response.move_infos.is_empty()
-                    || !response.root_info.as_ref().is_some_and(|root| root.visits > 0)
-                    || !response.has_valid_search_result(job.work_items[job.current_index].board_size));
+                && !response.has_valid_search_result(job.work_items[job.current_index].board_size);
             if response.is_during_search.is_none() || invalid_budget_final {
                 drop(state);
                 self.fail_unresponsive_run(run_id, "task response did not establish a valid target final");
@@ -2586,25 +2583,24 @@ impl Inner {
         let during = response.is_during_search == Some(true);
         let visits = response.root_info.as_ref().map_or(0, |root| root.visits);
         let has_result = visits > 0 && !response.no_results;
-        let has_data = has_result && !response.move_infos.is_empty();
-        if started.mode == AnalysisJobModeDto::Continuous && has_result && response.is_during_search.is_none()
-        {
+        let has_data = response.has_valid_search_result(state.jobs[index].board_size);
+        if has_result && response.is_during_search.is_none() {
             drop(state);
             self.fail_unresponsive_run(
                 run_id,
-                "continuous response omitted the required search-progress marker",
+                "selected-node response omitted the required search-progress marker",
+            );
+            return None;
+        }
+        if has_result && !has_data {
+            drop(state);
+            self.fail_unresponsive_run(
+                run_id,
+                "selected-node response contained invalid analysis values or geometry",
             );
             return None;
         }
         if started.mode == AnalysisJobModeDto::Continuous {
-            if has_result && !response.has_valid_search_result(state.jobs[index].board_size) {
-                drop(state);
-                self.fail_unresponsive_run(
-                    run_id,
-                    "continuous response contained invalid analysis values or geometry",
-                );
-                return None;
-            }
             if !during && !has_result {
                 let published = failure(
                     EngineOperationDto::Job,
@@ -2709,10 +2705,7 @@ impl Inner {
                     return None;
                 }
                 let during = response.is_during_search == Some(true);
-                let has_search_data = !response.no_results
-                    && !response.move_infos.is_empty()
-                    && response.root_info.as_ref().is_some_and(|root| root.visits > 0)
-                    && response.has_valid_search_result(item.board_size);
+                let has_search_data = response.has_valid_search_result(item.board_size);
                 if has_search_data {
                     state.last_activity = Instant::now();
                     if state.jobs[job_index].disposition == JobDisposition::Running {

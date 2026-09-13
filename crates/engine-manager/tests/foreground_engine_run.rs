@@ -368,7 +368,7 @@ done
 }
 
 #[cfg(unix)]
-fn resident_selected_node_result_script() -> String {
+fn selected_node_final_script(final_response: &str) -> String {
     r#"
 first=1
 while IFS= read -r line; do
@@ -382,10 +382,17 @@ while IFS= read -r line; do
     first=0
     continue
   fi
-  printf '{"id":"%s","turnNumber":2,"rootInfo":{"visits":8,"winrate":0.61,"scoreMean":2.5,"scoreStdev":4.0},"moveInfos":[{"move":"D6","visits":5,"winrate":0.62,"scoreMean":2.7,"prior":0.4,"pv":["D6","C7"]}],"ownership":[0.1,-0.2,0.3],"policy":[0.01,0.02,0.03]}\n' "$id"
+  FINAL_RESPONSE
 done
 "#
-    .into()
+    .replace("FINAL_RESPONSE", final_response)
+}
+
+#[cfg(unix)]
+fn resident_selected_node_result_script() -> String {
+    selected_node_final_script(
+        r#"printf '{"id":"%s","turnNumber":2,"isDuringSearch":false,"rootInfo":{"visits":8,"winrate":0.61,"scoreMean":2.5,"scoreStdev":4.0},"moveInfos":[{"move":"B2","visits":5,"winrate":0.62,"scoreMean":2.7,"prior":0.4,"pv":["B2","A1"]}],"ownership":[0.1,-0.2,0.3,0.0],"policy":[0.01,0.02,0.03,0.04,-1.0]}\n' "$id""#,
+    )
 }
 
 #[cfg(unix)]
@@ -762,7 +769,9 @@ fn selected_node_completion_publishes_normalized_candidates_pv_ownership_policy_
     query.komi = 6.5;
     query.include_ownership = Some(true);
     query.include_policy = Some(true);
-    query.initial_stones = vec![("B".into(), "C3".into())];
+    query.initial_stones = vec![("B".into(), "B1".into())];
+    query.board_x_size = 2;
+    query.board_y_size = 2;
     let started = manager
         .start_selected_node_job(SelectedNodeJobRequest {
             run_id: run_id.clone(),
@@ -770,7 +779,7 @@ fn selected_node_completion_publishes_normalized_candidates_pv_ownership_policy_
             generation: 4,
             node_path: NodePath { indices: vec![0, 1] },
             query,
-            board_size: 9,
+            board_size: 2,
             position_empty: true,
         })
         .unwrap();
@@ -788,18 +797,18 @@ fn selected_node_completion_publishes_normalized_candidates_pv_ownership_policy_
     assert_eq!(frame.candidates.len(), 1);
     assert_eq!(
         frame.candidates[0].vertex,
-        MoveVertex::Point(PointDto { x: 3, y: 3 })
+        MoveVertex::Point(PointDto { x: 1, y: 0 })
     );
     assert_eq!(
         frame.candidates[0].pv,
         vec![
-            MoveVertex::Point(PointDto { x: 3, y: 3 }),
-            MoveVertex::Point(PointDto { x: 2, y: 2 }),
+            MoveVertex::Point(PointDto { x: 1, y: 0 }),
+            MoveVertex::Point(PointDto { x: 0, y: 1 }),
         ]
     );
     assert_eq!(frame.candidates[0].policy_prior, Some(0.4));
-    assert_eq!(frame.ownership, Some(vec![0.1, -0.2, 0.3]));
-    assert_eq!(frame.policy, Some(vec![0.01, 0.02, 0.03]));
+    assert_eq!(frame.ownership, Some(vec![0.1, -0.2, 0.3, 0.0]));
+    assert_eq!(frame.policy, Some(vec![0.01, 0.02, 0.03, 0.04, -1.0]));
     let current = started.publication_scope();
     assert!(admits_analysis_publication(&completed, &current));
     let logged = std::fs::read_to_string(&log).unwrap();
@@ -807,11 +816,40 @@ fn selected_node_completion_publishes_normalized_candidates_pv_ownership_policy_
     assert!(logged.contains(r#""komi":6.5"#), "{logged}");
     assert!(logged.contains(r#""includeOwnership":true"#), "{logged}");
     assert!(logged.contains(r#""includePolicy":true"#), "{logged}");
-    assert!(logged.contains(r#"["B","C3"]"#), "{logged}");
+    assert!(logged.contains(r#"["B","B1"]"#), "{logged}");
     assert!(matches!(
         manager.snapshot().lifecycle,
         ForegroundEngineLifecycleDto::Ready { .. }
     ));
+}
+
+#[cfg(unix)]
+#[test]
+fn selected_node_invalid_or_unmarked_final_fails_run_without_a_frame() {
+    for (variant, response) in [
+        (
+            "invalid-root",
+            r#"printf '{"id":"%s","turnNumber":2,"isDuringSearch":false,"rootInfo":{"visits":1,"winrate":1.5},"moveInfos":[]}\n' "$id""#,
+        ),
+        (
+            "missing-marker",
+            r#"printf '{"id":"%s","turnNumber":2,"rootInfo":{"visits":1,"winrate":0.5},"moveInfos":[]}\n' "$id""#,
+        ),
+    ] {
+        let temp = TestTempDir::new(&format!("selected-{variant}"));
+        let (manager, _, events, run_id) = ready_manager(&temp, &selected_node_final_script(response));
+        let started = manager
+            .start_selected_node_job(selected_request(&run_id, 1, vec![]))
+            .unwrap();
+        let failed = wait_job(&events, Duration::from_secs(2), |job| {
+            job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+        });
+        assert!(failed.frame.is_none(), "{variant}");
+        assert!(matches!(
+            manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::Error { .. }
+        ));
+    }
 }
 
 #[cfg(unix)]
@@ -2258,7 +2296,7 @@ fn analysis_task_malformed_budget_final_fails_run_without_releasing_live_query()
 #[cfg(unix)]
 #[test]
 fn review_semantic_budget_final_keeps_run_failure_cleanup() {
-    for variant in ["semantic", "no_results", "empty", "unmarked"] {
+    for variant in ["semantic", "no_results", "unmarked"] {
         let temp = TestTempDir::new("task-semantic-budget-final");
         std::fs::write(temp.path().join("budget-smoke"), "total_visits").unwrap();
         std::fs::write(temp.path().join("malformed-final"), variant).unwrap();
@@ -2327,27 +2365,29 @@ fn review_unmarked_natural_response_cannot_infer_time_completion() {
 
 #[cfg(unix)]
 #[test]
-fn review_empty_candidate_final_cannot_complete_unattachable_result() {
-    let temp = TestTempDir::new("task-empty-natural-final");
-    std::fs::write(temp.path().join("budget-smoke"), "empty").unwrap();
+fn root_only_one_visit_final_completes_without_fabricating_candidates() {
+    let temp = TestTempDir::new("task-root-only-one-visit");
+    std::fs::write(temp.path().join("budget-smoke"), "root_only_one_visit").unwrap();
     let (manager, _, events, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
     let task = manager
         .start_analysis_task(
             whole_game_request(&run_id, 71, 1),
             analysis_scope(),
-            budget_conditions(None, Some(8), None),
+            budget_conditions(None, Some(1), None),
         )
         .unwrap();
-    let terminal = wait_job(&events, Duration::from_secs(3), |job| {
+
+    let progress = wait_job(&events, Duration::from_secs(3), |job| {
         job.job_id == task.job_id
-            && matches!(
-                job.outcome,
-                AnalysisJobOutcomeDto::Failed | AnalysisJobOutcomeDto::Completed
-            )
+            && job.outcome == AnalysisJobOutcomeDto::Progress
+            && job.frame.as_ref().is_some_and(|frame| frame.visits == 1)
     });
-    assert_eq!(terminal.outcome, AnalysisJobOutcomeDto::Failed);
-    assert!(terminal.frame.is_none());
-    assert!(manager.analysis_task_snapshot().unwrap().completed.is_empty());
+    let frame = progress.frame.expect("root-only analysis frame");
+    assert_eq!(frame.visits, 1);
+    assert!(frame.candidates.is_empty());
+    let completed = wait_task(&manager, AnalysisTaskStateDto::Completed);
+    assert_eq!(completed.completed.len(), 1);
+    assert_eq!(completed.ending_conditions, vec!["total_visits"]);
     manager.teardown().unwrap();
 }
 
@@ -5567,10 +5607,9 @@ fn continuous_one_visit_budget_limits_without_fabricating_candidates() {
         )
     });
     assert_eq!(terminal.outcome, AnalysisJobOutcomeDto::VisitsLimited);
-    assert!(
-        terminal.frame.is_none(),
-        "root-only result must not fabricate candidates"
-    );
+    let frame = terminal.frame.expect("root-only analysis frame");
+    assert_eq!(frame.visits, 1);
+    assert!(frame.candidates.is_empty());
     assert_eq!(
         manager.snapshot().continuous.phase,
         ContinuousAnalysisPhaseDto::VisitsLimited

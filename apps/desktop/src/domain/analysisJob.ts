@@ -6,6 +6,7 @@ export function admitsAnalysisPublication(
 ): boolean {
   return (event.outcome === "completed" || (event.mode === "continuous" && (event.outcome === "progress" || event.outcome === "time_limited" || event.outcome === "visits_limited")))
     && event.frame != null
+    && event.frame.visits > 0
     && event.run_id === current.run_id
     && event.job_id === current.job_id
     && event.generation === current.generation
@@ -29,12 +30,13 @@ export function matchesWholeGameJobIdentity(
 export function admitsWholeGameNodeResult(job: AnalysisJobEventDto): boolean {
   return job.lane === "whole_game"
     && job.outcome === "progress"
-    && job.frame != null;
+    && job.frame != null
+    && job.frame.visits > 0;
 }
 
 export function admitsAnalysisAttachment(event: AnalysisJobEventDto): boolean {
   const frame = event.frame;
-  if (frame == null || frame.visits === 0 || frame.candidates.length === 0) return false;
+  if (frame == null || frame.visits === 0) return false;
   if (event.lane === "selected_node") {
     return event.mode === "continuous"
       ? event.outcome === "progress" || event.outcome === "completed" || event.outcome === "time_limited" || event.outcome === "visits_limited"

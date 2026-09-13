@@ -42,8 +42,6 @@ def invalid_final(query, kind):
     result = frame(query, visits=8)
     if kind == "unmarked":
         result.pop("isDuringSearch")
-    elif kind == "empty":
-        result["moveInfos"] = []
     elif kind == "semantic":
         result["moveInfos"][0].update(move="Z99", pv=["Z99"])
     elif kind == "no_results":
@@ -88,9 +86,13 @@ def search(query):
     if identity not in active:
         return
     mode = (root / "budget-smoke").read_text().strip() if (root / "budget-smoke").exists() else ""
-    if mode in ("unmarked", "empty"):
+    if mode == "unmarked":
         active.discard(identity)
         emit(invalid_final(query, mode))
+        return
+    if mode == "root_only_one_visit":
+        active.discard(identity)
+        emit(frame(query, visits=1, candidates=[]))
         return
     if mode == "natural_race":
         emit(frame(query, True, visits=4))

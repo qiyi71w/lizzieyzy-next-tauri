@@ -80,13 +80,13 @@ fn frozen_java_payload_parses_score_ownership_and_playout_shorthand() {
 }
 
 #[test]
-fn malformed_and_incomplete_payloads_are_not_projectable_analysis() {
+fn malformed_and_zero_visit_payloads_are_not_projectable_analysis() {
     assert!(parse_analysis_payload("not-analysis", 19).is_none());
     assert!(parse_analysis_payload("Engine", 19).is_none());
     assert!(parse_analysis_payload("", 19).is_none());
 
     let header_only = parse_analysis_payload("Main 44.0 120", 19).expect("header parses");
-    assert!(!header_only.is_projectable());
+    assert!(header_only.is_projectable());
 
     let zero_visits = parse_analysis_payload("Main 44.0 0 3.5 0.7", 19).expect("zero visits parses");
     assert!(!zero_visits.is_projectable());

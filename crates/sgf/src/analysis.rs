@@ -17,7 +17,7 @@ pub struct SgfAnalysisPayload {
 
 impl SgfAnalysisPayload {
     pub fn is_projectable(&self) -> bool {
-        self.visits > 0 && !self.candidates.is_empty()
+        self.visits > 0
     }
 
     pub fn from_frame(frame: &AnalysisFrameDto, engine_name: impl Into<String>) -> Self {

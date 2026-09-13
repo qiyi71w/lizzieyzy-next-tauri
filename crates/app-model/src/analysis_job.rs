@@ -145,7 +145,7 @@ pub fn admits_analysis_attachment(event: &AnalysisJobEventDto) -> bool {
     let Some(frame) = event.frame.as_ref() else {
         return false;
     };
-    if frame.visits == 0 || frame.candidates.is_empty() {
+    if frame.visits == 0 {
         return false;
     }
     match event.lane {
@@ -439,11 +439,15 @@ mod tests {
         assert!(admits_analysis_attachment(&whole));
         whole.outcome = AnalysisJobOutcomeDto::Completed;
         assert!(!admits_analysis_attachment(&whole));
-        let mut empty = projectable_frame();
-        empty.visits = 0;
-        empty.candidates.clear();
+        let mut root_only = projectable_frame();
+        root_only.candidates.clear();
         whole.outcome = AnalysisJobOutcomeDto::Progress;
-        whole.frame = Some(empty);
+        whole.frame = Some(root_only);
+        assert!(admits_analysis_attachment(&whole));
+        let mut zero_visits = projectable_frame();
+        zero_visits.visits = 0;
+        zero_visits.candidates.clear();
+        whole.frame = Some(zero_visits);
         assert!(!admits_analysis_attachment(&whole));
     }
 }

@@ -92,7 +92,7 @@ pub struct AnalysisResponse {
 }
 
 impl AnalysisResponse {
-    /// Validates search accounting; publishing a frame additionally requires candidates.
+    /// Validates positive root search accounting and any supplied candidates or geometry.
     pub fn has_valid_search_result(&self, board_size: u8) -> bool {
         let Some(root) = &self.root_info else {
             return false;
