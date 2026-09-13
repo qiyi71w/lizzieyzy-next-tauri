@@ -51,6 +51,7 @@ fn confirmed_departure_hold_survives_navigation_and_preference_reload() {
 struct LiveFixture {
     directory: std::path::PathBuf,
     manager: ForegroundEngineManager,
+    catalog: Arc<InMemoryEngineProfileCatalog>,
     events: std::sync::mpsc::Receiver<app_model::ForegroundEngineEventDto>,
 }
 
@@ -107,11 +108,12 @@ for line in sys.stdin:
                 backend: app_model::EngineBackend::KataGoAnalysis,
             },
         });
-        let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+        let manager = ForegroundEngineManager::new(catalog.clone(), ForegroundEngineConfig::for_tests());
         let events = manager.subscribe();
         Self {
             directory,
             manager,
+            catalog,
             events,
         }
     }
@@ -218,6 +220,48 @@ fn wait_live_task_stage(
             "expected {expected_stage:?}/{expected_state:?}, got {task:?}"
         );
         std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn run_invalidation_rejects_already_queued_task_progress() {
+    for operation in ["stop", "restart", "switch"] {
+        let engine = task_fixture();
+        let state = CurrentGameState::default();
+        state.connect_analysis_manager(engine.manager.clone());
+        let opened = state.replace("(;SZ[9];B[dd])", None).unwrap();
+        let task = start_live_task(&engine, &state, opened.generation);
+        let queued_progress = engine.progress(None);
+        let before = state.inspect();
+
+        match operation {
+            "stop" => engine.manager.stop().unwrap(),
+            "restart" => engine.manager.restart().unwrap(),
+            "switch" => {
+                engine.catalog.upsert(engine_manager::SavedEngineProfile {
+                    profile_id: "replacement".into(),
+                    profile: app_model::EngineProfileDto {
+                        name: "replacement".into(),
+                        engine_path: engine.directory.join("engine").to_string_lossy().into(),
+                        model_path: Some("model".into()),
+                        config_path: Some("config".into()),
+                        working_dir: Some(engine.directory.to_string_lossy().into()),
+                        backend: app_model::EngineBackend::KataGoAnalysis,
+                    },
+                });
+                engine.manager.switch_to("replacement").unwrap();
+            }
+            _ => unreachable!(),
+        }
+
+        let invalidated = wait_live_task(&engine, app_model::AnalysisTaskStateDto::Invalidated);
+        assert_eq!(invalidated.task_id, task.task_id);
+        assert!(
+            state.attach_from_job_event(&queued_progress).is_none(),
+            "{operation} must fence a task frame already queued for gateway attachment"
+        );
+        assert_eq!(state.inspect(), before);
     }
 }
 

@@ -528,6 +528,26 @@ impl CurrentGameState {
             return None;
         }
         let frame = event.frame.as_ref()?;
+        if event.lane == app_model::AnalysisJobLaneDto::WholeGame {
+            if let Some(task) = self
+                .analysis_manager
+                .get()
+                .and_then(engine_manager::ForegroundEngineManager::analysis_task_snapshot)
+            {
+                if task.run_id != event.run_id
+                    || task.job_id != event.job_id
+                    || task.generation != event.generation
+                    || !matches!(
+                        task.state,
+                        app_model::AnalysisTaskStateDto::Queued
+                            | app_model::AnalysisTaskStateDto::Searching
+                            | app_model::AnalysisTaskStateDto::Completed
+                    )
+                {
+                    return None;
+                }
+            }
+        }
         let payload = SgfAnalysisPayload::from_frame(frame, "KataGo");
         let mut holder = self.holder.lock().expect("current game state");
         if holder.rejects_job(&event.run_id, &event.job_id)

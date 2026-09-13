@@ -4863,8 +4863,20 @@ fn continuous_cleanup_failure_remains_visible_and_blocks_new_work() {
         .start_selected_node_job(selected_request(&run_id, 7, vec![]))
         .is_err());
     assert!(manager.assert_profile_deletable("profile-1").is_err());
-    std::thread::sleep(Duration::from_millis(100));
-    manager.teardown().unwrap();
+    let retry_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match manager.teardown() {
+            Ok(()) => break,
+            Err(failure) => {
+                assert!(failure.message.contains("cleanup failed"));
+                assert!(
+                    Instant::now() < retry_deadline,
+                    "cleanup ownership did not release after bounded retries: {failure:?}"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
     assert!(matches!(
         manager.snapshot().lifecycle,
         ForegroundEngineLifecycleDto::NoEngine { .. }
