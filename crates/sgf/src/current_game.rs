@@ -1,6 +1,7 @@
 use app_model::{
-    CurrentGameError, CurrentGameErrorKind, GameDto, MoveDto, MoveVertex, NodePath, PlayerColor, PositionDto,
-    SelectedNodeSnapshotDto, SgfPropertyDto, SgfTreeNodeDto,
+    AnalysisMoveActorFilterDto, AnalysisSwingComparisonDto, CurrentGameError, CurrentGameErrorKind, GameDto,
+    MoveDto, MoveVertex, NodePath, PlayerColor, PositionDto, SelectedNodeSnapshotDto, SgfPropertyDto,
+    SgfTreeNodeDto,
 };
 
 use crate::{
@@ -13,6 +14,13 @@ use go_core::{Board, RuleError};
 #[derive(Debug, Clone)]
 pub struct CurrentSgfDocument {
     document: SgfDocument,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwingAnalysisScopeResolution {
+    pub requested: Vec<SelectedNodeSnapshotDto>,
+    pub supporting: Vec<SelectedNodeSnapshotDto>,
+    pub comparisons: Vec<AnalysisSwingComparisonDto>,
 }
 
 impl CurrentSgfDocument {
@@ -87,6 +95,140 @@ impl CurrentSgfDocument {
             indices.push(0);
         }
         Ok(snapshots)
+    }
+
+    pub fn analysis_scope_snapshots(
+        &self,
+        scope: &app_model::AnalysisScopeDto,
+    ) -> Result<Vec<SelectedNodeSnapshotDto>, CurrentGameError> {
+        use app_model::AnalysisScopeModeDto;
+        let invalid = |message: &str| CurrentGameError {
+            kind: CurrentGameErrorKind::InvalidNodePath,
+            message: message.to_string(),
+        };
+        if scope
+            .interval
+            .as_ref()
+            .is_some_and(|range| range.start > range.end)
+        {
+            return Err(invalid("Position interval start must not exceed its end."));
+        }
+        let mut choices = std::collections::BTreeMap::new();
+        for choice in &scope.branch_choices {
+            let nodes = self.nodes_on_path(&choice.parent)?;
+            let parent = nodes.last().expect("path includes root");
+            if choice.child as usize >= parent.children.len() {
+                return Err(invalid("Remembered branch choice no longer exists."));
+            }
+            if choices
+                .insert(choice.parent.indices.clone(), choice.child)
+                .is_some()
+            {
+                return Err(invalid("Duplicate remembered branch choice."));
+            }
+        }
+        let mut pending = vec![match scope.mode {
+            AnalysisScopeModeDto::CurrentNode => scope.current_node.clone(),
+            _ => NodePath::default(),
+        }];
+        let mut snapshots = Vec::new();
+        let mut maximum = 0;
+        while let Some(path) = pending.pop() {
+            let nodes = self.nodes_on_path(&path)?;
+            let node = nodes.last().expect("path includes root");
+            let explicit = scope.mode == AnalysisScopeModeDto::CurrentNode;
+            let position_node = path.indices.is_empty()
+                || node
+                    .properties
+                    .iter()
+                    .any(|property| matches!(property.key.as_str(), "B" | "W" | "AB" | "AW" | "AE" | "PL"));
+            if explicit || position_node {
+                let snapshot = self.snapshot(&path)?;
+                let position = &snapshot.position;
+                maximum = maximum.max(position.move_number);
+                if scope.interval.as_ref().is_none_or(|range| {
+                    range.start <= position.move_number && position.move_number <= range.end
+                }) && scope.to_play.is_none_or(|color| color == position.to_play)
+                {
+                    snapshots.push(snapshot);
+                }
+            }
+            if explicit || node.children.is_empty() {
+                continue;
+            }
+            if scope.mode == AnalysisScopeModeDto::AllBranches {
+                for index in (0..node.children.len()).rev() {
+                    let mut child = path.clone();
+                    child.indices.push(index as u32);
+                    pending.push(child);
+                }
+            } else {
+                let index = if scope.mode == AnalysisScopeModeDto::SelectedReviewLine {
+                    choices.get(&path.indices).copied().unwrap_or(0)
+                } else {
+                    0
+                };
+                let mut child = path;
+                child.indices.push(index);
+                pending.push(child);
+            }
+        }
+        if scope.interval.as_ref().is_some_and(|range| range.end > maximum) {
+            return Err(invalid("Position interval exceeds the selected scope."));
+        }
+        if snapshots.is_empty() {
+            return Err(invalid("The selected scope and filters contain no positions."));
+        }
+        Ok(snapshots)
+    }
+
+    pub fn swing_analysis_scope(
+        &self,
+        scope: &app_model::AnalysisScopeDto,
+        move_actors: AnalysisMoveActorFilterDto,
+    ) -> Result<SwingAnalysisScopeResolution, CurrentGameError> {
+        let requested = self.analysis_scope_snapshots(scope)?;
+        let requested_paths = requested
+            .iter()
+            .map(|snapshot| snapshot.path.indices.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut supporting_paths = std::collections::BTreeSet::new();
+        let mut supporting = Vec::new();
+        let mut comparisons = Vec::new();
+
+        for snapshot in &requested {
+            let nodes = self.nodes_on_path(&snapshot.path)?;
+            let node = nodes.last().expect("path walk includes the root");
+            let move_actor = node
+                .properties
+                .iter()
+                .find_map(|property| match property.key.as_str() {
+                    "B" => Some(PlayerColor::Black),
+                    "W" => Some(PlayerColor::White),
+                    _ => None,
+                });
+            let Some(move_actor) = move_actor.filter(|color| move_actors.admits(*color)) else {
+                continue;
+            };
+            let mut before = snapshot.path.clone();
+            if before.indices.pop().is_none() {
+                continue;
+            }
+            comparisons.push(AnalysisSwingComparisonDto {
+                before: before.clone(),
+                after: snapshot.path.clone(),
+                move_actor,
+            });
+            if !requested_paths.contains(&before.indices) && supporting_paths.insert(before.indices.clone()) {
+                supporting.push(self.snapshot(&before)?);
+            }
+        }
+
+        Ok(SwingAnalysisScopeResolution {
+            requested,
+            supporting,
+            comparisons,
+        })
     }
 
     pub fn serialize(&self) -> Result<String, CurrentGameError> {

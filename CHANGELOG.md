@@ -8,6 +8,11 @@
 - Added manual continuous current-node analysis with real KataGo progress, fixed 600-second search budgets, shared-Run queue liveness, target-final cancellation and bounded Run-failure cleanup. Accepted snapshots remain available to ordinary SGF Save and current-game recovery.
 - Added durable default-on continuous-analysis intent, manager-owned latest-node following, and contextual Start/Stop/Resume with limit, finite-job, error and document-departure inhibition.
 - Added durable independent continuous time/visits budgets and empty-board stopping, with explicit limit causes, retained results, fresh-budget Resume and write-before-replacement safety.
+- Personal comments preserve active analysis admission. Document snapshot ordering protects newer annotations and Save state from delayed analysis events.
+- Added explicit current-game analysis scopes with authoritative previews, finite total-visit tasks, progress, terminal cancellation and semantic/Run invalidation. Ctrl+B starts a one-visit overview; analysis results remain attached to their SGF nodes.
+- Analysis tasks support immediate Pause with target-final cleanup and Continue on the same Run with a fresh Job, retaining completed positions and restarting interrupted work at its full budget. Paused tasks reserve their lane; Cancel, semantic edits, Run replacement and confirmed departure prevent continuation.
+- Added independent, durable task search-time, total-visit and leading-candidate-visit conditions with OR stopping, observed ending causes, per-position query identity and target-final cleanup. Preset writes leave active task conditions unchanged.
+- Added an all-position two-stage task strategy: a 32-visit overview of every target precedes an independently persisted deep pass with a 500-visit minimum, stage-local Pause/Continue progress, retained overview summaries, and Ctrl+Shift+B access.
 
 ### 中文
 
@@ -15,6 +20,11 @@
 - 新增手动连续当前节点分析：接入真实 KataGo 进度、固定 600 秒搜索预算、共享 Run 排队保活、目标 final 取消与有界故障清理；已接纳快照可普通保存到 SGF，并纳入当前棋谱恢复。
 - 连续分析意图默认开启并持久化；由 manager 跟随最新节点，统一开始/停止/继续动作，并保留到限、有限请求、错误及离开棋谱后的自动工作抑制。
 - 连续分析支持独立持久化的时间/visits 预算及空棋盘停止；显示到限原因、保留结果，继续时创建新预算，设置落盘成功后才替换搜索。
+- 个人评论保留正在运行的分析准入；文档快照排序防止延迟分析事件覆盖新批注与保存状态。
+- 新增当前棋谱显式分析范围、Rust 权威预览、总访问预算任务、真实进度、终态取消及语义/Run 失效状态；Ctrl+B 启动一访问概览，结果保存在对应 SGF 节点。
+- 分析任务支持暂停／继续：等待目标 final 清理后进入 Paused，在同一 Run 上以新 Job 保留完成位置并为中断位置恢复完整预算。暂停任务继续占有整局通道；取消、语义编辑、Run 替换及确认离开会终止继续资格。
+- 分析任务新增独立持久化的搜索时间、总 visits 与首选候选 visits 条件，任一到限即停止实际查询；记录观测到的结束原因，以逐位置查询身份和目标 final 清理保护完成进度。预设写入不改变当前任务预算。
+- 新增全位置两阶段分析任务：先以 32 visits 概览全部目标，再按独立持久化且不低于 500 visits 的深度预算逐点分析；暂停／继续保留阶段进度与概览摘要，并支持 Ctrl+Shift+B 启动。
 
 ## [0.1.0] - 2026-05-01
 

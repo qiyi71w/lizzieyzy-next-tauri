@@ -36,6 +36,93 @@ fn payload(engine: &str, visits: u32, x: u8, y: u8) -> SgfAnalysisPayload {
 }
 
 #[test]
+fn semantic_replacement_rejects_old_analysis_at_surviving_paths() {
+    for replacement in [
+        "(;SZ[19]AB[dd])",
+        "(;SZ[19]PL[W])",
+        "(;SZ[19]RU[Japanese])",
+        "(;SZ[19]KM[6.5])",
+        "(;SZ[19];B[dd])",
+    ] {
+        let state = CurrentGameState::default();
+        let opened = state.replace("(;SZ[19])", None).unwrap();
+        state.replace(replacement, None).unwrap();
+        assert!(state
+            .attach_primary_analysis(opened.generation, path(&[]), payload("KataGo", 400, 3, 3))
+            .is_err());
+        assert!(state
+            .select_path(path(&[]))
+            .unwrap()
+            .snapshot
+            .primary_analysis
+            .is_none());
+    }
+}
+
+#[test]
+fn rejected_edits_and_existing_continuation_keep_admitted_analysis() {
+    let state = CurrentGameState::default();
+    let opened = state.replace("(;SZ[19];B[dd])", None).unwrap();
+    assert!(state.remove_variation(path(&[])).is_err());
+    assert!(state.set_personal_comment(path(&[9]), "invalid".into()).is_err());
+    state.set_personal_comment(path(&[]), "".into()).unwrap();
+    state
+        .play(path(&[]), MoveVertex::Point(PointDto { x: 3, y: 3 }))
+        .unwrap();
+    assert!(state
+        .play(path(&[0]), MoveVertex::Point(PointDto { x: 3, y: 3 }))
+        .is_err());
+    let attached = state
+        .attach_primary_analysis(opened.generation, path(&[0]), payload("KataGo", 400, 4, 4))
+        .unwrap();
+    assert_eq!(attached.snapshot.primary_analysis.unwrap().visits, 400);
+    state.play(path(&[0]), MoveVertex::Pass).unwrap();
+    assert!(state
+        .attach_primary_analysis(opened.generation, path(&[0]), payload("KataGo", 900, 4, 4))
+        .is_err());
+    assert_eq!(
+        state
+            .select_path(path(&[0]))
+            .unwrap()
+            .snapshot
+            .primary_analysis
+            .unwrap()
+            .visits,
+        400
+    );
+}
+
+#[test]
+fn admitted_analysis_survives_personal_comment_and_save() {
+    let state = CurrentGameState::default();
+    let opened = state.replace(BRANCHING, None).unwrap();
+    let admission = state.admit_whole_game(opened.generation).unwrap();
+    let edited = state
+        .set_personal_comment(path(&[]), "review in progress".into())
+        .unwrap();
+    assert!(edited.dirty);
+    let attached = state
+        .attach_primary_analysis(admission.generation, path(&[]), payload("KataGo", 400, 3, 3))
+        .unwrap();
+    assert_eq!(attached.snapshot.personal_comment, "review in progress");
+    assert_eq!(attached.snapshot.primary_analysis.unwrap().visits, 400);
+    let target = unique_sgf("comment-analysis");
+    let saved = state
+        .save_to_path(target.to_string_lossy().into_owned(), path(&[]))
+        .unwrap();
+    assert!(!saved.dirty);
+    let reopened = CurrentSgfDocument::open(&fs::read_to_string(&target).unwrap()).unwrap();
+    let snapshot = reopened.snapshot(&path(&[])).unwrap();
+    assert_eq!(snapshot.personal_comment, "review in progress");
+    assert_eq!(snapshot.primary_analysis.unwrap().visits, 400);
+    let later = state
+        .attach_primary_analysis(admission.generation, path(&[0]), payload("KataGo", 900, 15, 3))
+        .unwrap();
+    assert!(later.dirty);
+    fs::remove_file(target).unwrap();
+}
+
+#[test]
 fn attach_primary_dirties_without_changing_generation_and_keeps_secondary() {
     let state = CurrentGameState::default();
     let opened = state
@@ -244,7 +331,7 @@ fn projectable_frame(visits: u32, x: u8, y: u8) -> AnalysisFrameDto {
         turn: 0,
         visits,
         winrate_black: 0.61,
-        score_mean_black: 2.25,
+        score_mean_black: Some(2.25),
         score_stdev: Some(0.5),
         candidates: vec![CandidateMoveDto {
             vertex: MoveVertex::Point(PointDto { x, y }),

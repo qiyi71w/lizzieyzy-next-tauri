@@ -41,6 +41,7 @@ describe("admitsAnalysisPublication", () => {
     expect(admitsAnalysisPublication(event({ node_path: { indices: [1] } }), current)).toBe(false);
     expect(admitsAnalysisPublication(event({ outcome: "cancelled" }), current)).toBe(false);
     expect(admitsAnalysisPublication(event({ frame: undefined }), current)).toBe(false);
+    expect(admitsAnalysisPublication(event({ frame: { ...frame, visits: 0 } }), current)).toBe(false);
     expect(admitsAnalysisPublication(event({ mode: "continuous", outcome: "progress" }), current)).toBe(true);
     expect(admitsAnalysisPublication(event({ mode: "continuous", outcome: "time_limited" }), current)).toBe(true);
     expect(admitsAnalysisPublication(event({ mode: "finite", outcome: "progress" }), current)).toBe(false);
@@ -59,6 +60,7 @@ describe("whole-game incremental publication", () => {
     expect(admitsWholeGameNodeResult(event({ lane: "whole_game", outcome: "progress", frame }))).toBe(true);
     expect(admitsWholeGameNodeResult(event({ lane: "whole_game", outcome: "completed", frame }))).toBe(false);
     expect(admitsWholeGameNodeResult(event({ lane: "whole_game", outcome: "progress", frame: undefined }))).toBe(false);
+    expect(admitsWholeGameNodeResult(event({ lane: "whole_game", outcome: "progress", frame: { ...frame, visits: 0 } }))).toBe(false);
     expect(admitsWholeGameNodeResult(event({ outcome: "progress", frame }))).toBe(false);
   });
 });
@@ -70,12 +72,12 @@ describe("admitsAnalysisAttachment", () => {
     candidates: [{ vertex: { point: { x: 3, y: 3 } }, visits: 40, winrate_black: 0.62, score_mean_black: 2.8, pv: [] }]
   };
 
-  it("requires projectable selected-node completed and whole-game progress frames", () => {
+  it("requires positive-root selected-node completed and whole-game progress frames", () => {
     expect(admitsAnalysisAttachment(event({ frame: projectable }))).toBe(true);
     expect(admitsAnalysisAttachment(event({ frame: projectable, outcome: "cancelled" }))).toBe(false);
     expect(admitsAnalysisAttachment(event({ frame: projectable, outcome: "failed" }))).toBe(false);
     expect(admitsAnalysisAttachment(event({ frame: undefined }))).toBe(false);
-    expect(admitsAnalysisAttachment(event({ frame }))).toBe(false);
+    expect(admitsAnalysisAttachment(event({ frame }))).toBe(true);
 
     expect(admitsAnalysisAttachment(event({ lane: "whole_game", outcome: "progress", frame: projectable }))).toBe(true);
     expect(admitsAnalysisAttachment(event({ lane: "whole_game", outcome: "completed", frame: projectable }))).toBe(false);

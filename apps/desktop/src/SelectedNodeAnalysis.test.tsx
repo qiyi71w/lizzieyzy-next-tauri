@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CurrentGameResultDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
+import type { AnalysisFrameDto, CurrentGameResultDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
 import { defaultAppPreferences } from "./domain/preferences";
 
 const listeners: {
@@ -101,6 +101,7 @@ const initialGame: CurrentGameResultDto = {
   selected_path: { indices: [] },
   snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "" },
   generation: 1,
+  snapshot_seq: 1,
   dirty: false,
   native_path: null
 };
@@ -241,6 +242,7 @@ async function readyEngine(host: HTMLElement) {
             adapter_kind: "kata_go_analysis",
             selected_node_analysis: true,
             whole_game_analysis: true,
+            root_score: true,
             protocol_cancel: true
           }
         }
@@ -377,7 +379,13 @@ function emitContinuousSnapshot(phase: ForegroundEngineSnapshotDto["continuous"]
       run: {
         run_id: "run-1", profile_id: "profile-1", adapter_kind: "kata_go_analysis",
         profile_snapshot: savedProfile.profile,
-        capability_snapshot: { adapter_kind: "kata_go_analysis", selected_node_analysis: true, whole_game_analysis: true, protocol_cancel: true }
+        capability_snapshot: {
+          adapter_kind: "kata_go_analysis",
+          selected_node_analysis: true,
+          whole_game_analysis: true,
+          root_score: true,
+          protocol_cancel: true
+        }
       }
     },
     continuous: { enabled: options.enabled ?? true, phase },
@@ -393,8 +401,12 @@ function emitContinuousSnapshot(phase: ForegroundEngineSnapshotDto["continuous"]
   });
 }
 
-async function publishContinuousProgress(visits: number, phase: "searching" | "time_limited" | "visits_limited" = "searching") {
-  const frame = continuousFrame(visits);
+async function publishContinuousProgress(
+  visits: number,
+  phase: "searching" | "time_limited" | "visits_limited" = "searching",
+  overrides: Partial<AnalysisFrameDto> = {}
+) {
+  const frame = { ...continuousFrame(visits), ...overrides };
   await act(async () => {
     if (phase === "searching") emitContinuousSnapshot(phase);
     listeners.onJob?.({
@@ -403,6 +415,7 @@ async function publishContinuousProgress(visits: number, phase: "searching" | "t
       frame,
       current_game: {
         ...initialGame,
+        snapshot_seq: visits,
         dirty: true,
         snapshot: { ...initialGame.snapshot, primary_analysis: { ...frame, job_id: "00000000-0000-0000-0000-000000000000" } }
       }
@@ -515,7 +528,38 @@ describe("authoritative finite selected-node completion", () => {
 });
 
 describe("authoritative continuous selected-node analysis", () => {
-  it("adopts an automatic job without issuing browser-side work and renders waiting, searching, and limited phases", async () => {
+  it("keeps newer comments and saved state when the same continuous job delivers an older snapshot", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await publishContinuousProgress(12);
+    const commented: CurrentGameResultDto = {
+      ...initialGame, snapshot_seq: 13, dirty: true,
+      snapshot: { ...initialGame.snapshot, personal_comment: "keep this note", primary_analysis: continuousFrame(12) }
+    };
+    backend.setCurrentGamePersonalComment.mockResolvedValue(commented);
+    const editor = host.querySelector('textarea[aria-label="个人评论"]') as HTMLTextAreaElement;
+    act(() => {
+      editor.focus();
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(editor, "keep this note");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      editor.blur();
+      await backend.setCurrentGamePersonalComment.mock.results.at(-1)?.value;
+    });
+    backend.saveCurrentGame.mockResolvedValue({ ...commented, snapshot_seq: 14, dirty: false, native_path: "/tmp/comment.sgf" });
+    await act(async () => {
+      (host.querySelector('button[aria-label="保存"]') as HTMLButtonElement).click();
+      await backend.saveCurrentGame.mock.results.at(-1)?.value;
+    });
+    await publishContinuousProgress(12);
+    expect(editor.value).toBe("keep this note");
+    expect(host.querySelector(".doc-name")?.textContent).not.toContain("*");
+    expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("12");
+  });
+
+  it("adopts root-only progress and renders waiting, searching, and limited phases", async () => {
     const host = await renderApp();
     await readyEngine(host);
     expect(buttonNamed(host, "停止连续分析")).toBeInstanceOf(HTMLButtonElement);
@@ -529,8 +573,9 @@ describe("authoritative continuous selected-node analysis", () => {
         generation: 1, node_path: { indices: [] }, outcome: "started"
       });
     });
-    await publishContinuousProgress(12);
-    expect(host.querySelector(".cand-visits")?.textContent).toBe("12");
+    await publishContinuousProgress(1, "searching", { candidates: [] });
+    expect(host.querySelector(".cand-row")).toBeNull();
+    expect(host.querySelector(".doc-name")?.textContent).toContain("*");
     expect(host.textContent).toContain("连续分析：搜索中");
     await publishContinuousProgress(45, "time_limited");
     expect(host.querySelector(".cand-visits")?.textContent).toBe("45");
@@ -687,7 +732,13 @@ describe("authoritative continuous selected-node analysis", () => {
     const runA = {
       run_id: "run-1", profile_id: "profile-1", adapter_kind: "kata_go_analysis" as const,
       profile_snapshot: savedProfile.profile,
-      capability_snapshot: { adapter_kind: "kata_go_analysis" as const, selected_node_analysis: true, whole_game_analysis: true, protocol_cancel: true }
+      capability_snapshot: {
+        adapter_kind: "kata_go_analysis" as const,
+        selected_node_analysis: true,
+        whole_game_analysis: true,
+        root_score: true,
+        protocol_cancel: true
+      }
     };
     act(() => emitContinuousSnapshot("searching", {
       lifecycle: {
@@ -788,6 +839,7 @@ describe("authoritative continuous selected-node analysis", () => {
         generation: 1, node_path: { indices: [] }, outcome: "progress", frame: laterContinuousFrame,
         current_game: {
           ...initialGame,
+          snapshot_seq: 81,
           dirty: true,
           snapshot: { ...initialGame.snapshot, primary_analysis: { ...laterContinuousFrame, job_id: "00000000-0000-0000-0000-000000000000" } }
         }

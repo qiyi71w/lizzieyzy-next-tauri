@@ -296,6 +296,7 @@ impl CurrentGameHolder {
             snapshot: document.snapshot(&selected_path)?,
             selected_path,
             generation: self.generation,
+            snapshot_seq: self.snapshot_seq,
             dirty: self.dirty,
             native_path: self.native_path.clone(),
         })
@@ -324,6 +325,7 @@ impl CurrentGameHolder {
             selected_path,
             snapshot,
             generation: self.generation,
+            snapshot_seq: self.snapshot_seq,
             dirty: self.dirty,
             native_path: self.native_path.clone(),
         })

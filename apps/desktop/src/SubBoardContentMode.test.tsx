@@ -117,6 +117,7 @@ const initialGame: CurrentGameResultDto = {
   selected_path: { indices: [] },
   snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "" },
   generation: 1,
+  snapshot_seq: 1,
   dirty: false,
   native_path: null
 };
@@ -143,6 +144,7 @@ const capability = {
   adapter_kind: "kata_go_analysis" as const,
   selected_node_analysis: true,
   whole_game_analysis: true,
+  root_score: true,
   protocol_cancel: true
 };
 

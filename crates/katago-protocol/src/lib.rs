@@ -1,6 +1,6 @@
 use app_model::{
-    AnalysisFrameDto, AnalysisJobId, CandidateMoveDto, ContinuousAnalysisBudgetDto, GameDto, MoveDto,
-    MoveVertex, PlayerColor, PointDto,
+    AnalysisFrameDto, AnalysisJobId, AnalysisStageConditionsDto, CandidateMoveDto,
+    ContinuousAnalysisBudgetDto, GameDto, MoveDto, MoveVertex, PlayerColor, PointDto,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -39,6 +39,9 @@ pub struct ContinuousSearchSettings {
     pub max_visits: u64,
     pub max_playouts: u64,
 }
+
+pub const UNBOUNDED_MAX_TIME: f64 = 1e20;
+pub const UNBOUNDED_MAX_VISITS: u64 = 1 << 50;
 
 #[derive(Debug, Clone)]
 pub struct AnalysisQueryOptions {
@@ -89,7 +92,7 @@ pub struct AnalysisResponse {
 }
 
 impl AnalysisResponse {
-    /// Validates search accounting; publishing a frame additionally requires candidates.
+    /// Validates positive root search accounting and any supplied candidates or geometry.
     pub fn has_valid_search_result(&self, board_size: u8) -> bool {
         let Some(root) = &self.root_info else {
             return false;
@@ -113,7 +116,7 @@ impl AnalysisResponse {
         !self.no_results
             && root.visits > 0
             && (0.0..=1.0).contains(&root.winrate)
-            && root.score_lead.unwrap_or(root.score_mean).is_finite()
+            && root.score_lead.or(root.score_mean).is_none_or(f32::is_finite)
             && root
                 .score_stdev
                 .is_none_or(|value| value.is_finite() && value >= 0.0)
@@ -144,7 +147,7 @@ pub struct RootInfo {
     #[serde(default)]
     pub winrate: f32,
     #[serde(default)]
-    pub score_mean: f32,
+    pub score_mean: Option<f32>,
     #[serde(default)]
     pub score_lead: Option<f32>,
     #[serde(default)]
@@ -158,6 +161,8 @@ pub struct MoveInfo {
     pub move_: Option<String>,
     #[serde(default)]
     pub visits: u32,
+    #[serde(default)]
+    pub order: Option<u32>,
     #[serde(default)]
     pub winrate: f32,
     #[serde(default)]
@@ -190,16 +195,62 @@ impl AnalysisQuery {
             max_time: if budget.continuous_time_limit_enabled {
                 f64::from(budget.continuous_time_limit_seconds)
             } else {
-                1e20
+                UNBOUNDED_MAX_TIME
             },
-            // KataGo's unbounded search sentinel, overriding finite config limits.
             max_visits: if budget.continuous_visits_limit_enabled {
                 u64::from(budget.continuous_visits_limit)
             } else {
-                1 << 50
+                UNBOUNDED_MAX_VISITS
             },
-            max_playouts: 1 << 50,
+            max_playouts: UNBOUNDED_MAX_VISITS,
         });
+    }
+
+    pub fn task(&mut self, conditions: &AnalysisStageConditionsDto) {
+        self.max_visits = None;
+        self.report_during_search_every = Some(0.1);
+        self.override_settings = Some(ContinuousSearchSettings {
+            max_time: if conditions.time_seconds.enabled {
+                f64::from(conditions.time_seconds.value)
+            } else {
+                UNBOUNDED_MAX_TIME
+            },
+            max_visits: if conditions.total_visits.enabled {
+                u64::from(conditions.total_visits.value)
+            } else {
+                UNBOUNDED_MAX_VISITS
+            },
+            max_playouts: UNBOUNDED_MAX_VISITS,
+        });
+    }
+}
+
+impl AnalysisResponse {
+    pub fn observed_task_ending_conditions(
+        &self,
+        conditions: &AnalysisStageConditionsDto,
+        infer_time_from_final: bool,
+    ) -> Vec<String> {
+        let mut observed = Vec::new();
+        if conditions.total_visits.enabled
+            && self
+                .root_info
+                .as_ref()
+                .is_some_and(|root| root.visits >= conditions.total_visits.value)
+        {
+            observed.push("total_visits".into());
+        }
+        if conditions.leading_candidate_visits.enabled
+            && self.move_infos.iter().any(|candidate| {
+                candidate.order == Some(0) && candidate.visits >= conditions.leading_candidate_visits.value
+            })
+        {
+            observed.push("leading_candidate_visits".into());
+        }
+        if observed.is_empty() && infer_time_from_final && conditions.time_seconds.enabled {
+            observed.push("time_seconds".into());
+        }
+        observed
     }
 }
 
@@ -397,7 +448,7 @@ pub fn normalize_response(
     let root = response.root_info.unwrap_or(RootInfo {
         visits: 0,
         winrate: 0.5,
-        score_mean: 0.0,
+        score_mean: None,
         score_lead: None,
         score_stdev: None,
     });
@@ -408,7 +459,7 @@ pub fn normalize_response(
         turn: response.turn_number,
         visits: root.visits,
         winrate_black: root.winrate,
-        score_mean_black: root.score_lead.unwrap_or(root.score_mean),
+        score_mean_black: root.score_lead.or(root.score_mean),
         score_stdev: root.score_stdev,
         candidates: response
             .move_infos
@@ -519,7 +570,7 @@ mod tests {
             root_info: Some(RootInfo {
                 visits,
                 winrate: 0.5,
-                score_mean: 0.0,
+                score_mean: Some(0.0),
                 score_lead: None,
                 score_stdev: None,
             }),
@@ -555,6 +606,19 @@ mod tests {
         assert_eq!(response.id, "query-1");
         assert_eq!(response.turn_number, 2);
         assert_eq!(response.root_info.unwrap().visits, 64);
+    }
+
+    #[test]
+    fn valid_search_result_preserves_missing_root_score_as_unavailable() {
+        let response = parse_response_line(
+            r#"{"id":"query-1","rootInfo":{"visits":64,"winrate":0.52},"moveInfos":[{"move":"D4","visits":64,"winrate":0.52,"scoreMean":1.5}]}"#,
+        )
+        .unwrap();
+
+        assert!(response.has_valid_search_result(19));
+        assert_eq!(response.root_info.as_ref().unwrap().score_mean, None);
+        let frame = normalize_response(AnalysisJobId::nil(), response, 19);
+        assert_eq!(frame.score_mean_black, None);
     }
 
     #[test]
@@ -733,5 +797,87 @@ mod tests {
         assert_eq!(query.initial_stones, vec![("B".to_string(), "D6".to_string())]);
         assert_eq!(query.moves, vec![("B".to_string(), "pass".to_string())]);
         assert_eq!(query.analyze_turns, Some(vec![1]));
+    }
+
+    #[test]
+    fn task_query_uses_engine_time_and_explicit_unbounded_sentinels() {
+        let mut query = analysis_query_from_game(&game(Vec::new()), options(0)).unwrap();
+        let conditions = AnalysisStageConditionsDto {
+            time_seconds: app_model::AnalysisTaskLimitDto {
+                enabled: true,
+                value: 7,
+            },
+            total_visits: app_model::AnalysisTaskLimitDto {
+                enabled: false,
+                value: 800,
+            },
+            leading_candidate_visits: app_model::AnalysisTaskLimitDto {
+                enabled: true,
+                value: 12,
+            },
+        };
+
+        query.task(&conditions);
+
+        assert_eq!(query.max_visits, None);
+        assert_eq!(query.report_during_search_every, Some(0.1));
+        let settings = query.override_settings.unwrap();
+        assert_eq!(settings.max_time, 7.0);
+        assert_eq!(settings.max_visits, UNBOUNDED_MAX_VISITS);
+        assert_eq!(settings.max_playouts, UNBOUNDED_MAX_VISITS);
+    }
+
+    #[test]
+    fn ending_conditions_use_only_reported_order_zero_candidate_and_preserve_ties() {
+        let response = parse_response_line(
+            r#"{"id":"query-1","isDuringSearch":true,"rootInfo":{"visits":40,"winrate":0.5,"scoreMean":0.0},"moveInfos":[{"move":"D4","order":1,"visits":99,"winrate":0.5,"scoreMean":0.0},{"move":"Q16","order":0,"visits":12,"winrate":0.5,"scoreMean":0.0}]}"#,
+        )
+        .unwrap();
+        let conditions = AnalysisStageConditionsDto {
+            time_seconds: app_model::AnalysisTaskLimitDto {
+                enabled: true,
+                value: 10,
+            },
+            total_visits: app_model::AnalysisTaskLimitDto {
+                enabled: true,
+                value: 40,
+            },
+            leading_candidate_visits: app_model::AnalysisTaskLimitDto {
+                enabled: true,
+                value: 12,
+            },
+        };
+
+        assert_eq!(
+            response.observed_task_ending_conditions(&conditions, false),
+            vec!["total_visits", "leading_candidate_visits"]
+        );
+    }
+
+    #[test]
+    fn candidate_without_order_never_satisfies_leading_budget_and_final_can_identify_time() {
+        let response = parse_response_line(
+            r#"{"id":"query-1","isDuringSearch":false,"rootInfo":{"visits":4,"winrate":0.5,"scoreMean":0.0},"moveInfos":[{"move":"D4","visits":999,"winrate":0.5,"scoreMean":0.0}]}"#,
+        )
+        .unwrap();
+        let conditions = AnalysisStageConditionsDto {
+            time_seconds: app_model::AnalysisTaskLimitDto {
+                enabled: true,
+                value: 1,
+            },
+            total_visits: app_model::AnalysisTaskLimitDto {
+                enabled: false,
+                value: 800,
+            },
+            leading_candidate_visits: app_model::AnalysisTaskLimitDto {
+                enabled: true,
+                value: 20,
+            },
+        };
+
+        assert_eq!(
+            response.observed_task_ending_conditions(&conditions, true),
+            vec!["time_seconds"]
+        );
     }
 }

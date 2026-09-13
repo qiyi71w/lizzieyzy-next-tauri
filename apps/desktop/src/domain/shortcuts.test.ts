@@ -25,6 +25,8 @@ describe("shortcut registry catalog", () => {
       "file.paste-sgf",
       "game.human-vs-engine",
       "analysis.continuous",
+      "analysis.quick",
+      "analysis.all-positions",
       "review.pass",
       "review.remove-variation",
       "review.parent",
@@ -57,6 +59,20 @@ describe("shortcut registry catalog", () => {
       id: "help.shortcut-reference",
       label: "快捷键参考",
       primary: { key: "?" },
+      aliases: [],
+      focusRule: "focus-safe"
+    });
+    expect(catalog.find((item) => item.id === "analysis.quick")).toEqual({
+      id: "analysis.quick",
+      label: "Quick analysis",
+      primary: { key: "b", ctrl: true },
+      aliases: [],
+      focusRule: "focus-safe"
+    });
+    expect(catalog.find((item) => item.id === "analysis.all-positions")).toEqual({
+      id: "analysis.all-positions",
+      label: "All-position analysis",
+      primary: { key: "b", ctrl: true, shift: true },
       aliases: [],
       focusRule: "focus-safe"
     });

@@ -109,6 +109,7 @@ const navigableRoot: CurrentGameResultDto = {
   selected_path: { indices: [] },
   snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "" },
   generation: 1,
+  snapshot_seq: 1,
   dirty: false,
   native_path: null
 };
@@ -151,6 +152,7 @@ const capability = {
   adapter_kind: "kata_go_analysis" as const,
   selected_node_analysis: true,
   whole_game_analysis: true,
+  root_score: true,
   protocol_cancel: true
 };
 
@@ -560,6 +562,19 @@ describe("analysis presentation bound to exact nodes", () => {
     expect(candidateCoords(host)).toEqual(["D6"]);
   });
 
+  it("shows root-only positive analysis from an opened SGF", async () => {
+    const rootOnly = analysisFrame({ visits: 1, candidates: [] });
+    currentGameFixture.mockResolvedValue({
+      ...navigableRoot,
+      snapshot: { ...navigableRoot.snapshot, primary_analysis: rootOnly }
+    });
+
+    const host = await renderApp();
+    expect(candidateCoords(host)).toEqual([]);
+    expect(backend.classifyProblems).toHaveBeenCalledWith([rootOnly]);
+    expect(host.textContent).toContain("61.0%");
+  });
+
   it("clears presentation when the Foreground Engine Run leaves Ready", async () => {
     const host = await renderApp();
     await readyEngine(host);
@@ -581,7 +596,7 @@ describe("analysis presentation bound to exact nodes", () => {
 });
 
 describe("attached SGF analysis as the active persistence path", () => {
-  it("dirties on identity-valid whole-game progress, keeps Save enabled after a later node, and never writes SQLite", async () => {
+  it("dirties and saves root-only whole-game progress, keeps Save enabled after a later node, and never writes SQLite", async () => {
     let dirty = false;
     backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => ({
       ...snapshotAt(path),
@@ -598,9 +613,10 @@ describe("attached SGF analysis as the active persistence path", () => {
     expect(buttonNamed(host, "存档").disabled).toBe(true);
 
     dirty = true;
-    await emitWholeGameProgress({ indices: [] }, analysisFrame({ job_id: "job-wg" }));
+    await emitWholeGameProgress({ indices: [] }, analysisFrame({ job_id: "job-wg", visits: 1, candidates: [] }));
     expect(buttonNamed(host, "存档").disabled).toBe(false);
     expect(host.querySelector(".doc-name")?.textContent).toContain("*");
+    expect(candidateCoords(host)).toEqual([]);
 
     await act(async () => {
       buttonNamed(host, "存档").click();
@@ -641,10 +657,11 @@ describe("attached SGF analysis as the active persistence path", () => {
     expect(candidateCoords(host)).toEqual(["D6"]);
   });
 
-  it("does not dirty or persist cancelled, failed, or non-projectable events", async () => {
+  it.each(["cancelled", "failed"] as const)("does not dirty or persist a %s finite event", async (outcome) => {
     const host = await renderApp();
     await readyEngine(host);
     await startSelectedNode(host);
+    const classifyCalls = backend.classifyProblems.mock.calls.length;
     const selectCalls = backend.selectCurrentGameNode.mock.calls.length;
     await act(async () => {
       listeners.onJob?.({
@@ -654,18 +671,25 @@ describe("attached SGF analysis as the active persistence path", () => {
         mode: "finite",
         generation: 1,
         node_path: { indices: [] },
-        outcome: "cancelled"
+        outcome,
+        ...(outcome === "failed"
+          ? { failure: { operation: "job", kind: "protocol", message: "stderr boom" } }
+          : {})
       });
-      listeners.onJob?.({
-        run_id: "run-1",
-        job_id: "job-1",
-        lane: "selected_node",
-        mode: "finite",
-        generation: 1,
-        node_path: { indices: [] },
-        outcome: "failed",
-        failure: { operation: "job", kind: "protocol", message: "stderr boom" }
-      });
+    });
+    expect(backend.selectCurrentGameNode.mock.calls.length).toBe(selectCalls);
+    expect(backend.classifyProblems.mock.calls.length).toBe(classifyCalls);
+    expect(candidateCoords(host)).toEqual([]);
+    expect(buttonNamed(host, "存档").disabled).toBe(true);
+  });
+
+  it("rejects a matching zero-visit completion before presentation or persistence", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await startSelectedNode(host);
+    const classifyCalls = backend.classifyProblems.mock.calls.length;
+    const selectCalls = backend.selectCurrentGameNode.mock.calls.length;
+    await act(async () => {
       listeners.onJob?.({
         run_id: "run-1",
         job_id: "job-1",
@@ -678,7 +702,38 @@ describe("attached SGF analysis as the active persistence path", () => {
       });
     });
     expect(backend.selectCurrentGameNode.mock.calls.length).toBe(selectCalls);
+    expect(backend.classifyProblems.mock.calls.length).toBe(classifyCalls);
+    expect(candidateCoords(host)).toEqual([]);
     expect(buttonNamed(host, "存档").disabled).toBe(true);
+  });
+
+  it("rejects active whole-game zero-visit progress before presentation or persistence", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await startWholeGame(host);
+    const selectCalls = backend.selectCurrentGameNode.mock.calls.length;
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-1",
+        job_id: "job-wg",
+        lane: "whole_game",
+        mode: "finite",
+        generation: 1,
+        node_path: { indices: [] },
+        outcome: "progress",
+        completed: 0,
+        expected: 2,
+        remaining: 2,
+        frame: analysisFrame({ job_id: "job-wg", visits: 0, candidates: [] })
+      });
+    });
+    expect(backend.selectCurrentGameNode.mock.calls.length).toBe(selectCalls);
+    expect(host.textContent).not.toContain("61.0%");
+    expect(buttonNamed(host, "存档").disabled).toBe(true);
+
+    await selectPath(host, "下一变化");
+    await selectPath(host, "父节点");
+    expect(host.textContent).not.toContain("61.0%");
   });
 });
 

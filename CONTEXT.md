@@ -97,6 +97,21 @@ _Avoid_: Best move, engine suggestion
 The immutable engine/profile, model/config, rules, komi, and request-option set that makes two position analyses comparable. Completed visit counts may differ; missing or mismatched context makes a pair non-comparable.
 _Avoid_: Profile ID, cache hit, analysis job
 
+**Analysis Task（分析任务）**:
+A user-started, session-only analysis of an explicit set of positions in the current game, with fixed analysis conditions, stage budgets, and a resumable completed set. Navigation and ordinary Pause/Continue preserve its identity; edits to position semantics or tree structure, or a new Foreground Engine Run, require a new task.
+
+**Position Interval（局面区间）**:
+An inclusive range of positions after numbered moves; zero denotes the initial position. Pass counts as a move, while setup changes the position without increasing the move count.
+
+**Selected Review Line（当前复盘线路）**:
+The root-to-leaf line determined by the user's remembered branch choices, with the Primary Child used at an unchosen branch. An analysis task fixes this line when it starts.
+
+**Supporting Position（辅助局面）**:
+A position needed to compare a selected move's before-and-after analysis, even when it lies outside the user's position interval or color filter. It is listed separately from the requested targets and retains its own game-tree location.
+
+**Analysis Task Completed Set（分析任务完成集）**:
+The positions that have met a stage's requested search conditions within the same Analysis Task. Existing SGF visit counts alone do not establish membership.
+
 **Native File Activation（原生文件激活）**:
 An operating-system request to open an SGF or GIB in the existing application window or to launch the application for that file. It uses the same current-game replacement safety as an in-application open.
 _Avoid_: Command-line import, second window

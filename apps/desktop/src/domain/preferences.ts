@@ -1,5 +1,5 @@
 import type { NextMoveReviewMarkerMode } from "./nextMoveReviewMarker";
-import type { ContinuousAnalysisBudgetDto } from "./types";
+import type { AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, ContinuousAnalysisBudgetDto } from "./types";
 
 export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
@@ -13,6 +13,12 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   showCandidates: boolean;
   candidateLimit: number;
   defaultMaxVisits: number;
+  taskSingleStageConditions: AnalysisStageConditionsDto;
+  taskOverviewConditions: AnalysisStageConditionsDto;
+  taskDeepConditions: AnalysisStageConditionsDto;
+  taskSwingOverviewConditions: AnalysisStageConditionsDto;
+  taskSwingDeepConditions: AnalysisStageConditionsDto;
+  taskSwingCriteria: AnalysisSwingCriteriaDto;
   reviewMode: ReviewMode;
   boardTheme: BoardTheme;
   graphPerspective: GraphPerspective;
@@ -35,6 +41,36 @@ export const defaultAppPreferences: AppPreferences = {
   showCandidates: true,
   candidateLimit: 8,
   defaultMaxVisits: 800,
+  taskSingleStageConditions: {
+    time_seconds: { enabled: false, value: 10 },
+    total_visits: { enabled: true, value: 800 },
+    leading_candidate_visits: { enabled: false, value: 500 }
+  },
+  taskOverviewConditions: {
+    time_seconds: { enabled: false, value: 10 },
+    total_visits: { enabled: true, value: 32 },
+    leading_candidate_visits: { enabled: false, value: 32 }
+  },
+  taskDeepConditions: {
+    time_seconds: { enabled: false, value: 10 },
+    total_visits: { enabled: true, value: 800 },
+    leading_candidate_visits: { enabled: false, value: 500 }
+  },
+  taskSwingOverviewConditions: {
+    time_seconds: { enabled: false, value: 10 },
+    total_visits: { enabled: true, value: 32 },
+    leading_candidate_visits: { enabled: false, value: 32 }
+  },
+  taskSwingDeepConditions: {
+    time_seconds: { enabled: true, value: 10 },
+    total_visits: { enabled: false, value: 800 },
+    leading_candidate_visits: { enabled: false, value: 500 }
+  },
+  taskSwingCriteria: {
+    move_actors: "both",
+    winrate_change_percentage_points: { enabled: true, value: 10 },
+    score_change_points: { enabled: false, value: 3 }
+  },
   reviewMode: "quick",
   boardTheme: "classic",
   graphPerspective: "black",
@@ -56,15 +92,35 @@ export const defaultAppPreferences: AppPreferences = {
   continuousStopOnEmptyBoard: false
 };
 
-export function normalizeAppPreferences(value: Partial<AppPreferences> | null | undefined): AppPreferences {
+type StoredAppPreferences = Partial<AppPreferences> & {
+  taskConditions?: AnalysisStageConditionsDto;
+};
+
+export function normalizeAppPreferences(value: StoredAppPreferences | null | undefined): AppPreferences {
   const winrateLine = booleanValue(value?.winrateLine, defaultAppPreferences.winrateLine);
   const scoreLeadLine = booleanValue(value?.scoreLeadLine, defaultAppPreferences.scoreLeadLine);
+  const defaultMaxVisits = integerValue(value?.defaultMaxVisits, defaultAppPreferences.defaultMaxVisits, 1, 1_000_000);
   return {
     showOwnership: booleanValue(value?.showOwnership, defaultAppPreferences.showOwnership),
     showPolicy: booleanValue(value?.showPolicy, defaultAppPreferences.showPolicy),
     showCandidates: booleanValue(value?.showCandidates, defaultAppPreferences.showCandidates),
     candidateLimit: integerValue(value?.candidateLimit, defaultAppPreferences.candidateLimit, 1, 20),
-    defaultMaxVisits: integerValue(value?.defaultMaxVisits, defaultAppPreferences.defaultMaxVisits, 1, 1_000_000),
+    defaultMaxVisits,
+    taskSingleStageConditions: normalizeSingleStageTaskConditions(value, defaultMaxVisits),
+    taskOverviewConditions: normalizeTaskConditions(
+      value?.taskOverviewConditions,
+      defaultAppPreferences.taskOverviewConditions
+    ),
+    taskDeepConditions: normalizeDeepTaskConditions(value, defaultMaxVisits),
+    taskSwingOverviewConditions: normalizeTaskConditions(
+      value?.taskSwingOverviewConditions,
+      defaultAppPreferences.taskSwingOverviewConditions
+    ),
+    taskSwingDeepConditions: normalizeTaskConditions(
+      value?.taskSwingDeepConditions,
+      defaultAppPreferences.taskSwingDeepConditions
+    ),
+    taskSwingCriteria: normalizeSwingCriteria(value?.taskSwingCriteria),
     reviewMode: value?.reviewMode === "deep" ? "deep" : "quick",
     boardTheme: value?.boardTheme === "high-contrast" ? "high-contrast" : "classic",
     graphPerspective: value?.graphPerspective === "sideToPlay" ? "sideToPlay" : "black",
@@ -99,6 +155,117 @@ export function continuousBudgetError(value: ContinuousAnalysisBudgetDto): strin
     }
   }
   return null;
+}
+
+export function taskConditionsError(value: AnalysisStageConditionsDto): string | null {
+  const limits = [value.time_seconds, value.total_visits, value.leading_candidate_visits];
+  if (limits.some((limit) => !Number.isInteger(limit.value) || limit.value < 1 || limit.value > 4294967295)) {
+    return "Task condition values must be whole numbers from 1 to 4294967295; disabled conditions retain their values.";
+  }
+  if (!limits.some((limit) => limit.enabled)) {
+    return "Enable at least one task ending condition.";
+  }
+  return null;
+}
+
+export function taskStageConditionsError(
+  overview: AnalysisStageConditionsDto,
+  deep: AnalysisStageConditionsDto
+): string | null {
+  const error = taskConditionsError(overview) ?? taskConditionsError(deep);
+  if (error) return error;
+  if (deep.total_visits.value < 500) {
+    return "All-position deep total visits must be at least 500.";
+  }
+  return null;
+}
+
+export function swingCriteriaError(value: AnalysisSwingCriteriaDto): string | null {
+  const thresholds = [value.winrate_change_percentage_points, value.score_change_points];
+  if (thresholds.some((threshold) => !Number.isFinite(threshold.value) || threshold.value <= 0)) {
+    return "Swing threshold values must be positive finite numbers; disabled thresholds retain their values.";
+  }
+  if (!thresholds.some((threshold) => threshold.enabled)) {
+    return "Enable at least one swing selection threshold.";
+  }
+  return null;
+}
+
+function normalizeTaskConditions(
+  value: AnalysisStageConditionsDto | undefined,
+  fallback: AnalysisStageConditionsDto
+): AnalysisStageConditionsDto {
+  if (!value) return cloneTaskConditions(fallback);
+  return {
+    time_seconds: normalizeTaskLimit(value.time_seconds),
+    total_visits: normalizeTaskLimit(value.total_visits),
+    leading_candidate_visits: normalizeTaskLimit(value.leading_candidate_visits)
+  };
+}
+
+function normalizeSingleStageTaskConditions(
+  value: StoredAppPreferences | null | undefined,
+  defaultMaxVisits: number
+): AnalysisStageConditionsDto {
+  const fallback = cloneTaskConditions(defaultAppPreferences.taskSingleStageConditions);
+  fallback.total_visits.value = defaultMaxVisits;
+  return normalizeTaskConditions(value?.taskSingleStageConditions ?? value?.taskConditions, fallback);
+}
+
+function normalizeDeepTaskConditions(value: StoredAppPreferences | null | undefined, defaultMaxVisits: number) {
+  if (value?.taskDeepConditions) {
+    return normalizeTaskConditions(value.taskDeepConditions, defaultAppPreferences.taskDeepConditions);
+  }
+  if (value?.taskConditions) {
+    const migrated = normalizeTaskConditions(value.taskConditions, defaultAppPreferences.taskDeepConditions);
+    migrated.total_visits.value = Math.max(500, migrated.total_visits.value);
+    return migrated;
+  }
+  const fallback = cloneTaskConditions(defaultAppPreferences.taskDeepConditions);
+  fallback.total_visits.value = Math.max(500, defaultMaxVisits);
+  return fallback;
+}
+
+function cloneTaskConditions(value: AnalysisStageConditionsDto): AnalysisStageConditionsDto {
+  return {
+    time_seconds: { ...value.time_seconds },
+    total_visits: { ...value.total_visits },
+    leading_candidate_visits: { ...value.leading_candidate_visits }
+  };
+}
+
+function normalizeSwingCriteria(value: AnalysisSwingCriteriaDto | undefined): AnalysisSwingCriteriaDto {
+  const fallback = defaultAppPreferences.taskSwingCriteria;
+  return {
+    move_actors: value?.move_actors === "black" || value?.move_actors === "white"
+      ? value.move_actors
+      : "both",
+    winrate_change_percentage_points: normalizeSwingThreshold(
+      value?.winrate_change_percentage_points,
+      fallback.winrate_change_percentage_points
+    ),
+    score_change_points: normalizeSwingThreshold(
+      value?.score_change_points,
+      fallback.score_change_points
+    )
+  };
+}
+
+function normalizeSwingThreshold(
+  value: AnalysisSwingCriteriaDto["winrate_change_percentage_points"] | undefined,
+  fallback: AnalysisSwingCriteriaDto["winrate_change_percentage_points"]
+) {
+  return {
+    enabled: typeof value?.enabled === "boolean" ? value.enabled : fallback.enabled,
+    value: typeof value?.value === "number" ? value.value : fallback.value
+  };
+}
+
+function normalizeTaskLimit(value: AnalysisStageConditionsDto["time_seconds"] | undefined) {
+  return {
+    enabled: typeof value?.enabled === "boolean" ? value.enabled : false,
+    value: typeof value?.value === "number" ? value.value : Number.NaN
+  };
 }
 
 function nextMoveReviewMarkerValue(value: unknown): NextMoveReviewMarkerMode {

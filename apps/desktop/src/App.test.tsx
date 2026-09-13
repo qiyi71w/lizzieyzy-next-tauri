@@ -104,6 +104,7 @@ const initialGame: CurrentGameResultDto = {
   selected_path: { indices: [] },
   snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "" },
   generation: 1,
+  snapshot_seq: 1,
   dirty: false,
   native_path: null
 };
@@ -168,6 +169,7 @@ const acceptedGame: CurrentGameResultDto = {
     personal_comment: ""
   },
   generation: 2,
+  snapshot_seq: 1,
   dirty: true,
   native_path: null
 };
@@ -236,6 +238,7 @@ const branchingGame: CurrentGameResultDto = {
     personal_comment: ""
   },
   generation: 3,
+  snapshot_seq: 1,
   dirty: true,
   native_path: "/tmp/review.sgf"
 };
@@ -1781,6 +1784,56 @@ function installCandidateAnalysis() {
 }
 
 describe("accepted navigation coalescing", () => {
+  it.each([false, true])("preserves newer comment and Save state behind delayed navigation (save=%s)", async (save) => {
+    const initial = { ...navigableRoot, dirty: save, native_path: "/tmp/original.sgf" };
+    currentGameFixture.mockResolvedValue(initial);
+    const host = await renderApp();
+    let release!: (result: CurrentGameResultDto) => void;
+    const pending = new Promise<CurrentGameResultDto>((resolve) => { release = resolve; });
+    let authoritative: CurrentGameResultDto = initial;
+    backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => ({
+      ...authoritative, snapshot_seq: 5, selected_path: path,
+      snapshot: path.indices.length === 0 ? authoritative.snapshot : navigableChild.snapshot
+    })).mockReturnValueOnce(pending);
+    act(() => requiredElement<HTMLButtonElement>(host, 'button[title="下一手"]').click());
+    const editor = requiredElement<HTMLTextAreaElement>(host, 'textarea[aria-label="个人评论"]');
+    authoritative = {
+      ...initial, snapshot_seq: 3, dirty: true,
+      tree: { ...initial.tree, properties: [{ key: "C", values: ["retained annotation"] }] },
+      snapshot: { ...initial.snapshot, personal_comment: "retained annotation" }
+    };
+    backend.setCurrentGamePersonalComment.mockResolvedValue(authoritative);
+    act(() => {
+      editor.focus();
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(editor, "retained annotation");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      editor.blur();
+      await backend.setCurrentGamePersonalComment.mock.results.at(-1)?.value;
+    });
+    if (save) {
+      authoritative = { ...authoritative, snapshot_seq: 4, dirty: false, native_path: "/tmp/saved.sgf" };
+      backend.saveCurrentGame.mockResolvedValue(authoritative);
+      await act(async () => {
+        buttonLabeled(host, "保存").click();
+        await backend.saveCurrentGame.mock.results.at(-1)?.value;
+      });
+    }
+    await act(async () => {
+      release({ ...initial, snapshot_seq: 2, selected_path: navigableChild.selected_path, snapshot: navigableChild.snapshot });
+      await pending;
+      await Promise.resolve();
+    });
+    expect(requiredElement(host, ".doc-name").textContent).toBe(save ? "saved.sgf" : "original.sgf *");
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
+    await act(async () => {
+      requiredElement<HTMLButtonElement>(host, 'button[title="上一手"]').click();
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
+    });
+    expect(editor.value).toBe("retained annotation");
+  });
+
   it("shows only the latest path requested while an earlier native selection is pending", async () => {
     currentGameFixture.mockResolvedValue(branchingGame);
     let resolveFirstSelection!: (value: CurrentGameResultDto) => void;
@@ -1789,7 +1842,7 @@ describe("accepted navigation coalescing", () => {
     backend.selectCurrentGameNode.mockClear();
     backend.selectCurrentGameNode
       .mockReturnValueOnce(firstSelection)
-      .mockResolvedValueOnce(initialGame);
+      .mockResolvedValueOnce({ ...branchingGame, selected_path: initialGame.selected_path, snapshot: initialGame.snapshot });
 
     act(() => buttonNamed(host, "父节点").click());
     const jump = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
@@ -1874,6 +1927,7 @@ async function readyEngine(host: HTMLElement) {
             adapter_kind: "kata_go_analysis",
             selected_node_analysis: true,
             whole_game_analysis: true,
+            root_score: true,
             protocol_cancel: true
           }
         }

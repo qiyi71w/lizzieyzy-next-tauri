@@ -56,6 +56,24 @@ fn replace_primary_on_root_writes_lzop_and_preserves_secondary_unknown_and_comme
 }
 
 #[test]
+fn save_reopen_preserves_unavailable_root_score() {
+    let mut document = CurrentSgfDocument::open(BRANCHING).unwrap();
+    let mut payload = replacement_payload("KataGo", 400, 3, 3);
+    payload.score_mean_black = None;
+    document.replace_primary_analysis(&path(&[]), &payload).unwrap();
+
+    let serialized = document.serialize().unwrap();
+    let reopened = CurrentSgfDocument::open(&serialized).unwrap();
+    let primary = reopened
+        .snapshot(&path(&[]))
+        .unwrap()
+        .primary_analysis
+        .expect("root primary");
+    assert_eq!(primary.score_mean_black, None);
+    assert_eq!(primary.candidates[0].score_mean_black, 2.25);
+}
+
+#[test]
 fn replace_primary_on_move_node_writes_lz_and_preserves_lz2_comment_and_unknown() {
     let mut document = CurrentSgfDocument::open(BRANCHING).unwrap();
     let payload = replacement_payload("KataGo", 900, 15, 3);
@@ -89,6 +107,40 @@ fn replace_primary_is_idempotent_for_the_same_canonical_payload() {
     assert_eq!(document.serialize().unwrap(), serialized);
     assert_eq!(second.0.personal_comment, "root personal");
     assert_eq!(second.0.secondary_analysis.unwrap().visits, 150);
+}
+
+#[test]
+fn root_only_one_visit_analysis_saves_and_reopens_without_candidates() {
+    let mut document = CurrentSgfDocument::open(BRANCHING).unwrap();
+    let payload = SgfAnalysisPayload {
+        engine_name: "KataGo".to_string(),
+        visits: 1,
+        winrate_black: 0.56,
+        score_mean_black: Some(1.25),
+        score_stdev: Some(0.5),
+        pda: None,
+        candidates: Vec::new(),
+        ownership: None,
+    };
+
+    let (snapshot, changed) = document.replace_primary_analysis(&path(&[]), &payload).unwrap();
+    assert!(changed);
+    assert_eq!(snapshot.primary_analysis.as_ref().unwrap().visits, 1);
+    assert!(snapshot.primary_analysis.unwrap().candidates.is_empty());
+
+    let serialized = document.serialize().unwrap();
+    let reopened = CurrentSgfDocument::open(&serialized).unwrap();
+    let restored = reopened
+        .snapshot(&path(&[]))
+        .unwrap()
+        .primary_analysis
+        .expect("root-only primary analysis");
+    assert_eq!(restored.visits, 1);
+    assert!(restored.candidates.is_empty());
+    assert_eq!(
+        reopened.snapshot(&path(&[])).unwrap().personal_comment,
+        "root personal"
+    );
 }
 
 #[test]

@@ -101,6 +101,7 @@ const initialGame: CurrentGameResultDto = {
   selected_path: { indices: [] },
   snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "" },
   generation: 1,
+  snapshot_seq: 1,
   dirty: false,
   native_path: null
 };
@@ -177,6 +178,7 @@ const capability = {
   adapter_kind: "kata_go_analysis" as const,
   selected_node_analysis: true,
   whole_game_analysis: true,
+  root_score: true,
   protocol_cancel: true
 };
 
@@ -314,6 +316,7 @@ async function readyEngine(host: HTMLElement) {
             adapter_kind: "kata_go_analysis",
             selected_node_analysis: true,
             whole_game_analysis: true,
+            root_score: true,
             protocol_cancel: true
           }
         }
@@ -379,6 +382,7 @@ describe("foreground engine lifecycle UI", () => {
               adapter_kind: "kata_go_analysis",
               selected_node_analysis: true,
               whole_game_analysis: true,
+              root_score: true,
               protocol_cancel: true
             }
           }
@@ -419,6 +423,7 @@ describe("foreground engine lifecycle UI", () => {
               adapter_kind: "kata_go_analysis",
               selected_node_analysis: true,
               whole_game_analysis: true,
+              root_score: true,
               protocol_cancel: true
             }
           }
@@ -458,6 +463,7 @@ describe("foreground engine lifecycle UI", () => {
               adapter_kind: "kata_go_analysis",
               selected_node_analysis: true,
               whole_game_analysis: true,
+              root_score: true,
               protocol_cancel: true
             }
           }
@@ -478,90 +484,67 @@ describe("foreground engine lifecycle UI", () => {
     });
   });
 
-  it("presents selected-node analysis after a personal comment advances the document generation", async () => {
-    backend.setCurrentGamePersonalComment.mockResolvedValue({
-      ...initialGame,
-      snapshot: { ...initialGame.snapshot, personal_comment: "reviewer note" },
-      generation: 2,
-      dirty: true
+  it("keeps whole-game work and node results while commenting and saving", async () => {
+    let authoritative: CurrentGameResultDto = { ...mainlineRoot };
+    currentGameFixture.mockResolvedValue(authoritative);
+    backend.selectCurrentGameNode.mockImplementation(async () => authoritative);
+    backend.setCurrentGamePersonalComment.mockImplementation(async (_path: NodePath, comment: string) => {
+      authoritative = {
+        ...authoritative, snapshot_seq: 2, dirty: true,
+        tree: { ...authoritative.tree, properties: [{ key: "C", values: [comment] }] },
+        snapshot: { ...authoritative.snapshot, personal_comment: comment }
+      };
+      return authoritative;
     });
-    backend.startSelectedNodeAnalysis.mockResolvedValue({
-      run_id: "run-1",
-      job_id: "job-comment",
-      lane: "selected_node",
-      mode: "finite",
-      state: "queued",
-      generation: 2,
-      node_path: { indices: [] }
+    backend.saveCurrentGame.mockImplementation(async () => {
+      authoritative = { ...authoritative, snapshot_seq: 3, dirty: false, native_path: "/tmp/review.sgf" };
+      return authoritative;
     });
     const host = await renderApp();
     await readyEngine(host);
+    await act(async () => {
+      buttonNamed(host, "分析第一子主线").click();
+      await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
+    });
     const editor = host.querySelector('textarea[aria-label="个人评论"]') as HTMLTextAreaElement;
-
     act(() => {
       editor.focus();
-      const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
-      valueSetter?.call(editor, "reviewer note");
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(editor, "reviewer note");
       editor.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => {
       editor.blur();
-      await vi.waitFor(() => expect(backend.projectCurrentGameMainline).toHaveBeenCalledTimes(2));
+      await backend.setCurrentGamePersonalComment.mock.results.at(-1)?.value;
     });
-
+    expect(host.querySelector(".doc-name")?.textContent).toContain("*");
     await act(async () => {
-      buttonNamed(host, "分析当前节点").click();
-      await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
+      (host.querySelector('button[aria-label="保存"]') as HTMLButtonElement).click();
+      await backend.saveCurrentGame.mock.results.at(-1)?.value;
     });
-    expect(backend.startSelectedNodeAnalysis).toHaveBeenLastCalledWith({
-      runId: "run-1",
-      generation: 2,
-      nodePath: { indices: [] },
-      maxVisits: 800
-    });
-
-    await act(async () => {
-      listeners.onJob?.({
-        run_id: "run-1",
-        job_id: "job-comment",
-        lane: "selected_node",
-        mode: "finite",
-        generation: 1,
-        node_path: { indices: [] },
-        outcome: "completed",
-        frame: {
-          job_id: "job-comment",
-          turn: 0,
-          visits: 16,
-          winrate_black: 0.11,
-          score_mean_black: -9,
-          candidates: [{ vertex: { point: { x: 0, y: 0 } }, visits: 16, winrate_black: 0.11, score_mean_black: -9, pv: [] }]
-        }
-      });
-    });
-    expect(host.querySelector(".cand-row")).toBeNull();
-
+    expect(host.querySelector(".doc-name")?.textContent).toBe("review.sgf");
+    const frame = {
+      job_id: "job-wg", turn: 0, visits: 32, winrate_black: 0.71, score_mean_black: 4,
+      candidates: [{ vertex: { point: { x: 2, y: 3 } }, visits: 32, winrate_black: 0.71, score_mean_black: 4, pv: [] }]
+    };
+    authoritative = {
+      ...authoritative, snapshot_seq: 4, dirty: true,
+      snapshot: { ...authoritative.snapshot, primary_analysis: frame }
+    };
     await act(async () => {
       listeners.onJob?.({
-        run_id: "run-1",
-        job_id: "job-comment",
-        lane: "selected_node",
-        mode: "finite",
-        generation: 2,
-        node_path: { indices: [] },
-        outcome: "completed",
-        frame: {
-          job_id: "job-comment",
-          turn: 0,
-          visits: 32,
-          winrate_black: 0.71,
-          score_mean_black: 4,
-          candidates: [{ vertex: { point: { x: 2, y: 3 } }, visits: 32, winrate_black: 0.71, score_mean_black: 4, pv: [] }]
-        }
+        run_id: "run-1", job_id: "job-wg", lane: "whole_game", mode: "finite",
+        generation: 1, node_path: { indices: [] }, outcome: "progress",
+        completed: 1, expected: 2, remaining: 1, frame, current_game: authoritative
       });
-      await backend.classifyProblems.mock.results.at(-1)?.value;
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
     });
-    expect(Array.from(host.querySelectorAll(".cand-coord")).map((node) => node.textContent)).toEqual(["C6"]);
+    expect(editor.value).toBe("reviewer note");
+    expect(host.querySelector(".doc-name")?.textContent).toBe("review.sgf *");
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("32");
+    expect(host.querySelector(".nav-progress")?.textContent).toContain("整局 1/2");
+    expect(buttonNamed(host, "取消整局").disabled).toBe(false);
+    expect(backend.cancelKataGoAnalysis).not.toHaveBeenCalled();
+    expect(backend.startKataGoGameAnalysis).toHaveBeenCalledTimes(1);
   });
 
   it("does not revive analysis presentation from a stale job event", async () => {
@@ -587,6 +570,7 @@ describe("foreground engine lifecycle UI", () => {
               adapter_kind: "kata_go_analysis",
               selected_node_analysis: true,
               whole_game_analysis: true,
+              root_score: true,
               protocol_cancel: true
             }
           }
@@ -1145,23 +1129,19 @@ describe("foreground engine lifecycle UI", () => {
     expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
   });
 
-  it("rejects a second whole-game start as occupied without clearing the first job or blocking selected-node", async () => {
+  it("disables a second whole-game start without clearing the first job or blocking selected-node", async () => {
     const host = await renderApp();
     await readyEngine(host);
     await act(async () => {
       buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value;
     });
-    backend.startKataGoGameAnalysis.mockRejectedValueOnce({
-      operation: "job",
-      kind: "occupied",
-      message: "whole-game analysis is already running on this Foreground Engine Run"
-    });
     await act(async () => {
       buttonNamed(host, "分析第一子主线").click();
       await backend.startKataGoGameAnalysis.mock.results.at(-1)?.value.catch(() => undefined);
     });
-    expect(host.textContent).toContain("whole-game analysis is already running on this Foreground Engine Run");
+    expect(buttonNamed(host, "分析第一子主线").disabled).toBe(true);
+    expect(backend.startKataGoGameAnalysis).toHaveBeenCalledTimes(1);
     await act(async () => {
       buttonNamed(host, "分析当前节点").click();
       await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;

@@ -18,7 +18,10 @@ pub fn classify_problem_markers(frames: &[AnalysisFrameDto]) -> Vec<ProblemMarke
         let previous = &pair[0];
         let current = &pair[1];
         let winrate_loss = (previous.winrate_black - current.winrate_black).abs();
-        let score_loss = (previous.score_mean_black - current.score_mean_black).abs();
+        let score_loss = match (previous.score_mean_black, current.score_mean_black) {
+            (Some(previous), Some(current)) => Some((previous - current).abs()),
+            _ => None,
+        };
         let severity = severity_for(winrate_loss, score_loss);
         if severity != ProblemSeverity::Info {
             markers.push(ProblemMarkerDto {
@@ -33,12 +36,12 @@ pub fn classify_problem_markers(frames: &[AnalysisFrameDto]) -> Vec<ProblemMarke
     markers
 }
 
-pub fn severity_for(winrate_loss: f32, score_loss: f32) -> ProblemSeverity {
-    if winrate_loss >= 0.18 || score_loss >= 12.0 {
+pub fn severity_for(winrate_loss: f32, score_loss: Option<f32>) -> ProblemSeverity {
+    if winrate_loss >= 0.18 || score_loss.is_some_and(|loss| loss >= 12.0) {
         ProblemSeverity::Blunder
-    } else if winrate_loss >= 0.10 || score_loss >= 7.0 {
+    } else if winrate_loss >= 0.10 || score_loss.is_some_and(|loss| loss >= 7.0) {
         ProblemSeverity::Mistake
-    } else if winrate_loss >= 0.05 || score_loss >= 3.0 {
+    } else if winrate_loss >= 0.05 || score_loss.is_some_and(|loss| loss >= 3.0) {
         ProblemSeverity::Inaccuracy
     } else {
         ProblemSeverity::Info
@@ -66,7 +69,7 @@ mod tests {
             turn: t,
             visits: 100,
             winrate_black: w,
-            score_mean_black: s,
+            score_mean_black: Some(s),
             score_stdev: None,
             candidates: vec![],
             ownership: None,

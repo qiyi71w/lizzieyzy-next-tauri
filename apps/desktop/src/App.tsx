@@ -9,9 +9,12 @@ import { ShortcutReference } from "./components/ShortcutReference";
 import { DocumentDepartureDialog } from "./components/DocumentDepartureDialog";
 import { ApplicationTeardownDialog } from "./components/ApplicationTeardownDialog";
 import { CurrentGameRecoveryDialog } from "./components/CurrentGameRecoveryDialog";
+import { AnalysisTaskPanel, type AnalysisScopeDraft } from "./components/AnalysisTaskPanel";
 import { ProviderPanel } from "./components/ProviderPanel";
 import {
+  analysisTaskSnapshot,
   cancelKataGoAnalysis,
+  continueAnalysisTask,
   cancelSelectedNodeAnalysis,
   classifyProblems,
   fakeAnalyze,
@@ -25,6 +28,8 @@ import {
   playCurrentGame,
   prepareApplicationExit,
   prepareDocumentReplacement,
+  pauseAnalysisTask,
+  previewAnalysisScope,
   projectCurrentGameMainline,
   replaySgfPositions,
   resolveApplicationExit,
@@ -43,6 +48,7 @@ import {
   selectCurrentGameNode,
   setCurrentGamePersonalComment,
   removeCurrentGameVariation,
+  startAnalysisTask,
   startKataGoGameAnalysis,
   startSelectedNodeAnalysis,
   subscribeForegroundEngine,
@@ -64,7 +70,7 @@ import {
 } from "./domain/foregroundEngine";
 import { loadAppPreferences, saveAppPreferences } from "./api/preferences";
 import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition } from "./domain/board";
-import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, type AppPreferences } from "./domain/preferences";
+import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "./domain/preferences";
 import { buildNextMoveReviewMarkers, cycleNextMoveReviewMarker } from "./domain/nextMoveReviewMarker";
 import { admitsChartSeriesChange, buildWinrateChartModel, displayedWinrate } from "./domain/winrateChart";
 import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
@@ -85,15 +91,52 @@ import {
   variationReplayIdentityKey,
   variationReplayPointSteps
 } from "./domain/variationReplay";
-import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, SgfTreeNodeDto } from "./domain/types";
+import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, AnalysisTaskStrategyDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, SgfTreeNodeDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
 const demoGame = createDemoGame();
 const emptyChartRoot: SgfTreeNodeDto = { properties: [], children: [] };
 type WholeGameProgress = { completed: number; expected: number; remaining: number };
-type PendingPreferencesSave = { version: number; preferences: AppPreferences; patch: Partial<AppPreferences> };
+type PendingPreferencesSave = {
+  version: number;
+  preferences: AppPreferences;
+  patch: Partial<AppPreferences>;
+  onSaved?: (preferences: AppPreferences) => void;
+  onFailed?: (error: unknown) => void;
+};
 type CandidatePreview = { index: number; scope: ReviewPresentationScope };
+const defaultAnalysisScopeDraft: AnalysisScopeDraft = {
+  strategy: "all_positions_two_stage",
+  mode: "first_child_mainline",
+  intervalEnabled: false,
+  intervalStart: "0",
+  intervalEnd: "0",
+  toPlay: "both",
+  moveActors: defaultAppPreferences.taskSwingCriteria.move_actors,
+  winrateChangeEnabled: defaultAppPreferences.taskSwingCriteria.winrate_change_percentage_points.enabled,
+  winrateChangeThreshold: String(defaultAppPreferences.taskSwingCriteria.winrate_change_percentage_points.value),
+  scoreChangeEnabled: defaultAppPreferences.taskSwingCriteria.score_change_points.enabled,
+  scoreChangeThreshold: String(defaultAppPreferences.taskSwingCriteria.score_change_points.value),
+  overviewTimeEnabled: defaultAppPreferences.taskOverviewConditions.time_seconds.enabled,
+  overviewTimeSeconds: String(defaultAppPreferences.taskOverviewConditions.time_seconds.value),
+  overviewTotalVisitsEnabled: defaultAppPreferences.taskOverviewConditions.total_visits.enabled,
+  overviewTotalVisits: String(defaultAppPreferences.taskOverviewConditions.total_visits.value),
+  overviewLeadingCandidateVisitsEnabled: defaultAppPreferences.taskOverviewConditions.leading_candidate_visits.enabled,
+  overviewLeadingCandidateVisits: String(defaultAppPreferences.taskOverviewConditions.leading_candidate_visits.value),
+  singleTimeEnabled: defaultAppPreferences.taskSingleStageConditions.time_seconds.enabled,
+  singleTimeSeconds: String(defaultAppPreferences.taskSingleStageConditions.time_seconds.value),
+  singleTotalVisitsEnabled: defaultAppPreferences.taskSingleStageConditions.total_visits.enabled,
+  singleTotalVisits: String(defaultAppPreferences.taskSingleStageConditions.total_visits.value),
+  singleLeadingCandidateVisitsEnabled: defaultAppPreferences.taskSingleStageConditions.leading_candidate_visits.enabled,
+  singleLeadingCandidateVisits: String(defaultAppPreferences.taskSingleStageConditions.leading_candidate_visits.value),
+  timeEnabled: defaultAppPreferences.taskDeepConditions.time_seconds.enabled,
+  timeSeconds: String(defaultAppPreferences.taskDeepConditions.time_seconds.value),
+  totalVisitsEnabled: defaultAppPreferences.taskDeepConditions.total_visits.enabled,
+  totalVisits: String(defaultAppPreferences.taskDeepConditions.total_visits.value),
+  leadingCandidateVisitsEnabled: defaultAppPreferences.taskDeepConditions.leading_candidate_visits.enabled,
+  leadingCandidateVisits: String(defaultAppPreferences.taskDeepConditions.leading_candidate_visits.value)
+};
 
 
 export function App() {
@@ -112,6 +155,11 @@ export function App() {
   const [selectedNodeRunning, setSelectedNodeRunning] = useState(false);
   const [wholeGameRunning, setWholeGameRunning] = useState(false);
   const [wholeGameProgress, setWholeGameProgress] = useState<WholeGameProgress | null>(null);
+  const [analysisScopeDraft, setAnalysisScopeDraft] = useState<AnalysisScopeDraft>(defaultAnalysisScopeDraft);
+  const [analysisScopePreview, setAnalysisScopePreview] = useState<AnalysisScopePreviewDto | null>(null);
+  const [analysisTask, setAnalysisTask] = useState<AnalysisTaskDto | null>(null);
+  const [analysisTaskError, setAnalysisTaskError] = useState<string | null>(null);
+  const [analysisTaskRequestPending, setAnalysisTaskRequestPending] = useState(false);
   const [selectedCandidateIndex, setSelectedCandidateIndex] = useState<number | null>(null);
   const [candidatePreview, setCandidatePreview] = useState<CandidatePreview | null>(null);
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
@@ -187,6 +235,12 @@ export function App() {
   const wholeGameResultsRef = useRef<Map<string, AnalysisFrameDto>>(new Map());
   const handleSelectedNodeJobRef = useRef<(job: AnalysisJobEventDto) => void>(() => undefined);
   const handleWholeGameJobRef = useRef<(job: AnalysisJobEventDto) => void>(() => undefined);
+  const analysisTaskRef = useRef<AnalysisTaskDto | null>(null);
+  const analysisTaskSnapshotRequestRef = useRef(0);
+  const analysisScopePreviewRequestRef = useRef(0);
+  const analysisTaskActionInFlightRef = useRef(false);
+  const analysisTaskPauseFenceRef = useRef<{ taskId: string; jobId: string; continued: boolean } | null>(null);
+  const analysisConditionsDraftEditedRef = useRef(false);
 
   useEffect(() => {
     getHealth()
@@ -432,6 +486,12 @@ export function App() {
     shortcutRegistry.bind("analysis.continuous", () => {
       void handleContinuousAnalysisAction();
     });
+    shortcutRegistry.bind("analysis.quick", () => {
+      void handleQuickAnalysisTask();
+    });
+    shortcutRegistry.bind("analysis.all-positions", () => {
+      void handleAllPositionsAnalysisTask();
+    });
     shortcutRegistry.bind("file.open", () => {
       if (openEnabled) void handleOpenSgfDocument();
     });
@@ -618,9 +678,21 @@ export function App() {
         if (snapshot.selected_node_job?.mode === "continuous") {
           adoptAutomaticJobToken(snapshot.selected_node_job);
         }
-        wholeGameJobRef.current = snapshot.whole_game_job ?? null;
-        setWholeGameRunning(snapshot.whole_game_job?.state === "queued" || snapshot.whole_game_job?.state === "searching" || snapshot.whole_game_job?.state === "stopping");
-        if (!snapshot.whole_game_job) setWholeGameProgress(null);
+        const snapshotWholeGameJob = snapshot.whole_game_job ?? null;
+        const taskReserved = isAnalysisTaskReserved(analysisTaskRef.current);
+        const pauseFence = analysisTaskPauseFenceRef.current;
+        const fencedJob = snapshotWholeGameJob != null
+          && pauseFence != null && pauseFence.taskId === analysisTaskRef.current?.task_id
+          && pauseFence.jobId === snapshotWholeGameJob.job_id;
+        if (!fencedJob && (snapshotWholeGameJob || !taskReserved)) {
+          wholeGameJobRef.current = snapshotWholeGameJob;
+        }
+        const snapshotWholeGameActive = snapshotWholeGameJob?.state === "queued"
+          || snapshotWholeGameJob?.state === "searching"
+          || snapshotWholeGameJob?.state === "stopping";
+        setWholeGameRunning(taskReserved || (!fencedJob && snapshotWholeGameActive));
+        if (!snapshotWholeGameJob && !taskReserved) setWholeGameProgress(null);
+        void refreshAnalysisTaskSnapshot();
       },
       (failure) => {
         if (cancelled) return;
@@ -638,6 +710,7 @@ export function App() {
         if (cancelled) return;
         if (job.lane === "whole_game") handleWholeGameJobRef.current(job);
         else handleSelectedNodeJobRef.current(job);
+        void refreshAnalysisTaskSnapshot();
       }
     );
     return () => {
@@ -645,6 +718,7 @@ export function App() {
       void unlistenPromise.then((unlisten) => unlisten());
     };
   }, []);
+
 
   function handleEngineCommand(kind: "once" | "game") {
     const run = runFromSnapshot(engineSnapshot);
@@ -698,6 +772,34 @@ export function App() {
     setPreferencesLoaded(true);
     committedPreferencesRef.current = loaded;
     setPreferences(loaded);
+    if (!analysisConditionsDraftEditedRef.current) {
+      setAnalysisScopeDraft((current) => ({
+        ...current,
+        overviewTimeEnabled: loaded.taskOverviewConditions.time_seconds.enabled,
+        overviewTimeSeconds: String(loaded.taskOverviewConditions.time_seconds.value),
+        overviewTotalVisitsEnabled: loaded.taskOverviewConditions.total_visits.enabled,
+        overviewTotalVisits: String(loaded.taskOverviewConditions.total_visits.value),
+        overviewLeadingCandidateVisitsEnabled: loaded.taskOverviewConditions.leading_candidate_visits.enabled,
+        overviewLeadingCandidateVisits: String(loaded.taskOverviewConditions.leading_candidate_visits.value),
+        singleTimeEnabled: loaded.taskSingleStageConditions.time_seconds.enabled,
+        singleTimeSeconds: String(loaded.taskSingleStageConditions.time_seconds.value),
+        singleTotalVisitsEnabled: loaded.taskSingleStageConditions.total_visits.enabled,
+        singleTotalVisits: String(loaded.taskSingleStageConditions.total_visits.value),
+        singleLeadingCandidateVisitsEnabled: loaded.taskSingleStageConditions.leading_candidate_visits.enabled,
+        singleLeadingCandidateVisits: String(loaded.taskSingleStageConditions.leading_candidate_visits.value),
+        timeEnabled: loaded.taskDeepConditions.time_seconds.enabled,
+        timeSeconds: String(loaded.taskDeepConditions.time_seconds.value),
+        totalVisitsEnabled: loaded.taskDeepConditions.total_visits.enabled,
+        totalVisits: String(loaded.taskDeepConditions.total_visits.value),
+        leadingCandidateVisitsEnabled: loaded.taskDeepConditions.leading_candidate_visits.enabled,
+        leadingCandidateVisits: String(loaded.taskDeepConditions.leading_candidate_visits.value),
+        moveActors: loaded.taskSwingCriteria.move_actors,
+        winrateChangeEnabled: loaded.taskSwingCriteria.winrate_change_percentage_points.enabled,
+        winrateChangeThreshold: String(loaded.taskSwingCriteria.winrate_change_percentage_points.value),
+        scoreChangeEnabled: loaded.taskSwingCriteria.score_change_points.enabled,
+        scoreChangeThreshold: String(loaded.taskSwingCriteria.score_change_points.value),
+      }));
+    }
     setPreferencesStatus(status);
   }
 
@@ -711,6 +813,7 @@ export function App() {
     preferencesSaveVersionRef.current = pendingPreferencesSaveRef.current.version;
     setPreferencesStatus("Saving preferences...");
     void runPreferencesSaveLoop();
+    return pendingPreferencesSaveRef.current;
   }
 
   async function runPreferencesSaveLoop() {
@@ -723,6 +826,7 @@ export function App() {
           const saved = await saveAppPreferences(pending.preferences);
           committedPreferencesRef.current = saved;
           setPreferences(saved);
+          pending.onSaved?.(saved);
           if (pendingPreferencesSaveRef.current?.version === pending.version) {
             pendingPreferencesSaveRef.current = null;
             setPreferencesStatus("Preferences saved.");
@@ -730,11 +834,24 @@ export function App() {
             setPreferencesStatus("Saving preferences...");
           }
         } catch (error) {
-          if (pendingPreferencesSaveRef.current?.version === pending.version) {
+          pending.onFailed?.(error);
+          const queued = pendingPreferencesSaveRef.current;
+          if (queued?.version === pending.version) {
             pendingPreferencesSaveRef.current = null;
             setPreferencesStatus(`Save failed: ${errorMessage(error)}`);
-          } else {
-            setPreferencesStatus("Saving preferences...");
+          } else if (queued) {
+            for (const key of Object.keys(pending.patch) as Array<keyof AppPreferences>) {
+              if (JSON.stringify(queued.patch[key]) === JSON.stringify(pending.patch[key])) {
+                delete queued.patch[key];
+              }
+            }
+            if (Object.keys(queued.patch).length === 0) {
+              pendingPreferencesSaveRef.current = null;
+              setPreferencesStatus(`Save failed: ${errorMessage(error)}`);
+            } else {
+              queued.preferences = applyPreferencePatches(committedPreferencesRef.current, [queued.patch]);
+              setPreferencesStatus("Saving preferences...");
+            }
           }
         }
       }
@@ -744,6 +861,11 @@ export function App() {
   }
 
 
+
+  function isCurrentGameSnapshot(result: CurrentGameResultDto): boolean {
+    const current = currentGameRef.current;
+    return current !== null && result.generation === current.generation && result.snapshot_seq >= current.snapshot_seq;
+  }
 
   function adoptCurrentGame(result: CurrentGameResultDto) {
     documentGenerationRef.current = result.generation;
@@ -756,10 +878,14 @@ export function App() {
 
   async function refreshCurrentGameAfterAttach() {
     const game = currentGameRef.current;
-    if (!nativeRuntime || !game) return;
+    if (!nativeRuntime || !game || departurePendingRef.current || navigatingRef.current) return;
+    const requestToken = activeRequestTokenRef.current;
     try {
       const refreshed = await selectCurrentGameNode(game.selected_path);
-      if (!refreshed || !isCurrentDocumentGeneration(refreshed.generation)) return;
+      if (!refreshed || departurePendingRef.current || navigatingRef.current
+        || requestToken !== activeRequestTokenRef.current
+        || !samePath(game.selected_path, currentGameRef.current?.selected_path ?? { indices: [] })
+        || !isCurrentGameSnapshot(refreshed)) return;
       adoptCurrentGame(refreshed);
       setDirty(refreshed.dirty);
     } catch {
@@ -835,7 +961,7 @@ export function App() {
   }
   function presentCurrentGameAnalysis(result: CurrentGameResultDto) {
     const frame = result.snapshot.primary_analysis;
-    if (!frame || frame.visits === 0 || frame.candidates.length === 0) return;
+    if (!frame || frame.visits === 0) return;
     const captured: ReviewPresentationScope = {
       generation: result.generation,
       selectedPath: [...result.selected_path.indices],
@@ -994,6 +1120,12 @@ export function App() {
     selectedNodeJobRef.current = null;
     setSelectedNodeRunning(false);
     resetWholeGameSession();
+    analysisTaskRef.current = null;
+    analysisTaskPauseFenceRef.current = null;
+    ++analysisTaskSnapshotRequestRef.current;
+    setAnalysisTask(null);
+    setAnalysisScopePreview(null);
+    setAnalysisTaskError(null);
   }
 
   async function adoptCommittedReplacement(
@@ -1212,6 +1344,7 @@ export function App() {
         setMessage("Save cancelled.");
         return;
       }
+      if (!isCurrentGameSnapshot(saved)) return;
       adoptCurrentGame(saved);
       setCurrentFilePath(saved.native_path ?? null);
       setDirty(saved.dirty);
@@ -1304,9 +1437,9 @@ export function App() {
     if (!(["queued", "searching", "time_limited", "visits_limited"] as ContinuousAnalysisPhaseDto[]).includes(engineSnapshotRef.current.continuous.phase)) return;
     if (departurePendingRef.current || navigatingRef.current) return;
     const refreshed = job.current_game;
-    if (!refreshed || !isCurrentDocumentGeneration(refreshed.generation) || !samePath(refreshed.selected_path, job.node_path)) return;
+    if (!refreshed || !isCurrentGameSnapshot(refreshed) || !samePath(refreshed.selected_path, job.node_path)) return;
     const frame = refreshed.snapshot.primary_analysis;
-    if (!frame || frame.visits === 0 || frame.candidates.length === 0) return;
+    if (!frame || frame.visits === 0) return;
     adoptCurrentGame(refreshed);
     setDirty(refreshed.dirty);
     const captured: ReviewPresentationScope = {
@@ -1482,6 +1615,400 @@ export function App() {
   }
 
 
+  function analysisScopeFromDraft(draft: AnalysisScopeDraft): AnalysisScopeDto {
+    const game = currentGameRef.current;
+    if (!game) throw new Error("Analysis scope requires a current game.");
+    const interval = draft.intervalEnabled
+      ? {
+          start: parseU32(draft.intervalStart, "Interval start", true),
+          end: parseU32(draft.intervalEnd, "Interval end", true)
+        }
+      : null;
+    if (interval && interval.start > interval.end) {
+      throw new Error("Interval start must not exceed interval end.");
+    }
+    return {
+      mode: draft.mode,
+      current_node: game.selected_path,
+      branch_choices: analysisBranchChoices(chosenChildren),
+      interval,
+      to_play: draft.toPlay === "both" ? null : draft.toPlay
+    };
+  }
+
+  function handleAnalysisScopeDraftChange(incoming: AnalysisScopeDraft) {
+    const current = analysisScopeDraft;
+    let next = incoming;
+    if (incoming.strategy !== current.strategy && incoming.strategy !== "single_stage") {
+      const swing = incoming.strategy === "swing_selected_two_stage";
+      next = {
+        ...incoming,
+        ...analysisTaskStageDraft(
+          swing
+            ? committedPreferencesRef.current.taskSwingOverviewConditions
+            : committedPreferencesRef.current.taskOverviewConditions,
+          swing
+            ? committedPreferencesRef.current.taskSwingDeepConditions
+            : committedPreferencesRef.current.taskDeepConditions
+        ),
+        ...(swing ? swingCriteriaDraft(committedPreferencesRef.current.taskSwingCriteria) : {})
+      };
+    }
+    const conditionsChanged = next.overviewTimeEnabled !== current.overviewTimeEnabled
+      || next.overviewTimeSeconds !== current.overviewTimeSeconds
+      || next.overviewTotalVisitsEnabled !== current.overviewTotalVisitsEnabled
+      || next.overviewTotalVisits !== current.overviewTotalVisits
+      || next.overviewLeadingCandidateVisitsEnabled !== current.overviewLeadingCandidateVisitsEnabled
+      || next.overviewLeadingCandidateVisits !== current.overviewLeadingCandidateVisits
+      || next.singleTimeEnabled !== current.singleTimeEnabled
+      || next.singleTimeSeconds !== current.singleTimeSeconds
+      || next.singleTotalVisitsEnabled !== current.singleTotalVisitsEnabled
+      || next.singleTotalVisits !== current.singleTotalVisits
+      || next.singleLeadingCandidateVisitsEnabled !== current.singleLeadingCandidateVisitsEnabled
+      || next.singleLeadingCandidateVisits !== current.singleLeadingCandidateVisits
+      || next.timeEnabled !== current.timeEnabled
+      || next.timeSeconds !== current.timeSeconds
+      || next.totalVisitsEnabled !== current.totalVisitsEnabled
+      || next.totalVisits !== current.totalVisits
+      || next.leadingCandidateVisitsEnabled !== current.leadingCandidateVisitsEnabled
+      || next.leadingCandidateVisits !== current.leadingCandidateVisits
+      || next.moveActors !== current.moveActors
+      || next.winrateChangeEnabled !== current.winrateChangeEnabled
+      || next.winrateChangeThreshold !== current.winrateChangeThreshold
+      || next.scoreChangeEnabled !== current.scoreChangeEnabled
+      || next.scoreChangeThreshold !== current.scoreChangeThreshold;
+    if (conditionsChanged) analysisConditionsDraftEditedRef.current = true;
+    const scopeChanged = next.strategy !== current.strategy
+      || next.mode !== current.mode
+      || next.intervalEnabled !== current.intervalEnabled
+      || next.intervalStart !== current.intervalStart
+      || next.intervalEnd !== current.intervalEnd
+      || next.toPlay !== current.toPlay
+      || next.moveActors !== current.moveActors
+      || next.winrateChangeEnabled !== current.winrateChangeEnabled
+      || next.winrateChangeThreshold !== current.winrateChangeThreshold
+      || next.scoreChangeEnabled !== current.scoreChangeEnabled
+      || next.scoreChangeThreshold !== current.scoreChangeThreshold;
+    setAnalysisScopeDraft(next);
+    if (scopeChanged) {
+      ++analysisScopePreviewRequestRef.current;
+      setAnalysisScopePreview(null);
+    }
+    setAnalysisTaskError(null);
+  }
+
+  async function handlePreviewAnalysisScope() {
+    const game = currentGameRef.current;
+    if (!nativeRuntime || !game) {
+      setAnalysisTaskError(nativeRuntime ? "Analysis preview requires a current game." : nativeCurrentGameUnavailable);
+      return;
+    }
+    const request = ++analysisScopePreviewRequestRef.current;
+    const draft = analysisScopeDraft;
+    setAnalysisTaskRequestPending(true);
+    setAnalysisTaskError(null);
+    try {
+      const swingCriteria = draft.strategy === "swing_selected_two_stage"
+        ? swingCriteriaFromDraft(draft)
+        : null;
+      const criteriaError = swingCriteria ? swingCriteriaError(swingCriteria) : null;
+      if (criteriaError) throw new Error(criteriaError);
+      const preview = await previewAnalysisScope({
+        generation: game.generation,
+        scope: analysisScopeFromDraft(draft),
+        swingCriteria
+      });
+      if (request === analysisScopePreviewRequestRef.current) setAnalysisScopePreview(preview);
+    } catch (error) {
+      if (request === analysisScopePreviewRequestRef.current) setAnalysisTaskError(errorMessage(error));
+    } finally {
+      setAnalysisTaskRequestPending(false);
+    }
+  }
+
+  function adoptAnalysisTask(next: AnalysisTaskDto | null) {
+    const fence = analysisTaskPauseFenceRef.current;
+    if (fence && !next) return;
+    if (fence && next?.task_id === fence.taskId && next.job_id === fence.jobId) {
+      if (fence.continued || next.state === "queued" || next.state === "searching") return;
+    }
+    if (fence && next) {
+      if (next.task_id === fence.taskId && next.job_id !== fence.jobId && isAnalysisTaskReserved(next)) {
+        fence.continued = true;
+      } else if (next.task_id !== fence.taskId || !isAnalysisTaskReserved(next)) {
+        analysisTaskPauseFenceRef.current = null;
+      }
+    }
+    analysisTaskRef.current = next;
+    setAnalysisTask(next);
+    if (!next) return;
+    const acceptsJobEvents = next.state === "queued" || next.state === "searching";
+    setWholeGameRunning(isAnalysisTaskReserved(next));
+    const stageCompleted = next.stage === "overview" ? next.overview_completed.length : next.completed.length;
+    const expected = next.stage === "overview"
+      ? next.requested.length + next.supporting.length
+      : next.selected_for_deep?.length ?? next.requested.length;
+    setWholeGameProgress({
+      completed: stageCompleted,
+      expected,
+      remaining: Math.max(0, expected - stageCompleted)
+    });
+    wholeGameJobRef.current = acceptsJobEvents ? {
+      run_id: next.run_id,
+      job_id: next.job_id,
+      lane: "whole_game",
+      mode: "finite",
+      state: next.state === "searching" ? "searching" : "queued",
+      generation: next.generation,
+      node_path: next.requested[0] ?? { indices: [] }
+    } : null;
+  }
+
+  async function refreshAnalysisTaskSnapshot(force = false) {
+    if (!nativeRuntime || (analysisTaskActionInFlightRef.current && !force)) return analysisTaskRef.current;
+    const request = ++analysisTaskSnapshotRequestRef.current;
+    try {
+      const next = await analysisTaskSnapshot();
+      if (request === analysisTaskSnapshotRequestRef.current) adoptAnalysisTask(next);
+      return next;
+    } catch {
+      return null;
+    }
+  }
+
+  async function runAnalysisTask(input: {
+    runId: string;
+    scope: AnalysisScopeDto;
+    strategy: AnalysisTaskStrategyDto;
+    conditions: AnalysisStageConditionsDto;
+    overviewConditions?: AnalysisStageConditionsDto | null;
+    swingCriteria?: AnalysisSwingCriteriaDto | null;
+    preview?: AnalysisScopePreviewDto | null;
+    persistConditions?: boolean;
+  }) {
+    const game = currentGameRef.current;
+    if (!nativeRuntime || !game) throw new Error("Analysis task requires a current game.");
+    if (isAnalysisTaskReserved(analysisTaskRef.current)) {
+      throw new Error("An analysis task is already active.");
+    }
+    const conditionsError = input.strategy === "all_positions_two_stage" && input.overviewConditions
+      ? taskStageConditionsError(input.overviewConditions, input.conditions)
+      : input.strategy === "swing_selected_two_stage" && input.overviewConditions && input.swingCriteria
+        ? taskConditionsError(input.overviewConditions)
+          ?? taskConditionsError(input.conditions)
+          ?? swingCriteriaError(input.swingCriteria)
+        : taskConditionsError(input.conditions);
+    if (conditionsError) throw new Error(conditionsError);
+    if (input.strategy !== "single_stage" && !input.overviewConditions) {
+      throw new Error("Two-stage analysis requires overview conditions.");
+    }
+    if (input.strategy === "swing_selected_two_stage" && !input.swingCriteria) {
+      throw new Error("Swing-selected analysis requires swing criteria.");
+    }
+    const preview = input.preview ?? await previewAnalysisScope({
+      generation: game.generation,
+      scope: input.scope,
+      swingCriteria: input.swingCriteria
+    });
+    if (preview.generation !== game.generation
+      || JSON.stringify(preview.scope) !== JSON.stringify(input.scope)
+      || JSON.stringify(preview.swing_criteria ?? null) !== JSON.stringify(input.swingCriteria ?? null)) {
+      throw new Error("The scope preview is no longer current. Preview again before starting.");
+    }
+    if (input.persistConditions) {
+      const changed = input.strategy === "all_positions_two_stage"
+        ? JSON.stringify(input.overviewConditions) !== JSON.stringify(committedPreferencesRef.current.taskOverviewConditions)
+          || JSON.stringify(input.conditions) !== JSON.stringify(committedPreferencesRef.current.taskDeepConditions)
+        : input.strategy === "swing_selected_two_stage"
+          ? JSON.stringify(input.overviewConditions) !== JSON.stringify(committedPreferencesRef.current.taskSwingOverviewConditions)
+            || JSON.stringify(input.conditions) !== JSON.stringify(committedPreferencesRef.current.taskSwingDeepConditions)
+            || JSON.stringify(input.swingCriteria) !== JSON.stringify(committedPreferencesRef.current.taskSwingCriteria)
+          : JSON.stringify(input.conditions) !== JSON.stringify(committedPreferencesRef.current.taskSingleStageConditions);
+      if (changed) {
+        if (preferencesSaveInFlightRef.current || pendingPreferencesSaveRef.current || continuousActionInFlightRef.current) {
+          throw new Error("Wait for the current preference save before starting.");
+        }
+        const patch: Partial<AppPreferences> = input.strategy === "all_positions_two_stage"
+          ? {
+              taskOverviewConditions: input.overviewConditions!,
+              taskDeepConditions: input.conditions
+            }
+          : input.strategy === "swing_selected_two_stage"
+            ? {
+                taskSwingOverviewConditions: input.overviewConditions!,
+                taskSwingDeepConditions: input.conditions,
+                taskSwingCriteria: input.swingCriteria!
+              }
+            : { taskSingleStageConditions: input.conditions };
+        await new Promise<AppPreferences>((resolve, reject) => {
+          const pending = queuePreferencesSave(committedPreferencesRef.current, patch);
+          pending.onSaved = resolve;
+          pending.onFailed = reject;
+        });
+      }
+    }
+    const started = await startAnalysisTask({
+      runId: input.runId,
+      preview,
+      strategy: input.strategy,
+      conditions: input.conditions,
+      overviewConditions: input.overviewConditions
+    });
+    ++analysisTaskSnapshotRequestRef.current;
+    setAnalysisScopePreview(preview);
+    adoptAnalysisTask(started);
+    setMessage(`Analysis task ${started.state}: ${analysisTaskProgress(started)} completed.`);
+    void refreshAnalysisTaskSnapshot();
+  }
+
+  async function handleStartAnalysisTask() {
+    const run = runFromSnapshot(engineSnapshotRef.current);
+    if (!run || !analysisScopePreview) return;
+    setAnalysisTaskRequestPending(true);
+    setAnalysisTaskError(null);
+    try {
+      const scope = analysisScopeFromDraft(analysisScopeDraft);
+      const conditions = taskConditionsFromDraft(
+        analysisScopeDraft,
+        analysisScopeDraft.strategy === "single_stage" ? "single" : "deep"
+      );
+      const overviewConditions = analysisScopeDraft.strategy !== "single_stage"
+        ? taskConditionsFromDraft(analysisScopeDraft, "overview")
+        : null;
+      const swingCriteria = analysisScopeDraft.strategy === "swing_selected_two_stage"
+        ? swingCriteriaFromDraft(analysisScopeDraft)
+        : null;
+      await runAnalysisTask({
+        runId: run.run_id,
+        scope,
+        strategy: analysisScopeDraft.strategy,
+        conditions,
+        overviewConditions,
+        swingCriteria,
+        preview: analysisScopePreview,
+        persistConditions: true
+      });
+    } catch (error) {
+      const detail = errorMessage(error);
+      setAnalysisTaskError(detail);
+      setMessage(detail);
+    } finally {
+      setAnalysisTaskRequestPending(false);
+    }
+  }
+
+  async function handleQuickAnalysisTask() {
+    const run = runFromSnapshot(engineSnapshotRef.current);
+    const game = currentGameRef.current;
+    if (!run || !game || !admitsForegroundEngineJobs(engineSnapshotRef.current) || departurePendingRef.current || isAnalysisTaskReserved(analysisTaskRef.current)) return;
+    setAnalysisTaskRequestPending(true);
+    setAnalysisTaskError(null);
+    try {
+      await runAnalysisTask({
+        runId: run.run_id,
+        scope: presetAnalysisScope(game.selected_path, chosenChildren),
+        strategy: "single_stage",
+        conditions: {
+          time_seconds: { enabled: false, value: 10 },
+          total_visits: { enabled: true, value: 1 },
+          leading_candidate_visits: { enabled: false, value: 500 }
+        }
+      });
+    } catch (error) {
+      const detail = errorMessage(error);
+      setAnalysisTaskError(detail);
+      setMessage(detail);
+    } finally {
+      setAnalysisTaskRequestPending(false);
+    }
+  }
+
+  async function handleAllPositionsAnalysisTask() {
+    const run = runFromSnapshot(engineSnapshotRef.current);
+    const game = currentGameRef.current;
+    if (!run || !game || !admitsForegroundEngineJobs(engineSnapshotRef.current) || departurePendingRef.current || isAnalysisTaskReserved(analysisTaskRef.current)) return;
+    setAnalysisTaskRequestPending(true);
+    setAnalysisTaskError(null);
+    try {
+      await runAnalysisTask({
+        runId: run.run_id,
+        scope: presetAnalysisScope(game.selected_path, chosenChildren),
+        strategy: "all_positions_two_stage",
+        overviewConditions: committedPreferencesRef.current.taskOverviewConditions,
+        conditions: committedPreferencesRef.current.taskDeepConditions
+      });
+    } catch (error) {
+      const detail = errorMessage(error);
+      setAnalysisTaskError(detail);
+      setMessage(detail);
+    } finally {
+      setAnalysisTaskRequestPending(false);
+    }
+  }
+
+  async function handlePauseAnalysisTask() {
+    const task = analysisTaskRef.current;
+    const run = runFromSnapshot(engineSnapshotRef.current);
+    if (analysisTaskActionInFlightRef.current
+      || !task
+      || (task.state !== "queued" && task.state !== "searching")
+      || !run
+      || run.run_id !== task.run_id
+      || !admitsForegroundEngineJobs(engineSnapshotRef.current)
+      || departurePendingRef.current
+      || departurePrompt) return;
+    analysisTaskActionInFlightRef.current = true;
+    setAnalysisTaskRequestPending(true);
+    setAnalysisTaskError(null);
+    ++analysisTaskSnapshotRequestRef.current;
+    analysisTaskPauseFenceRef.current = { taskId: task.task_id, jobId: task.job_id, continued: false };
+    wholeGameJobRef.current = null;
+    try {
+      const paused = await pauseAnalysisTask({ runId: task.run_id, taskId: task.task_id });
+      adoptAnalysisTask(paused);
+      setMessage(`Analysis task ${paused.state}: ${analysisTaskProgress(paused)} completed.`);
+    } catch (error) {
+      analysisTaskPauseFenceRef.current = null;
+      adoptAnalysisTask(task);
+      const detail = errorMessage(error);
+      setAnalysisTaskError(detail);
+      setMessage(`Pause failed: ${detail}`);
+    } finally {
+      analysisTaskActionInFlightRef.current = false;
+      setAnalysisTaskRequestPending(false);
+    }
+    void refreshAnalysisTaskSnapshot();
+  }
+
+  async function handleContinueAnalysisTask() {
+    const task = analysisTaskRef.current;
+    const run = runFromSnapshot(engineSnapshotRef.current);
+    if (analysisTaskActionInFlightRef.current
+      || task?.state !== "paused"
+      || !run
+      || run.run_id !== task.run_id
+      || !admitsForegroundEngineJobs(engineSnapshotRef.current)
+      || departurePendingRef.current
+      || departurePrompt) return;
+    analysisTaskActionInFlightRef.current = true;
+    setAnalysisTaskRequestPending(true);
+    setAnalysisTaskError(null);
+    ++analysisTaskSnapshotRequestRef.current;
+    try {
+      const continued = await continueAnalysisTask({ runId: task.run_id, taskId: task.task_id });
+      adoptAnalysisTask(continued);
+      setMessage(`Analysis task ${continued.state}: ${analysisTaskProgress(continued)} completed.`);
+    } catch (error) {
+      const detail = errorMessage(error);
+      setAnalysisTaskError(detail);
+      setMessage(`Continue failed: ${detail}`);
+    } finally {
+      analysisTaskActionInFlightRef.current = false;
+      setAnalysisTaskRequestPending(false);
+    }
+    void refreshAnalysisTaskSnapshot();
+  }
+
   handleWholeGameJobRef.current = (job: AnalysisJobEventDto) => {
     const pending = wholeGameJobRef.current;
     if (!matchesWholeGameJobIdentity(pending, job)) return;
@@ -1513,6 +2040,7 @@ export function App() {
 
   async function handleAnalyzeKataGoGame(runId: string, maxVisits: number) {
     const game = currentGameRef.current;
+    if (isAnalysisTaskReserved(analysisTaskRef.current)) return;
     if (!nativeRuntime || !game) {
       setMessage(nativeRuntime ? "整局分析需要当前游戏。" : nativeCurrentGameUnavailable);
       return;
@@ -1528,6 +2056,7 @@ export function App() {
       setWholeGameRunning(true);
       setWholeGameProgress(null);
       setMessage(`Full-game KataGo analysis started (${started.job_id}).`);
+      void refreshAnalysisTaskSnapshot();
     } catch (error) {
       setMessage(errorMessage(error));
     }
@@ -1549,13 +2078,25 @@ export function App() {
   }
 
   async function handleCancelWholeGameAnalysis() {
+    if (analysisTaskActionInFlightRef.current) return;
+    const task = analysisTaskRef.current;
     const pending = wholeGameJobRef.current;
-    if (!pending) return;
+    const activeTask = isAnalysisTaskReserved(task) ? task : null;
+    const runId = pending?.run_id ?? activeTask?.run_id;
+    const jobId = pending?.job_id ?? activeTask?.job_id;
+    if (!runId || !jobId) return;
+    analysisTaskActionInFlightRef.current = true;
+    setAnalysisTaskRequestPending(true);
+    ++analysisTaskSnapshotRequestRef.current;
     try {
-      setMessage("Cancelling full-game KataGo analysis...");
-      await cancelKataGoAnalysis(pending.run_id, pending.job_id);
+      setMessage("Cancelling analysis task...");
+      await cancelKataGoAnalysis(runId, jobId);
+      await refreshAnalysisTaskSnapshot(true);
     } catch (error) {
       setMessage(`Cancel failed: ${errorMessage(error)}`);
+    } finally {
+      analysisTaskActionInFlightRef.current = false;
+      setAnalysisTaskRequestPending(false);
     }
   }
 
@@ -1635,20 +2176,17 @@ export function App() {
       return;
     }
     if (comment === currentGame.snapshot.personal_comment) return;
-    const previousGeneration = currentGame.generation;
     const editedPath = currentGame.selected_path;
     try {
       const result = await setCurrentGamePersonalComment(editedPath, comment);
-      documentGenerationRef.current = result.generation;
+      if (!isCurrentGameSnapshot(result)) return;
       const latestPath = pendingSelectedPathRef.current ?? currentGameRef.current?.selected_path ?? editedPath;
       const stillOnEditedNode = samePath(latestPath, editedPath);
-      setCurrentGame((prev) => {
-        if (stillOnEditedNode || prev === null) return result;
-        return {
-          ...result,
-          selected_path: prev.selected_path,
-          snapshot: prev.snapshot
-        };
+      const previous = currentGameRef.current;
+      adoptCurrentGame(stillOnEditedNode || previous === null ? result : {
+        ...result,
+        selected_path: previous.selected_path,
+        snapshot: previous.snapshot
       });
       if (stillOnEditedNode) {
         setChosenChildren((prev) => rememberChosenChildren(prev, result.selected_path));
@@ -1656,11 +2194,6 @@ export function App() {
         setSelectedCandidateIndex(null);
       }
       setDirty(result.dirty);
-      if (result.generation === previousGeneration) return;
-      await abandonAnalysisSessions();
-      const artifacts = await artifactsFromCurrentGame();
-      setGame(artifacts.projection);
-      clearReviewData();
       setMessage("已更新选中节点的个人评论。");
     } catch (error) {
       setMessage(`评论更新失败: ${errorMessage(error)}`);
@@ -1678,23 +2211,18 @@ export function App() {
     navigatingRef.current = true;
     try {
       while (pendingSelectedPathRef.current) {
-        const requestedPath = pendingSelectedPathRef.current;
+        const requestedPath: NodePath = pendingSelectedPathRef.current;
         pendingSelectedPathRef.current = null;
         try {
           const result = await selectCurrentGameNode(requestedPath);
-          documentGenerationRef.current = Math.max(documentGenerationRef.current, result.generation);
-          setCurrentGame((previous) => {
-            if (previous !== null && previous.generation > result.generation) {
-              return { ...previous, selected_path: result.selected_path, snapshot: result.snapshot };
-            }
-            return result;
-          });
-          currentGameRef.current = {
-            ...(currentGameRef.current ?? result),
-            selected_path: result.selected_path,
-            snapshot: result.snapshot,
-            generation: Math.max(currentGameRef.current?.generation ?? 0, result.generation)
-          };
+          const current = currentGameRef.current;
+          if (!current || result.generation < current.generation) continue;
+          if (result.generation === current.generation && result.snapshot_seq < current.snapshot_seq) {
+            // Keep the latest cursor intent, but obtain its snapshot after the accepted edit/Save.
+            pendingSelectedPathRef.current ??= requestedPath;
+            continue;
+          }
+          adoptCurrentGame(result);
           setChosenChildren((previous) => rememberChosenChildren(previous, result.selected_path));
           if (result.snapshot.primary_analysis) presentCurrentGameAnalysis(result);
           else {
@@ -1848,6 +2376,8 @@ export function App() {
         }
       }}
       onEngineCommand={handleEngineCommand}
+      onQuickAnalysis={() => void handleQuickAnalysisTask()}
+      onAllPositionsAnalysis={() => void handleAllPositionsAnalysisTask()}
       continuousAnalysisAction={continuousAnalysisAction}
       onContinuousAnalysis={() => void handleContinuousAnalysisAction()}
       preferences={preferences}
@@ -1964,6 +2494,7 @@ export function App() {
         />
       </aside>
     </section>
+    <div className="analysis-task-area">
     {recoveryProtection.status === "unprotected" ? (
       <div className="recovery-unprotected">
         <span role="status">{recoveryProtection.message}</span>
@@ -1972,6 +2503,21 @@ export function App() {
         </button>
       </div>
     ) : null}
+    <AnalysisTaskPanel
+      draft={analysisScopeDraft}
+      preview={analysisScopePreview}
+      task={analysisTask}
+      canRun={nativeRuntime && engineReady && Boolean(currentGame) && !departurePending && !departurePrompt}
+      busy={analysisTaskRequestPending}
+      error={analysisTaskError}
+      onDraftChange={handleAnalysisScopeDraftChange}
+      onPreview={() => void handlePreviewAnalysisScope()}
+      onStart={() => void handleStartAnalysisTask()}
+      onPause={() => void handlePauseAnalysisTask()}
+      onContinue={() => void handleContinueAnalysisTask()}
+      onCancel={() => void handleCancelWholeGameAnalysis()}
+    />
+    </div>
     <BottomBar
       currentMove={reviewIndex}
       maxMove={reviewMax}
@@ -1997,6 +2543,7 @@ export function App() {
       onContinuousAnalysis={() => void handleContinuousAnalysisAction()}
       onAnalyzeOnce={() => handleEngineCommand("once")}
       onAnalyzeGame={() => handleEngineCommand("game")}
+      onQuickAnalysis={() => void handleQuickAnalysisTask()}
       onCancelSelectedNode={() => void handleCancelSelectedNodeAnalysis()}
       onCancelWholeGame={() => void handleCancelWholeGameAnalysis()}
       onSync={() => toggleSheet("sync")}
@@ -2087,6 +2634,13 @@ export function App() {
   </main>;
 }
 
+function isAnalysisTaskReserved(task: AnalysisTaskDto | null): boolean {
+  return task != null && (task.state === "queued"
+    || task.state === "searching"
+    || task.state === "pausing"
+    || task.state === "paused");
+}
+
 function continuousPhaseStatus(phase: ContinuousAnalysisPhaseDto): string {
   switch (phase) {
     case "loading": return "连续分析：正在载入设置";
@@ -2110,9 +2664,10 @@ function continuousPhaseStatus(phase: ContinuousAnalysisPhaseDto): string {
 function preferencePatch(from: AppPreferences, to: AppPreferences): Partial<AppPreferences> {
   const patch: Partial<AppPreferences> = {};
   (Object.keys(to) as Array<keyof AppPreferences>).forEach((key) => {
-    if (from[key] !== to[key]) {
-      Object.assign(patch, { [key]: to[key] });
-    }
+    const unchanged = key === "taskOverviewConditions" || key === "taskDeepConditions"
+      ? JSON.stringify(from[key]) === JSON.stringify(to[key])
+      : from[key] === to[key];
+    if (!unchanged) Object.assign(patch, { [key]: to[key] });
   });
   return patch;
 }
@@ -2211,6 +2766,35 @@ function rememberChosenChildren(previous: Map<string, number>, path: NodePath): 
   return next;
 }
 
+function parseU32(value: string, label: string, allowZero: boolean): number {
+  const parsed = Number(value);
+  const minimum = allowZero ? 0 : 1;
+  const maximum = 4294967295;
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${label} must be a whole number from ${minimum} to ${maximum}.`);
+  }
+  return parsed;
+}
+
+function analysisBranchChoices(chosen: Map<string, number>) {
+  return [...chosen.entries()]
+    .map(([key, child]) => ({
+      parent: { indices: key === "" ? [] : key.split(",").map(Number) },
+      child
+    }))
+    .sort((left, right) => left.parent.indices.length - right.parent.indices.length);
+}
+
+function presetAnalysisScope(currentNode: NodePath, chosen: Map<string, number>): AnalysisScopeDto {
+  return {
+    mode: "first_child_mainline",
+    current_node: currentNode,
+    branch_choices: analysisBranchChoices(chosen),
+    interval: null,
+    to_play: null
+  };
+}
+
 function chosenChildIndex(chosen: Map<string, number>, path: NodePath, childCount: number): number {
   const remembered = chosen.get(pathKey(path));
   if (remembered !== undefined && remembered >= 0 && remembered < childCount) return remembered;
@@ -2226,4 +2810,114 @@ function chosenLeafPath(root: SgfTreeNodeDto, start: NodePath, chosen: Map<strin
     node = node.children[index];
   }
   return { indices };
+}
+
+function taskConditionsFromDraft(
+  draft: AnalysisScopeDraft,
+  stage: "overview" | "single" | "deep"
+): AnalysisStageConditionsDto {
+  const prefix = stage === "overview" ? "Overview" : stage === "single" ? "Single-stage" : "Deep";
+  const timeEnabled = stage === "overview"
+    ? draft.overviewTimeEnabled
+    : stage === "single"
+      ? draft.singleTimeEnabled
+      : draft.timeEnabled;
+  const timeSeconds = stage === "overview"
+    ? draft.overviewTimeSeconds
+    : stage === "single"
+      ? draft.singleTimeSeconds
+      : draft.timeSeconds;
+  const totalVisitsEnabled = stage === "overview"
+    ? draft.overviewTotalVisitsEnabled
+    : stage === "single"
+      ? draft.singleTotalVisitsEnabled
+      : draft.totalVisitsEnabled;
+  const totalVisits = stage === "overview"
+    ? draft.overviewTotalVisits
+    : stage === "single"
+      ? draft.singleTotalVisits
+      : draft.totalVisits;
+  const leadingCandidateVisitsEnabled = stage === "overview"
+    ? draft.overviewLeadingCandidateVisitsEnabled
+    : stage === "single"
+      ? draft.singleLeadingCandidateVisitsEnabled
+      : draft.leadingCandidateVisitsEnabled;
+  const leadingCandidateVisits = stage === "overview"
+    ? draft.overviewLeadingCandidateVisits
+    : stage === "single"
+      ? draft.singleLeadingCandidateVisits
+      : draft.leadingCandidateVisits;
+  return {
+    time_seconds: {
+      enabled: timeEnabled,
+      value: parseU32(timeSeconds, `${prefix} search time`, false)
+    },
+    total_visits: {
+      enabled: totalVisitsEnabled,
+      value: parseU32(totalVisits, `${prefix} total visits`, false)
+    },
+    leading_candidate_visits: {
+      enabled: leadingCandidateVisitsEnabled,
+      value: parseU32(leadingCandidateVisits, `${prefix} leading candidate visits`, false)
+    }
+  };
+}
+
+function analysisTaskStageDraft(
+  overview: AnalysisStageConditionsDto,
+  deep: AnalysisStageConditionsDto
+): Partial<AnalysisScopeDraft> {
+  return {
+    overviewTimeEnabled: overview.time_seconds.enabled,
+    overviewTimeSeconds: String(overview.time_seconds.value),
+    overviewTotalVisitsEnabled: overview.total_visits.enabled,
+    overviewTotalVisits: String(overview.total_visits.value),
+    overviewLeadingCandidateVisitsEnabled: overview.leading_candidate_visits.enabled,
+    overviewLeadingCandidateVisits: String(overview.leading_candidate_visits.value),
+    timeEnabled: deep.time_seconds.enabled,
+    timeSeconds: String(deep.time_seconds.value),
+    totalVisitsEnabled: deep.total_visits.enabled,
+    totalVisits: String(deep.total_visits.value),
+    leadingCandidateVisitsEnabled: deep.leading_candidate_visits.enabled,
+    leadingCandidateVisits: String(deep.leading_candidate_visits.value)
+  };
+}
+
+function swingCriteriaDraft(criteria: AnalysisSwingCriteriaDto): Partial<AnalysisScopeDraft> {
+  return {
+    moveActors: criteria.move_actors,
+    winrateChangeEnabled: criteria.winrate_change_percentage_points.enabled,
+    winrateChangeThreshold: String(criteria.winrate_change_percentage_points.value),
+    scoreChangeEnabled: criteria.score_change_points.enabled,
+    scoreChangeThreshold: String(criteria.score_change_points.value)
+  };
+}
+
+function swingCriteriaFromDraft(draft: AnalysisScopeDraft): AnalysisSwingCriteriaDto {
+  const positive = (value: string, label: string) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error(`${label} must be a positive finite number.`);
+    }
+    return parsed;
+  };
+  return {
+    move_actors: draft.moveActors,
+    winrate_change_percentage_points: {
+      enabled: draft.winrateChangeEnabled,
+      value: positive(draft.winrateChangeThreshold, "Winrate swing threshold")
+    },
+    score_change_points: {
+      enabled: draft.scoreChangeEnabled,
+      value: positive(draft.scoreChangeThreshold, "Score swing threshold")
+    }
+  };
+}
+
+function analysisTaskProgress(task: AnalysisTaskDto): string {
+  const completed = task.stage === "overview" ? task.overview_completed.length : task.completed.length;
+  const expected = task.stage === "overview"
+    ? task.requested.length + task.supporting.length
+    : task.selected_for_deep?.length ?? task.requested.length;
+  return `${completed}/${expected}`;
 }

@@ -28,6 +28,10 @@ pub struct WholeGameAdmission {
     pub komi: f32,
     pub rules: String,
     pub nodes: Vec<SelectedNodeSnapshotDto>,
+    pub requested: Vec<NodePath>,
+    pub supporting: Vec<NodePath>,
+    pub swing_comparisons: Vec<app_model::AnalysisSwingComparisonDto>,
+    pub swing_criteria: Option<app_model::AnalysisSwingCriteriaDto>,
 }
 
 #[derive(Default)]
@@ -70,6 +74,7 @@ impl CurrentGameState {
         let Some(manager) = self.analysis_manager.get() else {
             return;
         };
+        manager.invalidate_analysis_task(holder.generation);
         if holder.analysis_target.as_ref().is_some_and(|(generation, path)| {
             *generation == holder.generation && *path == holder.selected_path
         }) {
@@ -226,6 +231,7 @@ impl CurrentGameState {
             selected_path,
             snapshot,
             generation: holder.generation,
+            snapshot_seq: holder.snapshot_seq,
             dirty: holder.dirty,
             native_path: holder.native_path.clone(),
         })
@@ -237,21 +243,198 @@ impl CurrentGameState {
 
     pub fn admit_whole_game(&self, generation: u64) -> Result<WholeGameAdmission, CurrentGameError> {
         let holder = self.holder.lock().expect("current game state");
-        holder.ensure_editable()?;
-        let document = holder.document.as_ref().ok_or_else(no_current_game)?;
-        if holder.generation != generation {
-            return Err(CurrentGameError {
-                kind: CurrentGameErrorKind::NoCurrentGame,
-                message: "current game generation does not match".to_string(),
-            });
-        }
-        Ok(WholeGameAdmission {
-            generation: holder.generation,
-            board_size: document.board_size(),
-            komi: document.komi(),
-            rules: document.rules(),
-            nodes: document.first_child_mainline_snapshots()?,
+        holder.analysis_scope_admission(
+            generation,
+            &app_model::AnalysisScopeDto {
+                mode: app_model::AnalysisScopeModeDto::FirstChildMainline,
+                current_node: holder.selected_path.clone(),
+                branch_choices: Vec::new(),
+                interval: None,
+                to_play: None,
+            },
+            None,
+        )
+    }
+
+    pub fn start_first_child_analysis(
+        &self,
+        manager: &engine_manager::ForegroundEngineManager,
+        run_id: String,
+        generation: u64,
+        max_visits: u32,
+    ) -> Result<AnalysisJobStartedDto, app_model::EngineFailureDto> {
+        let holder = self.holder.lock().expect("current game state");
+        let scope = app_model::AnalysisScopeDto {
+            mode: app_model::AnalysisScopeModeDto::FirstChildMainline,
+            current_node: holder.selected_path.clone(),
+            branch_choices: Vec::new(),
+            interval: None,
+            to_play: None,
+        };
+        let admitted = holder
+            .analysis_scope_admission(generation, &scope, None)
+            .map_err(|error| {
+                crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, error.message)
+            })?;
+        let work_items = crate::whole_game_work_items(&admitted, max_visits, &run_id)?;
+        manager.start_whole_game_analysis(engine_manager::WholeGameJobRequest {
+            run_id,
+            generation,
+            work_items,
         })
+    }
+
+    pub fn preview_analysis_scope(
+        &self,
+        generation: u64,
+        scope: app_model::AnalysisScopeDto,
+        swing_criteria: Option<app_model::AnalysisSwingCriteriaDto>,
+    ) -> Result<app_model::AnalysisScopePreviewDto, CurrentGameError> {
+        let holder = self.holder.lock().expect("current game state");
+        let admission = holder.analysis_scope_admission(generation, &scope, swing_criteria.as_ref())?;
+        Ok(scope_preview(&admission, scope))
+    }
+
+    pub fn start_analysis_task(
+        &self,
+        manager: &engine_manager::ForegroundEngineManager,
+        run_id: String,
+        preview: app_model::AnalysisScopePreviewDto,
+        conditions: app_model::AnalysisStageConditionsDto,
+    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
+        let invalid =
+            |message| crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message);
+        conditions.validate_single_stage().map_err(&invalid)?;
+        // Keep semantic revalidation and manager admission under the same owner lock.
+        let holder = self.holder.lock().expect("current game state");
+        let admitted = holder
+            .analysis_scope_admission(preview.generation, &preview.scope, None)
+            .map_err(|error| invalid(error.message))?;
+        if scope_preview(&admitted, preview.scope.clone()) != preview {
+            return Err(invalid(
+                "Analysis scope preview no longer matches the current game.".into(),
+            ));
+        }
+        let work_items = crate::whole_game_work_items(&admitted, conditions.total_visits.value, &run_id)?;
+        manager.start_analysis_task(
+            engine_manager::WholeGameJobRequest {
+                run_id,
+                generation: admitted.generation,
+                work_items,
+            },
+            preview.scope,
+            conditions,
+        )
+    }
+
+    pub fn start_all_positions_analysis_task(
+        &self,
+        manager: &engine_manager::ForegroundEngineManager,
+        run_id: String,
+        preview: app_model::AnalysisScopePreviewDto,
+        overview_conditions: app_model::AnalysisStageConditionsDto,
+        deep_conditions: app_model::AnalysisStageConditionsDto,
+    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
+        let invalid =
+            |message| crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message);
+        app_model::AnalysisStageConditionsDto::validate_all_positions_two_stage(
+            &overview_conditions,
+            &deep_conditions,
+        )
+        .map_err(&invalid)?;
+        let holder = self.holder.lock().expect("current game state");
+        let admitted = holder
+            .analysis_scope_admission(preview.generation, &preview.scope, None)
+            .map_err(|error| invalid(error.message))?;
+        if scope_preview(&admitted, preview.scope.clone()) != preview {
+            return Err(invalid(
+                "Analysis scope preview no longer matches the current game.".into(),
+            ));
+        }
+        let work_items =
+            crate::whole_game_work_items(&admitted, deep_conditions.total_visits.value, &run_id)?;
+        manager.start_all_positions_analysis_task(
+            engine_manager::WholeGameJobRequest {
+                run_id,
+                generation: admitted.generation,
+                work_items,
+            },
+            preview.scope,
+            overview_conditions,
+            deep_conditions,
+        )
+    }
+
+    pub fn start_swing_analysis_task(
+        &self,
+        manager: &engine_manager::ForegroundEngineManager,
+        run_id: String,
+        preview: app_model::AnalysisScopePreviewDto,
+        overview_conditions: app_model::AnalysisStageConditionsDto,
+        deep_conditions: app_model::AnalysisStageConditionsDto,
+    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
+        let invalid =
+            |message| crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message);
+        overview_conditions.validate_single_stage().map_err(&invalid)?;
+        deep_conditions.validate_single_stage().map_err(&invalid)?;
+        let criteria = preview
+            .swing_criteria
+            .clone()
+            .ok_or_else(|| invalid("Swing-selected analysis requires swing criteria.".into()))?;
+        criteria.validate().map_err(&invalid)?;
+        let holder = self.holder.lock().expect("current game state");
+        let admitted = holder
+            .analysis_scope_admission(preview.generation, &preview.scope, Some(&criteria))
+            .map_err(|error| invalid(error.message))?;
+        if scope_preview(&admitted, preview.scope.clone()) != preview {
+            return Err(invalid(
+                "Analysis scope preview no longer matches the current game.".into(),
+            ));
+        }
+        let work_items =
+            crate::whole_game_work_items(&admitted, deep_conditions.total_visits.value, &run_id)?;
+        manager.start_swing_analysis_task(
+            engine_manager::WholeGameJobRequest {
+                run_id,
+                generation: admitted.generation,
+                work_items,
+            },
+            preview.scope,
+            admitted.requested,
+            admitted.supporting,
+            admitted.swing_comparisons,
+            criteria,
+            overview_conditions,
+            deep_conditions,
+        )
+    }
+
+    pub fn pause_analysis_task(
+        &self,
+        manager: &engine_manager::ForegroundEngineManager,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
+        // The holder lock orders Pause against attachment of already queued events.
+        let mut holder = self.holder.lock().expect("current game state");
+        let task = manager.pause_analysis_task(run_id, task_id)?;
+        holder
+            .closed_jobs
+            .insert((task.run_id.clone(), task.job_id.clone()));
+        Ok(task)
+    }
+
+    pub fn continue_analysis_task(
+        &self,
+        manager: &engine_manager::ForegroundEngineManager,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
+        let holder = self.holder.lock().expect("current game state");
+        holder.ensure_editable().map_err(|error| {
+            crate::job_failure(run_id, app_model::EngineFailureKind::InvalidState, error.message)
+        })?;
+        manager.continue_analysis_task(run_id, task_id, holder.generation)
     }
 
     pub fn admit_selected_node(
@@ -280,12 +463,13 @@ impl CurrentGameState {
     pub fn select_path(&self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
         let changed = holder.selected_path != path;
-        let result = holder.select_path(path)?;
+        let mut result = holder.select_path(path)?;
         if changed {
             holder.bump_snapshot();
             self.note_recovery(&holder);
         }
         self.follow_continuous_position(&mut holder);
+        result.snapshot_seq = holder.snapshot_seq;
         Ok(result)
     }
 
@@ -344,6 +528,26 @@ impl CurrentGameState {
             return None;
         }
         let frame = event.frame.as_ref()?;
+        if event.lane == app_model::AnalysisJobLaneDto::WholeGame {
+            if let Some(task) = self
+                .analysis_manager
+                .get()
+                .and_then(engine_manager::ForegroundEngineManager::analysis_task_snapshot)
+            {
+                if task.run_id != event.run_id
+                    || task.job_id != event.job_id
+                    || task.generation != event.generation
+                    || !matches!(
+                        task.state,
+                        app_model::AnalysisTaskStateDto::Queued
+                            | app_model::AnalysisTaskStateDto::Searching
+                            | app_model::AnalysisTaskStateDto::Completed
+                    )
+                {
+                    return None;
+                }
+            }
+        }
         let payload = SgfAnalysisPayload::from_frame(frame, "KataGo");
         let mut holder = self.holder.lock().expect("current game state");
         if holder.rejects_job(&event.run_id, &event.job_id)
@@ -393,6 +597,45 @@ impl CurrentGameState {
     }
 }
 
+fn scope_preview(
+    admitted: &WholeGameAdmission,
+    scope: app_model::AnalysisScopeDto,
+) -> app_model::AnalysisScopePreviewDto {
+    let target = |snapshot: &SelectedNodeSnapshotDto| app_model::AnalysisScopeTargetDto {
+        node_path: snapshot.path.clone(),
+        move_number: snapshot.position.move_number,
+        to_play: snapshot.position.to_play,
+    };
+    let requested = admitted
+        .requested
+        .iter()
+        .map(|path| &path.indices)
+        .collect::<HashSet<_>>();
+    let supporting = admitted
+        .supporting
+        .iter()
+        .map(|path| &path.indices)
+        .collect::<HashSet<_>>();
+    app_model::AnalysisScopePreviewDto {
+        generation: admitted.generation,
+        scope,
+        targets: admitted
+            .nodes
+            .iter()
+            .filter(|snapshot| requested.contains(&snapshot.path.indices))
+            .map(target)
+            .collect(),
+        supporting_targets: admitted
+            .nodes
+            .iter()
+            .filter(|snapshot| supporting.contains(&snapshot.path.indices))
+            .map(target)
+            .collect(),
+        swing_comparisons: admitted.swing_comparisons.clone(),
+        swing_criteria: admitted.swing_criteria.clone(),
+    }
+}
+
 fn no_current_game() -> CurrentGameError {
     CurrentGameError {
         kind: CurrentGameErrorKind::NoCurrentGame,
@@ -401,6 +644,57 @@ fn no_current_game() -> CurrentGameError {
 }
 
 impl CurrentGameHolder {
+    fn analysis_scope_admission(
+        &self,
+        generation: u64,
+        scope: &app_model::AnalysisScopeDto,
+        swing_criteria: Option<&app_model::AnalysisSwingCriteriaDto>,
+    ) -> Result<WholeGameAdmission, CurrentGameError> {
+        self.ensure_editable()?;
+        let document = self.document.as_ref().ok_or_else(no_current_game)?;
+        if self.generation != generation {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::InvalidNodePath,
+                message: "Current game semantics changed; preview a new analysis task.".into(),
+            });
+        }
+        let (nodes, requested, supporting, swing_comparisons) = if let Some(criteria) = swing_criteria {
+            criteria.validate().map_err(|message| CurrentGameError {
+                kind: CurrentGameErrorKind::InvalidNodePath,
+                message,
+            })?;
+            let resolved = document.swing_analysis_scope(scope, criteria.move_actors)?;
+            let requested = resolved
+                .requested
+                .iter()
+                .map(|snapshot| snapshot.path.clone())
+                .collect();
+            let supporting = resolved
+                .supporting
+                .iter()
+                .map(|snapshot| snapshot.path.clone())
+                .collect();
+            let mut nodes = resolved.requested;
+            nodes.extend(resolved.supporting);
+            (nodes, requested, supporting, resolved.comparisons)
+        } else {
+            let nodes = document.analysis_scope_snapshots(scope)?;
+            let requested = nodes.iter().map(|snapshot| snapshot.path.clone()).collect();
+            (nodes, requested, Vec::new(), Vec::new())
+        };
+        Ok(WholeGameAdmission {
+            generation: self.generation,
+            board_size: document.board_size(),
+            komi: document.komi(),
+            rules: document.rules(),
+            nodes,
+            requested,
+            supporting,
+            swing_comparisons,
+            swing_criteria: swing_criteria.cloned(),
+        })
+    }
+
     #[cfg(test)]
     fn replace(
         &mut self,
@@ -445,6 +739,7 @@ impl CurrentGameHolder {
             selected_path: snapshot.path.clone(),
             snapshot,
             generation: self.generation,
+            snapshot_seq: self.snapshot_seq,
             dirty: self.dirty,
             native_path: self.native_path.clone(),
         })
@@ -462,6 +757,7 @@ impl CurrentGameHolder {
             selected_path: path,
             snapshot,
             generation: self.generation,
+            snapshot_seq: self.snapshot_seq,
             dirty: self.dirty,
             native_path: self.native_path.clone(),
         })
@@ -481,7 +777,6 @@ impl CurrentGameHolder {
             (snapshot, document.tree()?, changed)
         };
         if changed {
-            self.generation += 1;
             self.mark_dirty();
             self.selected_path = path.clone();
             self.bump_snapshot();
@@ -491,6 +786,7 @@ impl CurrentGameHolder {
             selected_path: path,
             snapshot,
             generation: self.generation,
+            snapshot_seq: self.snapshot_seq,
             dirty: self.dirty,
             native_path: self.native_path.clone(),
         })
@@ -511,6 +807,7 @@ impl CurrentGameHolder {
             selected_path,
             snapshot,
             generation: self.generation,
+            snapshot_seq: self.snapshot_seq,
             dirty: self.dirty,
             native_path: self.native_path.clone(),
         })
@@ -546,6 +843,7 @@ impl CurrentGameHolder {
             selected_path: path,
             snapshot,
             generation: self.generation,
+            snapshot_seq: self.snapshot_seq,
             dirty: self.dirty,
             native_path: self.native_path.clone(),
         })
@@ -729,8 +1027,7 @@ mod current_game_replacement {
             MoveVertex::Pass
         );
 
-        let stale = state.admit_whole_game(opened.generation + 1).unwrap_err();
-        assert_eq!(stale.message, "current game generation does not match");
+        assert!(state.admit_whole_game(opened.generation + 1).is_err());
     }
 }
 
@@ -915,7 +1212,6 @@ mod current_game_comment_edit {
         assert_eq!(edited.snapshot.path.indices, second_sibling.indices);
         assert_eq!(edited.snapshot.personal_comment, "sibling edited");
         assert!(edited.snapshot.generated_information.is_none());
-        assert_eq!(edited.generation, opened.generation + 1);
         assert!(edited.dirty);
         assert_eq!(edited.native_path, opened.native_path);
         assert!(state.serialize().unwrap().contains("C[sibling edited]"));
@@ -930,7 +1226,6 @@ mod current_game_comment_edit {
         let noop = state
             .set_personal_comment(second_sibling.clone(), "sibling edited".to_string())
             .unwrap();
-        assert_eq!(noop.generation, edited.generation);
         assert_eq!(noop.dirty, edited.dirty);
         assert_eq!(noop.snapshot.personal_comment, "sibling edited");
         assert_eq!(state.inspect(), before_noop);
@@ -942,7 +1237,6 @@ mod current_game_comment_edit {
             .unwrap();
         assert_eq!(root_edit.selected_path.indices, root.indices);
         assert_eq!(root_edit.snapshot.personal_comment, "root edited");
-        assert_eq!(root_edit.generation, edited.generation + 1);
         assert!(root_edit.dirty);
 
         let move_edit = state
@@ -950,7 +1244,6 @@ mod current_game_comment_edit {
             .unwrap();
         assert_eq!(move_edit.selected_path.indices, move_node.indices);
         assert_eq!(move_edit.snapshot.personal_comment, "");
-        assert_eq!(move_edit.generation, root_edit.generation + 1);
 
         let before_invalid = state.inspect();
         let error = state

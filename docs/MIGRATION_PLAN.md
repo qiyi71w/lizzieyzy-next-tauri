@@ -31,7 +31,15 @@ Each workflow crosses the Rust domain, Rust wire DTO, Tauri gateway, TypeScript 
 
 Later Java `main` changes do not automatically change this plan. Data, SGF, Go-rule, and engine-correctness defects must be assessed; UX changes are judged individually; Swing-only implementation changes are ignored. Baseline changes follow the successor policy in `JAVA_BASELINE.md`.
 
-Abandoned and Swing-only capabilities remain exclusions in the inventory and matrix. They are not phase work.
+## Capability Preservation Policy
+
+Approved Q1–Q12 remain binding: preserve the frozen Java baseline's reachable user capabilities, primary operation habits, and data semantics by default. A non-equivalent redesign leaves a migration obligation; permanent removal requires item-specific user approval. Historical Abandoned/absorbed decisions record their original scope, not blanket permission to discard the remaining user capability. Swing-only machinery need not be copied. Existing Accepted IDs, scopes, and evidence remain intact; materially new behavior receives a Successor Item.
+
+The approved mainline order is safety/input correction → continuous current-node analysis → current-game range/color/budget/Pause/Continue/two-stage analysis → R6/R7 expansion. Independent work may proceed alongside that order with explicit ownership at shared integration boundaries. Release claims remain tiered and bounded by actual acceptance; a usable tier does not erase tracked gaps.
+
+Two approved future directions remain obligations: one Direct/System/Manual policy for Next-owned remote HTTP(S)/WebSocket(S), including providers, compute, contribution and updates (excluding browser-owned traffic, local sidecars and SSH); and an explicit whitelist Java settings import for supported engine/display values with preview and atomic confirmation, no Java writes or automatic engine start. Their successor admission is separate from ANA-16; older narrower transport/import dispositions are historical, not the final migration scope.
+
+The [2026-09-12 decision record](../.scratch/migration-planning-20260912/planning.md) carries Q1–Q24 and their primary evidence. The [current-game task spec](../.scratch/current-game-analysis-tasks/spec.md) implements the approved planning boundary, not a runtime completion claim.
 
 ## Evidence Model
 
@@ -581,6 +589,20 @@ Current state: R5 has not exited. Ticket 06 native closeout on candidate `4fd710
 
 The [independent R5 native failure-evidence ticket](../.scratch/r5-native-failure-evidence/issues/01-native-failure-evidence.md) can start separately and keeps `APP-03`, `APP-04`, and `ANA-15` evidence attribution. Neither batch silently accepts the other or admits a core-review replacement claim.
 
+### Analysis Task Restoration — Current-game Analysis Tasks
+
+**Goal:** Restore explicit current-game review scopes, search conditions, immediate Pause/Continue, and both all-position and swing-selected two-stage strategies after ANA-06.
+
+**Owns:** `ANA-16` (Accepted), a successor for the additional workflows rather than an expansion of accepted `ANA-02`. Frozen routes `CAP-04-ANA-06`–`CAP-04-ANA-08` map their covered capabilities here; automatic-on-load quick analysis remains a separate obligation.
+
+**Migration Phase Gate:** The Matrix-owned Item Start Prerequisites are Accepted. The [approved specification](../.scratch/current-game-analysis-tasks/spec.md) and its [local tracker](../.scratch/current-game-analysis-tasks/tracker.md) record the completed implementation and integrated acceptance. Full R5 exit is not a new start prerequisite.
+
+**Delivery Order:** The approved [eight-ticket set](../.scratch/current-game-analysis-tasks/tracker.md#published-tickets) runs 01 semantic identity prefactor → 02 explicit scope task → independent 03 Pause/Continue and 04 search budgets → 05 integration and all-position two-stage → 06 swing-selected two-stage → 07 integrated Windows real-KataGo acceptance → 08 read-only Follow-up Closeout. Leading-candidate visits and Supporting Positions remain in this batch; 07, not Closeout, gates delivery.
+
+**Exit when:** Every approved task behavior has repository evidence and exact-candidate Windows real-KataGo acceptance, including one/two-thread scheduling, all enabled search conditions, stage transitions, Pause/Continue, semantic/Run invalidation, SGF Save and safe departure. Task identity survives only within the same semantic game and Run; navigation/comments/ordinary Save remain allowed. No visits-only reuse of unrelated SGF results.
+
+**Current state:** Tickets 01–08 are complete. Exact Windows candidate `5e593537f702af0c651a2c3bf0f0fd77758052e2` passed real KataGo scope, one/two-thread scheduling, all budget kinds, stage transitions, Pause/Continue, semantic/Run invalidation, SGF persistence, protected departure, genuine engine failure and target-final timeout gates; final Standards + Spec review reported zero findings. `ANA-16` is Accepted. Ticket 08 completed read-only Follow-up Closeout with no follow-up candidates. R4 historical exit and ANA-02/ANA-06 scope remain unchanged; independent R5 evidence retains its own owners.
+
 ### R6 — SGF Authoring And Review
 
 **Goal:** Complete in-application SGF intake and the remaining no-engine authoring/review tools on top of `SGF-07`.
@@ -808,7 +830,7 @@ These items are stable and unnumbered. Each has an owner and a Plan-owned Promot
 | ID | Owner | Promotion Gate | Admission |
 | --- | --- | --- | --- |
 | `I18N-01` | Preferences surface | After functional migration | Complete resources for every supported locale, persisted locale, deterministic fallback, no mixed partial-language state. |
-| `GUIDE-01` | Guidance | Later disposition names a Guidance Producer whose owner is in a numbered phase | Leave Deferred only after a later disposition names a Guidance Producer whose owner is in a numbered phase (`Missing`/`Partial`/`Accepted`). The same ticket may admit the owner and name the producer. Persist dismissals only for named Educational Tips; dedicated Reset Guidance re-enables those tips; Safety Confirmations stay non-dismissible. `SET-HINT-AUTOANALYZE` is excluded with `CAP-04-ANA-08`. `ANA-06` ponder-limit and Ticket 25 GMA/readboard notices do not auto-start this item; later naming is allowed after those owners are in a numbered phase. Unnamed persist-dismiss stays with the producing capability. Empty Reset Guidance is not acceptance-sized. |
+| `GUIDE-01` | Guidance | Later disposition names a Guidance Producer whose owner is in a numbered phase | Leave Deferred only after a later disposition names a Guidance Producer whose owner is in a numbered phase (`Missing`/`Partial`/`Accepted`). The same ticket may admit the owner and name the producer. Persist dismissals only for named Educational Tips; dedicated Reset Guidance re-enables those tips; Safety Confirmations stay non-dismissible. `SET-HINT-AUTOANALYZE` remains a separate guidance obligation after `CAP-04-ANA-08` routes to `ANA-16`; task restoration does not promote guidance. `ANA-06` ponder-limit and Ticket 25 GMA/readboard notices do not auto-start this item; later naming is allowed after those owners are in a numbered phase. Unnamed persist-dismiss stays with the producing capability. Empty Reset Guidance is not acceptance-sized. |
 | `SGF-15` | SGF authoring | `SGF-07` | Explicit setup/move semantics, bounds/occupancy validation, reversible edits, non-mutating rejection, save/reopen. |
 | `SGF-16` | SGF authoring | — | Whole-tree color swap, rotate, and mirror with consistent coordinate-bearing properties. |
 | `REVIEW-04` | Review | — | Deterministic branch traversal to matching moves; no-match is non-mutating. |
@@ -821,7 +843,6 @@ These items are stable and unnumbered. Each has an owner and a Plan-owned Promot
 | `SSH-01` | SSH engine execution | — | One shared catalog; non-secret SSH profile fields plus System Credential Store/session-only fallback; every admitted stdio adapter preserves its declared capabilities; explicit Autoload Default marking; standard run, typed failure, explicit Restart, no local fallback or restart recovery; bounded deadlines fixed on promotion; repository and per-Shipped-Platform live evidence. |
 | `CONTRIB-01` | Contribution service | — | Promote only for official `katagotraining.org` with a separate signed client component built from an admitted KataGo tag for Windows/Linux CUDA and macOS Metal. Require versioned consent, System Credential Store/session-only fallback, argv-safe ephemeral config, Contribution Network Policy, curated backend/device and 1–16 games (default 1), one globally exclusive typed run, terminal auth/config/version failures, one cancellable 60-second reconnect window, explicit Retry, 30-second graceful-to-force Stop, no respawn/recovery, explicit component repair, default-off user-directory per-game auto-save, narrow local-data clearing, sanitized repository evidence, and a real production upload plus lifecycle/component/proxy/credential/save evidence on every Shipped Platform. Other services, custom commands/SSH, ONNX, `+bs50`, ROCm, OpenCL, raw config, and raw console require a successor or remain excluded. Service actions appear only after acceptance. |
 | `ANA-07` | Analysis | `APP-02` | Session-only SGF queue. Must not replace or dirty the current game. Queue state is not restored after restart. |
-| `ANA-08` | Analysis | — | Frozen Java analysis-header import and Next export/reopen. No false SQLite↔SGF sync claim. |
 | `ANA-09` | Engine adapters | Named engine/version product evidence | Named engine/version fixtures into the existing analysis model. Missing fields stay unavailable. Interface existence does not start this item. |
 | `GAME-06` | Game modes | — | Session-only PK batch with durable completed-game output. Restart does not restore an unfinished queue. |
 | `GAME-07` | Game modes | a separately approved clock policy | Application-owned remaining-time model. A Compute Budget timeout is not this item. |
@@ -836,7 +857,11 @@ These items are stable and unnumbered. Each has an owner and a Plan-owned Promot
 
 ## Next Executable Batch
 
-R4 Analysis has exited with `ANA-01`–`ANA-04`, promoted `ANA-08`, `ANA-10`–`ANA-14`, `PREF-01`, and `APP-05` Accepted. Ticket 06 accepted `SGF-07` without exiting R5. Remaining executable R5 work is the `APP-01` semantic gate and `APP-02`; `APP-03`/`APP-04` need their unrun native cases before Accepted. Do not pull R6–R11 work into that slice; `ENG-09` / `ENG-10` and the `UI-02` residual remain separate.
+**ANA-16 — Current-game Analysis Tasks is complete and Accepted.** Its eight-ticket set has closed with no follow-up candidates. The approved analysis-restoration sequence through range/color/budgets/Pause/Continue and both two-stage strategies is delivered. The next mainline feature batch requires its own planning decision; the remaining R5 evidence below can proceed independently.
+
+R5 remains open. Independent native failure evidence for Partial `APP-03`, `APP-04`, and `ANA-15` may proceed concurrently: actual ten-second teardown timeout/Retry/contextual Exit anyway, recovery replacement-write and release failures, and real query/engine errors. ANA-06's five-second target-final cancellation evidence does not discharge the ten-second teardown scenario.
+
+`APP-01` activation and `APP-02` drop remain Missing obligations. Their GIB paths require `SGF-08`; coordinate that future intake dependency rather than treating SGF parsing as GIB support. `ENG-09`/`ENG-10`, `UI-02` residuals, and other phase gates retain their own scope. This analysis batch does not claim R5 exit or promote those items.
 
 Slice R3-A (Foreground engine identity and lifecycle) is complete. The historical scope below is audit record, not the current batch.
 

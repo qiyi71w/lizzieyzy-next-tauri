@@ -3,7 +3,8 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CurrentGameResultDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
+import type { AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, CurrentGameResultDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
+import { defaultAppPreferences, type AppPreferences } from "./domain/preferences";
 
 const runtime = vi.hoisted(() => ({
   native: true,
@@ -16,6 +17,11 @@ const listeners: {
 } = {};
 
 const currentGameFixture = vi.hoisted(() => vi.fn());
+const preferencesApi = vi.hoisted(() => ({
+  loadAppPreferences: vi.fn((): Promise<{ preferences: AppPreferences }> => Promise.reject(new Error("preferences unavailable in test"))),
+  saveAppPreferences: vi.fn(async (preferences: AppPreferences) => preferences)
+}));
+const taskRuntime = vi.hoisted(() => ({ snapshot: null as AnalysisTaskDto | null }));
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
   prepareDocumentReplacement: vi.fn(async () => ({ status: "ready", departure_id: 1 })),
@@ -40,6 +46,11 @@ const backend = vi.hoisted(() => ({
   startSelectedNodeAnalysis: vi.fn(),
   cancelSelectedNodeAnalysis: vi.fn(),
   cancelKataGoAnalysis: vi.fn(),
+  previewAnalysisScope: vi.fn(),
+  startAnalysisTask: vi.fn(),
+  pauseAnalysisTask: vi.fn(),
+  continueAnalysisTask: vi.fn(),
+  analysisTaskSnapshot: vi.fn(),
   classifyProblems: vi.fn(),
   fakeAnalyze: vi.fn(),
   openSgfDocument: vi.fn(),
@@ -67,10 +78,7 @@ vi.mock("./api/backend", () => ({
   nativeCurrentGameUnavailable: runtime.nativeUnavailable
 }));
 
-vi.mock("./api/preferences", () => ({
-  loadAppPreferences: vi.fn(() => Promise.reject(new Error("preferences unavailable in test"))),
-  saveAppPreferences: vi.fn()
-}));
+vi.mock("./api/preferences", () => preferencesApi);
 
 vi.mock("./components/PreferencesPanel", () => ({ PreferencesPanel: () => null }));
 vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
@@ -95,6 +103,7 @@ const initialGame: CurrentGameResultDto = {
   selected_path: { indices: [] },
   snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "" },
   generation: 1,
+  snapshot_seq: 1,
   dirty: false,
   native_path: null
 };
@@ -127,6 +136,7 @@ let root: Root | null = null;
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   runtime.native = true;
+  taskRuntime.snapshot = null;
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
     return canvasContext(this);
   });
@@ -158,6 +168,70 @@ beforeEach(() => {
     generation: 1,
     node_path: { indices: [] }
   });
+  backend.previewAnalysisScope.mockImplementation(async ({ generation, scope, swingCriteria }: {
+    generation: number;
+    scope: AnalysisScopeDto;
+    swingCriteria?: AnalysisSwingCriteriaDto | null;
+  }) => ({
+    generation,
+    scope,
+    targets: [
+      { node_path: { indices: [] }, move_number: 0, to_play: "black" },
+      { node_path: { indices: [0] }, move_number: 1, to_play: "white" }
+    ],
+    supporting_targets: swingCriteria
+      ? [{ node_path: { indices: [2] }, move_number: 2, to_play: "black" }]
+      : [],
+    swing_comparisons: swingCriteria
+      ? [{ before: { indices: [2] }, after: { indices: [0] }, move_actor: "white" }]
+      : [],
+    swing_criteria: swingCriteria ?? null
+  }));
+  backend.startAnalysisTask.mockImplementation(async ({ runId, preview, strategy, conditions, overviewConditions }: {
+    runId: string;
+    preview: AnalysisScopePreviewDto;
+    strategy: AnalysisTaskDto["strategy"];
+    conditions: AnalysisStageConditionsDto;
+    overviewConditions?: AnalysisStageConditionsDto | null;
+  }) => {
+    const task: AnalysisTaskDto = {
+      task_id: "task-1",
+      run_id: runId,
+      job_id: "job-task-1",
+      generation: preview.generation,
+      scope: preview.scope,
+      strategy,
+      stage: strategy === "single_stage" ? "single_stage" : "overview",
+      conditions,
+      overview_conditions: overviewConditions,
+      requested: preview.targets.map((target) => target.node_path),
+      supporting: preview.supporting_targets.map((target) => target.node_path),
+      swing_comparisons: preview.swing_comparisons,
+      swing_criteria: preview.swing_criteria,
+      selected_for_deep: null,
+      overview_completed: strategy !== "single_stage" ? [preview.targets[0].node_path] : [],
+      completed: strategy === "single_stage" ? [preview.targets[0].node_path] : [],
+      overview_summaries: [],
+      state: "searching",
+      reason: null,
+      ending_conditions: []
+    };
+    taskRuntime.snapshot = task;
+    return task;
+  });
+  backend.pauseAnalysisTask.mockImplementation(async ({ runId, taskId }: { runId: string; taskId: string }) => {
+    const task = taskRuntime.snapshot;
+    if (!task || task.run_id !== runId || task.task_id !== taskId) throw new Error("Task not found");
+    taskRuntime.snapshot = { ...task, state: "pausing" };
+    return taskRuntime.snapshot;
+  });
+  backend.continueAnalysisTask.mockImplementation(async ({ runId, taskId }: { runId: string; taskId: string }) => {
+    const task = taskRuntime.snapshot;
+    if (!task || task.run_id !== runId || task.task_id !== taskId) throw new Error("Task not found");
+    taskRuntime.snapshot = { ...task, job_id: "job-task-2", state: "searching" };
+    return taskRuntime.snapshot;
+  });
+  backend.analysisTaskSnapshot.mockImplementation(async () => taskRuntime.snapshot);
   backend.classifyProblems.mockResolvedValue([]);
   backend.fakeAnalyze.mockResolvedValue([
     {
@@ -230,6 +304,7 @@ async function readyEngine(host: HTMLElement) {
             adapter_kind: "kata_go_analysis",
             selected_node_analysis: true,
             whole_game_analysis: true,
+            root_score: true,
             protocol_cancel: true
           }
         }
@@ -246,6 +321,19 @@ function buttonNamed(host: HTMLElement, label: string) {
 
 function openAnalyzeMenu(host: HTMLElement) {
   act(() => buttonNamed(host, "分析").click());
+}
+
+function inputNamed(host: HTMLElement, label: string) {
+  const input = host.querySelector(`input[aria-label="${label}"]`);
+  if (!(input instanceof HTMLInputElement)) throw new Error(`Missing input: ${label}`);
+  return input;
+}
+
+async function changeNumber(input: HTMLInputElement, value: string) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
 }
 
 function canvasContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
@@ -271,14 +359,12 @@ describe("truthful native analysis actions", () => {
     expect(buttonNamed(host, "AI 解说").disabled).toBe(true);
     expect(buttonNamed(host, "AI 解说").title).toMatch(/尚未接入/);
     expect(buttonNamed(host, "闪电分析").disabled).toBe(true);
-    expect(buttonNamed(host, "闪电分析").title).toMatch(/尚未接入|闪电分析/);
     expect(host.querySelector('button[aria-label="闪电分析"]')).toBeInstanceOf(HTMLButtonElement);
     expect((host.querySelector('button[aria-label="闪电分析"]') as HTMLButtonElement).disabled).toBe(true);
 
     openAnalyzeMenu(host);
-    const lightning = buttonNamed(host, "试复盘 / 闪电分析");
+    const lightning = buttonNamed(host, "试复盘 / 闪电分析(Ctrl+B)");
     expect(lightning.disabled).toBe(true);
-    expect(lightning.title).toMatch(/尚未接入|闪电分析/);
     const autoAnalyze = buttonNamed(host, "自动分析");
     expect(autoAnalyze.disabled).toBe(true);
     expect(autoAnalyze.textContent).toBe("自动分析");
@@ -380,6 +466,806 @@ describe("truthful native analysis actions", () => {
     expect(host.textContent).toContain("stderr boom");
     expect(backend.fakeAnalyze).not.toHaveBeenCalled();
   });
+  it("serializes task preset persistence with a concurrent display edit", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    const visits = host.querySelector('input[aria-label="Total visits"]') as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(visits, "500");
+      visits.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    let releaseSave!: (preferences: AppPreferences) => void;
+    preferencesApi.saveAppPreferences.mockImplementationOnce(() => new Promise<AppPreferences>((resolve) => { releaseSave = resolve; }));
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+    await act(async () => { buttonNamed(host, "显示").click(); });
+    const candidates = Array.from(host.querySelectorAll('[role="menuitemcheckbox"]')).find((item) => item.textContent?.includes("候选")) as HTMLElement;
+    await act(async () => { candidates.click(); });
+    expect(preferencesApi.saveAppPreferences).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      releaseSave(preferencesApi.saveAppPreferences.mock.calls[0][0]);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(preferencesApi.saveAppPreferences).toHaveBeenLastCalledWith(expect.objectContaining({
+      taskDeepConditions: expect.objectContaining({ total_visits: { enabled: true, value: 500 } }),
+      taskOverviewConditions: defaultAppPreferences.taskOverviewConditions,
+      showCandidates: false
+    }));
+    expect(backend.startAnalysisTask).toHaveBeenCalledTimes(1);
+    await act(async () => { buttonNamed(host, "显示").click(); });
+    const savedCandidates = Array.from(host.querySelectorAll('[role="menuitemcheckbox"]')).find((item) => item.textContent?.includes("候选"));
+    expect(savedCandidates?.getAttribute("aria-checked")).toBe("false");
+  });
+  it("does not leak a failed task preset through a concurrent preference save", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await changeNumber(inputNamed(host, "Total visits"), "500");
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    let rejectTaskSave!: (error: Error) => void;
+    preferencesApi.saveAppPreferences.mockImplementationOnce(() => new Promise<AppPreferences>((_, reject) => {
+      rejectTaskSave = reject;
+    }));
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    await act(async () => { buttonNamed(host, "显示").click(); });
+    const candidates = Array.from(host.querySelectorAll('[role="menuitemcheckbox"]'))
+      .find((item) => item.textContent?.includes("候选")) as HTMLElement;
+    await act(async () => { candidates.click(); });
+
+    await act(async () => {
+      rejectTaskSave(new Error("task preset write failed"));
+      await preferencesApi.saveAppPreferences.mock.results[0]?.value.catch(() => undefined);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+    expect(preferencesApi.saveAppPreferences).toHaveBeenCalledTimes(2);
+    expect(preferencesApi.saveAppPreferences.mock.calls[1][0]).toEqual(expect.objectContaining({
+      taskOverviewConditions: defaultAppPreferences.taskOverviewConditions,
+      taskDeepConditions: defaultAppPreferences.taskDeepConditions,
+      showCandidates: false
+    }));
+  });
+
+  it("validates and persists independent OR task conditions before starting", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+
+    const timeEnabled = inputNamed(host, "Enable search time");
+    const totalEnabled = inputNamed(host, "Enable total visits");
+    const leadingEnabled = inputNamed(host, "Enable leading candidate visits");
+    const time = inputNamed(host, "Search time seconds");
+    const total = inputNamed(host, "Total visits");
+    const leading = inputNamed(host, "Leading candidate visits");
+    expect([time.value, total.value, leading.value]).toEqual(["10", "800", "500"]);
+
+    await act(async () => { totalEnabled.click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+
+    await act(async () => { timeEnabled.click(); leadingEnabled.click(); });
+    await changeNumber(time, "1.5");
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+
+    await changeNumber(time, "12");
+    await changeNumber(total, "500");
+    await changeNumber(leading, "7");
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => {
+      buttonNamed(host, "Start task").click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const conditions = {
+      time_seconds: { enabled: true, value: 12 },
+      total_visits: { enabled: false, value: 500 },
+      leading_candidate_visits: { enabled: true, value: 7 }
+    };
+    expect(preferencesApi.saveAppPreferences).toHaveBeenCalledWith(expect.objectContaining({
+      taskOverviewConditions: defaultAppPreferences.taskOverviewConditions,
+      taskDeepConditions: conditions
+    }));
+    expect(backend.startAnalysisTask).toHaveBeenCalledWith(expect.objectContaining({
+      strategy: "all_positions_two_stage",
+      overviewConditions: defaultAppPreferences.taskOverviewConditions,
+      conditions
+    }));
+    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent)
+      .toContain("conditions 12s OR 7 leading candidate visits");
+
+    await changeNumber(time, "99");
+    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent)
+      .toContain("conditions 12s OR 7 leading candidate visits");
+  });
+
+  it("restores the durable task preset into the rendered controls", async () => {
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({
+      preferences: {
+        ...defaultAppPreferences,
+        defaultMaxVisits: 999,
+        taskDeepConditions: {
+          time_seconds: { enabled: true, value: 15 },
+          total_visits: { enabled: false, value: 640 },
+          leading_candidate_visits: { enabled: true, value: 8 }
+        }
+      }
+    });
+    const host = await renderApp();
+    await act(async () => { await preferencesApi.loadAppPreferences.mock.results[0]?.value; });
+    expect(inputNamed(host, "Enable search time").checked).toBe(true);
+    expect(inputNamed(host, "Search time seconds").value).toBe("15");
+    expect(inputNamed(host, "Enable total visits").checked).toBe(false);
+    expect(inputNamed(host, "Total visits").value).toBe("640");
+    expect(inputNamed(host, "Enable leading candidate visits").checked).toBe(true);
+    expect(inputNamed(host, "Leading candidate visits").value).toBe("8");
+  });
+
+  it("loads a durable task preset without overwriting an in-progress draft edit", async () => {
+    let resolveLoad!: (value: { preferences: AppPreferences }) => void;
+    const load = new Promise<{ preferences: AppPreferences }>((resolve) => { resolveLoad = resolve; });
+    preferencesApi.loadAppPreferences.mockReturnValueOnce(load);
+    const host = await renderApp();
+    const time = inputNamed(host, "Search time seconds");
+    await changeNumber(time, "27");
+
+    await act(async () => {
+      resolveLoad({
+        preferences: {
+          ...defaultAppPreferences,
+          defaultMaxVisits: 999,
+          taskDeepConditions: {
+            time_seconds: { enabled: true, value: 15 },
+            total_visits: { enabled: false, value: 640 },
+            leading_candidate_visits: { enabled: true, value: 8 }
+          }
+        }
+      });
+      await load;
+    });
+    expect(time.value).toBe("27");
+    expect(inputNamed(host, "Total visits").value).toBe("800");
+    expect(inputNamed(host, "Leading candidate visits").value).toBe("500");
+  });
+
+
+  it("cancels the newly started legacy task before its snapshot arrives", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    taskRuntime.snapshot = { ...taskRuntime.snapshot!, state: "completed" };
+    await act(async () => { listeners.onJob?.({ ...taskRuntime.snapshot, lane: "whole_game", mode: "finite", node_path: { indices: [] }, outcome: "completed" }); });
+    backend.analysisTaskSnapshot.mockImplementationOnce(() => new Promise(() => {}));
+    await act(async () => { buttonNamed(host, "分析第一子主线").click(); });
+    backend.cancelKataGoAnalysis.mockImplementationOnce(async (_runId: string, jobId: string) => {
+      if (jobId !== "job-wg") throw new Error("Previous task already ended");
+      taskRuntime.snapshot = { ...taskRuntime.snapshot!, task_id: "legacy-task", job_id: jobId, state: "cancelled" };
+    });
+    await act(async () => { buttonNamed(host, "取消整局").click(); });
+    expect(host.querySelector('[data-analysis-task-state="cancelled"]')).not.toBeNull();
+    expect(host.textContent).not.toContain("Previous task already ended");
+  });
+
+  it("keeps Cancel terminal when an older task snapshot arrives late", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const searching = taskRuntime.snapshot!;
+    let releaseSnapshot!: (task: AnalysisTaskDto) => void;
+    backend.analysisTaskSnapshot.mockImplementationOnce(() => new Promise<AnalysisTaskDto>((resolve) => {
+      releaseSnapshot = resolve;
+    }));
+    await act(async () => {
+      listeners.onJob?.({ run_id: searching.run_id, job_id: searching.job_id, lane: "whole_game", mode: "finite", generation: 1, node_path: { indices: [] }, outcome: "started" });
+    });
+    backend.cancelKataGoAnalysis.mockImplementationOnce(async () => {
+      taskRuntime.snapshot = { ...searching, state: "cancelled" };
+    });
+    await act(async () => {
+      buttonNamed(host, "Cancel task").click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(buttonNamed(host, "Cancel task").disabled).toBe(true);
+    await act(async () => { releaseSnapshot(searching); });
+    expect(buttonNamed(host, "Cancel task").disabled).toBe(true);
+    expect(host.querySelector('[data-analysis-task-state="cancelled"]')).not.toBeNull();
+  });
+
+  it("fences stale snapshots and frames across Pause and Continue without duplicate commands", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    const searching = taskRuntime.snapshot!;
+
+    let releaseOldSnapshot!: (task: AnalysisTaskDto) => void;
+    backend.analysisTaskSnapshot.mockImplementationOnce(() => new Promise<AnalysisTaskDto>((resolve) => {
+      releaseOldSnapshot = resolve;
+    }));
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: searching.run_id,
+        job_id: searching.job_id,
+        lane: "whole_game",
+        mode: "finite",
+        generation: searching.generation,
+        node_path: { indices: [] },
+        outcome: "started"
+      });
+      await Promise.resolve();
+    });
+
+    let releasePause!: (task: AnalysisTaskDto) => void;
+    backend.pauseAnalysisTask.mockImplementationOnce(() => new Promise<AnalysisTaskDto>((resolve) => {
+      releasePause = resolve;
+    }));
+    const pauseButton = buttonNamed(host, "Pause task");
+    await act(async () => {
+      pauseButton.click();
+      pauseButton.click();
+      await Promise.resolve();
+    });
+    expect(backend.pauseAnalysisTask).toHaveBeenCalledTimes(1);
+    expect(backend.pauseAnalysisTask).toHaveBeenCalledWith({ runId: "run-1", taskId: "task-1" });
+    expect(buttonNamed(host, "Continue task").disabled).toBe(true);
+
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: searching.run_id,
+        job_id: searching.job_id,
+        lane: "whole_game",
+        mode: "finite",
+        generation: searching.generation,
+        node_path: { indices: [0] },
+        outcome: "progress",
+        completed: 2,
+        expected: 2,
+        remaining: 0,
+        frame: {
+          job_id: searching.job_id,
+          turn: 1,
+          visits: 32,
+          winrate_black: 0.9,
+          score_mean_black: 10,
+          candidates: [{ vertex: "pass", visits: 32, winrate_black: 0.9, score_mean_black: 10, pv: [] }]
+        }
+      });
+      releasePause({ ...searching, state: "pausing" });
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-analysis-task-state="pausing"]')?.textContent).toContain("overview 1/2 · deep 0/2");
+    expect(buttonNamed(host, "Continue task").disabled).toBe(true);
+    expect(buttonNamed(host, "Cancel task").disabled).toBe(false);
+    expect(host.querySelectorAll(".cand-row")).toHaveLength(0);
+
+    await act(async () => { releaseOldSnapshot(searching); });
+    expect(host.querySelector('[data-analysis-task-state="pausing"]')).not.toBeNull();
+
+    taskRuntime.snapshot = { ...searching, state: "paused" };
+    await act(async () => {
+      listeners.onJob?.({ ...searching, lane: "whole_game", mode: "finite", node_path: { indices: [] }, outcome: "progress" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-analysis-task-state="paused"]')?.textContent).toContain("overview 1/2 · deep 0/2");
+
+    let releasePausedSnapshot!: (task: AnalysisTaskDto) => void;
+    backend.analysisTaskSnapshot.mockImplementationOnce(() => new Promise<AnalysisTaskDto>((resolve) => {
+      releasePausedSnapshot = resolve;
+    }));
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 3,
+        continuous: { enabled: true, phase: "waiting" },
+        lifecycle: {
+          state: "ready",
+          run: {
+            run_id: "run-1",
+            profile_id: "profile-1",
+            adapter_kind: "kata_go_analysis",
+            profile_snapshot: savedProfile.profile
+          }
+        }
+      });
+      await Promise.resolve();
+    });
+    let releaseContinue!: (task: AnalysisTaskDto) => void;
+    backend.continueAnalysisTask.mockImplementationOnce(() => new Promise<AnalysisTaskDto>((resolve) => {
+      releaseContinue = resolve;
+    }));
+    const continueButton = buttonNamed(host, "Continue task");
+    await act(async () => {
+      continueButton.click();
+      continueButton.click();
+      await Promise.resolve();
+    });
+    expect(backend.continueAnalysisTask).toHaveBeenCalledTimes(1);
+    expect(backend.continueAnalysisTask).toHaveBeenCalledWith({ runId: "run-1", taskId: "task-1" });
+
+    const continued = { ...searching, job_id: "job-task-2", state: "searching" as const };
+    taskRuntime.snapshot = continued;
+    await act(async () => {
+      releaseContinue(continued);
+      await Promise.resolve();
+      releasePausedSnapshot({ ...searching, state: "paused" });
+    });
+    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent).toContain("overview 1/2 · deep 0/2");
+    expect(buttonNamed(host, "Pause task").disabled).toBe(false);
+
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: searching.run_id,
+        job_id: searching.job_id,
+        lane: "whole_game",
+        mode: "finite",
+        generation: searching.generation,
+        node_path: { indices: [0] },
+        outcome: "progress",
+        completed: 2,
+        expected: 2,
+        remaining: 0
+      });
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent).toContain("overview 1/2 · deep 0/2");
+    expect(host.textContent).not.toContain("整局 2/2");
+  });
+
+  it("reserves only the whole-game lane while paused and lets Cancel make it terminal", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    const searching = taskRuntime.snapshot!;
+    await act(async () => { buttonNamed(host, "Pause task").click(); });
+    taskRuntime.snapshot = { ...searching, state: "paused" };
+    await act(async () => {
+      listeners.onJob?.({ ...searching, lane: "whole_game", mode: "finite", node_path: { indices: [] }, outcome: "progress" });
+      await Promise.resolve();
+    });
+
+    expect(buttonNamed(host, "Start task").disabled).toBe(true);
+    expect(buttonNamed(host, "闪电分析").disabled).toBe(true);
+    expect(Array.from(host.querySelectorAll("button")).filter((button) => button.textContent === "分析第一子主线").every((button) => button.disabled)).toBe(true);
+    expect(buttonNamed(host, "分析当前节点").disabled).toBe(false);
+    await act(async () => { buttonNamed(host, "分析当前节点").click(); });
+    expect(backend.startSelectedNodeAnalysis).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      listeners.onSnapshot?.({
+        revision: 3,
+        continuous: { enabled: true, phase: "error" },
+        lifecycle: {
+          state: "error",
+          run: {
+            run_id: "run-1",
+            profile_id: "profile-1",
+            adapter_kind: "kata_go_analysis",
+            profile_snapshot: savedProfile.profile
+          },
+          failure: { operation: "job", kind: "protocol", message: "engine held" }
+        }
+      });
+    });
+    expect(buttonNamed(host, "Continue task").disabled).toBe(true);
+
+    backend.cancelKataGoAnalysis.mockImplementationOnce(async () => {
+      taskRuntime.snapshot = { ...searching, state: "cancelled", reason: "Cancelled by user." };
+    });
+    await act(async () => { buttonNamed(host, "Cancel task").click(); });
+    expect(backend.cancelKataGoAnalysis).toHaveBeenCalledWith("run-1", "job-task-1");
+    expect(host.querySelector('[data-analysis-task-state="cancelled"]')?.textContent).toContain("overview 1/2 · deep 0/2");
+    expect(buttonNamed(host, "Cancel task").disabled).toBe(true);
+  });
+
+  it("previews and starts two stages, persists both budgets, and focus-guards the quick shortcut", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+
+    const scope = host.querySelector('select[aria-label="Analysis scope"]') as HTMLSelectElement;
+    const interval = host.querySelector('input[aria-label="Use position interval"]') as HTMLInputElement;
+    const start = host.querySelector('input[aria-label="Position interval start"]') as HTMLInputElement;
+    const end = host.querySelector('input[aria-label="Position interval end"]') as HTMLInputElement;
+    const side = host.querySelector('select[aria-label="Side to play"]') as HTMLSelectElement;
+    const visits = host.querySelector('input[aria-label="Total visits"]') as HTMLInputElement;
+    expect(Array.from(scope.options).map((option) => option.value)).toEqual([
+      "current_node",
+      "selected_review_line",
+      "first_child_mainline",
+      "all_branches"
+    ]);
+    await act(async () => {
+      scope.value = "selected_review_line";
+      scope.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => { interval.click(); });
+    for (const [input, value] of [[start, "0"], [end, "1"], [visits, "500"]] as const) {
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    }
+    await act(async () => {
+      side.value = "black";
+      side.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => {
+      buttonNamed(host, "Preview scope").click();
+      await backend.previewAnalysisScope.mock.results.at(-1)?.value;
+    });
+    expect(host.textContent).toContain("2 requested targets");
+    expect(host.textContent).toContain("move 0 (root, black to play)");
+    expect(host.textContent).toContain("move 1 (0, white to play)");
+
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(visits, "4294967296");
+      visits.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      buttonNamed(host, "Preview scope").click();
+      await backend.previewAnalysisScope.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      buttonNamed(host, "Start task").click();
+      await Promise.resolve();
+    });
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("Deep total visits must be a whole number");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(visits, "500");
+      visits.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      buttonNamed(host, "Preview scope").click();
+      await backend.previewAnalysisScope.mock.results.at(-1)?.value;
+    });
+    preferencesApi.saveAppPreferences.mockRejectedValueOnce(new Error("preferences disk full"));
+    await act(async () => {
+      buttonNamed(host, "Start task").click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("preferences disk full");
+
+
+    await act(async () => {
+      buttonNamed(host, "Start task").click();
+      await backend.startAnalysisTask.mock.results.at(-1)?.value;
+    });
+    expect(host.textContent).toContain("overview · searching · overview 1/2 · deep 0/2");
+    expect(backend.startAnalysisTask).toHaveBeenCalledWith(expect.objectContaining({
+      runId: "run-1",
+      strategy: "all_positions_two_stage",
+      overviewConditions: defaultAppPreferences.taskOverviewConditions,
+      conditions: {
+        time_seconds: { enabled: false, value: 10 },
+        total_visits: { enabled: true, value: 500 },
+        leading_candidate_visits: { enabled: false, value: 500 }
+      }
+    }));
+    expect(preferencesApi.saveAppPreferences).toHaveBeenCalledWith(expect.objectContaining({
+      taskOverviewConditions: defaultAppPreferences.taskOverviewConditions,
+      taskDeepConditions: {
+        time_seconds: { enabled: false, value: 10 },
+        total_visits: { enabled: true, value: 500 },
+        leading_candidate_visits: { enabled: false, value: 500 }
+      }
+    }));
+
+    taskRuntime.snapshot = { ...taskRuntime.snapshot!, state: "cancelled", reason: "Cancelled by user." };
+    await act(async () => {
+      buttonNamed(host, "Cancel task").click();
+      await backend.cancelKataGoAnalysis.mock.results.at(-1)?.value;
+      await Promise.resolve();
+    });
+    expect(backend.cancelKataGoAnalysis).toHaveBeenCalledWith("run-1", "job-task-1");
+    expect(host.textContent).toContain("cancelled · overview 1/2 · deep 0/2");
+
+    backend.startAnalysisTask.mockClear();
+    visits.focus();
+    act(() => visits.dispatchEvent(new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true })));
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+    visits.blur();
+    taskRuntime.snapshot = null;
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true }));
+      await backend.previewAnalysisScope.mock.results.at(-1)?.value;
+      await backend.startAnalysisTask.mock.results.at(-1)?.value;
+    });
+    expect(backend.startAnalysisTask).toHaveBeenCalledWith(expect.objectContaining({
+      strategy: "single_stage",
+      conditions: expect.objectContaining({ total_visits: { enabled: true, value: 1 } })
+    }));
+  });
+
+  it("runs the all-position strategy from Ctrl+Shift+B with text-focus suppression", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    const visits = host.querySelector('input[aria-label="Total visits"]') as HTMLInputElement;
+
+    visits.focus();
+    act(() => visits.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "b",
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true
+    })));
+    expect(backend.previewAnalysisScope).not.toHaveBeenCalled();
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+
+    visits.blur();
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "b",
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true
+      }));
+      await backend.previewAnalysisScope.mock.results.at(-1)?.value;
+      await backend.startAnalysisTask.mock.results.at(-1)?.value;
+    });
+    expect(backend.startAnalysisTask).toHaveBeenCalledWith(expect.objectContaining({
+      strategy: "all_positions_two_stage",
+      overviewConditions: defaultAppPreferences.taskOverviewConditions,
+      conditions: defaultAppPreferences.taskDeepConditions
+    }));
+    expect(host.textContent).toContain("overview · searching · overview 1/2 · deep 0/2");
+  });
+
+  it("previews swing support separately and persists independent selection and stage presets", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    const strategy = host.querySelector('select[aria-label="Analysis strategy"]') as HTMLSelectElement;
+    await act(async () => {
+      strategy.value = "swing_selected_two_stage";
+      strategy.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect((host.querySelector('input[aria-label="Enable search time"]') as HTMLInputElement).checked).toBe(true);
+    expect((host.querySelector('input[aria-label="Enable total visits"]') as HTMLInputElement).checked).toBe(false);
+    const actor = host.querySelector('select[aria-label="Swing move actor"]') as HTMLSelectElement;
+    const winrate = host.querySelector('input[aria-label="Winrate swing threshold"]') as HTMLInputElement;
+    const scoreEnabled = host.querySelector('input[aria-label="Enable score swing threshold"]') as HTMLInputElement;
+    await act(async () => {
+      actor.value = "white";
+      actor.dispatchEvent(new Event("change", { bubbles: true }));
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(winrate, "12");
+      winrate.dispatchEvent(new Event("input", { bubbles: true }));
+      scoreEnabled.click();
+    });
+    await act(async () => {
+      buttonNamed(host, "Preview scope").click();
+      await backend.previewAnalysisScope.mock.results.at(-1)?.value;
+    });
+    const criteria = {
+      move_actors: "white",
+      winrate_change_percentage_points: { enabled: true, value: 12 },
+      score_change_points: { enabled: true, value: 3 }
+    } as const;
+    expect(host.textContent).toContain("supporting first move 2 (2, black to play)");
+    expect(backend.previewAnalysisScope).toHaveBeenLastCalledWith(expect.objectContaining({ swingCriteria: criteria }));
+    expect(host.textContent).toContain("2 requested targets · 1 supporting predecessor targets");
+
+    await act(async () => {
+      buttonNamed(host, "Start task").click();
+      await backend.startAnalysisTask.mock.results.at(-1)?.value;
+    });
+    expect(backend.startAnalysisTask).toHaveBeenLastCalledWith(expect.objectContaining({
+      strategy: "swing_selected_two_stage",
+      overviewConditions: defaultAppPreferences.taskSwingOverviewConditions,
+      conditions: defaultAppPreferences.taskSwingDeepConditions,
+      preview: expect.objectContaining({ swing_criteria: criteria })
+    }));
+    expect(preferencesApi.saveAppPreferences).toHaveBeenLastCalledWith(expect.objectContaining({
+      taskSwingOverviewConditions: defaultAppPreferences.taskSwingOverviewConditions,
+      taskSwingDeepConditions: defaultAppPreferences.taskSwingDeepConditions,
+      taskSwingCriteria: criteria,
+      taskOverviewConditions: defaultAppPreferences.taskOverviewConditions,
+      taskDeepConditions: defaultAppPreferences.taskDeepConditions
+    }));
+    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent)
+      .toContain("overview 1/3 (requested 1/2, supporting 0/1) · deep 0/2");
+    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent)
+      .toContain("move actor white · swing 12pp winrate OR 3 score");
+    taskRuntime.snapshot = {
+      ...taskRuntime.snapshot!,
+      stage: "deep",
+      overview_completed: [{ indices: [] }, { indices: [0] }, { indices: [2] }],
+      selected_for_deep: [{ indices: [] }, { indices: [2] }],
+      completed: [{ indices: [2] }]
+    };
+    await act(async () => { buttonNamed(host, "Pause task").click(); });
+    expect(host.querySelector('[data-analysis-task-state="pausing"]')?.textContent)
+      .toContain("deep 1/2 (requested 0/1, supporting 1/1)");
+  });
+
+
+  it("discards a delayed swing preview after its predicate changes", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    const strategy = host.querySelector('select[aria-label="Analysis strategy"]') as HTMLSelectElement;
+    await act(async () => {
+      strategy.value = "swing_selected_two_stage";
+      strategy.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    let resolvePreview!: () => void;
+    backend.previewAnalysisScope.mockImplementationOnce(({ generation, scope, swingCriteria }) =>
+      new Promise<AnalysisScopePreviewDto>((resolve) => {
+        resolvePreview = () => resolve({
+          generation,
+          scope,
+          targets: [{ node_path: { indices: [0] }, move_number: 1, to_play: "white" }],
+          supporting_targets: [{ node_path: { indices: [] }, move_number: 0, to_play: "black" }],
+          swing_comparisons: [{ before: { indices: [] }, after: { indices: [0] }, move_actor: "black" }],
+          swing_criteria: swingCriteria ?? null
+        });
+      })
+    );
+    act(() => { buttonNamed(host, "Preview scope").click(); });
+    const winrate = host.querySelector('input[aria-label="Winrate swing threshold"]') as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(winrate, "20");
+      winrate.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      resolvePreview();
+      await backend.previewAnalysisScope.mock.results.at(-1)?.value;
+    });
+
+    expect(buttonNamed(host, "Start task").disabled).toBe(true);
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+  });
+
+  it("persists an explicit single-stage preset before admission", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    const strategy = host.querySelector('select[aria-label="Analysis strategy"]') as HTMLSelectElement;
+    await act(async () => {
+      strategy.value = "single_stage";
+      strategy.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await changeNumber(inputNamed(host, "Total visits"), "32");
+    await act(async () => {
+      buttonNamed(host, "Preview scope").click();
+      await backend.previewAnalysisScope.mock.results.at(-1)?.value;
+    });
+
+    preferencesApi.saveAppPreferences.mockRejectedValueOnce(new Error("preferences disk full"));
+    await act(async () => {
+      buttonNamed(host, "Start task").click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("preferences disk full");
+
+    await act(async () => {
+      buttonNamed(host, "Start task").click();
+      await backend.startAnalysisTask.mock.results.at(-1)?.value;
+    });
+    const singleStage = {
+      time_seconds: { enabled: false, value: 10 },
+      total_visits: { enabled: true, value: 32 },
+      leading_candidate_visits: { enabled: false, value: 500 }
+    };
+    expect(preferencesApi.saveAppPreferences).toHaveBeenLastCalledWith(expect.objectContaining({
+      taskSingleStageConditions: singleStage,
+      taskOverviewConditions: defaultAppPreferences.taskOverviewConditions,
+      taskDeepConditions: defaultAppPreferences.taskDeepConditions
+    }));
+    expect(backend.startAnalysisTask).toHaveBeenCalledWith(expect.objectContaining({
+      strategy: "single_stage",
+      conditions: singleStage,
+      overviewConditions: null
+    }));
+  });
+
+  it("renders the Deep transition and Pause/Continue with stage-local counts", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    const overview = taskRuntime.snapshot!;
+    const deep: AnalysisTaskDto = {
+      ...overview,
+      stage: "deep",
+      state: "searching",
+      overview_completed: overview.requested,
+      completed: [overview.requested[0]],
+      overview_summaries: []
+    };
+    taskRuntime.snapshot = deep;
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: deep.run_id,
+        job_id: deep.job_id,
+        lane: "whole_game",
+        mode: "finite",
+        generation: deep.generation,
+        node_path: deep.requested[0],
+        outcome: "progress"
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent)
+      .toContain("deep · searching · overview 2/2 · deep 1/2");
+
+    await act(async () => {
+      buttonNamed(host, "Pause task").click();
+      await backend.pauseAnalysisTask.mock.results.at(-1)?.value;
+    });
+    expect(host.querySelector('[data-analysis-task-state="pausing"]')?.textContent)
+      .toContain("overview 2/2 · deep 1/2");
+    taskRuntime.snapshot = { ...deep, state: "paused" };
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: deep.run_id,
+        job_id: deep.job_id,
+        lane: "whole_game",
+        mode: "finite",
+        generation: deep.generation,
+        node_path: deep.requested[1],
+        outcome: "cancelled"
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-analysis-task-state="paused"]')?.textContent)
+      .toContain("overview 2/2 · deep 1/2");
+
+    await act(async () => {
+      buttonNamed(host, "Continue task").click();
+      await backend.continueAnalysisTask.mock.results.at(-1)?.value;
+    });
+    expect(backend.continueAnalysisTask).toHaveBeenCalledWith({ runId: "run-1", taskId: "task-1" });
+    expect(host.querySelector('[data-analysis-task-state="searching"]')?.textContent)
+      .toContain("deep · searching · overview 2/2 · deep 1/2");
+  });
+
+  it("shows the observed normal ending conditions", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    taskRuntime.snapshot = {
+      ...taskRuntime.snapshot!,
+      state: "completed",
+      ending_conditions: ["time_seconds", "leading_candidate_visits"],
+      reason: "Budget reached."
+    };
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-1",
+        job_id: "job-task-1",
+        lane: "whole_game",
+        mode: "finite",
+        generation: 1,
+        node_path: { indices: [0] },
+        outcome: "completed"
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-analysis-task-state="completed"]')?.textContent)
+      .toContain("ended by time + leading candidate visits");
+  });
+
 });
 
 describe("truthful browser demonstration analysis", () => {
