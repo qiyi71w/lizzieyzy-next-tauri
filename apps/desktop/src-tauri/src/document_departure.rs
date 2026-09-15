@@ -312,7 +312,7 @@ pub fn resolve_exit(
             selected_path,
             save_destination(),
             teardown,
-            remaining(),
+            budget,
         ),
         ApplicationExitActionDto::Cancel => unreachable!(),
     }
@@ -494,7 +494,7 @@ pub async fn resolve_application_exit(
                 selected_path,
                 destination,
                 |budget| stop_foreground_resources(&manager, budget),
-                deadline.saturating_duration_since(Instant::now()),
+                APPLICATION_TEARDOWN_BUDGET,
             )?
         }
     } else {
@@ -881,6 +881,41 @@ mod tests {
         assert!(!*torn_down.borrow());
         assert!(outcome.message.contains("disk full"));
         assert!(state.play(opened.selected_path, MoveVertex::Pass).is_ok());
+    }
+
+    #[test]
+    fn exit_save_time_does_not_consume_teardown_budget() {
+        let state = CurrentGameState::default();
+        let opened = state.replace(BRANCHING, None).unwrap();
+        state.force_dirty();
+        let id = departure_id(state.prepare_exit().unwrap());
+        let destination = unique_path("exit-save-budget");
+        let budget = Duration::from_millis(20);
+        let observed_budget = RefCell::new(None);
+
+        let outcome = resolve_exit(
+            &state,
+            id,
+            ApplicationExitActionDto::Save,
+            opened.selected_path,
+            &[],
+            |_| Ok(()),
+            wait_succeeds,
+            || {
+                std::thread::sleep(Duration::from_millis(40));
+                Ok(Some(destination.to_string_lossy().into_owned()))
+            },
+            |received| {
+                *observed_budget.borrow_mut() = Some(received);
+                Vec::new()
+            },
+            budget,
+        )
+        .unwrap();
+
+        assert_eq!(*observed_budget.borrow(), Some(budget));
+        assert_eq!(outcome.teardown, Some(ApplicationTeardownAttemptDto::Completed));
+        let _ = fs::remove_file(destination);
     }
 
     #[test]
