@@ -142,10 +142,12 @@ pub fn attempt_teardown(
     budget: Duration,
     stop_owned: impl FnOnce(Duration) -> Vec<String>,
 ) -> ApplicationTeardownAttemptDto {
+    let deadline = Instant::now() + budget;
     let outstanding = stop_owned(budget);
     if outstanding.is_empty() {
         ApplicationTeardownAttemptDto::Completed
     } else {
+        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
         ApplicationTeardownAttemptDto::TimedOut { outstanding }
     }
 }
@@ -560,7 +562,7 @@ mod tests {
     };
     use std::cell::RefCell;
     use std::fs;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     const BRANCHING: &str = include_str!("../../../../tests/golden/editable-workspace-branching.sgf");
     const EMPTY: &str = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
@@ -963,6 +965,22 @@ mod tests {
     }
 
     #[test]
+    fn failed_teardown_uses_the_supplied_budget() {
+        let budget = Duration::from_millis(40);
+        let started = Instant::now();
+
+        let attempt = attempt_teardown(budget, |_| vec!["foreground engine".to_string()]);
+
+        assert!(started.elapsed() >= budget);
+        assert_eq!(
+            attempt,
+            ApplicationTeardownAttemptDto::TimedOut {
+                outstanding: vec!["foreground engine".to_string()],
+            }
+        );
+    }
+
+    #[test]
     fn teardown_timeout_names_resources_and_retry_is_another_bounded_attempt() {
         let state = CurrentGameState::default();
         let opened = state.replace(BRANCHING, None).unwrap();
@@ -981,7 +999,7 @@ mod tests {
                 *attempts.borrow_mut() += 1;
                 vec!["foreground engine".to_string()]
             },
-            Duration::from_secs(10),
+            Duration::from_millis(40),
         )
         .unwrap();
         assert_eq!(
@@ -1008,7 +1026,7 @@ mod tests {
                 *attempts.borrow_mut() += 1;
                 Vec::new()
             },
-            Duration::from_secs(10),
+            Duration::from_millis(40),
         )
         .unwrap();
         assert_eq!(*attempts.borrow(), 2);
