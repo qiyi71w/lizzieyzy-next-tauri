@@ -37,6 +37,7 @@ const backend = vi.hoisted(() => ({
   cancelKataGoAnalysis: vi.fn(),
   classifyProblems: vi.fn(),
   fakeAnalyze: vi.fn(),
+  importGameFile: vi.fn(),
   openSgfDocument: vi.fn(),
   parseSgfSummary: vi.fn(),
   replaySgfPositions: vi.fn(),
@@ -538,7 +539,7 @@ describe("App focus-safe review controls", () => {
       }
     }));
     backend.saveCurrentGame.mockResolvedValue({ ...branchingGame, dirty: false });
-    backend.openSgfDocument.mockResolvedValue({ sgfText: "(;SZ[9])", path: "/tmp/opened.sgf" });
+    backend.openSgfDocument.mockResolvedValue({ format: "sgf", sgf_text: "(;SZ[9])", display_path: "/tmp/opened.sgf", display_name: "opened.sgf", native_path: "/tmp/opened.sgf" });
     backend.playCurrentGame.mockImplementation(async (path: NodePath) => ({
       ...branchingGame,
       selected_path: path,
@@ -1193,7 +1194,7 @@ describe("App focus-safe review controls", () => {
 describe("App document replacement", () => {
   beforeEach(() => {
     backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
-    backend.openSgfDocument.mockResolvedValue({ sgfText: "(;SZ[9])", path: "/tmp/opened.sgf" });
+    backend.openSgfDocument.mockResolvedValue({ format: "sgf", sgf_text: "(;SZ[9])", display_path: "/tmp/opened.sgf", display_name: "opened.sgf", native_path: "/tmp/opened.sgf" });
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: {
@@ -1294,7 +1295,7 @@ describe("App document replacement", () => {
     backend.prepareDocumentReplacement.mockClear();
     backend.prepareDocumentReplacement.mockResolvedValue({ status: "ready", departure_id: 2 });
     backend.openSgfDocument.mockClear();
-    backend.openSgfDocument.mockResolvedValue({ sgfText: "(;SZ[9])", path: "/tmp/opened.sgf" });
+    backend.openSgfDocument.mockResolvedValue({ format: "sgf", sgf_text: "(;SZ[9])", display_path: "/tmp/opened.sgf", display_name: "opened.sgf", native_path: "/tmp/opened.sgf" });
     await act(async () => {
       buttonLabeled(host, "打开").click();
       await backend.openSgfDocument.mock.results.at(-1)?.value;
@@ -1303,6 +1304,64 @@ describe("App document replacement", () => {
     expect(backend.openSgfDocument).toHaveBeenCalledTimes(1);
     expect(backend.prepareDocumentReplacement).toHaveBeenCalledWith("(;SZ[9])", "/tmp/opened.sgf");
     expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).toBeNull();
+  });
+
+  it("opens GIB through the shared replacement owner without adopting its path", async () => {
+    const host = await renderApp();
+    currentGameFixture.mockResolvedValue({ ...branchingGame, native_path: null });
+    backend.prepareDocumentReplacement.mockClear();
+    backend.prepareDocumentReplacement.mockResolvedValue({ status: "ready", departure_id: 4 });
+    backend.openSgfDocument.mockResolvedValue({
+      format: "gib",
+      sgf_text: "(;SZ[19]PB[Black]PW[White];B[dd])",
+      display_path: "/tmp/named.gib",
+      display_name: "named.gib",
+      native_path: null
+    });
+    await act(async () => {
+      buttonLabeled(host, "打开").click();
+      await backend.openSgfDocument.mock.results.at(-1)?.value;
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+    expect(backend.prepareDocumentReplacement).toHaveBeenCalledWith(
+      "(;SZ[19]PB[Black]PW[White];B[dd])",
+      null
+    );
+    expect(host.querySelector(".doc-name")?.textContent).toContain("named.sgf");
+  });
+
+  it("imports a selected GIB file through the same read-only replacement contract", async () => {
+    const host = await renderApp();
+    currentGameFixture.mockResolvedValue({ ...branchingGame, native_path: null });
+    backend.prepareDocumentReplacement.mockClear();
+    backend.importGameFile.mockResolvedValue({
+      format: "gib",
+      sgf_text: "(;SZ[19]PB[Black]PW[White];B[dd])",
+      display_path: "upload.gib",
+      display_name: "upload.gib",
+      native_path: null
+    });
+    act(() => buttonNamed(host, "文件").click());
+    act(() => buttonNamed(host, "导入棋谱…").click());
+    const input = requiredElement<HTMLInputElement>(host, 'input[type="file"]');
+    expect(input.accept).toContain(".gib");
+    const file = new File(["gib bytes"], "upload.gib", { type: "application/octet-stream" });
+    Object.defineProperty(input, "files", { configurable: true, value: [file] });
+    await act(async () => {
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      await backend.importGameFile.mock.results.at(-1)?.value;
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+    expect(backend.importGameFile).toHaveBeenCalledWith(file);
+    expect(backend.prepareDocumentReplacement).toHaveBeenCalledWith(
+      "(;SZ[19]PB[Black]PW[White];B[dd])",
+      null
+    );
+    expect(host.querySelector(".doc-name")?.textContent).toContain("upload.sgf");
   });
 
   it("routes paste, sample, New, and parse through the shared replacement owner", async () => {

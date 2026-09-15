@@ -27,6 +27,7 @@ import type {
   EngineProfileSettingsDto,
   EngineFailureDto,
   ForegroundEngineSnapshotDto,
+  GameFileImportDto,
   GameDto,
   MoveDto,
   MoveVertex,
@@ -42,12 +43,7 @@ import { normalizeAppPreferences, type AppPreferences } from "../domain/preferen
 
 const letters = "abcdefghijklmnopqrstuvwxyz";
 const sampleGameId = "browser-sgf";
-const sgfDialogFilters = [{ name: "SGF files", extensions: ["sgf", "txt"] }];
-
-export type SgfDocument = {
-  path: string | null;
-  sgfText: string;
-};
+const gameDialogFilters = [{ name: "Game files", extensions: ["sgf", "txt", "gib"] }];
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
@@ -84,16 +80,32 @@ export async function fakeAnalyze(sgfText: string): Promise<AnalysisFrameDto[]> 
   throw new Error(nativeSyntheticAnalysisUnavailable);
 }
 
-export async function openSgfDocument(): Promise<SgfDocument | null> {
+export async function openSgfDocument(): Promise<GameFileImportDto | null> {
   if (!isTauriRuntime()) return null;
   const selected = await open({
     multiple: false,
     directory: false,
-    filters: sgfDialogFilters
+    filters: gameDialogFilters
   });
   if (typeof selected !== "string") return null;
-  const sgfText = await invoke<string>("read_sgf_file", { path: selected });
-  return { path: selected, sgfText };
+  return invoke<GameFileImportDto>("read_game_file", { path: selected });
+}
+
+export async function importGameFile(file: File): Promise<GameFileImportDto> {
+  if (!isTauriRuntime()) {
+    if (file.name.toLowerCase().endsWith(".gib")) {
+      throw new Error("GIB import requires the native Tauri desktop backend.");
+    }
+    return {
+      format: "sgf",
+      sgf_text: await file.text(),
+      display_path: file.name,
+      display_name: file.name,
+      native_path: null
+    };
+  }
+  const input = Array.from(new Uint8Array(await file.arrayBuffer()));
+  return invoke<GameFileImportDto>("import_game_bytes", { fileName: file.name, input });
 }
 
 export const nativeCurrentGameUnavailable =

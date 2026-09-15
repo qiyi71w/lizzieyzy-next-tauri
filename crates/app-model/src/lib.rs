@@ -97,6 +97,22 @@ pub struct GameDto {
     pub summary: GameSummaryDto,
     pub moves: Vec<MoveDto>,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GameFileFormatDto {
+    Sgf,
+    Gib,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GameFileImportDto {
+    pub format: GameFileFormatDto,
+    pub sgf_text: String,
+    pub display_path: String,
+    pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_path: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct NodePath {

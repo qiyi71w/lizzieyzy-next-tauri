@@ -21,6 +21,7 @@ import {
   foregroundEngineContinuousAction,
   getHealth,
   isTauriRuntime,
+  importGameFile,
   nativeCurrentGameUnavailable,
   nativeSyntheticAnalysisUnavailable,
   openSgfDocument,
@@ -1319,8 +1320,11 @@ export function App() {
     try {
       const document = await openSgfDocument();
       if (!document) return;
-      await applyReplacement(document.sgfText, document.path, {
+      await applyReplacement(document.sgf_text, document.native_path ?? null, {
         confirmMessage: "放弃未保存的棋谱并打开这个文件？",
+        fallbackName: document.format === "gib"
+          ? document.display_name.replace(/\.gib$/i, ".sgf")
+          : null,
         successMessage: (projection, fileName) => `Opened ${fileName}: ${projection.summary.move_count} moves.`,
         failurePrefix: "Open failed"
       });
@@ -2102,13 +2106,19 @@ export function App() {
 
   async function handleImportFile(file: File | null) {
     if (!file) return;
-    const text = await file.text();
-    await applyReplacement(text, null, {
-      confirmMessage: "放弃未保存的棋谱并导入这个文件？",
-      fallbackName: file.name,
-      successMessage: (projection, fileName) => `Imported ${fileName}: ${projection.summary.move_count} moves.`,
-      failurePrefix: "Import failed"
-    });
+    try {
+      const imported = await importGameFile(file);
+      await applyReplacement(imported.sgf_text, imported.native_path ?? null, {
+        confirmMessage: "放弃未保存的棋谱并导入这个文件？",
+        fallbackName: imported.format === "gib"
+          ? imported.display_name.replace(/\.gib$/i, ".sgf")
+          : imported.display_name,
+        successMessage: (projection, fileName) => `Imported ${fileName}: ${projection.summary.move_count} moves.`,
+        failurePrefix: "Import failed"
+      });
+    } catch (error) {
+      setMessage(`Import failed: ${errorMessage(error)}`);
+    }
   }
 
   async function handleProviderImport(result: ProviderImportResult) {
@@ -2585,7 +2595,7 @@ export function App() {
         <div className="button-row">
           <label className="file-button">
             导入棋谱
-            <input type="file" accept=".sgf,.txt,application/x-go-sgf,text/plain" disabled={false} onChange={(event) => void handleImportFile(event.target.files?.[0] ?? null)} />
+            <input type="file" accept=".sgf,.txt,.gib,application/x-go-sgf,text/plain,application/octet-stream" disabled={false} onChange={(event) => void handleImportFile(event.target.files?.[0] ?? null)} />
           </label>
           <button type="button" onClick={() => void loadSample()} disabled={false}>载入示例</button>
         </div>

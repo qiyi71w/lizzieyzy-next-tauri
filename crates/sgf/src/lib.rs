@@ -6,8 +6,10 @@ use uuid::Uuid;
 
 mod analysis;
 mod current_game;
+mod gib;
 pub use analysis::{encode_analysis_payload, parse_analysis_payload, AnalysisSlot, SgfAnalysisPayload};
 pub use current_game::CurrentSgfDocument;
+pub use gib::{import_gib, GibError};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SgfDocument {
     pub board_size: u8,

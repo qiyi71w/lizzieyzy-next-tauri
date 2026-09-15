@@ -863,7 +863,7 @@ describe("foreground engine lifecycle UI", () => {
   it("does not restore a previous document's whole-game node result after Open", async () => {
     currentGameFixture.mockResolvedValue(mainlineRoot);
     backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => snapshotAt(path));
-    backend.openSgfDocument.mockResolvedValue({ sgfText: "(;SZ[9]B[fe])", path: "/tmp/other.sgf" });
+    backend.openSgfDocument.mockResolvedValue({ format: "sgf", sgf_text: "(;SZ[9]B[fe])", display_path: "/tmp/other.sgf", display_name: "other.sgf", native_path: "/tmp/other.sgf" });
     const host = await renderApp();
     await readyEngine(host);
     const nextMove = host.querySelector('button[title="下一手"]') as HTMLButtonElement;
@@ -930,7 +930,7 @@ describe("foreground engine lifecycle UI", () => {
   it("drops a selected-node session when Open replaces the document", async () => {
     currentGameFixture.mockResolvedValue(mainlineRoot);
     backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => snapshotAt(path));
-    backend.openSgfDocument.mockResolvedValue({ sgfText: "(;SZ[9]B[fe])", path: "/tmp/other.sgf" });
+    backend.openSgfDocument.mockResolvedValue({ format: "sgf", sgf_text: "(;SZ[9]B[fe])", display_path: "/tmp/other.sgf", display_name: "other.sgf", native_path: "/tmp/other.sgf" });
     const host = await renderApp();
     await readyEngine(host);
     const nextMove = host.querySelector('button[title="下一手"]') as HTMLButtonElement;

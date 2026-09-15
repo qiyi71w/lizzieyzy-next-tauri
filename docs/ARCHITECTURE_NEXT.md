@@ -29,13 +29,15 @@ Provider and readboard live paths follow the same boundary rule. The React UI sh
 
 ### `apps/desktop`
 
-React + TypeScript desktop UI built with Vite. The current UI includes board rendering, SGF text/import workflow, native open/save entry points, winrate and analysis panels, and engine profile controls.
+React + TypeScript desktop UI built with Vite. The current UI includes board rendering, SGF text/import workflow, native SGF/GIB open and SGF save entry points, winrate and analysis panels, and engine profile controls.
 
 The browser preview can exercise UI fallback paths and local demonstration analysis, but it cannot perform native file dialogs, authoritative current-game edit/Save, app-data profile or recovery persistence, local asset checks, or real KataGo execution.
 
 ### `apps/desktop/src-tauri`
 
 Tauri 2 command gateway. It exposes health, SGF parse/replay, native SGF read/write, engine profile persistence, asset checks, and manager-owned Foreground Engine Run commands (`foreground_engine_snapshot`, `foreground_engine_start`, `foreground_engine_stop`, `foreground_engine_restart`, `foreground_engine_switch`, `foreground_engine_start_selected_node`, `foreground_engine_cancel_job`). Whole-game analysis on a Ready Run uses `katago_start_analyze_game` / `katago_cancel_analysis`. Current-game replacement uses `prepare_document_replacement` / `resolve_document_replacement`. Application exit uses `prepare_application_exit`, `resolve_application_exit`, `retry_application_teardown`, `confirm_application_exit_anyway`, and `confirm_native_exit`. Current-game recovery uses `inspect_current_game_recovery`, `restore_current_game_recovery`, `discard_current_game_recovery`, `retry_current_game_recovery`, and `current_game_recovery_protection`. Removed profile-to-process commands `katago_analyze_once` and `katago_analyze_game` are not registered. Native `fake_analyze` is not registered; browser-preview demonstration analysis remains non-authoritative and does not create a Foreground Engine Run.
+
+Native chooser intake uses `read_game_file`; the sheet file input uses `import_game_bytes`. Both return `GameFileImportDto` (`format`, canonical `sgf_text`, display path/name, optional writable `native_path`) and then enter the same document-replacement owner. SGF/TXT retains its native path. GIB is decoded and normalized by the `sgf` crate and always returns `native_path = null`, so ordinary Save uses Save As and can never overwrite the source GIB.
 
 This layer should stay a gateway. Domain behavior belongs in crates unless it is directly about Tauri lifecycle, app data paths, command shape, or event emission.
 
@@ -60,7 +62,7 @@ The Provider panel is the expected UI surface for provider fetch, readboard prob
 
 ### `crates/app-model`
 
-Shared DTOs for games, moves, positions, candidate moves, analysis frames, engine profiles, assets, health, and problem markers.
+Shared DTOs for games, typed file-import results, moves, positions, candidate moves, analysis frames, engine profiles, assets, health, and problem markers.
 
 ### `crates/go-core`
 
@@ -68,7 +70,7 @@ Pure Go board and rules logic. It has no UI, Tauri, storage, or process dependen
 
 ### `crates/sgf`
 
-SGF parsing, replay, and serialization. It preserves the parsed tree for compatibility paths while exposing normalized game and position DTOs to the rest of the app.
+SGF parsing, replay, and serialization plus Tygem GIB import. GIB accepts UTF-8 or GB18030 text, maps names, authoritative komi, ordinary moves, pass, and supported handicap setup into a validated SGF tree, and rejects malformed or illegal input before replacement. The crate preserves the parsed SGF tree for compatibility paths while exposing normalized game and position DTOs to the rest of the app.
 
 ### `crates/katago-protocol`
 
@@ -138,9 +140,9 @@ Tasks reuse the target-final cancellation, Run-failure, coherent Save, safe-depa
 
 ## Data Flow
 
-1. The user opens, replaces, or edits SGF in the React UI.
-2. The frontend calls Tauri commands through API wrapper functions. Native Open / New / paste / import use `prepare_document_replacement` then `resolve_document_replacement`. Ordinary Save / Save As use `save_current_game` / `save_current_game_as` and do not admit a document departure.
-3. Rust parses SGF into DTOs and replays positions through `sgf` and `go-core`. The holder keeps the selected `NodePath` with the document.
+1. The user opens, replaces, or edits SGF, or imports GIB, in the React UI.
+2. The frontend calls Tauri commands through API wrapper functions. Native chooser and sheet-file intake first produce `GameFileImportDto`; native Open / New / paste / import then use `prepare_document_replacement` followed by `resolve_document_replacement`. Ordinary Save / Save As use `save_current_game` / `save_current_game_as` and do not admit a document departure.
+3. Rust decodes and parses GIB into validated canonical SGF, parses SGF into DTOs, and replays positions through `sgf` and `go-core`. The holder keeps the selected `NodePath` with the document; an imported GIB has no writable native path.
 4. The user edits saved engine profiles and Autoload Default in Engine Settings. Manual Check Assets is diagnostic, not a Start gate.
 5. The Engine Switcher starts, stops, restarts, or switches a manager-owned Foreground Engine Run. `engine-manager` validates assets, spawns KataGo, and publishes Ready only after adapter readiness.
 6. Selected-node and whole-game analysis jobs occupy that Ready Run. `katago-protocol` builds JSONL; `engine-manager` writes it to the resident process, emits progress, and cancels by run/job identity.
