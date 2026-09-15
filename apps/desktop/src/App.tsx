@@ -510,6 +510,9 @@ export function App() {
     boardSize: currentPosition.board_size
   }), [preferences.nextMoveReviewMarker, selectedNode, selectedPath.indices.length, currentPosition.to_play, currentPosition.board_size]);
   const documentDirty = currentGame?.dirty ?? dirty;
+  const recoveryDiscardRetryPending = recoveryPrompt !== null
+    && recoveryProtection.status === "unprotected"
+    && pendingRecoveryContinuationRef.current === "discard_startup";
   const continuousPhase: ContinuousAnalysisPhaseDto = nativeRuntime
     ? engineSnapshot.continuous.phase
     : preferences.continuousAnalysisEnabled ? "waiting" : "off";
@@ -1366,11 +1369,12 @@ export function App() {
       await finishDiscardRecoveredGame();
     } catch (error: unknown) {
       const protection = await currentGameRecoveryProtection();
-      setRecoveryProtection(protection);
       if (protection.status === "unprotected") {
         pendingRecoveryContinuationRef.current = "discard_startup";
+        setRecoveryProtection(protection);
         setMessage(protection.message);
       } else {
+        setRecoveryProtection(protection);
         setMessage(`放弃恢复失败: ${errorMessage(error)}`);
       }
     }
@@ -2842,8 +2846,12 @@ export function App() {
     {recoveryPrompt ? (
       <CurrentGameRecoveryDialog
         message="检测到未正常退出的棋谱。恢复上次棋谱，还是放弃该恢复候选？"
+        retryMessage={recoveryDiscardRetryPending && recoveryProtection.status === "unprotected"
+          ? recoveryProtection.message
+          : null}
         onRestore={() => void handleRestoreRecoveredGame()}
         onDiscard={() => void handleDiscardRecoveredGame()}
+        onRetry={recoveryDiscardRetryPending ? () => void handleRetryRecoveryWrite() : null}
       />
     ) : null}
     {shortcutReferenceOpen ? (

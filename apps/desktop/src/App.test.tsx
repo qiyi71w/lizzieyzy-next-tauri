@@ -2127,12 +2127,15 @@ describe("App current-game recovery", () => {
       buttonLabeled(host, "Discard").click();
       await backend.discardCurrentGameRecovery.mock.results.at(-1)?.value.catch(() => undefined);
     });
-    expect(host.querySelector('[role="dialog"][aria-label="恢复当前棋谱"]')).not.toBeNull();
+    const recoveryDialog = host.querySelector('[role="dialog"][aria-label="恢复当前棋谱"]');
+    expect(recoveryDialog).not.toBeNull();
+    const retryButton = recoveryDialog?.querySelector<HTMLButtonElement>('button[aria-label="Retry recovery write"]');
+    expect(retryButton).not.toBeNull();
     expect(host.textContent).toContain("Recent current-game changes are not yet protected.");
     expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
 
     await act(async () => {
-      buttonLabeled(host, "Retry recovery write").click();
+      retryButton?.click();
       await backend.retryCurrentGameRecovery.mock.results.at(-1)?.value;
       await currentGameFixture.mock.results.at(-1)?.value;
       await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
