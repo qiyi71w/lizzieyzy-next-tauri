@@ -119,17 +119,13 @@ impl RecoveryCoordinator {
         snapshot: RecoverySnapshot,
         disposition: ApplicationExitDispositionDto,
     ) -> Option<RecoveryEnvelopeDto> {
-        if matches!(disposition, ApplicationExitDispositionDto::ExplicitDiscard) {
-            self.discarded_document_seq = Some(snapshot.document_seq);
-        }
         let envelope = envelope_from_snapshot(snapshot, disposition);
-        self.pending = None;
-        self.due_at_ms = None;
-        if self.is_stale(&envelope) {
-            return None;
-        }
-        self.writing = Some(envelope.clone());
-        Some(envelope)
+        self.take_immediate_write(envelope)
+    }
+
+    pub fn take_discard_write(&mut self, mut envelope: RecoveryEnvelopeDto) -> Option<RecoveryEnvelopeDto> {
+        envelope.disposition = ApplicationExitDispositionDto::ExplicitDiscard;
+        self.take_immediate_write(envelope)
     }
 
     pub fn retry(&mut self, now_ms: u64) -> Option<RecoveryEnvelopeDto> {
@@ -161,6 +157,22 @@ impl RecoveryCoordinator {
         self.writing = None;
         self.last_committed = Some(envelope);
         self.protection = RecoveryProtectionDto::Protected;
+    }
+
+    fn take_immediate_write(&mut self, envelope: RecoveryEnvelopeDto) -> Option<RecoveryEnvelopeDto> {
+        if matches!(
+            envelope.disposition,
+            ApplicationExitDispositionDto::ExplicitDiscard
+        ) {
+            self.discarded_document_seq = Some(envelope.document_seq);
+        }
+        self.pending = None;
+        self.due_at_ms = None;
+        if self.is_stale(&envelope) {
+            return None;
+        }
+        self.writing = Some(envelope.clone());
+        Some(envelope)
     }
 
     fn is_stale(&self, envelope: &RecoveryEnvelopeDto) -> bool {

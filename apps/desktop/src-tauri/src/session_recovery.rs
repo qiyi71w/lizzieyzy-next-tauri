@@ -87,11 +87,7 @@ pub fn persist_explicit_discard(state: &CurrentGameState, store: &FileRecoverySt
         state.mark_discard_committed(envelope);
         return Ok(());
     }
-    let mut discarded = envelope;
-    discarded.disposition = ApplicationExitDispositionDto::ExplicitDiscard;
-    recovery::persist_recovery_envelope(store, &discarded)?;
-    state.mark_discard_committed(discarded);
-    Ok(())
+    state.persist_discard(store, envelope)
 }
 
 pub fn recovery_file_path(app_handle: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -191,6 +187,33 @@ mod tests {
         let loaded = store.load().unwrap().unwrap();
         assert_eq!(loaded.sgf_text, EMPTY);
         assert!(loaded.document_seq > 3);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn failed_discard_keeps_candidate_unprotected_until_retry_persists_disposition() {
+        let (dir, store) = temp_store();
+        let original = envelope(BRANCH, ApplicationExitDispositionDto::ExitIncomplete);
+        store.replace(&original).unwrap();
+        let state = CurrentGameState::default();
+        recovery::inspect_and_seed(&state, &store);
+        let blocked_tmp = dir.join(format!("{RECOVERY_FILE}.tmp"));
+        fs::create_dir(&blocked_tmp).unwrap();
+
+        assert!(persist_explicit_discard(&state, &store).is_err());
+        assert!(matches!(
+            state.recovery_protection(),
+            RecoveryProtectionDto::Unprotected { .. }
+        ));
+        assert_eq!(store.load().unwrap(), Some(original));
+
+        fs::remove_dir(&blocked_tmp).unwrap();
+        assert_eq!(state.persist_retry(&store, 0), RecoveryProtectionDto::Protected);
+        let persisted = store.load().unwrap().expect("retried discard envelope");
+        assert_eq!(
+            persisted.disposition,
+            ApplicationExitDispositionDto::ExplicitDiscard
+        );
         let _ = fs::remove_dir_all(dir);
     }
 

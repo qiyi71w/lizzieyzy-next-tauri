@@ -58,6 +58,28 @@ impl CurrentGameState {
         result
     }
 
+    pub fn persist_discard(
+        &self,
+        store: &FileRecoveryStore,
+        envelope: RecoveryEnvelopeDto,
+    ) -> Result<(), String> {
+        {
+            let mut holder = self.holder.lock().expect("current game state");
+            holder.document_seq = holder.document_seq.max(envelope.document_seq);
+        }
+        let Some(envelope) = self
+            .recovery
+            .lock()
+            .expect("current game recovery")
+            .take_discard_write(envelope)
+        else {
+            return Ok(());
+        };
+        let result = persist_recovery_envelope(store, &envelope);
+        self.finish_recovery_write(envelope, result.clone());
+        result
+    }
+
     pub fn persist_retry(&self, store: &FileRecoveryStore, now_ms: u64) -> RecoveryProtectionDto {
         if let Some(envelope) = self.retry_recovery(now_ms) {
             let result = persist_recovery_envelope(store, &envelope);

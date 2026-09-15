@@ -50,6 +50,7 @@ import {
   restoreCurrentGameRecovery,
   discardCurrentGameRecovery,
   retryCurrentGameRecovery,
+  currentGameRecoveryProtection,
   subscribeCurrentGameRecoveryProtection,
   saveCurrentGame,
   serializeCurrentGame,
@@ -224,6 +225,7 @@ export function App() {
   } | null>(null);
   const [recoveryPrompt, setRecoveryPrompt] = useState<Extract<RecoveryStartupDto, { status: "abnormal" }> | null>(null);
   const [recoveryProtection, setRecoveryProtection] = useState<RecoveryProtectionDto>({ status: "protected" });
+  const pendingRecoveryContinuationRef = useRef<"discard_startup" | "native_exit" | null>(null);
   const exitInFlightRef = useRef(false);
   const [departurePending, setDeparturePending] = useState(false);
   const [fileFlowBusy, setFileFlowBusy] = useState(false);
@@ -1139,6 +1141,7 @@ export function App() {
       if (choice === "exit_anyway") break;
     }
     if (current.recovery_persist_error) {
+      pendingRecoveryContinuationRef.current = "native_exit";
       setMessage(current.recovery_persist_error);
       setRecoveryProtection({ status: "unprotected", message: current.recovery_persist_error });
       return;
@@ -1336,28 +1339,40 @@ export function App() {
     }
   }
 
+  async function finishDiscardRecoveredGame() {
+    pendingRecoveryContinuationRef.current = null;
+    setRecoveryPrompt(null);
+    const pending = pendingStartupActivationRef.current;
+    const startupRejection = pendingStartupRejectionRef.current;
+    pendingStartupActivationRef.current = null;
+    pendingStartupRejectionRef.current = null;
+    if (pending) {
+      await activationHandlerRef.current(pending);
+    } else {
+      await applyReplacement(demoSgf, null, {
+        confirmMessage: "放弃未保存的棋谱并载入示例？",
+        fallbackName: "sample.sgf",
+        successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
+        failurePrefix: "Sample load failed"
+      });
+    }
+    if (startupRejection) setMessage(startupRejection);
+    await markFileActivationReady();
+  }
+
   async function handleDiscardRecoveredGame() {
     try {
       await discardCurrentGameRecovery();
-      setRecoveryPrompt(null);
-      const pending = pendingStartupActivationRef.current;
-      const startupRejection = pendingStartupRejectionRef.current;
-      pendingStartupActivationRef.current = null;
-      pendingStartupRejectionRef.current = null;
-      if (pending) {
-        await activationHandlerRef.current(pending);
-      } else {
-        await applyReplacement(demoSgf, null, {
-          confirmMessage: "放弃未保存的棋谱并载入示例？",
-          fallbackName: "sample.sgf",
-          successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
-          failurePrefix: "Sample load failed"
-        });
-      }
-      if (startupRejection) setMessage(startupRejection);
-      await markFileActivationReady();
+      await finishDiscardRecoveredGame();
     } catch (error: unknown) {
-      setMessage(`放弃恢复失败: ${errorMessage(error)}`);
+      const protection = await currentGameRecoveryProtection();
+      setRecoveryProtection(protection);
+      if (protection.status === "unprotected") {
+        pendingRecoveryContinuationRef.current = "discard_startup";
+        setMessage(protection.message);
+      } else {
+        setMessage(`放弃恢复失败: ${errorMessage(error)}`);
+      }
     }
   }
 
@@ -1366,6 +1381,15 @@ export function App() {
       const protection = await retryCurrentGameRecovery();
       setRecoveryProtection(protection);
       if (protection.status === "protected") {
+        if (pendingRecoveryContinuationRef.current === "discard_startup") {
+          await finishDiscardRecoveredGame();
+          return;
+        }
+        if (pendingRecoveryContinuationRef.current === "native_exit") {
+          await confirmNativeExit();
+          pendingRecoveryContinuationRef.current = null;
+          return;
+        }
         setMessage("当前棋谱恢复快照已写入。");
       } else {
         setMessage(protection.message);

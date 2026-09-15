@@ -2096,6 +2096,51 @@ describe("App current-game recovery", () => {
     expect(backend.prepareDocumentReplacement).toHaveBeenCalled();
   });
 
+  it("keeps failed discard pending until recovery retry succeeds", async () => {
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "abnormal",
+      envelope: {
+        document_seq: 1,
+        snapshot_seq: 2,
+        sgf_text: "(;SZ[9])",
+        selected_path: { indices: [] },
+        dirty: true,
+        disposition: "exit_incomplete"
+      }
+    });
+    backend.discardCurrentGameRecovery.mockRejectedValueOnce(new Error("disk full"));
+    backend.currentGameRecoveryProtection.mockResolvedValueOnce({
+      status: "unprotected",
+      message: "Recent current-game changes are not yet protected."
+    });
+    backend.retryCurrentGameRecovery.mockResolvedValueOnce({ status: "protected" });
+    act(() => root?.unmount());
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<App />));
+    await act(async () => {
+      await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
+    });
+
+    await act(async () => {
+      buttonLabeled(host, "Discard").click();
+      await backend.discardCurrentGameRecovery.mock.results.at(-1)?.value.catch(() => undefined);
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="恢复当前棋谱"]')).not.toBeNull();
+    expect(host.textContent).toContain("Recent current-game changes are not yet protected.");
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+
+    await act(async () => {
+      buttonLabeled(host, "Retry recovery write").click();
+      await backend.retryCurrentGameRecovery.mock.results.at(-1)?.value;
+      await currentGameFixture.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="恢复当前棋谱"]')).toBeNull();
+    expect(backend.prepareDocumentReplacement).toHaveBeenCalledTimes(1);
+  });
+
   it("restores the abnormal document without loading the sample", async () => {
     backend.inspectCurrentGameRecovery.mockResolvedValue({
       status: "abnormal",
@@ -2186,7 +2231,7 @@ describe("App current-game recovery", () => {
     expect(backend.prepareDocumentReplacement).toHaveBeenCalled();
   });
 
-  it("does not confirm native exit when recovery persist fails", async () => {
+  it("keeps native exit blocked until recovery retry succeeds", async () => {
     backend.resolveApplicationExit.mockResolvedValue({
       committed: true,
       analysis_stopped: true,
@@ -2196,6 +2241,7 @@ describe("App current-game recovery", () => {
       teardown: { status: "completed" },
       recovery_persist_error: "disk full"
     });
+    backend.retryCurrentGameRecovery.mockResolvedValueOnce({ status: "protected" });
     const host = await renderApp();
     backend.confirmNativeExit.mockClear();
     await act(async () => {
@@ -2208,6 +2254,12 @@ describe("App current-game recovery", () => {
     });
     expect(backend.confirmNativeExit).not.toHaveBeenCalled();
     expect(host.textContent).toContain("disk full");
+    await act(async () => {
+      buttonLabeled(host, "Retry recovery write").click();
+      await backend.retryCurrentGameRecovery.mock.results.at(-1)?.value;
+      await backend.confirmNativeExit.mock.results.at(-1)?.value;
+    });
+    expect(backend.confirmNativeExit).toHaveBeenCalledTimes(1);
   });
 });
 

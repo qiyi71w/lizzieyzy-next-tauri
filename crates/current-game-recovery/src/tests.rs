@@ -169,6 +169,35 @@ fn committed_discard_is_not_revived_by_a_late_writer() {
 }
 
 #[test]
+fn failed_discard_stays_unprotected_after_late_write_completions() {
+    let mut coord = RecoveryCoordinator::default();
+    let committed = envelope_from_snapshot(
+        snapshot(1, 1, EMPTY, &[], true),
+        ApplicationExitDispositionDto::ExitIncomplete,
+    );
+    coord.load_checkpoint(committed.clone());
+    coord.note(snapshot(1, 2, BRANCH, &[0], true), 0);
+    let late = coord.take_due_write(1000).unwrap();
+    let discard = coord.take_discard_write(late.clone()).unwrap();
+    coord.finish_write(discard, Err("disk full".to_string()));
+
+    coord.finish_write(late.clone(), Ok(()));
+    coord.finish_write(late, Err("late failure".to_string()));
+    assert_eq!(
+        coord.protection(),
+        RecoveryProtectionDto::Unprotected {
+            message: UNPROTECTED_WRITE_MESSAGE.to_string()
+        }
+    );
+    assert_eq!(coord.last_committed(), Some(&committed));
+
+    let retry = coord.retry(2000).expect("retry failed discard");
+    assert_eq!(retry.disposition, ApplicationExitDispositionDto::ExplicitDiscard);
+    commit(&mut coord, retry);
+    assert_eq!(coord.protection(), RecoveryProtectionDto::Protected);
+}
+
+#[test]
 fn flush_writes_immediately_including_clean_exit_without_pending_edits() {
     let mut coord = RecoveryCoordinator::default();
     coord.note(snapshot(1, 1, EMPTY, &[], false), 0);
