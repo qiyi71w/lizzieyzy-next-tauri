@@ -46,7 +46,7 @@ use document_departure::{
     retry_application_teardown, APPLICATION_EXIT_REQUESTED_EVENT,
 };
 use file_activation::{
-    handle_second_instance, mark_file_activation_ready, set_file_activation_busy,
+    handle_file_drop, handle_second_instance, mark_file_activation_ready, set_file_activation_busy,
     take_initial_file_activation, take_pending_file_activation, FileActivationOwner,
 };
 use session_recovery::{
@@ -1161,6 +1161,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build LizzieYzy Next")
         .run(|app, event| match event {
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }),
+                ..
+            } if label == "main" => handle_file_drop(app, paths),
+
             tauri::RunEvent::WindowEvent {
                 label,
                 event: tauri::WindowEvent::CloseRequested { api, .. },

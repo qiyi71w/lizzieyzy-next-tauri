@@ -89,7 +89,14 @@ impl FileActivationOwner {
     }
 
     pub fn admit_warm(&self, args: Vec<OsString>, cwd: &Path) -> WarmAdmission {
-        let intent = classify_arguments(args, cwd);
+        self.admit_intent(classify_arguments(args, cwd))
+    }
+
+    pub fn admit_drop(&self, paths: Vec<PathBuf>) -> WarmAdmission {
+        self.admit_intent(classify_paths(paths))
+    }
+
+    fn admit_intent(&self, intent: ActivationIntent) -> WarmAdmission {
         let mut state = self.state.lock().expect("file activation state poisoned");
         match intent {
             ActivationIntent::FocusOnly => WarmAdmission::FocusOnly,
@@ -121,22 +128,31 @@ fn classify_arguments(args: Vec<OsString>, cwd: &Path) -> ActivationIntent {
     if inputs.is_empty() {
         return ActivationIntent::FocusOnly;
     }
-    if inputs.len() != 1 {
+    classify_paths(
+        inputs
+            .into_iter()
+            .map(PathBuf::from)
+            .map(|path| if path.is_absolute() { path } else { cwd.join(path) })
+            .collect(),
+    )
+}
+
+fn classify_paths(mut paths: Vec<PathBuf>) -> ActivationIntent {
+    if paths.len() != 1 {
         return ActivationIntent::Rejected(MULTIPLE_MESSAGE.to_string());
     }
-    let path = PathBuf::from(&inputs[0]);
-    let resolved = if path.is_absolute() { path } else { cwd.join(path) };
-    if resolved.is_dir() {
+    let path = paths.pop().expect("one path checked above");
+    if path.is_dir() {
         return ActivationIntent::Rejected(DIRECTORY_MESSAGE.to_string());
     }
-    let supported = resolved
+    let supported = path
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "sgf" | "txt" | "gib"));
     if !supported {
         return ActivationIntent::Rejected(UNSUPPORTED_MESSAGE.to_string());
     }
-    ActivationIntent::Open(resolved)
+    ActivationIntent::Open(path)
 }
 
 fn delivery_for_intent(
@@ -168,7 +184,19 @@ pub fn handle_second_instance(app: &AppHandle, args: Vec<String>, cwd: String) {
         let _ = window.set_focus();
     }
     let owner = app.state::<FileActivationOwner>();
-    match owner.admit_warm(args.into_iter().map(OsString::from).collect(), Path::new(&cwd)) {
+    emit_admission(
+        app,
+        owner.admit_warm(args.into_iter().map(OsString::from).collect(), Path::new(&cwd)),
+    );
+}
+
+pub fn handle_file_drop(app: &AppHandle, paths: Vec<PathBuf>) {
+    let owner = app.state::<FileActivationOwner>();
+    emit_admission(app, owner.admit_drop(paths));
+}
+
+fn emit_admission(app: &AppHandle, admission: WarmAdmission) {
+    match admission {
         WarmAdmission::FocusOnly => {}
         WarmAdmission::Available => {
             let _ = app.emit(FILE_ACTIVATION_AVAILABLE_EVENT, ());
@@ -308,5 +336,68 @@ mod tests {
             owner.admit_warm(args(&["app", "one.sgf"]), Path::new("C:/games")),
             WarmAdmission::Available
         );
+    }
+
+    #[test]
+    fn one_supported_drop_uses_the_pending_delivery_slot() {
+        let owner = FileActivationOwner::from_launch_args(args(&["app"]), Path::new("C:/games"));
+        assert_eq!(owner.take_startup(), None);
+        owner.mark_ready();
+
+        assert_eq!(
+            owner.admit_drop(vec![PathBuf::from("D:/棋谱 files/game one.gib")]),
+            WarmAdmission::Available
+        );
+        assert_eq!(
+            owner.take_warm(),
+            Some(FileActivationDeliveryDto::Open {
+                request_id: 1,
+                path: "D:/棋谱 files/game one.gib".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn rejected_busy_drop_is_not_replayed_after_busy_clears() {
+        let owner = FileActivationOwner::from_launch_args(args(&["app"]), Path::new("C:/games"));
+        assert_eq!(owner.take_startup(), None);
+        owner.mark_ready();
+        owner.set_file_flow_busy(true);
+
+        assert!(matches!(
+            owner.admit_drop(vec![PathBuf::from("D:/games/rejected.sgf")]),
+            WarmAdmission::Rejected(message) if message.contains("active")
+        ));
+        owner.set_file_flow_busy(false);
+        assert_eq!(owner.take_warm(), None);
+        assert_eq!(
+            owner.admit_drop(vec![PathBuf::from("D:/games/later.sgf")]),
+            WarmAdmission::Available
+        );
+        assert!(matches!(
+            owner.take_warm(),
+            Some(FileActivationDeliveryDto::Open { path, .. }) if path.ends_with("later.sgf")
+        ));
+    }
+
+    #[test]
+    fn unsupported_directory_and_multiple_drops_are_non_mutating_rejections() {
+        let owner = FileActivationOwner::from_launch_args(args(&["app"]), Path::new("C:/games"));
+        assert_eq!(owner.take_startup(), None);
+        owner.mark_ready();
+
+        assert!(matches!(
+            owner.admit_drop(vec![PathBuf::from("D:/games/game.pdf")]),
+            WarmAdmission::Rejected(message) if message.contains("unsupported")
+        ));
+        assert!(matches!(
+            owner.admit_drop(vec![std::env::current_dir().unwrap()]),
+            WarmAdmission::Rejected(message) if message.contains("directory")
+        ));
+        assert!(matches!(
+            owner.admit_drop(vec![PathBuf::from("one.sgf"), PathBuf::from("two.gib")]),
+            WarmAdmission::Rejected(message) if message.contains("multiple")
+        ));
+        assert_eq!(owner.take_warm(), None);
     }
 }
