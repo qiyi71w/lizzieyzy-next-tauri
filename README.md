@@ -12,14 +12,16 @@ Implemented in the Next workspace:
 - React + TypeScript + Vite frontend under `apps/desktop`.
 - Rust workspace crates for app DTOs, Go rules, SGF parsing/replay/serialization, native Save As outcomes, KataGo protocol normalization, analysis classification, engine management, and SQLite-backed application storage.
 - One Rust-owned editable SGF workspace with complete-tree `NodePath` navigation, legal move/pass editing, variation removal, personal comments, setup/metadata preservation, and semantic save/reopen.
-- Native SGF Open, Save, and Save As through the Tauri desktop backend, including cancellation and failed-write state preservation.
+- Native SGF/GIB Open and SGF Save / Save As through the Tauri desktop backend, including cancellation and failed-write state preservation; imported GIB files are never overwritten.
 - A Windows-native no-engine workflow covering open, navigate, edit, comment, remove, save, reopen, and rejected ACL Save As.
 - Manager-owned selected-node and first-child-mainline KataGo analysis with independent lane state, cancellation, progress, and exact `NodePath` publication.
+- Continuous current-node analysis and current-game Analysis Tasks with explicit scopes, color filters, search budgets, Pause/Continue, and all-position or swing-selected two-stage analysis.
 - Exact-node candidates, PV, ownership, policy, fixed six-level Move Rank, next-move markers, winrate/score charts, persisted Sub-Board modes, and synchronized Variation Replay.
 - Java-compatible `LZ` / `LZOP` / `LZ2` / `LZOP2` analysis exchange and SGF-only persistence through ordinary Save / Save As.
 - Durable categorized preferences plus a registry-owned, focus-safe shortcut reference.
-- Shared parse-before-replace protection for existing SGF intake, with Save / Discard / Cancel and final-save analysis cancellation.
-- Application-owned exit and review-only recovery snapshots; Windows happy-path and restore/discard evidence exists, with failure-path gaps listed below.
+- Shared parse-before-replace protection for file intake, with Save / Discard / Cancel, safe analysis shutdown on confirmed departure, and preservation on failure.
+- Single-window cold/warm SGF/GIB activation and native file drop, recovery-first startup arbitration, and explicit busy rejection without queued replacement.
+- Application-owned exit and review-only recovery snapshots, with Windows evidence for ten-second resource teardown timeout, Retry, contextual Exit anyway, recovery write failures, and restoration of protection without resurrecting analysis tasks or engines.
 - Java-compatible review keys and explicit keyboard placement: arrows navigate in review mode, Enter places only in placement mode, and Space never places a stone.
 - Native `分析当前节点` / `分析第一子主线` actions use the real manager-backed analysis lanes; browser demonstration remains explicitly non-authoritative.
 - Engine path/model/config pickers, asset checks, and multiple engine profiles persisted in app data.
@@ -37,8 +39,8 @@ Not yet claimed as complete in the Next workspace:
 - Production signing/notarization for macOS and Windows unless maintainer secrets are configured.
 - End-to-end clean-machine installer smoke coverage across all target platforms.
 - Complete migration of every legacy setting, layout preference, and analysis workflow.
-- Complete R5 acceptance: native file activation and window drop remain missing; shutdown, recovery, and native analysis-entry failure evidence remain partial.
-- Continuous analysis and engine-game shortcuts: Space and N currently explain that their respective workflows are unavailable.
+- Installed file-association acceptance for `APP-01`, which remains an R11 / `REL-04` obligation after the R5 native activation semantic gate passed.
+- Human-versus-engine and other engine-game workflows; N remains reserved for that separate migration scope.
 
 Provider and readboard work in this batch should be treated as offline contract/domain-command coverage until the owning implementation has live environment evidence. Do not describe live provider login, external network capture, or readboard sidecar operation as shipped from this repository alone.
 
@@ -46,7 +48,7 @@ Provider and readboard work in this batch should be treated as offline contract/
 
 [The parity matrix](docs/PARITY_MATRIX.md) is the item-level source of truth. This table is a compact roll-up, not a second status tracker.
 
-The completed [Migration Baseline v1 traceability audit](docs/MIGRATION_TRACEABILITY_AUDIT.md) reconstructed 139 Frozen IDs and 108 baseline Parity Items with no unresolved mapping remainder. The [capability inventory](docs/JAVA_CAPABILITY_INVENTORY.md) records the frozen user-reachable surface. R3 Foreground Engine Lifecycle and R4 Analysis have exited. The first safety/input integration batch has completed its recorded verification and follow-up reconciliation: `SGF-07` and `UI-06` are Accepted; `APP-03`, `APP-04`, and `ANA-15` remain Partial. R5 has not exited; native file activation, window drop, and the remaining evidence gates are still open. Traceability closure and a completed ticket set do not establish full Java workflow parity.
+The completed [Migration Baseline v1 traceability audit](docs/MIGRATION_TRACEABILITY_AUDIT.md) reconstructed 139 Frozen IDs and 108 baseline Parity Items with no unresolved mapping remainder. The [capability inventory](docs/JAVA_CAPABILITY_INVENTORY.md) records the frozen user-reachable surface. R3 Foreground Engine Lifecycle, R4 Analysis, and R5 Safe Current Game have exited. Supplemental continuous analysis (`ANA-06`) and current-game Analysis Tasks (`ANA-16`) are Accepted. R5 integrated Windows candidate `48db2b2` accepted `SGF-08`, `APP-02`, `APP-03`, `APP-04`, and `ANA-15`, and passed the `APP-01` semantic gate. Final installed file association remains with R11; other R6/R7 authoring, review, and workspace capabilities remain migration work. These bounded acceptance results do not establish full Java workflow parity.
 
 Status and evidence are separate. The evidence ladder is `Not started` → `Scaffolded` → `Behavior implemented` → `Repository tested` → `Native/live verified`. Environment-independent behavior can be accepted at `Repository tested`; native/live evidence is not required for those items.
 
@@ -63,14 +65,18 @@ Status and evidence are separate. The evidence ladder is `Not started` → `Scaf
 | Manager-owned selected-node and first-child-mainline analysis | `ANA-01`–`ANA-04` | Accepted | Native/live verified | None for R4. |
 | Java-compatible SGF analysis exchange and SGF-only persistence | `ANA-05`, `ANA-08`, `ANA-14` | Accepted | Native/live verified | `ANA-05` remains frozen historical evidence; `ANA-14` owns the current runtime. |
 | Analysis review presentation | `ANA-10`–`ANA-13` | Accepted | Native/live verified | None for fixed Move Rank, markers, charts, Sub-Board modes, and Variation Replay. |
+| Continuous current-node analysis | `ANA-06` | Accepted | Native/live verified | None within the accepted Windows scope. |
+| Current-game Analysis Tasks: scopes, budgets, Pause/Continue and two-stage strategies | `ANA-16` | Accepted | Native/live verified | Multi-file batch analysis remains a separate Deferred item. |
 | Durable preferences mechanism and categorized surface | `PREF-01` | Accepted | Native/live verified | Later owner-domain preferences remain tracked by their own items. |
 | Shortcut registry and reference | `APP-05` | Accepted | Native/live verified | None. |
-| Safe replacement through existing intake routes | `SGF-07` | Accepted | Native/live verified | Future GIB, recents, activation, drop, and readboard callers require their own integration evidence. |
-| Java-compatible review keys and explicit keyboard placement | `UI-06` | Accepted | Native/live verified | Continuous analysis and human-versus-engine remain separate workflows; Space/N explain current unavailability. |
-| Safe graceful shutdown | `APP-03` | Partial | Repository tested; partial native smoke | Stuck-resource timeout, Retry, and Exit anyway not exercised; ordinary Save during analysis not separately captured in this batch. |
-| Current-game session recovery | `APP-04` | Partial | Repository tested; partial native smoke | Recovery write-failure prompt not exercised. |
-| Truthful native analysis entries | `ANA-15` | Partial | Repository tested; partial native smoke | Native analysis failure presentation not separately forced. |
-| Native file activation and window file drop | `APP-01`, `APP-02` | Missing | Not started | Shared activation/drop dispatch and installed file-association evidence. |
+| Safe replacement through existing intake routes | `SGF-07` | Accepted | Native/live verified | Recents and future provider/readboard intake retain their own integration obligations. |
+| Java-compatible review keys and explicit keyboard placement | `UI-06` | Accepted | Native/live verified | Space now controls continuous analysis under `ANA-06`; N remains reserved for human-versus-engine. |
+| GIB import and Save As SGF | `SGF-08` | Accepted | Native/live verified | None within the accepted Windows scope; delivered ahead of the remaining R6 work. |
+| Safe graceful shutdown | `APP-03` | Accepted | Native/live verified | Windows ten-second resource timeout, Retry and contextual Exit anyway verified; exact unchanged-path evidence reused with final-candidate exit smoke. |
+| Current-game session recovery | `APP-04` | Accepted | Native/live verified | Windows recovery write/disposition failures, last-successful snapshot retention and explicit Retry verified. |
+| Truthful native analysis entries | `ANA-15` | Accepted | Native/live verified | Real KataGo failure preserves visible errors, personal comments and legal results without synthetic replacement. |
+| Native file activation | `APP-01` | Missing — R5 semantic gate passed | Native semantic gate verified; installed acceptance pending | R11 / `REL-04` production association and Canonical Artifact Installed Live Evidence. |
+| Window file drop | `APP-02` | Accepted | Native/live verified | Single-file SGF/GIB intake accepted; multi-file analysis remains Deferred and does not replace the current game. |
 | Adjustable and persisted layout | `LAYOUT-01`–`LAYOUT-03` | Missing | Not started | Splitters, persistence, and narrow reset behavior. |
 | Engine game modes | `GAME-01`–`GAME-03` | Missing | Not started | Session state, controls, batch revision, and SGF integration. |
 | Yike and Fox providers | `PROV-01`–`PROV-02` | Partial | Repository tested | Live sessions, network behavior, and recovery evidence. |
