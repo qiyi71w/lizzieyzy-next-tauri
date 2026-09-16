@@ -27,6 +27,8 @@ import type {
   EngineProfileSettingsDto,
   EngineFailureDto,
   ForegroundEngineSnapshotDto,
+  FileActivationDeliveryDto,
+  FileActivationRejectionDto,
   GameFileImportDto,
   GameDto,
   MoveDto,
@@ -88,7 +90,44 @@ export async function openSgfDocument(): Promise<GameFileImportDto | null> {
     filters: gameDialogFilters
   });
   if (typeof selected !== "string") return null;
-  return invoke<GameFileImportDto>("read_game_file", { path: selected });
+  return readGameFile(selected);
+}
+
+export async function readGameFile(path: string): Promise<GameFileImportDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<GameFileImportDto>("read_game_file", { path });
+}
+
+export async function takeInitialFileActivation(): Promise<FileActivationDeliveryDto | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke<FileActivationDeliveryDto | null>("take_initial_file_activation");
+}
+
+export async function takePendingFileActivation(): Promise<FileActivationDeliveryDto | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke<FileActivationDeliveryDto | null>("take_pending_file_activation");
+}
+
+export async function markFileActivationReady(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await invoke("mark_file_activation_ready");
+}
+
+export async function setFileActivationBusy(busy: boolean): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await invoke("set_file_activation_busy", { busy });
+}
+
+export async function subscribeFileActivationAvailable(onAvailable: () => void): Promise<() => void> {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen("file-activation://available", onAvailable);
+}
+
+export async function subscribeFileActivationRejected(
+  onRejected: (rejection: FileActivationRejectionDto) => void
+): Promise<() => void> {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen<FileActivationRejectionDto>("file-activation://rejected", (event) => onRejected(event.payload));
 }
 
 export async function importGameFile(file: File): Promise<GameFileImportDto> {

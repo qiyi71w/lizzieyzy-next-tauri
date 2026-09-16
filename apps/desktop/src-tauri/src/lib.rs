@@ -32,6 +32,7 @@ mod continuous_analysis;
 use continuous_analysis::{foreground_engine_continuous_action, PreferencesState};
 mod current_game_state;
 mod document_departure;
+mod file_activation;
 mod save_as;
 mod session_recovery;
 #[cfg(windows)]
@@ -43,6 +44,10 @@ use document_departure::{
     confirm_application_exit_anyway, confirm_native_exit, prepare_application_exit,
     prepare_document_replacement, resolve_application_exit, resolve_document_replacement,
     retry_application_teardown, APPLICATION_EXIT_REQUESTED_EVENT,
+};
+use file_activation::{
+    handle_second_instance, mark_file_activation_ready, set_file_activation_busy,
+    take_initial_file_activation, take_pending_file_activation, FileActivationOwner,
 };
 use session_recovery::{
     current_game_recovery_protection, discard_current_game_recovery, inspect_current_game_recovery,
@@ -1051,6 +1056,8 @@ fn foreground_engine_switch(
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(handle_second_instance))
+        .manage(FileActivationOwner::from_process())
         .manage(CurrentGameState::default())
         .manage(PreferencesState::default())
         .setup(|app| {
@@ -1114,6 +1121,10 @@ pub fn run() {
             discard_current_game_recovery,
             retry_current_game_recovery,
             current_game_recovery_protection,
+            take_initial_file_activation,
+            take_pending_file_activation,
+            mark_file_activation_ready,
+            set_file_activation_busy,
             serialize_current_game,
             save_current_game,
             save_current_game_as,

@@ -23,6 +23,11 @@ export type GameFileImportDto = {
   display_name: string;
   native_path?: string | null;
 };
+export type FileActivationDeliveryDto =
+  | { kind: "open"; request_id: number; path: string }
+  | { kind: "rejected"; message: string };
+export type FileActivationRejectionDto = { message: string };
+
 export type NodePath = { indices: number[] };
 export type SgfPropertyDto = { key: string; values: string[] };
 export type SgfTreeNodeDto = { properties: SgfPropertyDto[]; children: SgfTreeNodeDto[] };

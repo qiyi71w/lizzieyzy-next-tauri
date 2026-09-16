@@ -25,6 +25,13 @@ import {
   nativeCurrentGameUnavailable,
   nativeSyntheticAnalysisUnavailable,
   openSgfDocument,
+  readGameFile,
+  takeInitialFileActivation,
+  takePendingFileActivation,
+  markFileActivationReady,
+  setFileActivationBusy,
+  subscribeFileActivationAvailable,
+  subscribeFileActivationRejected,
   parseSgfSummary,
   playCurrentGame,
   prepareApplicationExit,
@@ -92,7 +99,7 @@ import {
   variationReplayIdentityKey,
   variationReplayPointSteps
 } from "./domain/variationReplay";
-import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, AnalysisTaskStrategyDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, SgfTreeNodeDto } from "./domain/types";
+import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, AnalysisTaskStrategyDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, FileActivationDeliveryDto, ForegroundEngineSnapshotDto, GameDto, GameFileImportDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, SgfTreeNodeDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
@@ -107,6 +114,12 @@ type PendingPreferencesSave = {
   onFailed?: (error: unknown) => void;
 };
 type CandidatePreview = { index: number; scope: ReviewPresentationScope };
+type ReplacementOptions = {
+  confirmMessage: string;
+  fallbackName?: string | null;
+  successMessage: (projection: GameDto, fileName: string) => string;
+  failurePrefix: string;
+};
 const defaultAnalysisScopeDraft: AnalysisScopeDraft = {
   strategy: "all_positions_two_stage",
   mode: "first_child_mainline",
@@ -213,6 +226,13 @@ export function App() {
   const [recoveryProtection, setRecoveryProtection] = useState<RecoveryProtectionDto>({ status: "protected" });
   const exitInFlightRef = useRef(false);
   const [departurePending, setDeparturePending] = useState(false);
+  const [fileFlowBusy, setFileFlowBusy] = useState(false);
+  const fileFlowDepthRef = useRef(0);
+  const pendingStartupActivationRef = useRef<Extract<FileActivationDeliveryDto, { kind: "open" }> | null>(null);
+  const pendingStartupRejectionRef = useRef<string | null>(null);
+  const importPickerActiveRef = useRef(false);
+  const importFileInputRef = useRef<HTMLInputElement | null>(null);
+  const activationHandlerRef = useRef<(delivery: FileActivationDeliveryDto) => Promise<void>>(async () => undefined);
   const shortcutRegistry = useMemo(() => createShortcutRegistry(), []);
   const jumpRef = useRef<HTMLInputElement | null>(null);
   const requestSerialRef = useRef(0);
@@ -251,57 +271,124 @@ export function App() {
 
   useEffect(() => {
     let isMounted = true;
+    let subscriptionsDisposed = false;
+    const unlisteners: Array<() => void> = [];
+    const disposeSubscriptions = () => {
+      subscriptionsDisposed = true;
+      for (const unlisten of unlisteners.splice(0)) unlisten();
+    };
+    const registerSubscription = async (subscription: Promise<() => void>) => {
+      const unlisten = await subscription;
+      if (subscriptionsDisposed || !isMounted) {
+        unlisten();
+        return false;
+      }
+      unlisteners.push(unlisten);
+      return true;
+    };
     void (async () => {
-      let loadedPrefs = defaultAppPreferences;
       try {
-        const loaded = await loadAppPreferences();
-        if (!isMounted) return;
-        settleLoadedPreferences(loaded.preferences, loaded.recovery?.message ?? "Preferences loaded.");
-        loadedPrefs = loaded.preferences;
-      } catch (error: unknown) {
-        if (!isMounted) return;
-        settleLoadedPreferences(defaultAppPreferences, `Load failed: ${errorMessage(error)}`);
-      }
-      if (!isTauriRuntime()) return;
-      let startup: RecoveryStartupDto = { status: "none" };
-      try {
-        startup = await inspectCurrentGameRecovery();
-      } catch (error: unknown) {
-        if (!isMounted) return;
-        setMessage(`恢复检查失败: ${errorMessage(error)}`);
-      }
-      if (!isMounted) return;
-      if (startup.status === "abnormal") {
-        setRecoveryPrompt(startup);
-        return;
-      }
-      if (startup.status === "unreadable") {
-        setMessage(startup.message);
-      }
-      if (startup.status === "normal" && loadedPrefs.restoreLastSession) {
+        if (isTauriRuntime()) {
+          const availableRegistered = await registerSubscription(subscribeFileActivationAvailable(() => {
+            if (!isMounted) return;
+            void takePendingFileActivation()
+              .then((delivery) => {
+                if (isMounted && delivery) return activationHandlerRef.current(delivery);
+              })
+              .catch((error: unknown) => {
+                if (isMounted) setMessage(`Open failed: ${errorMessage(error)}`);
+              });
+          }));
+          if (!availableRegistered) return;
+          const rejectedRegistered = await registerSubscription(subscribeFileActivationRejected((rejection) => {
+            if (isMounted) setMessage(rejection.message);
+          }));
+          if (!rejectedRegistered) return;
+        }
+
+        let loadedPrefs = defaultAppPreferences;
         try {
-          await restoreRecoveredDocument("已恢复上次棋谱。");
-          return;
+          const loaded = await loadAppPreferences();
+          if (!isMounted) return;
+          settleLoadedPreferences(loaded.preferences, loaded.recovery?.message ?? "Preferences loaded.");
+          loadedPrefs = loaded.preferences;
         } catch (error: unknown) {
           if (!isMounted) return;
-          setMessage(`恢复失败: ${errorMessage(error)}`);
+          settleLoadedPreferences(defaultAppPreferences, `Load failed: ${errorMessage(error)}`);
         }
-      }
-      await applyReplacement(demoSgf, null, {
-        confirmMessage: "放弃未保存的棋谱并载入示例？",
-        fallbackName: "sample.sgf",
-        successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
-        failurePrefix: "Sample load failed"
-      });
-      if (!isMounted) return;
-      if (startup.status === "unreadable") {
-        setMessage(startup.message);
+        if (!isTauriRuntime()) return;
+
+        let startup: RecoveryStartupDto = { status: "none" };
+        try {
+          startup = await inspectCurrentGameRecovery();
+        } catch (error: unknown) {
+          if (!isMounted) return;
+          setMessage(`恢复检查失败: ${errorMessage(error)}`);
+          return;
+        }
+        if (!isMounted) return;
+
+        const startupActivation = await takeInitialFileActivation();
+        if (!isMounted) return;
+        pendingStartupActivationRef.current = startupActivation?.kind === "open" ? startupActivation : null;
+        pendingStartupRejectionRef.current = startupActivation?.kind === "rejected" ? startupActivation.message : null;
+        if (startup.status === "abnormal") {
+          setRecoveryPrompt(startup);
+          return;
+        }
+
+        const explicitFile = pendingStartupActivationRef.current;
+        const startupRejection = pendingStartupRejectionRef.current;
+        pendingStartupActivationRef.current = null;
+        pendingStartupRejectionRef.current = null;
+        if (explicitFile) {
+          await activationHandlerRef.current(explicitFile);
+          await markFileActivationReady();
+          return;
+        }
+
+        if (startup.status === "unreadable") {
+          setMessage(startup.message);
+        }
+        if (startup.status === "normal" && loadedPrefs.restoreLastSession) {
+          try {
+            await restoreRecoveredDocument("已恢复上次棋谱。");
+            if (startupRejection) setMessage(startupRejection);
+            await markFileActivationReady();
+            return;
+          } catch (error: unknown) {
+            if (!isMounted) return;
+            setMessage(`恢复失败: ${errorMessage(error)}`);
+          }
+        }
+        await applyReplacement(demoSgf, null, {
+          confirmMessage: "放弃未保存的棋谱并载入示例？",
+          fallbackName: "sample.sgf",
+          successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
+          failurePrefix: "Sample load failed"
+        });
+        if (!isMounted) return;
+        if (startupRejection) setMessage(startupRejection);
+        else if (startup.status === "unreadable") setMessage(startup.message);
+        await markFileActivationReady();
+      } catch (error: unknown) {
+        disposeSubscriptions();
+        if (isMounted) setMessage(`File activation initialization failed: ${errorMessage(error)}`);
       }
     })();
     return () => {
       isMounted = false;
+      disposeSubscriptions();
     };
   }, []);
+
+  useEffect(() => {
+    const input = importFileInputRef.current;
+    if (!input) return;
+    const handleCancel = () => void finishImportPicker();
+    input.addEventListener("cancel", handleCancel);
+    return () => input.removeEventListener("cancel", handleCancel);
+  }, [sheet]);
 
   const currentPosition = useMemo(() => {
     if (currentGame) return currentGame.snapshot.position;
@@ -974,6 +1061,30 @@ export function App() {
   }
 
 
+  async function enterFileFlow(): Promise<void> {
+    const outermost = fileFlowDepthRef.current === 0;
+    fileFlowDepthRef.current += 1;
+    if (!outermost) return;
+    setFileFlowBusy(true);
+    try {
+      await setFileActivationBusy(true);
+    } catch (error) {
+      fileFlowDepthRef.current -= 1;
+      setFileFlowBusy(false);
+      throw error;
+    }
+  }
+
+  async function leaveFileFlow(): Promise<void> {
+    fileFlowDepthRef.current = Math.max(0, fileFlowDepthRef.current - 1);
+    if (fileFlowDepthRef.current !== 0) return;
+    try {
+      await setFileActivationBusy(false);
+    } finally {
+      setFileFlowBusy(false);
+    }
+  }
+
   function requestDepartureDecision(message: string): Promise<DocumentDepartureActionDto> {
     return new Promise((resolve) => {
       setDeparturePrompt({
@@ -1041,6 +1152,7 @@ export function App() {
       return;
     }
     if (exitInFlightRef.current || departurePrompt || teardownPrompt) return;
+    await enterFileFlow();
     exitInFlightRef.current = true;
     try {
       const admission = await prepareApplicationExit();
@@ -1077,6 +1189,7 @@ export function App() {
       exitInFlightRef.current = false;
       departurePendingRef.current = false;
       setDeparturePending(false);
+      await leaveFileFlow();
     }
   }
 
@@ -1211,6 +1324,13 @@ export function App() {
     try {
       await restoreRecoveredDocument("已恢复上次未正常退出的棋谱。");
       setRecoveryPrompt(null);
+      const pending = pendingStartupActivationRef.current;
+      const startupRejection = pendingStartupRejectionRef.current;
+      pendingStartupActivationRef.current = null;
+      pendingStartupRejectionRef.current = null;
+      if (pending) await activationHandlerRef.current(pending);
+      if (startupRejection) setMessage(startupRejection);
+      await markFileActivationReady();
     } catch (error: unknown) {
       setMessage(`恢复失败: ${errorMessage(error)}`);
     }
@@ -1220,12 +1340,22 @@ export function App() {
     try {
       await discardCurrentGameRecovery();
       setRecoveryPrompt(null);
-      await applyReplacement(demoSgf, null, {
-        confirmMessage: "放弃未保存的棋谱并载入示例？",
-        fallbackName: "sample.sgf",
-        successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
-        failurePrefix: "Sample load failed"
-      });
+      const pending = pendingStartupActivationRef.current;
+      const startupRejection = pendingStartupRejectionRef.current;
+      pendingStartupActivationRef.current = null;
+      pendingStartupRejectionRef.current = null;
+      if (pending) {
+        await activationHandlerRef.current(pending);
+      } else {
+        await applyReplacement(demoSgf, null, {
+          confirmMessage: "放弃未保存的棋谱并载入示例？",
+          fallbackName: "sample.sgf",
+          successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
+          failurePrefix: "Sample load failed"
+        });
+      }
+      if (startupRejection) setMessage(startupRejection);
+      await markFileActivationReady();
     } catch (error: unknown) {
       setMessage(`放弃恢复失败: ${errorMessage(error)}`);
     }
@@ -1248,12 +1378,7 @@ export function App() {
   async function applyReplacement(
     sgfInput: string,
     nativePath: string | null,
-    options: {
-      confirmMessage: string;
-      fallbackName?: string | null;
-      successMessage: (projection: GameDto, fileName: string) => string;
-      failurePrefix: string;
-    }
+    options: ReplacementOptions
   ): Promise<boolean> {
     if (!nativeRuntime) {
       try {
@@ -1282,6 +1407,7 @@ export function App() {
         return false;
       }
     }
+    await enterFileFlow();
 
     try {
       const admission = await prepareDocumentReplacement(sgfInput, nativePath);
@@ -1299,6 +1425,7 @@ export function App() {
     } finally {
       departurePendingRef.current = false;
       setDeparturePending(false);
+      await leaveFileFlow();
     }
   }
 
@@ -1312,24 +1439,53 @@ export function App() {
     });
   }
 
+  async function replaceImportedGame(document: GameFileImportDto): Promise<boolean> {
+    return applyReplacement(document.sgf_text, document.native_path ?? null, {
+      confirmMessage: "放弃未保存的棋谱并打开这个文件？",
+      fallbackName: document.format === "gib"
+        ? document.display_name.replace(/\.gib$/i, ".sgf")
+        : null,
+      successMessage: (projection, fileName) => `Opened ${fileName}: ${projection.summary.move_count} moves.`,
+      failurePrefix: "Open failed"
+    });
+  }
+
+  async function handleFileActivation(delivery: FileActivationDeliveryDto): Promise<void> {
+    if (delivery.kind === "rejected") {
+      setMessage(delivery.message);
+      return;
+    }
+    if (fileFlowDepthRef.current !== 0) {
+      setMessage("Another file action is active; the external open request was rejected.");
+      return;
+    }
+    await enterFileFlow();
+    try {
+      const document = await readGameFile(delivery.path);
+      await replaceImportedGame(document);
+    } catch (error) {
+      setMessage(`Open failed: ${errorMessage(error)}`);
+    } finally {
+      await leaveFileFlow();
+    }
+  }
+
+  activationHandlerRef.current = handleFileActivation;
+
   async function handleOpenSgfDocument() {
     if (!nativeRuntime) {
       setMessage(nativeCurrentGameUnavailable);
       return;
     }
+    await enterFileFlow();
     try {
       const document = await openSgfDocument();
       if (!document) return;
-      await applyReplacement(document.sgf_text, document.native_path ?? null, {
-        confirmMessage: "放弃未保存的棋谱并打开这个文件？",
-        fallbackName: document.format === "gib"
-          ? document.display_name.replace(/\.gib$/i, ".sgf")
-          : null,
-        successMessage: (projection, fileName) => `Opened ${fileName}: ${projection.summary.move_count} moves.`,
-        failurePrefix: "Open failed"
-      });
+      await replaceImportedGame(document);
     } catch (error) {
       setMessage(`Open failed: ${errorMessage(error)}`);
+    } finally {
+      await leaveFileFlow();
     }
   }
 
@@ -1342,6 +1498,7 @@ export function App() {
       setMessage(nativeCurrentGameUnavailable);
       return;
     }
+    await enterFileFlow();
     try {
       const saved = await saveCurrentGame(saveAs ? null : documentPath, currentGame.selected_path, saveFileName);
       if (!saved) {
@@ -1356,6 +1513,8 @@ export function App() {
       setMessage(`Saved ${saved.native_path ? fileNameFromPath(saved.native_path) : saveFileName}.`);
     } catch (error) {
       setMessage(`Save failed: ${errorMessage(error)}`);
+    } finally {
+      await leaveFileFlow();
     }
   }
 
@@ -2104,8 +2263,27 @@ export function App() {
     }
   }
 
+  function handleImportPickerOpen() {
+    if (importPickerActiveRef.current) return;
+    importPickerActiveRef.current = true;
+    void enterFileFlow().catch(async (error: unknown) => {
+      importPickerActiveRef.current = false;
+      setMessage(`Import failed: ${errorMessage(error)}`);
+      await leaveFileFlow();
+    });
+  }
+
+  async function finishImportPicker() {
+    if (!importPickerActiveRef.current) return;
+    importPickerActiveRef.current = false;
+    await leaveFileFlow();
+  }
+
   async function handleImportFile(file: File | null) {
-    if (!file) return;
+    if (!file) {
+      await finishImportPicker();
+      return;
+    }
     try {
       const imported = await importGameFile(file);
       await applyReplacement(imported.sgf_text, imported.native_path ?? null, {
@@ -2118,6 +2296,8 @@ export function App() {
       });
     } catch (error) {
       setMessage(`Import failed: ${errorMessage(error)}`);
+    } finally {
+      await finishImportPicker();
     }
   }
 
@@ -2359,7 +2539,7 @@ export function App() {
     <AppChrome
       sheet={sheet}
       onToggleSheet={toggleSheet}
-      busy={false}
+      busy={fileFlowBusy || departurePending || Boolean(departurePrompt) || Boolean(teardownPrompt) || Boolean(recoveryPrompt)}
       dirty={documentDirty}
       documentName={documentName}
       engineLabel={engineLabel}
@@ -2595,7 +2775,14 @@ export function App() {
         <div className="button-row">
           <label className="file-button">
             导入棋谱
-            <input type="file" accept=".sgf,.txt,.gib,application/x-go-sgf,text/plain,application/octet-stream" disabled={false} onChange={(event) => void handleImportFile(event.target.files?.[0] ?? null)} />
+            <input
+              ref={importFileInputRef}
+              type="file"
+              accept=".sgf,.txt,.gib,application/x-go-sgf,text/plain,application/octet-stream"
+              disabled={false}
+              onClick={handleImportPickerOpen}
+              onChange={(event) => void handleImportFile(event.target.files?.[0] ?? null)}
+            />
           </label>
           <button type="button" onClick={() => void loadSample()} disabled={false}>载入示例</button>
         </div>

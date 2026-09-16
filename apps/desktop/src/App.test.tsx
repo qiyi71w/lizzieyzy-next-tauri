@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
+import { StrictMode, act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AnalysisFrameDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureAdmissionDto, GameDto, NodePath, RecoveryProtectionDto, RecoveryStartupDto } from "./domain/types";
+import type { AnalysisFrameDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureAdmissionDto, FileActivationDeliveryDto, FileActivationRejectionDto, GameDto, NodePath, RecoveryProtectionDto, RecoveryStartupDto } from "./domain/types";
+import type { AppPreferences } from "./domain/preferences";
 
 const currentGameFixture = vi.hoisted(() => vi.fn());
 const backend = vi.hoisted(() => ({
@@ -39,6 +40,13 @@ const backend = vi.hoisted(() => ({
   fakeAnalyze: vi.fn(),
   importGameFile: vi.fn(),
   openSgfDocument: vi.fn(),
+  readGameFile: vi.fn(),
+  takeInitialFileActivation: vi.fn(async (): Promise<FileActivationDeliveryDto | null> => null),
+  takePendingFileActivation: vi.fn(async (): Promise<FileActivationDeliveryDto | null> => null),
+  markFileActivationReady: vi.fn(async () => undefined),
+  setFileActivationBusy: vi.fn(async () => undefined),
+  subscribeFileActivationAvailable: vi.fn(async (_onAvailable: () => void) => () => undefined),
+  subscribeFileActivationRejected: vi.fn(async (_onRejected: (rejection: FileActivationRejectionDto) => void) => () => undefined),
   parseSgfSummary: vi.fn(),
   replaySgfPositions: vi.fn(),
   saveCurrentGame: vi.fn(),
@@ -64,6 +72,8 @@ const backend = vi.hoisted(() => ({
 const listeners: {
   onSnapshot?: (snapshot: unknown) => void;
   onJob?: (job: unknown) => void;
+  onActivationAvailable?: () => void;
+  onActivationRejected?: (rejection: FileActivationRejectionDto) => void;
 } = {};
 
 vi.mock("./api/backend", () => ({
@@ -73,7 +83,7 @@ vi.mock("./api/backend", () => ({
 }));
 
 const preferencesApi = vi.hoisted(() => ({
-  loadAppPreferences: vi.fn(() => Promise.reject(new Error("preferences unavailable in test"))),
+  loadAppPreferences: vi.fn<() => Promise<{ preferences: AppPreferences; recovery?: { message: string } }>>(() => Promise.reject(new Error("preferences unavailable in test"))),
   saveAppPreferences: vi.fn(async (preferences: unknown) => preferences)
 }));
 
@@ -277,6 +287,18 @@ beforeEach(() => {
     listeners.onSnapshot = onSnapshot;
     listeners.onJob = onJob;
     onSnapshot({ revision: 0, lifecycle: { state: "no_engine" }, continuous: { enabled: null, phase: "loading" } });
+    return () => undefined;
+  });
+  backend.takeInitialFileActivation.mockResolvedValue(null);
+  backend.takePendingFileActivation.mockResolvedValue(null);
+  backend.markFileActivationReady.mockResolvedValue(undefined);
+  backend.setFileActivationBusy.mockResolvedValue(undefined);
+  backend.subscribeFileActivationAvailable.mockImplementation(async (onAvailable: () => void) => {
+    listeners.onActivationAvailable = onAvailable;
+    return () => undefined;
+  });
+  backend.subscribeFileActivationRejected.mockImplementation(async (onRejected: (rejection: FileActivationRejectionDto) => void) => {
+    listeners.onActivationRejected = onRejected;
     return () => undefined;
   });
 });
@@ -1346,6 +1368,9 @@ describe("App document replacement", () => {
     act(() => buttonNamed(host, "文件").click());
     act(() => buttonNamed(host, "导入棋谱…").click());
     const input = requiredElement<HTMLInputElement>(host, 'input[type="file"]');
+    await act(async () => {
+      input.click();
+    });
     expect(input.accept).toContain(".gib");
     const file = new File(["gib bytes"], "upload.gib", { type: "application/octet-stream" });
     Object.defineProperty(input, "files", { configurable: true, value: [file] });
@@ -1602,6 +1627,409 @@ describe("App application exit", () => {
   });
 });
 
+
+describe("App native file activation", () => {
+  const activatedFile = {
+    format: "sgf" as const,
+    sgf_text: "(;SZ[9];B[dd])",
+    display_path: "C:/棋谱 files/open me.sgf",
+    display_name: "open me.sgf",
+    native_path: "C:/棋谱 files/open me.sgf"
+  };
+
+  it("retains a take-once startup file and cleans late listeners across StrictMode replay", async () => {
+    let listenersReleased = false;
+    let activeAvailableListeners = 0;
+    let activeRejectedListeners = 0;
+    backend.subscribeFileActivationAvailable.mockImplementation(async () => {
+      await vi.waitUntil(() => listenersReleased);
+      activeAvailableListeners += 1;
+      return () => {
+        activeAvailableListeners -= 1;
+      };
+    });
+    backend.subscribeFileActivationRejected.mockImplementation(async () => {
+      await vi.waitUntil(() => listenersReleased);
+      activeRejectedListeners += 1;
+      return () => {
+        activeRejectedListeners -= 1;
+      };
+    });
+    backend.takeInitialFileActivation
+      .mockResolvedValueOnce({ kind: "open", request_id: 1, path: activatedFile.display_path })
+      .mockResolvedValue(null);
+    backend.readGameFile.mockResolvedValue(activatedFile);
+    preferencesApi.loadAppPreferences.mockResolvedValue({ preferences: defaultAppPreferences });
+
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<StrictMode><App /></StrictMode>));
+    await act(async () => {
+      listenersReleased = true;
+      await vi.waitUntil(() => backend.takeInitialFileActivation.mock.calls.length > 0);
+    });
+    await vi.waitFor(() => expect(backend.readGameFile).toHaveBeenCalledWith(activatedFile.display_path));
+    expect(activeAvailableListeners).toBe(1);
+    expect(activeRejectedListeners).toBe(1);
+    act(() => root?.unmount());
+    root = null;
+    expect(activeAvailableListeners).toBe(0);
+    expect(activeRejectedListeners).toBe(0);
+  });
+
+  it("disposes the first activation subscription when the peer subscription fails", async () => {
+    let activeAvailableListeners = 0;
+    backend.subscribeFileActivationAvailable.mockImplementation(async () => {
+      activeAvailableListeners += 1;
+      return () => {
+        activeAvailableListeners -= 1;
+      };
+    });
+    backend.subscribeFileActivationRejected.mockRejectedValue(new Error("listener unavailable"));
+
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(<App />));
+    await act(async () => {
+      await vi.waitFor(() => expect(backend.subscribeFileActivationRejected).toHaveBeenCalledTimes(1));
+    });
+
+    expect(activeAvailableListeners).toBe(0);
+    expect(backend.takeInitialFileActivation).not.toHaveBeenCalled();
+  });
+
+  it("keeps activation admission busy while the sheet picker and import are active", async () => {
+    const host = await renderApp();
+    act(() => buttonNamed(host, "文件").click());
+    act(() => buttonNamed(host, "导入棋谱…").click());
+    const input = requiredElement<HTMLInputElement>(host, 'input[type="file"]');
+    backend.setFileActivationBusy.mockClear();
+    let imported: typeof activatedFile | null = null;
+    backend.importGameFile.mockImplementation(async () => {
+      await vi.waitUntil(() => imported !== null);
+      return imported!;
+    });
+
+    await act(async () => {
+      input.click();
+    });
+    expect(backend.setFileActivationBusy).toHaveBeenLastCalledWith(true);
+
+    const file = new File(["(;SZ[9])"], "held import.sgf", { type: "application/x-go-sgf" });
+    Object.defineProperty(input, "files", { configurable: true, value: [file] });
+    act(() => input.dispatchEvent(new Event("change", { bubbles: true })));
+    expect(backend.setFileActivationBusy).not.toHaveBeenCalledWith(false);
+    act(() => listeners.onActivationRejected?.({ message: "Another file action is active; request rejected." }));
+    expect(host.textContent).toContain("request rejected");
+    expect(backend.takePendingFileActivation).not.toHaveBeenCalled();
+
+    await act(async () => {
+      imported = activatedFile;
+      await backend.importGameFile.mock.results.at(-1)?.value;
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+    expect(backend.setFileActivationBusy.mock.calls).toEqual([[true], [false]]);
+    await act(async () => {
+      input.click();
+      input.dispatchEvent(new Event("cancel"));
+    });
+    expect(backend.setFileActivationBusy.mock.calls).toEqual([[true], [false], [true], [false]]);
+  });
+
+  it("reports a retained startup rejection after abnormal recovery is resolved", async () => {
+    backend.takeInitialFileActivation.mockResolvedValue({
+      kind: "rejected",
+      message: "Only SGF, TXT, and GIB files can be opened."
+    });
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "abnormal",
+      envelope: {
+        document_seq: 1,
+        snapshot_seq: 2,
+        sgf_text: "(;SZ[9])",
+        selected_path: { indices: [] },
+        dirty: true,
+        disposition: "exit_incomplete"
+      }
+    });
+    backend.restoreCurrentGameRecovery.mockResolvedValue({ ...initialGame, dirty: true });
+    backend.serializeCurrentGame.mockResolvedValue("(;SZ[9])");
+    const host = await renderApp();
+
+    await act(async () => {
+      buttonLabeled(host, "Restore").click();
+      await backend.restoreCurrentGameRecovery.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+
+    expect(host.textContent).toContain("Only SGF, TXT, and GIB files can be opened.");
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+    expect(backend.markFileActivationReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a retained startup rejection after abnormal recovery is discarded", async () => {
+    backend.takeInitialFileActivation.mockResolvedValue({
+      kind: "rejected",
+      message: "Opening multiple files at once is not supported."
+    });
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "abnormal",
+      envelope: {
+        document_seq: 1,
+        snapshot_seq: 2,
+        sgf_text: "(;SZ[9])",
+        selected_path: { indices: [] },
+        dirty: true,
+        disposition: "exit_incomplete"
+      }
+    });
+    const host = await renderApp();
+
+    await act(async () => {
+      buttonLabeled(host, "Discard").click();
+      await backend.discardCurrentGameRecovery.mock.results.at(-1)?.value;
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+
+    expect(host.textContent).toContain("Opening multiple files at once is not supported.");
+    expect(backend.prepareDocumentReplacement).toHaveBeenCalledWith(expect.stringContaining("SZ[19]"), null);
+    expect(backend.markFileActivationReady).toHaveBeenCalledTimes(1);
+  });
+  it("opens the retained startup file instead of normal restore or the sample", async () => {
+    preferencesApi.loadAppPreferences.mockResolvedValue({
+      preferences: { ...defaultAppPreferences, restoreLastSession: true }
+    });
+
+    backend.takeInitialFileActivation.mockResolvedValue({
+      kind: "open",
+      request_id: 1,
+      path: activatedFile.display_path
+    });
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "normal",
+      envelope: {
+        document_seq: 1,
+        snapshot_seq: 1,
+        sgf_text: "(;SZ[9];W[ee])",
+        selected_path: { indices: [0] },
+        dirty: false,
+        disposition: "clean_completed"
+      }
+    });
+    backend.readGameFile.mockResolvedValue(activatedFile);
+
+    const host = await renderApp();
+    await flushLast(backend.readGameFile);
+    await flushLast(backend.resolveDocumentReplacement);
+    await flushLast(backend.projectCurrentGameMainline);
+
+    expect(backend.restoreCurrentGameRecovery).not.toHaveBeenCalled();
+    expect(backend.readGameFile).toHaveBeenCalledWith(activatedFile.display_path);
+    expect(backend.prepareDocumentReplacement).toHaveBeenCalledTimes(1);
+    expect(backend.prepareDocumentReplacement).toHaveBeenCalledWith(activatedFile.sgf_text, activatedFile.native_path);
+    expect(backend.markFileActivationReady).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("open me.sgf");
+  });
+
+  it("restores an abnormal game before routing the retained file through safe replacement", async () => {
+    backend.takeInitialFileActivation.mockResolvedValue({ kind: "open", request_id: 1, path: activatedFile.display_path });
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "abnormal",
+      envelope: {
+        document_seq: 1,
+        snapshot_seq: 2,
+        sgf_text: "(;SZ[9])",
+        selected_path: { indices: [] },
+        dirty: true,
+        disposition: "exit_incomplete"
+      }
+    });
+    backend.restoreCurrentGameRecovery.mockResolvedValue({ ...initialGame, dirty: true });
+    backend.serializeCurrentGame.mockResolvedValue("(;SZ[9])");
+    backend.readGameFile.mockResolvedValue(activatedFile);
+    const host = await renderApp();
+
+    expect(backend.readGameFile).not.toHaveBeenCalled();
+    await act(async () => {
+      buttonLabeled(host, "Restore").click();
+      await backend.restoreCurrentGameRecovery.mock.results.at(-1)?.value;
+      await backend.readGameFile.mock.results.at(-1)?.value;
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+
+    expect(backend.restoreCurrentGameRecovery.mock.invocationCallOrder[0])
+      .toBeLessThan(backend.readGameFile.mock.invocationCallOrder[0]);
+    expect(backend.prepareDocumentReplacement).toHaveBeenCalledWith(activatedFile.sgf_text, activatedFile.native_path);
+    expect(backend.markFileActivationReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not open the retained file when recovery disposition fails", async () => {
+    backend.takeInitialFileActivation.mockResolvedValue({ kind: "open", request_id: 1, path: activatedFile.display_path });
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "abnormal",
+      envelope: {
+        document_seq: 1,
+        snapshot_seq: 1,
+        sgf_text: "(;SZ[9])",
+        selected_path: { indices: [] },
+        dirty: true,
+        disposition: "exit_incomplete"
+      }
+    });
+    backend.restoreCurrentGameRecovery.mockRejectedValue(new Error("recovery write failed"));
+    const host = await renderApp();
+
+    await act(async () => {
+      buttonLabeled(host, "Restore").click();
+      await backend.restoreCurrentGameRecovery.mock.results.at(-1)?.value.catch(() => undefined);
+    });
+
+    expect(backend.readGameFile).not.toHaveBeenCalled();
+    expect(backend.markFileActivationReady).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="dialog"][aria-label="恢复当前棋谱"]')).not.toBeNull();
+  });
+
+  it("consumes replacement Cancel without retrying the startup request", async () => {
+    backend.takeInitialFileActivation.mockResolvedValue({ kind: "open", request_id: 1, path: activatedFile.display_path });
+    backend.readGameFile.mockResolvedValue(activatedFile);
+    backend.prepareDocumentReplacement.mockResolvedValue({ status: "needs_decision", departure_id: 9 });
+    const host = await renderApp();
+    await flushLast(backend.readGameFile);
+    await flushLast(backend.prepareDocumentReplacement);
+
+    await act(async () => {
+      buttonLabeled(host, "Cancel").click();
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+    });
+
+    expect(backend.readGameFile).toHaveBeenCalledTimes(1);
+    expect(backend.markFileActivationReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens an idle warm request and reports a busy rejection without queuing it", async () => {
+    backend.readGameFile.mockResolvedValue(activatedFile);
+    const host = await renderApp();
+    expect(backend.markFileActivationReady).toHaveBeenCalledTimes(1);
+
+    backend.takePendingFileActivation.mockResolvedValueOnce({
+      kind: "open",
+      request_id: 2,
+      path: activatedFile.display_path
+    });
+    await act(async () => {
+      listeners.onActivationAvailable?.();
+      await backend.takePendingFileActivation.mock.results.at(-1)?.value;
+      await backend.readGameFile.mock.results.at(-1)?.value;
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+    expect(backend.readGameFile).toHaveBeenCalledTimes(1);
+
+    act(() => listeners.onActivationRejected?.({ message: "Another file action is active; request rejected." }));
+    expect(host.textContent).toContain("request rejected");
+    expect(backend.readGameFile).toHaveBeenCalledTimes(1);
+  });
+  it("discards abnormal recovery before opening the retained file", async () => {
+    backend.takeInitialFileActivation.mockResolvedValue({ kind: "open", request_id: 1, path: activatedFile.display_path });
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "abnormal",
+      envelope: {
+        document_seq: 1,
+        snapshot_seq: 1,
+        sgf_text: "(;SZ[9])",
+        selected_path: { indices: [] },
+        dirty: true,
+        disposition: "exit_incomplete"
+      }
+    });
+    backend.readGameFile.mockResolvedValue(activatedFile);
+    const host = await renderApp();
+
+    await act(async () => {
+      buttonLabeled(host, "Discard").click();
+      await backend.discardCurrentGameRecovery.mock.results.at(-1)?.value;
+      await backend.readGameFile.mock.results.at(-1)?.value;
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+
+    expect(backend.discardCurrentGameRecovery.mock.invocationCallOrder[0])
+      .toBeLessThan(backend.readGameFile.mock.invocationCallOrder[0]);
+    expect(backend.prepareDocumentReplacement).toHaveBeenCalledWith(activatedFile.sgf_text, activatedFile.native_path);
+  });
+
+  it("keeps the restored game when the retained file cannot be parsed", async () => {
+    backend.takeInitialFileActivation.mockResolvedValue({ kind: "open", request_id: 1, path: activatedFile.display_path });
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "abnormal",
+      envelope: {
+        document_seq: 1,
+        snapshot_seq: 1,
+        sgf_text: "(;SZ[9])",
+        selected_path: { indices: [] },
+        dirty: true,
+        disposition: "exit_incomplete"
+      }
+    });
+    backend.restoreCurrentGameRecovery.mockResolvedValue({ ...initialGame, native_path: "/tmp/recovered.sgf", dirty: true });
+    backend.serializeCurrentGame.mockResolvedValue("(;SZ[9])");
+    backend.readGameFile.mockRejectedValue(new Error("malformed GIB"));
+    const host = await renderApp();
+    backend.prepareDocumentReplacement.mockClear();
+
+    await act(async () => {
+      buttonLabeled(host, "Restore").click();
+      await backend.restoreCurrentGameRecovery.mock.results.at(-1)?.value;
+      await backend.readGameFile.mock.results.at(-1)?.value.catch(() => undefined);
+    });
+
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("recovered.sgf");
+    expect(host.textContent).toContain("malformed GIB");
+    expect(backend.markFileActivationReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes a retained file through the dirty restored game's replacement decision", async () => {
+    backend.takeInitialFileActivation.mockResolvedValue({ kind: "open", request_id: 1, path: activatedFile.display_path });
+    backend.inspectCurrentGameRecovery.mockResolvedValue({
+      status: "abnormal",
+      envelope: {
+        document_seq: 1,
+        snapshot_seq: 1,
+        sgf_text: "(;SZ[9])",
+        selected_path: { indices: [] },
+        dirty: true,
+        disposition: "exit_incomplete"
+      }
+    });
+    backend.restoreCurrentGameRecovery.mockResolvedValue({ ...initialGame, dirty: true });
+    backend.serializeCurrentGame.mockResolvedValue("(;SZ[9])");
+    backend.readGameFile.mockResolvedValue(activatedFile);
+    backend.prepareDocumentReplacement.mockResolvedValue({ status: "needs_decision", departure_id: 12 });
+    const host = await renderApp();
+
+    await act(async () => {
+      buttonLabeled(host, "Restore").click();
+      await backend.restoreCurrentGameRecovery.mock.results.at(-1)?.value;
+      await backend.readGameFile.mock.results.at(-1)?.value;
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).not.toBeNull();
+
+    await act(async () => {
+      buttonLabeled(host, "Cancel").click();
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+    });
+    expect(backend.resolveDocumentReplacement).toHaveBeenCalledWith(expect.objectContaining({ action: "cancel" }));
+    expect(backend.markFileActivationReady).toHaveBeenCalledTimes(1);
+  });
+
+});
 
 describe("App current-game recovery", () => {
   const recoveredGame: CurrentGameResultDto = {
