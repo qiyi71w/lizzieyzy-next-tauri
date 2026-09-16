@@ -80,7 +80,7 @@ The existing Tauri implementation is the migration starting point and must be pr
 
 - `UI-02` remains Partial: there is still no evidence that engine events are delivered while a board mutation promise is pending. That residual does not reopen R4.
 - R4 Analysis has exited with all ten owner items plus pulled-forward `PREF-01` and `APP-05` Accepted.
-- Remaining R5 work is the `APP-01` semantic gate, `APP-02` window file-drop, remaining `APP-03` teardown timeout/Retry/Exit anyway native evidence, and remaining `APP-04` recovery write-failure prompt. Ticket 06 on candidate `4fd710e` accepted `SGF-07` and recorded successors `UI-06` (Accepted) and `ANA-15` (Partial); `APP-03` and `APP-04` are Partial. R5 has not exited; the `APP-01` semantic gate is not claimed.
+- R5 has exited on integrated Windows candidate `48db2b2833f9deb45bd7dcd47181f5da77348a0c`. `SGF-08`, `APP-02`, `APP-03`, `APP-04`, and `ANA-15` are Accepted; the `APP-01` R5 semantic gate passed. Final `APP-01` acceptance remains an R11 / `REL-04` installer-association and Canonical Artifact Installed Live Evidence obligation.
 - Layout rails are fixed at `228px` and `260px`; splitters, rail visibility, window-geometry reset, and narrow Restore Default are absent.
 - Review HUD player labels are hardcoded 黑棋/白棋 rather than root `PB`/`PW` (`REVIEW-09`). Main-window always-on-top is absent (`WINDOW-02`).
 - Multi-backend profiles, Generic GTP, and Match Sessions are absent.
@@ -221,7 +221,7 @@ flowchart TB
 
 Layout, window, and appearance in R7 wait only for `PREF-01`. `GUIDE-01` is Deferred (Ticket 21) and is not an R7 member or exit.
 
-R4 ran after R3 and pulled only `PREF-01` and `APP-05` forward from R5; both are now Accepted. Ticket 06 accepted `SGF-07` and recorded `UI-06`/`ANA-15` without exiting R5 or passing the `APP-01` semantic gate. Remaining R5 sequencing is that gate, then `APP-02`; `APP-03`/`APP-04` stay Partial until their unrun native cases exist.
+R4 ran after R3 and pulled only `PREF-01` and `APP-05` forward from R5; both remain Accepted. R5 subsequently accepted `SGF-08`, `APP-02`, `APP-03`, `APP-04`, and `ANA-15`, and passed the `APP-01` semantic gate. Final `APP-01` acceptance remains with R11 / `REL-04`; no R5 sequencing remains open.
 
 ### Critical Edges
 
@@ -545,15 +545,15 @@ Current state: R4 has exited. `ANA-05` remains an immutable historical acceptanc
 
 **Owns:** `PREF-01`, `SGF-07`, `APP-02`, `APP-03`, `APP-04`, `APP-05`, the `APP-01` semantic gate, and successors `UI-06` and `ANA-15` (not additional exit items).
 
-**Migration Phase Gate:** R1, R2, and R3 have exited, so the gate is satisfied; R4 has also exited. `PREF-01` and `APP-05` were accepted early in R4. `SGF-07` is Accepted from Ticket 06. Remaining R5 work is the `APP-01` semantic gate and `APP-02`; do not treat Partial `APP-03`/`APP-04` as phase exit.
+**Migration Phase Gate:** R1 through R4 have exited. R5 has also exited: pulled-forward `PREF-01` and `APP-05`, `SGF-07`, `APP-02`, `APP-03`, and `APP-04` are Accepted, and the `APP-01` semantic gate is recorded as passed. `APP-01` itself remains unaccepted pending R11 / `REL-04`.
 
 **Delivery Order:**
 
-1. `PREF-01` durable preferences and `APP-05` Shortcut Registry are already Accepted from R4 closeout.
-2. `SGF-07` safe replacement is Accepted from Ticket 06.
-3. Finish named residual native evidence for Partial `APP-03` (stuck-resource 10s timeout / Retry / Exit anyway) and Partial `APP-04` (recovery write-failure prompt).
-4. Pass the `APP-01` semantic gate after `SGF-07`; do not wait for final `APP-01` Accepted.
-5. `APP-02` window file-drop dispatch after the recorded `APP-01` semantic gate.
+1. `PREF-01` durable preferences and `APP-05` Shortcut Registry were accepted early in R4 closeout.
+2. `SGF-07` safe replacement was accepted before the integrated batch.
+3. `SGF-08` GIB intake was delivered ahead of its R6 owner and accepted on the integrated candidate.
+4. The `APP-01` semantic gate passed through cold/warm single-instance native activation without claiming final installed association acceptance.
+5. `APP-02` drop and the remaining `APP-03`, `APP-04`, and `ANA-15` owner evidence were accepted before R5 exit.
 
 **Deliver:**
 
@@ -571,7 +571,7 @@ Current state: R4 has exited. `ANA-05` remains an immutable historical acceptanc
 - Native restart smoke proves preference durability and review-only recovery.
 - Shutdown smoke proves cancelled save aborts exit and successful teardown stops every currently owned resource.
 
-Current state: R5 has not exited. Ticket 06 native closeout on candidate `4fd710e` (Windows 11, Ticket 07 KataGo, worktree `safe-current-game-06`) accepted `SGF-07` and successor `UI-06`, recorded successor `ANA-15` as Partial, and moved `APP-03`/`APP-04` from Missing to Partial. Native File Exit, WM_CLOSE Cancel, clean `clean_completed`, Restore/Discard without resurrecting engine or jobs, and Q9 Save As cancel (engine kept, analysis stopped) were exercised. Not run: stuck-resource 10s timeout / Retry / Exit anyway; recovery write-failure prompt; native analysis failure presentation. The `APP-01` semantic gate is not recorded. R9 still requires Accepted `APP-04`; R10 still requires Accepted `APP-03`.
+Current state: R5 exited on exact integrated Windows candidate `48db2b2833f9deb45bd7dcd47181f5da77348a0c` (`org.lizzieyzy.next.acceptance.r83a0f33a97144c71927fe5a3657899bc`). Repository checks covered GIB semantics, current-game recovery, desktop lifecycle, foreground-engine failure, and the full affected rendered App. Native N1–N7 evidence covered GIB Open / Save As / reopen; cold and warm single-instance activation; physical one- and multi-file Explorer drop; busy rejection without replay; abnormal recovery before a pending file; real recovery persistence failure and Retry; real KataGo replacement/save safety; exact ten-second teardown Retry and contextual Exit anyway from the unchanged ticket-04 owner path plus final-candidate smoke; truthful owned-engine failure and explicit Restart; and final clean exit with `clean_completed`. `SGF-08`, `APP-02`, `APP-03`, `APP-04`, and `ANA-15` are Accepted. The `APP-01` semantic gate passed, while production association and installed-live evidence remain with R11 / `REL-04`.
 
 ### Analysis Restoration — Continuous Current-node Analysis
 
@@ -857,11 +857,11 @@ These items are stable and unnumbered. Each has an owner and a Plan-owned Promot
 
 ## Next Executable Batch
 
-**ANA-16 — Current-game Analysis Tasks is complete and Accepted.** Its eight-ticket set has closed with no follow-up candidates. The approved analysis-restoration sequence through range/color/budgets/Pause/Continue and both two-stage strategies is delivered. The next mainline feature batch requires its own planning decision; the remaining R5 evidence below can proceed independently.
+**ANA-16 — Current-game Analysis Tasks is complete and Accepted.** Its eight-ticket set has closed with no follow-up candidates. The approved analysis-restoration sequence through range/color/budgets/Pause/Continue and both two-stage strategies is delivered. R5 has also exited; the next mainline feature batch requires its own planning decision.
 
-R5 remains open. Independent native failure evidence for Partial `APP-03`, `APP-04`, and `ANA-15` may proceed concurrently: actual ten-second teardown timeout/Retry/contextual Exit anyway, recovery replacement-write and release failures, and real query/engine errors. ANA-06's five-second target-final cancellation evidence does not discharge the ten-second teardown scenario.
+R5 has exited. Integrated candidate `48db2b2833f9deb45bd7dcd47181f5da77348a0c` completed the native activation/drop, graceful-shutdown, recovery-failure, and truthful-analysis evidence; exact unchanged-path reuse for the ten-second teardown cases was paired with affected final-candidate smoke.
 
-`APP-01` activation and `APP-02` drop remain Missing obligations. Their GIB paths require `SGF-08`; coordinate that future intake dependency rather than treating SGF parsing as GIB support. `ENG-09`/`ENG-10`, `UI-02` residuals, and other phase gates retain their own scope. This analysis batch does not claim R5 exit or promote those items.
+`APP-01` remains Missing only for its R11 / `REL-04` production association and Canonical Artifact Installed Live Evidence obligation. `ENG-09`/`ENG-10`, `UI-02` residuals, and other phase gates retain their own scope; R5 exit does not promote them.
 
 Slice R3-A (Foreground engine identity and lifecycle) is complete. The historical scope below is audit record, not the current batch.
 
