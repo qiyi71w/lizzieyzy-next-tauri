@@ -54,6 +54,14 @@ const backend = vi.hoisted(() => ({
   classifyProblems: vi.fn(),
   fakeAnalyze: vi.fn(),
   openSgfDocument: vi.fn(),
+  readGameFile: vi.fn(),
+  takeInitialFileActivation: vi.fn(async () => null),
+  takePendingFileActivation: vi.fn(async () => null),
+  markFileActivationReady: vi.fn(async () => undefined),
+  setFileActivationBusy: vi.fn(async () => undefined),
+  subscribeFileActivationAvailable: vi.fn(async () => () => undefined),
+  subscribeFileActivationRejected: vi.fn(async () => () => undefined),
+
   parseSgfSummary: vi.fn(),
   replaySgfPositions: vi.fn(),
   saveCurrentGame: vi.fn(),
@@ -466,6 +474,62 @@ describe("truthful native analysis actions", () => {
     expect(host.textContent).toContain("stderr boom");
     expect(backend.fakeAnalyze).not.toHaveBeenCalled();
   });
+
+  it("keeps personal comments and attached legal analysis visible after a native job failure", async () => {
+    currentGameFixture.mockResolvedValueOnce({
+      ...initialGame,
+      snapshot: {
+        ...initialGame.snapshot,
+        personal_comment: "human-authored note",
+        primary_analysis: {
+          job_id: "stored-analysis",
+          turn: 0,
+          visits: 55,
+          winrate_black: 0.52,
+          score_mean_black: 1.5,
+          candidates: [{
+            vertex: { point: { x: 3, y: 3 } },
+            visits: 55,
+            winrate_black: 0.52,
+            score_mean_black: 1.5,
+            pv: []
+          }]
+        }
+      }
+    });
+    const host = await renderApp();
+    expect((host.querySelector(".personal-comment-editor") as HTMLTextAreaElement).value).toBe("human-authored note");
+    expect(host.querySelectorAll(".cand-row")).toHaveLength(1);
+    await readyEngine(host);
+    backend.startSelectedNodeAnalysis.mockResolvedValueOnce({
+      run_id: "run-1",
+      job_id: "job-retain",
+      lane: "selected_node",
+      mode: "finite",
+      state: "queued",
+      generation: 1,
+      node_path: { indices: [] }
+    });
+    await act(async () => {
+      buttonNamed(host, "分析当前节点").click();
+      await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
+      listeners.onJob?.({
+        run_id: "run-1",
+        job_id: "job-retain",
+        lane: "selected_node",
+        mode: "finite",
+        generation: 1,
+        node_path: { indices: [] },
+        outcome: "failed",
+        failure: { operation: "unexpected_exit", kind: "nonzero_exit", message: "real engine exited" }
+      });
+    });
+    expect(host.textContent).toContain("real engine exited");
+    expect((host.querySelector(".personal-comment-editor") as HTMLTextAreaElement).value).toBe("human-authored note");
+    expect(host.querySelectorAll(".cand-row")).toHaveLength(1);
+    expect(backend.fakeAnalyze).not.toHaveBeenCalled();
+  });
+
   it("serializes task preset persistence with a concurrent display edit", async () => {
     const host = await renderApp();
     await readyEngine(host);

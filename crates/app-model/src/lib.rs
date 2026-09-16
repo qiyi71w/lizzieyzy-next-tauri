@@ -97,6 +97,34 @@ pub struct GameDto {
     pub summary: GameSummaryDto,
     pub moves: Vec<MoveDto>,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GameFileFormatDto {
+    Sgf,
+    Gib,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GameFileImportDto {
+    pub format: GameFileFormatDto,
+    pub sgf_text: String,
+    pub display_path: String,
+    pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FileActivationDeliveryDto {
+    Open { request_id: u64, path: String },
+    Rejected { message: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileActivationRejectionDto {
+    pub message: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct NodePath {
@@ -712,6 +740,30 @@ mod provider_tests {
         assert_eq!(json["snapshot_id"], "snapshot-1");
         assert_eq!(json["image_path"], "/tmp/board.png");
         assert_eq!(json["timeout_ms"], 250);
+    }
+}
+
+#[cfg(test)]
+mod file_activation_wire {
+    use super::*;
+
+    #[test]
+    fn file_activation_delivery_uses_tagged_snake_case_wire_shape() {
+        let open = serde_json::to_value(FileActivationDeliveryDto::Open {
+            request_id: 7,
+            path: "C:/棋谱 files/open me.sgf".to_string(),
+        })
+        .unwrap();
+        let rejected = serde_json::to_value(FileActivationDeliveryDto::Rejected {
+            message: "busy".to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(open["kind"], "open");
+        assert_eq!(open["request_id"], 7);
+        assert_eq!(open["path"], "C:/棋谱 files/open me.sgf");
+        assert_eq!(rejected["kind"], "rejected");
+        assert_eq!(rejected["message"], "busy");
     }
 }
 

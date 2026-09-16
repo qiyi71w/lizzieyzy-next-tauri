@@ -27,6 +27,9 @@ import type {
   EngineProfileSettingsDto,
   EngineFailureDto,
   ForegroundEngineSnapshotDto,
+  FileActivationDeliveryDto,
+  FileActivationRejectionDto,
+  GameFileImportDto,
   GameDto,
   MoveDto,
   MoveVertex,
@@ -42,12 +45,7 @@ import { normalizeAppPreferences, type AppPreferences } from "../domain/preferen
 
 const letters = "abcdefghijklmnopqrstuvwxyz";
 const sampleGameId = "browser-sgf";
-const sgfDialogFilters = [{ name: "SGF files", extensions: ["sgf", "txt"] }];
-
-export type SgfDocument = {
-  path: string | null;
-  sgfText: string;
-};
+const gameDialogFilters = [{ name: "Game files", extensions: ["sgf", "txt", "gib"] }];
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
@@ -84,16 +82,69 @@ export async function fakeAnalyze(sgfText: string): Promise<AnalysisFrameDto[]> 
   throw new Error(nativeSyntheticAnalysisUnavailable);
 }
 
-export async function openSgfDocument(): Promise<SgfDocument | null> {
+export async function openSgfDocument(): Promise<GameFileImportDto | null> {
   if (!isTauriRuntime()) return null;
   const selected = await open({
     multiple: false,
     directory: false,
-    filters: sgfDialogFilters
+    filters: gameDialogFilters
   });
   if (typeof selected !== "string") return null;
-  const sgfText = await invoke<string>("read_sgf_file", { path: selected });
-  return { path: selected, sgfText };
+  return readGameFile(selected);
+}
+
+export async function readGameFile(path: string): Promise<GameFileImportDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<GameFileImportDto>("read_game_file", { path });
+}
+
+export async function takeInitialFileActivation(): Promise<FileActivationDeliveryDto | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke<FileActivationDeliveryDto | null>("take_initial_file_activation");
+}
+
+export async function takePendingFileActivation(): Promise<FileActivationDeliveryDto | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke<FileActivationDeliveryDto | null>("take_pending_file_activation");
+}
+
+export async function markFileActivationReady(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await invoke("mark_file_activation_ready");
+}
+
+export async function setFileActivationBusy(busy: boolean): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await invoke("set_file_activation_busy", { busy });
+}
+
+export async function subscribeFileActivationAvailable(onAvailable: () => void): Promise<() => void> {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen("file-activation://available", onAvailable);
+}
+
+export async function subscribeFileActivationRejected(
+  onRejected: (rejection: FileActivationRejectionDto) => void
+): Promise<() => void> {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen<FileActivationRejectionDto>("file-activation://rejected", (event) => onRejected(event.payload));
+}
+
+export async function importGameFile(file: File): Promise<GameFileImportDto> {
+  if (!isTauriRuntime()) {
+    if (file.name.toLowerCase().endsWith(".gib")) {
+      throw new Error("GIB import requires the native Tauri desktop backend.");
+    }
+    return {
+      format: "sgf",
+      sgf_text: await file.text(),
+      display_path: file.name,
+      display_name: file.name,
+      native_path: null
+    };
+  }
+  const input = Array.from(new Uint8Array(await file.arrayBuffer()));
+  return invoke<GameFileImportDto>("import_game_bytes", { fileName: file.name, input });
 }
 
 export const nativeCurrentGameUnavailable =

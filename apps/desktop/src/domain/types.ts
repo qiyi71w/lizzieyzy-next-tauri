@@ -15,6 +15,19 @@ export type PositionDto = {
 };
 export type GameSummaryDto = { id: string; board_size: number; komi: number; black_name?: string | null; white_name?: string | null; result?: string | null; move_count: number };
 export type GameDto = { summary: GameSummaryDto; moves: MoveDto[] };
+export type GameFileFormatDto = "sgf" | "gib";
+export type GameFileImportDto = {
+  format: GameFileFormatDto;
+  sgf_text: string;
+  display_path: string;
+  display_name: string;
+  native_path?: string | null;
+};
+export type FileActivationDeliveryDto =
+  | { kind: "open"; request_id: number; path: string }
+  | { kind: "rejected"; message: string };
+export type FileActivationRejectionDto = { message: string };
+
 export type NodePath = { indices: number[] };
 export type SgfPropertyDto = { key: string; values: string[] };
 export type SgfTreeNodeDto = { properties: SgfPropertyDto[]; children: SgfTreeNodeDto[] };

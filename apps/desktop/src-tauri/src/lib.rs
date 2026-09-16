@@ -1,11 +1,11 @@
 use app_model::{
     AnalysisFrameDto, AnalysisJobModeDto, AnalysisJobStartedDto, AppHealthDto, CurrentGameError,
     CurrentGameResultDto, EngineBackend, EngineFailureDto, EngineFailureKind, EngineOperationDto,
-    EngineProfileDto, ForegroundEngineEventDto, ForegroundEngineSnapshotDto, MoveVertex, NodePath,
-    PositionDto, ProviderError, ProviderErrorKind, ProviderFetchMethod, ProviderFetchRequest,
-    ProviderFetchResult, ProviderGameMetadata, ProviderImportRequest, ProviderImportResult, ProviderKind,
-    ReadboardSidecarProbeRequest, ReadboardSidecarProbeResult, ReadboardSidecarSyncSnapshotRequest,
-    ReadboardSidecarSyncSnapshotResult,
+    EngineProfileDto, ForegroundEngineEventDto, ForegroundEngineSnapshotDto, GameFileFormatDto,
+    GameFileImportDto, MoveVertex, NodePath, PositionDto, ProviderError, ProviderErrorKind,
+    ProviderFetchMethod, ProviderFetchRequest, ProviderFetchResult, ProviderGameMetadata,
+    ProviderImportRequest, ProviderImportResult, ProviderKind, ReadboardSidecarProbeRequest,
+    ReadboardSidecarProbeResult, ReadboardSidecarSyncSnapshotRequest, ReadboardSidecarSyncSnapshotResult,
 };
 use engine_manager::{
     build_command_spec, check_assets, default_engine_profiles_settings, normalize_engine_profiles,
@@ -32,6 +32,7 @@ mod continuous_analysis;
 use continuous_analysis::{foreground_engine_continuous_action, PreferencesState};
 mod current_game_state;
 mod document_departure;
+mod file_activation;
 mod save_as;
 mod session_recovery;
 #[cfg(windows)]
@@ -43,6 +44,10 @@ use document_departure::{
     confirm_application_exit_anyway, confirm_native_exit, prepare_application_exit,
     prepare_document_replacement, resolve_application_exit, resolve_document_replacement,
     retry_application_teardown, APPLICATION_EXIT_REQUESTED_EVENT,
+};
+use file_activation::{
+    handle_file_drop, handle_second_instance, mark_file_activation_ready, set_file_activation_busy,
+    take_initial_file_activation, take_pending_file_activation, FileActivationOwner,
 };
 use session_recovery::{
     current_game_recovery_protection, discard_current_game_recovery, inspect_current_game_recovery,
@@ -389,9 +394,61 @@ fn replay_sgf_positions(sgf_text: String) -> Result<Vec<PositionDto>, String> {
 }
 
 #[tauri::command]
-fn read_sgf_file(path: String) -> Result<String, String> {
+fn read_game_file(path: String) -> Result<GameFileImportDto, String> {
     let path = non_empty_path(path)?;
-    fs::read_to_string(&path).map_err(|err| format!("failed to read SGF file {}: {err}", path.display()))
+    let display_path = path.display().to_string();
+    let input =
+        fs::read(&path).map_err(|error| format!("failed to read game file {display_path}: {error}"))?;
+    import_game_input(display_path.clone(), input, Some(display_path))
+}
+
+#[tauri::command]
+fn import_game_bytes(file_name: String, input: Vec<u8>) -> Result<GameFileImportDto, String> {
+    let display_path = non_empty_path(file_name)?.display().to_string();
+    import_game_input(display_path, input, None)
+}
+
+fn import_game_input(
+    display_path: String,
+    input: Vec<u8>,
+    source_native_path: Option<String>,
+) -> Result<GameFileImportDto, String> {
+    let path = Path::new(&display_path);
+    let display_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("game file has no valid file name: {display_path}"))?
+        .to_string();
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| format!("unsupported game file: {display_path}"))?;
+    if !matches!(extension.as_str(), "sgf" | "txt" | "gib") {
+        return Err(format!("unsupported game file: {display_path}"));
+    }
+    let (format, sgf_text, native_path) = if extension == "gib" {
+        (
+            GameFileFormatDto::Gib,
+            sgf::import_gib(&input)
+                .map_err(|error| format!("failed to import GIB file {display_path}: {error}"))?,
+            None,
+        )
+    } else {
+        (
+            GameFileFormatDto::Sgf,
+            String::from_utf8(input)
+                .map_err(|error| format!("failed to decode game file {display_path} as UTF-8: {error}"))?,
+            source_native_path,
+        )
+    };
+    Ok(GameFileImportDto {
+        format,
+        sgf_text,
+        display_path,
+        display_name,
+        native_path,
+    })
 }
 
 #[tauri::command]
@@ -999,6 +1056,8 @@ fn foreground_engine_switch(
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(handle_second_instance))
+        .manage(FileActivationOwner::from_process())
         .manage(CurrentGameState::default())
         .manage(PreferencesState::default())
         .setup(|app| {
@@ -1048,7 +1107,8 @@ pub fn run() {
             readboard_sidecar_probe,
             readboard_sidecar_sync_snapshot,
             replay_sgf_positions,
-            read_sgf_file,
+            read_game_file,
+            import_game_bytes,
             prepare_document_replacement,
             resolve_document_replacement,
             prepare_application_exit,
@@ -1061,6 +1121,10 @@ pub fn run() {
             discard_current_game_recovery,
             retry_current_game_recovery,
             current_game_recovery_protection,
+            take_initial_file_activation,
+            take_pending_file_activation,
+            mark_file_activation_ready,
+            set_file_activation_busy,
             serialize_current_game,
             save_current_game,
             save_current_game_as,
@@ -1097,6 +1161,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build LizzieYzy Next")
         .run(|app, event| match event {
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }),
+                ..
+            } if label == "main" => handle_file_drop(app, paths),
+
             tauri::RunEvent::WindowEvent {
                 label,
                 event: tauri::WindowEvent::CloseRequested { api, .. },
@@ -1652,5 +1722,46 @@ for line in sys.stdin:
             },
             warnings: Vec::new(),
         }
+    }
+    #[test]
+    fn game_file_import_routes_formats_and_keeps_gib_read_only() {
+        let directory = std::env::temp_dir().join(format!("game-file-import-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let sgf_path = directory.join("named.sgf");
+        std::fs::write(&sgf_path, "(;SZ[9]PB[Black]PW[White];B[dd])").unwrap();
+        let sgf_import = read_game_file(sgf_path.to_string_lossy().into_owned()).unwrap();
+        assert_eq!(sgf_import.format, app_model::GameFileFormatDto::Sgf);
+        assert_eq!(sgf_import.display_name, "named.sgf");
+        assert_eq!(sgf_import.native_path.as_deref(), sgf_path.to_str());
+        assert_eq!(sgf_import.sgf_text, "(;SZ[9]PB[Black]PW[White];B[dd])");
+
+        let gib_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/tygem-named-pass-lf.gib");
+        let original = std::fs::read(&gib_path).unwrap();
+        let gib_import = read_game_file(gib_path.to_string_lossy().into_owned()).unwrap();
+        assert_eq!(gib_import.format, app_model::GameFileFormatDto::Gib);
+        assert_eq!(gib_import.display_name, "tygem-named-pass-lf.gib");
+        assert_eq!(gib_import.native_path, None);
+        assert_eq!(std::fs::read(&gib_path).unwrap(), original);
+        let imported = sgf::CurrentSgfDocument::open(&gib_import.sgf_text).unwrap();
+        assert_eq!(imported.default_selected_path().indices, vec![0, 0, 0]);
+
+        let uploaded = import_game_bytes("uploaded.gib".to_string(), original.clone()).unwrap();
+        assert_eq!(uploaded.format, app_model::GameFileFormatDto::Gib);
+        assert_eq!(uploaded.display_name, "uploaded.gib");
+        assert_eq!(uploaded.native_path, None);
+        assert_eq!(uploaded.sgf_text, gib_import.sgf_text);
+
+        let unsupported = directory.join("unsupported.ngf");
+        std::fs::write(&unsupported, "not supported").unwrap();
+        assert!(read_game_file(unsupported.to_string_lossy().into_owned())
+            .unwrap_err()
+            .contains("unsupported game file"));
+        assert!(
+            read_game_file(directory.join("missing.sgf").to_string_lossy().into_owned())
+                .unwrap_err()
+                .contains("failed to read game file")
+        );
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

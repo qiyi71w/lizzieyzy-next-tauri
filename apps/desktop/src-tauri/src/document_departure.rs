@@ -142,10 +142,12 @@ pub fn attempt_teardown(
     budget: Duration,
     stop_owned: impl FnOnce(Duration) -> Vec<String>,
 ) -> ApplicationTeardownAttemptDto {
+    let deadline = Instant::now() + budget;
     let outstanding = stop_owned(budget);
     if outstanding.is_empty() {
         ApplicationTeardownAttemptDto::Completed
     } else {
+        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
         ApplicationTeardownAttemptDto::TimedOut { outstanding }
     }
 }
@@ -310,7 +312,7 @@ pub fn resolve_exit(
             selected_path,
             save_destination(),
             teardown,
-            remaining(),
+            budget,
         ),
         ApplicationExitActionDto::Cancel => unreachable!(),
     }
@@ -492,7 +494,7 @@ pub async fn resolve_application_exit(
                 selected_path,
                 destination,
                 |budget| stop_foreground_resources(&manager, budget),
-                deadline.saturating_duration_since(Instant::now()),
+                APPLICATION_TEARDOWN_BUDGET,
             )?
         }
     } else {
@@ -560,7 +562,7 @@ mod tests {
     };
     use std::cell::RefCell;
     use std::fs;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     const BRANCHING: &str = include_str!("../../../../tests/golden/editable-workspace-branching.sgf");
     const EMPTY: &str = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
@@ -882,6 +884,41 @@ mod tests {
     }
 
     #[test]
+    fn exit_save_time_does_not_consume_teardown_budget() {
+        let state = CurrentGameState::default();
+        let opened = state.replace(BRANCHING, None).unwrap();
+        state.force_dirty();
+        let id = departure_id(state.prepare_exit().unwrap());
+        let destination = unique_path("exit-save-budget");
+        let budget = Duration::from_millis(20);
+        let observed_budget = RefCell::new(None);
+
+        let outcome = resolve_exit(
+            &state,
+            id,
+            ApplicationExitActionDto::Save,
+            opened.selected_path,
+            &[],
+            |_| Ok(()),
+            wait_succeeds,
+            || {
+                std::thread::sleep(Duration::from_millis(40));
+                Ok(Some(destination.to_string_lossy().into_owned()))
+            },
+            |received| {
+                *observed_budget.borrow_mut() = Some(received);
+                Vec::new()
+            },
+            budget,
+        )
+        .unwrap();
+
+        assert_eq!(*observed_budget.borrow(), Some(budget));
+        assert_eq!(outcome.teardown, Some(ApplicationTeardownAttemptDto::Completed));
+        let _ = fs::remove_file(destination);
+    }
+
+    #[test]
     fn clean_exit_and_discard_report_distinct_dispositions() {
         let clean = CurrentGameState::default();
         let opened = clean
@@ -963,6 +1000,22 @@ mod tests {
     }
 
     #[test]
+    fn failed_teardown_uses_the_supplied_budget() {
+        let budget = Duration::from_millis(40);
+        let started = Instant::now();
+
+        let attempt = attempt_teardown(budget, |_| vec!["foreground engine".to_string()]);
+
+        assert!(started.elapsed() >= budget);
+        assert_eq!(
+            attempt,
+            ApplicationTeardownAttemptDto::TimedOut {
+                outstanding: vec!["foreground engine".to_string()],
+            }
+        );
+    }
+
+    #[test]
     fn teardown_timeout_names_resources_and_retry_is_another_bounded_attempt() {
         let state = CurrentGameState::default();
         let opened = state.replace(BRANCHING, None).unwrap();
@@ -981,7 +1034,7 @@ mod tests {
                 *attempts.borrow_mut() += 1;
                 vec!["foreground engine".to_string()]
             },
-            Duration::from_secs(10),
+            Duration::from_millis(40),
         )
         .unwrap();
         assert_eq!(
@@ -1008,7 +1061,7 @@ mod tests {
                 *attempts.borrow_mut() += 1;
                 Vec::new()
             },
-            Duration::from_secs(10),
+            Duration::from_millis(40),
         )
         .unwrap();
         assert_eq!(*attempts.borrow(), 2);
