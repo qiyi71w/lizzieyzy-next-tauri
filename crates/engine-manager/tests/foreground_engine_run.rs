@@ -888,10 +888,10 @@ fn selected_node_protocol_stderr_failure_is_typed_and_publishes_no_frame() {
 
 #[cfg(unix)]
 #[test]
-fn continuous_board_size_refusal_fails_only_the_job_and_keeps_ready_run() {
-    let temp = TestTempDir::new("selected-board-size-refusal");
+fn continuous_board_size_refusal_fails_only_the_job_and_keeps_exact_ready_run() {
+    let temp = TestTempDir::new("continuous-board-size-refusal");
     let script = selected_node_final_script(
-        r#"printf '{"id":"%s","error":"Board size 25x2 is not supported by this neural net"}\n' "$id""#,
+        r#"printf '{"id":"%s","error":"Must provide an integer from 2 to 19","field":"boardXSize"}\n' "$id""#,
     );
     let (manager, _, events, run_id) = ready_manager(&temp, &script);
     let mut request = continuous_request(&run_id, 4, vec![]);
@@ -907,7 +907,58 @@ fn continuous_board_size_refusal_fails_only_the_job_and_keeps_ready_run() {
     let failure = failed.failure.expect("typed capability refusal");
     assert_eq!(failure.kind, EngineFailureKind::UnsupportedCapability);
     assert!(failure.message.contains("25×2"), "{}", failure.message);
-    assert!(failure.message.contains("not supported"), "{}", failure.message);
+    assert!(failure.message.contains("2 to 19"), "{}", failure.message);
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { ref run } if run.run_id == run_id
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn finite_board_size_refusal_fails_only_the_job_and_keeps_exact_ready_run() {
+    let temp = TestTempDir::new("finite-board-size-refusal");
+    let script = selected_node_final_script(
+        r#"printf '{"id":"%s","error":"Must provide an integer from 2 to 19","field":"boardYSize"}\n' "$id""#,
+    );
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let mut request = selected_request(&run_id, 4, vec![]);
+    request.query.board_x_size = 2;
+    request.query.board_y_size = 25;
+    request.board_width = 2;
+    request.board_height = 25;
+    let started = manager.start_selected_node_job(request).unwrap();
+
+    let failed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    let failure = failed.failure.expect("typed capability refusal");
+    assert_eq!(failure.kind, EngineFailureKind::UnsupportedCapability);
+    assert!(failure.message.contains("2×25"), "{}", failure.message);
+    assert!(failure.message.contains("2 to 19"), "{}", failure.message);
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { ref run } if run.run_id == run_id
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn generic_integer_error_for_another_field_remains_a_protocol_failure() {
+    let temp = TestTempDir::new("non-board-integer-refusal");
+    let script = selected_node_final_script(
+        r#"printf '{"id":"%s","error":"Must provide an integer from 2 to 19","field":"maxVisits"}\n' "$id""#,
+    );
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let started = manager
+        .start_selected_node_job(selected_request(&run_id, 4, vec![]))
+        .unwrap();
+
+    let failed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    let failure = failed.failure.expect("typed protocol failure");
+    assert_eq!(failure.kind, EngineFailureKind::Protocol);
     assert!(matches!(
         manager.snapshot().lifecycle,
         ForegroundEngineLifecycleDto::Ready { ref run } if run.run_id == run_id

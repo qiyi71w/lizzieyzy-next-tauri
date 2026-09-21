@@ -604,6 +604,24 @@ describe("authoritative continuous selected-node analysis", () => {
     expect(backend.foregroundEngineContinuousAction).not.toHaveBeenCalled();
   });
 
+  it("shows a continuous capability refusal before the terminal snapshot", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    act(() => emitContinuousSnapshot("searching"));
+    const message = "The current engine does not support 25×2 boards: Must provide an integer from 2 to 19";
+    act(() => {
+      listeners.onJob?.({
+        run_id: "run-1", job_id: "job-continuous", lane: "selected_node", mode: "continuous",
+        generation: 1, node_path: { indices: [] }, outcome: "failed",
+        failure: { operation: "job", kind: "unsupported_capability", message, run_id: "run-1", job_id: "job-continuous" }
+      });
+      emitContinuousSnapshot("error", { job: false });
+    });
+    expect(host.textContent).toContain(message);
+    expect(buttonNamed(host, "继续连续分析").disabled).toBe(false);
+    expect(host.querySelector(".engine-failure")).toBeNull();
+  });
+
   it("routes focus-safe Space, visible, and menu actions through the same contextual command", async () => {
     const host = await renderApp();
     await readyEngine(host);

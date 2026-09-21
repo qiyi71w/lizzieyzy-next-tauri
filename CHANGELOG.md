@@ -4,6 +4,7 @@
 
 ### English
 
+- Added rectangular 2–25-axis boards across SGF, rules, main/sub-board rendering and KataGo analysis, plus shared New/Clear/Set Board Size parameters and durable new-document dimension/komi defaults.
 - Removed the legacy force-replace IPC and frontend wrapper. Native current-game replacement uses the shared candidate-validation and Save / Discard / Cancel workflow.
 - Added manual continuous current-node analysis with real KataGo progress, fixed 600-second search budgets, shared-Run queue liveness, target-final cancellation and bounded Run-failure cleanup. Accepted snapshots remain available to ordinary SGF Save and current-game recovery.
 - Added durable default-on continuous-analysis intent, manager-owned latest-node following, and contextual Start/Stop/Resume with limit, finite-job, error and document-departure inhibition.
@@ -16,6 +17,7 @@
 
 ### 中文
 
+- 新增宽高各 2–25 的矩形棋盘，贯通 SGF、规则、主副棋盘与 KataGo 分析；新建／清空／设置棋盘大小共用参数表单，并持久化新建宽高与贴目默认值。
 - 移除旧强制替换 IPC 及前端 wrapper；原生当前棋谱替换统一使用候选验证与保存/放弃/取消流程。
 - 新增手动连续当前节点分析：接入真实 KataGo 进度、固定 600 秒搜索预算、共享 Run 排队保活、目标 final 取消与有界故障清理；已接纳快照可普通保存到 SGF，并纳入当前棋谱恢复。
 - 连续分析意图默认开启并持久化；由 manager 跟随最新节点，统一开始/停止/继续动作，并保留到限、有限请求、错误及离开棋谱后的自动工作抑制。

@@ -232,6 +232,9 @@ export function App() {
   const [departurePending, setDeparturePending] = useState(false);
   const [fileFlowBusy, setFileFlowBusy] = useState(false);
   const fileFlowDepthRef = useRef(0);
+  const newDocumentFlowReservedRef = useRef(false);
+  const newDocumentAdmissionRef = useRef<Promise<void> | null>(null);
+  const newDocumentSubmittingRef = useRef(false);
   const pendingStartupActivationRef = useRef<Extract<FileActivationDeliveryDto, { kind: "open" }> | null>(null);
   const pendingStartupRejectionRef = useRef<string | null>(null);
   const importPickerActiveRef = useRef(false);
@@ -271,6 +274,10 @@ export function App() {
     getHealth()
       .then(setHealth)
       .catch((error: unknown) => setMessage(errorMessage(error)));
+  }, []);
+
+  useEffect(() => () => {
+    void releaseNewDocumentFlow(false);
   }, []);
 
   useEffect(() => {
@@ -1086,14 +1093,26 @@ export function App() {
     }
   }
 
-  async function leaveFileFlow(): Promise<void> {
+  async function leaveFileFlow(updateState = true): Promise<void> {
     fileFlowDepthRef.current = Math.max(0, fileFlowDepthRef.current - 1);
     if (fileFlowDepthRef.current !== 0) return;
     try {
       await setFileActivationBusy(false);
     } finally {
-      setFileFlowBusy(false);
+      if (updateState) setFileFlowBusy(false);
     }
+  }
+
+  async function releaseNewDocumentFlow(updateState = true): Promise<void> {
+    if (!newDocumentFlowReservedRef.current) return;
+    newDocumentFlowReservedRef.current = false;
+    const admission = newDocumentAdmissionRef.current;
+    newDocumentAdmissionRef.current = null;
+    if (admission) {
+      await admission.then(() => leaveFileFlow(updateState), () => undefined);
+      return;
+    }
+    await leaveFileFlow(updateState);
   }
 
   function requestDepartureDecision(message: string): Promise<DocumentDepartureActionDto> {
@@ -1677,7 +1696,7 @@ export function App() {
       } else if ((job.outcome === "time_limited" || job.outcome === "visits_limited") && (phase === "queued" || phase === "searching" || phase === job.outcome)) {
         if (admitsAnalysisAttachment(job)) void publishAuthoritativeContinuousFrame(job);
         setMessage(`${continuousPhaseStatus(job.outcome)}；可显式继续。`);
-      } else if ((job.outcome === "failed" || job.outcome === "timeout") && phase === "error") {
+      } else if ((job.outcome === "failed" || job.outcome === "timeout") && (phase === "queued" || phase === "searching" || phase === "error")) {
         setMessage(job.failure?.message ?? "连续分析失败；请显式继续或重启引擎。");
       }
       return;
@@ -2357,19 +2376,43 @@ export function App() {
     });
   }
 
-  function handleNewGame() {
-    if (newDocumentOpen || departurePendingRef.current || departurePrompt) return;
+  async function handleNewGame() {
+    if (!preferencesLoaded || newDocumentFlowReservedRef.current || departurePendingRef.current || departurePrompt) return;
+    newDocumentFlowReservedRef.current = true;
+    const admission = enterFileFlow();
+    newDocumentAdmissionRef.current = admission;
     setNewDocumentOpen(true);
+    try {
+      await admission;
+      newDocumentAdmissionRef.current = null;
+    } catch (error) {
+      setNewDocumentOpen(false);
+      await releaseNewDocumentFlow();
+      setMessage(`New game failed: ${errorMessage(error)}`);
+    }
+  }
+
+  async function handleCancelNewGame() {
+    if (newDocumentSubmittingRef.current) return;
+    setNewDocumentOpen(false);
+    await releaseNewDocumentFlow();
   }
 
   async function handleCreateNewGame(parameters: NewDocumentParameters) {
+    if (!newDocumentFlowReservedRef.current || newDocumentSubmittingRef.current) return;
+    newDocumentSubmittingRef.current = true;
     setNewDocumentOpen(false);
-    const sgf = newDocumentSgf(parameters);
-    await applyReplacement(sgf, null, {
-      confirmMessage: "放弃未保存的棋谱并新建对局？",
-      successMessage: () => `已新建 ${parameters.boardWidth} × ${parameters.boardHeight} 空谱。`,
-      failurePrefix: "New game failed"
-    });
+    try {
+      const sgf = newDocumentSgf(parameters);
+      await applyReplacement(sgf, null, {
+        confirmMessage: "放弃未保存的棋谱并新建对局？",
+        successMessage: () => `已新建 ${parameters.boardWidth} × ${parameters.boardHeight} 空谱。`,
+        failurePrefix: "New game failed"
+      });
+    } finally {
+      newDocumentSubmittingRef.current = false;
+      await releaseNewDocumentFlow();
+    }
   }
 
   async function handleCopySgf() {
@@ -2851,7 +2894,7 @@ export function App() {
         defaultBoardHeight={preferences.defaultBoardHeight}
         defaultKomi={preferences.defaultKomi}
         onCreate={(parameters) => void handleCreateNewGame(parameters)}
-        onCancel={() => setNewDocumentOpen(false)}
+        onCancel={() => void handleCancelNewGame()}
       />
     ) : null}
     {departurePrompt ? (

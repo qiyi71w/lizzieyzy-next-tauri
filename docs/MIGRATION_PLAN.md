@@ -611,6 +611,8 @@ The [independent R5 native failure-evidence ticket](../.scratch/r5-native-failur
 
 **Migration Phase Gate:** `SGF-07` and `PREF-01` accepted.
 
+`SGF-10` repository implementation supports rectangular 2–25-axis boards and shared New/Clear/Set Board Size parameters with durable new-document defaults. Its independent Ticket 01 completion record tracks exact-candidate Windows native and real-KataGo acceptance; repository checks alone do not mark this owner Accepted or close R6.
+
 **Delivery Order:**
 
 1. `SGF-08` GIB import, `SGF-09` recent kifu, `SGF-10` New Document.

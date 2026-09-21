@@ -70,6 +70,10 @@ Shared DTOs for games, typed file-import results, moves, positions, candidate mo
 
 Pure Go board and rules logic. It has no UI, Tauri, storage, or process dependency.
 
+Boards have independent width and height, each 2–25. Current-game wire DTOs expose `board_width` and `board_height`; Go indexing, SGF setup/replay, main/sub-board rendering, PVs and analysis heatmaps use width as the row stride and height for ranks. KataGo receives `boardXSize` and `boardYSize`. Square provider/readboard inputs normalize to equal dimensions at their existing adapter boundary. The unrelated storage tables and external readboard protocol retain their existing square schema.
+
+File New, Clear Board and Set Board Size share a parameter form and the existing document-replacement owner. Opening/cancelling that form does not seal analysis. Successful creation installs a clean root-selected untitled document; the first content edit makes it dirty. SGF uses `SZ[n]` or `SZ[w:h]`, defaults missing SZ to 19×19 and rejects malformed/out-of-range explicit dimensions. Durable `defaultBoardWidth`, `defaultBoardHeight` and `defaultKomi` default to 19, 19 and 7.5; per-document dimensions, finite komi and names do not rewrite defaults. Existing departure Save failure and explicit Resume safety holds remain unchanged. Engine dimension refusals fail the analysis Job with a capability explanation while retaining the Ready Run.
+
 ### `crates/sgf`
 
 SGF parsing, replay, and serialization plus Tygem GIB import. GIB accepts UTF-8 or GB18030 text, maps names, authoritative komi, ordinary moves, pass, and supported handicap setup into a validated SGF tree, and rejects malformed or illegal input before replacement. The crate preserves the parsed SGF tree for compatibility paths while exposing normalized game and position DTOs to the rest of the app.

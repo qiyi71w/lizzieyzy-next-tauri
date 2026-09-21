@@ -179,6 +179,8 @@ pub enum ProtocolError {
     Json(#[from] serde_json::Error),
     #[error("KataGo returned error: {0}")]
     Engine(String),
+    #[error("KataGo returned error for {field}: {message}")]
+    EngineField { message: String, field: String },
     #[error("move vertex ({x}, {y}) is outside board {board_width}x{board_height}")]
     InvalidVertex {
         x: u8,
@@ -262,7 +264,13 @@ impl AnalysisResponse {
 pub fn parse_response_line(line: &str) -> Result<AnalysisResponse, ProtocolError> {
     let response: AnalysisResponse = serde_json::from_str(line)?;
     if let Some(error) = &response.error {
-        return Err(ProtocolError::Engine(error.clone()));
+        return match &response.field {
+            Some(field) => Err(ProtocolError::EngineField {
+                message: error.clone(),
+                field: field.clone(),
+            }),
+            None => Err(ProtocolError::Engine(error.clone())),
+        };
     }
     Ok(response)
 }
@@ -637,7 +645,23 @@ mod tests {
     }
 
     #[test]
-    fn parse_response_line_returns_engine_error_field() {
+    fn parse_response_line_preserves_engine_error_field() {
+        let error = parse_response_line(
+            r#"{"id":"query-1","error":"Must provide an integer from 2 to 19","field":"boardXSize"}"#,
+        )
+        .unwrap_err();
+
+        match error {
+            ProtocolError::EngineField { message, field } => {
+                assert_eq!(message, "Must provide an integer from 2 to 19");
+                assert_eq!(field, "boardXSize");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_response_line_preserves_engine_error_without_field() {
         let error = parse_response_line(r#"{"id":"query-1","error":"bad query"}"#).unwrap_err();
 
         match error {

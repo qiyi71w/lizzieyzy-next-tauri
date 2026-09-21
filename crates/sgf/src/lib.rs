@@ -174,13 +174,8 @@ pub fn parse_sgf(input: &str) -> Result<SgfDocument, SgfError> {
         return Err(SgfError::Empty);
     }
     let root = SgfParser::new(input).parse()?;
-    let (board_width, board_height) = match property_values(&root, "SZ") {
-        None => (19, 19),
-        Some(values) => {
-            let raw = values.first().ok_or(SgfError::Malformed)?;
-            parse_board_dimensions(raw)?
-        }
-    };
+    let (board_width, board_height) = root_board_dimensions(&root)?;
+    validate_tree_properties(&root, board_width, board_height)?;
     let komi = property_values(&root, "KM")
         .and_then(|v| v.first())
         .and_then(|v| v.parse::<f32>().ok())
@@ -217,6 +212,41 @@ pub fn parse_sgf(input: &str) -> Result<SgfDocument, SgfError> {
         moves,
         root: Some(root),
     })
+}
+
+fn root_board_dimensions(root: &SgfNode) -> Result<(u8, u8), SgfError> {
+    let mut properties = root.properties.iter().filter(|property| property.key == "SZ");
+    let Some(property) = properties.next() else {
+        return Ok((19, 19));
+    };
+    if properties.next().is_some() || property.values.len() != 1 {
+        return Err(SgfError::Malformed);
+    }
+    parse_board_dimensions(&property.values[0])
+}
+
+fn validate_tree_properties(root: &SgfNode, board_width: u8, board_height: u8) -> Result<(), SgfError> {
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        for property in &node.properties {
+            for value in &property.values {
+                match property.key.as_str() {
+                    "B" | "W" => {
+                        parse_vertex(value, board_width, board_height)?;
+                    }
+                    "AB" | "AW" | "AE" => {
+                        parse_setup_point_bounds(value, board_width, board_height)?;
+                    }
+                    "PL" => {
+                        parse_player_to_play(value)?;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        pending.extend(&node.children);
+    }
+    Ok(())
 }
 
 pub fn serialize_sgf_document(document: &SgfDocument) -> Result<String, SgfError> {
@@ -1198,12 +1228,16 @@ fn mainline_nodes(root: &SgfNode) -> Vec<&SgfNode> {
 }
 
 pub(crate) fn player_to_play(node: &SgfNode) -> Result<Option<PlayerColor>, SgfError> {
-    let Some(value) = property_values(node, "PL").and_then(|values| values.first()) else {
-        return Ok(None);
-    };
-    match value.as_str() {
-        "B" | "b" => Ok(Some(PlayerColor::Black)),
-        "W" | "w" => Ok(Some(PlayerColor::White)),
+    property_values(node, "PL")
+        .and_then(|values| values.first())
+        .map(|value| parse_player_to_play(value))
+        .transpose()
+}
+
+fn parse_player_to_play(raw: &str) -> Result<PlayerColor, SgfError> {
+    match raw {
+        "B" | "b" => Ok(PlayerColor::Black),
+        "W" | "w" => Ok(PlayerColor::White),
         _ => Err(SgfError::Malformed),
     }
 }
@@ -1240,22 +1274,35 @@ pub(crate) fn apply_setup_properties(
 }
 
 fn parse_setup_points(raw: &str, board_width: u8, board_height: u8) -> Result<Vec<Point>, SgfError> {
-    if raw.len() == 5 && raw.as_bytes()[2] == b':' {
-        let start = parse_point(&raw[..2], board_width, board_height)?;
-        let end = parse_point(&raw[3..], board_width, board_height)?;
-        let min_x = start.x.min(end.x);
-        let max_x = start.x.max(end.x);
-        let min_y = start.y.min(end.y);
-        let max_y = start.y.max(end.y);
-        let mut points = Vec::new();
-        for y in min_y..=max_y {
-            for x in min_x..=max_x {
-                points.push(Point { x, y });
-            }
+    let (start, end) = parse_setup_point_bounds(raw, board_width, board_height)?;
+    let Some(end) = end else {
+        return Ok(vec![start]);
+    };
+    let min_x = start.x.min(end.x);
+    let max_x = start.x.max(end.x);
+    let min_y = start.y.min(end.y);
+    let max_y = start.y.max(end.y);
+    let mut points = Vec::new();
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            points.push(Point { x, y });
         }
-        return Ok(points);
     }
-    Ok(vec![parse_point(raw, board_width, board_height)?])
+    Ok(points)
+}
+
+fn parse_setup_point_bounds(
+    raw: &str,
+    board_width: u8,
+    board_height: u8,
+) -> Result<(Point, Option<Point>), SgfError> {
+    if raw.len() == 5 && raw.as_bytes()[2] == b':' {
+        return Ok((
+            parse_point(&raw[..2], board_width, board_height)?,
+            Some(parse_point(&raw[3..], board_width, board_height)?),
+        ));
+    }
+    Ok((parse_point(raw, board_width, board_height)?, None))
 }
 
 fn parse_point(raw: &str, board_width: u8, board_height: u8) -> Result<Point, SgfError> {

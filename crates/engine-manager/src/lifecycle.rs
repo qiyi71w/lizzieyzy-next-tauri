@@ -3990,23 +3990,10 @@ fn finish_failed_job(state: &mut ManagerState, started: &AnalysisJobStartedDto, 
 }
 
 fn board_dimension_capability_refusal(error: &ProtocolError) -> Option<&str> {
-    let ProtocolError::Engine(message) = error else {
+    let ProtocolError::EngineField { message, field } = error else {
         return None;
     };
-    let normalized = message.to_ascii_lowercase();
-    let mentions_board_dimensions = normalized.contains("board")
-        && (normalized.contains("size")
-            || normalized.contains("dimension")
-            || normalized.contains("boardxsize")
-            || normalized.contains("boardysize"));
-    let refuses_dimensions = normalized.contains("support")
-        || normalized.contains("invalid")
-        || normalized.contains("must")
-        || normalized.contains("too large")
-        || normalized.contains("maximum")
-        || normalized.contains("minimum")
-        || normalized.contains("range");
-    (mentions_board_dimensions && refuses_dimensions).then_some(message.as_str())
+    matches!(field.as_str(), "boardXSize" | "boardYSize").then_some(message.as_str())
 }
 
 fn extract_response_id(line: &str) -> Option<String> {

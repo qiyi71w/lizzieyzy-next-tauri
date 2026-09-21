@@ -37,6 +37,46 @@ fn rejects_malformed_out_of_range_and_far_axis_coordinates() {
 }
 
 #[test]
+fn current_document_rejects_invalid_properties_anywhere_in_the_tree() {
+    for sgf in [
+        "(;SZ[2:3]AB[ca])",
+        "(;SZ[2:3](;B[aa])(;B[ca]))",
+        "(;SZ[2:3](;B[aa])(;PL[X]))",
+        "(;SZ[2:3](;B[aa])(;AB[aa:ca]))",
+        "(;SZ[2:3];B[aa][ca])",
+        "(;SZ[2:3];PL[W][X])",
+    ] {
+        assert!(CurrentSgfDocument::open(sgf).is_err(), "accepted {sgf}");
+    }
+}
+
+#[test]
+fn current_document_rejects_ambiguous_root_dimensions() {
+    assert!(CurrentSgfDocument::open("(;SZ[9][13])").is_err());
+    assert!(CurrentSgfDocument::open("(;SZ[9]SZ[13])").is_err());
+    let defaulted = CurrentSgfDocument::open("(;GM[1])").unwrap();
+    assert_eq!((defaulted.board_width(), defaulted.board_height()), (19, 19));
+}
+
+#[test]
+fn current_document_accepts_rectangular_compressed_setup_and_variations() {
+    let document = CurrentSgfDocument::open("(;SZ[2:3]AB[aa:bb]PL[W](;W[ac])(;W[bc]))").unwrap();
+    let snapshot = document.snapshot(&NodePath { indices: vec![1] }).unwrap();
+
+    assert_eq!(
+        (snapshot.position.board_width, snapshot.position.board_height),
+        (2, 3)
+    );
+    assert_eq!(snapshot.position.to_play, PlayerColor::Black);
+    assert_eq!(snapshot.position.stones.len(), 5);
+    assert!(snapshot
+        .position
+        .stones
+        .iter()
+        .any(|stone| stone.x == 1 && stone.y == 2 && stone.color == PlayerColor::White));
+}
+
+#[test]
 fn replays_compressed_setup_and_far_axis_moves_on_rectangles() {
     let positions = replay_sgf_positions("(;SZ[25:2]AB[xa:yb];W[wa])").unwrap();
     let root = &positions[0];

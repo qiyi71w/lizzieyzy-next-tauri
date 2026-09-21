@@ -1119,6 +1119,22 @@ describe("App focus-safe review controls", () => {
     expect(backend.playCurrentGame).not.toHaveBeenCalled();
   });
 
+  it("waits for durable new-document defaults before opening the form", async () => {
+    let finish!: (value: { preferences: AppPreferences }) => void;
+    const promise = new Promise<{ preferences: AppPreferences }>((resolve) => { finish = resolve; });
+    preferencesApi.loadAppPreferences.mockReturnValue(promise);
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => { root?.render(<App />); });
+    act(() => buttonLabeled(host, "新建").click());
+    expect(host.querySelector('[role="dialog"][aria-label="新建棋谱"]')).toBeNull();
+    await act(async () => { finish({ preferences: { ...defaultAppPreferences, defaultBoardWidth: 13, defaultBoardHeight: 9, defaultKomi: 0.5 } }); });
+    act(() => buttonLabeled(host, "新建").click());
+    const dialog = requiredElement(host, '[role="dialog"][aria-label="新建棋谱"]');
+    expect([...dialog.querySelectorAll('input[type="number"]')].map(input => (input as HTMLInputElement).value)).toEqual(["13", "9", "0.5"]);
+  });
+
   it("opens the same new-document form from board dimensions and Ctrl+I without preparing on cancel", async () => {
     const host = await renderApp();
     backend.prepareDocumentReplacement.mockClear();
@@ -1126,11 +1142,11 @@ describe("App focus-safe review controls", () => {
     act(() => buttonNamed(host, "棋局").click());
     act(() => buttonNamed(host, "设置棋盘大小(Ctrl+I)").click());
     expect(host.querySelector('[role="dialog"][aria-label="新建棋谱"]')).not.toBeNull();
-    act(() => buttonLabeled(host, "取消").click());
+    await act(async () => buttonLabeled(host, "取消").click());
 
     pressKey(buttonNamed(host, "坐标"), "i", { ctrlKey: true });
     expect(host.querySelector('[role="dialog"][aria-label="新建棋谱"]')).not.toBeNull();
-    act(() => buttonLabeled(host, "取消").click());
+    await act(async () => buttonLabeled(host, "取消").click());
     expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
   });
 
@@ -1774,6 +1790,70 @@ describe("App native file activation", () => {
       input.dispatchEvent(new Event("cancel"));
     });
     expect(backend.setFileActivationBusy.mock.calls).toEqual([[true], [false], [true], [false]]);
+  });
+
+  it("reserves external activation while the new-document form is open and releases it on Cancel", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await startSelectedNode(host);
+    backend.setFileActivationBusy.mockClear();
+    backend.prepareDocumentReplacement.mockClear();
+    backend.resolveDocumentReplacement.mockClear();
+    backend.cancelSelectedNodeAnalysis.mockClear();
+    const moveBeforeActivation = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value;
+
+    await act(async () => {
+      buttonLabeled(host, "新建").click();
+      buttonLabeled(host, "新建").click();
+      await backend.setFileActivationBusy.mock.results.at(-1)?.value;
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="新建棋谱"]')).not.toBeNull();
+    expect(backend.setFileActivationBusy.mock.calls).toEqual([[true]]);
+
+    backend.takePendingFileActivation.mockResolvedValueOnce({
+      kind: "open",
+      request_id: 7,
+      path: activatedFile.display_path
+    });
+    await act(async () => {
+      listeners.onActivationAvailable?.();
+      await backend.takePendingFileActivation.mock.results.at(-1)?.value;
+      await Promise.resolve();
+    });
+
+    expect(backend.readGameFile).not.toHaveBeenCalled();
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+    expect(backend.resolveDocumentReplacement).not.toHaveBeenCalled();
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe(moveBeforeActivation);
+    expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="dialog"][aria-label="新建棋谱"]')).not.toBeNull();
+
+    await act(async () => {
+      buttonLabeled(host, "取消").click();
+      await backend.setFileActivationBusy.mock.results.at(-1)?.value;
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="新建棋谱"]')).toBeNull();
+    expect(backend.setFileActivationBusy.mock.calls).toEqual([[true], [false]]);
+    expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+  });
+
+  it("balances repeated new-document requests when the app unmounts", async () => {
+    const host = await renderApp();
+    backend.setFileActivationBusy.mockClear();
+
+    await act(async () => {
+      buttonLabeled(host, "新建").click();
+      buttonLabeled(host, "新建").click();
+      await backend.setFileActivationBusy.mock.results.at(-1)?.value;
+    });
+    expect(backend.setFileActivationBusy.mock.calls).toEqual([[true]]);
+
+    act(() => root?.unmount());
+    root = null;
+    await act(async () => {
+      await backend.setFileActivationBusy.mock.results.at(-1)?.value;
+    });
+    expect(backend.setFileActivationBusy.mock.calls).toEqual([[true], [false]]);
   });
 
   it("reports a retained startup rejection after abnormal recovery is resolved", async () => {
