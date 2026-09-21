@@ -4,6 +4,59 @@ use sgf::CurrentSgfDocument;
 const BRANCHING: &str = include_str!("../../../tests/golden/editable-workspace-branching.sgf");
 
 #[test]
+fn exact_navigation_preserves_distinct_same_position_nodes_and_markup() {
+    let document =
+        CurrentSgfDocument::open(include_str!("../../../tests/golden/r6-exact-navigation.sgf")).unwrap();
+    let before = document.serialize().unwrap();
+    let a = document
+        .snapshot(&NodePath {
+            indices: vec![0, 0, 0, 0, 0],
+        })
+        .unwrap();
+    let b = document
+        .snapshot(&NodePath {
+            indices: vec![0, 0, 0, 1, 0],
+        })
+        .unwrap();
+    assert_eq!(a.position, b.position);
+    assert_eq!(a.position.move_number, 2);
+    assert_ne!(a.path, b.path);
+    assert_eq!(a.personal_comment, "branch A move");
+    assert_eq!(b.personal_comment, "branch B same move");
+    assert_eq!(
+        a.markup,
+        vec![app_model::SgfMarkupDto::Label {
+            point: PointDto { x: 3, y: 3 },
+            text: "A".into()
+        }]
+    );
+    assert_eq!(
+        b.markup,
+        vec![app_model::SgfMarkupDto::Label {
+            point: PointDto { x: 3, y: 3 },
+            text: "B".into()
+        }]
+    );
+    let pass = document
+        .snapshot(&NodePath {
+            indices: vec![0, 0, 0],
+        })
+        .unwrap();
+    assert_eq!(pass.position.move_number, 1);
+    assert!(matches!(
+        pass.position.last_move.unwrap().vertex,
+        MoveVertex::Pass
+    ));
+    let comment = document.snapshot(&NodePath { indices: vec![0, 0] }).unwrap();
+    assert_eq!(comment.position.move_number, 0);
+    assert!(comment.markup.is_empty());
+    assert_eq!(document.serialize().unwrap(), before);
+    let reopened = CurrentSgfDocument::open(&before).unwrap();
+    assert_eq!(reopened.tree().unwrap(), document.tree().unwrap());
+    assert_eq!(reopened.snapshot(&b.path).unwrap(), b);
+}
+
+#[test]
 fn editable_workspace_roundtrip_retains_edit_and_drops_removed_sibling() {
     let mut document = CurrentSgfDocument::open(BRANCHING).unwrap();
     let parent = NodePath { indices: vec![0] };

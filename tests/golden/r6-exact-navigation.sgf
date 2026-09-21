@@ -1,0 +1,8 @@
+(;GM[1]FF[4]SZ[9]KM[7.5]PB[Exact Black]PW[Exact White]C[root]LB[aa:R]XY[preserved]
+;AB[cc]PL[B]C[setup]SQ[cc]
+;C[before pass]LZ[MainEngine 20.0 100 6.0
+move D4 visits 100 winrate 8000 pv D4]
+;B[]C[pass]TR[dd]LZ[MainEngine 60.0 100 -6.0
+move E5 visits 100 winrate 4000 pv E5]
+(;C[branch A comment]MA[ee];W[dd]C[branch A move]LB[dd:A](;B[ff]C[deep A])(;B[gg]C[deep B]))
+(;C[branch B same position]CR[ff];W[dd]C[branch B same move]LB[dd:B]))

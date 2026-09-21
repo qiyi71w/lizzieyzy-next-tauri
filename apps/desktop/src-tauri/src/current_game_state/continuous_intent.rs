@@ -25,7 +25,9 @@ fn confirmed_departure_hold_survives_navigation_and_preference_reload() {
         app_model::ContinuousAnalysisPhaseDto::Departing
     );
     state.abort_protected_commit(id, opened.selected_path).unwrap();
-    state.select_path(NodePath { indices: vec![] }).unwrap();
+    state
+        .select_path(NodePath { indices: vec![] }, state.inspect().0)
+        .unwrap();
     manager
         .set_continuous_preferences(false, app_model::ContinuousAnalysisBudgetDto::default())
         .unwrap();
@@ -288,7 +290,7 @@ fn analysis_task_pause_continue_controllable_engine_smoke() {
     std::fs::write(engine.directory.join("cancel-final"), "").unwrap();
     let paused = wait_live_task(&engine, AnalysisTaskStateDto::Paused);
     assert_eq!(paused.completed, vec![NodePath::default()]);
-    state.select_path(NodePath::default()).unwrap();
+    state.select_path(NodePath::default(), state.inspect().0).unwrap();
     state
         .set_personal_comment(NodePath::default(), "paused review note".into())
         .unwrap();
@@ -484,7 +486,7 @@ fn all_positions_two_stage_pause_continue_controllable_engine_smoke() {
     }
     assert_eq!(
         state
-            .select_path(NodePath::default())
+            .select_path(NodePath::default(), state.inspect().0)
             .unwrap()
             .snapshot
             .primary_analysis
@@ -893,7 +895,7 @@ fn paused_task_does_not_resume_after_departure_save_cancellation_or_failure() {
             .is_err());
         assert_eq!(
             state
-                .select_path(NodePath::default())
+                .select_path(NodePath::default(), state.inspect().0)
                 .unwrap()
                 .snapshot
                 .position
@@ -984,7 +986,7 @@ fn task_pause_cleanup_failure_aborts_departure_and_retains_game() {
             .is_err());
         assert_eq!(
             state
-                .select_path(NodePath::default())
+                .select_path(NodePath::default(), state.inspect().0)
                 .unwrap()
                 .snapshot
                 .position
@@ -1021,7 +1023,7 @@ fn paused_task_invalidates_on_edit_outside_its_frozen_mainline() {
         .is_err());
     assert!(state.attach_from_job_event(&first).is_none());
     assert!(state
-        .select_path(NodePath::default())
+        .select_path(NodePath::default(), state.inspect().0)
         .unwrap()
         .snapshot
         .primary_analysis
@@ -1327,8 +1329,12 @@ fn authoritative_following_seals_old_progress_and_failed_write_preserves_search(
         first.job_id
     );
     assert!(state.attach_from_job_event(&first).is_some());
-    state.select_path(NodePath { indices: vec![] }).unwrap();
-    state.select_path(opened.selected_path.clone()).unwrap();
+    state
+        .select_path(NodePath { indices: vec![] }, state.inspect().0)
+        .unwrap();
+    state
+        .select_path(opened.selected_path.clone(), state.inspect().0)
+        .unwrap();
     std::fs::write(engine.directory.join("release"), "").unwrap();
     assert!(
         state.attach_from_job_event(&first).is_none(),

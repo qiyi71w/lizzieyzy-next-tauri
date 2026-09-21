@@ -492,8 +492,11 @@ fn project_current_game_mainline(
 fn select_current_game_node(
     state: State<CurrentGameState>,
     path: NodePath,
+    generation: u64,
 ) -> Result<CurrentGameResultDto, String> {
-    state.select_path(path).map_err(|error| error.to_string())
+    state
+        .select_path(path, generation)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1385,7 +1388,7 @@ for line in sys.stdin:
             .replace("(;GM[1]FF[4]SZ[5]KM[6.5]RU[Japanese];B[cc];W[ee])", None)
             .unwrap();
         let path = NodePath { indices: vec![0, 0] };
-        let selected = state.select_path(path.clone()).unwrap();
+        let selected = state.select_path(path.clone(), opened.generation).unwrap();
         assert_eq!(selected.snapshot.position.move_number, 2);
         assert_eq!(selected.snapshot.position.to_play, app_model::PlayerColor::Black);
 

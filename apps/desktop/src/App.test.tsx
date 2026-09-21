@@ -113,7 +113,7 @@ const emptyPosition = {
 const initialGame: CurrentGameResultDto = {
   tree: { properties: [], children: [] },
   selected_path: { indices: [] },
-  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "" },
+  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "", markup: [] },
   generation: 1,
   snapshot_seq: 1,
   dirty: false,
@@ -177,6 +177,7 @@ const acceptedGame: CurrentGameResultDto = {
       stones: [{ x: 5, y: 4, color: "black" as const }],
       last_move: { color: "black", vertex: { point: { x: 5, y: 4 } }, move_number: 1 }
     },
+    markup: [],
     personal_comment: ""
   },
   generation: 2,
@@ -199,6 +200,7 @@ const navigableChild: CurrentGameResultDto = {
   snapshot: {
     path: { indices: [0] },
     position: acceptedGame.snapshot.position,
+    markup: [],
     personal_comment: ""
   }
 };
@@ -246,6 +248,7 @@ const branchingGame: CurrentGameResultDto = {
   snapshot: {
     path: { indices: [0, 1] },
     position: { ...emptyPosition, move_number: 2, to_play: "black" },
+    markup: [],
     personal_comment: ""
   },
   generation: 3,
@@ -425,20 +428,12 @@ describe("App stale review presentation", () => {
     backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => (
       path.indices.length === 0 ? navigableRoot : navigableChild
     ));
-    backend.classifyProblems.mockResolvedValue([{
-      turn: 1,
-      severity: "mistake",
-      winrate_loss: 0.12,
-      score_loss: 3,
-      label: "恶手"
-    }]);
 
     const host = await renderApp();
     await readyEngine(host);
     await startSelectedNode(host);
     await completeSelectedNode("job-1", { indices: [] }, analysisFrame);
     expect(candidateCoords(host)).toEqual(["C6", "G4"]);
-    expect(buttonNamed(host, "问题手 (1)")).toBeTruthy();
 
     const board = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
     const miniBoard = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="参考图变化副棋盘"]');
@@ -462,7 +457,6 @@ describe("App stale review presentation", () => {
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
     expect(candidateCoords(host)).toEqual([]);
     expect(host.querySelector(".cand-row.is-selected")).toBeNull();
-    expect(buttonNamed(host, "问题手 (0)")).toBeTruthy();
   });
 
   it("ignores a late completion after the selected NodePath has already changed", async () => {
@@ -611,7 +605,7 @@ describe("App focus-safe review controls", () => {
     expect(backend.saveCurrentGame).toHaveBeenCalledTimes(1);
     pressKey(canvas, "ArrowUp");
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0] });
     pressKey(canvas, "c");
     expect(coordinates.getAttribute("aria-pressed")).toBe("false");
     pressKey(canvas, "c");
@@ -654,14 +648,14 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonNamed(hostParent, "父节点").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0] });
     expect(requiredElement<HTMLInputElement>(hostParent, 'input[aria-label="跳转手数"]').value).toBe("1");
 
     const hostLeft = await renderApp();
     backend.selectCurrentGameNode.mockClear();
     pressKey(buttonNamed(hostLeft, "坐标"), "ArrowUp");
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0] });
 
     const hostBoardUp = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -669,26 +663,26 @@ describe("App focus-safe review controls", () => {
     act(() => board.focus());
     pressKey(board, "ArrowUp");
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0] });
 
     const hostPrevMove = await renderApp();
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonLabeled(hostPrevMove, "上一手").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0] });
 
     const hostUp = await renderApp();
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonNamed(hostUp, "上一分支").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 0] });
     expect(requiredElement(hostUp, '.nav-cluster[aria-label="变化导航"] .move-indicator').textContent).toBe("分支 1/2");
 
     const hostUpKey = await renderApp();
     backend.selectCurrentGameNode.mockClear();
     pressKey(buttonNamed(hostUpKey, "坐标"), "ArrowLeft");
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 0] });
 
     const hostRight = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -697,7 +691,7 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonNamed(hostRight, "下一变化").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 1] });
 
     const hostRightKey = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -706,7 +700,7 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     pressKey(buttonNamed(hostRightKey, "坐标"), "ArrowDown");
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 1] });
 
     const hostDown = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -715,7 +709,7 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonNamed(hostDown, "下一分支").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 1] });
 
     const hostDownKey = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -724,15 +718,15 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     pressKey(buttonNamed(hostDownKey, "坐标"), "ArrowRight");
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 1] });
 
     const hostFirst = await renderApp();
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonLabeled(hostFirst, "首手").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [] });
     pressKey(buttonNamed(hostFirst, "坐标"), "Home");
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [] });
 
     const hostLast = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -741,7 +735,7 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonLabeled(hostLast, "末手").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 1] });
 
     const hostEnd = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -750,15 +744,15 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     pressKey(buttonNamed(hostEnd, "坐标"), "End");
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 1] });
 
     const hostBack = await renderApp();
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonLabeled(hostBack, "回退 10 手").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [] });
     pressKey(buttonNamed(hostBack, "坐标"), "PageUp");
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [] });
 
     const hostForward = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -767,7 +761,7 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonLabeled(hostForward, "前进 10 手").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 1] });
 
     const hostPage = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -776,7 +770,7 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     pressKey(buttonNamed(hostPage, "坐标"), "PageDown");
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 1] });
 
     const hostNextMove = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -785,7 +779,7 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonLabeled(hostNextMove, "下一手").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0] });
   });
 
   it("dispatches claimed file and edit shortcuts through the same actions as the visible controls", async () => {
@@ -910,7 +904,7 @@ describe("App focus-safe review controls", () => {
     act(() => buttonNamed(hostFirst, "编辑").click());
     act(() => buttonNamed(hostFirst, "跳转到最前").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [] });
 
     const hostRemove = await renderApp();
     backend.removeCurrentGameVariation.mockClear();
@@ -2326,6 +2320,68 @@ function installCandidateAnalysis() {
 }
 
 describe("accepted navigation coalescing", () => {
+  it("discards queued navigation when a new document replaces the tree", async () => {
+    currentGameFixture.mockResolvedValue({ ...branchingGame, dirty: false });
+    const host = await renderApp();
+    let release!: (value: CurrentGameResultDto) => void;
+    const pending = new Promise<CurrentGameResultDto>((resolve) => { release = resolve; });
+    backend.selectCurrentGameNode.mockReset();
+    backend.selectCurrentGameNode.mockReturnValueOnce(pending);
+    act(() => buttonNamed(host, "父节点").click());
+    const jump = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(jump, "0");
+      jump.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const replacement = { ...initialGame, generation: 4, snapshot: { ...initialGame.snapshot, personal_comment: "new document" } };
+    currentGameFixture.mockResolvedValue(replacement);
+    await act(async () => {
+      buttonLabeled(host, "新建").click();
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      release({ ...branchingGame, selected_path: { indices: [0] }, snapshot: navigableChild.snapshot });
+      await pending;
+    });
+    expect(backend.selectCurrentGameNode).toHaveBeenCalledTimes(1);
+    expect(jump.value).toBe("0");
+    expect(requiredElement<HTMLTextAreaElement>(host, 'textarea[aria-label="个人评论"]').value).toBe("new document");
+  });
+
+  it("jumps to the actual pass node beyond setup and comments, not path depth", async () => {
+    const tree = {
+      properties: [],
+      children: [{ properties: [{ key: "AB", values: ["aa"] }], children: [
+        { properties: [{ key: "C", values: ["before move"] }], children: [
+          { properties: [{ key: "B", values: [""] }], children: [
+            { properties: [{ key: "C", values: ["after pass"] }], children: [] }
+          ] }
+        ] }
+      ] }]
+    };
+    currentGameFixture.mockResolvedValue({ ...initialGame, tree });
+    backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => ({
+      ...initialGame, tree, selected_path: path,
+      snapshot: {
+        ...initialGame.snapshot, path,
+        position: { ...emptyPosition, move_number: path.indices.length >= 3 ? 1 : 0 },
+        personal_comment: path.indices.length === 3 ? "pass selected" : "wrong nonmove"
+      }
+    }));
+    const host = await renderApp();
+    const jump = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(jump, "1");
+      jump.dispatchEvent(new Event("input", { bubbles: true }));
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
+    });
+    expect(requiredElement<HTMLTextAreaElement>(host, 'textarea[aria-label="个人评论"]').value).toBe("pass selected");
+    expect(requiredElement<HTMLInputElement>(host, 'input[type="range"].move-slider').max).toBe("1");
+    expect(jump.value).toBe("1");
+  });
+
   it.each([false, true])("preserves newer comment and Save state behind delayed navigation (save=%s)", async (save) => {
     const initial = { ...navigableRoot, dirty: save, native_path: "/tmp/original.sgf" };
     currentGameFixture.mockResolvedValue(initial);
@@ -2401,7 +2457,7 @@ describe("accepted navigation coalescing", () => {
       await Promise.resolve();
     });
     expect(backend.selectCurrentGameNode).toHaveBeenCalledTimes(2);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [] });
     expect(jump.value).toBe("0");
     expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
   });

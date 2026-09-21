@@ -1,4 +1,4 @@
-import type { PlayerColor, SgfPropertyDto, SgfTreeNodeDto } from "./types";
+import type { NodePath, PlayerColor, SgfPropertyDto, SgfTreeNodeDto } from "./types";
 import {
   classifyPlayedMove,
   isBlunderBarRank,
@@ -9,14 +9,16 @@ import {
 export type GraphPerspective = "black" | "sideToPlay";
 
 export type ChartPoint = {
+  path: NodePath;
   moveNumber: number;
+  isMove: boolean;
   toPlay: PlayerColor;
   analysis: DisplayedAnalysis | null;
 };
 
 export type BlunderBar = {
-  fromMove: number;
-  toMove: number;
+  fromIndex: number;
+  toIndex: number;
   rank: Extract<MoveRank, "inaccuracy" | "mistake" | "blunder">;
 };
 
@@ -32,6 +34,7 @@ export type WinrateChartSettings = {
 export type WinrateChartModel = {
   points: ChartPoint[];
   currentMove: number;
+  selectedPath: NodePath;
   selectedToPlay: PlayerColor;
   perspective: GraphPerspective;
   scoreAvailable: boolean;
@@ -81,7 +84,8 @@ export function walkSelectedLine(root: SgfTreeNodeDto, chosen: Map<string, numbe
   const points: ChartPoint[] = [];
   let node: SgfTreeNodeDto | undefined = root;
   const indices: number[] = [];
-  let toPlay: PlayerColor = "black";
+  const handicap = Number(firstPropertyValue(root, "HA"));
+  let toPlay: PlayerColor = Number.isFinite(handicap) && handicap >= 2 ? "white" : "black";
   let moveNumber = 0;
   while (node) {
     const played = playedColor(node);
@@ -89,8 +93,11 @@ export function walkSelectedLine(root: SgfTreeNodeDto, chosen: Map<string, numbe
       moveNumber += 1;
       toPlay = played === "black" ? "white" : "black";
     }
+    toPlay = explicitPlayer(node) ?? toPlay;
     points.push({
+      path: { indices: [...indices] },
       moveNumber,
+      isMove: played != null,
       toPlay,
       analysis: displayedPrimaryAnalysis(node, indices.length === 0)
     });
@@ -151,20 +158,22 @@ export function displayedScore(point: ChartPoint, perspective: GraphPerspective,
 export function buildWinrateChartModel(input: {
   root: SgfTreeNodeDto;
   chosen: Map<string, number>;
-  selectedPathLength: number;
+  selectedPath: NodePath;
   selectedToPlay: PlayerColor;
   settings: WinrateChartSettings;
 }): WinrateChartModel {
   const points = walkSelectedLine(input.root, input.chosen);
   const scoreAvailable = points.some((point) => point.analysis?.scoreMeanBlack != null);
   const series = effectiveChartSeries(input.settings, scoreAvailable);
-  const currentMove = Math.min(
-    Math.max(input.selectedPathLength, 0),
-    points.at(-1)?.moveNumber ?? 0
-  );
+  const selectedPath = { indices: [...input.selectedPath.indices] };
+  const currentMove = points.find((point) => (
+    point.path.indices.length === selectedPath.indices.length
+    && point.path.indices.every((index, position) => index === selectedPath.indices[position])
+  ))?.moveNumber ?? 0;
   return {
     points,
     currentMove,
+    selectedPath,
     selectedToPlay: input.selectedToPlay,
     perspective: input.settings.graphPerspective,
     scoreAvailable,
@@ -177,14 +186,17 @@ export function buildWinrateChartModel(input: {
 }
 
 export function blunderBars(points: ChartPoint[]): BlunderBar[] {
-  const displayed = points.filter((point) => point.analysis);
+  const displayed = points
+    .map((point, index) => ({ point, index }))
+    .filter(({ point }) => point.analysis);
   const bars: BlunderBar[] = [];
   for (let index = 1; index < displayed.length; index += 1) {
     const parent = displayed[index - 1];
     const child = displayed[index];
-    const rank = classifyPlayedMove(parent.analysis, child.analysis, parent.toPlay);
+    if (!child.point.isMove) continue;
+    const rank = classifyPlayedMove(parent.point.analysis, child.point.analysis, parent.point.toPlay);
     if (!rank || !isBlunderBarRank(rank)) continue;
-    bars.push({ fromMove: parent.moveNumber, toMove: child.moveNumber, rank });
+    bars.push({ fromIndex: parent.index, toIndex: child.index, rank });
   }
   return bars;
 }
@@ -205,6 +217,15 @@ function playedColor(node: SgfTreeNodeDto): PlayerColor | null {
   }
   return null;
 }
+
+function explicitPlayer(node: SgfTreeNodeDto): PlayerColor | null {
+  const value = firstPropertyValue(node, "PL")?.trim().toUpperCase();
+  if (value === "B") return "black";
+  if (value === "W") return "white";
+  return null;
+}
+
+
 
 function pathKey(indices: number[]): string {
   return indices.join(",");

@@ -23,6 +23,44 @@ pub struct SwingAnalysisScopeResolution {
     pub comparisons: Vec<AnalysisSwingComparisonDto>,
 }
 
+fn selected_markup(node: &SgfNode, board_size: u8) -> Vec<app_model::SgfMarkupDto> {
+    use app_model::{PointDto, SgfMarkupDto};
+    let mut markup = Vec::new();
+    for property in &node.properties {
+        for value in &property.values {
+            if property.key == "LB" {
+                if let Some((raw_point, text)) = value.split_once(':') {
+                    if let Ok(point) = crate::parse_point(raw_point, board_size) {
+                        markup.push(SgfMarkupDto::Label {
+                            point: PointDto {
+                                x: point.x,
+                                y: point.y,
+                            },
+                            text: text.to_string(),
+                        });
+                    }
+                }
+            } else if matches!(property.key.as_str(), "CR" | "SQ" | "MA" | "TR") {
+                if let Ok(points) = crate::parse_setup_points(value, board_size) {
+                    for point in points {
+                        let point = PointDto {
+                            x: point.x,
+                            y: point.y,
+                        };
+                        markup.push(match property.key.as_str() {
+                            "CR" => SgfMarkupDto::Circle { point },
+                            "SQ" => SgfMarkupDto::Square { point },
+                            "MA" => SgfMarkupDto::Cross { point },
+                            _ => SgfMarkupDto::Triangle { point },
+                        });
+                    }
+                }
+            }
+        }
+    }
+    markup
+}
+
 impl CurrentSgfDocument {
     pub fn open(input: &str) -> Result<Self, CurrentGameError> {
         let document = parse_sgf(input)?;
@@ -65,6 +103,7 @@ impl CurrentSgfDocument {
             path: path.clone(),
             position: position.clone(),
             personal_comment: personal_comment(selected),
+            markup: selected_markup(selected, self.document.board_size),
             generated_information: None,
             primary_analysis: projected
                 .primary

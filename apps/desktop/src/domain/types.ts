@@ -31,10 +31,14 @@ export type FileActivationRejectionDto = { message: string };
 export type NodePath = { indices: number[] };
 export type SgfPropertyDto = { key: string; values: string[] };
 export type SgfTreeNodeDto = { properties: SgfPropertyDto[]; children: SgfTreeNodeDto[] };
+export type SgfMarkupDto =
+  | { kind: "label"; point: PointDto; text: string }
+  | { kind: "circle" | "square" | "cross" | "triangle"; point: PointDto };
 export type SelectedNodeSnapshotDto = {
   path: NodePath;
   position: PositionDto;
   personal_comment: string;
+  markup: SgfMarkupDto[];
   generated_information?: string | null;
   primary_analysis?: AnalysisFrameDto | null;
   secondary_analysis?: AnalysisFrameDto | null;

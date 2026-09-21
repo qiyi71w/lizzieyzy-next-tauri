@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
-import type { AnalysisFrameDto, MoveDto, PointDto, PositionDto } from "../domain/types";
+import type { AnalysisFrameDto, MoveDto, PointDto, PositionDto, SgfMarkupDto } from "../domain/types";
 import { isPoint } from "../domain/board";
 import type { NextMoveReviewMarker, NextMoveReviewMarkerMode } from "../domain/nextMoveReviewMarker";
 import { variationReplayPointSteps } from "../domain/variationReplay";
@@ -13,6 +13,7 @@ export type OverlayMode = "candidates" | "ownership" | "policy";
 
 type Props = {
   position: PositionDto;
+  markup?: SgfMarkupDto[];
   analysis?: AnalysisFrameDto;
   selectedCandidateIndex?: number | null;
   moves?: MoveDto[];
@@ -42,6 +43,7 @@ function samePreviewScope(
 
 export function BoardCanvas({
   position,
+  markup = [],
   analysis,
   selectedCandidateIndex,
   moves = [],
@@ -343,6 +345,38 @@ export function BoardCanvas({
       ctx.stroke();
     }
 
+    for (const mark of markup) {
+      const cx = coord(mark.point.x);
+      const cy = coord(mark.point.y);
+      const radius = grid * 0.25;
+      const stone = position.stones.find((entry) => entry.x === mark.point.x && entry.y === mark.point.y);
+      ctx.strokeStyle = stone?.color === "black" ? "#ffffff" : "#161616";
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.lineWidth = Math.max(1.5, grid * 0.06);
+      ctx.beginPath();
+      if (mark.kind === "label") {
+        ctx.font = `${Math.max(9, grid * 0.4)}px sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(mark.text, cx, cy, grid * 0.85);
+      } else if (mark.kind === "circle") {
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      } else if (mark.kind === "square") {
+        ctx.rect(cx - radius, cy - radius, radius * 2, radius * 2);
+      } else if (mark.kind === "triangle") {
+        ctx.moveTo(cx, cy - radius);
+        ctx.lineTo(cx + radius, cy + radius);
+        ctx.lineTo(cx - radius, cy + radius);
+        ctx.lineTo(cx, cy - radius);
+      } else {
+        ctx.moveTo(cx - radius, cy - radius);
+        ctx.lineTo(cx + radius, cy + radius);
+        ctx.moveTo(cx + radius, cy - radius);
+        ctx.lineTo(cx - radius, cy + radius);
+      }
+      ctx.stroke();
+    }
+
     if (keyboardPoint) {
       const cx = coord(keyboardPoint.x);
       const cy = coord(keyboardPoint.y);
@@ -358,7 +392,7 @@ export function BoardCanvas({
       ctx.lineWidth = Math.max(1.5, grid * 0.06);
       ctx.stroke();
     }
-  }, [position, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, moves, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers, pvPrefixLength, replayCandidateIndex]);
+  }, [position, markup, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, moves, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers, pvPrefixLength, replayCandidateIndex]);
 
   const layerHost = document.getElementById("board-layers");
   const overlays = (

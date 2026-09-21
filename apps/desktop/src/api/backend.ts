@@ -289,11 +289,11 @@ export async function projectCurrentGameMainline(): Promise<GameDto> {
   return invoke<GameDto>("project_current_game_mainline");
 }
 
-export async function selectCurrentGameNode(path: NodePath): Promise<CurrentGameResultDto> {
+export async function selectCurrentGameNode(path: NodePath, generation: number): Promise<CurrentGameResultDto> {
   if (!isTauriRuntime()) {
     throw new Error("Native current-game navigation requires the Tauri desktop backend.");
   }
-  return invoke<CurrentGameResultDto>("select_current_game_node", { path });
+  return invoke<CurrentGameResultDto>("select_current_game_node", { path, generation });
 }
 
 export async function playCurrentGame(path: NodePath, vertex: MoveVertex): Promise<CurrentGameResultDto> {

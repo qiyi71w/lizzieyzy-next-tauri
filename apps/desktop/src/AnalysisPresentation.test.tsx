@@ -115,7 +115,7 @@ const navigableRoot: CurrentGameResultDto = {
     children: [{ properties: [{ key: "B", values: ["fe"] }], children: [] }]
   },
   selected_path: { indices: [] },
-  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "" },
+  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "", markup: [] },
   generation: 1,
   snapshot_seq: 1,
   dirty: false,
@@ -133,6 +133,7 @@ function snapshotAt(path: NodePath): CurrentGameResultDto {
         move_number: path.indices.length,
         to_play: path.indices.length % 2 === 0 ? "black" : "white"
       },
+      markup: [],
       personal_comment: ""
     }
   };
@@ -508,7 +509,7 @@ describe("analysis presentation bound to exact nodes", () => {
     expect(candidateCoords(host)).toEqual([]);
     backend.cancelKataGoAnalysis.mockClear();
     await selectPath(host, "下一变化");
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0] });
     expect(backend.cancelKataGoAnalysis).not.toHaveBeenCalled();
     expect(buttonNamed(host, "取消整局")).toBeTruthy();
     expect(candidateCoords(host)).toEqual(["B9"]);

@@ -4,6 +4,8 @@
 
 ### English
 
+- Added complete SGF tree navigation and exact-path links from variations, charts and problem lists. Move jumps count pass while skipping setup/comment nodes; selected SGF labels and marks follow the cursor, and stale-document navigation is rejected.
+
 - Removed the legacy force-replace IPC and frontend wrapper. Native current-game replacement uses the shared candidate-validation and Save / Discard / Cancel workflow.
 - Added manual continuous current-node analysis with real KataGo progress, fixed 600-second search budgets, shared-Run queue liveness, target-final cancellation and bounded Run-failure cleanup. Accepted snapshots remain available to ordinary SGF Save and current-game recovery.
 - Added durable default-on continuous-analysis intent, manager-owned latest-node following, and contextual Start/Stop/Resume with limit, finite-job, error and document-departure inhibition.
@@ -15,6 +17,8 @@
 - Added an all-position two-stage task strategy: a 32-visit overview of every target precedes an independently persisted deep pass with a 500-visit minimum, stage-local Pause/Continue progress, retained overview summaries, and Ctrl+Shift+B access.
 
 ### 中文
+
+- 新增完整 SGF 树及变化、图表、问题列表的精确路径导航；跳手计入 pass、跳过 setup/注释节点，标签与标记随选点同步，过期文档请求不会改变选择。
 
 - 移除旧强制替换 IPC 及前端 wrapper；原生当前棋谱替换统一使用候选验证与保存/放弃/取消流程。
 - 新增手动连续当前节点分析：接入真实 KataGo 进度、固定 600 秒搜索预算、共享 Run 排队保活、目标 final 取消与有界故障清理；已接纳快照可普通保存到 SGF，并纳入当前棋谱恢复。
