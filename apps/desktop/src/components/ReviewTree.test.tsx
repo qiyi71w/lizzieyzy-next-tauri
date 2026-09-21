@@ -92,6 +92,23 @@ function renderTree(props: {
 }
 
 describe("ReviewTree", () => {
+  it.each(["aa", ""])("counts a root move or pass before descendant moves (%s)", (coordinate) => {
+    const { onSelectNode } = renderTree({
+      tree: {
+        properties: [{ key: "B", values: [coordinate] }],
+        children: [{ properties: [{ key: "W", values: ["bb"] }], children: [] }]
+      }
+    });
+    const rows = host.querySelectorAll(".review-tree-row");
+    expect(rows[0].querySelector(".review-tree-move-num")?.textContent).toBe("#1");
+    expect(rows[0].querySelector(".review-tree-kind")?.textContent).toBe(`Root · B ${coordinate || "Pass"}`);
+    expect(rows[1].querySelector(".review-tree-move-num")?.textContent).toBe("#2");
+    act(() => (rows[0].querySelector(".review-tree-select-btn") as HTMLButtonElement).click());
+    expect(onSelectNode).toHaveBeenLastCalledWith({ indices: [] }, 1);
+    act(() => (rows[1].querySelector(".review-tree-select-btn") as HTMLButtonElement).click());
+    expect(onSelectNode).toHaveBeenLastCalledWith({ indices: [0] }, 1);
+  });
+
   it("renders all nodes with accurate actual move count (not depth), kinds, and annotations", () => {
     renderTree({});
 

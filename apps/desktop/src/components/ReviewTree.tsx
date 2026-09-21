@@ -35,25 +35,6 @@ function nodePathKey(path: NodePath): string {
 }
 
 function parseNodeDetails(node: SgfTreeNodeDto, isRoot: boolean): NodeDetails {
-  if (isRoot) {
-    let comment: string | undefined;
-    let name: string | undefined;
-    for (const prop of node.properties ?? []) {
-      if (prop.key === "C" && prop.values[0]) {
-        comment = prop.values[0].trim();
-      } else if (prop.key === "N" && prop.values[0]) {
-        name = prop.values[0].trim();
-      }
-    }
-    return {
-      kindText: "Root",
-      kindClass: "kind-root",
-      isMove: false,
-      name,
-      comment
-    };
-  }
-
   let moveColor: "B" | "W" | null = null;
   let moveCoord = "";
   let isPass = false;
@@ -84,9 +65,13 @@ function parseNodeDetails(node: SgfTreeNodeDto, isRoot: boolean): NodeDetails {
   }
 
   if (moveColor) {
-    const kindText = isPass ? `${moveColor} Pass` : `${moveColor} ${moveCoord}`;
+    const kindText = `${isRoot ? "Root · " : ""}${moveColor} ${isPass ? "Pass" : moveCoord}`;
     const kindClass = moveColor === "B" ? "kind-black" : "kind-white";
     return { kindText, kindClass, isMove: true, name, comment };
+  }
+
+  if (isRoot) {
+    return { kindText: "Root", kindClass: "kind-root", isMove: false, name, comment };
   }
 
   if (hasSetup) {
@@ -170,7 +155,8 @@ function collectVisibleRows(
     }
   }
 
-  walk(root, [], 0, 0, 0, 1);
+  const rootHasMove = (root.properties ?? []).some((prop) => prop.key === "B" || prop.key === "W");
+  walk(root, [], 0, rootHasMove ? 1 : 0, 0, 1);
   return rows;
 }
 
