@@ -77,6 +77,12 @@ type Props = {
   komi: number;
   onNew: () => void;
   onOpen: () => void;
+  recentGamePaths: string[];
+  recentHistoryBusy: boolean;
+  recentHistoryError: string | null;
+  onOpenRecent: (index: number) => void;
+  onClearRecentHistory: () => void;
+  onRetryRecentHistory: () => void;
   nativeRuntime?: boolean;
   nativeUnavailable?: string;
   onSave: () => void;
@@ -117,6 +123,9 @@ export function AppChrome(props: Props) {
   const openDisabled = props.busy || !nativeAvailable;
   const saveDisabled = !nativeAvailable || !props.dirty;
   const saveAsDisabled = !nativeAvailable;
+  const recentOpenDisabled = props.busy || props.recentHistoryBusy || !nativeAvailable;
+  const clearRecentDisabled = props.recentGamePaths.length === 0 || props.busy || props.recentHistoryBusy || !nativeAvailable;
+  const retryRecentDisabled = props.busy || props.recentHistoryBusy || !nativeAvailable;
 
   useEffect(() => {
     function onPointerDown(event: PointerEvent) {
@@ -145,7 +154,42 @@ export function AppChrome(props: Props) {
           <ChromeMenu label="文件" open={openMenu === "file"} onToggle={() => setOpenMenu(openMenu === "file" ? null : "file")}>
             <MenuItem label="新建(Ctrl+Home)" onClick={() => run(props.onNew)} disabled={props.busy} />
             <MenuItem label="打开棋谱(O)" onClick={() => run(props.onOpen)} disabled={openDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
-            <MenuItem label="最近打开" disabled title={later} />
+            <SubMenu label="最近打开">
+              {props.recentGamePaths.length === 0 ? (
+                <MenuItem label="最近列表为空" disabled />
+              ) : (
+                props.recentGamePaths.map((path, index) => (
+                  <MenuItem
+                    key={`${path}-${index}`}
+                    label={getBasename(path)}
+                    title={path}
+                    onClick={() => run(() => props.onOpenRecent(index))}
+                    disabled={recentOpenDisabled}
+                  />
+                ))
+              )}
+              <div className="menu-sep" role="separator" />
+              <MenuItem
+                label="清空最近记录"
+                onClick={() => run(props.onClearRecentHistory)}
+                disabled={clearRecentDisabled}
+                title={!nativeAvailable ? nativeUnavailable : undefined}
+              />
+              {props.recentHistoryError ? (
+                <>
+                  <div className="menu-sep" role="separator" />
+                  <div role="alert" className="menu-item menu-error" title={props.recentHistoryError} style={{ color: "var(--danger)" }}>
+                    {props.recentHistoryError}
+                  </div>
+                  <MenuItem
+                    label="重试最近记录写入"
+                    onClick={() => run(props.onRetryRecentHistory)}
+                    disabled={retryRecentDisabled}
+                    title={!nativeAvailable ? nativeUnavailable : undefined}
+                  />
+                </>
+              ) : null}
+            </SubMenu>
             <MenuItem label="打开在线链接(Q)" disabled title={later} />
             <div className="menu-sep" role="separator" />
             <MenuItem label="保存(Ctrl+S)" onClick={() => run(props.onSave)} disabled={saveDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
@@ -671,4 +715,10 @@ function IconBtn({ src, label, onClick, disabled, title }: { src: string; label:
       <img src={src} width={16} height={16} alt="" draggable={false} />
     </button>
   );
+}
+
+function getBasename(path: string): string {
+  const trimmed = path.replace(/[/\\]+$/, "");
+  const index = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  return (index >= 0 ? trimmed.slice(index + 1) : trimmed) || path;
 }

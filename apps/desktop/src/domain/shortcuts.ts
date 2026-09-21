@@ -46,6 +46,9 @@ export type ShortcutRegistry = {
 const CLAIMED_SHORTCUTS: ShortcutDefinition[] = [
   { id: "file.new", label: "新建", primary: { key: "Home", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.open", label: "打开棋谱", primary: { key: "o" }, aliases: [], focusRule: "focus-safe" },
+  ...[1, 2, 3, 4, 5].map((index): ShortcutDefinition => ({ id: `file.recent-${index}`, label: `最近棋谱 ${index}`, primary: { key: String(index), alt: true }, aliases: [], focusRule: "focus-safe" })),
+  { id: "file.clear-recent", label: "清空最近记录", primary: { key: "Delete", ctrl: true, shift: true }, aliases: [], focusRule: "focus-safe" },
+  { id: "file.retry-recent", label: "重试最近记录写入", primary: { key: "r", ctrl: true, shift: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.save", label: "保存", primary: { key: "s", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.save-as", label: "另存为", primary: { key: "s" }, aliases: [], focusRule: "focus-safe" },
   { id: "file.copy-sgf", label: "复制棋谱", primary: { key: "c", ctrl: true }, aliases: [], focusRule: "focus-safe" },

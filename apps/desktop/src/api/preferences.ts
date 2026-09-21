@@ -48,6 +48,11 @@ export async function saveAppPreferences(preferences: AppPreferences): Promise<A
   return normalizeAppPreferences(await invoke<AppPreferences>("save_app_preferences", { preferences: normalized }));
 }
 
+export async function updateRecentGameHistory(openedPath: string | null): Promise<string[]> {
+  if (!isTauriRuntime()) throw new Error("Recent game history requires the native Tauri desktop backend.");
+  return invoke<string[]>("update_recent_game_history", { openedPath });
+}
+
 function loadBrowserPreferences(): AppPreferencesLoadResult {
   if (typeof window === "undefined") return { preferences: defaultAppPreferences };
   const raw = window.localStorage.getItem(browserPreferencesKey);

@@ -4,6 +4,7 @@
 
 ### English
 
+- Added five-entry durable native SGF/GIB history with safe reopen, full-path tooltips, narrow Clear, and explicit persistence-failure Retry. Successful opens remain installed when history persistence fails.
 - Removed the legacy force-replace IPC and frontend wrapper. Native current-game replacement uses the shared candidate-validation and Save / Discard / Cancel workflow.
 - Added manual continuous current-node analysis with real KataGo progress, fixed 600-second search budgets, shared-Run queue liveness, target-final cancellation and bounded Run-failure cleanup. Accepted snapshots remain available to ordinary SGF Save and current-game recovery.
 - Added durable default-on continuous-analysis intent, manager-owned latest-node following, and contextual Start/Stop/Resume with limit, finite-job, error and document-departure inhibition.
@@ -16,6 +17,7 @@
 
 ### 中文
 
+- 新增最近五个原生 SGF/GIB 的持久历史，支持安全重开、完整路径提示、单独清空和写失败显式重试；历史写入失败不撤销已打开的棋谱。
 - 移除旧强制替换 IPC 及前端 wrapper；原生当前棋谱替换统一使用候选验证与保存/放弃/取消流程。
 - 新增手动连续当前节点分析：接入真实 KataGo 进度、固定 600 秒搜索预算、共享 Run 排队保活、目标 final 取消与有界故障清理；已接纳快照可普通保存到 SGF，并纳入当前棋谱恢复。
 - 连续分析意图默认开启并持久化；由 manager 跟随最新节点，统一开始/停止/继续动作，并保留到限、有限请求、错误及离开棋谱后的自动工作抑制。

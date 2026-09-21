@@ -6,6 +6,9 @@ use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod recent;
+pub use recent::recent_game_paths;
+
 pub const APP_PREFERENCES_FILE: &str = "lizzieyzy-next-app-preferences.json";
 pub const UNREADABLE_RECOVERY_MESSAGE: &str = "Unreadable preferences isolated; restored defaults.";
 
@@ -64,6 +67,8 @@ pub struct AppPreferencesDto {
     pub variation_replay_interval_ms: u32,
     #[serde(default = "default_restore_last_session")]
     pub restore_last_session: bool,
+    #[serde(default)]
+    pub recent_game_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +114,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         variation_replay_enabled: default_variation_replay_enabled(),
         variation_replay_interval_ms: default_variation_replay_interval_ms(),
         restore_last_session: default_restore_last_session(),
+        recent_game_paths: Vec::new(),
     }
 }
 
@@ -505,6 +511,7 @@ mod tests {
             variation_replay_enabled: true,
             variation_replay_interval_ms: 250,
             restore_last_session: true,
+            recent_game_paths: Vec::new(),
         }
     }
 

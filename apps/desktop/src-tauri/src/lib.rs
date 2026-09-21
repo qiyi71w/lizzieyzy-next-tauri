@@ -396,6 +396,8 @@ fn replay_sgf_positions(sgf_text: String) -> Result<Vec<PositionDto>, String> {
 #[tauri::command]
 fn read_game_file(path: String) -> Result<GameFileImportDto, String> {
     let path = non_empty_path(path)?;
+    let path = fs::canonicalize(&path)
+        .map_err(|error| format!("failed to read game file {}: {error}", path.display()))?;
     let display_path = path.display().to_string();
     let input =
         fs::read(&path).map_err(|error| format!("failed to read game file {display_path}: {error}"))?;
@@ -427,6 +429,7 @@ fn import_game_input(
     if !matches!(extension.as_str(), "sgf" | "txt" | "gib") {
         return Err(format!("unsupported game file: {display_path}"));
     }
+    let opened_path = source_native_path.clone();
     let (format, sgf_text, native_path) = if extension == "gib" {
         (
             GameFileFormatDto::Gib,
@@ -448,6 +451,7 @@ fn import_game_input(
         display_path,
         display_name,
         native_path,
+        opened_path,
     })
 }
 
@@ -562,6 +566,15 @@ fn save_app_preferences(
 ) -> Result<AppPreferencesDto, String> {
     let path = app_preferences_path(&app_handle)?;
     state.save(&path, &manager, preferences)
+}
+
+#[tauri::command]
+fn update_recent_game_history(
+    app_handle: AppHandle,
+    state: State<PreferencesState>,
+    opened_path: Option<String>,
+) -> Result<Vec<String>, String> {
+    state.update_recent_history(&app_preferences_path(&app_handle)?, opened_path.as_deref())
 }
 
 #[tauri::command]
@@ -1138,6 +1151,7 @@ pub fn run() {
             engine_asset_checks,
             load_app_preferences,
             save_app_preferences,
+            update_recent_game_history,
             load_engine_profile_settings,
             save_engine_profile_settings,
             load_engine_profiles_settings,
@@ -1732,7 +1746,7 @@ for line in sys.stdin:
         let sgf_import = read_game_file(sgf_path.to_string_lossy().into_owned()).unwrap();
         assert_eq!(sgf_import.format, app_model::GameFileFormatDto::Sgf);
         assert_eq!(sgf_import.display_name, "named.sgf");
-        assert_eq!(sgf_import.native_path.as_deref(), sgf_path.to_str());
+        assert_eq!(sgf_import.native_path.as_deref(), std::fs::canonicalize(&sgf_path).unwrap().to_str());
         assert_eq!(sgf_import.sgf_text, "(;SZ[9]PB[Black]PW[White];B[dd])");
 
         let gib_path =
@@ -1742,6 +1756,7 @@ for line in sys.stdin:
         assert_eq!(gib_import.format, app_model::GameFileFormatDto::Gib);
         assert_eq!(gib_import.display_name, "tygem-named-pass-lf.gib");
         assert_eq!(gib_import.native_path, None);
+        assert_eq!(gib_import.opened_path.as_deref(), std::fs::canonicalize(&gib_path).unwrap().to_str());
         assert_eq!(std::fs::read(&gib_path).unwrap(), original);
         let imported = sgf::CurrentSgfDocument::open(&gib_import.sgf_text).unwrap();
         assert_eq!(imported.default_selected_path().indices, vec![0, 0, 0]);
@@ -1750,6 +1765,7 @@ for line in sys.stdin:
         assert_eq!(uploaded.format, app_model::GameFileFormatDto::Gib);
         assert_eq!(uploaded.display_name, "uploaded.gib");
         assert_eq!(uploaded.native_path, None);
+        assert_eq!(uploaded.opened_path, None);
         assert_eq!(uploaded.sgf_text, gib_import.sgf_text);
 
         let unsupported = directory.join("unsupported.ngf");
