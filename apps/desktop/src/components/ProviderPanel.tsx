@@ -456,14 +456,14 @@ function providerFetchStatus(result: ProviderFetchResult, label: string): string
 }
 
 function readboardSyncStatus(result: ReadboardSidecarSyncSnapshotResult): string {
-  const position = result.position ? `position ${result.position.board_size}x${result.position.board_size} move ${result.position.move_number}` : "no position";
+  const position = result.position ? `position ${result.position.board_width}x${result.position.board_height} move ${result.position.move_number}` : "no position";
   const warnings = result.warnings.length > 0 ? `, ${result.warnings.length} warning(s)` : "";
   return `Snapshot preview ${result.snapshot_id}: ${position}${warnings}.`;
 }
 
 function positionStatus(result: ReadboardSidecarSyncSnapshotResult): string {
   if (!result.position) return "none";
-  return `${result.position.board_size}x${result.position.board_size}, move ${result.position.move_number}, ${result.position.stones.length} stones`;
+  return `${result.position.board_width}x${result.position.board_height}, move ${result.position.move_number}, ${result.position.stones.length} stones`;
 }
 
 function warningCount(warnings: string[]): string {

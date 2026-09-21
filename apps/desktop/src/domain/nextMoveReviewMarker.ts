@@ -22,7 +22,8 @@ export function buildNextMoveReviewMarkers(input: {
   selectedNode: SgfTreeNodeDto | null;
   selectedIsRoot: boolean;
   toPlay: PlayerColor;
-  boardSize: number;
+  boardWidth: number;
+  boardHeight: number;
 }): NextMoveReviewMarker[] {
   if (input.mode === "off" || !input.selectedNode) return [];
   const parentAnalysis = input.mode === "graded"
@@ -30,8 +31,13 @@ export function buildNextMoveReviewMarkers(input: {
     : null;
   const markers: NextMoveReviewMarker[] = [];
   for (const [index, child] of input.selectedNode.children.entries()) {
-    const point = childCoordinate(child, input.boardSize);
-    if (!point) continue;
+    const move = child.properties.find((property) => property.key === "B" || property.key === "W");
+    if (!move) continue;
+    const raw = move.values[0] ?? "";
+    if (raw.length === 0 || (raw.toLowerCase() === "tt" && input.boardWidth <= 19 && input.boardHeight <= 19)) continue;
+    if (raw.length !== 2) continue;
+    const point = { x: raw.charCodeAt(0) - 97, y: raw.charCodeAt(1) - 97 };
+    if (point.x < 0 || point.y < 0 || point.x >= input.boardWidth || point.y >= input.boardHeight) continue;
     const primary = index === 0;
     const rank = input.mode === "graded" && primary
       ? classifyPlayedMove(parentAnalysis, displayedPrimaryAnalysis(child, false), input.toPlay)
@@ -39,19 +45,4 @@ export function buildNextMoveReviewMarkers(input: {
     markers.push({ point, primary, rank });
   }
   return markers;
-}
-
-function childCoordinate(node: SgfTreeNodeDto, boardSize: number): PointDto | null {
-  const move = node.properties.find((property) => property.key === "B" || property.key === "W");
-  if (!move) return null;
-  return parseSgfPoint(move.values[0] ?? "", boardSize);
-}
-
-function parseSgfPoint(raw: string, boardSize: number): PointDto | null {
-  if (raw.length === 0 || (raw.toLowerCase() === "tt" && boardSize <= 19)) return null;
-  if (raw.length !== 2) return null;
-  const x = raw.charCodeAt(0) - 97;
-  const y = raw.charCodeAt(1) - 97;
-  if (x < 0 || y < 0 || x >= boardSize || y >= boardSize) return null;
-  return { x, y };
 }

@@ -103,11 +103,30 @@ describe("browser preference storage", () => {
     expect(window.localStorage.getItem(unreadableKey)).toBe("{not-json");
   });
 
-  it("reloads a successful write as the next load", async () => {
-    const saved = await saveAppPreferences({ ...defaultAppPreferences, showCandidates: false, candidateLimit: 3 });
+  it("reloads successful rectangular new-document defaults", async () => {
+    const saved = await saveAppPreferences({
+      ...defaultAppPreferences,
+      showCandidates: false,
+      candidateLimit: 3,
+      defaultBoardWidth: 15,
+      defaultBoardHeight: 13,
+      defaultKomi: 6.5
+    });
     const loaded = await loadAppPreferences();
     expect(loaded.preferences).toEqual(saved);
     expect(loaded.recovery).toBeUndefined();
+  });
+
+  it("rejects invalid new-document defaults without writing", async () => {
+    await expect(saveAppPreferences({
+      ...defaultAppPreferences,
+      defaultBoardWidth: 26
+    })).rejects.toThrow("2–25");
+    await expect(saveAppPreferences({
+      ...defaultAppPreferences,
+      defaultKomi: Number.POSITIVE_INFINITY
+    })).rejects.toThrow("有限");
+    expect(window.localStorage.getItem(storageKey)).toBeNull();
   });
   it("reloads independent overview and deep task presets", async () => {
     const overview = {

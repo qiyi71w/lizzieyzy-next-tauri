@@ -58,7 +58,8 @@ impl CurrentSgfDocument {
         let position = self.replay_nodes(&nodes)?;
         let projected = crate::analysis::project_node_analysis(
             selected,
-            self.document.board_size,
+            self.document.board_width,
+            self.document.board_height,
             path.indices.is_empty(),
         );
         Ok(SelectedNodeSnapshotDto {
@@ -243,8 +244,12 @@ impl CurrentSgfDocument {
         self.document.komi
     }
 
-    pub fn board_size(&self) -> u8 {
-        self.document.board_size
+    pub fn board_width(&self) -> u8 {
+        self.document.board_width
+    }
+
+    pub fn board_height(&self) -> u8 {
+        self.document.board_height
     }
 
     pub fn rules(&self) -> String {
@@ -281,7 +286,7 @@ impl CurrentSgfDocument {
         board
             .play(to_core_color(to_play), to_core_vertex(&vertex))
             .map_err(rule_error)?;
-        let encoded = serialize_vertex(&vertex, self.document.board_size)?;
+        let encoded = serialize_vertex(&vertex, self.document.board_width, self.document.board_height)?;
         let index = {
             let parent = self.node_at_mut(path)?;
             parent.children.push(SgfNode {
@@ -315,10 +320,16 @@ impl CurrentSgfDocument {
         path: &NodePath,
         payload: &crate::SgfAnalysisPayload,
     ) -> Result<(SelectedNodeSnapshotDto, bool), CurrentGameError> {
-        let board_size = self.document.board_size;
+        let board_width = self.document.board_width;
+        let board_height = self.document.board_height;
         let is_root = path.indices.is_empty();
-        let changed =
-            crate::analysis::replace_primary_analysis(self.node_mut(path)?, payload, board_size, is_root);
+        let changed = crate::analysis::replace_primary_analysis(
+            self.node_mut(path)?,
+            payload,
+            board_width,
+            board_height,
+            is_root,
+        );
         Ok((self.snapshot(path)?, changed))
     }
 
@@ -379,9 +390,15 @@ impl CurrentSgfDocument {
     }
 
     fn replay_nodes(&self, nodes: &[&SgfNode]) -> Result<PositionDto, CurrentGameError> {
-        let mut board = Board::new(self.document.board_size).map_err(|_| CurrentGameError {
-            kind: CurrentGameErrorKind::UnsupportedBoardSize,
-            message: SgfError::UnsupportedBoardSize(self.document.board_size).to_string(),
+        let mut board = Board::new(self.document.board_width, self.document.board_height).map_err(|_| {
+            CurrentGameError {
+                kind: CurrentGameErrorKind::UnsupportedBoardSize,
+                message: SgfError::UnsupportedBoardDimensions {
+                    width: self.document.board_width,
+                    height: self.document.board_height,
+                }
+                .to_string(),
+            }
         })?;
         let mut captures_black = 0u32;
         let mut captures_white = 0u32;
@@ -391,7 +408,12 @@ impl CurrentSgfDocument {
         let mut errors = Vec::new();
 
         for node in nodes {
-            apply_setup_properties(&mut board, node, self.document.board_size)?;
+            apply_setup_properties(
+                &mut board,
+                node,
+                self.document.board_width,
+                self.document.board_height,
+            )?;
             if let Some(color) = player_to_play(node)? {
                 to_play = color;
             }
@@ -408,7 +430,7 @@ impl CurrentSgfDocument {
                 move_number += 1;
                 let sgf_move = MoveDto {
                     color,
-                    vertex: parse_vertex(raw, self.document.board_size)?,
+                    vertex: parse_vertex(raw, self.document.board_width, self.document.board_height)?,
                     move_number,
                 };
                 match board.play(to_core_color(sgf_move.color), to_core_vertex(&sgf_move.vertex)) {
@@ -424,7 +446,8 @@ impl CurrentSgfDocument {
         }
 
         Ok(PositionDto {
-            board_size: self.document.board_size,
+            board_width: self.document.board_width,
+            board_height: self.document.board_height,
             move_number,
             to_play,
             stones: stones_from_board(&board),
@@ -455,7 +478,7 @@ impl CurrentSgfDocument {
                     continue;
                 }
                 let raw = property.values.first().ok_or(SgfError::Malformed)?;
-                if &parse_vertex(raw, self.document.board_size)? == vertex {
+                if &parse_vertex(raw, self.document.board_width, self.document.board_height)? == vertex {
                     return Ok(Some(u32::try_from(index).expect("child index fits u32")));
                 }
             }
@@ -465,12 +488,23 @@ impl CurrentSgfDocument {
 
     fn board_after(&self, path: &NodePath) -> Result<Board, CurrentGameError> {
         let nodes = self.nodes_on_path(path)?;
-        let mut board = Board::new(self.document.board_size).map_err(|_| CurrentGameError {
-            kind: CurrentGameErrorKind::UnsupportedBoardSize,
-            message: SgfError::UnsupportedBoardSize(self.document.board_size).to_string(),
+        let mut board = Board::new(self.document.board_width, self.document.board_height).map_err(|_| {
+            CurrentGameError {
+                kind: CurrentGameErrorKind::UnsupportedBoardSize,
+                message: SgfError::UnsupportedBoardDimensions {
+                    width: self.document.board_width,
+                    height: self.document.board_height,
+                }
+                .to_string(),
+            }
         })?;
         for node in nodes {
-            apply_setup_properties(&mut board, node, self.document.board_size)?;
+            apply_setup_properties(
+                &mut board,
+                node,
+                self.document.board_width,
+                self.document.board_height,
+            )?;
             for property in &node.properties {
                 let color = match property.key.as_str() {
                     "B" => Some(PlayerColor::Black),
@@ -481,7 +515,7 @@ impl CurrentSgfDocument {
                     continue;
                 };
                 let raw = property.values.first().ok_or(SgfError::Malformed)?;
-                let played = parse_vertex(raw, self.document.board_size)?;
+                let played = parse_vertex(raw, self.document.board_width, self.document.board_height)?;
                 let _ = board.play(to_core_color(color), to_core_vertex(&played));
             }
         }
@@ -523,7 +557,7 @@ fn rule_error(error: RuleError) -> CurrentGameError {
 impl From<SgfError> for CurrentGameError {
     fn from(error: SgfError) -> Self {
         match error {
-            SgfError::UnsupportedBoardSize(_) => CurrentGameError {
+            SgfError::UnsupportedBoardDimensions { .. } => CurrentGameError {
                 kind: CurrentGameErrorKind::UnsupportedBoardSize,
                 message: error.to_string(),
             },
@@ -620,7 +654,10 @@ mod editable_workspace_open {
             Some(vec!["second continuation".to_string()])
         );
 
-        assert_eq!(snapshot.position.board_size, 5);
+        assert_eq!(
+            (snapshot.position.board_width, snapshot.position.board_height),
+            (5, 5)
+        );
         assert_eq!(snapshot.position.move_number, 3);
         assert_eq!(snapshot.position.to_play, PlayerColor::Black);
         assert_eq!(snapshot.position.captures_black, 0);
@@ -738,7 +775,13 @@ mod editable_workspace_navigation {
         let root_snapshot = document.snapshot(&root).unwrap();
         assert_eq!(root_snapshot.path.indices, root.indices);
         assert_eq!(root_snapshot.personal_comment, "root personal");
-        assert_eq!(root_snapshot.position.board_size, 5);
+        assert_eq!(
+            (
+                root_snapshot.position.board_width,
+                root_snapshot.position.board_height
+            ),
+            (5, 5)
+        );
         assert_eq!(root_snapshot.position.move_number, 0);
         assert_eq!(root_snapshot.position.to_play, PlayerColor::White);
         assert_eq!(root_snapshot.position.captures_black, 0);
@@ -1315,7 +1358,7 @@ mod selected_node_analysis_capture {
         let japanese = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[5]KM[6.5]RU[Japanese];B[cc])").unwrap();
         assert_eq!(japanese.rules(), "japanese");
         assert_eq!(japanese.komi(), 6.5);
-        assert_eq!(japanese.board_size(), 5);
+        assert_eq!((japanese.board_width(), japanese.board_height()), (5, 5));
 
         let defaulted = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[9]KM[7.5];B[cc])").unwrap();
         assert_eq!(defaulted.rules(), "chinese");
@@ -1375,7 +1418,7 @@ mod first_child_mainline_worklist {
         let snapshots = document.first_child_mainline_snapshots().unwrap();
         assert_eq!(snapshots.len(), 4);
         assert_eq!(document.komi(), 0.5);
-        assert_eq!(document.board_size(), 5);
+        assert_eq!((document.board_width(), document.board_height()), (5, 5));
         assert_eq!(document.rules(), "chinese");
 
         let root = &snapshots[0];

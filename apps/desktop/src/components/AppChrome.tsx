@@ -291,7 +291,7 @@ export function AppChrome(props: Props) {
             <MenuItem label="棋谱原文" onClick={() => run(() => props.onToggleSheet("sgf"))} />
             <MenuItem label="解析棋谱" onClick={() => run(props.onParse)} disabled={props.busy} />
             <MenuItem label="编辑棋局信息(I)" disabled title={later} />
-            <MenuItem label="设置棋盘大小(Ctrl+I)" disabled title={later} />
+            <MenuItem label={actionLabelFromRegistry("game.board-dimensions", "设置棋盘大小")} onClick={() => run(props.onClearBoard)} disabled={props.busy} />
           </ChromeMenu>
         </div>
         <span className="menu-div" />

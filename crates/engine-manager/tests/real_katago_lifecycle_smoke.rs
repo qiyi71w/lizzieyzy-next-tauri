@@ -210,7 +210,8 @@ fn selected_request(run_id: &str, generation: u64, max_visits: u32) -> SelectedN
         generation,
         node_path: app_model::NodePath { indices: vec![] },
         query: query(max_visits),
-        board_size: 9,
+        board_width: 9,
+        board_height: 9,
         position_empty: true,
     }
 }

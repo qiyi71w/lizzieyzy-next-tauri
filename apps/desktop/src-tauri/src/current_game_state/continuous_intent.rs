@@ -891,15 +891,9 @@ fn paused_task_does_not_resume_after_departure_save_cancellation_or_failure() {
         assert!(state
             .continue_analysis_task(&engine.manager, &task.run_id, &task.task_id)
             .is_err());
-        assert_eq!(
-            state
-                .select_path(NodePath::default())
-                .unwrap()
-                .snapshot
-                .position
-                .board_size,
-            9
-        );
+        let retained_position = &state.select_path(NodePath::default()).unwrap().snapshot.position;
+        assert_eq!(retained_position.board_width, 9);
+        assert_eq!(retained_position.board_height, 9);
         assert!(state.attach_from_job_event(&first).is_none());
         assert!(matches!(
             engine.manager.snapshot().lifecycle,
@@ -982,15 +976,9 @@ fn task_pause_cleanup_failure_aborts_departure_and_retains_game() {
         assert!(state
             .continue_analysis_task(&engine.manager, &task.run_id, &task.task_id)
             .is_err());
-        assert_eq!(
-            state
-                .select_path(NodePath::default())
-                .unwrap()
-                .snapshot
-                .position
-                .board_size,
-            9
-        );
+        let retained_position = &state.select_path(NodePath::default()).unwrap().snapshot.position;
+        assert_eq!(retained_position.board_width, 9);
+        assert_eq!(retained_position.board_height, 9);
         assert!(engine.manager.snapshot().whole_game_job.is_none());
         assert!(engine.manager.snapshot().selected_node_job.is_none());
     }

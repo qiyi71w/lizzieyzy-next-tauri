@@ -94,7 +94,8 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 import { App } from "./App";
 
 const emptyPosition = {
-  board_size: 9,
+  board_width: 9,
+  board_height: 9,
   move_number: 0,
   to_play: "black" as const,
   stones: [],
@@ -115,7 +116,7 @@ const initialGame: CurrentGameResultDto = {
 };
 
 const initialProjection: GameDto = {
-  summary: { id: "game", board_size: 9, komi: 7.5, move_count: 0 },
+  summary: { id: "game", board_width: 9, board_height: 9, komi: 7.5, move_count: 0 },
   moves: []
 };
 
@@ -785,7 +786,12 @@ describe("authoritative continuous selected-node analysis", () => {
     await readyEngine(host);
     await publishContinuousProgress(28);
 
-    act(() => (host.querySelector('button[aria-label="新建"]') as HTMLButtonElement).click());
+    act(() => {
+      (host.querySelector('button[aria-label="新建"]') as HTMLButtonElement).click();
+    });
+    act(() => {
+      buttonNamed(host, "创建").click();
+    });
     await act(async () => {
       await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
       await Promise.resolve();

@@ -99,7 +99,8 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 import { App } from "./App";
 
 const emptyPosition = {
-  board_size: 9,
+  board_width: 9,
+  board_height: 9,
   move_number: 0,
   to_play: "black" as const,
   stones: [],
@@ -139,7 +140,7 @@ function snapshotAt(path: NodePath): CurrentGameResultDto {
 }
 
 const initialProjection: GameDto = {
-  summary: { id: "game", board_size: 9, komi: 7.5, move_count: 1 },
+  summary: { id: "game", board_width: 9, board_height: 9, komi: 7.5, move_count: 1 },
   moves: [{ move_number: 1, color: "black", vertex: { point: { x: 5, y: 4 } } }]
 };
 

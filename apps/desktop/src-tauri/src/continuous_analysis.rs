@@ -98,12 +98,14 @@ pub fn position_request(
     generation: u64,
     node_path: NodePath,
     snapshot: SelectedNodeSnapshotDto,
-    board_size: u8,
+    board_width: u8,
+    board_height: u8,
     komi: f32,
     rules: String,
 ) -> Result<SelectedNodeJobRequest, String> {
     let query = analysis_query_from_position(
-        board_size,
+        board_width,
+        board_height,
         komi,
         &snapshot.position.stones,
         snapshot.position.to_play,
@@ -123,7 +125,8 @@ pub fn position_request(
         generation,
         node_path,
         query,
-        board_size,
+        board_width,
+        board_height,
         position_empty: snapshot.position.stones.is_empty(),
     })
 }

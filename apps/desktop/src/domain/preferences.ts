@@ -33,6 +33,9 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   variationReplayIntervalMs: number;
   restoreLastSession: boolean;
   continuousAnalysisEnabled: boolean;
+  defaultBoardWidth: number;
+  defaultBoardHeight: number;
+  defaultKomi: number;
 };
 
 export const defaultAppPreferences: AppPreferences = {
@@ -41,6 +44,9 @@ export const defaultAppPreferences: AppPreferences = {
   showCandidates: true,
   candidateLimit: 8,
   defaultMaxVisits: 800,
+  defaultBoardWidth: 19,
+  defaultBoardHeight: 19,
+  defaultKomi: 7.5,
   taskSingleStageConditions: {
     time_seconds: { enabled: false, value: 10 },
     total_visits: { enabled: true, value: 800 },
@@ -106,6 +112,9 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
     showCandidates: booleanValue(value?.showCandidates, defaultAppPreferences.showCandidates),
     candidateLimit: integerValue(value?.candidateLimit, defaultAppPreferences.candidateLimit, 1, 20),
     defaultMaxVisits,
+    defaultBoardWidth: integerValue(value?.defaultBoardWidth, defaultAppPreferences.defaultBoardWidth, 2, 25),
+    defaultBoardHeight: integerValue(value?.defaultBoardHeight, defaultAppPreferences.defaultBoardHeight, 2, 25),
+    defaultKomi: finiteValue(value?.defaultKomi, defaultAppPreferences.defaultKomi),
     taskSingleStageConditions: normalizeSingleStageTaskConditions(value, defaultMaxVisits),
     taskOverviewConditions: normalizeTaskConditions(
       value?.taskOverviewConditions,
@@ -146,6 +155,15 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
     continuousVisitsLimit: value?.continuousVisitsLimit ?? defaultAppPreferences.continuousVisitsLimit,
     continuousStopOnEmptyBoard: booleanValue(value?.continuousStopOnEmptyBoard, defaultAppPreferences.continuousStopOnEmptyBoard)
   };
+}
+
+export function newGameDefaultsError(value: Pick<AppPreferences, "defaultBoardWidth" | "defaultBoardHeight" | "defaultKomi">): string | null {
+  if (!Number.isInteger(value.defaultBoardWidth) || value.defaultBoardWidth < 2 || value.defaultBoardWidth > 25
+    || !Number.isInteger(value.defaultBoardHeight) || value.defaultBoardHeight < 2 || value.defaultBoardHeight > 25) {
+    return "棋盘宽高须为 2–25 的整数。";
+  }
+  if (!Number.isFinite(value.defaultKomi)) return "贴目须为有限数值。";
+  return null;
 }
 
 export function continuousBudgetError(value: ContinuousAnalysisBudgetDto): string | null {
@@ -274,6 +292,11 @@ function nextMoveReviewMarkerValue(value: unknown): NextMoveReviewMarkerMode {
 
 function booleanValue(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+function finiteValue(value: unknown, fallback: number): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function integerValue(value: unknown, fallback: number, min: number, max: number): number {

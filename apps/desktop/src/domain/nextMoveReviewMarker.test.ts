@@ -34,7 +34,8 @@ describe("next-move review marker", () => {
       selectedNode: selected,
       selectedIsRoot: true,
       toPlay: "black",
-      boardSize: 19
+      boardWidth: 19,
+      boardHeight: 19
     })).toEqual([]);
   });
 
@@ -49,7 +50,8 @@ describe("next-move review marker", () => {
       selectedNode: selected,
       selectedIsRoot: true,
       toPlay: "black",
-      boardSize: 19
+      boardWidth: 19,
+      boardHeight: 19
     })).toEqual([
       { point: dd, primary: true, rank: null },
       { point: pp, primary: false, rank: null },
@@ -69,9 +71,28 @@ describe("next-move review marker", () => {
       selectedNode: selected,
       selectedIsRoot: true,
       toPlay: "black",
-      boardSize: 19
+      boardWidth: 19,
+      boardHeight: 19
     })).toEqual([
       { point: dd, primary: false, rank: null }
+    ]);
+  });
+
+  it("bounds child coordinates against rectangular width and height independently", () => {
+    const selected = node([], [
+      node([{ key: "B", values: ["ad"] }]),
+      node([{ key: "B", values: ["da"] }]),
+      node([{ key: "B", values: ["af"] }])
+    ]);
+    expect(buildNextMoveReviewMarkers({
+      mode: "variations",
+      selectedNode: selected,
+      selectedIsRoot: true,
+      toPlay: "black",
+      boardWidth: 3,
+      boardHeight: 5
+    })).toEqual([
+      { point: { x: 0, y: 3 }, primary: true, rank: null }
     ]);
   });
 
@@ -85,7 +106,8 @@ describe("next-move review marker", () => {
       selectedNode: selected,
       selectedIsRoot: true,
       toPlay: "black",
-      boardSize: 19
+      boardWidth: 19,
+      boardHeight: 19
     })).toEqual([
       { point: dd, primary: true, rank: "mistake" },
       { point: pp, primary: false, rank: null }
@@ -101,7 +123,8 @@ describe("next-move review marker", () => {
       selectedNode: whiteToPlay,
       selectedIsRoot: false,
       toPlay: "white",
-      boardSize: 19
+      boardWidth: 19,
+      boardHeight: 19
     })).toEqual([
       { point: dd, primary: true, rank: "mistake" }
     ]);
@@ -125,7 +148,8 @@ describe("next-move review marker", () => {
         selectedNode: selected,
         selectedIsRoot: true,
         toPlay: "black",
-        boardSize: 19
+        boardWidth: 19,
+        boardHeight: 19
       }), childHeader).toEqual([
         { point: dd, primary: true, rank }
       ]);
@@ -141,7 +165,8 @@ describe("next-move review marker", () => {
       selectedNode: selectedGood,
       selectedIsRoot: true,
       toPlay: "black",
-      boardSize: 19
+      boardWidth: 19,
+      boardHeight: 19
     })).toEqual([
       { point: dd, primary: true, rank: "good" }
     ]);
@@ -154,7 +179,8 @@ describe("next-move review marker", () => {
       selectedNode: selectedGuard,
       selectedIsRoot: true,
       toPlay: "black",
-      boardSize: 19
+      boardWidth: 19,
+      boardHeight: 19
     })).toEqual([
       { point: dd, primary: true, rank: "mistake" }
     ]);
@@ -181,35 +207,40 @@ describe("next-move review marker", () => {
       selectedNode: missing,
       selectedIsRoot: true,
       toPlay: "black",
-      boardSize: 19
+      boardWidth: 19,
+      boardHeight: 19
     })).toEqual([{ point: dd, primary: true, rank: null }]);
     expect(buildNextMoveReviewMarkers({
       mode: "graded",
       selectedNode: malformed,
       selectedIsRoot: true,
       toPlay: "black",
-      boardSize: 19
+      boardWidth: 19,
+      boardHeight: 19
     })).toEqual([{ point: dd, primary: true, rank: null }]);
     expect(buildNextMoveReviewMarkers({
       mode: "graded",
       selectedNode: zeroVisit,
       selectedIsRoot: true,
       toPlay: "black",
-      boardSize: 19
+      boardWidth: 19,
+      boardHeight: 19
     })).toEqual([{ point: dd, primary: true, rank: null }]);
     expect(buildNextMoveReviewMarkers({
       mode: "graded",
       selectedNode: passPrimary,
       selectedIsRoot: true,
       toPlay: "black",
-      boardSize: 19
+      boardWidth: 19,
+      boardHeight: 19
     })).toEqual([{ point: pp, primary: false, rank: null }]);
     expect(buildNextMoveReviewMarkers({
       mode: "graded",
       selectedNode: noChildren,
       selectedIsRoot: true,
       toPlay: "black",
-      boardSize: 19
+      boardWidth: 19,
+      boardHeight: 19
     })).toEqual([]);
   });
 });

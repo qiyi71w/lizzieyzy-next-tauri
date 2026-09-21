@@ -643,7 +643,7 @@ fn bind_selected_node_job(
     mode: AnalysisJobModeDto,
     max_visits: Option<u32>,
 ) -> Result<SelectedNodeJobRequest, EngineFailureDto> {
-    let (snapshot, board_size, komi, rules) = current_game
+    let (snapshot, board_width, board_height, komi, rules) = current_game
         .admit_selected_node(generation, &node_path)
         .map_err(|error| EngineFailureDto {
             operation: EngineOperationDto::Job,
@@ -655,18 +655,25 @@ fn bind_selected_node_job(
             message: error.message,
             diagnostic_summary: None,
         })?;
-    let mut request =
-        continuous_analysis::position_request(generation, node_path, snapshot, board_size, komi, rules)
-            .map_err(|error| EngineFailureDto {
-                operation: EngineOperationDto::Job,
-                run_id: Some(run_id.clone()),
-                switch_id: None,
-                job_id: None,
-                profile_id: None,
-                kind: EngineFailureKind::Protocol,
-                message: error.to_string(),
-                diagnostic_summary: None,
-            })?;
+    let mut request = continuous_analysis::position_request(
+        generation,
+        node_path,
+        snapshot,
+        board_width,
+        board_height,
+        komi,
+        rules,
+    )
+    .map_err(|error| EngineFailureDto {
+        operation: EngineOperationDto::Job,
+        run_id: Some(run_id.clone()),
+        switch_id: None,
+        job_id: None,
+        profile_id: None,
+        kind: EngineFailureKind::Protocol,
+        message: error.to_string(),
+        diagnostic_summary: None,
+    })?;
     request.run_id = run_id;
     request.mode = mode;
     request.query.max_visits = max_visits;
@@ -739,7 +746,8 @@ fn whole_game_work_items(
         .iter()
         .map(|snapshot| {
             let query = analysis_query_from_position(
-                admitted.board_size,
+                admitted.board_width,
+                admitted.board_height,
                 admitted.komi,
                 &snapshot.position.stones,
                 snapshot.position.to_play,
@@ -756,7 +764,8 @@ fn whole_game_work_items(
             Ok(WholeGameWorkItem {
                 node_path: snapshot.path.clone(),
                 query,
-                board_size: admitted.board_size,
+                board_width: admitted.board_width,
+                board_height: admitted.board_height,
                 move_number: snapshot.position.move_number,
             })
         })
@@ -965,7 +974,8 @@ fn enrich_provider_import_result(
         message: format!("failed to parse imported provider SGF: {err}"),
     })?;
     result.summary.provider = result.provider;
-    result.summary.board_size = Some(document.board_size);
+    result.summary.board_width = Some(document.board_width);
+    result.summary.board_height = Some(document.board_height);
     result.summary.komi = Some(document.komi);
     result.summary.handicap = document.handicap;
     result.summary.black_name = document.black_name;
@@ -1309,16 +1319,21 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn whole_game_work_items_use_current_game_owned_rules() {
+    fn whole_game_work_items_use_current_game_owned_rules_and_dimensions() {
         let state = CurrentGameState::default();
         let opened = state
-            .replace("(;GM[1]FF[4]SZ[9]KM[6.5]RU[Japanese];B[dd])", None)
+            .replace("(;GM[1]FF[4]SZ[9:13]KM[6.5]RU[Japanese];B[di])", None)
             .unwrap();
         let admitted = state.admit_whole_game(opened.generation).unwrap();
         let items = whole_game_work_items(&admitted, 32, "run-rules").unwrap();
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].query.rules, "japanese");
-        assert_eq!(items[1].query.rules, "japanese");
+        for item in items {
+            assert_eq!(item.board_width, 9);
+            assert_eq!(item.board_height, 13);
+            assert_eq!(item.query.board_x_size, 9);
+            assert_eq!(item.query.board_y_size, 13);
+            assert_eq!(item.query.rules, "japanese");
+        }
     }
 
     fn registered_tauri_commands(source: &str) -> Vec<&str> {
@@ -1379,10 +1394,10 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn selected_node_request_captures_exact_position_turn_rules_and_komi_before_protocol() {
+    fn selected_node_request_captures_exact_position_turn_rules_komi_and_dimensions_before_protocol() {
         let state = CurrentGameState::default();
         let opened = state
-            .replace("(;GM[1]FF[4]SZ[5]KM[6.5]RU[Japanese];B[cc];W[ee])", None)
+            .replace("(;GM[1]FF[4]SZ[5:7]KM[6.5]RU[Japanese];B[cc];W[eg])", None)
             .unwrap();
         let path = NodePath { indices: vec![0, 0] };
         let selected = state.select_path(path.clone()).unwrap();
@@ -1403,7 +1418,10 @@ for line in sys.stdin:
         assert_eq!(request.generation, opened.generation);
         assert_eq!(request.node_path, path);
         assert_eq!(request.mode, AnalysisJobModeDto::Finite);
-        assert_eq!(request.board_size, 5);
+        assert_eq!(request.board_width, 5);
+        assert_eq!(request.board_height, 7);
+        assert_eq!(request.query.board_x_size, 5);
+        assert_eq!(request.query.board_y_size, 7);
         assert_eq!(request.query.komi, 6.5);
         assert_eq!(request.query.rules, "japanese");
         assert_eq!(request.query.include_ownership, Some(true));
@@ -1412,7 +1430,7 @@ for line in sys.stdin:
         assert_eq!(
             request.query.initial_stones,
             vec![
-                ("B".to_string(), "C3".to_string()),
+                ("B".to_string(), "C5".to_string()),
                 ("W".to_string(), "E1".to_string()),
             ]
         );
@@ -1636,6 +1654,33 @@ for line in sys.stdin:
     }
 
     #[test]
+    fn provider_enrichment_projects_rectangular_dimensions() {
+        let enriched = enrich_provider_import_result(ProviderImportResult {
+            provider: ProviderKind::Yike,
+            sgf_text: "(;GM[1]FF[4]SZ[9:13]KM[7.5])".to_string(),
+            summary: app_model::ProviderGameSummary {
+                provider: ProviderKind::Yike,
+                source_id: None,
+                board_width: None,
+                board_height: None,
+                komi: None,
+                handicap: None,
+                black_name: None,
+                white_name: None,
+                result: None,
+                date: None,
+                move_count: None,
+            },
+            metadata: ProviderGameMetadata::default(),
+            warnings: Vec::new(),
+        })
+        .unwrap();
+
+        assert_eq!(enriched.summary.board_width, Some(9));
+        assert_eq!(enriched.summary.board_height, Some(13));
+    }
+
+    #[test]
     fn readboard_sidecar_probe_returns_structured_runtime_status() {
         let result = readboard_sidecar_probe(ReadboardSidecarProbeRequest {
             endpoint: Some("local-test-endpoint".to_string()),
@@ -1666,7 +1711,8 @@ for line in sys.stdin:
 
         assert_eq!(result.snapshot_id, "snapshot-1");
         let position = result.position.unwrap();
-        assert_eq!(position.board_size, 2);
+        assert_eq!(position.board_width, 2);
+        assert_eq!(position.board_height, 2);
         assert_eq!(position.move_number, 1);
         assert_eq!(position.stones.len(), 1);
     }

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "../domain/preferences";
+import { continuousBudgetError, defaultAppPreferences, newGameDefaultsError, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "../domain/preferences";
 
 declare global {
   interface Window {
@@ -33,7 +33,8 @@ export async function loadAppPreferences(): Promise<AppPreferencesLoadResult> {
 }
 
 export async function saveAppPreferences(preferences: AppPreferences): Promise<AppPreferences> {
-  const error = continuousBudgetError(preferences)
+  const error = newGameDefaultsError(preferences)
+    ?? continuousBudgetError(preferences)
     ?? taskConditionsError(preferences.taskSingleStageConditions)
     ?? taskStageConditionsError(preferences.taskOverviewConditions, preferences.taskDeepConditions)
     ?? taskConditionsError(preferences.taskSwingOverviewConditions)
@@ -54,7 +55,8 @@ function loadBrowserPreferences(): AppPreferencesLoadResult {
   if (!raw) return { preferences: defaultAppPreferences };
   try {
     const preferences = normalizeAppPreferences(JSON.parse(raw) as Partial<AppPreferences>);
-    const error = continuousBudgetError(preferences)
+    const error = newGameDefaultsError(preferences)
+      ?? continuousBudgetError(preferences)
       ?? taskConditionsError(preferences.taskSingleStageConditions)
       ?? taskStageConditionsError(preferences.taskOverviewConditions, preferences.taskDeepConditions)
       ?? taskConditionsError(preferences.taskSwingOverviewConditions)

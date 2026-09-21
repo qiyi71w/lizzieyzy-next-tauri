@@ -64,6 +64,12 @@ pub struct AppPreferencesDto {
     pub variation_replay_interval_ms: u32,
     #[serde(default = "default_restore_last_session")]
     pub restore_last_session: bool,
+    #[serde(default = "default_board_width")]
+    pub default_board_width: u8,
+    #[serde(default = "default_board_height")]
+    pub default_board_height: u8,
+    #[serde(default = "default_komi")]
+    pub default_komi: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +115,9 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         variation_replay_enabled: default_variation_replay_enabled(),
         variation_replay_interval_ms: default_variation_replay_interval_ms(),
         restore_last_session: default_restore_last_session(),
+        default_board_width: default_board_width(),
+        default_board_height: default_board_height(),
+        default_komi: default_komi(),
     }
 }
 
@@ -211,6 +220,21 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
 }
 
 pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPreferencesDto, String> {
+    if !(2..=25).contains(&preferences.default_board_width) {
+        return Err(format!(
+            "Default board width must be between 2 and 25, got {}.",
+            preferences.default_board_width
+        ));
+    }
+    if !(2..=25).contains(&preferences.default_board_height) {
+        return Err(format!(
+            "Default board height must be between 2 and 25, got {}.",
+            preferences.default_board_height
+        ));
+    }
+    if !preferences.default_komi.is_finite() {
+        return Err("Default komi must be finite.".to_string());
+    }
     preferences.continuous_budget.validate()?;
     let single_stage = preferences
         .task_single_stage_conditions
@@ -444,6 +468,18 @@ fn default_restore_last_session() -> bool {
     false
 }
 
+fn default_board_width() -> u8 {
+    19
+}
+
+fn default_board_height() -> u8 {
+    19
+}
+
+fn default_komi() -> f32 {
+    7.5
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,6 +541,9 @@ mod tests {
             variation_replay_enabled: true,
             variation_replay_interval_ms: 250,
             restore_last_session: true,
+            default_board_width: 19,
+            default_board_height: 19,
+            default_komi: 7.5,
         }
     }
 
@@ -644,6 +683,9 @@ mod tests {
         assert!(!loaded.preferences.variation_replay_enabled);
         assert_eq!(loaded.preferences.variation_replay_interval_ms, 500);
         assert!(loaded.recovery.is_none());
+        assert_eq!(loaded.preferences.default_board_width, 19);
+        assert_eq!(loaded.preferences.default_board_height, 19);
+        assert_eq!(loaded.preferences.default_komi, 7.5);
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -836,5 +878,77 @@ mod tests {
             roundtrip_object.get("showCandidates"),
             Some(&serde_json::json!(true))
         );
+    }
+
+    #[test]
+    fn default_board_and_komi_preferences_roundtrip_and_reject_invalid_writes() {
+        let (dir, path) = temp_prefs();
+        let mut custom = sample_preferences();
+        custom.default_board_width = 13;
+        custom.default_board_height = 17;
+        custom.default_komi = 6.5;
+
+        let saved = save_to_path(&path, custom.clone()).unwrap();
+        assert_eq!(saved.default_board_width, 13);
+        assert_eq!(saved.default_board_height, 17);
+        assert_eq!(saved.default_komi, 6.5);
+
+        let reloaded = load_from_path(&path).unwrap();
+        assert_eq!(reloaded.preferences.default_board_width, 13);
+        assert_eq!(reloaded.preferences.default_board_height, 17);
+        assert_eq!(reloaded.preferences.default_komi, 6.5);
+
+        let serialized = serde_json::to_value(&reloaded.preferences).unwrap();
+        assert_eq!(serialized["defaultBoardWidth"], 13);
+        assert_eq!(serialized["defaultBoardHeight"], 17);
+        assert_eq!(serialized["defaultKomi"], 6.5);
+
+        let durable = fs::read(&path).unwrap();
+
+        // Invalid width (< 2, > 25)
+        let mut invalid_width_low = custom.clone();
+        invalid_width_low.default_board_width = 1;
+        assert!(save_to_path(&path, invalid_width_low).is_err());
+        assert_eq!(fs::read(&path).unwrap(), durable);
+
+        let mut invalid_width_high = custom.clone();
+        invalid_width_high.default_board_width = 26;
+        assert!(save_to_path(&path, invalid_width_high).is_err());
+        assert_eq!(fs::read(&path).unwrap(), durable);
+
+        // Invalid height (< 2, > 25)
+        let mut invalid_height_low = custom.clone();
+        invalid_height_low.default_board_height = 1;
+        assert!(save_to_path(&path, invalid_height_low).is_err());
+        assert_eq!(fs::read(&path).unwrap(), durable);
+
+        let mut invalid_height_high = custom.clone();
+        invalid_height_high.default_board_height = 26;
+        assert!(save_to_path(&path, invalid_height_high).is_err());
+        assert_eq!(fs::read(&path).unwrap(), durable);
+
+        // Nonfinite komi (NaN, infinity, neg infinity)
+        let mut invalid_komi_nan = custom.clone();
+        invalid_komi_nan.default_komi = f32::NAN;
+        assert!(save_to_path(&path, invalid_komi_nan).is_err());
+        assert_eq!(fs::read(&path).unwrap(), durable);
+
+        let mut invalid_komi_inf = custom.clone();
+        invalid_komi_inf.default_komi = f32::INFINITY;
+        assert!(save_to_path(&path, invalid_komi_inf).is_err());
+        assert_eq!(fs::read(&path).unwrap(), durable);
+
+        let mut invalid_komi_neginf = custom.clone();
+        invalid_komi_neginf.default_komi = f32::NEG_INFINITY;
+        assert!(save_to_path(&path, invalid_komi_neginf).is_err());
+        assert_eq!(fs::read(&path).unwrap(), durable);
+
+        // Verify durable preferences still load untouched
+        let reloaded_after_rejects = load_from_path(&path).unwrap();
+        assert_eq!(reloaded_after_rejects.preferences.default_board_width, 13);
+        assert_eq!(reloaded_after_rejects.preferences.default_board_height, 17);
+        assert_eq!(reloaded_after_rejects.preferences.default_komi, 6.5);
+
+        let _ = fs::remove_dir_all(dir);
     }
 }

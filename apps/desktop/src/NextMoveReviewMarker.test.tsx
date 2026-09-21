@@ -99,7 +99,8 @@ vi.mock("./components/WinrateChart", () => ({
 import { App } from "./App";
 
 const emptyPosition = {
-  board_size: 19,
+  board_width: 19,
+  board_height: 19,
   move_number: 0,
   to_play: "black" as const,
   stones: [],
@@ -149,7 +150,7 @@ const staleFrame: AnalysisFrameDto = {
 };
 
 const initialProjection: GameDto = {
-  summary: { id: "test", board_size: 19, komi: 7.5, move_count: 2 },
+  summary: { id: "test", board_width: 19, board_height: 19, komi: 7.5, move_count: 2 },
   moves: [
     { move_number: 1, color: "black", vertex: { point: { x: 3, y: 3 } } },
     { move_number: 2, color: "white", vertex: { point: { x: 15, y: 15 } } }

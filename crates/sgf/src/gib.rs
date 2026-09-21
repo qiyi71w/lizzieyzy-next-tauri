@@ -183,14 +183,15 @@ fn parse_gib_text(text: &str) -> Result<SgfDocument, GibError> {
                     PlayerColor::Black => "B",
                     PlayerColor::White => "W",
                 },
-                &serialize_vertex(&vertex, BOARD_SIZE).map_err(|_| GibError::Malformed)?,
+                &serialize_vertex(&vertex, BOARD_SIZE, BOARD_SIZE).map_err(|_| GibError::Malformed)?,
             )],
             children: Vec::new(),
         });
     }
 
     Ok(SgfDocument {
-        board_size: BOARD_SIZE,
+        board_width: BOARD_SIZE,
+        board_height: BOARD_SIZE,
         komi,
         handicap: (handicap >= 2).then_some(handicap),
         black_name: Some(black_name),
@@ -249,7 +250,7 @@ fn handicap_points(handicap: u8) -> Vec<PointDto> {
 }
 
 fn serialize_point(point: PointDto) -> Result<String, GibError> {
-    serialize_vertex(&MoveVertex::Point(point), BOARD_SIZE).map_err(|_| GibError::Malformed)
+    serialize_vertex(&MoveVertex::Point(point), BOARD_SIZE, BOARD_SIZE).map_err(|_| GibError::Malformed)
 }
 
 fn property(key: &str, value: &str) -> SgfProperty {

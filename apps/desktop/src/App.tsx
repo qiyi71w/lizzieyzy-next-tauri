@@ -11,6 +11,7 @@ import { ApplicationTeardownDialog } from "./components/ApplicationTeardownDialo
 import { CurrentGameRecoveryDialog } from "./components/CurrentGameRecoveryDialog";
 import { AnalysisTaskPanel, type AnalysisScopeDraft } from "./components/AnalysisTaskPanel";
 import { ProviderPanel } from "./components/ProviderPanel";
+import { NewDocumentDialog } from "./components/NewDocumentDialog";
 import {
   analysisTaskSnapshot,
   cancelKataGoAnalysis,
@@ -100,10 +101,10 @@ import {
   variationReplayIdentityKey,
   variationReplayPointSteps
 } from "./domain/variationReplay";
+import { newDocumentSgf, type NewDocumentParameters } from "./domain/newDocument";
 import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, AnalysisTaskStrategyDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, FileActivationDeliveryDto, ForegroundEngineSnapshotDto, GameDto, GameFileImportDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, SgfTreeNodeDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
-const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
 const demoGame = createDemoGame();
 const emptyChartRoot: SgfTreeNodeDto = { properties: [], children: [] };
 type WholeGameProgress = { completed: number; expected: number; remaining: number };
@@ -189,6 +190,7 @@ export function App() {
   const [preferences, setPreferences] = useState<AppPreferences>(() => defaultAppPreferences);
   const [preferencesStatus, setPreferencesStatus] = useState("正在载入设置…");
   const [sheet, setSheet] = useState<"none" | SheetId>("none");
+  const [newDocumentOpen, setNewDocumentOpen] = useState(false);
   const [engineSnapshot, setEngineSnapshot] = useState<ForegroundEngineSnapshotDto>(() => emptyForegroundEngineSnapshot());
   const [engineProfiles, setEngineProfiles] = useState<EngineProfileRecordDto[]>([]);
   const [engineFailure, setEngineFailure] = useState<EngineFailureDto | null>(null);
@@ -394,8 +396,8 @@ export function App() {
 
   const currentPosition = useMemo(() => {
     if (currentGame) return currentGame.snapshot.position;
-    return selectExactPosition(positions, currentMove, game.summary.board_size);
-  }, [currentGame, currentMove, positions, game.summary.board_size]);
+    return selectExactPosition(positions, currentMove, game.summary.board_width, game.summary.board_height);
+  }, [currentGame, currentMove, positions, game.summary.board_width, game.summary.board_height]);
   currentGameRef.current = currentGame;
   const selectedPersonalComment = currentGame ? currentGame.snapshot.personal_comment : "";
   const selectedGeneratedInformation = currentGame?.snapshot.generated_information ?? null;
@@ -507,8 +509,9 @@ export function App() {
     selectedNode,
     selectedIsRoot: selectedPath.indices.length === 0,
     toPlay: currentPosition.to_play,
-    boardSize: currentPosition.board_size
-  }), [preferences.nextMoveReviewMarker, selectedNode, selectedPath.indices.length, currentPosition.to_play, currentPosition.board_size]);
+    boardWidth: currentPosition.board_width,
+    boardHeight: currentPosition.board_height
+  }), [preferences.nextMoveReviewMarker, selectedNode, selectedPath.indices.length, currentPosition.to_play, currentPosition.board_width, currentPosition.board_height]);
   const documentDirty = currentGame?.dirty ?? dirty;
   const recoveryDiscardRetryPending = recoveryPrompt !== null
     && recoveryProtection.status === "unprotected"
@@ -571,6 +574,9 @@ export function App() {
     const passEnabled = openEnabled;
 
     shortcutRegistry.bind("file.new", () => {
+      void handleNewGame();
+    });
+    shortcutRegistry.bind("game.board-dimensions", () => {
       void handleNewGame();
     });
     shortcutRegistry.bind("game.human-vs-engine", () => {
@@ -2351,10 +2357,17 @@ export function App() {
     });
   }
 
-  async function handleNewGame() {
-    await applyReplacement(emptySgf, null, {
+  function handleNewGame() {
+    if (newDocumentOpen || departurePendingRef.current || departurePrompt) return;
+    setNewDocumentOpen(true);
+  }
+
+  async function handleCreateNewGame(parameters: NewDocumentParameters) {
+    setNewDocumentOpen(false);
+    const sgf = newDocumentSgf(parameters);
+    await applyReplacement(sgf, null, {
       confirmMessage: "放弃未保存的棋谱并新建对局？",
-      successMessage: () => "已新建空谱。",
+      successMessage: () => `已新建 ${parameters.boardWidth} × ${parameters.boardHeight} 空谱。`,
       failurePrefix: "New game failed"
     });
   }
@@ -2567,7 +2580,7 @@ export function App() {
     <AppChrome
       sheet={sheet}
       onToggleSheet={toggleSheet}
-      busy={fileFlowBusy || departurePending || Boolean(departurePrompt) || Boolean(teardownPrompt) || Boolean(recoveryPrompt)}
+      busy={fileFlowBusy || departurePending || Boolean(newDocumentOpen) || Boolean(departurePrompt) || Boolean(teardownPrompt) || Boolean(recoveryPrompt)}
       dirty={documentDirty}
       documentName={documentName}
       engineLabel={engineLabel}
@@ -2658,7 +2671,8 @@ export function App() {
           frame={visibleCurrentFrame}
           problems={visibleProblems}
           moves={game.moves}
-          boardSize={game.summary.board_size}
+          boardWidth={game.summary.board_width}
+          boardHeight={game.summary.board_height}
           currentMove={currentMove}
           currentPosition={currentPosition}
           personalComment={selectedPersonalComment}
@@ -2700,7 +2714,8 @@ export function App() {
           frame={visibleCurrentFrame}
           problems={visibleProblems}
           moves={game.moves}
-          boardSize={game.summary.board_size}
+          boardWidth={game.summary.board_width}
+          boardHeight={game.summary.board_height}
           currentMove={currentMove}
           currentPosition={currentPosition}
           selectedCandidateIndex={selectedCandidateIndex}
@@ -2830,6 +2845,15 @@ export function App() {
         onChange={(nextPreferences) => void handlePreferencesChange(nextPreferences)}
       /> : null}
     </section>
+    {newDocumentOpen ? (
+      <NewDocumentDialog
+        defaultBoardWidth={preferences.defaultBoardWidth}
+        defaultBoardHeight={preferences.defaultBoardHeight}
+        defaultKomi={preferences.defaultKomi}
+        onCreate={(parameters) => void handleCreateNewGame(parameters)}
+        onCancel={() => setNewDocumentOpen(false)}
+      />
+    ) : null}
     {departurePrompt ? (
       <DocumentDepartureDialog
         message={departurePrompt.message}
@@ -2862,6 +2886,7 @@ export function App() {
     ) : null}
   </main>;
 }
+
 
 function isAnalysisTaskReserved(task: AnalysisTaskDto | null): boolean {
   return task != null && (task.state === "queued"

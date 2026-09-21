@@ -100,7 +100,8 @@ import { App } from "./App";
 import { defaultAppPreferences } from "./domain/preferences";
 
 const emptyPosition = {
-  board_size: 9,
+  board_width: 9,
+  board_height: 9,
   move_number: 0,
   to_play: "black" as const,
   stones: [],
@@ -121,7 +122,7 @@ const initialGame: CurrentGameResultDto = {
 };
 
 const initialProjection: GameDto = {
-  summary: { id: "test", board_size: 9, komi: 7.5, move_count: 0 },
+  summary: { id: "test", board_width: 9, board_height: 9, komi: 7.5, move_count: 0 },
   moves: []
 };
 
@@ -511,6 +512,9 @@ describe("App stale review presentation", () => {
 
     await act(async () => {
       buttonNamed(host, "新对局").click();
+    });
+    await act(async () => {
+      buttonLabeled(host, "创建").click();
       await currentGameFixture.mock.results.at(-1)?.value;
       await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
     });
@@ -548,7 +552,7 @@ describe("App focus-safe review controls", () => {
   beforeEach(() => {
     currentGameFixture.mockResolvedValue(branchingGame);
     backend.projectCurrentGameMainline.mockResolvedValue({
-      summary: { id: "branch", board_size: 9, komi: 7.5, move_count: 2 },
+      summary: { id: "branch", board_width: 9, board_height: 9, komi: 7.5, move_count: 2 },
       moves: []
     });
     backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => ({
@@ -866,6 +870,8 @@ describe("App focus-safe review controls", () => {
 
     currentGameFixture.mockResolvedValue(branchingGame);
     pressKey(buttonNamed(hostKeys, "坐标"), "Home", { ctrlKey: true });
+    await act(async () => { await Promise.resolve(); });
+    act(() => buttonLabeled(hostKeys, "创建").click());
     await act(async () => {
       await Promise.resolve();
       await currentGameFixture.mock.results.at(-1)?.value;
@@ -1113,6 +1119,21 @@ describe("App focus-safe review controls", () => {
     expect(backend.playCurrentGame).not.toHaveBeenCalled();
   });
 
+  it("opens the same new-document form from board dimensions and Ctrl+I without preparing on cancel", async () => {
+    const host = await renderApp();
+    backend.prepareDocumentReplacement.mockClear();
+
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "设置棋盘大小(Ctrl+I)").click());
+    expect(host.querySelector('[role="dialog"][aria-label="新建棋谱"]')).not.toBeNull();
+    act(() => buttonLabeled(host, "取消").click());
+
+    pressKey(buttonNamed(host, "坐标"), "i", { ctrlKey: true });
+    expect(host.querySelector('[role="dialog"][aria-label="新建棋谱"]')).not.toBeNull();
+    act(() => buttonLabeled(host, "取消").click());
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+  });
+
   it("opens the same searchable Shortcut Reference from Help and focus-safe ?", async () => {
     const host = await renderApp();
     pressKey(buttonNamed(host, "坐标"), "?", { shiftKey: true });
@@ -1252,8 +1273,12 @@ describe("App document replacement", () => {
     const host = await renderApp();
     backend.cancelSelectedNodeAnalysis.mockClear();
     backend.resolveDocumentReplacement.mockClear();
-    await act(async () => {
+    act(() => {
       buttonLabeled(host, "新建").click();
+    });
+    expect(backend.prepareDocumentReplacement).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      buttonLabeled(host, "创建").click();
       await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
     });
     expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).not.toBeNull();
@@ -1278,8 +1303,11 @@ describe("App document replacement", () => {
     const host = await renderApp();
     backend.saveCurrentGame.mockClear();
     backend.resolveDocumentReplacement.mockClear();
-    await act(async () => {
+    act(() => {
       buttonLabeled(host, "新建").click();
+    });
+    await act(async () => {
+      buttonLabeled(host, "创建").click();
       await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
     });
     await act(async () => {
@@ -1300,8 +1328,11 @@ describe("App document replacement", () => {
     const host = await renderApp();
     backend.saveCurrentGame.mockClear();
     backend.resolveDocumentReplacement.mockClear();
-    await act(async () => {
+    act(() => {
       buttonLabeled(host, "新建").click();
+    });
+    await act(async () => {
+      buttonLabeled(host, "创建").click();
       await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
     });
     await act(async () => {
@@ -1404,8 +1435,11 @@ describe("App document replacement", () => {
       buttonNamed(host, "载入示例").click();
       await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
     });
-    await act(async () => {
+    act(() => {
       buttonLabeled(host, "新建").click();
+    });
+    await act(async () => {
+      buttonLabeled(host, "创建").click();
       await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
     });
     await act(async () => {
@@ -1424,8 +1458,11 @@ describe("App document replacement", () => {
     expect(buttonNamed(host, "键盘落子").getAttribute("aria-pressed")).toBe("true");
     backend.prepareDocumentReplacement.mockClear();
     backend.prepareDocumentReplacement.mockResolvedValue({ status: "ready", departure_id: 9 });
-    await act(async () => {
+    act(() => {
       buttonLabeled(host, "新建").click();
+    });
+    await act(async () => {
+      buttonLabeled(host, "创建").click();
       await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
       await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
     });

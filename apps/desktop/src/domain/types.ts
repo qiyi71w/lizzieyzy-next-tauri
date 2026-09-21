@@ -4,7 +4,8 @@ export type MoveVertex = { point: PointDto } | "pass";
 export type MoveDto = { color: PlayerColor; vertex: MoveVertex; move_number: number };
 export type StoneDto = PointDto & { color: PlayerColor };
 export type PositionDto = {
-  board_size: number;
+  board_width: number;
+  board_height: number;
   move_number: number;
   to_play: PlayerColor;
   stones: StoneDto[];
@@ -13,7 +14,7 @@ export type PositionDto = {
   last_move?: MoveDto | null;
   errors: string[];
 };
-export type GameSummaryDto = { id: string; board_size: number; komi: number; black_name?: string | null; white_name?: string | null; result?: string | null; move_count: number };
+export type GameSummaryDto = { id: string; board_width: number; board_height: number; komi: number; black_name?: string | null; white_name?: string | null; result?: string | null; move_count: number };
 export type GameDto = { summary: GameSummaryDto; moves: MoveDto[] };
 export type GameFileFormatDto = "sgf" | "gib";
 export type GameFileImportDto = {

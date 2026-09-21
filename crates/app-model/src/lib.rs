@@ -71,7 +71,8 @@ pub struct StoneDto {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PositionDto {
-    pub board_size: u8,
+    pub board_width: u8,
+    pub board_height: u8,
     pub move_number: u32,
     pub to_play: PlayerColor,
     pub stones: Vec<StoneDto>,
@@ -84,7 +85,8 @@ pub struct PositionDto {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameSummaryDto {
     pub id: GameId,
-    pub board_size: u8,
+    pub board_width: u8,
+    pub board_height: u8,
     pub komi: f32,
     pub black_name: Option<String>,
     pub white_name: Option<String>,
@@ -500,7 +502,9 @@ pub struct ProviderGameSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub board_size: Option<u8>,
+    pub board_width: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_height: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub komi: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -656,7 +660,8 @@ impl ProviderGameSummary {
         Self {
             provider,
             source_id: None,
-            board_size: None,
+            board_width: None,
+            board_height: None,
             komi: None,
             handicap: None,
             black_name: None,
@@ -795,7 +800,8 @@ mod current_game_wire {
                     indices: vec![0, 0, 0],
                 },
                 position: PositionDto {
-                    board_size: 5,
+                    board_width: 5,
+                    board_height: 5,
                     move_number: 3,
                     to_play: PlayerColor::Black,
                     stones: vec![StoneDto {

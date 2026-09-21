@@ -546,7 +546,7 @@ export async function replaySgfPositions(sgfText: string): Promise<PositionDto[]
   try {
     const parsed = await parseSgfSummary(sgfText);
     const positions = await invoke<PositionDto[]>("replay_sgf_positions", { sgfText });
-    return ensureInitialPosition(parsed.summary.board_size, positions);
+    return ensureInitialPosition(parsed.summary.board_width, parsed.summary.board_height, positions);
   } catch {
     return replayGamePositions(parseSgfLocally(sgfText));
   }
@@ -672,7 +672,7 @@ function parseSgfLocally(sgfText: string): GameDto {
     throw new Error("The SGF text does not look like a game tree.");
   }
 
-  const boardSize = numberProperty(text, "SZ") ?? 19;
+  const { width: boardWidth, height: boardHeight } = parseBoardDimensions(textProperty(text, "SZ"));
   const komi = numberProperty(text, "KM") ?? 7.5;
   const moves = extractMainVariationNodes(text)
     .flatMap((node) => {
@@ -682,18 +682,16 @@ function parseSgfLocally(sgfText: string): GameDto {
     })
     .map<MoveDto>((move, index) => ({
       color: move.color,
-      vertex: parseVertex(move.rawVertex, boardSize),
+      vertex: parseVertex(move.rawVertex, boardWidth, boardHeight),
       move_number: index + 1
     }));
 
-  if (moves.length === 0) {
-    throw new Error("No main-line moves were found in the SGF text.");
-  }
 
   return {
     summary: {
       id: sampleGameId,
-      board_size: boardSize,
+      board_width: boardWidth,
+      board_height: boardHeight,
       komi,
       black_name: textProperty(text, "PB") ?? "Black",
       white_name: textProperty(text, "PW") ?? "White",
@@ -793,12 +791,24 @@ export function extractMainVariationNodes(sgfText: string): string[] {
   }
 }
 
-function parseVertex(raw: string, boardSize: number): MoveVertex {
+function parseVertex(raw: string, boardWidth: number, boardHeight: number): MoveVertex {
   if (raw.length !== 2) return "pass";
   const x = letters.indexOf(raw[0].toLowerCase());
   const y = letters.indexOf(raw[1].toLowerCase());
-  if (x < 0 || y < 0 || x >= boardSize || y >= boardSize) return "pass";
+  if (x < 0 || y < 0 || x >= boardWidth || y >= boardHeight) return "pass";
   return { point: { x, y } };
+}
+
+function parseBoardDimensions(raw: string | null): { width: number; height: number } {
+  if (raw === null) return { width: 19, height: 19 };
+  const match = /^(\d+)(?::(\d+))?$/.exec(raw.trim());
+  const width = Number(match?.[1]);
+  const height = Number(match?.[2] ?? match?.[1]);
+  if (!match || !Number.isInteger(width) || !Number.isInteger(height)
+    || width < 2 || width > 25 || height < 2 || height > 25) {
+    throw new Error("SGF SZ must contain board width and height from 2 to 25.");
+  }
+  return { width, height };
 }
 
 function numberProperty(text: string, property: string): number | null {
@@ -842,9 +852,9 @@ function buildCandidates(game: GameDto, turn: number, winrate: number): Candidat
   );
   const candidates: CandidateMoveDto[] = [];
   let cursor = turn * 5 + 3;
-  while (candidates.length < 8 && cursor < game.summary.board_size * game.summary.board_size * 3) {
-    const x = (cursor * 7 + 3) % game.summary.board_size;
-    const y = (cursor * 11 + 5) % game.summary.board_size;
+  while (candidates.length < 8 && cursor < game.summary.board_width * game.summary.board_height * 3) {
+    const x = (cursor * 7 + 3) % game.summary.board_width;
+    const y = (cursor * 11 + 5) % game.summary.board_height;
     cursor += 1;
     if (occupied.has(`${x}:${y}`)) continue;
     const rank = candidates.length;

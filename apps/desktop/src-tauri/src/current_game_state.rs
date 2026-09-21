@@ -24,7 +24,8 @@ pub(crate) mod recovery;
 #[derive(Debug, Clone)]
 pub struct WholeGameAdmission {
     pub generation: u64,
-    pub board_size: u8,
+    pub board_width: u8,
+    pub board_height: u8,
     pub komi: f32,
     pub rules: String,
     pub nodes: Vec<SelectedNodeSnapshotDto>,
@@ -99,7 +100,8 @@ impl CurrentGameState {
                     holder.generation,
                     holder.selected_path.clone(),
                     snapshot,
-                    document.board_size(),
+                    document.board_width(),
+                    document.board_height(),
                     document.komi(),
                     document.rules(),
                 )
@@ -441,7 +443,7 @@ impl CurrentGameState {
         &self,
         generation: u64,
         path: &NodePath,
-    ) -> Result<(SelectedNodeSnapshotDto, u8, f32, String), CurrentGameError> {
+    ) -> Result<(SelectedNodeSnapshotDto, u8, u8, f32, String), CurrentGameError> {
         let holder = self.holder.lock().expect("current game state");
         holder.ensure_editable()?;
         let document = holder.document.as_ref().ok_or_else(no_current_game)?;
@@ -452,7 +454,13 @@ impl CurrentGameState {
             });
         }
         let snapshot = document.snapshot(path)?;
-        Ok((snapshot, document.board_size(), document.komi(), document.rules()))
+        Ok((
+            snapshot,
+            document.board_width(),
+            document.board_height(),
+            document.komi(),
+            document.rules(),
+        ))
     }
 
     #[allow(dead_code)]
@@ -684,7 +692,8 @@ impl CurrentGameHolder {
         };
         Ok(WholeGameAdmission {
             generation: self.generation,
-            board_size: document.board_size(),
+            board_width: document.board_width(),
+            board_height: document.board_height(),
             komi: document.komi(),
             rules: document.rules(),
             nodes,
@@ -865,7 +874,7 @@ mod current_game_replacement {
     use app_model::{CurrentGameErrorKind, MoveVertex, NodePath};
 
     const BRANCHING: &str = include_str!("../../../../tests/golden/editable-workspace-branching.sgf");
-    const EMPTY: &str = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
+    const EMPTY: &str = "(;GM[1]FF[4]SZ[13:9]KM[7.5]PB[黑]PW[白])";
 
     #[test]
     fn current_game_replacement_installs_shared_result_and_preserves_state_on_cancel_or_failure() {
@@ -899,6 +908,8 @@ mod current_game_replacement {
         assert!(imported.native_path.is_none());
         assert!(imported.selected_path.indices.is_empty());
         assert_eq!(imported.snapshot.position.move_number, 0);
+        assert_eq!(imported.snapshot.position.board_width, 13);
+        assert_eq!(imported.snapshot.position.board_height, 9);
         assert!(state.mainline_projection().unwrap().moves.is_empty());
 
         state.force_dirty();
@@ -976,12 +987,15 @@ mod current_game_replacement {
     #[test]
     fn admit_selected_node_requires_matching_generation_and_existing_path() {
         let state = CurrentGameState::default();
-        let opened = state.replace(EMPTY, None).unwrap();
-        let (snapshot, board_size, komi, rules) = state
+        let opened = state
+            .replace("(;GM[1]FF[4]SZ[13:9]KM[7.5]RU[Chinese])", None)
+            .unwrap();
+        let (snapshot, board_width, board_height, komi, rules) = state
             .admit_selected_node(opened.generation, &opened.selected_path)
             .unwrap();
         assert_eq!(snapshot.path, opened.selected_path);
-        assert_eq!(board_size, 19);
+        assert_eq!(board_width, 13);
+        assert_eq!(board_height, 9);
         assert_eq!(komi, 7.5);
         assert_eq!(rules, "chinese");
 
@@ -1005,7 +1019,10 @@ mod current_game_replacement {
         );
 
         let opened = state
-            .replace(BRANCHING, Some("/tmp/branching.sgf".to_string()))
+            .replace(
+                "(;GM[1]FF[4]SZ[5:7]KM[0.5]RU[Chinese];B[aa](;W[bb];B[cc])(;W[dd];B[]))",
+                Some("/tmp/branching.sgf".to_string()),
+            )
             .unwrap();
         let sibling = state.select_path(NodePath { indices: vec![0, 1] }).unwrap();
         assert_eq!(sibling.generation, opened.generation);
@@ -1013,7 +1030,8 @@ mod current_game_replacement {
 
         let admitted = state.admit_whole_game(opened.generation).unwrap();
         assert_eq!(admitted.generation, opened.generation);
-        assert_eq!(admitted.board_size, 5);
+        assert_eq!(admitted.board_width, 5);
+        assert_eq!(admitted.board_height, 7);
         assert_eq!(admitted.komi, 0.5);
         assert_eq!(admitted.rules, "chinese");
         let paths: Vec<Vec<u32>> = admitted
@@ -1024,7 +1042,7 @@ mod current_game_replacement {
         assert_eq!(paths, vec![Vec::new(), vec![0], vec![0, 0], vec![0, 0, 0]]);
         assert_eq!(
             admitted.nodes[3].position.last_move.as_ref().unwrap().vertex,
-            MoveVertex::Pass
+            MoveVertex::Point(app_model::PointDto { x: 2, y: 2 })
         );
 
         assert!(state.admit_whole_game(opened.generation + 1).is_err());

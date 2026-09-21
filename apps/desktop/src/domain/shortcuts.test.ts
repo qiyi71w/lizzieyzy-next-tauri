@@ -24,6 +24,7 @@ describe("shortcut registry catalog", () => {
       "file.copy-sgf",
       "file.paste-sgf",
       "game.human-vs-engine",
+      "game.board-dimensions",
       "analysis.continuous",
       "analysis.quick",
       "analysis.all-positions",
@@ -122,6 +123,13 @@ describe("shortcut registry catalog", () => {
       id: "game.human-vs-engine",
       label: "人机对局（未接入）",
       primary: { key: "n" },
+      aliases: [],
+      focusRule: "focus-safe"
+    });
+    expect(catalog.find((item) => item.id === "game.board-dimensions")).toEqual({
+      id: "game.board-dimensions",
+      label: "设置棋盘大小",
+      primary: { key: "i", ctrl: true },
       aliases: [],
       focusRule: "focus-safe"
     });
@@ -224,6 +232,11 @@ describe("shortcut reference and dispatch", () => {
       id: "game.human-vs-engine",
       label: "人机对局（未接入）",
       keys: "N"
+    });
+    expect(entries.find((entry) => entry.id === "game.board-dimensions")).toEqual({
+      id: "game.board-dimensions",
+      label: "设置棋盘大小",
+      keys: "Ctrl+I"
     });
     expect(entries.find((entry) => entry.id === "review.next-move-marker")).toEqual({
       id: "review.next-move-marker",

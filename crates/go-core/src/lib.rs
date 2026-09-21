@@ -38,7 +38,8 @@ pub struct MoveOutcome {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Board {
-    size: u8,
+    width: u8,
+    height: u8,
     stones: Vec<Option<Color>>,
     ko: Option<Point>,
     consecutive_passes: u8,
@@ -59,19 +60,23 @@ pub enum RuleError {
 }
 
 impl Board {
-    pub fn new(size: u8) -> Result<Self, RuleError> {
-        if !(2..=25).contains(&size) {
+    pub fn new(width: u8, height: u8) -> Result<Self, RuleError> {
+        if !(2..=25).contains(&width) || !(2..=25).contains(&height) {
             return Err(RuleError::InvalidBoardSize);
         }
         Ok(Self {
-            size,
-            stones: vec![None; size as usize * size as usize],
+            width,
+            height,
+            stones: vec![None; width as usize * height as usize],
             ko: None,
             consecutive_passes: 0,
         })
     }
-    pub fn size(&self) -> u8 {
-        self.size
+    pub fn width(&self) -> u8 {
+        self.width
+    }
+    pub fn height(&self) -> u8 {
+        self.height
     }
     pub fn ko(&self) -> Option<Point> {
         self.ko
@@ -148,10 +153,10 @@ impl Board {
     }
 
     fn index(&self, point: Point) -> Result<usize, RuleError> {
-        if point.x >= self.size || point.y >= self.size {
+        if point.x >= self.width || point.y >= self.height {
             return Err(RuleError::OutOfBounds);
         }
-        Ok(point.y as usize * self.size as usize + point.x as usize)
+        Ok(point.y as usize * self.width as usize + point.x as usize)
     }
     fn neighbors(&self, point: Point) -> Vec<Point> {
         let mut result = Vec::with_capacity(4);
@@ -167,13 +172,13 @@ impl Board {
                 y: point.y - 1,
             });
         }
-        if point.x + 1 < self.size {
+        if point.x + 1 < self.width {
             result.push(Point {
                 x: point.x + 1,
                 y: point.y,
             });
         }
-        if point.y + 1 < self.size {
+        if point.y + 1 < self.height {
             result.push(Point {
                 x: point.x,
                 y: point.y + 1,
@@ -732,7 +737,7 @@ mod tests {
     }
     #[test]
     fn captures_single_stone() {
-        let mut b = Board::new(5).unwrap();
+        let mut b = Board::new(5, 5).unwrap();
         b.play(Color::Black, p(1, 1)).unwrap();
         b.play(Color::White, p(0, 1)).unwrap();
         b.play(Color::White, p(1, 0)).unwrap();
@@ -742,7 +747,7 @@ mod tests {
     }
     #[test]
     fn rejects_suicide() {
-        let mut b = Board::new(5).unwrap();
+        let mut b = Board::new(5, 5).unwrap();
         b.play(Color::White, p(0, 1)).unwrap();
         b.play(Color::White, p(1, 0)).unwrap();
         b.play(Color::White, p(2, 1)).unwrap();
@@ -752,7 +757,7 @@ mod tests {
 
     #[test]
     fn setup_can_add_replace_and_clear_stones() {
-        let mut b = Board::new(5).unwrap();
+        let mut b = Board::new(5, 5).unwrap();
         let point = Point { x: 2, y: 3 };
 
         b.set_stone(point, Some(Color::Black)).unwrap();
@@ -767,6 +772,27 @@ mod tests {
             b.set_stone(Point { x: 5, y: 0 }, Some(Color::Black)).unwrap_err(),
             RuleError::OutOfBounds
         );
+    }
+
+    #[test]
+    fn asymmetric_board_bounds_and_capture_near_long_axis_edge() {
+        let mut b = Board::new(4, 9).unwrap();
+        assert_eq!(b.width(), 4);
+        assert_eq!(b.height(), 9);
+
+        assert_eq!(Board::new(1, 9).unwrap_err(), RuleError::InvalidBoardSize);
+        assert_eq!(Board::new(4, 26).unwrap_err(), RuleError::InvalidBoardSize);
+
+        assert_eq!(b.get(Point { x: 4, y: 0 }).unwrap_err(), RuleError::OutOfBounds);
+        assert_eq!(b.get(Point { x: 0, y: 9 }).unwrap_err(), RuleError::OutOfBounds);
+        assert_eq!(b.get(Point { x: 8, y: 2 }).unwrap_err(), RuleError::OutOfBounds);
+
+        b.play(Color::Black, p(1, 8)).unwrap();
+        b.play(Color::White, p(0, 8)).unwrap();
+        b.play(Color::White, p(2, 8)).unwrap();
+        let out = b.play(Color::White, p(1, 7)).unwrap();
+        assert_eq!(out.captured, vec![Point { x: 1, y: 8 }]);
+        assert_eq!(b.get(Point { x: 1, y: 8 }).unwrap(), None);
     }
 
     fn rb_point(x: u8, y: u8) -> Point {

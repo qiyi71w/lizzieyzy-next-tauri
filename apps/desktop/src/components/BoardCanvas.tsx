@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
 import type { AnalysisFrameDto, MoveDto, PointDto, PositionDto } from "../domain/types";
 import { isPoint } from "../domain/board";
@@ -77,9 +77,12 @@ export function BoardCanvas({
     onOverlayModeChange?.(mode);
     if (overlayModeProp === undefined) setOverlayModeLocal(mode);
   }
-  const boardPointCount = position.board_size * position.board_size;
+  const boardPointCount = position.board_width * position.board_height;
   const hasOwnership = (analysis?.ownership?.length ?? 0) >= boardPointCount;
-  const policyPoints = useMemo(() => getTopPolicyPoints(analysis?.policy, position.board_size, 12), [analysis?.policy, position.board_size]);
+  const policyPoints = useMemo(
+    () => getTopPolicyPoints(analysis?.policy, position.board_width, position.board_height, 12),
+    [analysis?.policy, position.board_width, position.board_height]
+  );
   const hasPolicy = policyPoints.length > 0;
   const effectiveOverlayMode = overlayMode === "ownership" && !hasOwnership ? "candidates" : overlayMode === "policy" && !hasPolicy ? "candidates" : overlayMode;
 
@@ -101,16 +104,19 @@ export function BoardCanvas({
       return;
     }
     const rect = event.currentTarget.getBoundingClientRect();
-    const cssSize = Math.min(rect.width, rect.height);
-    const boardSize = position.board_size;
-    const padding = cssSize * 0.09;
-    const grid = (cssSize - padding * 2) / Math.max(boardSize - 1, 1);
+    const padding = Math.min(rect.width, rect.height) * 0.09;
+    const grid = Math.min(
+      (rect.width - padding * 2) / Math.max(position.board_width - 1, 1),
+      (rect.height - padding * 2) / Math.max(position.board_height - 1, 1)
+    );
+    const offsetX = (rect.width - grid * (position.board_width - 1)) / 2;
+    const offsetY = (rect.height - grid * (position.board_height - 1)) / 2;
     const pointerX = event.clientX - rect.left;
     const pointerY = event.clientY - rect.top;
     const candidateIndex = (analysis?.candidates ?? []).findIndex((candidate) => {
       if (!isPoint(candidate.vertex)) return false;
-      const centerX = padding + candidate.vertex.point.x * grid;
-      const centerY = padding + candidate.vertex.point.y * grid;
+      const centerX = offsetX + candidate.vertex.point.x * grid;
+      const centerY = offsetY + candidate.vertex.point.y * grid;
       const radius = grid * (0.18 + Math.min(candidate.visits / Math.max(analysis?.visits ?? 1, 1), 1) * 0.22);
       return Math.hypot(pointerX - centerX, pointerY - centerY) <= radius;
     });
@@ -144,24 +150,23 @@ export function BoardCanvas({
   useEffect(() => {
     setKeyboardPoint((current) => {
       if (!current) return null;
-      const lastCoordinate = Math.max(position.board_size - 1, 0);
       const next = {
-        x: Math.min(current.x, lastCoordinate),
-        y: Math.min(current.y, lastCoordinate)
+        x: Math.min(current.x, Math.max(position.board_width - 1, 0)),
+        y: Math.min(current.y, Math.max(position.board_height - 1, 0))
       };
       return next.x === current.x && next.y === current.y ? current : next;
     });
-  }, [position.board_size]);
+  }, [position.board_width, position.board_height]);
 
   useEffect(() => {
     if (!keyboardPlacement) {
       setKeyboardPoint(null);
       return;
     }
-    const center = Math.floor(position.board_size / 2);
-    setKeyboardPoint((current) => current ?? { x: center, y: center });
+    const center = { x: Math.floor(position.board_width / 2), y: Math.floor(position.board_height / 2) };
+    setKeyboardPoint((current) => current ?? center);
     canvasRef.current?.focus();
-  }, [keyboardPlacement, position.board_size]);
+  }, [keyboardPlacement, position.board_width, position.board_height]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLCanvasElement>) {
     if (!keyboardPlacement) return;
@@ -178,20 +183,19 @@ export function BoardCanvas({
     event.preventDefault();
     event.stopPropagation();
 
-    const center = Math.floor(position.board_size / 2);
-    const current = keyboardPoint ?? { x: center, y: center };
+    const center = { x: Math.floor(position.board_width / 2), y: Math.floor(position.board_height / 2) };
+    const current = keyboardPoint ?? center;
     if (isEnter) {
       cancelCandidatePreview();
       onPointClick?.(current);
       return;
     }
 
-    const lastCoordinate = Math.max(position.board_size - 1, 0);
     const xDelta = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
     const yDelta = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
     setKeyboardPoint({
-      x: Math.max(0, Math.min(lastCoordinate, current.x + xDelta)),
-      y: Math.max(0, Math.min(lastCoordinate, current.y + yDelta))
+      x: Math.max(0, Math.min(position.board_width - 1, current.x + xDelta)),
+      y: Math.max(0, Math.min(position.board_height - 1, current.y + yDelta))
     });
   }
 
@@ -200,55 +204,70 @@ export function BoardCanvas({
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
     const dpr = window.devicePixelRatio || 1;
-    const cssSize = Math.min(canvas.clientWidth || 720, canvas.clientHeight || 720);
-    canvas.width = Math.floor(cssSize * dpr);
-    canvas.height = Math.floor(cssSize * dpr);
+    const cssWidth = canvas.clientWidth || 720;
+    const cssHeight = canvas.clientHeight || 720;
+    canvas.width = Math.floor(cssWidth * dpr);
+    canvas.height = Math.floor(cssHeight * dpr);
     ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, cssSize, cssSize);
+    ctx.clearRect(0, 0, cssWidth, cssHeight);
 
-    const boardSize = position.board_size;
-    const padding = cssSize * 0.09;
-    const grid = (cssSize - padding * 2) / (boardSize - 1);
-    const coord = (n: number) => padding + n * grid;
+    const boardWidth = position.board_width;
+    const boardHeight = position.board_height;
+    const padding = Math.min(cssWidth, cssHeight) * 0.09;
+    const grid = Math.min(
+      (cssWidth - padding * 2) / Math.max(boardWidth - 1, 1),
+      (cssHeight - padding * 2) / Math.max(boardHeight - 1, 1)
+    );
+    const offsetX = (cssWidth - grid * (boardWidth - 1)) / 2;
+    const offsetY = (cssHeight - grid * (boardHeight - 1)) / 2;
+    const coordX = (n: number) => offsetX + n * grid;
+    const coordY = (n: number) => offsetY + n * grid;
 
     ctx.fillStyle = "#e4c27a";
-    ctx.fillRect(0, 0, cssSize, cssSize);
+    ctx.fillRect(0, 0, cssWidth, cssHeight);
     ctx.strokeStyle = "rgba(74,53,24,.85)";
     ctx.lineWidth = 1;
-    for (let i = 0; i < boardSize; i += 1) {
-      ctx.beginPath(); ctx.moveTo(coord(0), coord(i)); ctx.lineTo(coord(boardSize - 1), coord(i)); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(coord(i), coord(0)); ctx.lineTo(coord(i), coord(boardSize - 1)); ctx.stroke();
+    for (let y = 0; y < boardHeight; y += 1) {
+      ctx.beginPath(); ctx.moveTo(coordX(0), coordY(y)); ctx.lineTo(coordX(boardWidth - 1), coordY(y)); ctx.stroke();
+    }
+    for (let x = 0; x < boardWidth; x += 1) {
+      ctx.beginPath(); ctx.moveTo(coordX(x), coordY(0)); ctx.lineTo(coordX(x), coordY(boardHeight - 1)); ctx.stroke();
     }
 
-    const stars = boardSize === 19 ? [3, 9, 15] : boardSize === 13 ? [3, 6, 9] : [2, boardSize - 3];
     ctx.fillStyle = "rgba(42,28,14,.88)";
-    for (const x of stars) for (const y of stars) { ctx.beginPath(); ctx.arc(coord(x), coord(y), Math.max(2, grid * 0.08), 0, Math.PI * 2); ctx.fill(); }
+    for (const x of starCoordinates(boardWidth)) for (const y of starCoordinates(boardHeight)) {
+      ctx.beginPath(); ctx.arc(coordX(x), coordY(y), Math.max(2, grid * 0.08), 0, Math.PI * 2); ctx.fill();
+    }
 
     if (showCoordinates) {
-      const letters = "ABCDEFGHJKLMNOPQRST";
+      const letters = "ABCDEFGHJKLMNOPQRSTUVWXYZ";
       ctx.fillStyle = "#4a3518";
       ctx.font = `${Math.max(9, grid * 0.28)}px "Noto Sans SC", sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      for (let i = 0; i < boardSize; i += 1) {
-        const label = letters[i] ?? String(i + 1);
-        ctx.fillText(label, coord(i), padding * 0.38);
-        ctx.fillText(label, coord(i), cssSize - padding * 0.38);
-        ctx.fillText(String(boardSize - i), padding * 0.38, coord(i));
-        ctx.fillText(String(boardSize - i), cssSize - padding * 0.38, coord(i));
+      for (let x = 0; x < boardWidth; x += 1) {
+        const label = letters[x] ?? String(x + 1);
+        ctx.fillText(label, coordX(x), padding * 0.38);
+        ctx.fillText(label, coordX(x), cssHeight - padding * 0.38);
+      }
+      for (let y = 0; y < boardHeight; y += 1) {
+        const label = String(boardHeight - y);
+        ctx.fillText(label, padding * 0.38, coordY(y));
+        ctx.fillText(label, cssWidth - padding * 0.38, coordY(y));
       }
     }
 
     if (effectiveOverlayMode === "ownership" && hasOwnership && analysis?.ownership) {
-      const cellSize = Math.max(2, grid * 0.94);
-      for (let y = 0; y < boardSize; y += 1) {
-        for (let x = 0; x < boardSize; x += 1) {
-          const value = normalizeOwnershipValue(analysis.ownership[y * boardSize + x]);
+      const cellWidth = Math.max(2, grid * 0.94);
+      const cellHeight = cellWidth;
+      for (let y = 0; y < boardHeight; y += 1) {
+        for (let x = 0; x < boardWidth; x += 1) {
+          const value = normalizeOwnershipValue(analysis.ownership[y * boardWidth + x]);
           const magnitude = Math.abs(value);
           if (magnitude < 0.015) continue;
           const alpha = 0.1 + magnitude * 0.38;
           ctx.fillStyle = value >= 0 ? `rgba(33,86,199,${alpha})` : `rgba(194,65,12,${alpha})`;
-          ctx.fillRect(coord(x) - cellSize / 2, coord(y) - cellSize / 2, cellSize, cellSize);
+          ctx.fillRect(coordX(x) - cellWidth / 2, coordY(y) - cellHeight / 2, cellWidth, cellHeight);
         }
       }
     }
@@ -261,7 +280,7 @@ export function BoardCanvas({
       }
     }
     for (const stone of position.stones) {
-      const cx = coord(stone.x); const cy = coord(stone.y); const radius = grid * 0.45;
+      const cx = coordX(stone.x); const cy = coordY(stone.y); const radius = grid * 0.45;
       ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.fillStyle = stone.color === "black" ? "#161616" : "#f7f4ee"; ctx.fill();
       ctx.strokeStyle = "#1c1915";
@@ -279,13 +298,12 @@ export function BoardCanvas({
 
     if (position.last_move && isPoint(position.last_move.vertex)) {
       const { x, y } = position.last_move.vertex.point;
-      const cx = coord(x); const cy = coord(y);
       ctx.fillStyle = "#2156c7";
-      ctx.beginPath(); ctx.arc(cx, cy, Math.max(2.5, grid * 0.12), 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(coordX(x), coordY(y), Math.max(2.5, grid * 0.12), 0, Math.PI * 2); ctx.fill();
     }
 
     if (effectiveOverlayMode === "policy" && hasPolicy) {
-      drawPolicyOverlay(ctx, policyPoints, boardSize, coord, grid);
+      drawPolicyOverlay(ctx, policyPoints, coordX, coordY, grid);
     } else if (!hideCandidates) {
       const topCandidates = analysis?.candidates ?? [];
       const replayCandidate = topCandidates[replayCandidateIndex ?? selectedCandidateIndex ?? 0] ?? topCandidates[0];
@@ -293,7 +311,7 @@ export function BoardCanvas({
       if (replaySteps.length === 0) {
         for (const [index, candidate] of topCandidates.entries()) {
           if (!isPoint(candidate.vertex)) continue;
-          const cx = coord(candidate.vertex.point.x); const cy = coord(candidate.vertex.point.y);
+          const cx = coordX(candidate.vertex.point.x); const cy = coordY(candidate.vertex.point.y);
           const radius = grid * (0.18 + Math.min(candidate.visits / Math.max(analysis?.visits ?? 1, 1), 1) * 0.22);
           const isSelected = selectedCandidateIndex === index;
           ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2);
@@ -312,8 +330,8 @@ export function BoardCanvas({
         let turnColor: "black" | "white" = position.to_play;
         for (const [index, point] of replaySteps.entries()) {
           if (index > 0) turnColor = turnColor === "black" ? "white" : "black";
-          const cx = coord(point.x);
-          const cy = coord(point.y);
+          const cx = coordX(point.x);
+          const cy = coordY(point.y);
           const radius = grid * 0.45;
           ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2);
           ctx.fillStyle = turnColor === "black" ? "#1a1a1e" : "#ffffff";
@@ -331,8 +349,8 @@ export function BoardCanvas({
     }
 
     for (const marker of nextMoveMode === "off" ? [] : nextMoveMarkers) {
-      const cx = coord(marker.point.x);
-      const cy = coord(marker.point.y);
+      const cx = coordX(marker.point.x);
+      const cy = coordY(marker.point.y);
       const radius = grid * (marker.primary ? 0.22 : 0.16);
       ctx.beginPath();
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);
@@ -344,8 +362,8 @@ export function BoardCanvas({
     }
 
     if (keyboardPoint) {
-      const cx = coord(keyboardPoint.x);
-      const cy = coord(keyboardPoint.y);
+      const cx = coordX(keyboardPoint.x);
+      const cy = coordY(keyboardPoint.y);
       const radius = grid * 0.48;
       ctx.beginPath();
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);
@@ -369,8 +387,13 @@ export function BoardCanvas({
     </div>
   );
 
+  const boardStyle = {
+    "--board-ratio": position.board_width / position.board_height,
+    aspectRatio: `${position.board_width} / ${position.board_height}`
+  } as CSSProperties;
   return <div
     className="board-canvas"
+    style={boardStyle}
     data-next-move-mode={nextMoveMode}
     data-next-move-markers={JSON.stringify(nextMoveMarkers)}
   >
@@ -386,13 +409,16 @@ export function BoardCanvas({
         cancelCandidatePreview();
         if (!onPointClick) return;
         const rect = event.currentTarget.getBoundingClientRect();
-        const cssSize = Math.min(rect.width, rect.height);
-        const boardSize = position.board_size;
-        const padding = cssSize * 0.09;
-        const grid = (cssSize - padding * 2) / Math.max(boardSize - 1, 1);
-        const x = Math.round((event.clientX - rect.left - padding) / grid);
-        const y = Math.round((event.clientY - rect.top - padding) / grid);
-        if (x < 0 || y < 0 || x >= boardSize || y >= boardSize) return;
+        const padding = Math.min(rect.width, rect.height) * 0.09;
+        const grid = Math.min(
+          (rect.width - padding * 2) / Math.max(position.board_width - 1, 1),
+          (rect.height - padding * 2) / Math.max(position.board_height - 1, 1)
+        );
+        const offsetX = (rect.width - grid * (position.board_width - 1)) / 2;
+        const offsetY = (rect.height - grid * (position.board_height - 1)) / 2;
+        const x = Math.round((event.clientX - rect.left - offsetX) / grid);
+        const y = Math.round((event.clientY - rect.top - offsetY) / grid);
+        if (x < 0 || y < 0 || x >= position.board_width || y >= position.board_height) return;
         onPointClick({ x, y });
       }}
     />
@@ -410,23 +436,24 @@ function normalizeOwnershipValue(value: number | undefined): number {
   return Math.max(-1, Math.min(1, normalized));
 }
 
-function getTopPolicyPoints(policy: number[] | null | undefined, boardSize: number, limit: number): PolicyPoint[] {
-  if (!policy || policy.length < boardSize * boardSize) return [];
+function getTopPolicyPoints(policy: number[] | null | undefined, boardWidth: number, boardHeight: number, limit: number): PolicyPoint[] {
+  const pointCount = boardWidth * boardHeight;
+  if (!policy || policy.length < pointCount) return [];
   const points: PolicyPoint[] = [];
-  for (let index = 0; index < boardSize * boardSize; index += 1) {
+  for (let index = 0; index < pointCount; index += 1) {
     const value = policy[index];
     if (!Number.isFinite(value) || value <= 0) continue;
-    points.push({ x: index % boardSize, y: Math.floor(index / boardSize), value });
+    points.push({ x: index % boardWidth, y: Math.floor(index / boardWidth), value });
   }
   return points.sort((a, b) => b.value - a.value).slice(0, limit);
 }
 
-function drawPolicyOverlay(ctx: CanvasRenderingContext2D, points: PolicyPoint[], boardSize: number, coord: (n: number) => number, grid: number) {
+function drawPolicyOverlay(ctx: CanvasRenderingContext2D, points: PolicyPoint[], coordX: (n: number) => number, coordY: (n: number) => number, grid: number) {
   const maxPolicy = Math.max(points[0]?.value ?? 1, 1e-6);
   for (const [rank, point] of points.entries()) {
     const weight = Math.sqrt(point.value / maxPolicy);
-    const cx = coord(point.x);
-    const cy = coord(point.y);
+    const cx = coordX(point.x);
+    const cy = coordY(point.y);
     const radius = grid * (0.12 + weight * 0.32);
     ctx.beginPath();
     ctx.arc(cx, cy, radius, 0, Math.PI * 2);
@@ -443,6 +470,14 @@ function drawPolicyOverlay(ctx: CanvasRenderingContext2D, points: PolicyPoint[],
       ctx.fillText(String(rank + 1), cx, cy);
     }
   }
+}
+
+function starCoordinates(length: number): number[] {
+  if (length === 19) return [3, 9, 15];
+  if (length === 13) return [3, 6, 9];
+  if (length === 9) return [2, 4, 6];
+  if (length < 7) return [];
+  return [3, length - 4].filter((value, index, values) => value >= 0 && value < length && values.indexOf(value) === index);
 }
 
 function markerFill(marker: NextMoveReviewMarker): string {

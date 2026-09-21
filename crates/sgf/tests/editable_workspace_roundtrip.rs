@@ -58,7 +58,13 @@ fn editable_workspace_roundtrip_retains_edit_and_drops_removed_sibling() {
     assert_eq!(property(&tree, "DT"), Some("2026-08-29"));
     assert_eq!(property(&tree, "PL"), Some("W"));
     assert_eq!(root_snapshot.personal_comment, "root personal");
-    assert_eq!(root_snapshot.position.board_size, 5);
+    assert_eq!(
+        (
+            root_snapshot.position.board_width,
+            root_snapshot.position.board_height
+        ),
+        (5, 5)
+    );
     assert_eq!(root_snapshot.position.to_play, PlayerColor::White);
     assert!(has_stone(&root_snapshot.position, 0, 0, PlayerColor::Black));
     assert!(has_stone(&root_snapshot.position, 2, 2, PlayerColor::White));

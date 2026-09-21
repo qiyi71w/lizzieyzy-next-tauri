@@ -12,7 +12,8 @@ declare global {
 }
 
 const position: PositionDto = {
-  board_size: 9,
+  board_width: 9,
+  board_height: 9,
   move_number: 0,
   to_play: "black",
   stones: [],
@@ -149,21 +150,21 @@ describe("BoardCanvas keyboard intent", () => {
     dispatchKey(canvas, "Enter");
     expect(onPointClick).toHaveBeenLastCalledWith({ x: 8, y: 4 });
 
-    rerender({ ...position, board_size: 5 });
+    rerender({ ...position, board_width: 5, board_height: 7 });
     dispatchKey(canvas, "Enter");
     expect(onPointClick).toHaveBeenLastCalledWith({ x: 4, y: 4 });
   });
 
   it("preserves pointer coordinate submission", () => {
     const onPointClick = vi.fn<(point: PointDto) => void>();
-    const { canvas } = renderBoard({ onPointClick });
-    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
+    const { canvas } = renderBoard({ initialPosition: { ...position, board_width: 9, board_height: 5 }, onPointClick });
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 160, 100);
 
     act(() => {
       canvas.dispatchEvent(new MouseEvent("click", {
         bubbles: true,
-        clientX: 29.5,
-        clientY: 39.75
+        clientX: 44.5,
+        clientY: 70.5
       }));
     });
 
