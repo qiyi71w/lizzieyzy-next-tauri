@@ -490,6 +490,13 @@ button[aria-pressed="true"] {
   display: block;
 }
 
+.winrate-chart-node-select {
+  width: 100%;
+  min-width: 0;
+  color: var(--ink);
+  background: var(--surface);
+}
+
 .winrate-chart-hover {
   position: absolute;
   left: 8px;
