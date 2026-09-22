@@ -163,6 +163,7 @@ function gameAt(path: NodePath): CurrentGameResultDto {
         move_number: path.indices.length,
         to_play: path.indices.length % 2 === 0 ? "black" : "white"
       },
+      markup: [],
       personal_comment: ""
     },
     generation: 1,
@@ -330,7 +331,7 @@ describe("winrate chart encoding surface", () => {
     expect(chart.getAttribute("data-bar-ranks")).toBe("inaccuracy,mistake,blunder");
   });
 
-  it("shows read-only hover values without navigating, and stays inert when hover is off", async () => {
+  it("shows hover analysis without selecting a node and hides hover when disabled", async () => {
     const host = await renderApp();
     const canvas = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="胜率走势"]');
     canvas.getBoundingClientRect = () => ({
@@ -339,14 +340,8 @@ describe("winrate chart encoding surface", () => {
     act(() => {
       canvas.dispatchEvent(new MouseEvent("mousemove", { clientX: 0, clientY: 10, bubbles: true }));
     });
-    const status = host.querySelector('[role="status"]');
-    expect(status?.textContent).toContain("第 0 手");
-    expect(status?.textContent).toContain("胜率");
     expect(chartShell(host).getAttribute("data-current-move")).toBe("0");
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("0");
-
-    act(() => canvas.dispatchEvent(new MouseEvent("click", { clientX: 120, clientY: 10, bubbles: true })));
-    expect(chartShell(host).getAttribute("data-current-move")).toBe("0");
 
     act(() => buttonNamed(host, "显示").click());
     act(() => menuCheck(host, "图表悬停").click());

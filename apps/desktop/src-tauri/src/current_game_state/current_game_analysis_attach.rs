@@ -51,7 +51,7 @@ fn semantic_replacement_rejects_old_analysis_at_surviving_paths() {
             .attach_primary_analysis(opened.generation, path(&[]), payload("KataGo", 400, 3, 3))
             .is_err());
         assert!(state
-            .select_path(path(&[]))
+            .select_path(path(&[]), state.inspect().0)
             .unwrap()
             .snapshot
             .primary_analysis
@@ -82,7 +82,7 @@ fn rejected_edits_and_existing_continuation_keep_admitted_analysis() {
         .is_err());
     assert_eq!(
         state
-            .select_path(path(&[0]))
+            .select_path(path(&[0]), state.inspect().0)
             .unwrap()
             .snapshot
             .primary_analysis
@@ -570,7 +570,7 @@ fn continuous_attachment_observes_selected_path_and_sealed_job_cutoff() {
     } else {
         path(&[])
     };
-    state.select_path(other).unwrap();
+    state.select_path(other, state.inspect().0).unwrap();
     let fresh = continuous_job_event(
         AnalysisJobOutcomeDto::Progress,
         opened.generation,
@@ -584,7 +584,7 @@ fn continuous_attachment_observes_selected_path_and_sealed_job_cutoff() {
 fn latest_admitted_lane_result_wins_primary_and_survives_save_and_recovery() {
     let state = CurrentGameState::default();
     state.replace(BRANCHING, None).unwrap();
-    let opened = state.select_path(path(&[])).unwrap();
+    let opened = state.select_path(path(&[]), state.inspect().0).unwrap();
     let personal_comment = opened.snapshot.personal_comment.clone();
     let secondary_visits = opened.snapshot.secondary_analysis.as_ref().unwrap().visits;
 
@@ -660,7 +660,7 @@ fn latest_admitted_lane_result_wins_primary_and_survives_save_and_recovery() {
     stale.job_id = "stale-generation-job".into();
     assert!(state.attach_from_job_event(&stale).is_none());
 
-    let authoritative = state.select_path(path(&[])).unwrap();
+    let authoritative = state.select_path(path(&[]), state.inspect().0).unwrap();
     assert_eq!(
         authoritative.snapshot.primary_analysis.as_ref().unwrap().visits,
         75
@@ -676,7 +676,9 @@ fn latest_admitted_lane_result_wins_primary_and_survives_save_and_recovery() {
         .expect("admitted analysis reaches recovery");
     let recovered_state = CurrentGameState::default();
     recovered_state.replace(&recovery.sgf_text, None).unwrap();
-    let recovered = recovered_state.select_path(path(&[])).unwrap();
+    let recovered = recovered_state
+        .select_path(path(&[]), recovered_state.inspect().0)
+        .unwrap();
 
     let save_path = unique_sgf("two-lane-admission-order");
     state
@@ -686,7 +688,9 @@ fn latest_admitted_lane_result_wins_primary_and_survives_save_and_recovery() {
     reopened_state
         .replace(&fs::read_to_string(&save_path).unwrap(), None)
         .unwrap();
-    let reopened = reopened_state.select_path(path(&[])).unwrap();
+    let reopened = reopened_state
+        .select_path(path(&[]), reopened_state.inspect().0)
+        .unwrap();
     let _ = fs::remove_file(save_path);
 
     for snapshot in [recovered.snapshot, reopened.snapshot] {
@@ -703,7 +707,7 @@ fn latest_admitted_lane_result_wins_primary_and_survives_save_and_recovery() {
 fn existing_child_play_selects_without_dirtying_and_accepts_continuous_progress() {
     let state = CurrentGameState::default();
     let opened = state.replace(BRANCHING, None).unwrap();
-    state.select_path(path(&[])).unwrap();
+    state.select_path(path(&[]), state.inspect().0).unwrap();
     let selected = state
         .play(path(&[]), MoveVertex::Point(PointDto { x: 3, y: 3 }))
         .unwrap();

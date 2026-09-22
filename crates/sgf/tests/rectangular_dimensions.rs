@@ -77,6 +77,36 @@ fn current_document_accepts_rectangular_compressed_setup_and_variations() {
 }
 
 #[test]
+fn exact_node_markup_uses_both_axes_and_survives_reopen() {
+    use app_model::SgfMarkupDto;
+
+    let document = CurrentSgfDocument::open("(;SZ[2:25]CR[ax:by](;B[aa]LB[ay:A])(;B[ba]LB[by:B]))").unwrap();
+    let root = document.snapshot(&NodePath::default()).unwrap();
+    let mut circles: Vec<_> = root
+        .markup
+        .iter()
+        .map(|mark| match mark {
+            SgfMarkupDto::Circle { point } => (point.x, point.y),
+            _ => panic!("unexpected root markup"),
+        })
+        .collect();
+    circles.sort();
+    assert_eq!(circles, vec![(0, 23), (0, 24), (1, 23), (1, 24)]);
+
+    let branch = NodePath { indices: vec![1] };
+    let selected = document.snapshot(&branch).unwrap();
+    assert_eq!(
+        selected.markup,
+        vec![SgfMarkupDto::Label {
+            point: PointDto { x: 1, y: 24 },
+            text: "B".to_string(),
+        }]
+    );
+    let reopened = CurrentSgfDocument::open(&document.serialize().unwrap()).unwrap();
+    assert_eq!(reopened.snapshot(&branch).unwrap().markup, selected.markup);
+}
+
+#[test]
 fn replays_compressed_setup_and_far_axis_moves_on_rectangles() {
     let positions = replay_sgf_positions("(;SZ[25:2]AB[xa:yb];W[wa])").unwrap();
     let root = &positions[0];

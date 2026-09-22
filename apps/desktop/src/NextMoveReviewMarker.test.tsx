@@ -172,6 +172,7 @@ function gameAt(path: NodePath): CurrentGameResultDto {
         move_number: path.indices.length,
         to_play: path.indices.length % 2 === 0 ? "black" : "white"
       },
+      markup: [],
       personal_comment: "",
       primary_analysis: snapshotAnalysis
     },

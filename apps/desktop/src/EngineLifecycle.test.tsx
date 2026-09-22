@@ -108,7 +108,7 @@ const emptyPosition = {
 const initialGame: CurrentGameResultDto = {
   tree: { properties: [], children: [] },
   selected_path: { indices: [] },
-  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "" },
+  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "", markup: [] },
   generation: 1,
   snapshot_seq: 1,
   dirty: false,
@@ -139,6 +139,7 @@ function snapshotAt(path: NodePath): CurrentGameResultDto {
         move_number: path.indices.length,
         to_play: path.indices.length % 2 === 0 ? "black" : "white"
       },
+      markup: [],
       personal_comment: ""
     }
   };
@@ -850,7 +851,7 @@ describe("foreground engine lifecycle UI", () => {
       nextMove.click();
       await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
     });
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0] });
     expect(backend.cancelKataGoAnalysis).not.toHaveBeenCalled();
     expect(buttonNamed(host, "取消整局")).toBeTruthy();
     expect(host.querySelector(".nav-progress")?.textContent).toContain("整局 1/2");
@@ -862,7 +863,7 @@ describe("foreground engine lifecycle UI", () => {
       prevMove.click();
       await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
     });
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [] });
     expect(backend.cancelKataGoAnalysis).not.toHaveBeenCalled();
     expect((host.querySelector('input[aria-label="跳转手数"]') as HTMLInputElement).value).toBe("0");
     expect(host.textContent).toContain("61.0%");

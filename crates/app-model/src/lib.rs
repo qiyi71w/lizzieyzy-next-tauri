@@ -146,10 +146,22 @@ pub struct SgfTreeNodeDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SgfMarkupDto {
+    Label { point: PointDto, text: String },
+    Circle { point: PointDto },
+    Square { point: PointDto },
+    Cross { point: PointDto },
+    Triangle { point: PointDto },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SelectedNodeSnapshotDto {
     pub path: NodePath,
     pub position: PositionDto,
     pub personal_comment: String,
+    #[serde(default)]
+    pub markup: Vec<SgfMarkupDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generated_information: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -819,6 +831,7 @@ mod current_game_wire {
                     errors: Vec::new(),
                 },
                 personal_comment: "mainline pass".to_string(),
+                markup: Vec::new(),
                 generated_information: None,
                 primary_analysis: None,
                 secondary_analysis: None,

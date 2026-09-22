@@ -577,7 +577,7 @@ export function BottomBar(props: {
       <span className="spacer" />
       <div className="nav-cluster" aria-label="手数导航">
         <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(0)} disabled={props.currentMove <= 0} title="首手">|&lt;</button>
-        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.currentMove - 10)} disabled={props.currentMove <= 0} title="回退 10 手">&lt;&lt;</button>
+        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(Math.max(0, props.currentMove - 10))} disabled={props.currentMove <= 0} title="回退 10 手">&lt;&lt;</button>
         <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.currentMove - 1)} disabled={props.currentMove <= 0} title="上一手">&lt;</button>
         <input
           ref={(node) => { props.jumpRef.current = node; }}
@@ -587,7 +587,7 @@ export function BottomBar(props: {
           onChange={(event) => props.onMove(Number(event.target.value))}
         />
         <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.currentMove + 1)} disabled={props.currentMove >= props.maxMove} title="下一手">&gt;</button>
-        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.currentMove + 10)} disabled={props.currentMove >= props.maxMove} title="前进 10 手">&gt;&gt;</button>
+        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(Math.min(props.maxMove, props.currentMove + 10))} disabled={props.currentMove >= props.maxMove} title="前进 10 手">&gt;&gt;</button>
         <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.maxMove)} disabled={props.currentMove >= props.maxMove} title="末手">&gt;|</button>
         <input
           className="move-slider"

@@ -468,8 +468,22 @@ impl CurrentGameState {
         self.holder.lock().expect("current game state").dirty
     }
 
-    pub fn select_path(&self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
+    pub fn select_path(
+        &self,
+        path: NodePath,
+        generation: u64,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
+        holder.ensure_editable()?;
+        if holder.document.is_none() {
+            return Err(no_current_game());
+        }
+        if holder.generation != generation {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::InvalidNodePath,
+                message: "Current game semantics changed; select a node from the current tree.".into(),
+            });
+        }
         let changed = holder.selected_path != path;
         let mut result = holder.select_path(path)?;
         if changed {
@@ -952,7 +966,9 @@ mod current_game_replacement {
     #[test]
     fn select_path_returns_snapshot_without_mutating_document_identity() {
         let state = CurrentGameState::default();
-        let missing = state.select_path(NodePath { indices: Vec::new() }).unwrap_err();
+        let missing = state
+            .select_path(NodePath { indices: Vec::new() }, state.inspect().0)
+            .unwrap_err();
         assert_eq!(missing.kind, CurrentGameErrorKind::NoCurrentGame);
 
         let opened = state
@@ -960,7 +976,9 @@ mod current_game_replacement {
             .unwrap();
         let before = state.holder.lock().expect("current game state").snapshot_state();
 
-        let second = state.select_path(NodePath { indices: vec![0, 1] }).unwrap();
+        let second = state
+            .select_path(NodePath { indices: vec![0, 1] }, state.inspect().0)
+            .unwrap();
         assert_eq!(
             state.holder.lock().expect("current game state").snapshot_state(),
             before
@@ -975,13 +993,44 @@ mod current_game_replacement {
         assert_eq!(second.snapshot.position.move_number, 2);
         assert_eq!(second.snapshot.position.to_play, app_model::PlayerColor::White);
 
-        let invalid = state.select_path(NodePath { indices: vec![0, 2] }).unwrap_err();
+        let invalid = state
+            .select_path(NodePath { indices: vec![0, 2] }, state.inspect().0)
+            .unwrap_err();
         assert_eq!(invalid.kind, CurrentGameErrorKind::InvalidNodePath);
         assert_eq!(
             state.holder.lock().expect("current game state").snapshot_state(),
             before
         );
         assert_eq!(opened.selected_path.indices, vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn exact_navigation_rejects_old_document_and_invalid_paths_without_dirtying() {
+        let state = CurrentGameState::default();
+        let old = state.replace(BRANCHING, None).unwrap();
+        let current = state
+            .replace(
+                include_str!("../../../../tests/golden/r6-exact-navigation.sgf"),
+                None,
+            )
+            .unwrap();
+        let before = state.serialize().unwrap();
+        assert!(state.select_path(NodePath::default(), old.generation).is_err());
+        assert!(state
+            .select_path(NodePath { indices: vec![9] }, current.generation)
+            .is_err());
+        let selected = state
+            .select_path(current.selected_path.clone(), current.generation)
+            .unwrap();
+        assert_eq!(selected, current);
+        for path in [vec![], vec![0], vec![0, 0], vec![0, 0, 0], vec![0, 0, 0, 1, 0]] {
+            let result = state
+                .select_path(NodePath { indices: path }, current.generation)
+                .unwrap();
+            assert!(!result.dirty);
+            assert_eq!(result.generation, current.generation);
+            assert_eq!(state.serialize().unwrap(), before);
+        }
     }
 
     #[test]
@@ -1024,7 +1073,9 @@ mod current_game_replacement {
                 Some("/tmp/branching.sgf".to_string()),
             )
             .unwrap();
-        let sibling = state.select_path(NodePath { indices: vec![0, 1] }).unwrap();
+        let sibling = state
+            .select_path(NodePath { indices: vec![0, 1] }, state.inspect().0)
+            .unwrap();
         assert_eq!(sibling.generation, opened.generation);
         assert_eq!(sibling.selected_path.indices, vec![0, 1]);
 

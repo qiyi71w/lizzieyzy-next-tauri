@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import type { AnalysisFrameDto, CandidateMoveDto, MoveDto, PositionDto, ProblemMarkerDto } from "../domain/types";
+import type { AnalysisFrameDto, CandidateMoveDto, NodePath, PositionDto, ProblemMarkerDto } from "../domain/types";
+import type { ChartPoint } from "../domain/winrateChart";
+import type { ReviewProblem } from "../domain/reviewNavigation";
 import { isPoint, vertexLabel } from "../domain/board";
 import { variationReplayPointSteps } from "../domain/variationReplay";
 
@@ -9,8 +11,10 @@ type SubBoardContentMode = "variation" | "raw";
 
 type Props = {
   frame?: AnalysisFrameDto;
-  problems: ProblemMarkerDto[];
-  moves?: MoveDto[];
+  problems: ReviewProblem[];
+  reviewLine?: ChartPoint[];
+  selectedPath?: NodePath;
+  onSelectNode?: (path: NodePath) => void;
   boardWidth: number;
   boardHeight: number;
   currentMove: number;
@@ -22,7 +26,7 @@ type Props = {
   selectedCandidateIndex: number | null;
   previewCandidateIndex?: number | null;
   onSelectCandidate: (index: number) => void;
-  onSelectProblem: (moveNumber: number) => void;
+  onSelectProblem: (problem: ReviewProblem) => void;
   pane?: Pane;
   contentMode?: SubBoardContentMode;
   pvPrefixLength?: number;
@@ -38,7 +42,9 @@ const severityLabel: Record<ProblemMarkerDto["severity"], string> = {
 export function AnalysisPanel({
   frame,
   problems,
-  moves = [],
+  reviewLine = [],
+  selectedPath,
+  onSelectNode,
   boardWidth,
   boardHeight,
   currentMove,
@@ -71,19 +77,21 @@ export function AnalysisPanel({
     return (
       <aside className="analysis-panel reference-panel" aria-label="参考图与选点">
         <section className="variation-tree" aria-label="变化">
-          <button type="button" className={currentMove === 0 ? "is-current" : undefined} onClick={() => onSelectProblem(0)}>
-            根
-          </button>
-          {moves.map((move) => {
-            const label = isPoint(move.vertex) ? vertexLabel(move.vertex, boardHeight) : "虚手";
+          {reviewLine.map((point) => {
+            const key = point.path.indices.join(",");
             return (
               <button
-                key={move.move_number}
+                key={key}
                 type="button"
-                className={currentMove === move.move_number ? "is-current" : undefined}
-                onClick={() => onSelectProblem(move.move_number)}
+                className={selectedPath?.indices.join(",") === key ? "is-current" : undefined}
+                data-node-path={key}
+                onClick={(event) => {
+                  if (event.currentTarget.isConnected && !event.currentTarget.closest("[hidden]")) {
+                    onSelectNode?.(point.path);
+                  }
+                }}
               >
-                {move.move_number} {move.color === "black" ? "黑" : "白"} {label}
+                {point.path.indices.length === 0 ? "根" : `${point.moveNumber} ${point.isMove ? "棋步" : "非棋步"}`} · {key || "root"}
               </button>
             );
           })}
@@ -248,13 +256,17 @@ export function AnalysisPanel({
               ) : (
                 <ol className="problem-list">
                   {problems.slice(0, 16).map((p) => {
-                    const isCurrent = currentMove === p.turn;
+                    const isCurrent = p.path ? selectedPath?.indices.join(",") === p.path.indices.join(",") : currentMove === p.turn;
                     return (
-                      <li key={p.turn} className={`severity-${p.severity}${isCurrent ? " is-current" : ""}`}>
+                      <li key={p.path?.indices.join(",") ?? p.turn} className={`severity-${p.severity}${isCurrent ? " is-current" : ""}`}>
                         <button
                           type="button"
                           className="problem-button"
-                          onClick={() => onSelectProblem(p.turn)}
+                          onClick={(event) => {
+                            if (event.currentTarget.isConnected && !event.currentTarget.closest("[hidden]")) {
+                              onSelectProblem(p);
+                            }
+                          }}
                         >
                           <span className="problem-turn">第 {p.turn} 手</span>
                           <strong className="problem-tag">{severityLabel[p.severity] ?? p.label}</strong>

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BoardCanvas } from "./components/BoardCanvas";
 import { WinrateChart } from "./components/WinrateChart";
+import { ReviewTree } from "./components/ReviewTree";
+import { reviewLineProblems, type ReviewProblem } from "./domain/reviewNavigation";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import { EngineSetupPanel } from "./components/EngineSetupPanel";
 import { AppChrome, BottomBar, type ContinuousAnalysisAction, type OverlayMode, type SheetId } from "./components/AppChrome";
@@ -186,6 +188,7 @@ export function App() {
   const navigatingRef = useRef(false);
   const documentGenerationRef = useRef(0);
   const pendingSelectedPathRef = useRef<NodePath | null>(null);
+  const queuedSelectionRef = useRef<{ path: NodePath; generation: number } | null>(null);
   const pendingBoardIntentRef = useRef<string | null>(null);
   const [preferences, setPreferences] = useState<AppPreferences>(() => defaultAppPreferences);
   const [preferencesStatus, setPreferencesStatus] = useState("正在载入设置…");
@@ -495,18 +498,18 @@ export function App() {
   const canNextSibling = Boolean(parentNode && siblingIndex !== undefined && siblingIndex + 1 < parentNode.children.length);
   const siblingLabel = parentNode && siblingIndex !== undefined ? `${siblingIndex + 1}/${parentNode.children.length}` : "—";
   const maxMove = Math.max(positions.at(-1)?.move_number ?? 0, 1);
-  const reviewIndex = currentGame ? selectedPath.indices.length : currentMove;
-  const reviewMax = currentGame
-    ? chosenLeafPath(currentGame.tree, { indices: [] }, chosenChildren).indices.length
-    : maxMove;
+  const reviewIndex = currentGame ? currentPosition.move_number : currentMove;
   const chartModel = useMemo(() => buildWinrateChartModel({
     root: currentGame?.tree ?? emptyChartRoot,
     chosen: chosenChildren,
-    selectedPathLength: currentGame ? selectedPath.indices.length : currentMove,
+    selectedPath,
     selectedToPlay: currentPosition.to_play,
     settings: preferences
   }), [currentGame, chosenChildren, selectedPath.indices.length, currentMove, currentPosition.to_play, preferences]);
-  const currentChartPoint = chartModel.points.find((point) => point.moveNumber === chartModel.currentMove);
+  const reviewMax = currentGame ? chartModel.points.at(-1)?.moveNumber ?? 0 : maxMove;
+  const reviewProblems = useMemo(() => currentGame ? reviewLineProblems(chartModel.points) : visibleProblems,
+    [currentGame, chartModel.points, visibleProblems]);
+  const currentChartPoint = chartModel.points.find((point) => samePath(point.path, selectedPath));
   const chartWinrate = currentChartPoint
     ? displayedWinrate(currentChartPoint, chartModel.perspective, chartModel.selectedToPlay)
     : null;
@@ -636,10 +639,10 @@ export function App() {
       handleMoveSelect(reviewMax);
     });
     shortcutRegistry.bind("review.back-10", () => {
-      handleMoveSelect(reviewIndex - 10);
+      handleMoveSelect(Math.max(0, reviewIndex - 10));
     });
     shortcutRegistry.bind("review.forward-10", () => {
-      handleMoveSelect(reviewIndex + 10);
+      handleMoveSelect(Math.min(reviewMax, reviewIndex + 10));
     });
     shortcutRegistry.bind("review.select-candidate", (event) => {
       const index = Number(event.key) - 1;
@@ -987,7 +990,7 @@ export function App() {
     if (!nativeRuntime || !game || departurePendingRef.current || navigatingRef.current) return;
     const requestToken = activeRequestTokenRef.current;
     try {
-      const refreshed = await selectCurrentGameNode(game.selected_path);
+      const refreshed = await selectCurrentGameNode(game.selected_path, game.generation);
       if (!refreshed || departurePendingRef.current || navigatingRef.current
         || requestToken !== activeRequestTokenRef.current
         || !samePath(game.selected_path, currentGameRef.current?.selected_path ?? { indices: [] })
@@ -2474,26 +2477,32 @@ export function App() {
     }
   }
 
-  async function selectNode(path: NodePath) {
+  async function selectNode(path: NodePath, generation = currentGame?.generation) {
     const game = currentGameRef.current;
-    if (!game) return;
+    if (!game || generation !== game.generation || departurePendingRef.current
+      || !path.indices.every((index) => Number.isInteger(index) && index >= 0)
+      || !nodeAt(game.tree, path)) return;
     if (!navigatingRef.current && samePath(path, game.selected_path)) return;
-    pendingSelectedPathRef.current = path;
+    const request = { path: { indices: [...path.indices] }, generation };
+    queuedSelectionRef.current = request;
+    pendingSelectedPathRef.current = request.path;
     beginReviewRequest();
     if (navigatingRef.current) return;
 
     navigatingRef.current = true;
     try {
-      while (pendingSelectedPathRef.current) {
-        const requestedPath: NodePath = pendingSelectedPathRef.current;
-        pendingSelectedPathRef.current = null;
+      while (queuedSelectionRef.current) {
+        const requested: { path: NodePath; generation: number } = queuedSelectionRef.current;
+        queuedSelectionRef.current = null;
+        if (currentGameRef.current?.generation !== requested.generation) continue;
         try {
-          const result = await selectCurrentGameNode(requestedPath);
+          const result = await selectCurrentGameNode(requested.path, requested.generation);
           const current = currentGameRef.current;
-          if (!current || result.generation < current.generation) continue;
-          if (result.generation === current.generation && result.snapshot_seq < current.snapshot_seq) {
-            // Keep the latest cursor intent, but obtain its snapshot after the accepted edit/Save.
-            pendingSelectedPathRef.current ??= requestedPath;
+          if (!current || current.generation !== requested.generation
+            || result.generation !== requested.generation || queuedSelectionRef.current) continue;
+          if (result.snapshot_seq < current.snapshot_seq) {
+            // Refresh the latest cursor against a newer accepted comment/Save snapshot.
+            queuedSelectionRef.current = requested;
             continue;
           }
           adoptCurrentGame(result);
@@ -2506,7 +2515,9 @@ export function App() {
           setCurrentMove(result.snapshot.position.move_number);
           setSelectedCandidateIndex(null);
         } catch (error) {
-          if (!pendingSelectedPathRef.current) setMessage(`导航失败: ${errorMessage(error)}`);
+          if (!queuedSelectionRef.current && currentGameRef.current?.generation === requested.generation) {
+            setMessage(`导航失败: ${errorMessage(error)}`);
+          }
         }
       }
     } finally {
@@ -2517,13 +2528,27 @@ export function App() {
 
   function handleMoveSelect(moveNumber: number) {
     if (currentGame) {
-      const leaf = chosenLeafPath(currentGame.tree, { indices: [] }, chosenChildren);
-      const depth = Math.max(0, Math.min(moveNumber, leaf.indices.length));
-      void selectNode({ indices: leaf.indices.slice(0, depth) });
+      if (!Number.isInteger(moveNumber) || moveNumber < 0) return;
+      const target = moveNumber === 0
+        ? chartModel.points[0]
+        : chartModel.points.find((point) => point.isMove && point.moveNumber === moveNumber);
+      if (target) void selectNode(target.path, currentGame.generation);
       return;
     }
     setCurrentMove(clampMoveNumberToPositions(positions, moveNumber));
     setSelectedCandidateIndex(null);
+  }
+
+  function handleReviewNodeSelect(path: NodePath) {
+    if (!currentGame || !chartModel.points.some((point) => samePath(point.path, path))) return;
+    void selectNode(path, currentGame.generation);
+  }
+
+  function handleProblemSelect(problem: ReviewProblem) {
+    if (!reviewProblems.includes(problem)) return;
+    if (currentGame) {
+      if (problem.path) void selectNode(problem.path, currentGame.generation);
+    } else handleMoveSelect(problem.turn);
   }
 
   function handleParent() {
@@ -2706,14 +2731,13 @@ export function App() {
               {`${((chartWinrate ?? 0.5) * 100).toFixed(1)}%`}
             </span>
           </h2>
-          <WinrateChart model={chartModel} />
+          <WinrateChart model={chartModel} onSelectNode={handleReviewNodeSelect} />
           <div id="board-layers" />
         </div>
         <AnalysisPanel
           pane="commentary"
           frame={visibleCurrentFrame}
-          problems={visibleProblems}
-          moves={game.moves}
+          problems={reviewProblems}
           boardWidth={game.summary.board_width}
           boardHeight={game.summary.board_height}
           currentMove={currentMove}
@@ -2724,12 +2748,14 @@ export function App() {
           onCommitPersonalComment={(comment) => void handleCommitPersonalComment(comment)}
           selectedCandidateIndex={selectedCandidateIndex}
           onSelectCandidate={selectCandidate}
-          onSelectProblem={handleMoveSelect}
+          onSelectProblem={handleProblemSelect}
+          selectedPath={selectedPath}
         />
       </aside>
       <div className="diagram">
         <BoardCanvas
           position={currentPosition}
+          markup={currentGame?.snapshot.markup}
           analysis={visibleCurrentFrame}
           selectedCandidateIndex={selectedCandidateIndex}
           previewScope={activeScope}
@@ -2752,11 +2778,19 @@ export function App() {
         ) : null}
       </div>
       <aside className="sheet-col" hidden={referenceRailCollapsed}>
+        {currentGame ? <ReviewTree
+          key={currentGame.generation}
+          root={currentGame.tree}
+          selectedPath={selectedPath}
+          generation={currentGame.generation}
+          onSelectNode={(path, generation) => {
+            if (!referenceRailCollapsed) void selectNode(path, generation);
+          }}
+        /> : null}
         <AnalysisPanel
           pane="reference"
           frame={visibleCurrentFrame}
-          problems={visibleProblems}
-          moves={game.moves}
+          problems={reviewProblems}
           boardWidth={game.summary.board_width}
           boardHeight={game.summary.board_height}
           currentMove={currentMove}
@@ -2764,7 +2798,10 @@ export function App() {
           selectedCandidateIndex={selectedCandidateIndex}
           previewCandidateIndex={previewCandidateIndex}
           onSelectCandidate={selectCandidate}
-          onSelectProblem={handleMoveSelect}
+          onSelectProblem={handleProblemSelect}
+          selectedPath={selectedPath}
+          reviewLine={currentGame ? chartModel.points : undefined}
+          onSelectNode={handleReviewNodeSelect}
           contentMode={preferences.subBoardContentMode}
           pvPrefixLength={replayPrefix}
         />
@@ -3098,16 +3135,6 @@ function chosenChildIndex(chosen: Map<string, number>, path: NodePath, childCoun
   return 0;
 }
 
-function chosenLeafPath(root: SgfTreeNodeDto, start: NodePath, chosen: Map<string, number>): NodePath {
-  const indices = [...start.indices];
-  let node = nodeAt(root, start);
-  while (node && node.children.length > 0) {
-    const index = chosenChildIndex(chosen, { indices }, node.children.length);
-    indices.push(index);
-    node = node.children[index];
-  }
-  return { indices };
-}
 
 function taskConditionsFromDraft(
   draft: AnalysisScopeDraft,
