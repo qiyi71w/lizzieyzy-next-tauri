@@ -614,7 +614,8 @@ export function App() {
     shortcutRegistry.bind("game.board-dimensions", () => {
       void handleNewGame();
     });
-    shortcutRegistry.bind("game.metadata", () => {
+    shortcutRegistry.bind("game.metadata", (event) => {
+      event.preventDefault();
       openMetadataEditor();
     });
     shortcutRegistry.bind("game.human-vs-engine", () => {

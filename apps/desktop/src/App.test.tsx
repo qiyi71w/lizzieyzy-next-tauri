@@ -658,6 +658,22 @@ describe("App game metadata", () => {
     expect(host.querySelector(".score-summary-card .player-name")?.textContent).toBe("新黑");
     expect(host.textContent).toContain("贴目:");
   });
+  it("consumes the opening I key before autofocus can insert it into the player name", async () => {
+    currentGameFixture.mockResolvedValue({
+      ...initialGame,
+      tree: { properties: [{ key: "PB", values: ["Original"] }], children: [] }
+    });
+    const host = await renderApp();
+    const openingKey = new KeyboardEvent("keydown", { key: "i", bubbles: true, cancelable: true });
+    act(() => requiredElement(host, 'canvas[aria-label="棋盘"]').dispatchEvent(openingKey));
+    expect(openingKey.defaultPrevented).toBe(true);
+    const name = requiredElement<HTMLInputElement>(host, '[role="dialog"] input[type="text"]');
+    expect(name.value).toBe("Original");
+    const typingKey = new KeyboardEvent("keydown", { key: "i", bubbles: true, cancelable: true });
+    act(() => name.dispatchEvent(typingKey));
+    expect(typingKey.defaultPrevented).toBe(false);
+  });
+
 });
 
 describe("App focus-safe review controls", () => {
