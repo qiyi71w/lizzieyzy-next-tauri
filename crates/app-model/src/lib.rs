@@ -182,6 +182,8 @@ pub struct CurrentGameResultDto {
     /// Document snapshot ordering within this semantic identity, including Save state.
     pub snapshot_seq: u64,
     pub dirty: bool,
+    pub can_undo: bool,
+    pub can_redo: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_path: Option<String>,
 }
@@ -841,6 +843,8 @@ mod current_game_wire {
             generation: 1,
             snapshot_seq: 1,
             dirty: false,
+            can_undo: true,
+            can_redo: false,
             native_path: Some("/tmp/game.sgf".to_string()),
         };
 
@@ -854,6 +858,8 @@ mod current_game_wire {
         assert_eq!(json["snapshot"]["position"]["captures_white"], 1);
         assert_eq!(json["generation"], 1);
         assert_eq!(json["dirty"], false);
+        assert_eq!(json["can_undo"], true);
+        assert_eq!(json["can_redo"], false);
         assert_eq!(json["native_path"], "/tmp/game.sgf");
         assert_eq!(json["tree"]["children"][0]["properties"][0]["key"], "W");
         assert!(json["snapshot"].get("generated_information").is_none());

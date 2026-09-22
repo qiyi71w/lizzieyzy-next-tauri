@@ -64,6 +64,8 @@ fn restore_installs_tree_analysis_comment_cursor_source_and_dirty() {
     assert_eq!(root.snapshot.primary_analysis.unwrap().visits, 400);
     assert_eq!(restored.native_path.as_deref(), Some("/tmp/branching.sgf"));
     assert!(restored.dirty);
+    assert!(!restored.can_undo);
+    assert!(!restored.can_redo);
     assert!(target.serialize().unwrap().contains("C[restored personal]"));
     assert!(target.serialize().unwrap().contains("LZOP[KataGo"));
 }

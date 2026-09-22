@@ -317,6 +317,20 @@ export async function removeCurrentGameVariation(path: NodePath): Promise<Curren
   return invoke<CurrentGameResultDto>("remove_current_game_variation", { path });
 }
 
+export async function undoCurrentGame(generation: number): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<CurrentGameResultDto>("undo_current_game", { generation });
+}
+
+export async function redoCurrentGame(generation: number): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<CurrentGameResultDto>("redo_current_game", { generation });
+}
+
 export async function saveCurrentGame(
   path: string | null,
   selectedPath: NodePath,

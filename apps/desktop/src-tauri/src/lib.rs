@@ -532,6 +532,22 @@ fn remove_current_game_variation(
 }
 
 #[tauri::command]
+fn undo_current_game(
+    state: State<CurrentGameState>,
+    generation: u64,
+) -> Result<CurrentGameResultDto, String> {
+    state.undo(generation).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn redo_current_game(
+    state: State<CurrentGameState>,
+    generation: u64,
+) -> Result<CurrentGameResultDto, String> {
+    state.redo(generation).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn classify_problems(frames: Vec<AnalysisFrameDto>) -> Vec<app_model::ProblemMarkerDto> {
     analysis_core::classify_problem_markers(&frames)
 }
@@ -1159,6 +1175,8 @@ pub fn run() {
             play_current_game,
             set_current_game_personal_comment,
             remove_current_game_variation,
+            undo_current_game,
+            redo_current_game,
             classify_problems,
             katago_launch_plan,
             engine_asset_checks,

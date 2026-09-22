@@ -97,6 +97,10 @@ type Props = {
   onCopySgf: () => void;
   onPasteSgf: () => void;
   onExit: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
   onClearBoard: () => void;
   onPass?: () => void;
   onRemoveVariation?: () => void;
@@ -121,8 +125,8 @@ export function AppChrome(props: Props) {
   const nativeAvailable = props.nativeRuntime !== false;
   const nativeUnavailable = props.nativeUnavailable ?? "Native current-game, edit, and authoritative Save require the Tauri desktop backend. Browser preview is non-authoritative.";
   const openDisabled = props.busy || !nativeAvailable;
-  const saveDisabled = !nativeAvailable || !props.dirty;
-  const saveAsDisabled = !nativeAvailable;
+  const saveDisabled = props.busy || !nativeAvailable || !props.dirty;
+  const saveAsDisabled = props.busy || !nativeAvailable;
   const recentOpenDisabled = props.busy || props.recentHistoryBusy || !nativeAvailable;
   const clearRecentDisabled = props.recentGamePaths.length === 0 || props.busy || props.recentHistoryBusy || !nativeAvailable;
   const retryRecentDisabled = props.busy || props.recentHistoryBusy || !nativeAvailable;
@@ -360,6 +364,9 @@ export function AppChrome(props: Props) {
             <MenuItem label="清除分析信息(此手)" disabled title={later} />
           </ChromeMenu>
           <ChromeMenu label="编辑" open={openMenu === "edit"} onToggle={() => setOpenMenu(openMenu === "edit" ? null : "edit")}>
+            <MenuItem label={actionLabelFromRegistry("edit.undo", "撤销")} onClick={() => run(props.onUndo)} disabled={!props.canUndo} />
+            <MenuItem label={actionLabelFromRegistry("edit.redo", "重做")} onClick={() => run(props.onRedo)} disabled={!props.canRedo} />
+            <div className="menu-sep" role="separator" />
             <MenuItem label="添加黑子" disabled title={later} />
             <MenuItem label="添加白子" disabled title={later} />
             <MenuItem label="交替落子" disabled title={later} />

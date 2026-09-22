@@ -58,6 +58,8 @@ const CLAIMED_SHORTCUTS: ShortcutDefinition[] = [
   { id: "analysis.continuous", label: "连续分析", primary: { key: " " }, aliases: [], focusRule: "focus-safe" },
   { id: "analysis.quick", label: "Quick analysis", primary: { key: "b", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "analysis.all-positions", label: "All-position analysis", primary: { key: "b", ctrl: true, shift: true }, aliases: [], focusRule: "focus-safe" },
+  { id: "edit.undo", label: "撤销", primary: { key: "z", ctrl: true }, aliases: [], focusRule: "focus-safe" },
+  { id: "edit.redo", label: "重做", primary: { key: "y", ctrl: true }, aliases: [{ key: "z", ctrl: true, shift: true }], focusRule: "focus-safe" },
   { id: "review.pass", label: "停一手", primary: { key: "p" }, aliases: [], focusRule: "focus-safe" },
   { id: "review.remove-variation", label: "删除分支", primary: { key: "Delete", shift: true }, aliases: [{ key: "Backspace", shift: true }], focusRule: "focus-safe" },
   { id: "review.parent", label: "上一手", primary: { key: "ArrowUp" }, aliases: [], focusRule: "focus-safe" },

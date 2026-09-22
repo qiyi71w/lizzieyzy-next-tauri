@@ -52,6 +52,8 @@ const backend = vi.hoisted(() => ({
   saveCurrentGame: vi.fn(),
   setCurrentGamePersonalComment: vi.fn(),
   removeCurrentGameVariation: vi.fn(),
+  undoCurrentGame: vi.fn(),
+  redoCurrentGame: vi.fn(),
   startKataGoGameAnalysis: vi.fn(),
   loadEngineProfilesSettings: vi.fn(),
   subscribeForegroundEngine: vi.fn(),
@@ -118,6 +120,8 @@ const initialGame: CurrentGameResultDto = {
   snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "", markup: [] },
   generation: 1,
   snapshot_seq: 1,
+  can_undo: false,
+  can_redo: false,
   dirty: false,
   native_path: null
 };
@@ -184,6 +188,8 @@ const acceptedGame: CurrentGameResultDto = {
   },
   generation: 2,
   snapshot_seq: 1,
+  can_undo: true,
+  can_redo: false,
   dirty: true,
   native_path: null
 };
@@ -255,6 +261,8 @@ const branchingGame: CurrentGameResultDto = {
   },
   generation: 3,
   snapshot_seq: 1,
+  can_undo: true,
+  can_redo: false,
   dirty: true,
   native_path: "/tmp/review.sgf"
 };
@@ -582,6 +590,22 @@ describe("App focus-safe review controls", () => {
       },
       generation: 4
     });
+    backend.undoCurrentGame.mockResolvedValue({
+      ...branchingGame,
+      selected_path: { indices: [0] },
+      snapshot: { ...branchingGame.snapshot, path: { indices: [0] }, position: { ...emptyPosition, move_number: 1 } },
+      generation: 4,
+      snapshot_seq: 2,
+      can_undo: false,
+      can_redo: true
+    });
+    backend.redoCurrentGame.mockResolvedValue({
+      ...branchingGame,
+      generation: 4,
+      snapshot_seq: 2,
+      can_undo: true,
+      can_redo: false
+    });
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: {
@@ -878,6 +902,73 @@ describe("App focus-safe review controls", () => {
     pressKey(buttonNamed(hostKeys, "坐标"), "s");
     await flushLast(backend.saveCurrentGame);
     expect(backend.saveCurrentGame).toHaveBeenLastCalledWith(null, { indices: [0, 1] }, "review.sgf");
+  });
+
+  it("runs native Undo and Redo from the Edit menu and registered aliases", async () => {
+    const hostUndo = await renderApp();
+    act(() => buttonNamed(hostUndo, "编辑").click());
+    const undo = buttonNamed(hostUndo, "撤销(Ctrl+Z)");
+    expect(undo.disabled).toBe(false);
+    act(() => undo.click());
+    await flushLast(backend.undoCurrentGame);
+    await flushLast(backend.projectCurrentGameMainline);
+    expect(backend.undoCurrentGame).toHaveBeenLastCalledWith(3);
+    expect(requiredElement<HTMLInputElement>(hostUndo, 'input[aria-label="跳转手数"]').value).toBe("1");
+
+    currentGameFixture.mockResolvedValue({ ...branchingGame, can_redo: true });
+    const hostRedo = await renderApp();
+    pressKey(buttonNamed(hostRedo, "坐标"), "y", { ctrlKey: true });
+    await flushLast(backend.redoCurrentGame);
+    expect(backend.redoCurrentGame).toHaveBeenLastCalledWith(3);
+
+    const hostAlias = await renderApp();
+    backend.redoCurrentGame.mockClear();
+    pressKey(buttonNamed(hostAlias, "坐标"), "z", { ctrlKey: true, shiftKey: true });
+    await flushLast(backend.redoCurrentGame);
+    expect(backend.redoCurrentGame).toHaveBeenLastCalledWith(3);
+  });
+
+  it("disables empty native history and leaves text Undo to the focused editor", async () => {
+    currentGameFixture.mockResolvedValue({ ...branchingGame, can_undo: false, can_redo: false });
+    const host = await renderApp();
+    act(() => buttonNamed(host, "编辑").click());
+    expect(buttonNamed(host, "撤销(Ctrl+Z)").disabled).toBe(true);
+    expect(buttonNamed(host, "重做(Ctrl+Y)").disabled).toBe(true);
+
+    const editor = requiredElement<HTMLTextAreaElement>(host, 'textarea[aria-label="个人评论"]');
+    act(() => editor.focus());
+    pressKey(editor, "z", { ctrlKey: true });
+    pressKey(editor, "y", { ctrlKey: true });
+    pressKey(editor, "z", { ctrlKey: true, shiftKey: true });
+    expect(backend.undoCurrentGame).not.toHaveBeenCalled();
+    expect(backend.redoCurrentGame).not.toHaveBeenCalled();
+  });
+
+  it("fences navigation while a native history mutation is pending", async () => {
+    let releaseUndo!: (result: CurrentGameResultDto) => void;
+    backend.undoCurrentGame.mockReturnValueOnce(new Promise<CurrentGameResultDto>((resolve) => {
+      releaseUndo = resolve;
+    }));
+    const host = await renderApp();
+    backend.selectCurrentGameNode.mockClear();
+    pressKey(buttonNamed(host, "坐标"), "z", { ctrlKey: true });
+    pressKey(buttonNamed(host, "坐标"), "ArrowUp");
+    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releaseUndo({
+        ...branchingGame,
+        selected_path: { indices: [0] },
+        snapshot: { ...branchingGame.snapshot, path: { indices: [0] }, position: { ...emptyPosition, move_number: 1 } },
+        generation: 4,
+        snapshot_seq: 2,
+        can_undo: false,
+        can_redo: true
+      });
+      await backend.undoCurrentGame.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
   });
 
   it("dispatches claimed view shortcuts through the same actions as the visible controls", async () => {

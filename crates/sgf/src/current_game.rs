@@ -16,6 +16,117 @@ pub struct CurrentSgfDocument {
     document: SgfDocument,
 }
 
+const DOCUMENT_HISTORY_LIMIT: usize = 100;
+
+#[derive(Debug, Default)]
+pub struct DocumentHistory {
+    undo: Vec<SgfDocumentEdit>,
+    redo: Vec<SgfDocumentEdit>,
+}
+
+#[derive(Debug)]
+pub struct SgfDocumentEdit {
+    reversal: DocumentReversal,
+    selected_before: NodePath,
+    selected_after: NodePath,
+}
+
+#[derive(Debug)]
+enum DocumentReversal {
+    SetComment {
+        path: NodePath,
+        properties: Vec<(usize, SgfProperty)>,
+    },
+    RemoveSubtree {
+        parent: NodePath,
+        index: usize,
+    },
+    InsertSubtree {
+        parent: NodePath,
+        index: usize,
+        subtree: SgfNode,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentHistoryOutcome {
+    pub selected_path: NodePath,
+    pub structural: bool,
+}
+
+#[derive(Debug)]
+pub struct DocumentEditOutcome {
+    pub snapshot: SelectedNodeSnapshotDto,
+    pub edit: Option<SgfDocumentEdit>,
+}
+
+impl DocumentHistory {
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+    }
+
+    pub fn commit(&mut self, edit: SgfDocumentEdit) {
+        self.redo.clear();
+        self.undo.push(edit);
+        if self.undo.len() > DOCUMENT_HISTORY_LIMIT {
+            self.undo.remove(0);
+        }
+    }
+
+    pub fn undo(
+        &mut self,
+        document: &mut CurrentSgfDocument,
+    ) -> Result<Option<DocumentHistoryOutcome>, CurrentGameError> {
+        let Some(mut edit) = self.undo.pop() else {
+            return Ok(None);
+        };
+        let structural = match document.apply_reversal(&mut edit.reversal) {
+            Ok(structural) => structural,
+            Err(error) => {
+                self.undo.push(edit);
+                return Err(error);
+            }
+        };
+        let selected_path = edit.selected_before.clone();
+        self.redo.push(edit);
+        Ok(Some(DocumentHistoryOutcome {
+            selected_path,
+            structural,
+        }))
+    }
+
+    pub fn redo(
+        &mut self,
+        document: &mut CurrentSgfDocument,
+    ) -> Result<Option<DocumentHistoryOutcome>, CurrentGameError> {
+        let Some(mut edit) = self.redo.pop() else {
+            return Ok(None);
+        };
+        let structural = match document.apply_reversal(&mut edit.reversal) {
+            Ok(structural) => structural,
+            Err(error) => {
+                self.redo.push(edit);
+                return Err(error);
+            }
+        };
+        let selected_path = edit.selected_after.clone();
+        self.undo.push(edit);
+        Ok(Some(DocumentHistoryOutcome {
+            selected_path,
+            structural,
+        }))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SwingAnalysisScopeResolution {
     pub requested: Vec<SelectedNodeSnapshotDto>,
@@ -314,11 +425,26 @@ impl CurrentSgfDocument {
         path: &NodePath,
         vertex: MoveVertex,
     ) -> Result<SelectedNodeSnapshotDto, CurrentGameError> {
+        Ok(self.play_with_history(path, path, vertex)?.snapshot)
+    }
+
+    pub fn play_with_history(
+        &mut self,
+        selected_before: &NodePath,
+        path: &NodePath,
+        vertex: MoveVertex,
+    ) -> Result<DocumentEditOutcome, CurrentGameError> {
+        if selected_before != path {
+            self.snapshot(selected_before)?;
+        }
         let to_play = self.snapshot(path)?.position.to_play;
         if let Some(index) = self.existing_child_index(path, to_play, &vertex)? {
             let mut indices = path.indices.clone();
             indices.push(index);
-            return self.snapshot(&NodePath { indices });
+            return Ok(DocumentEditOutcome {
+                snapshot: self.snapshot(&NodePath { indices })?,
+                edit: None,
+            });
         }
 
         let mut board = self.board_after(path)?;
@@ -338,11 +464,22 @@ impl CurrentSgfDocument {
                 }],
                 children: Vec::new(),
             });
-            u32::try_from(parent.children.len() - 1).expect("child index fits u32")
+            parent.children.len() - 1
         };
         let mut indices = path.indices.clone();
-        indices.push(index);
-        self.snapshot(&NodePath { indices })
+        indices.push(u32::try_from(index).expect("child index fits u32"));
+        let selected_after = NodePath { indices };
+        Ok(DocumentEditOutcome {
+            snapshot: self.snapshot(&selected_after)?,
+            edit: Some(SgfDocumentEdit {
+                reversal: DocumentReversal::RemoveSubtree {
+                    parent: path.clone(),
+                    index,
+                },
+                selected_before: selected_before.clone(),
+                selected_after,
+            }),
+        })
     }
 
     pub fn set_personal_comment(
@@ -350,8 +487,41 @@ impl CurrentSgfDocument {
         path: &NodePath,
         comment: &str,
     ) -> Result<SelectedNodeSnapshotDto, CurrentGameError> {
+        Ok(self
+            .set_personal_comment_with_history(path, path, comment)?
+            .snapshot)
+    }
+
+    pub fn set_personal_comment_with_history(
+        &mut self,
+        selected_before: &NodePath,
+        path: &NodePath,
+        comment: &str,
+    ) -> Result<DocumentEditOutcome, CurrentGameError> {
+        if selected_before != path {
+            self.snapshot(selected_before)?;
+        }
+        let before_snapshot = self.snapshot(path)?;
+        let before = comment_properties(self.node_mut(path)?);
         apply_personal_comment(self.node_mut(path)?, comment);
-        self.snapshot(path)
+        let after = comment_properties(self.node_mut(path)?);
+        if before == after {
+            return Ok(DocumentEditOutcome {
+                snapshot: before_snapshot,
+                edit: None,
+            });
+        }
+        Ok(DocumentEditOutcome {
+            snapshot: self.snapshot(path)?,
+            edit: Some(SgfDocumentEdit {
+                reversal: DocumentReversal::SetComment {
+                    path: path.clone(),
+                    properties: before,
+                },
+                selected_before: selected_before.clone(),
+                selected_after: path.clone(),
+            }),
+        })
     }
 
     pub fn replace_primary_analysis(
@@ -373,19 +543,92 @@ impl CurrentSgfDocument {
     }
 
     pub fn remove_variation(&mut self, path: &NodePath) -> Result<NodePath, CurrentGameError> {
+        Ok(self.remove_variation_with_history(path, path)?.snapshot.path)
+    }
+
+    pub fn remove_variation_with_history(
+        &mut self,
+        selected_before: &NodePath,
+        path: &NodePath,
+    ) -> Result<DocumentEditOutcome, CurrentGameError> {
         if path.indices.is_empty() {
             return Err(CurrentGameError {
                 kind: CurrentGameErrorKind::RootRemoval,
                 message: "cannot remove the root".to_string(),
             });
         }
+        self.snapshot(selected_before)?;
         let _ = self.nodes_on_path(path)?;
-        let child_index = *path.indices.last().expect("non-root path") as usize;
-        let parent_path = NodePath {
+        let index = *path.indices.last().expect("non-root path") as usize;
+        let parent = NodePath {
             indices: path.indices[..path.indices.len() - 1].to_vec(),
         };
-        self.node_mut(&parent_path)?.children.remove(child_index);
-        Ok(parent_path)
+        self.snapshot(&parent)?;
+        let subtree = self.node_mut(&parent)?.children.remove(index);
+        Ok(DocumentEditOutcome {
+            snapshot: self.snapshot(&parent)?,
+            edit: Some(SgfDocumentEdit {
+                reversal: DocumentReversal::InsertSubtree {
+                    parent: parent.clone(),
+                    index,
+                    subtree,
+                },
+                selected_before: selected_before.clone(),
+                selected_after: parent,
+            }),
+        })
+    }
+
+    fn apply_reversal(&mut self, reversal: &mut DocumentReversal) -> Result<bool, CurrentGameError> {
+        match reversal {
+            DocumentReversal::SetComment { path, properties } => {
+                let node = self.node_mut(path)?;
+                let inverse = comment_properties(node);
+                replace_comment_properties(node, properties);
+                *properties = inverse;
+                Ok(false)
+            }
+            DocumentReversal::RemoveSubtree { parent, index } => {
+                let parent_path = parent.clone();
+                let child_index = *index;
+                let node = self.node_mut(&parent_path)?;
+                if child_index >= node.children.len() {
+                    return Err(invalid_history_path());
+                }
+                let subtree = node.children.remove(child_index);
+                *reversal = DocumentReversal::InsertSubtree {
+                    parent: parent_path,
+                    index: child_index,
+                    subtree,
+                };
+                Ok(true)
+            }
+            DocumentReversal::InsertSubtree {
+                parent,
+                index,
+                subtree,
+            } => {
+                let parent_path = parent.clone();
+                let child_index = *index;
+                let node = self.node_mut(&parent_path)?;
+                if child_index > node.children.len() {
+                    return Err(invalid_history_path());
+                }
+                let inserted = std::mem::replace(
+                    subtree,
+                    SgfNode {
+                        properties: Vec::new(),
+                        children: Vec::new(),
+                    },
+                );
+                node.children.insert(child_index, inserted);
+                *reversal = DocumentReversal::RemoveSubtree {
+                    parent: parent_path,
+                    index: child_index,
+                };
+                Ok(true)
+            }
+        }
     }
 
     fn root(&self) -> Result<&SgfNode, CurrentGameError> {
@@ -605,6 +848,30 @@ impl From<SgfError> for CurrentGameError {
                 message: error.to_string(),
             },
         }
+    }
+}
+
+fn invalid_history_path() -> CurrentGameError {
+    CurrentGameError {
+        kind: CurrentGameErrorKind::InvalidNodePath,
+        message: "document history no longer matches the current tree".to_string(),
+    }
+}
+
+fn comment_properties(node: &SgfNode) -> Vec<(usize, SgfProperty)> {
+    node.properties
+        .iter()
+        .enumerate()
+        .filter(|(_, property)| property.key == "C")
+        .map(|(index, property)| (index, property.clone()))
+        .collect()
+}
+
+fn replace_comment_properties(node: &mut SgfNode, properties: &[(usize, SgfProperty)]) {
+    node.properties.retain(|property| property.key != "C");
+    for (index, property) in properties {
+        node.properties
+            .insert((*index).min(node.properties.len()), property.clone());
     }
 }
 

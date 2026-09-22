@@ -77,12 +77,16 @@ describe("shortcut reference and dispatch", () => {
     const candidates = entries.find((entry) => entry.id === "review.select-candidate");
     const remove = entries.find((entry) => entry.id === "review.remove-variation");
     const create = entries.find((entry) => entry.id === "file.new");
+    const undo = entries.find((entry) => entry.id === "edit.undo");
+    const redo = entries.find((entry) => entry.id === "edit.redo");
 
     expect(autoplay).toEqual({ id: "review.autoplay", label: "自动播放", keys: "Ctrl+A" });
     expect(help).toEqual({ id: "help.shortcut-reference", label: "快捷键参考", keys: "?" });
     expect(candidates).toEqual({ id: "review.select-candidate", label: "选择候选", keys: "1–9" });
     expect(remove).toEqual({ id: "review.remove-variation", label: "删除分支", keys: "Shift+Delete, Shift+Backspace" });
     expect(create).toEqual({ id: "file.new", label: "新建", keys: "Ctrl+Home" });
+    expect(undo).toEqual({ id: "edit.undo", label: "撤销", keys: "Ctrl+Z" });
+    expect(redo).toEqual({ id: "edit.redo", label: "重做", keys: "Ctrl+Y, Ctrl+Shift+Z" });
     expect(entries.find((entry) => entry.id === "review.parent")).toEqual({
       id: "review.parent",
       label: "上一手",
@@ -132,6 +136,10 @@ describe("shortcut reference and dispatch", () => {
     const help = vi.fn();
     registry.bind("review.autoplay", autoplay);
     registry.bind("help.shortcut-reference", help);
+    const undo = vi.fn();
+    const redo = vi.fn();
+    registry.bind("edit.undo", undo);
+    registry.bind("edit.redo", redo);
 
     const host = document.createElement("button");
     document.body.append(host);
@@ -153,6 +161,28 @@ describe("shortcut reference and dispatch", () => {
     Object.defineProperty(typed, "target", { value: editor });
     expect(registry.dispatch(typed)).toBe(false);
     expect(help).toHaveBeenCalledTimes(1);
+    const textUndo = new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true, cancelable: true });
+    Object.defineProperty(textUndo, "target", { value: editor });
+    expect(registry.dispatch(textUndo)).toBe(false);
+    expect(undo).not.toHaveBeenCalled();
+
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    document.body.append(editable);
+    const textRedo = new KeyboardEvent("keydown", { key: "z", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true });
+    Object.defineProperty(textRedo, "target", { value: editable });
+    expect(registry.dispatch(textRedo)).toBe(false);
+    expect(redo).not.toHaveBeenCalled();
+
+    const boardUndo = new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true, cancelable: true });
+    Object.defineProperty(boardUndo, "target", { value: host });
+    expect(registry.dispatch(boardUndo)).toBe(true);
+    expect(undo).toHaveBeenCalledTimes(1);
+
+    const boardRedo = new KeyboardEvent("keydown", { key: "y", ctrlKey: true, bubbles: true, cancelable: true });
+    Object.defineProperty(boardRedo, "target", { value: host });
+    expect(registry.dispatch(boardRedo)).toBe(true);
+    expect(redo).toHaveBeenCalledTimes(1);
 
     const board = document.createElement("canvas");
     board.setAttribute("aria-label", "棋盘");

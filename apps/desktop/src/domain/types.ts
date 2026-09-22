@@ -52,6 +52,8 @@ export type CurrentGameResultDto = {
   /** Semantic position/tree identity; comments, navigation and Save preserve it. */
   generation: number;
   snapshot_seq: number;
+  can_undo: boolean;
+  can_redo: boolean;
   dirty: boolean;
   native_path?: string | null;
 };

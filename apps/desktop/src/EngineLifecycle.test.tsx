@@ -56,6 +56,8 @@ const backend = vi.hoisted(() => ({
   saveCurrentGame: vi.fn(),
   setCurrentGamePersonalComment: vi.fn(),
   removeCurrentGameVariation: vi.fn(),
+  undoCurrentGame: vi.fn(),
+  redoCurrentGame: vi.fn(),
   startKataGoGameAnalysis: vi.fn(),
   loadEngineProfilesSettings: vi.fn(),
   saveEngineProfilesSettings: vi.fn(),
@@ -111,6 +113,8 @@ const initialGame: CurrentGameResultDto = {
   snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "", markup: [] },
   generation: 1,
   snapshot_seq: 1,
+  can_undo: false,
+  can_redo: false,
   dirty: false,
   native_path: null
 };

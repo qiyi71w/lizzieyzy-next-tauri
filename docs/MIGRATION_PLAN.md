@@ -69,6 +69,7 @@ The existing Tauri implementation is the migration starting point and must be pr
 - Rust-owned current-game state, tree-shaped DTOs, `NodePath`, SGF mutation/serialization, Go-rule validation, and fresh projections for remaining analysis consumers.
 - Native SGF Open/Save/Save As, including cancellation and failed-write preservation; browser preview remains explicitly non-authoritative.
 - Variation navigation, legal move/pass editing, branch removal, personal comments, and semantic save/reopen without an engine.
+- Unified 100-commit Undo/Redo for move/pass insertion, personal comments and variation removal, with semantic reversals, exact cursors and Save-aware dirty state. R6 ticket 04 owns the Windows/native and real-KataGo acceptance record; implementation alone does not close `SGF-12` history acceptance.
 - Board, exact-node analysis presentation, candidate/PV/ownership/policy paths, Java-compatible Move Rank markers, configurable win-rate/score chart, Sub-Board Variation/Raw, and synchronized Variation Replay.
 - Persisted engine profiles, asset checks, KataGo command construction, one manager-owned event contract, independent selected-node and first-child-mainline lanes, incremental progress, lane-local cancellation, timeout/error propagation, and exact identity rejection.
 - Java-compatible `LZ` / `LZOP` / `LZ2` / `LZOP2` SGF exchange and exact-node attachment. Save / Save As is the only active analysis persistence path; the unshipped SQLite analysis-cache product surface and runtime are removed.

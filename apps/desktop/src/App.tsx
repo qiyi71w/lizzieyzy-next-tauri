@@ -60,6 +60,8 @@ import {
   selectCurrentGameNode,
   setCurrentGamePersonalComment,
   removeCurrentGameVariation,
+  undoCurrentGame,
+  redoCurrentGame,
   startAnalysisTask,
   startKataGoGameAnalysis,
   startSelectedNodeAnalysis,
@@ -191,6 +193,8 @@ export function App() {
   const pendingSelectedPathRef = useRef<NodePath | null>(null);
   const queuedSelectionRef = useRef<{ path: NodePath; generation: number } | null>(null);
   const pendingBoardIntentRef = useRef<string | null>(null);
+  const [editActionPending, setEditActionPending] = useState(false);
+  const editActionPendingRef = useRef(false);
   const [preferences, setPreferences] = useState<AppPreferences>(() => defaultAppPreferences);
   const [preferencesStatus, setPreferencesStatus] = useState("正在载入设置…");
   const [recentHistoryBusy, setRecentHistoryBusy] = useState(false);
@@ -571,6 +575,10 @@ export function App() {
   const documentPath = currentGame?.native_path ?? currentFilePath;
   const documentName = useMemo(() => documentPath ? fileNameFromPath(documentPath) : fallbackFileName ?? "未命名棋谱", [documentPath, fallbackFileName]);
   const saveFileName = documentName.toLowerCase().endsWith(".sgf") ? documentName : `${documentName}.sgf`;
+  const documentFlowBusy = fileFlowBusy || departurePending || Boolean(newDocumentOpen) || Boolean(departurePrompt) || Boolean(teardownPrompt) || Boolean(recoveryPrompt);
+  const historyActionBlocked = documentFlowBusy || editActionPending;
+  const canUndo = nativeRuntime && Boolean(currentGame?.can_undo) && !historyActionBlocked;
+  const canRedo = nativeRuntime && Boolean(currentGame?.can_redo) && !historyActionBlocked;
 
 
   useEffect(() => {
@@ -584,7 +592,7 @@ export function App() {
   }, [preferences.showCandidates, preferences.candidateLimit, selectedCandidateIndex]);
 
   useEffect(() => {
-    const openEnabled = nativeRuntime;
+    const openEnabled = nativeRuntime && !historyActionBlocked;
     const saveEnabled = openEnabled && documentDirty;
     const passEnabled = openEnabled;
 
@@ -625,6 +633,12 @@ export function App() {
     });
     shortcutRegistry.bind("file.paste-sgf", () => {
       void handlePasteSgf();
+    });
+    shortcutRegistry.bind("edit.undo", () => {
+      if (canUndo) void handleHistoryAction("undo");
+    });
+    shortcutRegistry.bind("edit.redo", () => {
+      if (canRedo) void handleHistoryAction("redo");
     });
     shortcutRegistry.bind("review.pass", () => {
       if (passEnabled) void playAt("pass");
@@ -708,6 +722,9 @@ export function App() {
     chosenChildren,
     currentGame,
     documentDirty,
+    canUndo,
+    canRedo,
+    historyActionBlocked,
     nativeRuntime,
     positions,
     preferences,
@@ -2498,13 +2515,15 @@ export function App() {
   }
 
   async function handleCommitPersonalComment(comment: string) {
-    if (!currentGame) return;
+    if (!currentGame || editActionPendingRef.current) return;
     if (!nativeRuntime) {
       setMessage(nativeCurrentGameUnavailable);
       return;
     }
     if (comment === currentGame.snapshot.personal_comment) return;
     const editedPath = currentGame.selected_path;
+    editActionPendingRef.current = true;
+    setEditActionPending(true);
     try {
       const result = await setCurrentGamePersonalComment(editedPath, comment);
       if (!isCurrentGameSnapshot(result)) return;
@@ -2525,12 +2544,15 @@ export function App() {
       setMessage("已更新选中节点的个人评论。");
     } catch (error) {
       setMessage(`评论更新失败: ${errorMessage(error)}`);
+    } finally {
+      editActionPendingRef.current = false;
+      setEditActionPending(false);
     }
   }
 
   async function selectNode(path: NodePath, generation = currentGame?.generation) {
     const game = currentGameRef.current;
-    if (!game || generation !== game.generation || departurePendingRef.current
+    if (!game || editActionPendingRef.current || generation !== game.generation || departurePendingRef.current
       || !path.indices.every((index) => Number.isInteger(index) && index >= 0)
       || !nodeAt(game.tree, path)) return;
     if (!navigatingRef.current && samePath(path, game.selected_path)) return;
@@ -2626,14 +2648,15 @@ export function App() {
       setMessage(nativeCurrentGameUnavailable);
       return;
     }
-    if (!currentGame || pendingBoardIntentRef.current !== null) return;
+    if (!currentGame || pendingBoardIntentRef.current !== null || editActionPendingRef.current) return;
     const intentKey = vertex === "pass" ? "pass" : `${vertex.point.x},${vertex.point.y}`;
     pendingBoardIntentRef.current = intentKey;
+    editActionPendingRef.current = true;
+    setEditActionPending(true);
     const previousGeneration = currentGame.generation;
     try {
       const result = await playCurrentGame(currentGame.selected_path, vertex);
-      documentGenerationRef.current = result.generation;
-      setCurrentGame(result);
+      adoptCurrentGame(result);
       pendingSelectedPathRef.current = result.selected_path;
       setChosenChildren((prev) => rememberChosenChildren(prev, result.selected_path));
       setDirty(result.dirty);
@@ -2654,11 +2677,15 @@ export function App() {
       setMessage(feedback);
     } finally {
       if (pendingBoardIntentRef.current === intentKey) pendingBoardIntentRef.current = null;
+      editActionPendingRef.current = false;
+      setEditActionPending(false);
     }
   }
 
   async function handleRemoveVariation() {
-    if (!currentGame || selectedPath.indices.length === 0) return;
+    if (!currentGame || selectedPath.indices.length === 0 || editActionPendingRef.current) return;
+    editActionPendingRef.current = true;
+    setEditActionPending(true);
     try {
       const result = await removeCurrentGameVariation(selectedPath);
       adoptCurrentGame(result);
@@ -2674,6 +2701,46 @@ export function App() {
       setMessage("已删除选中变化，并回到其父节点。");
     } catch (error) {
       setMessage(`删除变化失败: ${errorMessage(error)}`);
+    } finally {
+      editActionPendingRef.current = false;
+      setEditActionPending(false);
+    }
+  }
+
+  async function handleHistoryAction(action: "undo" | "redo") {
+    const before = currentGameRef.current;
+    if (!nativeRuntime || !before || documentFlowBusy || editActionPendingRef.current
+      || navigatingRef.current || queuedSelectionRef.current) return;
+    if (action === "undo" ? !before.can_undo : !before.can_redo) return;
+    editActionPendingRef.current = true;
+    setEditActionPending(true);
+    try {
+      const result = await (action === "undo" ? undoCurrentGame(before.generation) : redoCurrentGame(before.generation));
+      const latest = currentGameRef.current;
+      if (!latest || latest.generation !== before.generation || latest.snapshot_seq > result.snapshot_seq) return;
+      const changed = result.generation !== before.generation || result.snapshot_seq !== before.snapshot_seq;
+      const structural = result.generation !== before.generation;
+      adoptCurrentGame(result);
+      pendingSelectedPathRef.current = result.selected_path;
+      setChosenChildren(chosenFromPath(result.selected_path));
+      setDirty(result.dirty);
+      setCurrentMove(result.snapshot.position.move_number);
+      setSelectedCandidateIndex(null);
+      if (structural) {
+        clearReviewData();
+        await abandonAnalysisSessions();
+        const artifacts = await artifactsFromCurrentGame();
+        if (!isCurrentDocumentGeneration(result.generation)) return;
+        setGame(artifacts.projection);
+      }
+      setMessage(changed
+        ? (action === "undo" ? "已撤销上一次编辑。" : "已重做上一次编辑。")
+        : (action === "undo" ? "没有可撤销的编辑。" : "没有可重做的编辑。"));
+    } catch (error) {
+      setMessage(`${action === "undo" ? "撤销" : "重做"}失败: ${errorMessage(error)}`);
+    } finally {
+      editActionPendingRef.current = false;
+      setEditActionPending(false);
     }
   }
 
@@ -2699,7 +2766,7 @@ export function App() {
     <AppChrome
       sheet={sheet}
       onToggleSheet={toggleSheet}
-      busy={fileFlowBusy || departurePending || Boolean(newDocumentOpen) || Boolean(departurePrompt) || Boolean(teardownPrompt) || Boolean(recoveryPrompt)}
+      busy={historyActionBlocked}
       dirty={documentDirty}
       documentName={documentName}
       engineLabel={engineLabel}
@@ -2769,6 +2836,10 @@ export function App() {
       onCopySgf={() => void handleCopySgf()}
       onPasteSgf={() => void handlePasteSgf()}
       onExit={() => void handleApplicationExit()}
+      onUndo={() => void handleHistoryAction("undo")}
+      onRedo={() => void handleHistoryAction("redo")}
+      canUndo={canUndo}
+      canRedo={canRedo}
       onClearBoard={() => void handleNewGame()}
       onPass={() => void playAt("pass")}
       onRemoveVariation={() => void handleRemoveVariation()}
