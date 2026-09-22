@@ -178,6 +178,25 @@ describe("durable preferences surface", () => {
     expect(buttonNamed(host, "手数").getAttribute("aria-pressed")).toBe("false");
   });
 
+  it("adopts mute only after a successful durable write and retains it after failure", async () => {
+    const host = await renderApp();
+    openPreferences(host);
+    let resolveSave!: (value: AppPreferences) => void;
+    preferencesApi.saveAppPreferences.mockImplementationOnce(() => new Promise<AppPreferences>((resolve) => { resolveSave = resolve; }));
+    act(() => labeledCheckbox(host, "落子声音").click());
+    expect(labeledCheckbox(host, "落子声音").checked).toBe(true);
+    await act(async () => {
+      resolveSave({ ...defaultAppPreferences, soundEnabled: false });
+      await preferencesApi.saveAppPreferences.mock.results.at(-1)?.value;
+    });
+    expect(labeledCheckbox(host, "落子声音").checked).toBe(false);
+    preferencesApi.saveAppPreferences.mockRejectedValueOnce(new Error("disk full"));
+    act(() => labeledCheckbox(host, "落子声音").click());
+    await act(async () => { await preferencesApi.saveAppPreferences.mock.results.at(-1)?.value.catch(() => undefined); });
+    expect(labeledCheckbox(host, "落子声音").checked).toBe(false);
+    expect(preferencesStatus(host)).toContain("disk full");
+  });
+
   it("keeps invalid budgets local and restores the committed values when persistence fails", async () => {
     const host = await renderApp();
     act(() => buttonNamed(host, "分析").click());

@@ -98,6 +98,12 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
       <ContinuousBudgetEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       <fieldset className="preferences-grid">
         <legend>复盘</legend>
+        <Toggle
+          label="落子声音"
+          checked={preferences.soundEnabled}
+          disabled={disabled}
+          onChange={(checked) => update({ soundEnabled: checked })}
+        />
         <label>
           <span>默认计算量</span>
           <input

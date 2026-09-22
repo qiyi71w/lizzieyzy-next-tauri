@@ -546,7 +546,7 @@ export function AppChrome(props: Props) {
 export function BottomBar(props: {
   currentMove: number;
   maxMove: number;
-  onMove: (move: number) => void;
+  onMove: (move: number, forward?: boolean) => void;
   canParent: boolean;
   canNext: boolean;
   canPrevSibling: boolean;
@@ -637,7 +637,7 @@ export function BottomBar(props: {
           aria-label="跳转手数"
           onChange={(event) => props.onMove(Number(event.target.value))}
         />
-        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.currentMove + 1)} disabled={props.currentMove >= props.maxMove} title="下一手">&gt;</button>
+        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.currentMove + 1, true)} disabled={props.currentMove >= props.maxMove} title="下一手">&gt;</button>
         <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(Math.min(props.maxMove, props.currentMove + 10))} disabled={props.currentMove >= props.maxMove} title="前进 10 手">&gt;&gt;</button>
         <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.maxMove)} disabled={props.currentMove >= props.maxMove} title="末手">&gt;|</button>
         <input
