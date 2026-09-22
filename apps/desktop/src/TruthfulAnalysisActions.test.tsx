@@ -79,7 +79,8 @@ const backend = vi.hoisted(() => ({
   switchForegroundEngine: vi.fn(() => Promise.resolve()),
   getForegroundEngineSnapshot: vi.fn(),
   foregroundEngineContinuousAction: vi.fn(),
-  subscribeForegroundEngine: vi.fn()
+  subscribeForegroundEngine: vi.fn(),
+  subscribeTrialAnalysis: vi.fn(async () => () => undefined)
 }));
 
 vi.mock("./api/backend", () => ({

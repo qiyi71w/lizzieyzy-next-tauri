@@ -57,6 +57,7 @@ const backend = vi.hoisted(() => ({
   startKataGoGameAnalysis: vi.fn(),
   loadEngineProfilesSettings: vi.fn(),
   subscribeForegroundEngine: vi.fn(),
+  subscribeTrialAnalysis: vi.fn(async () => () => undefined),
   startForegroundEngine: vi.fn(),
   stopForegroundEngine: vi.fn(),
   restartForegroundEngine: vi.fn(),
