@@ -2,9 +2,9 @@ use ::current_game_recovery::RecoveryCoordinator;
 use app_model::{
     admits_analysis_attachment, AnalysisJobEventDto, AnalysisJobModeDto, AnalysisJobStartedDto,
     ApplicationExitDispositionDto, CurrentGameError, CurrentGameErrorKind, CurrentGameResultDto, GameDto,
-    MoveVertex, NodePath, RecoveryEnvelopeDto, RecoveryProtectionDto, SelectedNodeSnapshotDto,
+    MoveVertex, NodePath, RecoveryEnvelopeDto, RecoveryProtectionDto, SelectedNodeSnapshotDto, TrialSessionDto,
 };
-use sgf::{CurrentSgfDocument, DocumentHistory, SgfAnalysisPayload, SgfDocumentEdit};
+use sgf::{CurrentSgfDocument, DocumentHistory, SgfAnalysisPayload, SgfDocumentEdit, TrialLine};
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
@@ -19,6 +19,7 @@ mod current_game_save_write;
 #[cfg(test)]
 mod current_game_session_recovery;
 mod departure;
+mod trial;
 pub(crate) mod recovery;
 
 #[derive(Debug, Clone)]
@@ -70,6 +71,9 @@ struct CurrentGameHolder {
     document_identity: u64,
     snapshot_seq: u64,
     analysis_target: Option<(u64, NodePath)>,
+    trial_mode: trial::TrialMode,
+    next_trial_id: u64,
+    next_trial_revision: u64,
 }
 
 impl CurrentGameState {
@@ -84,6 +88,9 @@ impl CurrentGameState {
 
     // Called with the holder locked: accepted cursor/edit order is also target order.
     fn follow_continuous_position(&self, holder: &mut CurrentGameHolder) {
+        if !matches!(holder.trial_mode, trial::TrialMode::Review) {
+            return;
+        }
         let Some(manager) = self.analysis_manager.get() else {
             return;
         };
@@ -589,6 +596,9 @@ impl CurrentGameState {
         }
         let payload = SgfAnalysisPayload::from_frame(frame, "KataGo");
         let mut holder = self.holder.lock().expect("current game state");
+        if !matches!(holder.trial_mode, trial::TrialMode::Review) {
+            return None;
+        }
         if holder.rejects_job(&event.run_id, &event.job_id)
             || (event.mode == AnalysisJobModeDto::Continuous && holder.selected_path != event.node_path)
         {

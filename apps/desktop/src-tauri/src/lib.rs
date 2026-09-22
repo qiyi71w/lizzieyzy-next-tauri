@@ -548,6 +548,44 @@ fn redo_current_game(
 }
 
 #[tauri::command]
+fn enter_trial(state: State<CurrentGameState>) -> Result<app_model::TrialSessionDto, String> {
+    state.enter_trial()
+}
+
+#[tauri::command]
+fn exit_trial(state: State<CurrentGameState>, session_id: u64) -> Result<CurrentGameResultDto, String> {
+    state.exit_trial(session_id)
+}
+
+#[tauri::command]
+fn trial_snapshot(state: State<CurrentGameState>, session_id: u64) -> Result<app_model::TrialSessionDto, CurrentGameError> {
+    state.trial_snapshot(session_id)
+}
+
+#[tauri::command]
+fn trial_select(state: State<CurrentGameState>, session_id: u64, revision: u64, path: NodePath) -> Result<app_model::TrialSessionDto, CurrentGameError> {
+    state.trial_select(session_id, revision, path)
+}
+
+#[tauri::command]
+fn trial_play(state: State<CurrentGameState>, session_id: u64, revision: u64, vertex: MoveVertex) -> Result<app_model::TrialSessionDto, CurrentGameError> {
+    state.trial_play(session_id, revision, vertex)
+}
+
+#[tauri::command]
+fn trial_undo(state: State<CurrentGameState>, session_id: u64, revision: u64) -> Result<app_model::TrialSessionDto, CurrentGameError> {
+    state.trial_undo(session_id, revision)
+}
+
+#[tauri::command]
+fn trial_start_finite(
+    manager: State<ForegroundEngineManager>, state: State<CurrentGameState>,
+    session_id: u64, revision: u64, run_id: String, max_visits: u32,
+) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+    state.trial_start_finite(&manager, session_id, revision, run_id, max_visits)
+}
+
+#[tauri::command]
 fn classify_problems(frames: Vec<AnalysisFrameDto>) -> Vec<app_model::ProblemMarkerDto> {
     analysis_core::classify_problem_markers(&frames)
 }
@@ -1127,6 +1165,9 @@ pub fn run() {
                         ForegroundEngineEventDto::Job { mut job } => {
                             if let Some(state) = emit_handle.try_state::<CurrentGameState>() {
                                 job.current_game = state.attach_from_job_event(&job);
+                                if let Some(trial) = state.attach_trial_from_job_event(&job) {
+                                    let _ = emit_handle.emit("trial://analysis", trial);
+                                }
                             }
                             let _ = emit_handle.emit("foreground-engine://job", job);
                         }
@@ -1177,6 +1218,13 @@ pub fn run() {
             remove_current_game_variation,
             undo_current_game,
             redo_current_game,
+            enter_trial,
+            exit_trial,
+            trial_snapshot,
+            trial_select,
+            trial_play,
+            trial_undo,
+            trial_start_finite,
             classify_problems,
             katago_launch_plan,
             engine_asset_checks,

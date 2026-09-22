@@ -60,6 +60,174 @@ pub struct DocumentEditOutcome {
     pub edit: Option<SgfDocumentEdit>,
 }
 
+/// A session-only branch rooted at the selected position. The retained ancestors
+/// preserve replay and simple-ko context; only the branch below the entry is exposed.
+pub struct TrialLine {
+    document: CurrentSgfDocument,
+    entry: NodePath,
+    entry_move_number: u32,
+    selected: NodePath,
+    history: DocumentHistory,
+}
+
+impl TrialLine {
+    pub fn new(source: &CurrentSgfDocument, entry: &NodePath) -> Result<Self, CurrentGameError> {
+        let ancestors = source.nodes_on_path(entry)?;
+        let mut root = SgfNode {
+            properties: ancestors[0].properties.clone(),
+            children: Vec::new(),
+        };
+        let mut cursor = &mut root;
+        for ancestor in ancestors.iter().skip(1) {
+            let node = SgfNode {
+                properties: ancestor.properties.clone(),
+                children: Vec::new(),
+            };
+            cursor.children.push(node);
+            cursor = &mut cursor.children[0];
+        }
+        cursor
+            .properties
+            .retain(|property| !matches!(property.key.as_str(), "LZ" | "LZ2" | "LZOP" | "LZOP2"));
+        let entry_move_number = source.snapshot(entry)?.position.move_number;
+        let internal = NodePath {
+            indices: vec![0; entry.indices.len()],
+        };
+        let document = SgfDocument {
+            board_width: source.document.board_width,
+            board_height: source.document.board_height,
+            komi: source.document.komi,
+            handicap: source.document.handicap,
+            black_name: source.document.black_name.clone(),
+            white_name: source.document.white_name.clone(),
+            result: source.document.result.clone(),
+            moves: Vec::new(),
+            root: Some(root),
+        };
+        Ok(Self {
+            document: CurrentSgfDocument { document },
+            entry: internal.clone(),
+            entry_move_number,
+            selected: internal,
+            history: DocumentHistory::default(),
+        })
+    }
+
+    fn absolute(&self, path: &NodePath) -> NodePath {
+        let mut indices = self.entry.indices.clone();
+        indices.extend_from_slice(&path.indices);
+        NodePath { indices }
+    }
+
+    fn relative(&self, path: &NodePath) -> NodePath {
+        NodePath {
+            indices: path.indices[self.entry.indices.len()..].to_vec(),
+        }
+    }
+
+    pub fn selected_path(&self) -> NodePath {
+        self.relative(&self.selected)
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    pub fn tree(&self) -> Result<SgfTreeNodeDto, CurrentGameError> {
+        let node = *self
+            .document
+            .nodes_on_path(&self.entry)?
+            .last()
+            .expect("entry exists");
+        let mut tree = tree_dto(node);
+        tree.properties
+            .retain(|property| property.key != "B" && property.key != "W");
+        Ok(tree)
+    }
+
+    pub fn raw_snapshot(&self) -> Result<SelectedNodeSnapshotDto, CurrentGameError> {
+        let mut snapshot = self.document.snapshot(&self.selected)?;
+        snapshot.path = self.relative(&self.selected);
+        Ok(snapshot)
+    }
+
+    pub fn snapshot(&self) -> Result<SelectedNodeSnapshotDto, CurrentGameError> {
+        let mut snapshot = self.raw_snapshot()?;
+        snapshot.position.move_number -= self.entry_move_number;
+        snapshot.position.last_move = snapshot.position.last_move.and_then(|mut last| {
+            if last.move_number <= self.entry_move_number {
+                None
+            } else {
+                last.move_number -= self.entry_move_number;
+                Some(last)
+            }
+        });
+        snapshot
+            .stone_move_numbers
+            .retain(|m| m.move_number > self.entry_move_number);
+        for number in &mut snapshot.stone_move_numbers {
+            number.move_number -= self.entry_move_number;
+        }
+        for frame in [&mut snapshot.primary_analysis, &mut snapshot.secondary_analysis]
+            .into_iter()
+            .flatten()
+        {
+            frame.turn = frame.turn.saturating_sub(self.entry_move_number);
+        }
+        Ok(snapshot)
+    }
+
+    pub fn select(&mut self, path: &NodePath) -> Result<(), CurrentGameError> {
+        let absolute = self.absolute(path);
+        self.document.snapshot(&absolute)?;
+        self.selected = absolute;
+        Ok(())
+    }
+
+    pub fn play(&mut self, vertex: MoveVertex) -> Result<bool, CurrentGameError> {
+        let outcome = self
+            .document
+            .play_with_history(&self.selected, &self.selected, vertex)?;
+        let changed = outcome.edit.is_some();
+        if let Some(edit) = outcome.edit {
+            self.history.commit(edit);
+        }
+        self.selected = outcome.snapshot.path;
+        Ok(changed)
+    }
+
+    pub fn undo(&mut self) -> Result<bool, CurrentGameError> {
+        let Some(outcome) = self.history.undo(&mut self.document)? else {
+            return Ok(false);
+        };
+        self.selected = outcome.selected_path;
+        Ok(true)
+    }
+
+    pub fn attach_analysis(
+        &mut self,
+        path: &NodePath,
+        payload: &crate::SgfAnalysisPayload,
+    ) -> Result<(), CurrentGameError> {
+        self.document
+            .replace_primary_analysis(&self.absolute(path), payload)?;
+        Ok(())
+    }
+
+    pub fn board_width(&self) -> u8 {
+        self.document.board_width()
+    }
+    pub fn board_height(&self) -> u8 {
+        self.document.board_height()
+    }
+    pub fn komi(&self) -> f32 {
+        self.document.komi()
+    }
+    pub fn rules(&self) -> String {
+        self.document.rules()
+    }
+}
+
 impl DocumentHistory {
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
@@ -957,6 +1125,52 @@ fn tree_dto(node: &SgfNode) -> SgfTreeNodeDto {
             })
             .collect(),
         children: node.children.iter().map(tree_dto).collect(),
+    }
+}
+
+#[cfg(test)]
+mod trial_line_isolation {
+    use super::*;
+    use app_model::{MoveVertex, PointDto};
+
+    #[test]
+    fn branch_entry_replays_legal_moves_without_changing_the_source() {
+        let source = CurrentSgfDocument::open("(;SZ[5]C[root];B[aa];W[bb]C[entry]LZ[old];B[cc])").unwrap();
+        let entry = NodePath { indices: vec![0, 0] };
+        let serialized = source.serialize().unwrap();
+        let mut trial = TrialLine::new(&source, &entry).unwrap();
+        assert_eq!(trial.snapshot().unwrap().position.move_number, 0);
+        assert!(trial.snapshot().unwrap().primary_analysis.is_none());
+        assert!(trial.tree().unwrap().children.is_empty());
+        assert!(!trial.tree().unwrap().properties.iter().any(|p| p.key == "W"));
+
+        assert_eq!(
+            trial
+                .play(MoveVertex::Point(PointDto { x: 0, y: 0 }))
+                .unwrap_err()
+                .kind,
+            CurrentGameErrorKind::OccupiedPoint
+        );
+        assert!(!trial.can_undo());
+        trial.play(MoveVertex::Pass).unwrap();
+        assert_eq!(trial.snapshot().unwrap().position.move_number, 1);
+        assert_eq!(
+            trial.snapshot().unwrap().position.last_move.unwrap().vertex,
+            MoveVertex::Pass
+        );
+        trial.play(MoveVertex::Point(PointDto { x: 2, y: 2 })).unwrap();
+        assert_eq!(trial.snapshot().unwrap().position.move_number, 2);
+        assert_eq!(trial.selected_path().indices, vec![0, 0]);
+        trial.select(&NodePath { indices: vec![0] }).unwrap();
+        assert_eq!(trial.snapshot().unwrap().position.move_number, 1);
+        trial.undo().unwrap();
+        assert_eq!(trial.snapshot().unwrap().position.move_number, 1);
+        trial.undo().unwrap();
+        assert_eq!(trial.snapshot().unwrap().position.move_number, 0);
+        assert!(!trial.can_undo());
+        assert_eq!(source.serialize().unwrap(), serialized);
+        assert_eq!(source.snapshot(&entry).unwrap().personal_comment, "entry");
+        assert_eq!(source.tree().unwrap().children[0].children[0].children.len(), 1);
     }
 }
 

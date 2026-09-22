@@ -190,6 +190,18 @@ pub struct CurrentGameResultDto {
     pub native_path: Option<String>,
 }
 
+/// Session-only projection. Paths and revisions belong to this trial, not the saved game.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrialSessionDto {
+    pub session_id: u64,
+    pub revision: u64,
+    pub entry_path: NodePath,
+    pub tree: SgfTreeNodeDto,
+    pub selected_path: NodePath,
+    pub snapshot: SelectedNodeSnapshotDto,
+    pub can_undo: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CurrentGameError {
     pub kind: CurrentGameErrorKind,

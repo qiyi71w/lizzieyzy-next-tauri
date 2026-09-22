@@ -37,7 +37,8 @@ import type {
   PositionDto,
   ProblemMarkerDto,
   RecoveryProtectionDto,
-  RecoveryStartupDto
+  RecoveryStartupDto,
+  TrialSessionDto
 } from "../domain/types";
 import { emptyForegroundEngineSnapshot, mergeForegroundEngineSnapshot } from "../domain/foregroundEngine";
 import { ensureInitialPosition, replayGamePositions } from "../domain/board";
@@ -329,6 +330,37 @@ export async function redoCurrentGame(generation: number): Promise<CurrentGameRe
     throw new Error(nativeCurrentGameUnavailable);
   }
   return invoke<CurrentGameResultDto>("redo_current_game", { generation });
+}
+
+export async function enterTrial(): Promise<TrialSessionDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<TrialSessionDto>("enter_trial");
+}
+
+export async function exitTrial(sessionId: number): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<CurrentGameResultDto>("exit_trial", { sessionId });
+}
+
+export async function trialSelect(sessionId: number, revision: number, path: NodePath): Promise<TrialSessionDto> {
+  return invoke<TrialSessionDto>("trial_select", { sessionId, revision, path });
+}
+
+export async function trialPlay(sessionId: number, revision: number, vertex: MoveVertex): Promise<TrialSessionDto> {
+  return invoke<TrialSessionDto>("trial_play", { sessionId, revision, vertex });
+}
+
+export async function trialUndo(sessionId: number, revision: number): Promise<TrialSessionDto> {
+  return invoke<TrialSessionDto>("trial_undo", { sessionId, revision });
+}
+
+export async function trialStartFinite(sessionId: number, revision: number, runId: string, maxVisits: number): Promise<AnalysisJobStartedDto> {
+  return invoke<AnalysisJobStartedDto>("trial_start_finite", { sessionId, revision, runId, maxVisits });
+}
+
+export async function subscribeTrialAnalysis(onTrial: (trial: TrialSessionDto) => void): Promise<() => void> {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen<TrialSessionDto>("trial://analysis", (event) => onTrial(event.payload));
 }
 
 export async function saveCurrentGame(

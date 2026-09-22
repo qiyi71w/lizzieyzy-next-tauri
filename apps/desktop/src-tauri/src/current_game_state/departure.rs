@@ -272,6 +272,9 @@ impl CurrentGameState {
         if holder.departure.is_some() {
             return Err(departure_in_progress());
         }
+        if matches!(holder.trial_mode, super::trial::TrialMode::Entering(_) | super::trial::TrialMode::Leaving(_)) {
+            return Err(departure_blocked());
+        }
         holder.next_departure_id = holder.next_departure_id.saturating_add(1);
         let departure_id = holder.next_departure_id;
         let dirty = holder.dirty;
@@ -319,6 +322,7 @@ impl CurrentGameHolder {
         self.departure = None;
         self.closed_jobs.clear();
         self.analysis_target = None;
+        self.trial_mode = super::trial::TrialMode::Review;
         self.current_result()
     }
 
@@ -334,6 +338,8 @@ impl CurrentGameHolder {
             Err(departure_blocked())
         } else if self.departure.is_some() {
             Err(departure_in_progress())
+        } else if !matches!(self.trial_mode, super::trial::TrialMode::Review) {
+            Err(departure_blocked())
         } else {
             Ok(())
         }
