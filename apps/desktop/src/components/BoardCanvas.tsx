@@ -286,7 +286,8 @@ export function BoardCanvas({
       }
     }
 
-    if (position.last_move && isPoint(position.last_move.vertex)) {
+    if (position.last_move && isPoint(position.last_move.vertex) &&
+      !moveByPoint.has(`${position.last_move.vertex.point.x}:${position.last_move.vertex.point.y}`)) {
       const { x, y } = position.last_move.vertex.point;
       ctx.fillStyle = "#2156c7";
       ctx.beginPath(); ctx.arc(coordX(x), coordY(y), Math.max(2.5, grid * 0.12), 0, Math.PI * 2); ctx.fill();
