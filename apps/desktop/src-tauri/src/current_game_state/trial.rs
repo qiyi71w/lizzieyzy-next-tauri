@@ -438,6 +438,15 @@ mod tests {
         assert_eq!(root.snapshot.position.move_number, 0);
         assert_eq!(state.serialize().unwrap(), source);
         assert_eq!(state.inspect(), before);
+        let invalid_destination = std::env::temp_dir().join(format!("trial-save-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&invalid_destination).unwrap();
+        assert!(state
+            .save_to_path(invalid_destination.to_string_lossy().into_owned(), entry.clone())
+            .is_err());
+        std::fs::remove_dir_all(&invalid_destination).unwrap();
+        assert_eq!(state.trial_snapshot(root.session_id).unwrap(), root);
+        assert_eq!(state.serialize().unwrap(), source);
+        assert_eq!(state.inspect(), before);
 
         let admission = state.prepare_replacement("(;SZ[9])", None).unwrap();
         let departure_id = match admission {
