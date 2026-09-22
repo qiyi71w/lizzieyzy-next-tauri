@@ -1537,6 +1537,8 @@ fn task_search_budgets_controllable_engine_smoke() {
         let mut preset = app_preferences::default_app_preferences();
         preset.continuous_analysis_enabled = false;
         preset.task_deep_conditions = Some(AnalysisStageConditionsDto::default());
+        app_preferences::save_to_path(&path, preset.clone()).unwrap();
+        preferences.load(&path, &engine.manager).unwrap();
         preferences.save(&path, &engine.manager, preset.clone()).unwrap();
         assert_eq!(
             engine.manager.analysis_task_snapshot().unwrap().conditions,

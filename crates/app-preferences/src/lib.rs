@@ -6,6 +6,9 @@ use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod recent;
+pub use recent::recent_game_paths;
+
 pub const APP_PREFERENCES_FILE: &str = "lizzieyzy-next-app-preferences.json";
 pub const UNREADABLE_RECOVERY_MESSAGE: &str = "Unreadable preferences isolated; restored defaults.";
 
@@ -70,6 +73,8 @@ pub struct AppPreferencesDto {
     pub default_board_height: u8,
     #[serde(default = "default_komi")]
     pub default_komi: f32,
+    #[serde(default)]
+    pub recent_game_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +123,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         default_board_width: default_board_width(),
         default_board_height: default_board_height(),
         default_komi: default_komi(),
+        recent_game_paths: Vec::new(),
     }
 }
 
@@ -544,6 +550,7 @@ mod tests {
             default_board_width: 19,
             default_board_height: 19,
             default_komi: 7.5,
+            recent_game_paths: Vec::new(),
         }
     }
 

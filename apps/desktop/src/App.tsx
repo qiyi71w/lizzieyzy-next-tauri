@@ -80,7 +80,7 @@ import {
   runFromSnapshot,
   shouldAcceptFailureEvent
 } from "./domain/foregroundEngine";
-import { loadAppPreferences, saveAppPreferences } from "./api/preferences";
+import { loadAppPreferences, saveAppPreferences, updateRecentGameHistory } from "./api/preferences";
 import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition } from "./domain/board";
 import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "./domain/preferences";
 import { buildNextMoveReviewMarkers, cycleNextMoveReviewMarker } from "./domain/nextMoveReviewMarker";
@@ -123,6 +123,7 @@ type ReplacementOptions = {
   fallbackName?: string | null;
   successMessage: (projection: GameDto, fileName: string) => string;
   failurePrefix: string;
+  openedPath?: string | null;
 };
 const defaultAnalysisScopeDraft: AnalysisScopeDraft = {
   strategy: "all_positions_two_stage",
@@ -192,6 +193,10 @@ export function App() {
   const pendingBoardIntentRef = useRef<string | null>(null);
   const [preferences, setPreferences] = useState<AppPreferences>(() => defaultAppPreferences);
   const [preferencesStatus, setPreferencesStatus] = useState("正在载入设置…");
+  const [recentHistoryBusy, setRecentHistoryBusy] = useState(false);
+  const recentHistoryBusyRef = useRef(false);
+  const [recentHistoryError, setRecentHistoryError] = useState<string | null>(null);
+  const failedRecentActionRef = useRef<{ openedPath: string | null } | null>(null);
   const [sheet, setSheet] = useState<"none" | SheetId>("none");
   const [newDocumentOpen, setNewDocumentOpen] = useState(false);
   const [engineSnapshot, setEngineSnapshot] = useState<ForegroundEngineSnapshotDto>(() => emptyForegroundEngineSnapshot());
@@ -604,6 +609,11 @@ export function App() {
     shortcutRegistry.bind("file.open", () => {
       if (openEnabled) void handleOpenSgfDocument();
     });
+    for (let index = 0; index < 5; index += 1) {
+      shortcutRegistry.bind(`file.recent-${index + 1}`, () => void handleOpenRecent(index));
+    }
+    shortcutRegistry.bind("file.clear-recent", () => void handleClearRecentHistory());
+    shortcutRegistry.bind("file.retry-recent", () => void handleRetryRecentHistory());
     shortcutRegistry.bind("file.save", () => {
       if (saveEnabled) void handleSaveSgfDocument(false);
     });
@@ -932,7 +942,7 @@ export function App() {
       while (pendingPreferencesSaveRef.current && !continuousActionInFlightRef.current) {
         const pending = pendingPreferencesSaveRef.current;
         try {
-          const saved = await saveAppPreferences(pending.preferences);
+          const saved = { ...await saveAppPreferences(pending.preferences), recentGamePaths: committedPreferencesRef.current.recentGamePaths };
           committedPreferencesRef.current = saved;
           setPreferences(saved);
           pending.onSaved?.(saved);
@@ -1311,11 +1321,7 @@ export function App() {
     action: DocumentDepartureActionDto,
     sgfInput: string,
     nativePath: string | null,
-    options: {
-      fallbackName?: string | null;
-      successMessage: (projection: GameDto, fileName: string) => string;
-      failurePrefix: string;
-    }
+    options: Omit<ReplacementOptions, "confirmMessage">
   ): Promise<boolean> {
     const outcome = await resolveDocumentReplacement({
       departureId,
@@ -1339,6 +1345,7 @@ export function App() {
       setMessage(`${options.failurePrefix}: replacement committed without a current game`);
       return false;
     }
+    if (options.openedPath) await persistRecentHistory(options.openedPath);
     await adoptCommittedReplacement(outcome.current, sgfInput, nativePath, options);
     return true;
   }
@@ -1502,8 +1509,52 @@ export function App() {
         ? document.display_name.replace(/\.gib$/i, ".sgf")
         : null,
       successMessage: (projection, fileName) => `Opened ${fileName}: ${projection.summary.move_count} moves.`,
-      failurePrefix: "Open failed"
+      failurePrefix: "Open failed",
+      openedPath: document.opened_path,
     });
+  }
+
+  async function persistRecentHistory(openedPath: string | null) {
+    recentHistoryBusyRef.current = true;
+    setRecentHistoryBusy(true);
+    try {
+      const recentGamePaths = await updateRecentGameHistory(openedPath);
+      committedPreferencesRef.current = { ...committedPreferencesRef.current, recentGamePaths };
+      setPreferences((current) => ({ ...current, recentGamePaths }));
+      failedRecentActionRef.current = null;
+      setRecentHistoryError(null);
+    } catch (error) {
+      failedRecentActionRef.current = { openedPath };
+      setRecentHistoryError(`最近记录写入失败，保留已保存列表：${errorMessage(error)}`);
+    } finally {
+      recentHistoryBusyRef.current = false;
+      setRecentHistoryBusy(false);
+    }
+  }
+
+  async function handleOpenRecent(index: number) {
+    if (!nativeRuntime || !preferencesLoaded || fileFlowDepthRef.current !== 0 || recentHistoryBusyRef.current) return;
+    const path = committedPreferencesRef.current.recentGamePaths[index];
+    if (!path) return;
+    await enterFileFlow();
+    try {
+      await replaceImportedGame(await readGameFile(path));
+    } catch (error) {
+      setMessage(`Open failed: ${errorMessage(error)}`);
+    } finally {
+      await leaveFileFlow();
+    }
+  }
+
+  async function handleClearRecentHistory() {
+    if (!nativeRuntime || !preferencesLoaded || fileFlowDepthRef.current !== 0 || recentHistoryBusyRef.current) return;
+    await persistRecentHistory(null);
+  }
+
+  async function handleRetryRecentHistory() {
+    if (!nativeRuntime || !preferencesLoaded || fileFlowDepthRef.current !== 0 || recentHistoryBusyRef.current) return;
+    const action = failedRecentActionRef.current;
+    if (action) await persistRecentHistory(action.openedPath);
   }
 
   async function handleFileActivation(delivery: FileActivationDeliveryDto): Promise<void> {
@@ -1819,7 +1870,7 @@ export function App() {
     continuousActionInFlightRef.current = true;
     setContinuousActionPending(true);
     try {
-      const saved = await foregroundEngineContinuousAction();
+      const saved = { ...await foregroundEngineContinuousAction(), recentGamePaths: committedPreferencesRef.current.recentGamePaths };
       committedPreferencesRef.current = saved;
       setPreferences(saved);
       setPreferencesStatus("Preferences saved.");
@@ -2698,6 +2749,12 @@ export function App() {
       komi={game.summary.komi}
       onNew={() => void handleNewGame()}
       onOpen={() => void handleOpenSgfDocument()}
+      recentGamePaths={preferences.recentGamePaths}
+      recentHistoryBusy={recentHistoryBusy || !preferencesLoaded}
+      recentHistoryError={recentHistoryError}
+      onOpenRecent={(index) => void handleOpenRecent(index)}
+      onClearRecentHistory={() => void handleClearRecentHistory()}
+      onRetryRecentHistory={() => void handleRetryRecentHistory()}
       nativeRuntime={nativeRuntime}
       nativeUnavailable={nativeCurrentGameUnavailable}
       onSave={() => void handleSaveSgfDocument(false)}
@@ -2719,7 +2776,7 @@ export function App() {
       onFirstMove={() => handleMoveSelect(0)}
       onAutoPlay={() => setAutoPlaying((value) => !value)}
       onOverlayMode={setOverlayMode}
-      message={message}
+      message={recentHistoryError ? `${message} ${recentHistoryError}` : message}
       toPlay={currentPosition.to_play}
     />
     <section className="spread">
@@ -2874,7 +2931,7 @@ export function App() {
       keyboardPlacement={keyboardPlacement}
       onKeyboardPlacement={setKeyboardPlacement}
       jumpRef={jumpRef}
-      message={message}
+      message={recentHistoryError ? `${message} ${recentHistoryError}` : message}
       toPlay={currentPosition.to_play}
     />
     <section className="sheet-row" hidden={sheet === "none"}>

@@ -114,6 +114,8 @@ pub struct GameFileImportDto {
     pub display_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

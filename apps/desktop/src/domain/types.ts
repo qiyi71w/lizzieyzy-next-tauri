@@ -23,6 +23,7 @@ export type GameFileImportDto = {
   display_path: string;
   display_name: string;
   native_path?: string | null;
+  opened_path?: string | null;
 };
 export type FileActivationDeliveryDto =
   | { kind: "open"; request_id: number; path: string }

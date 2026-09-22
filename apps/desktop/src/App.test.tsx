@@ -84,7 +84,8 @@ vi.mock("./api/backend", () => ({
 
 const preferencesApi = vi.hoisted(() => ({
   loadAppPreferences: vi.fn<() => Promise<{ preferences: AppPreferences; recovery?: { message: string } }>>(() => Promise.reject(new Error("preferences unavailable in test"))),
-  saveAppPreferences: vi.fn(async (preferences: unknown) => preferences)
+  saveAppPreferences: vi.fn(async (preferences: unknown) => preferences),
+  updateRecentGameHistory: vi.fn<(openedPath: string | null) => Promise<string[]>>(),
 }));
 
 vi.mock("./api/preferences", () => preferencesApi);
@@ -2374,6 +2375,56 @@ describe("App current-game recovery", () => {
       await backend.confirmNativeExit.mock.results.at(-1)?.value;
     });
     expect(backend.confirmNativeExit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("App recent history", () => {
+  it("keeps the opened GIB and durable list on history failure, then explicitly retries", async () => {
+    const oldPath = "/games/previous.sgf";
+    const gibPath = "/games/import.gib";
+    preferencesApi.loadAppPreferences.mockResolvedValue({ preferences: { ...defaultAppPreferences, recentGamePaths: [oldPath] } });
+    preferencesApi.updateRecentGameHistory.mockRejectedValueOnce(new Error("disk denied"));
+    backend.openSgfDocument.mockResolvedValue({ format: "gib", sgf_text: "(;SZ[9])", display_name: "import.gib", display_path: gibPath, native_path: null, opened_path: gibPath });
+    const host = await renderApp();
+    pressKey(window, "o");
+    await act(async () => { await vi.waitFor(() => expect(preferencesApi.updateRecentGameHistory).toHaveBeenCalledTimes(1)); });
+    expect(host.textContent).toContain("Opened import.sgf");
+    expect(host.textContent).toContain("disk denied");
+    act(() => buttonNamed(host, "文件").click());
+    expect(host.querySelector('button[title="/games/previous.sgf"]')).not.toBeNull();
+    expect(host.querySelector('button[title="/games/import.gib"]')).toBeNull();
+    expect(preferencesApi.updateRecentGameHistory).toHaveBeenCalledTimes(1);
+    preferencesApi.updateRecentGameHistory.mockResolvedValueOnce([gibPath, oldPath]);
+    act(() => buttonNamed(host, "重试最近记录写入").click());
+    await flushLast(preferencesApi.updateRecentGameHistory);
+    act(() => buttonNamed(host, "文件").click());
+    expect(host.querySelector('button[title="/games/import.gib"]')).not.toBeNull();
+    expect(host.textContent).not.toContain("disk denied");
+    expect(preferencesApi.updateRecentGameHistory).toHaveBeenLastCalledWith(gibPath);
+  });
+
+  it("keeps the original game and list when a recent reopen is cancelled or unreadable", async () => {
+    const path = "/games/kept.sgf";
+    preferencesApi.loadAppPreferences.mockResolvedValue({ preferences: { ...defaultAppPreferences, recentGamePaths: [path] } });
+    backend.readGameFile.mockResolvedValue({ format: "sgf", sgf_text: "(;SZ[9])", display_name: "kept.sgf", display_path: path, native_path: path, opened_path: path });
+    const host = await renderApp();
+    await act(async () => { await vi.waitFor(() => expect(backend.markFileActivationReady).toHaveBeenCalled()); });
+    backend.prepareDocumentReplacement.mockResolvedValueOnce({ status: "needs_decision", departure_id: 9 });
+    pressKey(window, "1", { altKey: true });
+    await flushLast(backend.readGameFile);
+    await flushLast(backend.prepareDocumentReplacement);
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).not.toBeNull();
+    act(() => buttonLabeled(host, "Cancel").click());
+    await flushLast(backend.resolveDocumentReplacement);
+    expect(preferencesApi.updateRecentGameHistory).not.toHaveBeenCalled();
+    backend.readGameFile.mockRejectedValueOnce(new Error("file missing"));
+    pressKey(window, "1", { altKey: true });
+    await act(async () => { await backend.readGameFile.mock.results.at(-1)?.value.catch(() => undefined); });
+    expect(host.textContent).toContain("file missing");
+    expect(preferencesApi.updateRecentGameHistory).not.toHaveBeenCalled();
+    act(() => buttonNamed(host, "文件").click());
+    expect(host.querySelector('button[title="/games/kept.sgf"]')).not.toBeNull();
+    expect(host.querySelector(".doc-name")?.textContent).not.toContain("kept.sgf");
   });
 });
 

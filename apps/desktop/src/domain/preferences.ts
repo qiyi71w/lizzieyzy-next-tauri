@@ -36,6 +36,7 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   defaultBoardWidth: number;
   defaultBoardHeight: number;
   defaultKomi: number;
+  recentGamePaths: string[];
 };
 
 export const defaultAppPreferences: AppPreferences = {
@@ -91,6 +92,7 @@ export const defaultAppPreferences: AppPreferences = {
   variationReplayIntervalMs: 500,
   restoreLastSession: false,
   continuousAnalysisEnabled: true,
+  recentGamePaths: [],
   continuousTimeLimitEnabled: true,
   continuousTimeLimitSeconds: 600,
   continuousVisitsLimitEnabled: false,
@@ -149,6 +151,7 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
     ),
     restoreLastSession: booleanValue(value?.restoreLastSession, defaultAppPreferences.restoreLastSession),
     continuousAnalysisEnabled: booleanValue(value?.continuousAnalysisEnabled, defaultAppPreferences.continuousAnalysisEnabled),
+    recentGamePaths: Array.isArray(value?.recentGamePaths) ? value.recentGamePaths : [],
     continuousTimeLimitEnabled: booleanValue(value?.continuousTimeLimitEnabled, defaultAppPreferences.continuousTimeLimitEnabled),
     continuousTimeLimitSeconds: value?.continuousTimeLimitSeconds ?? defaultAppPreferences.continuousTimeLimitSeconds,
     continuousVisitsLimitEnabled: booleanValue(value?.continuousVisitsLimitEnabled, defaultAppPreferences.continuousVisitsLimitEnabled),

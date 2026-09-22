@@ -32,9 +32,13 @@ impl PreferencesState {
         &self,
         path: &Path,
         manager: &ForegroundEngineManager,
-        preferences: AppPreferencesDto,
+        mut preferences: AppPreferencesDto,
     ) -> Result<AppPreferencesDto, String> {
         let mut committed = self.0.lock().expect("preferences transaction");
+        preferences.recent_game_paths = committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before saving.")?
+            .preferences.recent_game_paths.clone();
         let saved = app_preferences::save_to_path(path, preferences)?;
         manager.set_continuous_preferences(saved.continuous_analysis_enabled, saved.continuous_budget)?;
         *committed = Some(AppPreferencesLoadResultDto {
@@ -42,6 +46,21 @@ impl PreferencesState {
             recovery: None,
         });
         Ok(saved)
+    }
+
+    pub fn update_recent_history(&self, path: &Path, opened_path: Option<&str>) -> Result<Vec<String>, String> {
+        let mut committed = self.0.lock().expect("preferences transaction");
+        let mut preferences = committed.as_ref()
+            .ok_or("Preferences must finish loading before updating recent history.")?
+            .preferences.clone();
+        preferences.recent_game_paths = match opened_path {
+            Some(opened) => app_preferences::recent_game_paths(&preferences.recent_game_paths, opened),
+            None => Vec::new(),
+        };
+        let saved = app_preferences::save_to_path(path, preferences)?;
+        let paths = saved.recent_game_paths.clone();
+        *committed = Some(AppPreferencesLoadResultDto { preferences: saved, recovery: None });
+        Ok(paths)
     }
 
     pub fn primary(
@@ -137,6 +156,35 @@ mod tests {
     use app_model::{ContinuousAnalysisPhaseDto, ForegroundEngineLifecycleDto};
     use engine_manager::{ForegroundEngineConfig, InMemoryEngineProfileCatalog};
     use std::sync::Arc;
+
+    #[test]
+    fn recent_history_failure_clear_restart_and_stale_preferences_are_atomic() {
+        let directory = std::env::temp_dir().join(format!("recent-prefs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("preferences.json");
+        let manager = ForegroundEngineManager::new(
+            Arc::new(InMemoryEngineProfileCatalog::new()), ForegroundEngineConfig::for_tests(),
+        );
+        let state = PreferencesState::default();
+        let mut before_open = state.load(&path, &manager).unwrap().preferences;
+        before_open.restore_last_session = true;
+        state.save(&path, &manager, before_open.clone()).unwrap();
+        state.update_recent_history(&path, Some("/games/old.sgf")).unwrap();
+        let durable = std::fs::read(&path).unwrap();
+        assert!(state.update_recent_history(&directory, Some("/games/new.gib")).is_err());
+        assert!(state.update_recent_history(&directory, None).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), durable);
+        assert_eq!(state.load(&path, &manager).unwrap().preferences.recent_game_paths, ["/games/old.sgf"]);
+        let saved = state.save(&path, &manager, before_open).unwrap();
+        assert_eq!(saved.recent_game_paths, ["/games/old.sgf"]);
+        state.update_recent_history(&path, Some("/games/new.gib")).unwrap();
+        let reloaded = PreferencesState::default().load(&path, &manager).unwrap().preferences;
+        assert_eq!(reloaded.recent_game_paths, ["/games/new.gib", "/games/old.sgf"]);
+        state.update_recent_history(&path, None).unwrap();
+        let cleared = app_preferences::load_from_path(&path).unwrap().preferences;
+        assert_eq!(cleared, AppPreferencesDto { recent_game_paths: Vec::new(), ..reloaded });
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn durable_primary_write_failure_preserves_intent_and_restart_choice() {
