@@ -67,6 +67,8 @@ pub struct AppPreferencesDto {
     pub variation_replay_interval_ms: u32,
     #[serde(default = "default_restore_last_session")]
     pub restore_last_session: bool,
+    #[serde(default = "default_sound_enabled")]
+    pub sound_enabled: bool,
     #[serde(default = "default_board_width")]
     pub default_board_width: u8,
     #[serde(default = "default_board_height")]
@@ -120,6 +122,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         variation_replay_enabled: default_variation_replay_enabled(),
         variation_replay_interval_ms: default_variation_replay_interval_ms(),
         restore_last_session: default_restore_last_session(),
+        sound_enabled: default_sound_enabled(),
         default_board_width: default_board_width(),
         default_board_height: default_board_height(),
         default_komi: default_komi(),
@@ -474,6 +477,10 @@ fn default_restore_last_session() -> bool {
     false
 }
 
+fn default_sound_enabled() -> bool {
+    true
+}
+
 fn default_board_width() -> u8 {
     19
 }
@@ -547,6 +554,7 @@ mod tests {
             variation_replay_enabled: true,
             variation_replay_interval_ms: 250,
             restore_last_session: true,
+            sound_enabled: true,
             default_board_width: 19,
             default_board_height: 19,
             default_komi: 7.5,
@@ -690,6 +698,7 @@ mod tests {
         assert!(!loaded.preferences.variation_replay_enabled);
         assert_eq!(loaded.preferences.variation_replay_interval_ms, 500);
         assert!(loaded.recovery.is_none());
+        assert!(loaded.preferences.sound_enabled);
         assert_eq!(loaded.preferences.default_board_width, 19);
         assert_eq!(loaded.preferences.default_board_height, 19);
         assert_eq!(loaded.preferences.default_komi, 7.5);
@@ -955,6 +964,44 @@ mod tests {
         assert_eq!(reloaded_after_rejects.preferences.default_board_width, 13);
         assert_eq!(reloaded_after_rejects.preferences.default_board_height, 17);
         assert_eq!(reloaded_after_rejects.preferences.default_komi, 6.5);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sound_enabled_defaults_to_true_and_disabled_survives_roundtrip_and_unrelated_writes() {
+        let (dir, path) = temp_prefs();
+
+        // Missing old JSON defaults to soundEnabled: true
+        fs::write(&path, r#"{"showCandidates":true}"#).unwrap();
+        let loaded = load_from_path(&path).unwrap();
+        assert!(loaded.preferences.sound_enabled);
+        assert!(default_app_preferences().sound_enabled);
+
+        // Disabling sound survives save and durable reload
+        let mut prefs = loaded.preferences;
+        prefs.sound_enabled = false;
+        let saved = save_to_path(&path, prefs).unwrap();
+        assert!(!saved.sound_enabled);
+
+        let reloaded = load_from_path(&path).unwrap();
+        assert!(!reloaded.preferences.sound_enabled);
+
+        let serialized = serde_json::to_value(&reloaded.preferences).unwrap();
+        assert_eq!(serialized["soundEnabled"], false);
+
+        // Unrelated preference writes retain disabled sound
+        let mut updated = reloaded.preferences;
+        updated.candidate_limit = 5;
+        updated.board_theme = "high-contrast".to_string();
+        let saved_updated = save_to_path(&path, updated).unwrap();
+        assert!(!saved_updated.sound_enabled);
+        assert_eq!(saved_updated.candidate_limit, 5);
+
+        let reloaded_updated = load_from_path(&path).unwrap();
+        assert!(!reloaded_updated.preferences.sound_enabled);
+        assert_eq!(reloaded_updated.preferences.candidate_limit, 5);
+        assert_eq!(reloaded_updated.preferences.board_theme, "high-contrast");
 
         let _ = fs::remove_dir_all(dir);
     }

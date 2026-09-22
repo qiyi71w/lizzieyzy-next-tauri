@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { acceptedMoveSound } from "./domain/acceptedMoveSound";
+import { playMoveSound } from "./domain/moveSound";
 import { BoardCanvas } from "./components/BoardCanvas";
 import { WinrateChart } from "./components/WinrateChart";
 import { ReviewTree } from "./components/ReviewTree";
@@ -189,7 +191,7 @@ export function App() {
   const navigatingRef = useRef(false);
   const documentGenerationRef = useRef(0);
   const pendingSelectedPathRef = useRef<NodePath | null>(null);
-  const queuedSelectionRef = useRef<{ path: NodePath; generation: number } | null>(null);
+  const queuedSelectionRef = useRef<{ path: NodePath; generation: number; forward: boolean } | null>(null);
   const pendingBoardIntentRef = useRef<string | null>(null);
   const [preferences, setPreferences] = useState<AppPreferences>(() => defaultAppPreferences);
   const [preferencesStatus, setPreferencesStatus] = useState("正在载入设置…");
@@ -737,7 +739,7 @@ export function App() {
         void selectNode(childPath(
           currentGame.selected_path,
           chosenChildIndex(chosenChildren, currentGame.selected_path, node.children.length)
-        ));
+        ), currentGame.generation, true);
         return;
       }
       setCurrentMove((move) => {
@@ -2528,13 +2530,19 @@ export function App() {
     }
   }
 
-  async function selectNode(path: NodePath, generation = currentGame?.generation) {
+  function soundAcceptedMove(before: CurrentGameResultDto, after: CurrentGameResultDto) {
+    if (!preferencesLoadSettledRef.current || !committedPreferencesRef.current.soundEnabled) return;
+    const kind = acceptedMoveSound(before.snapshot, after.snapshot);
+    if (kind) void playMoveSound(kind).catch((error) => setMessage(`声音播放失败: ${errorMessage(error)}`));
+  }
+
+  async function selectNode(path: NodePath, generation = currentGame?.generation, forward = false) {
     const game = currentGameRef.current;
     if (!game || generation !== game.generation || departurePendingRef.current
       || !path.indices.every((index) => Number.isInteger(index) && index >= 0)
       || !nodeAt(game.tree, path)) return;
     if (!navigatingRef.current && samePath(path, game.selected_path)) return;
-    const request = { path: { indices: [...path.indices] }, generation };
+    const request = { path: { indices: [...path.indices] }, generation, forward };
     queuedSelectionRef.current = request;
     pendingSelectedPathRef.current = request.path;
     beginReviewRequest();
@@ -2543,7 +2551,7 @@ export function App() {
     navigatingRef.current = true;
     try {
       while (queuedSelectionRef.current) {
-        const requested: { path: NodePath; generation: number } = queuedSelectionRef.current;
+        const requested: { path: NodePath; generation: number; forward: boolean } = queuedSelectionRef.current;
         queuedSelectionRef.current = null;
         if (currentGameRef.current?.generation !== requested.generation) continue;
         try {
@@ -2557,6 +2565,7 @@ export function App() {
             continue;
           }
           adoptCurrentGame(result);
+          if (requested.forward) soundAcceptedMove(current, result);
           setChosenChildren((previous) => rememberChosenChildren(previous, result.selected_path));
           if (result.snapshot.primary_analysis) presentCurrentGameAnalysis(result);
           else {
@@ -2577,13 +2586,13 @@ export function App() {
     }
   }
 
-  function handleMoveSelect(moveNumber: number) {
+  function handleMoveSelect(moveNumber: number, forward = false) {
     if (currentGame) {
       if (!Number.isInteger(moveNumber) || moveNumber < 0) return;
       const target = moveNumber === 0
         ? chartModel.points[0]
         : chartModel.points.find((point) => point.isMove && point.moveNumber === moveNumber);
-      if (target) void selectNode(target.path, currentGame.generation);
+      if (target) void selectNode(target.path, currentGame.generation, forward);
       return;
     }
     setCurrentMove(clampMoveNumberToPositions(positions, moveNumber));
@@ -2608,7 +2617,7 @@ export function App() {
 
   function handleNextChild() {
     if (!selectedNode || selectedNode.children.length === 0) return;
-    void selectNode(childPath(selectedPath, chosenChildIndex(chosenChildren, selectedPath, selectedNode.children.length)));
+    void selectNode(childPath(selectedPath, chosenChildIndex(chosenChildren, selectedPath, selectedNode.children.length)), currentGame?.generation, true);
   }
 
   function handlePrevSibling() {
@@ -2641,6 +2650,7 @@ export function App() {
       setSelectedCandidateIndex(null);
       setBoardIntentFeedback(null);
       setMessage("落子已接受。");
+      soundAcceptedMove(currentGame, result);
       if (result.generation !== previousGeneration) {
         clearReviewData();
         await abandonAnalysisSessions();

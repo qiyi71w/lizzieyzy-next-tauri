@@ -263,6 +263,7 @@ let root: Root | null = null;
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
     return canvasContext(this);
   });
@@ -317,6 +318,29 @@ afterEach(() => {
 });
 
 describe("App board intent feedback", () => {
+  it("keeps accepted moves silent when durable sound is disabled", async () => {
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, soundEnabled: false } });
+    backend.playCurrentGame.mockResolvedValueOnce(acceptedGame);
+    const host = await renderApp();
+    act(() => buttonNamed(host, "键盘落子").click());
+    dispatchKey(requiredElement(host, 'canvas[aria-label="棋盘"]'), "Enter");
+    await flushLast(backend.playCurrentGame);
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
+    expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+  });
+
+  it("reports a missing audio resource without changing the sound preference or undoing the move", async () => {
+    vi.mocked(HTMLMediaElement.prototype.play).mockRejectedValueOnce(new Error("missing sound resource"));
+    backend.playCurrentGame.mockResolvedValueOnce(acceptedGame);
+    const host = await renderApp();
+    act(() => buttonNamed(host, "键盘落子").click());
+    dispatchKey(requiredElement(host, 'canvas[aria-label="棋盘"]'), "Enter");
+    await flushLast(backend.playCurrentGame);
+    expect(host.textContent).toContain("missing sound resource");
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  });
+
   it("keeps review interaction live, deduplicates a pending intent, and announces rejection until the next accepted intent", async () => {
     let rejectPendingMove = false;
     backend.playCurrentGame
@@ -364,6 +388,7 @@ describe("App board intent feedback", () => {
     expect(status.getAttribute("aria-live")).toBe("polite");
     expect(status.textContent).toContain("落子失败: point is occupied");
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("0");
+    expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
 
     act(() => canvas.focus());
     dispatchKey(canvas, "Enter");
@@ -376,6 +401,7 @@ describe("App board intent feedback", () => {
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
     expect(host.querySelector(".board-intent-status")).toBeNull();
     expect(requiredElement(host, ".nav-message").textContent).toBe("落子已接受。");
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -455,6 +481,17 @@ describe("App stale review presentation", () => {
       buttonNamed(host, "下一变化").click();
       await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
     });
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      buttonNamed(host, "父节点").click();
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
+    });
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      buttonNamed(host, "下一变化").click();
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
+    });
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(2);
 
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
     expect(candidateCoords(host)).toEqual([]);
