@@ -522,6 +522,18 @@ fn set_current_game_personal_comment(
         .set_personal_comment(path, comment)
         .map_err(|error| error.to_string())
 }
+#[tauri::command]
+fn set_current_game_metadata(
+    state: State<CurrentGameState>,
+    generation: u64,
+    black_name: String,
+    white_name: String,
+    komi: f32,
+) -> Result<CurrentGameResultDto, String> {
+    state
+        .set_metadata(generation, black_name, white_name, komi)
+        .map_err(|error| error.to_string())
+}
 
 #[tauri::command]
 fn remove_current_game_variation(
@@ -1174,6 +1186,7 @@ pub fn run() {
             select_current_game_node,
             play_current_game,
             set_current_game_personal_comment,
+            set_current_game_metadata,
             remove_current_game_variation,
             undo_current_game,
             redo_current_game,
@@ -1813,7 +1826,10 @@ for line in sys.stdin:
         let sgf_import = read_game_file(sgf_path.to_string_lossy().into_owned()).unwrap();
         assert_eq!(sgf_import.format, app_model::GameFileFormatDto::Sgf);
         assert_eq!(sgf_import.display_name, "named.sgf");
-        assert_eq!(sgf_import.native_path.as_deref(), std::fs::canonicalize(&sgf_path).unwrap().to_str());
+        assert_eq!(
+            sgf_import.native_path.as_deref(),
+            std::fs::canonicalize(&sgf_path).unwrap().to_str()
+        );
         assert_eq!(sgf_import.sgf_text, "(;SZ[9]PB[Black]PW[White];B[dd])");
 
         let gib_path =
@@ -1823,7 +1839,10 @@ for line in sys.stdin:
         assert_eq!(gib_import.format, app_model::GameFileFormatDto::Gib);
         assert_eq!(gib_import.display_name, "tygem-named-pass-lf.gib");
         assert_eq!(gib_import.native_path, None);
-        assert_eq!(gib_import.opened_path.as_deref(), std::fs::canonicalize(&gib_path).unwrap().to_str());
+        assert_eq!(
+            gib_import.opened_path.as_deref(),
+            std::fs::canonicalize(&gib_path).unwrap().to_str()
+        );
         assert_eq!(std::fs::read(&gib_path).unwrap(), original);
         let imported = sgf::CurrentSgfDocument::open(&gib_import.sgf_text).unwrap();
         assert_eq!(imported.default_selected_path().indices, vec![0, 0, 0]);

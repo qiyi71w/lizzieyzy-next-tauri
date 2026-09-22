@@ -60,6 +60,45 @@ fn semantic_replacement_rejects_old_analysis_at_surviving_paths() {
 }
 
 #[test]
+fn komi_history_exchanges_only_analysis_for_the_matching_position_condition() {
+    let state = CurrentGameState::default();
+    let opened = state.replace("(;SZ[9]KM[6.5]PB[黑]PW[白];B[aa])", None).unwrap();
+    let old = state
+        .attach_primary_analysis(opened.generation, path(&[0]), payload("old", 200, 1, 1))
+        .unwrap();
+    let names = state
+        .set_metadata(old.generation, "新黑".into(), "新白".into(), 6.5)
+        .unwrap();
+    assert_eq!(names.generation, opened.generation);
+    assert_eq!(names.snapshot.primary_analysis.as_ref().unwrap().visits, 200);
+
+    let changed = state
+        .set_metadata(names.generation, "新黑".into(), "新白".into(), 7.5)
+        .unwrap();
+    assert!(changed.snapshot.primary_analysis.is_none());
+    assert!(state
+        .attach_primary_analysis(old.generation, path(&[0]), payload("stale", 800, 2, 2))
+        .is_err());
+    let fresh = state
+        .attach_primary_analysis(changed.generation, path(&[0]), payload("fresh", 300, 2, 2))
+        .unwrap();
+    assert_eq!(fresh.snapshot.primary_analysis.as_ref().unwrap().visits, 300);
+
+    let undone = state.undo(fresh.generation).unwrap();
+    assert!(undone.generation > fresh.generation);
+    assert_eq!(undone.snapshot.primary_analysis.as_ref().unwrap().visits, 200);
+    let redone = state.redo(undone.generation).unwrap();
+    assert_eq!(redone.snapshot.primary_analysis.as_ref().unwrap().visits, 300);
+    assert_eq!(
+        state
+            .admit_selected_node(redone.generation, &path(&[0]))
+            .unwrap()
+            .3,
+        7.5
+    );
+}
+
+#[test]
 fn rejected_edits_and_existing_continuation_keep_admitted_analysis() {
     let state = CurrentGameState::default();
     let opened = state.replace("(;SZ[19];B[dd])", None).unwrap();

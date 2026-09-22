@@ -83,7 +83,7 @@ The existing Tauri implementation is the migration starting point and must be pr
 - R4 Analysis has exited with all ten owner items plus pulled-forward `PREF-01` and `APP-05` Accepted.
 - R5 has exited on integrated Windows candidate `48db2b2833f9deb45bd7dcd47181f5da77348a0c`. `SGF-08`, `APP-02`, `APP-03`, `APP-04`, and `ANA-15` are Accepted; the `APP-01` R5 semantic gate passed. Final `APP-01` acceptance remains an R11 / `REL-04` installer-association and Canonical Artifact Installed Live Evidence obligation.
 - Layout rails are fixed at `228px` and `260px`; splitters, rail visibility, window-geometry reset, and narrow Restore Default are absent.
-- Review HUD player labels are hardcoded 黑棋/白棋 rather than root `PB`/`PW` (`REVIEW-09`). Main-window always-on-top is absent (`WINDOW-02`).
+- Review HUD player labels read root `PB`/`PW` with missing/blank fallback; native metadata editing for names and komi belongs to R6 ticket 07. Main-window always-on-top is absent (`WINDOW-02`).
 - Multi-backend profiles, Generic GTP, and Match Sessions are absent.
 - Provider/readboard repository plumbing exists, but live sessions remain unvalidated; Yike ongoing sync and Tencent kifu import are unclaimed; readboard snapshots are previewed rather than synchronized into the active game.
 - Signing, notarization, production updater apply/handoff/rollback, bundled installed-runtime resolution, and Canonical Artifact Installed Live Evidence remain incomplete.

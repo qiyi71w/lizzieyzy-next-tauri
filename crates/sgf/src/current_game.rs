@@ -37,6 +37,11 @@ enum DocumentReversal {
         path: NodePath,
         properties: Vec<(usize, SgfProperty)>,
     },
+    SetMetadata {
+        properties: Vec<(usize, SgfProperty)>,
+        komi: f32,
+        analysis: Option<Vec<(NodePath, Vec<(usize, SgfProperty)>)>>,
+    },
     RemoveSubtree {
         parent: NodePath,
         index: usize,
@@ -420,6 +425,84 @@ impl CurrentSgfDocument {
     pub fn tree(&self) -> Result<SgfTreeNodeDto, CurrentGameError> {
         Ok(tree_dto(self.root()?))
     }
+    pub fn set_metadata_with_history(
+        &mut self,
+        selected_before: &NodePath,
+        black_name: &str,
+        white_name: &str,
+        komi: f32,
+    ) -> Result<DocumentEditOutcome, CurrentGameError> {
+        if !komi.is_finite() {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::MalformedSgf,
+                message: "komi must be finite".into(),
+            });
+        }
+        let before_snapshot = self.snapshot(selected_before)?;
+        let root = self.root()?;
+        let stored_name = |key| {
+            property_values(root, key)
+                .and_then(|values| values.first())
+                .map(String::as_str)
+                .unwrap_or("")
+        };
+        let black_changed = stored_name("PB") != black_name;
+        let white_changed = stored_name("PW") != white_name;
+        let previous_komi = self.document.komi;
+        let komi_changed = previous_komi != komi;
+        if !black_changed && !white_changed && !komi_changed {
+            return Ok(DocumentEditOutcome {
+                snapshot: before_snapshot,
+                edit: None,
+            });
+        }
+        let before = metadata_properties(root);
+        let mut desired = before.clone();
+        for (key, changed) in [("PB", black_changed), ("PW", white_changed), ("KM", komi_changed)] {
+            if changed {
+                let value = match key {
+                    "PB" => black_name.to_owned(),
+                    "PW" => white_name.to_owned(),
+                    _ => komi.to_string(),
+                };
+                let index = before
+                    .iter()
+                    .find(|(_, property)| property.key == key)
+                    .map(|(index, _)| *index)
+                    .unwrap_or(root.properties.len() + desired.len());
+                desired.retain(|(_, property)| property.key != key);
+                desired.push((
+                    index,
+                    SgfProperty {
+                        key: key.into(),
+                        values: vec![value],
+                    },
+                ));
+            }
+        }
+        let analysis = if komi_changed {
+            Some(take_analysis(
+                self.document.root.as_mut().expect("validated root"),
+            ))
+        } else {
+            None
+        };
+        let root = self.document.root.as_mut().expect("validated root");
+        restore_metadata(&mut root.properties, &desired);
+        self.document.komi = komi;
+        Ok(DocumentEditOutcome {
+            snapshot: self.snapshot(selected_before)?,
+            edit: Some(SgfDocumentEdit {
+                reversal: DocumentReversal::SetMetadata {
+                    properties: before,
+                    komi: previous_komi,
+                    analysis,
+                },
+                selected_before: selected_before.clone(),
+                selected_after: selected_before.clone(),
+            }),
+        })
+    }
 
     pub fn play(
         &mut self,
@@ -589,6 +672,23 @@ impl CurrentSgfDocument {
                 *properties = inverse;
                 Ok(false)
             }
+            DocumentReversal::SetMetadata {
+                properties,
+                komi,
+                analysis,
+            } => {
+                let root = self.document.root.as_mut().expect("validated root");
+                let previous = metadata_properties(root);
+                restore_metadata(&mut root.properties, properties);
+                *properties = previous;
+                std::mem::swap(komi, &mut self.document.komi);
+                if let Some(saved) = analysis {
+                    let current = take_analysis(root);
+                    restore_analysis(root, saved);
+                    *saved = current;
+                }
+                Ok(analysis.is_some())
+            }
             DocumentReversal::RemoveSubtree { parent, index } => {
                 let parent_path = parent.clone();
                 let child_index = *index;
@@ -704,8 +804,13 @@ impl CurrentSgfDocument {
                     continue;
                 }
                 for value in &property.values {
-                    for point in crate::parse_setup_points(value, self.document.board_width, self.document.board_height)? {
-                        stone_sources[point.y as usize * self.document.board_width as usize + point.x as usize] = None;
+                    for point in crate::parse_setup_points(
+                        value,
+                        self.document.board_width,
+                        self.document.board_height,
+                    )? {
+                        stone_sources
+                            [point.y as usize * self.document.board_width as usize + point.x as usize] = None;
                     }
                 }
             }
@@ -735,8 +840,8 @@ impl CurrentSgfDocument {
                             PlayerColor::White => captures_white += outcome.captured.len() as u32,
                         }
                         for captured in outcome.captured {
-                            let idx =
-                                captured.y as usize * self.document.board_width as usize + captured.x as usize;
+                            let idx = captured.y as usize * self.document.board_width as usize
+                                + captured.x as usize;
                             stone_sources[idx] = None;
                         }
                         if let MoveVertex::Point(point) = &sgf_move.vertex {
@@ -885,6 +990,70 @@ fn invalid_history_path() -> CurrentGameError {
     CurrentGameError {
         kind: CurrentGameErrorKind::InvalidNodePath,
         message: "document history no longer matches the current tree".to_string(),
+    }
+}
+fn metadata_properties(node: &SgfNode) -> Vec<(usize, SgfProperty)> {
+    node.properties
+        .iter()
+        .enumerate()
+        .filter(|(_, property)| matches!(property.key.as_str(), "PB" | "PW" | "KM"))
+        .map(|(index, property)| (index, property.clone()))
+        .collect()
+}
+
+fn restore_metadata(properties: &mut Vec<SgfProperty>, desired: &[(usize, SgfProperty)]) {
+    properties.retain(|property| !matches!(property.key.as_str(), "PB" | "PW" | "KM"));
+    let mut ordered = desired.to_vec();
+    ordered.sort_by_key(|(index, _)| *index);
+    for (index, property) in ordered {
+        properties.insert(index.min(properties.len()), property);
+    }
+}
+
+fn take_analysis(root: &mut SgfNode) -> Vec<(NodePath, Vec<(usize, SgfProperty)>)> {
+    fn visit(
+        node: &mut SgfNode,
+        path: &mut Vec<u32>,
+        removed: &mut Vec<(NodePath, Vec<(usize, SgfProperty)>)>,
+    ) {
+        let properties: Vec<_> = node
+            .properties
+            .iter()
+            .enumerate()
+            .filter(|(_, property)| matches!(property.key.as_str(), "LZ" | "LZ2" | "LZOP" | "LZOP2"))
+            .map(|(index, property)| (index, property.clone()))
+            .collect();
+        if !properties.is_empty() {
+            node.properties
+                .retain(|property| !matches!(property.key.as_str(), "LZ" | "LZ2" | "LZOP" | "LZOP2"));
+            removed.push((
+                NodePath {
+                    indices: path.clone(),
+                },
+                properties,
+            ));
+        }
+        for (index, child) in node.children.iter_mut().enumerate() {
+            path.push(u32::try_from(index).expect("child index fits u32"));
+            visit(child, path, removed);
+            path.pop();
+        }
+    }
+    let mut removed = Vec::new();
+    visit(root, &mut Vec::new(), &mut removed);
+    removed
+}
+
+fn restore_analysis(root: &mut SgfNode, saved: &[(NodePath, Vec<(usize, SgfProperty)>)]) {
+    for (path, properties) in saved {
+        let mut node = &mut *root;
+        for &index in &path.indices {
+            node = &mut node.children[index as usize];
+        }
+        for (index, property) in properties {
+            node.properties
+                .insert((*index).min(node.properties.len()), property.clone());
+        }
     }
 }
 
@@ -1923,9 +2092,7 @@ mod snapshot_stone_move_numbers {
         let document = CurrentSgfDocument::open(sgf).unwrap();
         let initial_serialized = document.serialize().unwrap();
 
-        let path_move2 = NodePath {
-            indices: vec![0, 0],
-        };
+        let path_move2 = NodePath { indices: vec![0, 0] };
         let snap2 = document.snapshot(&path_move2).unwrap();
         assert_eq!(snap2.position.move_number, 2);
         assert_eq!(

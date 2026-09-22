@@ -16,6 +16,7 @@ import { CurrentGameRecoveryDialog } from "./components/CurrentGameRecoveryDialo
 import { AnalysisTaskPanel, type AnalysisScopeDraft } from "./components/AnalysisTaskPanel";
 import { ProviderPanel } from "./components/ProviderPanel";
 import { NewDocumentDialog } from "./components/NewDocumentDialog";
+import { GameMetadataDialog } from "./components/GameMetadataDialog";
 import {
   analysisTaskSnapshot,
   cancelKataGoAnalysis,
@@ -61,6 +62,7 @@ import {
   serializeCurrentGame,
   selectCurrentGameNode,
   setCurrentGamePersonalComment,
+  setCurrentGameMetadata,
   removeCurrentGameVariation,
   undoCurrentGame,
   redoCurrentGame,
@@ -205,6 +207,9 @@ export function App() {
   const failedRecentActionRef = useRef<{ openedPath: string | null } | null>(null);
   const [sheet, setSheet] = useState<"none" | SheetId>("none");
   const [newDocumentOpen, setNewDocumentOpen] = useState(false);
+  const [metadataDraft, setMetadataDraft] = useState<{
+    generation: number; blackName: string; whiteName: string; komi: number; handicap: string | null;
+  } | null>(null);
   const [engineSnapshot, setEngineSnapshot] = useState<ForegroundEngineSnapshotDto>(() => emptyForegroundEngineSnapshot());
   const [engineProfiles, setEngineProfiles] = useState<EngineProfileRecordDto[]>([]);
   const [engineFailure, setEngineFailure] = useState<EngineFailureDto | null>(null);
@@ -423,6 +428,12 @@ export function App() {
   const selectedGeneratedInformation = currentGame?.snapshot.generated_information ?? null;
   const selectedPath = currentGame?.selected_path ?? { indices: [] };
   const selectedNode = currentGame ? nodeAt(currentGame.tree, selectedPath) : null;
+  const blackName = currentGame
+    ? currentGame.tree.properties.find((property) => property.key === "PB")?.values[0]
+    : game.summary.black_name;
+  const whiteName = currentGame
+    ? currentGame.tree.properties.find((property) => property.key === "PW")?.values[0]
+    : game.summary.white_name;
   const selectedPathKey = selectedPath.indices.join(".");
   const activeScope = useMemo<ReviewPresentationScope>(() => ({
     generation: currentGame?.generation ?? 0,
@@ -576,7 +587,7 @@ export function App() {
   const documentPath = currentGame?.native_path ?? currentFilePath;
   const documentName = useMemo(() => documentPath ? fileNameFromPath(documentPath) : fallbackFileName ?? "未命名棋谱", [documentPath, fallbackFileName]);
   const saveFileName = documentName.toLowerCase().endsWith(".sgf") ? documentName : `${documentName}.sgf`;
-  const documentFlowBusy = fileFlowBusy || departurePending || Boolean(newDocumentOpen) || Boolean(departurePrompt) || Boolean(teardownPrompt) || Boolean(recoveryPrompt);
+  const documentFlowBusy = fileFlowBusy || departurePending || Boolean(newDocumentOpen) || Boolean(metadataDraft) || Boolean(departurePrompt) || Boolean(teardownPrompt) || Boolean(recoveryPrompt);
   const historyActionBlocked = documentFlowBusy || editActionPending;
   const canUndo = nativeRuntime && Boolean(currentGame?.can_undo) && !historyActionBlocked;
   const canRedo = nativeRuntime && Boolean(currentGame?.can_redo) && !historyActionBlocked;
@@ -602,6 +613,9 @@ export function App() {
     });
     shortcutRegistry.bind("game.board-dimensions", () => {
       void handleNewGame();
+    });
+    shortcutRegistry.bind("game.metadata", () => {
+      openMetadataEditor();
     });
     shortcutRegistry.bind("game.human-vs-engine", () => {
       setMessage("人机对局尚未接入，N 不会新建棋谱。");
@@ -2715,6 +2729,54 @@ export function App() {
       setEditActionPending(false);
     }
   }
+  function openMetadataEditor() {
+    const game = currentGameRef.current;
+    if (!nativeRuntime || !game || documentFlowBusy || editActionPendingRef.current || navigatingRef.current) return;
+    const value = (key: string) => game.tree.properties.find((property) => property.key === key)?.values[0];
+    setMetadataDraft({
+      generation: game.generation,
+      blackName: value("PB") ?? "",
+      whiteName: value("PW") ?? "",
+      komi: Number.isFinite(Number(value("KM"))) && value("KM")?.trim() ? Number(value("KM")) : 7.5,
+      handicap: value("HA") ?? null
+    });
+  }
+
+  async function handleApplyMetadata(generation: number, black: string, white: string, komi: number) {
+    const before = currentGameRef.current;
+    if (!nativeRuntime || !before || before.generation !== generation || departurePendingRef.current
+      || editActionPendingRef.current || navigatingRef.current) {
+      throw new Error("棋谱已变化，请重新打开棋局信息。");
+    }
+    editActionPendingRef.current = true;
+    setEditActionPending(true);
+    try {
+      let result = await setCurrentGameMetadata(generation, black, white, komi);
+      const latest = currentGameRef.current;
+      if (!latest || latest.generation !== generation) throw new Error("棋谱已变化，请重新打开棋局信息。");
+      if (latest.snapshot_seq > result.snapshot_seq) {
+        result = await selectCurrentGameNode(latest.selected_path, result.generation);
+        if (currentGameRef.current?.generation !== generation) throw new Error("棋谱已变化，请重新打开棋局信息。");
+      }
+      adoptCurrentGame(result);
+      setDirty(result.dirty);
+      if (result.generation !== generation) {
+        clearReviewData();
+        await abandonAnalysisSessions();
+      }
+      setMetadataDraft(null);
+      const projection = await projectCurrentGameMainline();
+      if (isCurrentDocumentGeneration(result.generation)) setGame(projection);
+      setMessage("已更新棋局信息。");
+    } catch (error) {
+      setMessage(`棋局信息更新失败: ${errorMessage(error)}`);
+      throw error;
+    } finally {
+      editActionPendingRef.current = false;
+      setEditActionPending(false);
+    }
+  }
+
 
   async function handleHistoryAction(action: "undo" | "redo") {
     const before = currentGameRef.current;
@@ -2824,6 +2886,8 @@ export function App() {
       autoPlaying={autoPlaying}
       komi={game.summary.komi}
       onNew={() => void handleNewGame()}
+      onEditMetadata={openMetadataEditor}
+      canEditMetadata={nativeRuntime && Boolean(currentGame) && !documentFlowBusy && !editActionPending}
       onOpen={() => void handleOpenSgfDocument()}
       recentGamePaths={preferences.recentGamePaths}
       recentHistoryBusy={recentHistoryBusy || !preferencesLoaded}
@@ -2878,6 +2942,8 @@ export function App() {
           boardWidth={game.summary.board_width}
           boardHeight={game.summary.board_height}
           currentMove={currentMove}
+          blackName={blackName}
+          whiteName={whiteName}
           currentPosition={currentPosition}
           personalComment={selectedPersonalComment}
           generatedInformation={selectedGeneratedInformation}
@@ -3069,6 +3135,16 @@ export function App() {
         defaultKomi={preferences.defaultKomi}
         onCreate={(parameters) => void handleCreateNewGame(parameters)}
         onCancel={() => void handleCancelNewGame()}
+      />
+    ) : null}
+    {metadataDraft ? (
+      <GameMetadataDialog
+        blackName={metadataDraft.blackName}
+        whiteName={metadataDraft.whiteName}
+        komi={metadataDraft.komi}
+        handicap={metadataDraft.handicap}
+        onApply={(black, white, komi) => handleApplyMetadata(metadataDraft.generation, black, white, komi)}
+        onCancel={() => setMetadataDraft(null)}
       />
     ) : null}
     {departurePrompt ? (

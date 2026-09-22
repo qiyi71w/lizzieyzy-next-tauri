@@ -51,6 +51,7 @@ const backend = vi.hoisted(() => ({
   replaySgfPositions: vi.fn(),
   saveCurrentGame: vi.fn(),
   setCurrentGamePersonalComment: vi.fn(),
+  setCurrentGameMetadata: vi.fn(),
   removeCurrentGameVariation: vi.fn(),
   undoCurrentGame: vi.fn(),
   redoCurrentGame: vi.fn(),
@@ -595,6 +596,67 @@ describe("App stale review presentation", () => {
 
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
     expect(candidateCoords(host)).toEqual([]);
+  });
+});
+
+describe("App game metadata", () => {
+  it("shows root names without an engine and preserves raw long names with a blank fallback", async () => {
+    const longName = "甲".repeat(90);
+    currentGameFixture.mockResolvedValue({
+      ...initialGame,
+      tree: { properties: [{ key: "PB", values: [longName] }, { key: "PW", values: ["   "] }], children: [] }
+    });
+    const host = await renderApp();
+    const names = host.querySelectorAll(".score-summary-card .player-name");
+    expect(names[0].textContent).toBe(longName);
+    expect(names[0].getAttribute("title")).toBe(longName);
+    expect(names[1].textContent).toBe("白棋");
+  });
+
+  it("keeps cancel and invalid komi atomic, then applies both names and komi once", async () => {
+    currentGameFixture.mockResolvedValue({
+      ...initialGame,
+      tree: { properties: [{ key: "PB", values: ["原黑"] }, { key: "PW", values: ["原白"] }, { key: "KM", values: ["6.5"] }, { key: "HA", values: ["2"] }], children: [] }
+    });
+    const host = await renderApp();
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "编辑棋局信息(I)").click());
+    let dialog = requiredElement(host, '[role="dialog"][aria-label="编辑棋局信息"]');
+    expect([...dialog.querySelectorAll("input")].map((input) => input.value)).toEqual(["原黑", "原白", "6.5", "2"]);
+    act(() => buttonNamed(dialog, "取消").click());
+    expect(backend.setCurrentGameMetadata).not.toHaveBeenCalled();
+
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "编辑棋局信息(I)").click());
+    dialog = requiredElement(host, '[role="dialog"][aria-label="编辑棋局信息"]');
+    const fields = dialog.querySelectorAll("input");
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(fields[0], "新黑");
+      fields[0].dispatchEvent(new Event("input", { bubbles: true }));
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(fields[2], "");
+      fields[2].dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    act(() => buttonNamed(dialog, "应用").click());
+    expect(dialog.textContent).toContain("贴目须为有限数值");
+    expect(backend.setCurrentGameMetadata).not.toHaveBeenCalled();
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(fields[2], "7.5");
+      fields[2].dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    backend.setCurrentGameMetadata.mockResolvedValue({
+      ...initialGame,
+      generation: 2,
+      snapshot_seq: 2,
+      dirty: true,
+      can_undo: true,
+      tree: { properties: [{ key: "PB", values: ["新黑"] }, { key: "PW", values: ["原白"] }, { key: "KM", values: ["7.5"] }, { key: "HA", values: ["2"] }], children: [] }
+    });
+    act(() => buttonNamed(dialog, "应用").click());
+    await flushLast(backend.setCurrentGameMetadata);
+    expect(backend.setCurrentGameMetadata).toHaveBeenCalledExactlyOnceWith(1, "新黑", "原白", 7.5);
+    expect(host.querySelector('[role="dialog"][aria-label="编辑棋局信息"]')).toBeNull();
+    expect(host.querySelector(".score-summary-card .player-name")?.textContent).toBe("新黑");
+    expect(host.textContent).toContain("贴目:");
   });
 });
 

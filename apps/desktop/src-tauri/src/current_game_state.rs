@@ -515,6 +515,19 @@ impl CurrentGameState {
         self.follow_continuous_position(&mut holder);
         Ok(result)
     }
+    pub fn set_metadata(
+        &self,
+        generation: u64,
+        black_name: String,
+        white_name: String,
+        komi: f32,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let mut holder = self.holder.lock().expect("current game state");
+        let result = holder.set_metadata(generation, &black_name, &white_name, komi)?;
+        self.note_recovery(&holder);
+        self.follow_continuous_position(&mut holder);
+        Ok(result)
+    }
 
     pub fn remove_variation(&self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
@@ -799,6 +812,29 @@ impl CurrentGameHolder {
         if let Some(edit) = outcome.edit {
             self.commit_edit(edit);
             self.selected_path = outcome.snapshot.path;
+            self.bump_snapshot();
+        }
+        self.current_result()
+    }
+
+    fn set_metadata(
+        &mut self,
+        generation: u64,
+        black_name: &str,
+        white_name: &str,
+        komi: f32,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.ensure_editable()?;
+        self.ensure_generation(generation)?;
+        let document = self.document.as_mut().ok_or_else(no_current_game)?;
+        let previous_komi = document.komi();
+        let outcome =
+            document.set_metadata_with_history(&self.selected_path, black_name, white_name, komi)?;
+        if let Some(edit) = outcome.edit {
+            self.commit_edit(edit);
+            if previous_komi != komi {
+                self.generation = self.generation.saturating_add(1);
+            }
             self.bump_snapshot();
         }
         self.current_result()
@@ -1180,6 +1216,92 @@ mod current_game_replacement {
         );
 
         assert!(state.admit_whole_game(opened.generation + 1).is_err());
+    }
+    #[test]
+    fn metadata_commit_is_atomic_and_komi_fences_old_analysis() {
+        let state = CurrentGameState::default();
+        let original =
+            "(;GM[1]SZ[5]KM[6.5]PB[甲]PW[乙]HA[2]XY[keep]LZOP[engine 50 100];B[aa]LZ[engine 50 100])";
+        let opened = state.replace(original, None).unwrap();
+        let selected = opened.selected_path.clone();
+        let rejected = state
+            .set_metadata(opened.generation, "丙".into(), "丁".into(), f32::NAN)
+            .unwrap_err();
+        assert_eq!(rejected.kind, CurrentGameErrorKind::MalformedSgf);
+        assert_eq!(state.serialize().unwrap(), original);
+        assert!(!state.inspect().1);
+
+        let names = state
+            .set_metadata(opened.generation, "长名 黑".into(), "白]名".into(), 6.5)
+            .unwrap();
+        assert_eq!(names.generation, opened.generation);
+        assert!(names.can_undo && names.dirty);
+        assert!(names.snapshot.primary_analysis.is_some());
+        assert!(state.admit_selected_node(names.generation, &selected).is_ok());
+        assert!(state.serialize().unwrap().contains("PW[白\\]名]"));
+
+        let changed = state
+            .set_metadata(names.generation, "长名 黑".into(), "白]名".into(), 7.5)
+            .unwrap();
+        assert!(changed.generation > names.generation);
+        assert!(changed.snapshot.primary_analysis.is_none());
+        assert!(!state.serialize().unwrap().contains("LZ["));
+        assert!(state.admit_selected_node(names.generation, &selected).is_err());
+        assert_eq!(
+            state
+                .admit_selected_node(changed.generation, &selected)
+                .unwrap()
+                .3,
+            7.5
+        );
+        assert!(state
+            .set_metadata(names.generation, "过期".into(), "过期".into(), 0.5)
+            .is_err());
+
+        let undone_komi = state.undo(changed.generation).unwrap();
+        assert!(undone_komi.generation > changed.generation);
+        assert!(undone_komi.snapshot.primary_analysis.is_some());
+        assert_eq!(
+            state
+                .admit_selected_node(undone_komi.generation, &selected)
+                .unwrap()
+                .3,
+            6.5
+        );
+        let undone_names = state.undo(undone_komi.generation).unwrap();
+        assert_eq!(undone_names.generation, undone_komi.generation);
+        assert!(!undone_names.dirty);
+        assert_eq!(state.serialize().unwrap(), original);
+        let redone_names = state.redo(undone_names.generation).unwrap();
+        assert_eq!(redone_names.generation, undone_names.generation);
+        let redone_komi = state.redo(redone_names.generation).unwrap();
+        assert!(redone_komi.generation > redone_names.generation);
+        assert!(!state.serialize().unwrap().contains("LZOP["));
+    }
+    #[test]
+    fn untouched_metadata_retains_original_sgf_and_history() {
+        let state = CurrentGameState::default();
+        let original = "(;GM[1]SZ[9]KM[6.50]XY[keep]LZOP[engine 50 100])";
+        let opened = state.replace(original, None).unwrap();
+        let unchanged = state
+            .set_metadata(opened.generation, String::new(), String::new(), 6.5)
+            .unwrap();
+        assert_eq!(state.serialize().unwrap(), original);
+        assert_eq!(unchanged.generation, opened.generation);
+        assert_eq!(unchanged.snapshot_seq, opened.snapshot_seq);
+        assert!(!unchanged.dirty && !unchanged.can_undo);
+        assert!(unchanged.snapshot.primary_analysis.is_some());
+
+        let renamed = state
+            .set_metadata(unchanged.generation, "Black".into(), String::new(), 6.5)
+            .unwrap();
+        assert!(renamed.can_undo);
+        assert_eq!(renamed.generation, opened.generation);
+        assert!(renamed.snapshot.primary_analysis.is_some());
+        assert!(state.serialize().unwrap().contains("KM[6.50]"));
+        let undone = state.undo(renamed.generation).unwrap();
+        assert!(!undone.dirty);
+        assert_eq!(state.serialize().unwrap(), original);
     }
 }
 
