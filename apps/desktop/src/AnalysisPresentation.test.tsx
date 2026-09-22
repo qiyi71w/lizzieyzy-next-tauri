@@ -369,8 +369,8 @@ async function hoverBoard(host: HTMLElement) {
   await act(async () => {
     board.dispatchEvent(new MouseEvent("pointermove", {
       bubbles: true,
-      clientX: 70.5,
-      clientY: 60.25
+      clientX: 64.22,
+      clientY: 57.11
     }));
     await new Promise((resolve) => setTimeout(resolve, 130));
   });
