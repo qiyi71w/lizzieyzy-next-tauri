@@ -117,7 +117,7 @@ const emptyPosition = {
 const initialGame: CurrentGameResultDto = {
   tree: { properties: [], children: [] },
   selected_path: { indices: [] },
-  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "", markup: [] },
+  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "", markup: [], stone_move_numbers: [] },
   generation: 1,
   snapshot_seq: 1,
   can_undo: false,
@@ -184,6 +184,7 @@ const acceptedGame: CurrentGameResultDto = {
       last_move: { color: "black", vertex: { point: { x: 5, y: 4 } }, move_number: 1 }
     },
     markup: [],
+    stone_move_numbers: [],
     personal_comment: ""
   },
   generation: 2,
@@ -209,6 +210,7 @@ const navigableChild: CurrentGameResultDto = {
     path: { indices: [0] },
     position: acceptedGame.snapshot.position,
     markup: [],
+    stone_move_numbers: [],
     personal_comment: ""
   }
 };
@@ -257,6 +259,7 @@ const branchingGame: CurrentGameResultDto = {
     path: { indices: [0, 1] },
     position: { ...emptyPosition, move_number: 2, to_play: "black" },
     markup: [],
+    stone_move_numbers: [],
     personal_comment: ""
   },
   generation: 3,
@@ -360,6 +363,7 @@ describe("App board intent feedback", () => {
     const coordinates = buttonNamed(host, "坐标");
     expect(coordinates.getAttribute("aria-pressed")).toBe("true");
     act(() => coordinates.click());
+    await flushLast(preferencesApi.saveAppPreferences);
     expect(coordinates.getAttribute("aria-pressed")).toBe("false");
 
     const rejectedMove = backend.playCurrentGame.mock.results[0].value;
@@ -387,6 +391,14 @@ describe("App board intent feedback", () => {
   });
 });
 
+function renderedBoardPoint(canvas: HTMLCanvasElement, column: string, row: string) {
+  const labels = (canvas.dataset.drawn ?? "").split("|").map((entry) => entry.split("@"));
+  const x = labels.find(([text]) => text === column)?.[1]?.split(",")[0];
+  const y = labels.find(([text]) => text === row)?.[1]?.split(",")[1];
+  if (!x || !y) throw new Error("Board coordinates were not rendered");
+  return { clientX: Number(x), clientY: Number(y) };
+}
+
 describe("App candidate continuation preview", () => {
   it("propagates board dwell to the mini-board without mutating the selected game", async () => {
     backend.classifyProblems.mockResolvedValue([]);
@@ -399,7 +411,7 @@ describe("App candidate continuation preview", () => {
 
     const board = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
     const miniBoard = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="参考图变化副棋盘"]');
-    board.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
+    board.getBoundingClientRect = () => new DOMRect(0, 0, board.width, board.height);
     const beforePreview = miniBoard.dataset.drawn;
     const serializedCalls = backend.serializeCurrentGame.mock.calls.length;
     const currentMove = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value;
@@ -407,8 +419,7 @@ describe("App candidate continuation preview", () => {
     await act(async () => {
       board.dispatchEvent(new MouseEvent("pointermove", {
         bubbles: true,
-        clientX: 70.5,
-        clientY: 60.25
+        ...renderedBoardPoint(board, "G", "4")
       }));
       await new Promise((resolve) => setTimeout(resolve, 130));
     });
@@ -447,13 +458,12 @@ describe("App stale review presentation", () => {
 
     const board = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
     const miniBoard = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="参考图变化副棋盘"]');
-    board.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
+    board.getBoundingClientRect = () => new DOMRect(0, 0, board.width, board.height);
     const beforePreview = miniBoard.dataset.drawn;
     await act(async () => {
       board.dispatchEvent(new MouseEvent("pointermove", {
         bubbles: true,
-        clientX: 70.5,
-        clientY: 60.25
+        ...renderedBoardPoint(board, "G", "4")
       }));
       await new Promise((resolve) => setTimeout(resolve, 130));
     });
@@ -636,8 +646,10 @@ describe("App focus-safe review controls", () => {
     await flushLast(backend.selectCurrentGameNode);
     expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0] });
     pressKey(canvas, "c");
+    await flushLast(preferencesApi.saveAppPreferences);
     expect(coordinates.getAttribute("aria-pressed")).toBe("false");
     pressKey(canvas, "c");
+    await flushLast(preferencesApi.saveAppPreferences);
     expect(coordinates.getAttribute("aria-pressed")).toBe("true");
 
     const composing = new KeyboardEvent("keydown", { key: "c", bubbles: true, cancelable: true });
@@ -976,8 +988,10 @@ describe("App focus-safe review controls", () => {
     const moveNumbers = buttonNamed(host, "手数");
     expect(moveNumbers.getAttribute("aria-pressed")).toBe("false");
     pressKey(buttonNamed(host, "坐标"), "c");
+    await flushLast(preferencesApi.saveAppPreferences);
     expect(buttonNamed(host, "坐标").getAttribute("aria-pressed")).toBe("false");
     pressKey(buttonNamed(host, "坐标"), "m");
+    await flushLast(preferencesApi.saveAppPreferences);
     expect(moveNumbers.getAttribute("aria-pressed")).toBe("true");
 
     const autoplay = buttonNamed(host, "自动播放");

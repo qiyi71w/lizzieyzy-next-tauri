@@ -19,6 +19,10 @@ pub struct AppPreferencesDto {
     pub continuous_analysis_enabled: bool,
     #[serde(flatten)]
     pub continuous_budget: ContinuousAnalysisBudgetDto,
+    #[serde(default = "default_show_coordinates")]
+    pub show_coordinates: bool,
+    #[serde(default)]
+    pub show_move_numbers: bool,
     #[serde(default = "default_show_ownership")]
     pub show_ownership: bool,
     #[serde(default = "default_show_policy")]
@@ -92,10 +96,16 @@ pub struct AppPreferencesLoadResultDto {
     pub recovery: Option<AppPreferencesRecoveryDto>,
 }
 
+fn default_show_coordinates() -> bool {
+    true
+}
+
 pub fn default_app_preferences() -> AppPreferencesDto {
     AppPreferencesDto {
         continuous_analysis_enabled: default_continuous_analysis_enabled(),
         continuous_budget: ContinuousAnalysisBudgetDto::default(),
+        show_coordinates: default_show_coordinates(),
+        show_move_numbers: false,
         show_ownership: default_show_ownership(),
         show_policy: default_show_policy(),
         show_candidates: default_show_candidates(),
@@ -523,6 +533,8 @@ mod tests {
                 continuous_visits_limit: 123,
                 continuous_stop_on_empty_board: true,
             },
+            show_coordinates: false,
+            show_move_numbers: true,
             show_ownership: false,
             show_policy: false,
             show_candidates: false,
@@ -678,6 +690,8 @@ mod tests {
         fs::write(&path, r#"{"showCandidates":false,"candidateLimit":2}"#).unwrap();
 
         let loaded = load_from_path(&path).unwrap();
+        assert!(loaded.preferences.show_coordinates);
+        assert!(!loaded.preferences.show_move_numbers);
         assert!(loaded.preferences.continuous_analysis_enabled);
         assert!(!loaded.preferences.show_candidates);
         assert_eq!(loaded.preferences.candidate_limit, 2);

@@ -16,7 +16,7 @@ type Props = {
   markup?: SgfMarkupDto[];
   analysis?: AnalysisFrameDto;
   selectedCandidateIndex?: number | null;
-  moves?: MoveDto[];
+  stoneMoveNumbers?: MoveDto[];
   showCoordinates?: boolean;
   showMoveNumbers?: boolean;
   overlayMode?: OverlayMode;
@@ -46,7 +46,7 @@ export function BoardCanvas({
   markup = [],
   analysis,
   selectedCandidateIndex,
-  moves = [],
+  stoneMoveNumbers = [],
   showCoordinates = true,
   showMoveNumbers = false,
   overlayMode: overlayModeProp,
@@ -106,13 +106,7 @@ export function BoardCanvas({
       return;
     }
     const rect = event.currentTarget.getBoundingClientRect();
-    const padding = Math.min(rect.width, rect.height) * 0.09;
-    const grid = Math.min(
-      (rect.width - padding * 2) / Math.max(position.board_width - 1, 1),
-      (rect.height - padding * 2) / Math.max(position.board_height - 1, 1)
-    );
-    const offsetX = (rect.width - grid * (position.board_width - 1)) / 2;
-    const offsetY = (rect.height - grid * (position.board_height - 1)) / 2;
+    const { grid, offsetX, offsetY } = boardGeometry(rect.width, rect.height, position.board_width, position.board_height);
     const pointerX = event.clientX - rect.left;
     const pointerY = event.clientY - rect.top;
     const candidateIndex = (analysis?.candidates ?? []).findIndex((candidate) => {
@@ -215,13 +209,7 @@ export function BoardCanvas({
 
     const boardWidth = position.board_width;
     const boardHeight = position.board_height;
-    const padding = Math.min(cssWidth, cssHeight) * 0.09;
-    const grid = Math.min(
-      (cssWidth - padding * 2) / Math.max(boardWidth - 1, 1),
-      (cssHeight - padding * 2) / Math.max(boardHeight - 1, 1)
-    );
-    const offsetX = (cssWidth - grid * (boardWidth - 1)) / 2;
-    const offsetY = (cssHeight - grid * (boardHeight - 1)) / 2;
+    const { padding, grid, offsetX, offsetY } = boardGeometry(cssWidth, cssHeight, boardWidth, boardHeight);
     const coordX = (n: number) => offsetX + n * grid;
     const coordY = (n: number) => offsetY + n * grid;
 
@@ -244,7 +232,7 @@ export function BoardCanvas({
     if (showCoordinates) {
       const letters = "ABCDEFGHJKLMNOPQRSTUVWXYZ";
       ctx.fillStyle = "#4a3518";
-      ctx.font = `${Math.max(9, grid * 0.28)}px "Noto Sans SC", sans-serif`;
+      ctx.font = `${Math.max(9, Math.min(grid * 0.28, padding * 0.5))}px "Noto Sans SC", sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       for (let x = 0; x < boardWidth; x += 1) {
@@ -276,8 +264,8 @@ export function BoardCanvas({
 
     const moveByPoint = new Map<string, number>();
     if (showMoveNumbers) {
-      for (const move of moves) {
-        if (move.move_number > position.move_number || !isPoint(move.vertex)) continue;
+      for (const move of stoneMoveNumbers) {
+        if (!isPoint(move.vertex)) continue;
         moveByPoint.set(`${move.vertex.point.x}:${move.vertex.point.y}`, move.move_number);
       }
     }
@@ -298,7 +286,8 @@ export function BoardCanvas({
       }
     }
 
-    if (position.last_move && isPoint(position.last_move.vertex)) {
+    if (position.last_move && isPoint(position.last_move.vertex) &&
+      !moveByPoint.has(`${position.last_move.vertex.point.x}:${position.last_move.vertex.point.y}`)) {
       const { x, y } = position.last_move.vertex.point;
       ctx.fillStyle = "#2156c7";
       ctx.beginPath(); ctx.arc(coordX(x), coordY(y), Math.max(2.5, grid * 0.12), 0, Math.PI * 2); ctx.fill();
@@ -410,7 +399,7 @@ export function BoardCanvas({
       ctx.lineWidth = Math.max(1.5, grid * 0.06);
       ctx.stroke();
     }
-  }, [position, markup, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, moves, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers, pvPrefixLength, replayCandidateIndex]);
+  }, [position, markup, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, stoneMoveNumbers, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers, pvPrefixLength, replayCandidateIndex]);
 
   const layerHost = document.getElementById("board-layers");
   const overlays = (
@@ -422,8 +411,8 @@ export function BoardCanvas({
   );
 
   const boardStyle = {
-    "--board-ratio": position.board_width / position.board_height,
-    aspectRatio: `${position.board_width} / ${position.board_height}`
+    "--board-ratio": (position.board_width + 2) / (position.board_height + 2),
+    aspectRatio: `${position.board_width + 2} / ${position.board_height + 2}`
   } as CSSProperties;
   return <div
     className="board-canvas"
@@ -443,13 +432,7 @@ export function BoardCanvas({
         cancelCandidatePreview();
         if (!onPointClick) return;
         const rect = event.currentTarget.getBoundingClientRect();
-        const padding = Math.min(rect.width, rect.height) * 0.09;
-        const grid = Math.min(
-          (rect.width - padding * 2) / Math.max(position.board_width - 1, 1),
-          (rect.height - padding * 2) / Math.max(position.board_height - 1, 1)
-        );
-        const offsetX = (rect.width - grid * (position.board_width - 1)) / 2;
-        const offsetY = (rect.height - grid * (position.board_height - 1)) / 2;
+        const { grid, offsetX, offsetY } = boardGeometry(rect.width, rect.height, position.board_width, position.board_height);
         const x = Math.round((event.clientX - rect.left - offsetX) / grid);
         const y = Math.round((event.clientY - rect.top - offsetY) / grid);
         if (x < 0 || y < 0 || x >= position.board_width || y >= position.board_height) return;
@@ -458,6 +441,18 @@ export function BoardCanvas({
     />
     {layerHost ? createPortal(overlays, layerHost) : overlays}
   </div>;
+}
+
+function boardGeometry(width: number, height: number, boardWidth: number, boardHeight: number) {
+  const padding = Math.max(18, Math.min(width, height) * 0.09);
+  // Reserve the coordinate gutter and half a cell beyond each edge intersection.
+  const grid = Math.min((width - padding * 2) / boardWidth, (height - padding * 2) / boardHeight);
+  return {
+    padding,
+    grid,
+    offsetX: (width - grid * (boardWidth - 1)) / 2,
+    offsetY: (height - grid * (boardHeight - 1)) / 2
+  };
 }
 
 function OverlayButton({ label, active, disabled, onClick }: { label: string; active: boolean; disabled?: boolean; onClick: () => void }) {

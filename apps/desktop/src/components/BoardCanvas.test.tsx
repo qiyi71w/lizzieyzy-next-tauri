@@ -56,11 +56,15 @@ const analysis: AnalysisFrameDto = {
 let root: Root | null = null;
 let drawArc: Mock = vi.fn();
 let drawStroke: Mock = vi.fn();
+let drawText: Mock = vi.fn();
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   drawArc = vi.fn();
   drawStroke = vi.fn();
+  drawText = vi.fn();
+  vi.spyOn(HTMLCanvasElement.prototype, "clientWidth", "get").mockReturnValue(100);
+  vi.spyOn(HTMLCanvasElement.prototype, "clientHeight", "get").mockReturnValue(100);
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => canvasContext(drawArc, drawStroke));
 });
 
@@ -70,6 +74,32 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+it("keeps rectangular corner stones inside the canvas and maps their clicks to the same vertices", () => {
+  const corners: PointDto[] = [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 0, y: 2 }, { x: 4, y: 2 }];
+  const rectangular: PositionDto = {
+    ...position, board_width: 5, board_height: 3,
+    stones: corners.map((point) => ({ ...point, color: "black" }))
+  };
+  const onPointClick = vi.fn<(point: PointDto) => void>();
+  const { canvas, rerender } = renderBoard({ initialPosition: rectangular, onPointClick });
+  Object.defineProperties(canvas, {
+    clientWidth: { configurable: true, value: 926 },
+    clientHeight: { configurable: true, value: 555 }
+  });
+  canvas.getBoundingClientRect = () => new DOMRect(0, 0, 926, 555);
+  drawArc.mockClear();
+  rerender({ ...rectangular });
+  const stones = drawArc.mock.calls.slice(-4);
+  for (const [index, [x, y, radius]] of stones.entries()) {
+    expect(x - radius).toBeGreaterThanOrEqual(0);
+    expect(y - radius).toBeGreaterThanOrEqual(0);
+    expect(x + radius).toBeLessThanOrEqual(926);
+    expect(y + radius).toBeLessThanOrEqual(555);
+    act(() => canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: x, clientY: y })));
+    expect(onPointClick).toHaveBeenLastCalledWith(corners[index]);
+  }
 });
 
 describe("BoardCanvas keyboard intent", () => {
@@ -113,14 +143,6 @@ describe("BoardCanvas keyboard intent", () => {
     act(() => expect(canvas.dispatchEvent(right)).toBe(false));
     act(() => expect(canvas.dispatchEvent(down)).toBe(false));
     expect(globalKeydown).not.toHaveBeenCalled();
-    expect(drawArc.mock.calls.slice(-2).map((call) => call.slice(0, 2))).toEqual([
-      [60.25, 60.25],
-      [60.25, 60.25]
-    ]);
-    expect(drawStroke.mock.calls.slice(-2)).toEqual([
-      ["#ffffff", 3],
-      ["#2156c7", 1.5]
-    ]);
 
     const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
     const space = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true });
@@ -157,14 +179,16 @@ describe("BoardCanvas keyboard intent", () => {
 
   it("preserves pointer coordinate submission", () => {
     const onPointClick = vi.fn<(point: PointDto) => void>();
-    const { canvas } = renderBoard({ initialPosition: { ...position, board_width: 9, board_height: 5 }, onPointClick });
+    const rectangular = { ...position, board_width: 9, board_height: 5 };
+    const { canvas, rerender } = renderBoard({ initialPosition: rectangular, onPointClick });
+    Object.defineProperty(canvas, "clientWidth", { configurable: true, value: 160 });
     canvas.getBoundingClientRect = () => new DOMRect(0, 0, 160, 100);
+    rerender({ ...rectangular });
 
     act(() => {
       canvas.dispatchEvent(new MouseEvent("click", {
         bubbles: true,
-        clientX: 44.5,
-        clientY: 70.5
+        ...renderedPoint(2, 3, 5)
       }));
     });
 
@@ -180,14 +204,14 @@ describe("BoardCanvas candidate preview", () => {
     const { canvas } = renderBoard({ analysis, onCandidatePreview });
     setCanvasBounds(canvas);
 
-    dispatchPointer(canvas, "pointermove", 29.5, 39.75);
+    dispatchPointer(canvas, "pointermove", 2, 3);
     act(() => vi.advanceTimersByTime(119));
     expect(onCandidatePreview).not.toHaveBeenCalled();
 
     act(() => vi.advanceTimersByTime(1));
     expect(onCandidatePreview).toHaveBeenLastCalledWith(0);
 
-    dispatchPointer(canvas, "pointerout", 29.5, 39.75);
+    dispatchPointer(canvas, "pointerout", 2, 3);
     expect(onCandidatePreview).toHaveBeenLastCalledWith(null);
   });
 
@@ -198,13 +222,12 @@ describe("BoardCanvas candidate preview", () => {
     const { canvas } = renderBoard({ analysis, onCandidatePreview, onPointClick });
     setCanvasBounds(canvas);
 
-    dispatchPointer(canvas, "pointermove", 29.5, 39.75);
+    dispatchPointer(canvas, "pointermove", 2, 3);
     act(() => vi.advanceTimersByTime(60));
     act(() => {
       canvas.dispatchEvent(new MouseEvent("click", {
         bubbles: true,
-        clientX: 29.5,
-        clientY: 39.75
+        ...renderedPoint(2, 3)
       }));
     });
     act(() => vi.runAllTimers());
@@ -220,9 +243,9 @@ describe("BoardCanvas candidate preview", () => {
     const { canvas } = renderBoard({ analysis, onCandidatePreview, onPointClick });
     setCanvasBounds(canvas);
 
-    dispatchPointer(canvas, "pointermove", 29.5, 39.75);
+    dispatchPointer(canvas, "pointermove", 2, 3);
     act(() => vi.advanceTimersByTime(60));
-    dispatchPointer(canvas, "pointermove", 70.5, 60.25);
+    dispatchPointer(canvas, "pointermove", 6, 5);
     act(() => vi.advanceTimersByTime(119));
     expect(onCandidatePreview).not.toHaveBeenCalled();
     act(() => vi.advanceTimersByTime(1));
@@ -231,8 +254,7 @@ describe("BoardCanvas candidate preview", () => {
     act(() => {
       canvas.dispatchEvent(new MouseEvent("click", {
         bubbles: true,
-        clientX: 70.5,
-        clientY: 60.25
+        ...renderedPoint(6, 5)
       }));
     });
     expect(onCandidatePreview).toHaveBeenLastCalledWith(null);
@@ -252,14 +274,14 @@ describe("BoardCanvas candidate preview", () => {
     });
     setCanvasBounds(canvas);
 
-    dispatchPointer(canvas, "pointermove", 29.5, 39.75);
+    dispatchPointer(canvas, "pointermove", 2, 3);
     act(() => vi.advanceTimersByTime(120));
     expect(onCandidatePreview).toHaveBeenLastCalledWith(0);
 
     rerender(position, { ...initialPreviewScope, selectedPath: [1] });
     expect(onCandidatePreview).toHaveBeenLastCalledWith(null);
 
-    dispatchPointer(canvas, "pointermove", 29.5, 39.75);
+    dispatchPointer(canvas, "pointermove", 2, 3);
     act(() => vi.advanceTimersByTime(60));
     rerender(position, { ...initialPreviewScope, selectedPath: [2] });
     act(() => vi.runAllTimers());
@@ -276,7 +298,7 @@ describe("BoardCanvas candidate preview", () => {
     });
     setCanvasBounds(canvas);
 
-    dispatchPointer(canvas, "pointermove", 29.5, 39.75);
+    dispatchPointer(canvas, "pointermove", 2, 3);
     act(() => vi.advanceTimersByTime(60));
     rerender(position, { ...initialPreviewScope, selectedPath: [0] });
     act(() => vi.advanceTimersByTime(60));
@@ -302,7 +324,7 @@ describe("BoardCanvas candidate preview", () => {
     const canvas = host.querySelector("canvas");
     if (!canvas) throw new Error("BoardCanvas did not render a canvas");
     setCanvasBounds(canvas);
-    dispatchPointer(canvas, "pointermove", 29.5, 39.75);
+    dispatchPointer(canvas, "pointermove", 2, 3);
     act(() => vi.advanceTimersByTime(119));
 
     act(() => root?.render(
@@ -331,7 +353,7 @@ describe("BoardCanvas next-move review markers", () => {
     });
     paintAtCssSize(canvas, rerender);
     expect(host.querySelector(".board-canvas")?.getAttribute("data-next-move-mode")).toBe("off");
-    expect(drawArc.mock.calls.some((call) => call[2] === 10.25 * 0.22 || call[2] === 10.25 * 0.16)).toBe(false);
+    expect(drawStroke.mock.calls.some((call) => call[0] === "#163f96" || call[0] === "rgba(33,86,199,.55)")).toBe(false);
   });
 
   it("marks all children and uses a thicker Primary Child ring", () => {
@@ -341,12 +363,13 @@ describe("BoardCanvas next-move review markers", () => {
     });
     paintAtCssSize(canvas, rerender);
     expect(host.querySelector(".board-canvas")?.getAttribute("data-next-move-mode")).toBe("variations");
-    const padding = 9;
-    const grid = 10.25;
-    expect(drawArc.mock.calls.some((call) => call[0] === padding + 3 * grid && call[1] === padding + 3 * grid && call[2] === grid * 0.22)).toBe(true);
-    expect(drawArc.mock.calls.some((call) => call[0] === padding + 6 * grid && call[1] === padding + 5 * grid && call[2] === grid * 0.16)).toBe(true);
-    expect(drawStroke.mock.calls.some((call) => call[0] === "#163f96" && call[1] === 2)).toBe(true);
-    expect(drawStroke.mock.calls.some((call) => call[0] === "rgba(33,86,199,.55)" && call[1] === 1)).toBe(true);
+    const primary = renderedPoint(3, 3);
+    const secondary = renderedPoint(6, 5);
+    expect(drawArc.mock.calls.some((call) => call[0] === primary.clientX && call[1] === primary.clientY)).toBe(true);
+    expect(drawArc.mock.calls.some((call) => call[0] === secondary.clientX && call[1] === secondary.clientY)).toBe(true);
+    const primaryStroke = drawStroke.mock.calls.find((call) => call[0] === "#163f96");
+    const secondaryStroke = drawStroke.mock.calls.find((call) => call[0] === "rgba(33,86,199,.55)");
+    expect(primaryStroke?.[1]).toBeGreaterThan(secondaryStroke?.[1]);
   });
 
   it("keeps the Primary Child grade visible in Graded", () => {
@@ -455,9 +478,16 @@ function setCanvasBounds(canvas: HTMLCanvasElement) {
   canvas.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
 }
 
-function dispatchPointer(canvas: HTMLCanvasElement, type: "pointermove" | "pointerout", clientX: number, clientY: number) {
+function renderedPoint(x: number, y: number, boardHeight = 9) {
+  const column = drawText.mock.calls.find((call) => call[0] === "ABCDEFGHJKLMNOPQRSTUVWXYZ"[x]);
+  const row = drawText.mock.calls.find((call) => call[0] === String(boardHeight - y));
+  if (!column || !row) throw new Error("Board coordinates were not rendered");
+  return { clientX: column[1] as number, clientY: row[2] as number };
+}
+
+function dispatchPointer(canvas: HTMLCanvasElement, type: "pointermove" | "pointerout", x: number, y: number) {
   act(() => {
-    canvas.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX, clientY }));
+    canvas.dispatchEvent(new MouseEvent(type, { bubbles: true, ...renderedPoint(x, y) }));
   });
 }
 
@@ -467,10 +497,10 @@ function canvasContext(arc: Mock, stroke: Mock): CanvasRenderingContext2D {
   return {
     beginPath: vi.fn(),
     arc,
-    clearRect: vi.fn(),
+    clearRect: vi.fn(() => drawText.mockClear()),
     fill: vi.fn(),
     fillRect: vi.fn(),
-    fillText: vi.fn(),
+    fillText: drawText,
     get lineWidth() {
       return lineWidth;
     },

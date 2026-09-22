@@ -161,6 +161,8 @@ pub enum SgfMarkupDto {
 pub struct SelectedNodeSnapshotDto {
     pub path: NodePath,
     pub position: PositionDto,
+    /// Successful moves whose stones survive on the selected root-to-node line.
+    pub stone_move_numbers: Vec<MoveDto>,
     pub personal_comment: String,
     #[serde(default)]
     pub markup: Vec<SgfMarkupDto>,
@@ -834,6 +836,7 @@ mod current_game_wire {
                     }),
                     errors: Vec::new(),
                 },
+                stone_move_numbers: Vec::new(),
                 personal_comment: "mainline pass".to_string(),
                 markup: Vec::new(),
                 generated_information: None,

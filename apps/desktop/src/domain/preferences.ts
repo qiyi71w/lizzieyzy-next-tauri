@@ -8,6 +8,8 @@ export type SubBoardContentMode = "variation" | "raw";
 export type { NextMoveReviewMarkerMode };
 
 export type AppPreferences = ContinuousAnalysisBudgetDto & {
+  showCoordinates: boolean;
+  showMoveNumbers: boolean;
   showOwnership: boolean;
   showPolicy: boolean;
   showCandidates: boolean;
@@ -40,6 +42,8 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
 };
 
 export const defaultAppPreferences: AppPreferences = {
+  showCoordinates: true,
+  showMoveNumbers: false,
   showOwnership: true,
   showPolicy: true,
   showCandidates: true,
@@ -109,6 +113,8 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
   const scoreLeadLine = booleanValue(value?.scoreLeadLine, defaultAppPreferences.scoreLeadLine);
   const defaultMaxVisits = integerValue(value?.defaultMaxVisits, defaultAppPreferences.defaultMaxVisits, 1, 1_000_000);
   return {
+    showCoordinates: booleanValue(value?.showCoordinates, defaultAppPreferences.showCoordinates),
+    showMoveNumbers: booleanValue(value?.showMoveNumbers, defaultAppPreferences.showMoveNumbers),
     showOwnership: booleanValue(value?.showOwnership, defaultAppPreferences.showOwnership),
     showPolicy: booleanValue(value?.showPolicy, defaultAppPreferences.showPolicy),
     showCandidates: booleanValue(value?.showCandidates, defaultAppPreferences.showCandidates),

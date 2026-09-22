@@ -110,7 +110,7 @@ const emptyPosition = {
 const initialGame: CurrentGameResultDto = {
   tree: { properties: [], children: [] },
   selected_path: { indices: [] },
-  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "", markup: [] },
+  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "", markup: [], stone_move_numbers: [] },
   generation: 1,
   snapshot_seq: 1,
   can_undo: false,
@@ -144,6 +144,7 @@ function snapshotAt(path: NodePath): CurrentGameResultDto {
         to_play: path.indices.length % 2 === 0 ? "black" : "white"
       },
       markup: [],
+      stone_move_numbers: [],
       personal_comment: ""
     }
   };

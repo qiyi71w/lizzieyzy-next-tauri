@@ -116,7 +116,7 @@ const emptyPosition = {
 const initialGame: CurrentGameResultDto = {
   tree: { properties: [], children: [] },
   selected_path: { indices: [] },
-  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "", markup: [] },
+  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "", markup: [], stone_move_numbers: [] },
   generation: 1,
   snapshot_seq: 1,
   can_undo: false,
@@ -152,6 +152,32 @@ afterEach(() => {
 });
 
 describe("durable preferences surface", () => {
+  it("keeps display controls committed until a write succeeds and reports failed shortcut writes", async () => {
+    let finishSave!: (value: AppPreferences) => void;
+    const pendingSave = new Promise<AppPreferences>((resolve) => { finishSave = resolve; });
+    preferencesApi.saveAppPreferences.mockReturnValueOnce(pendingSave);
+    const host = await renderApp();
+    const coordinates = () => buttonNamed(host, "坐标");
+    act(() => coordinates().click());
+    expect(coordinates().getAttribute("aria-pressed")).toBe("true");
+    await act(async () => {
+      finishSave({ ...defaultAppPreferences, showCoordinates: false });
+      await pendingSave;
+    });
+    expect(coordinates().getAttribute("aria-pressed")).toBe("false");
+    act(() => buttonNamed(host, "显示").click());
+    expect(menuCheck(host, "坐标(C)").getAttribute("aria-checked")).toBe("false");
+    act(() => buttonNamed(host, "显示").click());
+    preferencesApi.saveAppPreferences.mockRejectedValueOnce(new Error("display disk full"));
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "c", bubbles: true })));
+    await act(async () => { await preferencesApi.saveAppPreferences.mock.results.at(-1)?.value.catch(() => undefined); });
+    expect(coordinates().getAttribute("aria-pressed")).toBe("false");
+    expect(host.textContent).toContain("display disk full");
+    openPreferences(host);
+    expect(labeledCheckbox(host, "坐标").checked).toBe(false);
+    expect(buttonNamed(host, "手数").getAttribute("aria-pressed")).toBe("false");
+  });
+
   it("keeps invalid budgets local and restores the committed values when persistence fails", async () => {
     const host = await renderApp();
     act(() => buttonNamed(host, "分析").click());
