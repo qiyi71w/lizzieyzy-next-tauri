@@ -7,6 +7,7 @@
 - Added rectangular 2–25-axis boards across SGF, rules, main/sub-board rendering and KataGo analysis, plus shared New/Clear/Set Board Size parameters and durable new-document dimension/komi defaults.
 - Added complete SGF tree navigation and exact-path links from variations, charts and problem lists. Move jumps count pass while skipping setup/comment nodes; selected SGF labels and marks follow the cursor, and stale-document navigation is rejected.
 - Added five-entry durable native SGF/GIB history with safe reopen, full-path tooltips, narrow Clear, and explicit persistence-failure Retry. Successful opens remain installed when history persistence fails.
+- Added durable coordinate and all-move-number controls shared by menus, C/M shortcuts and Preferences. Numbering follows surviving stones on the selected branch, including captures, setup and pass; cancelled or failed preference writes retain the saved display state.
 - Removed the legacy force-replace IPC and frontend wrapper. Native current-game replacement uses the shared candidate-validation and Save / Discard / Cancel workflow.
 - Added manual continuous current-node analysis with real KataGo progress, fixed 600-second search budgets, shared-Run queue liveness, target-final cancellation and bounded Run-failure cleanup. Accepted snapshots remain available to ordinary SGF Save and current-game recovery.
 - Added durable default-on continuous-analysis intent, manager-owned latest-node following, and contextual Start/Stop/Resume with limit, finite-job, error and document-departure inhibition.
@@ -22,6 +23,7 @@
 - 新增宽高各 2–25 的矩形棋盘，贯通 SGF、规则、主副棋盘与 KataGo 分析；新建／清空／设置棋盘大小共用参数表单，并持久化新建宽高与贴目默认值。
 - 新增完整 SGF 树及变化、图表、问题列表的精确路径导航；跳手计入 pass、跳过 setup/注释节点，标签与标记随选点同步，过期文档请求不会改变选择。
 - 新增最近五个原生 SGF/GIB 的持久历史，支持安全重开、完整路径提示、单独清空和写失败显式重试；历史写入失败不撤销已打开的棋谱。
+- 坐标与全部手数设置现已持久化，菜单、C/M 快捷键与设置面板共享保存值；编号按当前真实分支的存活棋子来源显示，正确处理提子、setup 和 pass，取消或写入失败保留原设置。
 - 移除旧强制替换 IPC 及前端 wrapper；原生当前棋谱替换统一使用候选验证与保存/放弃/取消流程。
 - 新增手动连续当前节点分析：接入真实 KataGo 进度、固定 600 秒搜索预算、共享 Run 排队保活、目标 final 取消与有界故障清理；已接纳快照可普通保存到 SGF，并纳入当前棋谱恢复。
 - 连续分析意图默认开启并持久化；由 manager 跟随最新节点，统一开始/停止/继续动作，并保留到限、有限请求、错误及离开棋谱后的自动工作抑制。

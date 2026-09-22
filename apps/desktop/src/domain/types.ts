@@ -39,6 +39,7 @@ export type SgfMarkupDto =
 export type SelectedNodeSnapshotDto = {
   path: NodePath;
   position: PositionDto;
+  stone_move_numbers: MoveDto[];
   personal_comment: string;
   markup: SgfMarkupDto[];
   generated_information?: string | null;

@@ -93,7 +93,7 @@ impl CurrentSgfDocument {
     pub fn snapshot(&self, path: &NodePath) -> Result<SelectedNodeSnapshotDto, CurrentGameError> {
         let nodes = self.nodes_on_path(path)?;
         let selected = *nodes.last().expect("path walk includes the root");
-        let position = self.replay_nodes(&nodes)?;
+        let (position, stone_move_numbers) = self.replay_nodes(&nodes)?;
         let projected = crate::analysis::project_node_analysis(
             selected,
             self.document.board_width,
@@ -103,6 +103,7 @@ impl CurrentSgfDocument {
         Ok(SelectedNodeSnapshotDto {
             path: path.clone(),
             position: position.clone(),
+            stone_move_numbers,
             personal_comment: personal_comment(selected),
             markup: selected_markup(selected, self.document.board_width, self.document.board_height),
             generated_information: None,
@@ -428,7 +429,7 @@ impl CurrentSgfDocument {
         Ok(nodes)
     }
 
-    fn replay_nodes(&self, nodes: &[&SgfNode]) -> Result<PositionDto, CurrentGameError> {
+    fn replay_nodes(&self, nodes: &[&SgfNode]) -> Result<(PositionDto, Vec<MoveDto>), CurrentGameError> {
         let mut board = Board::new(self.document.board_width, self.document.board_height).map_err(|_| {
             CurrentGameError {
                 kind: CurrentGameErrorKind::UnsupportedBoardSize,
@@ -445,6 +446,8 @@ impl CurrentSgfDocument {
         let mut last_move = None;
         let mut move_number = 0u32;
         let mut errors = Vec::new();
+        let mut stone_sources: Vec<Option<MoveDto>> =
+            vec![None; self.document.board_width as usize * self.document.board_height as usize];
 
         for node in nodes {
             apply_setup_properties(
@@ -453,6 +456,16 @@ impl CurrentSgfDocument {
                 self.document.board_width,
                 self.document.board_height,
             )?;
+            for property in &node.properties {
+                if !matches!(property.key.as_str(), "AB" | "AW" | "AE") {
+                    continue;
+                }
+                for value in &property.values {
+                    for point in crate::parse_setup_points(value, self.document.board_width, self.document.board_height)? {
+                        stone_sources[point.y as usize * self.document.board_width as usize + point.x as usize] = None;
+                    }
+                }
+            }
             if let Some(color) = player_to_play(node)? {
                 to_play = color;
             }
@@ -473,10 +486,22 @@ impl CurrentSgfDocument {
                     move_number,
                 };
                 match board.play(to_core_color(sgf_move.color), to_core_vertex(&sgf_move.vertex)) {
-                    Ok(outcome) => match sgf_move.color {
-                        PlayerColor::Black => captures_black += outcome.captured.len() as u32,
-                        PlayerColor::White => captures_white += outcome.captured.len() as u32,
-                    },
+                    Ok(outcome) => {
+                        match sgf_move.color {
+                            PlayerColor::Black => captures_black += outcome.captured.len() as u32,
+                            PlayerColor::White => captures_white += outcome.captured.len() as u32,
+                        }
+                        for captured in outcome.captured {
+                            let idx =
+                                captured.y as usize * self.document.board_width as usize + captured.x as usize;
+                            stone_sources[idx] = None;
+                        }
+                        if let MoveVertex::Point(point) = &sgf_move.vertex {
+                            let idx =
+                                point.y as usize * self.document.board_width as usize + point.x as usize;
+                            stone_sources[idx] = Some(sgf_move.clone());
+                        }
+                    }
                     Err(error) => errors.push(format!("{error}")),
                 }
                 to_play = player_to_play(node)?.unwrap_or_else(|| sgf_move.color.opponent());
@@ -484,19 +509,24 @@ impl CurrentSgfDocument {
             }
         }
 
-        Ok(PositionDto {
-            board_width: self.document.board_width,
-            board_height: self.document.board_height,
-            move_number,
-            to_play,
-            stones: stones_from_board(&board),
-            captures_black,
-            captures_white,
-            last_move,
-            errors,
-        })
-    }
+        let mut stone_move_numbers: Vec<MoveDto> = stone_sources.into_iter().flatten().collect();
+        stone_move_numbers.sort_by_key(|m| m.move_number);
 
+        Ok((
+            PositionDto {
+                board_width: self.document.board_width,
+                board_height: self.document.board_height,
+                move_number,
+                to_play,
+                stones: stones_from_board(&board),
+                captures_black,
+                captures_white,
+                last_move,
+                errors,
+            },
+            stone_move_numbers,
+        ))
+    }
     fn existing_child_index(
         &self,
         path: &NodePath,
@@ -1508,5 +1538,355 @@ mod first_child_mainline_worklist {
             .stones
             .iter()
             .any(|stone| stone.x == x && stone.y == y && stone.color == color)
+    }
+}
+
+#[cfg(test)]
+mod snapshot_stone_move_numbers {
+    use super::*;
+    use app_model::{MoveDto, MoveVertex, NodePath, PlayerColor, PointDto};
+
+    #[test]
+    fn snapshot_stone_move_numbers_multilevel_alternate_branch_vs_mainline() {
+        let sgf = "(;SZ[5]\
+            ;B[aa]\
+            (;W[bb];B[cc])\
+            (;W[dd];B[ee]\
+                (;W[ab])\
+                (;W[ba])\
+            )\
+        )";
+        let document = CurrentSgfDocument::open(sgf).unwrap();
+        let initial_serialized = document.serialize().unwrap();
+
+        let mainline_path = NodePath {
+            indices: vec![0, 0, 0],
+        };
+        let mainline_snap = document.snapshot(&mainline_path).unwrap();
+        assert_eq!(mainline_snap.position.move_number, 3);
+        assert_eq!(
+            mainline_snap.stone_move_numbers,
+            vec![
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 0 }),
+                    move_number: 1,
+                },
+                MoveDto {
+                    color: PlayerColor::White,
+                    vertex: MoveVertex::Point(PointDto { x: 1, y: 1 }),
+                    move_number: 2,
+                },
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 2, y: 2 }),
+                    move_number: 3,
+                },
+            ]
+        );
+
+        let branch_a_path = NodePath {
+            indices: vec![0, 1, 0, 0],
+        };
+        let branch_a_snap = document.snapshot(&branch_a_path).unwrap();
+        assert_eq!(branch_a_snap.position.move_number, 4);
+        assert_eq!(
+            branch_a_snap.stone_move_numbers,
+            vec![
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 0 }),
+                    move_number: 1,
+                },
+                MoveDto {
+                    color: PlayerColor::White,
+                    vertex: MoveVertex::Point(PointDto { x: 3, y: 3 }),
+                    move_number: 2,
+                },
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 4, y: 4 }),
+                    move_number: 3,
+                },
+                MoveDto {
+                    color: PlayerColor::White,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 1 }),
+                    move_number: 4,
+                },
+            ]
+        );
+
+        let branch_b_path = NodePath {
+            indices: vec![0, 1, 0, 1],
+        };
+        let branch_b_snap = document.snapshot(&branch_b_path).unwrap();
+        assert_eq!(branch_b_snap.position.move_number, 4);
+        assert_eq!(
+            branch_b_snap.stone_move_numbers,
+            vec![
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 0 }),
+                    move_number: 1,
+                },
+                MoveDto {
+                    color: PlayerColor::White,
+                    vertex: MoveVertex::Point(PointDto { x: 3, y: 3 }),
+                    move_number: 2,
+                },
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 4, y: 4 }),
+                    move_number: 3,
+                },
+                MoveDto {
+                    color: PlayerColor::White,
+                    vertex: MoveVertex::Point(PointDto { x: 1, y: 0 }),
+                    move_number: 4,
+                },
+            ]
+        );
+
+        assert_eq!(document.serialize().unwrap(), initial_serialized);
+    }
+
+    #[test]
+    fn snapshot_stone_move_numbers_capture_and_replay_same_point() {
+        let sgf = "(;SZ[5];B[ab];W[aa];B[ba];W[];B[aa])";
+        let document = CurrentSgfDocument::open(sgf).unwrap();
+        let initial_serialized = document.serialize().unwrap();
+
+        let path_move2 = NodePath {
+            indices: vec![0, 0],
+        };
+        let snap2 = document.snapshot(&path_move2).unwrap();
+        assert_eq!(snap2.position.move_number, 2);
+        assert_eq!(
+            snap2.stone_move_numbers,
+            vec![
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 1 }),
+                    move_number: 1,
+                },
+                MoveDto {
+                    color: PlayerColor::White,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 0 }),
+                    move_number: 2,
+                },
+            ]
+        );
+
+        let path_move3 = NodePath {
+            indices: vec![0, 0, 0],
+        };
+        let snap3 = document.snapshot(&path_move3).unwrap();
+        assert_eq!(snap3.position.move_number, 3);
+        assert_eq!(snap3.position.captures_black, 1);
+        assert_eq!(
+            snap3.stone_move_numbers,
+            vec![
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 1 }),
+                    move_number: 1,
+                },
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 1, y: 0 }),
+                    move_number: 3,
+                },
+            ]
+        );
+
+        let path_move4 = NodePath {
+            indices: vec![0, 0, 0, 0],
+        };
+        let snap4 = document.snapshot(&path_move4).unwrap();
+        assert_eq!(snap4.position.move_number, 4);
+        assert_eq!(snap4.stone_move_numbers, snap3.stone_move_numbers);
+
+        let path_move5 = NodePath {
+            indices: vec![0, 0, 0, 0, 0],
+        };
+        let snap5 = document.snapshot(&path_move5).unwrap();
+        assert_eq!(snap5.position.move_number, 5);
+        assert_eq!(
+            snap5.stone_move_numbers,
+            vec![
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 1 }),
+                    move_number: 1,
+                },
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 1, y: 0 }),
+                    move_number: 3,
+                },
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 0 }),
+                    move_number: 5,
+                },
+            ]
+        );
+
+        assert_eq!(document.serialize().unwrap(), initial_serialized);
+    }
+
+    #[test]
+    fn snapshot_stone_move_numbers_setup_same_color_reassertion_pass_comment() {
+        let sgf = "(;SZ[5]AB[ba]AW[bb]C[root setup]PL[B]\
+            ;B[ab]C[first move]\
+            ;W[]\
+            ;C[tactical note]\
+            ;AB[ab]AE[ba]AW[cc]\
+            ;W[dd]\
+        )";
+        let document = CurrentSgfDocument::open(sgf).unwrap();
+        let initial_serialized = document.serialize().unwrap();
+
+        let root_path = NodePath { indices: Vec::new() };
+        let root_snap = document.snapshot(&root_path).unwrap();
+        assert_eq!(root_snap.position.move_number, 0);
+        assert!(root_snap.stone_move_numbers.is_empty());
+        assert_eq!(root_snap.position.to_play, PlayerColor::Black);
+
+        let path_1 = NodePath { indices: vec![0] };
+        let snap_1 = document.snapshot(&path_1).unwrap();
+        assert_eq!(snap_1.position.move_number, 1);
+        assert_eq!(
+            snap_1.stone_move_numbers,
+            vec![MoveDto {
+                color: PlayerColor::Black,
+                vertex: MoveVertex::Point(PointDto { x: 0, y: 1 }),
+                move_number: 1,
+            }]
+        );
+
+        let path_2 = NodePath { indices: vec![0, 0] };
+        let snap_2 = document.snapshot(&path_2).unwrap();
+        assert_eq!(snap_2.position.move_number, 2);
+        assert_eq!(snap_2.stone_move_numbers, snap_1.stone_move_numbers);
+
+        let path_3 = NodePath {
+            indices: vec![0, 0, 0],
+        };
+        let snap_3 = document.snapshot(&path_3).unwrap();
+        assert_eq!(snap_3.position.move_number, 2);
+        assert_eq!(snap_3.stone_move_numbers, snap_1.stone_move_numbers);
+
+        let path_4 = NodePath {
+            indices: vec![0, 0, 0, 0],
+        };
+        let snap_4 = document.snapshot(&path_4).unwrap();
+        assert_eq!(snap_4.position.move_number, 2);
+        assert!(
+            snap_4.stone_move_numbers.is_empty(),
+            "same-color reassertion AB[ab] clears move source for (0, 1)"
+        );
+        assert!(snap_4
+            .position
+            .stones
+            .iter()
+            .any(|s| s.x == 0 && s.y == 1 && s.color == PlayerColor::Black));
+
+        let path_5 = NodePath {
+            indices: vec![0, 0, 0, 0, 0],
+        };
+        let snap_5 = document.snapshot(&path_5).unwrap();
+        assert_eq!(snap_5.position.move_number, 3);
+        assert_eq!(
+            snap_5.stone_move_numbers,
+            vec![MoveDto {
+                color: PlayerColor::White,
+                vertex: MoveVertex::Point(PointDto { x: 3, y: 3 }),
+                move_number: 3,
+            }]
+        );
+
+        assert_eq!(document.serialize().unwrap(), initial_serialized);
+    }
+
+    #[test]
+    fn snapshot_stone_move_numbers_rectangular_edge_and_illegal_replay_move() {
+        let sgf = "(;SZ[4:6];B[ad];W[df];B[da];W[af];B[ad])";
+        let document = CurrentSgfDocument::open(sgf).unwrap();
+        let initial_serialized = document.serialize().unwrap();
+
+        let leaf_path = NodePath {
+            indices: vec![0, 0, 0, 0, 0],
+        };
+        let snap = document.snapshot(&leaf_path).unwrap();
+
+        assert_eq!((snap.position.board_width, snap.position.board_height), (4, 6));
+        assert_eq!(snap.position.move_number, 5);
+        assert_eq!(snap.position.errors.len(), 1);
+        assert!(snap.position.errors[0].contains("already occupied"));
+
+        assert_eq!(
+            snap.stone_move_numbers,
+            vec![
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 3 }),
+                    move_number: 1,
+                },
+                MoveDto {
+                    color: PlayerColor::White,
+                    vertex: MoveVertex::Point(PointDto { x: 3, y: 5 }),
+                    move_number: 2,
+                },
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 3, y: 0 }),
+                    move_number: 3,
+                },
+                MoveDto {
+                    color: PlayerColor::White,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 5 }),
+                    move_number: 4,
+                },
+            ]
+        );
+
+        assert_eq!(document.serialize().unwrap(), initial_serialized);
+    }
+
+    #[test]
+    fn snapshot_stone_move_numbers_root_move_counts() {
+        let sgf = "(;SZ[5]B[cc];W[dd])";
+        let document = CurrentSgfDocument::open(sgf).unwrap();
+        let root_path = NodePath { indices: Vec::new() };
+        let root_snap = document.snapshot(&root_path).unwrap();
+        assert_eq!(root_snap.position.move_number, 1);
+        assert_eq!(
+            root_snap.stone_move_numbers,
+            vec![MoveDto {
+                color: PlayerColor::Black,
+                vertex: MoveVertex::Point(PointDto { x: 2, y: 2 }),
+                move_number: 1,
+            }]
+        );
+
+        let child_path = NodePath { indices: vec![0] };
+        let child_snap = document.snapshot(&child_path).unwrap();
+        assert_eq!(child_snap.position.move_number, 2);
+        assert_eq!(
+            child_snap.stone_move_numbers,
+            vec![
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 2, y: 2 }),
+                    move_number: 1,
+                },
+                MoveDto {
+                    color: PlayerColor::White,
+                    vertex: MoveVertex::Point(PointDto { x: 3, y: 3 }),
+                    move_number: 2,
+                },
+            ]
+        );
     }
 }

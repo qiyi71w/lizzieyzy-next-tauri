@@ -215,8 +215,7 @@ export function App() {
   );
   const engineLabel = engineStatusLabel(engineSnapshot);
   const engineReady = admitsForegroundEngineJobs(engineSnapshot);
-  const [showCoordinates, setShowCoordinates] = useState(true);
-  const [showMoveNumbers, setShowMoveNumbers] = useState(false);
+  const { showCoordinates, showMoveNumbers } = preferences;
   const [showBlackCandidates, setShowBlackCandidates] = useState(true);
   const [showWhiteCandidates, setShowWhiteCandidates] = useState(true);
   const [referenceRailCollapsed, setReferenceRailCollapsed] = useState(false);
@@ -659,10 +658,10 @@ export function App() {
       if (visibleCurrentFrame?.candidates[index]) setSelectedCandidateIndex(index);
     });
     shortcutRegistry.bind("view.coordinates", () => {
-      setShowCoordinates((value) => !value);
+      handlePreferencesChange({ ...preferences, showCoordinates: !preferences.showCoordinates });
     });
     shortcutRegistry.bind("view.move-numbers", () => {
-      setShowMoveNumbers((value) => !value);
+      handlePreferencesChange({ ...preferences, showMoveNumbers: !preferences.showMoveNumbers });
     });
     shortcutRegistry.bind("view.policy", () => {
       void handlePreferencesChange({ ...preferences, showPolicy: !preferences.showPolicy });
@@ -2735,8 +2734,8 @@ export function App() {
       scoreLeadAvailable={chartModel.scoreAvailable}
       showCoordinates={showCoordinates}
       showMoveNumbers={showMoveNumbers}
-      onShowCoordinates={setShowCoordinates}
-      onShowMoveNumbers={setShowMoveNumbers}
+      onShowCoordinates={(value) => handlePreferencesChange({ ...preferences, showCoordinates: value })}
+      onShowMoveNumbers={(value) => handlePreferencesChange({ ...preferences, showMoveNumbers: value })}
       showBlackCandidates={showBlackCandidates}
       showWhiteCandidates={showWhiteCandidates}
       onShowBlackCandidates={setShowBlackCandidates}
@@ -2817,7 +2816,7 @@ export function App() {
           selectedCandidateIndex={selectedCandidateIndex}
           previewScope={activeScope}
           onCandidatePreview={previewCandidate}
-          moves={game.moves}
+          stoneMoveNumbers={currentGame?.snapshot.stone_move_numbers}
           showCoordinates={showCoordinates}
           showMoveNumbers={showMoveNumbers}
           overlayMode={overlayMode}
@@ -2926,12 +2925,12 @@ export function App() {
       autoPlaying={autoPlaying}
       showCoordinates={showCoordinates}
       showMoveNumbers={showMoveNumbers}
-      onShowCoordinates={setShowCoordinates}
-      onShowMoveNumbers={setShowMoveNumbers}
+      onShowCoordinates={(value) => handlePreferencesChange({ ...preferences, showCoordinates: value })}
+      onShowMoveNumbers={(value) => handlePreferencesChange({ ...preferences, showMoveNumbers: value })}
       keyboardPlacement={keyboardPlacement}
       onKeyboardPlacement={setKeyboardPlacement}
       jumpRef={jumpRef}
-      message={recentHistoryError ? `${message} ${recentHistoryError}` : message}
+      message={[message, recentHistoryError, preferencesStatus.startsWith("Save failed:") ? preferencesStatus : null].filter(Boolean).join(" ")}
       toPlay={currentPosition.to_play}
     />
     <section className="sheet-row" hidden={sheet === "none"}>

@@ -173,6 +173,7 @@ function gameAt(path: NodePath): CurrentGameResultDto {
         to_play: path.indices.length % 2 === 0 ? "black" : "white"
       },
       markup: [],
+      stone_move_numbers: [],
       personal_comment: "",
       primary_analysis: snapshotAnalysis
     },

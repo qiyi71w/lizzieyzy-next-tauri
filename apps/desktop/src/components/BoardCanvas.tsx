@@ -16,7 +16,7 @@ type Props = {
   markup?: SgfMarkupDto[];
   analysis?: AnalysisFrameDto;
   selectedCandidateIndex?: number | null;
-  moves?: MoveDto[];
+  stoneMoveNumbers?: MoveDto[];
   showCoordinates?: boolean;
   showMoveNumbers?: boolean;
   overlayMode?: OverlayMode;
@@ -46,7 +46,7 @@ export function BoardCanvas({
   markup = [],
   analysis,
   selectedCandidateIndex,
-  moves = [],
+  stoneMoveNumbers = [],
   showCoordinates = true,
   showMoveNumbers = false,
   overlayMode: overlayModeProp,
@@ -276,8 +276,8 @@ export function BoardCanvas({
 
     const moveByPoint = new Map<string, number>();
     if (showMoveNumbers) {
-      for (const move of moves) {
-        if (move.move_number > position.move_number || !isPoint(move.vertex)) continue;
+      for (const move of stoneMoveNumbers) {
+        if (!isPoint(move.vertex)) continue;
         moveByPoint.set(`${move.vertex.point.x}:${move.vertex.point.y}`, move.move_number);
       }
     }
@@ -410,7 +410,7 @@ export function BoardCanvas({
       ctx.lineWidth = Math.max(1.5, grid * 0.06);
       ctx.stroke();
     }
-  }, [position, markup, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, moves, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers, pvPrefixLength, replayCandidateIndex]);
+  }, [position, markup, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, stoneMoveNumbers, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers, pvPrefixLength, replayCandidateIndex]);
 
   const layerHost = document.getElementById("board-layers");
   const overlays = (

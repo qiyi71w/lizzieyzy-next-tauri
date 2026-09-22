@@ -127,6 +127,7 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
           </select>
         </label>
       </fieldset>
+      <DisplayPreferencesEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       <NewGameDefaultsEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       <fieldset className="preferences-grid">
         <legend>胜率图</legend>
@@ -176,6 +177,58 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
         </label>
       </fieldset>
     </section>
+  );
+}
+
+function DisplayPreferencesEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
+  const [edited, setEdited] = useState<{ showCoordinates: boolean; showMoveNumbers: boolean } | null>(null);
+  const draft = edited ?? {
+    showCoordinates: preferences.showCoordinates,
+    showMoveNumbers: preferences.showMoveNumbers
+  };
+
+  function apply() {
+    if (edited === null) return;
+    onChange({
+      ...preferences,
+      showCoordinates: draft.showCoordinates,
+      showMoveNumbers: draft.showMoveNumbers
+    });
+    setEdited(null);
+  }
+
+  return (
+    <fieldset className="preferences-grid" disabled={disabled}>
+      <legend>棋盘显示</legend>
+      <Toggle
+        label="坐标"
+        checked={draft.showCoordinates}
+        disabled={disabled}
+        onChange={(checked) => setEdited({ ...draft, showCoordinates: checked })}
+      />
+      <Toggle
+        label="全部手数"
+        checked={draft.showMoveNumbers}
+        disabled={disabled}
+        onChange={(checked) => setEdited({ ...draft, showMoveNumbers: checked })}
+      />
+      <button
+        type="button"
+        aria-label="应用显示设置"
+        disabled={disabled || edited === null}
+        onClick={apply}
+      >
+        应用
+      </button>
+      <button
+        type="button"
+        aria-label="取消显示设置"
+        disabled={disabled || edited === null}
+        onClick={() => setEdited(null)}
+      >
+        取消
+      </button>
+    </fieldset>
   );
 }
 
