@@ -51,6 +51,7 @@ const backend = vi.hoisted(() => ({
   replaySgfPositions: vi.fn(),
   saveCurrentGame: vi.fn(),
   setCurrentGamePersonalComment: vi.fn(),
+  editCurrentGameMarkup: vi.fn(),
   removeCurrentGameVariation: vi.fn(),
   undoCurrentGame: vi.fn(),
   redoCurrentGame: vi.fn(),
@@ -327,6 +328,37 @@ afterEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
 });
+describe("node markup authoring", () => {
+  it("cancels text without a write and commits only the selected point through the native wrapper", async () => {
+    backend.editCurrentGameMarkup.mockImplementation(async (_path, _generation, action) => ({
+      ...initialGame, snapshot_seq: 2, dirty: true, can_undo: true,
+      snapshot: { ...initialGame.snapshot, markup: action.kind === "clear" ? [] : [{ kind: "label", point: action.point, text: action.tool.text }] }
+    }));
+    const host = await renderApp();
+    const canvas = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 450, 450);
+    const center = () => act(() => canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 225, clientY: 225 })));
+    act(() => buttonLabeled(host, "文字").click());
+    center();
+    expect(host.querySelector('[role="dialog"][aria-label="编辑文字标记"]')).not.toBeNull();
+    act(() => buttonLabeled(host, "取消").click());
+    expect(backend.editCurrentGameMarkup).not.toHaveBeenCalled();
+    center();
+    const dialog = requiredElement<HTMLFormElement>(host, '[role="dialog"][aria-label="编辑文字标记"]');
+    const input = requiredElement<HTMLInputElement>(dialog, "input");
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "a]\\中");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { buttonLabeled(dialog, "应用").click(); await Promise.resolve(); });
+    expect(backend.editCurrentGameMarkup).toHaveBeenCalledWith({ indices: [] }, 1,
+      { kind: "point", point: { x: 4, y: 4 }, tool: { kind: "label", text: "a]\\中" } });
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    await act(async () => { buttonLabeled(host, "清空标记").click(); await Promise.resolve(); });
+    expect(backend.editCurrentGameMarkup).toHaveBeenLastCalledWith({ indices: [] }, 1, { kind: "clear" });
+  });
+});
+
 
 describe("App board intent feedback", () => {
   it("keeps accepted moves silent when durable sound is disabled", async () => {

@@ -60,6 +60,15 @@ const CLAIMED_SHORTCUTS: ShortcutDefinition[] = [
   { id: "analysis.all-positions", label: "All-position analysis", primary: { key: "b", ctrl: true, shift: true }, aliases: [], focusRule: "focus-safe" },
   { id: "edit.undo", label: "撤销", primary: { key: "z", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "edit.redo", label: "重做", primary: { key: "y", ctrl: true }, aliases: [{ key: "z", ctrl: true, shift: true }], focusRule: "focus-safe" },
+  ...([
+    ["label", "文字", "l"], ["letters", "字母", "a"], ["numbers", "数字", "n"],
+    ["circle", "圆", "c"], ["square", "方", "s"], ["cross", "叉", "m"],
+    ["triangle", "三角", "t"], ["erase", "擦除", "e"]
+  ] as const).map(([id, label, key]): ShortcutDefinition => ({
+    id: `markup.${id}`, label: `标记：${label}`, primary: { key, alt: true, shift: true },
+    aliases: [], focusRule: "focus-safe"
+  })),
+  { id: "markup.clear", label: "清空当前节点标记", primary: { key: "Delete", alt: true, shift: true }, aliases: [], focusRule: "focus-safe" },
   { id: "review.pass", label: "停一手", primary: { key: "p" }, aliases: [], focusRule: "focus-safe" },
   { id: "review.remove-variation", label: "删除分支", primary: { key: "Delete", shift: true }, aliases: [{ key: "Backspace", shift: true }], focusRule: "focus-safe" },
   { id: "review.parent", label: "上一手", primary: { key: "ArrowUp" }, aliases: [], focusRule: "focus-safe" },

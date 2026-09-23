@@ -36,6 +36,7 @@ import type {
   PlayerColor,
   PositionDto,
   ProblemMarkerDto,
+  SgfMarkupActionDto,
   RecoveryProtectionDto,
   RecoveryStartupDto
 } from "../domain/types";
@@ -308,6 +309,11 @@ export async function setCurrentGamePersonalComment(path: NodePath, comment: str
     throw new Error(nativeCurrentGameUnavailable);
   }
   return invoke<CurrentGameResultDto>("set_current_game_personal_comment", { path, comment });
+}
+
+export async function editCurrentGameMarkup(path: NodePath, generation: number, action: SgfMarkupActionDto): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<CurrentGameResultDto>("edit_current_game_markup", { path, generation, action });
 }
 
 export async function removeCurrentGameVariation(path: NodePath): Promise<CurrentGameResultDto> {
