@@ -2,9 +2,9 @@ use app_model::{
     AnalysisFrameDto, AnalysisJobModeDto, AnalysisJobStartedDto, AppHealthDto, CurrentGameError,
     CurrentGameResultDto, EngineBackend, EngineFailureDto, EngineFailureKind, EngineOperationDto,
     EngineProfileDto, ForegroundEngineEventDto, ForegroundEngineSnapshotDto, GameFileFormatDto,
-    GameFileImportDto, MoveVertex, NodePath, PositionDto, ProviderError, ProviderErrorKind,
+    GameFileImportDto, MoveVertex, NodePath, PlayerColor, PositionDto, ProviderError, ProviderErrorKind,
     ProviderFetchMethod, ProviderFetchRequest, ProviderFetchResult, ProviderGameMetadata,
-    ProviderImportRequest, ProviderImportResult, ProviderKind, ReadboardSidecarProbeRequest,
+    ProviderImportRequest, ProviderImportResult, ProviderKind, ReadboardSidecarProbeRequest, StoneDto,
     ReadboardSidecarProbeResult, ReadboardSidecarSyncSnapshotRequest, ReadboardSidecarSyncSnapshotResult,
 };
 use engine_manager::{
@@ -529,6 +529,25 @@ fn remove_current_game_variation(
     path: NodePath,
 ) -> Result<CurrentGameResultDto, String> {
     state.remove_variation(path).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn apply_root_setup(
+    state: State<CurrentGameState>,
+    generation: u64,
+    stones: Vec<StoneDto>,
+    to_play: PlayerColor,
+) -> Result<CurrentGameResultDto, String> {
+    state.apply_root_setup(generation, stones, to_play).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn convert_to_root_setup(
+    state: State<CurrentGameState>,
+    generation: u64,
+    path: NodePath,
+) -> Result<CurrentGameResultDto, String> {
+    state.convert_to_root_setup(generation, path).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1175,6 +1194,8 @@ pub fn run() {
             play_current_game,
             set_current_game_personal_comment,
             remove_current_game_variation,
+            apply_root_setup,
+            convert_to_root_setup,
             undo_current_game,
             redo_current_game,
             classify_problems,

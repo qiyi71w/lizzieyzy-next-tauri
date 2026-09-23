@@ -2,7 +2,8 @@ use ::current_game_recovery::RecoveryCoordinator;
 use app_model::{
     admits_analysis_attachment, AnalysisJobEventDto, AnalysisJobModeDto, AnalysisJobStartedDto,
     ApplicationExitDispositionDto, CurrentGameError, CurrentGameErrorKind, CurrentGameResultDto, GameDto,
-    MoveVertex, NodePath, RecoveryEnvelopeDto, RecoveryProtectionDto, SelectedNodeSnapshotDto,
+    MoveVertex, NodePath, PlayerColor, RecoveryEnvelopeDto, RecoveryProtectionDto, SelectedNodeSnapshotDto,
+    StoneDto,
 };
 use sgf::{CurrentSgfDocument, DocumentHistory, SgfAnalysisPayload, SgfDocumentEdit};
 use std::collections::HashSet;
@@ -524,6 +525,31 @@ impl CurrentGameState {
         Ok(result)
     }
 
+    pub fn apply_root_setup(
+        &self,
+        generation: u64,
+        stones: Vec<StoneDto>,
+        to_play: PlayerColor,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let mut holder = self.holder.lock().expect("current game state");
+        let result = holder.apply_root_setup(generation, &stones, to_play)?;
+        self.note_recovery(&holder);
+        self.follow_continuous_position(&mut holder);
+        Ok(result)
+    }
+
+    pub fn convert_to_root_setup(
+        &self,
+        generation: u64,
+        path: NodePath,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let mut holder = self.holder.lock().expect("current game state");
+        let result = holder.convert_to_root_setup(generation, path)?;
+        self.note_recovery(&holder);
+        self.follow_continuous_position(&mut holder);
+        Ok(result)
+    }
+
     pub fn undo(&self, generation: u64) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
         let result = holder.undo(generation)?;
@@ -822,6 +848,54 @@ impl CurrentGameHolder {
         self.current_result()
     }
 
+    fn apply_root_setup(
+        &mut self,
+        generation: u64,
+        stones: &[StoneDto],
+        to_play: PlayerColor,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.ensure_editable()?;
+        self.ensure_generation(generation)?;
+        let outcome = self
+            .document
+            .as_mut()
+            .ok_or_else(no_current_game)?
+            .apply_root_setup_with_history(&self.selected_path, stones, to_play)?;
+        if let Some(edit) = outcome.edit {
+            self.commit_edit(edit);
+            self.generation = self.generation.saturating_add(1);
+            self.bump_snapshot();
+        }
+        self.current_result()
+    }
+
+    fn convert_to_root_setup(
+        &mut self,
+        generation: u64,
+        path: NodePath,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.ensure_editable()?;
+        self.ensure_generation(generation)?;
+        if self.selected_path != path {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::InvalidNodePath,
+                message: "Selected node changed; confirm conversion again.".into(),
+            });
+        }
+        let outcome = self
+            .document
+            .as_mut()
+            .ok_or_else(no_current_game)?
+            .convert_to_root_setup_with_history(&path)?;
+        if let Some(edit) = outcome.edit {
+            self.commit_edit(edit);
+            self.generation = self.generation.saturating_add(1);
+            self.selected_path = outcome.snapshot.path;
+            self.bump_snapshot();
+        }
+        self.current_result()
+    }
+
     fn undo(&mut self, generation: u64) -> Result<CurrentGameResultDto, CurrentGameError> {
         self.ensure_editable()?;
         self.ensure_generation(generation)?;
@@ -972,6 +1046,60 @@ mod current_game_replacement {
 
     const BRANCHING: &str = include_str!("../../../../tests/golden/editable-workspace-branching.sgf");
     const EMPTY: &str = "(;GM[1]FF[4]SZ[13:9]KM[7.5]PB[黑]PW[白])";
+
+    #[test]
+    fn root_setup_and_conversion_keep_source_and_reverse_as_single_edits() {
+        let state = CurrentGameState::default();
+        let source = Some("/tmp/root-setup.sgf".to_string());
+        let opened = state
+            .replace("(;SZ[2:3]C[root]XY[keep];B[aa];W[bb])", source.clone())
+            .unwrap();
+        let original = state.serialize().unwrap();
+        let selected = opened.selected_path.clone();
+        let converted = state
+            .convert_to_root_setup(opened.generation, selected.clone())
+            .unwrap();
+        assert!(converted.tree.children.is_empty());
+        assert!(converted.dirty && converted.can_undo);
+        assert_eq!(converted.native_path, source);
+        assert_eq!(converted.snapshot.position.move_number, 0);
+        assert_eq!(
+            converted.snapshot.position.stones,
+            opened.snapshot.position.stones
+        );
+        assert!(converted.generation > opened.generation);
+        assert!(state.convert_to_root_setup(opened.generation, selected).is_err());
+
+        let edited = state
+            .apply_root_setup(
+                converted.generation,
+                vec![StoneDto {
+                    x: 1,
+                    y: 2,
+                    color: PlayerColor::White,
+                }],
+                PlayerColor::Black,
+            )
+            .unwrap();
+        assert_eq!(edited.snapshot.position.stones.len(), 1);
+        let undone_setup = state.undo(edited.generation).unwrap();
+        assert_eq!(
+            undone_setup.snapshot.position.stones,
+            converted.snapshot.position.stones
+        );
+        let undone_conversion = state.undo(undone_setup.generation).unwrap();
+        assert_eq!(undone_conversion.selected_path, opened.selected_path);
+        assert_eq!(state.serialize().unwrap(), original);
+        assert!(!undone_conversion.dirty);
+        assert_eq!(undone_conversion.native_path, source);
+        let redo_conversion = state.redo(undone_conversion.generation).unwrap();
+        let redo_setup = state.redo(redo_conversion.generation).unwrap();
+        assert_eq!(
+            redo_setup.snapshot.position.stones,
+            edited.snapshot.position.stones
+        );
+        assert!(redo_setup.dirty);
+    }
 
     #[test]
     fn current_game_replacement_installs_shared_result_and_preserves_state_on_cancel_or_failure() {

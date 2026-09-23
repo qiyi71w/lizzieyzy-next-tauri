@@ -55,6 +55,8 @@ const CLAIMED_SHORTCUTS: ShortcutDefinition[] = [
   { id: "file.paste-sgf", label: "粘贴棋谱", primary: { key: "v", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "game.human-vs-engine", label: "人机对局（未接入）", primary: { key: "n" }, aliases: [], focusRule: "focus-safe" },
   { id: "game.board-dimensions", label: "设置棋盘大小", primary: { key: "i", ctrl: true }, aliases: [], focusRule: "focus-safe" },
+  { id: "game.root-setup", label: "起始局面设置", primary: { key: "l", ctrl: true, shift: true }, aliases: [], focusRule: "focus-safe" },
+  { id: "game.convert-position", label: "转换为起始局面", primary: { key: "v", ctrl: true, shift: true }, aliases: [], focusRule: "focus-safe" },
   { id: "analysis.continuous", label: "连续分析", primary: { key: " " }, aliases: [], focusRule: "focus-safe" },
   { id: "analysis.quick", label: "Quick analysis", primary: { key: "b", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "analysis.all-positions", label: "All-position analysis", primary: { key: "b", ctrl: true, shift: true }, aliases: [], focusRule: "focus-safe" },

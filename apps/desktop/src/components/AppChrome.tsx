@@ -76,6 +76,10 @@ type Props = {
   autoPlaying: boolean;
   komi: number;
   onNew: () => void;
+  onRootSetup: () => void;
+  onConvertPosition: () => void;
+  canRootSetup: boolean;
+  canConvertPosition: boolean;
   onOpen: () => void;
   recentGamePaths: string[];
   recentHistoryBusy: boolean;
@@ -334,7 +338,8 @@ export function AppChrome(props: Props) {
               <MenuItem label="续弈[AI执白]" disabled title={later} />
             </SubMenu>
             <MenuItem label="引擎对局" disabled title={later} />
-            <MenuItem label="起始局面设置" disabled title={later} />
+            <MenuItem label={actionLabelFromRegistry("game.root-setup", "起始局面设置")} onClick={() => run(props.onRootSetup)} disabled={!props.canRootSetup} title={!props.canRootSetup ? "仅无后续的根节点可直接设置起始局面" : undefined} />
+            <MenuItem label={actionLabelFromRegistry("game.convert-position", "转换为起始局面")} onClick={() => run(props.onConvertPosition)} disabled={!props.canConvertPosition} title="确认后丢弃原着手树；可撤销" />
             <MenuItem label="清空棋盘(Ctrl+Home)" onClick={() => run(props.onClearBoard)} disabled={props.busy} />
             <MenuItem label="棋谱原文" onClick={() => run(() => props.onToggleSheet("sgf"))} />
             <MenuItem label="解析棋谱" onClick={() => run(props.onParse)} disabled={props.busy} />

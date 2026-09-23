@@ -713,6 +713,45 @@ button[aria-pressed="true"] {
   container-type: size;
   position: relative;
 }
+.diagram.setup-active {
+  padding-bottom: 76px;
+}
+
+.root-setup-tools {
+  position: absolute;
+  bottom: 8px;
+  left: 12px;
+  right: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  z-index: 2;
+  font-size: 12px;
+}
+
+.root-setup-tools button[aria-pressed="true"] {
+  background: var(--accent);
+  color: white;
+}
+
+.root-conversion-dialog {
+  width: min(420px, calc(100vw - 32px));
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.root-conversion-dialog h2 {
+  margin-top: 0;
+}
+
 
 .board-canvas {
   width: min(100cqi, calc(100cqb * var(--board-ratio, 1)));

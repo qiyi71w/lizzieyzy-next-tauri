@@ -1,7 +1,7 @@
 use app_model::{
     AnalysisMoveActorFilterDto, AnalysisSwingComparisonDto, CurrentGameError, CurrentGameErrorKind, GameDto,
     MoveDto, MoveVertex, NodePath, PlayerColor, PositionDto, SelectedNodeSnapshotDto, SgfPropertyDto,
-    SgfTreeNodeDto,
+    SgfTreeNodeDto, StoneDto,
 };
 
 use crate::{
@@ -45,6 +45,10 @@ enum DocumentReversal {
         parent: NodePath,
         index: usize,
         subtree: SgfNode,
+    },
+    RootSetup {
+        properties: Vec<(usize, SgfProperty)>,
+        children: Option<Vec<SgfNode>>,
     },
 }
 
@@ -525,6 +529,79 @@ impl CurrentSgfDocument {
         })
     }
 
+    pub fn apply_root_setup_with_history(
+        &mut self,
+        selected_before: &NodePath,
+        stones: &[StoneDto],
+        to_play: PlayerColor,
+    ) -> Result<DocumentEditOutcome, CurrentGameError> {
+        let root_path = NodePath::default();
+        self.snapshot(selected_before)?;
+        if !selected_before.indices.is_empty() || !self.root()?.children.is_empty() {
+            return Err(root_setup_error(
+                "Direct setup requires a childless selected root.",
+            ));
+        }
+        validate_setup_stones(stones, self.document.board_width, self.document.board_height)?;
+        let before = self.snapshot(&root_path)?;
+        if same_setup(&before.position.stones, stones) && before.position.to_play == to_play {
+            return Ok(DocumentEditOutcome {
+                snapshot: before,
+                edit: None,
+            });
+        }
+        let properties = root_setup_properties(self.root()?);
+        replace_root_setup_properties(self.node_mut(&root_path)?, stones, to_play, false);
+        Ok(DocumentEditOutcome {
+            snapshot: self.snapshot(&root_path)?,
+            edit: Some(SgfDocumentEdit {
+                reversal: DocumentReversal::RootSetup {
+                    properties,
+                    children: None,
+                },
+                selected_before: selected_before.clone(),
+                selected_after: root_path,
+            }),
+        })
+    }
+
+    pub fn convert_to_root_setup_with_history(
+        &mut self,
+        selected_before: &NodePath,
+    ) -> Result<DocumentEditOutcome, CurrentGameError> {
+        let position = self.snapshot(selected_before)?.position;
+        let original_position = self.snapshot(&NodePath::default())?.position;
+        let root_path = NodePath::default();
+        let root = self.root()?;
+        if root.children.is_empty() && !root.properties.iter().any(|p| p.key == "B" || p.key == "W") {
+            return Ok(DocumentEditOutcome {
+                snapshot: self.snapshot(&root_path)?,
+                edit: None,
+            });
+        }
+        let properties = root_setup_properties(root);
+        let root = self.node_mut(&root_path)?;
+        let children = std::mem::take(&mut root.children);
+        replace_root_setup_properties(
+            root,
+            &position.stones,
+            position.to_play,
+            same_setup(&position.stones, &original_position.stones)
+                && position.to_play == original_position.to_play,
+        );
+        Ok(DocumentEditOutcome {
+            snapshot: self.snapshot(&root_path)?,
+            edit: Some(SgfDocumentEdit {
+                reversal: DocumentReversal::RootSetup {
+                    properties,
+                    children: Some(children),
+                },
+                selected_before: selected_before.clone(),
+                selected_after: root_path,
+            }),
+        })
+    }
+
     pub fn replace_primary_analysis(
         &mut self,
         path: &NodePath,
@@ -629,6 +706,16 @@ impl CurrentSgfDocument {
                 };
                 Ok(true)
             }
+            DocumentReversal::RootSetup { properties, children } => {
+                let root = self.node_mut(&NodePath::default())?;
+                let inverse = root_setup_properties(root);
+                restore_root_setup_properties(root, properties);
+                *properties = inverse;
+                if let Some(children) = children {
+                    std::mem::swap(&mut root.children, children);
+                }
+                Ok(true)
+            }
         }
     }
 
@@ -704,8 +791,13 @@ impl CurrentSgfDocument {
                     continue;
                 }
                 for value in &property.values {
-                    for point in crate::parse_setup_points(value, self.document.board_width, self.document.board_height)? {
-                        stone_sources[point.y as usize * self.document.board_width as usize + point.x as usize] = None;
+                    for point in crate::parse_setup_points(
+                        value,
+                        self.document.board_width,
+                        self.document.board_height,
+                    )? {
+                        stone_sources
+                            [point.y as usize * self.document.board_width as usize + point.x as usize] = None;
                     }
                 }
             }
@@ -735,8 +827,8 @@ impl CurrentSgfDocument {
                             PlayerColor::White => captures_white += outcome.captured.len() as u32,
                         }
                         for captured in outcome.captured {
-                            let idx =
-                                captured.y as usize * self.document.board_width as usize + captured.x as usize;
+                            let idx = captured.y as usize * self.document.board_width as usize
+                                + captured.x as usize;
                             stone_sources[idx] = None;
                         }
                         if let MoveVertex::Point(point) = &sgf_move.vertex {
@@ -886,6 +978,89 @@ fn invalid_history_path() -> CurrentGameError {
         kind: CurrentGameErrorKind::InvalidNodePath,
         message: "document history no longer matches the current tree".to_string(),
     }
+}
+
+fn root_setup_error(message: &str) -> CurrentGameError {
+    CurrentGameError {
+        kind: CurrentGameErrorKind::InvalidNodePath,
+        message: message.into(),
+    }
+}
+
+fn is_root_setup_property(key: &str) -> bool {
+    matches!(
+        key,
+        "AB" | "AW" | "AE" | "PL" | "B" | "W" | "LZ" | "LZ2" | "LZOP" | "LZOP2"
+    )
+}
+
+fn root_setup_properties(root: &SgfNode) -> Vec<(usize, SgfProperty)> {
+    root.properties
+        .iter()
+        .enumerate()
+        .filter(|(_, property)| is_root_setup_property(&property.key))
+        .map(|(index, property)| (index, property.clone()))
+        .collect()
+}
+
+fn restore_root_setup_properties(root: &mut SgfNode, properties: &[(usize, SgfProperty)]) {
+    root.properties
+        .retain(|property| !is_root_setup_property(&property.key));
+    for (index, property) in properties {
+        root.properties
+            .insert((*index).min(root.properties.len()), property.clone());
+    }
+}
+
+fn replace_root_setup_properties(
+    root: &mut SgfNode,
+    stones: &[StoneDto],
+    to_play: PlayerColor,
+    retain_analysis: bool,
+) {
+    root.properties.retain(|property| {
+        !is_root_setup_property(&property.key)
+            || retain_analysis && matches!(property.key.as_str(), "LZ" | "LZ2" | "LZOP" | "LZOP2")
+    });
+    for (color, key) in [(PlayerColor::Black, "AB"), (PlayerColor::White, "AW")] {
+        let values: Vec<String> = stones
+            .iter()
+            .filter(|stone| stone.color == color)
+            .map(|stone| format!("{}{}", char::from(b'a' + stone.x), char::from(b'a' + stone.y)))
+            .collect();
+        if !values.is_empty() {
+            root.properties.push(SgfProperty {
+                key: key.into(),
+                values,
+            });
+        }
+    }
+    root.properties.push(SgfProperty {
+        key: "PL".into(),
+        values: vec![match to_play {
+            PlayerColor::Black => "B",
+            PlayerColor::White => "W",
+        }
+        .into()],
+    });
+}
+
+fn validate_setup_stones(stones: &[StoneDto], width: u8, height: u8) -> Result<(), CurrentGameError> {
+    let mut used = vec![false; width as usize * height as usize];
+    for stone in stones {
+        if stone.x >= width || stone.y >= height {
+            return Err(root_setup_error("Setup point is outside the board."));
+        }
+        let index = stone.y as usize * width as usize + stone.x as usize;
+        if std::mem::replace(&mut used[index], true) {
+            return Err(root_setup_error("Setup point occurs more than once."));
+        }
+    }
+    Ok(())
+}
+
+fn same_setup(left: &[StoneDto], right: &[StoneDto]) -> bool {
+    left.len() == right.len() && left.iter().all(|stone| right.contains(stone))
 }
 
 fn comment_properties(node: &SgfNode) -> Vec<(usize, SgfProperty)> {
@@ -1923,9 +2098,7 @@ mod snapshot_stone_move_numbers {
         let document = CurrentSgfDocument::open(sgf).unwrap();
         let initial_serialized = document.serialize().unwrap();
 
-        let path_move2 = NodePath {
-            indices: vec![0, 0],
-        };
+        let path_move2 = NodePath { indices: vec![0, 0] };
         let snap2 = document.snapshot(&path_move2).unwrap();
         assert_eq!(snap2.position.move_number, 2);
         assert_eq!(
