@@ -36,6 +36,7 @@ import type {
   PlayerColor,
   PositionDto,
   ProblemMarkerDto,
+  SgfMarkupActionDto,
   RecoveryProtectionDto,
   RecoveryStartupDto,
   StoneDto
@@ -317,6 +318,11 @@ export async function setCurrentGameMetadata(
   return invoke<CurrentGameResultDto>("set_current_game_metadata", { generation, blackName, whiteName, komi });
 }
 
+
+export async function editCurrentGameMarkup(path: NodePath, generation: number, action: SgfMarkupActionDto): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<CurrentGameResultDto>("edit_current_game_markup", { path, generation, action });
+}
 
 export async function removeCurrentGameVariation(path: NodePath, generation: number): Promise<CurrentGameResultDto> {
   if (!isTauriRuntime()) {

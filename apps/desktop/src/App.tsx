@@ -41,6 +41,7 @@ import {
   subscribeFileActivationAvailable,
   subscribeFileActivationRejected,
   parseSgfSummary,
+  editCurrentGameMarkup,
   playCurrentGame,
   prepareApplicationExit,
   prepareDocumentReplacement,
@@ -113,7 +114,7 @@ import {
   variationReplayPointSteps
 } from "./domain/variationReplay";
 import { newDocumentSgf, type NewDocumentParameters } from "./domain/newDocument";
-import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, AnalysisTaskStrategyDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, FileActivationDeliveryDto, ForegroundEngineSnapshotDto, GameDto, GameFileImportDto, MoveVertex, NodePath, PlayerColor, PointDto, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, SgfTreeNodeDto, StoneDto } from "./domain/types";
+import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, AnalysisTaskStrategyDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, FileActivationDeliveryDto, ForegroundEngineSnapshotDto, GameDto, GameFileImportDto, MoveVertex, NodePath, PlayerColor, PointDto, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, SgfMarkupActionDto, SgfMarkupToolDto, SgfTreeNodeDto, StoneDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const demoGame = createDemoGame();
@@ -241,6 +242,8 @@ export function App() {
   const [autoPlaying, setAutoPlaying] = useState(false);
   const [shortcutReferenceOpen, setShortcutReferenceOpen] = useState(false);
   const [keyboardPlacement, setKeyboardPlacement] = useState(false);
+  const [markupTool, setMarkupTool] = useState<"play" | SgfMarkupToolDto["kind"]>("play");
+  const [markupDialog, setMarkupDialog] = useState<{ point: PointDto; path: NodePath; generation: number; text: string } | null>(null);
   const [departurePrompt, setDeparturePrompt] = useState<{
     message: string;
     choose: (action: DocumentDepartureActionDto) => void;
@@ -598,7 +601,7 @@ export function App() {
   const documentPath = currentGame?.native_path ?? currentFilePath;
   const documentName = useMemo(() => documentPath ? fileNameFromPath(documentPath) : fallbackFileName ?? "未命名棋谱", [documentPath, fallbackFileName]);
   const saveFileName = documentName.toLowerCase().endsWith(".sgf") ? documentName : `${documentName}.sgf`;
-  const documentFlowBusy = fileFlowBusy || departurePending || Boolean(newDocumentOpen) || Boolean(rootSetupDraft) || Boolean(conversionPrompt) || Boolean(metadataDraft) || Boolean(departurePrompt) || Boolean(teardownPrompt) || Boolean(recoveryPrompt);
+  const documentFlowBusy = fileFlowBusy || departurePending || Boolean(newDocumentOpen) || Boolean(rootSetupDraft) || Boolean(conversionPrompt) || Boolean(metadataDraft) || Boolean(markupDialog) || Boolean(departurePrompt) || Boolean(teardownPrompt) || Boolean(recoveryPrompt);
   const historyActionBlocked = documentFlowBusy || editActionPending;
   const canUndo = nativeRuntime && Boolean(currentGame?.can_undo) && !historyActionBlocked;
   const canRedo = nativeRuntime && Boolean(currentGame?.can_redo) && !historyActionBlocked;
@@ -676,6 +679,10 @@ export function App() {
     shortcutRegistry.bind("edit.redo", () => {
       if (canRedo) void handleHistoryAction("redo");
     });
+    for (const tool of ["label", "letters", "numbers", "circle", "square", "cross", "triangle", "erase"] as const) {
+      shortcutRegistry.bind(`markup.${tool}`, () => { if (openEnabled) setMarkupTool(tool); });
+    }
+    shortcutRegistry.bind("markup.clear", () => { if (openEnabled) void commitMarkup({ kind: "clear" }); });
     shortcutRegistry.bind("review.pass", () => {
       if (passEnabled) void playAt("pass");
     });
@@ -788,7 +795,7 @@ export function App() {
   ]);
 
   useEffect(() => {
-    if (!autoPlaying || rootSetupDraft || conversionPrompt) return;
+    if (!autoPlaying || rootSetupDraft || conversionPrompt || markupDialog) return;
     const timer = window.setInterval(() => {
       if (currentGame) {
         const node = nodeAt(currentGame.tree, currentGame.selected_path);
@@ -809,7 +816,7 @@ export function App() {
       });
     }, 800);
     return () => window.clearInterval(timer);
-  }, [autoPlaying, positions, currentGame, chosenChildren, rootSetupDraft, conversionPrompt]);
+  }, [autoPlaying, positions, currentGame, chosenChildren, rootSetupDraft, conversionPrompt, markupDialog]);
 
   function toggleSheet(next: SheetId) {
     setSheet((current) => current === next ? "none" : next);
@@ -1505,8 +1512,8 @@ export function App() {
     nativePath: string | null,
     options: ReplacementOptions
   ): Promise<boolean> {
-    if (rootSetupDraft || conversionPrompt) {
-      setMessage("请先完成或取消起始局面编辑。");
+    if (rootSetupDraft || conversionPrompt || metadataDraft || markupDialog) {
+      setMessage("请先完成或取消当前棋谱编辑。");
       return false;
     }
     if (!nativeRuntime) {
@@ -1599,7 +1606,7 @@ export function App() {
   }
 
   async function handleOpenRecent(index: number) {
-    if (!nativeRuntime || !preferencesLoaded || rootSetupDraft || conversionPrompt || fileFlowDepthRef.current !== 0 || recentHistoryBusyRef.current) return;
+    if (!nativeRuntime || !preferencesLoaded || documentFlowBusy || fileFlowDepthRef.current !== 0 || recentHistoryBusyRef.current) return;
     const path = committedPreferencesRef.current.recentGamePaths[index];
     if (!path) return;
     await enterFileFlow();
@@ -1628,8 +1635,8 @@ export function App() {
       setMessage(delivery.message);
       return;
     }
-    if (rootSetupDraft || conversionPrompt) {
-      setMessage("请先完成或取消起始局面编辑；外部打开请求已拒绝。");
+    if (rootSetupDraft || conversionPrompt || metadataDraft || markupDialog) {
+      setMessage("请先完成或取消当前棋谱编辑；外部打开请求已拒绝。");
       return;
     }
     if (fileFlowDepthRef.current !== 0) {
@@ -1650,6 +1657,7 @@ export function App() {
   activationHandlerRef.current = handleFileActivation;
 
   async function handleOpenSgfDocument() {
+    if (documentFlowBusy) return;
     if (!nativeRuntime) {
       setMessage(nativeCurrentGameUnavailable);
       return;
@@ -2501,7 +2509,7 @@ export function App() {
   }
 
   async function handleNewGame() {
-    if (!preferencesLoaded || rootSetupDraft || conversionPrompt || newDocumentFlowReservedRef.current || departurePendingRef.current || departurePrompt) return;
+    if (!preferencesLoaded || documentFlowBusy || newDocumentFlowReservedRef.current || departurePendingRef.current || departurePrompt) return;
     newDocumentFlowReservedRef.current = true;
     const admission = enterFileFlow();
     newDocumentAdmissionRef.current = admission;
@@ -2611,7 +2619,7 @@ export function App() {
 
   async function selectNode(path: NodePath, generation = currentGame?.generation, forward = false) {
     const game = currentGameRef.current;
-    if (!game || rootSetupDraft || conversionPrompt || editActionPendingRef.current || generation !== game.generation || departurePendingRef.current
+    if (!game || rootSetupDraft || conversionPrompt || markupDialog || editActionPendingRef.current || generation !== game.generation || departurePendingRef.current
       || !path.indices.every((index) => Number.isInteger(index) && index >= 0)
       || !nodeAt(game.tree, path)) return;
     if (!navigatingRef.current && samePath(path, game.selected_path)) return;
@@ -2770,12 +2778,56 @@ export function App() {
     }
   }
 
+  async function commitMarkup(action: SgfMarkupActionDto, captured?: { path: NodePath; generation: number }) {
+    const before = currentGameRef.current;
+    if (!nativeRuntime || !before || rootSetupDraft || conversionPrompt || metadataDraft || newDocumentOpen || editActionPendingRef.current || departurePendingRef.current || fileFlowBusy) return;
+    const path = captured?.path ?? before.selected_path;
+    const generation = captured?.generation ?? before.generation;
+    if (generation !== before.generation || !samePath(path, before.selected_path)) {
+      setMessage("标记未提交：选中节点或棋谱已改变。");
+      return;
+    }
+    editActionPendingRef.current = true;
+    setEditActionPending(true);
+    try {
+      const result = await editCurrentGameMarkup(path, generation, action);
+      if (!isCurrentGameSnapshot(result) || !samePath(currentGameRef.current?.selected_path ?? { indices: [] }, path)) return;
+      adoptCurrentGame(result);
+      setDirty(result.dirty);
+      setMessage(result.snapshot_seq === before.snapshot_seq ? "标记未变化。" : "已更新当前节点标记。");
+    } catch (error) {
+      setMessage(`标记更新失败: ${errorMessage(error)}`);
+    } finally {
+      editActionPendingRef.current = false;
+      setEditActionPending(false);
+    }
+  }
+
+  function handleBoardPoint(point: PointDto) {
+    if (rootSetupDraft) {
+      placeSetupStone(point);
+      return;
+    }
+    const before = currentGameRef.current;
+    if (markupTool === "play") {
+      void playAt({ point });
+      return;
+    }
+    if (!before || !nativeRuntime || documentFlowBusy || editActionPendingRef.current) return;
+    if (markupTool === "label") {
+      const existing = before.snapshot.markup.find((mark) => mark.kind === "label" && mark.point.x === point.x && mark.point.y === point.y);
+      setMarkupDialog({ point, path: before.selected_path, generation: before.generation, text: existing?.kind === "label" ? existing.text : "" });
+      return;
+    }
+    void commitMarkup({ kind: "point", point, tool: { kind: markupTool } });
+  }
+
   async function playAt(vertex: MoveVertex) {
     if (!nativeRuntime) {
       setMessage(nativeCurrentGameUnavailable);
       return;
     }
-    if (!currentGame || rootSetupDraft || conversionPrompt || pendingBoardIntentRef.current !== null || editActionPendingRef.current) return;
+    if (!currentGame || documentFlowBusy || pendingBoardIntentRef.current !== null || editActionPendingRef.current) return;
     const intentKey = vertex === "pass" ? "pass" : `${vertex.point.x},${vertex.point.y}`;
     pendingBoardIntentRef.current = intentKey;
     editActionPendingRef.current = true;
@@ -3113,6 +3165,15 @@ export function App() {
         />
       </aside>
       <div className={`diagram${rootSetupDraft ? " setup-active" : ""}`}>
+      <div className="markup-toolbar" role="toolbar" aria-label="节点标记工具">
+        {([
+          ["play", "落子"], ["label", "文字"], ["letters", "字母"], ["numbers", "数字"],
+          ["circle", "圆"], ["square", "方"], ["cross", "叉"], ["triangle", "三角"], ["erase", "擦除"]
+        ] as const).map(([tool, label]) => <button key={tool} type="button" aria-pressed={markupTool === tool}
+          disabled={!nativeRuntime || !currentGame || historyActionBlocked} onClick={() => setMarkupTool(tool)}>{label}</button>)}
+        <button type="button" disabled={!nativeRuntime || !currentGame || historyActionBlocked}
+          onClick={() => void commitMarkup({ kind: "clear" })}>清空标记</button>
+      </div>
         <BoardCanvas
           position={rootSetupDraft ? { ...currentPosition, stones: rootSetupDraft.stones, to_play: rootSetupDraft.toPlay, last_move: null, move_number: 0 } : currentPosition}
           markup={currentGame?.snapshot.markup}
@@ -3128,7 +3189,7 @@ export function App() {
           hideCandidates={hideCandidates}
           pvPrefixLength={replayPrefix}
           replayCandidateIndex={activeCandidateIndex}
-          onPointClick={(point) => rootSetupDraft ? placeSetupStone(point) : void playAt({ point })}
+          onPointClick={handleBoardPoint}
           keyboardPlacement={keyboardPlacement}
           nextMoveMode={rootSetupDraft ? "off" : preferences.nextMoveReviewMarker}
           nextMoveMarkers={rootSetupDraft ? [] : nextMoveMarkers}
@@ -3326,6 +3387,27 @@ export function App() {
         onApply={(black, white, komi) => handleApplyMetadata(metadataDraft.generation, black, white, komi)}
         onCancel={() => setMetadataDraft(null)}
       />
+    ) : null}
+    {markupDialog ? (
+      <div className="shortcut-reference-backdrop" onClick={() => setMarkupDialog(null)}>
+        <form className="new-document-dialog" role="dialog" aria-modal="true" aria-label="编辑文字标记"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setMarkupDialog(null); } }}
+          onSubmit={(event) => {
+            event.preventDefault();
+            const pending = markupDialog;
+            setMarkupDialog(null);
+            void commitMarkup({ kind: "point", point: pending.point, tool: { kind: "label", text: pending.text } }, pending);
+          }}>
+          <h2>当前节点文字标记</h2>
+          <label>文字 <input type="text" autoFocus value={markupDialog.text}
+            onChange={(event) => setMarkupDialog({ ...markupDialog, text: event.target.value })} /></label>
+          <div className="new-document-actions">
+            <button type="button" onClick={() => setMarkupDialog(null)}>取消</button>
+            <button type="submit">应用</button>
+          </div>
+        </form>
+      </div>
     ) : null}
     {departurePrompt ? (
       <DocumentDepartureDialog

@@ -1,7 +1,7 @@
 use app_model::{
     AnalysisMoveActorFilterDto, AnalysisSwingComparisonDto, CurrentGameError, CurrentGameErrorKind, GameDto,
-    MoveDto, MoveVertex, NodePath, PlayerColor, PositionDto, SelectedNodeSnapshotDto, SgfPropertyDto,
-    SgfTreeNodeDto, StoneDto,
+    MoveDto, MoveVertex, NodePath, PlayerColor, PositionDto, SelectedNodeSnapshotDto, SgfMarkupActionDto,
+    SgfMarkupToolDto, SgfPropertyDto, SgfTreeNodeDto, StoneDto,
 };
 
 use crate::{
@@ -41,6 +41,10 @@ enum DocumentReversal {
         properties: Vec<(usize, SgfProperty)>,
         komi: f32,
         analysis: Option<Vec<(NodePath, Vec<(usize, SgfProperty)>)>>,
+    },
+    SetMarkup {
+        path: NodePath,
+        properties: Vec<(usize, SgfProperty)>,
     },
     RemoveSubtree {
         parent: NodePath,
@@ -689,6 +693,116 @@ impl CurrentSgfDocument {
         })
     }
 
+    pub fn edit_markup_with_history(
+        &mut self,
+        selected_before: &NodePath,
+        path: &NodePath,
+        action: SgfMarkupActionDto,
+    ) -> Result<DocumentEditOutcome, CurrentGameError> {
+        self.snapshot(selected_before)?;
+        let before_snapshot = self.snapshot(path)?;
+        if let SgfMarkupActionDto::Point { point, .. } = &action {
+            if point.x >= self.document.board_width || point.y >= self.document.board_height {
+                return Err(CurrentGameError {
+                    kind: CurrentGameErrorKind::InvalidNodePath,
+                    message: "markup point is outside the board".into(),
+                });
+            }
+            if matches!(action, SgfMarkupActionDto::Point { tool: SgfMarkupToolDto::Label { ref text }, .. } if text.is_empty())
+            {
+                return Err(CurrentGameError {
+                    kind: CurrentGameErrorKind::InvalidNodePath,
+                    message: "label text must not be empty; use Erase instead".into(),
+                });
+            }
+        }
+        let before = markup_properties(self.node_mut(path)?);
+        let width = self.document.board_width;
+        let height = self.document.board_height;
+        let label = match &action {
+            SgfMarkupActionDto::Point { point, tool } => match tool {
+                SgfMarkupToolDto::Letters => Some(next_markup_label(
+                    self.node_mut(path)?,
+                    *point,
+                    true,
+                    width,
+                    height,
+                )),
+                SgfMarkupToolDto::Numbers => Some(next_markup_label(
+                    self.node_mut(path)?,
+                    *point,
+                    false,
+                    width,
+                    height,
+                )),
+                SgfMarkupToolDto::Label { text } => Some(text.clone()),
+                _ => None,
+            },
+            SgfMarkupActionDto::Clear => None,
+        };
+        if let SgfMarkupActionDto::Point { point, tool } = &action {
+            let mut matching = before_snapshot.markup.iter().filter(|mark| match mark {
+                app_model::SgfMarkupDto::Label { point: at, .. }
+                | app_model::SgfMarkupDto::Circle { point: at }
+                | app_model::SgfMarkupDto::Square { point: at }
+                | app_model::SgfMarkupDto::Cross { point: at }
+                | app_model::SgfMarkupDto::Triangle { point: at } => at == point,
+            });
+            let first = matching.next();
+            let exactly_one = first.is_some() && matching.next().is_none();
+            if first.is_none() && matches!(tool, SgfMarkupToolDto::Erase) {
+                return Ok(DocumentEditOutcome {
+                    snapshot: before_snapshot,
+                    edit: None,
+                });
+            }
+            if exactly_one
+                && matches!(first.unwrap(), app_model::SgfMarkupDto::Label { text, .. }
+                if label.as_deref() == Some(text.as_str()))
+            {
+                return Ok(DocumentEditOutcome {
+                    snapshot: before_snapshot,
+                    edit: None,
+                });
+            }
+            if exactly_one
+                && matches!(
+                    (first.unwrap(), tool),
+                    (app_model::SgfMarkupDto::Circle { .. }, SgfMarkupToolDto::Circle)
+                        | (app_model::SgfMarkupDto::Square { .. }, SgfMarkupToolDto::Square)
+                        | (app_model::SgfMarkupDto::Cross { .. }, SgfMarkupToolDto::Cross)
+                        | (
+                            app_model::SgfMarkupDto::Triangle { .. },
+                            SgfMarkupToolDto::Triangle
+                        )
+                )
+            {
+                return Ok(DocumentEditOutcome {
+                    snapshot: before_snapshot,
+                    edit: None,
+                });
+            }
+        }
+        apply_markup(self.node_mut(path)?, action, width, height, label);
+        if before == markup_properties(self.node_mut(path)?) {
+            return Ok(DocumentEditOutcome {
+                snapshot: before_snapshot,
+                edit: None,
+            });
+        }
+        Ok(DocumentEditOutcome {
+            snapshot: self.snapshot(path)?,
+            edit: Some(SgfDocumentEdit {
+                reversal: DocumentReversal::SetMarkup {
+                    path: path.clone(),
+                    properties: before,
+                },
+                selected_before: selected_before.clone(),
+                selected_after: path.clone(),
+            }),
+        })
+    }
+
     pub fn replace_primary_analysis(
         &mut self,
         path: &NodePath,
@@ -806,6 +920,13 @@ impl CurrentSgfDocument {
                     *saved = current;
                 }
                 Ok(analysis.is_some())
+            }
+            DocumentReversal::SetMarkup { path, properties } => {
+                let node = self.node_mut(path)?;
+                let inverse = markup_properties(node);
+                replace_markup_properties(node, properties);
+                *properties = inverse;
+                Ok(false)
             }
             DocumentReversal::RemoveSubtree { parent, index } => {
                 let parent_path = parent.clone();
@@ -1298,6 +1419,123 @@ fn replace_comment_properties(node: &mut SgfNode, properties: &[(usize, SgfPrope
     for (index, property) in properties {
         node.properties
             .insert((*index).min(node.properties.len()), property.clone());
+    }
+}
+
+fn is_markup_key(key: &str) -> bool {
+    matches!(key, "LB" | "CR" | "SQ" | "MA" | "TR")
+}
+
+fn markup_properties(node: &SgfNode) -> Vec<(usize, SgfProperty)> {
+    node.properties
+        .iter()
+        .enumerate()
+        .filter(|(_, property)| is_markup_key(&property.key))
+        .map(|(index, property)| (index, property.clone()))
+        .collect()
+}
+
+fn replace_markup_properties(node: &mut SgfNode, properties: &[(usize, SgfProperty)]) {
+    node.properties.retain(|property| !is_markup_key(&property.key));
+    for (index, property) in properties {
+        node.properties
+            .insert((*index).min(node.properties.len()), property.clone());
+    }
+}
+
+fn next_markup_label(
+    node: &SgfNode,
+    point: app_model::PointDto,
+    letters: bool,
+    width: u8,
+    height: u8,
+) -> String {
+    let used: std::collections::HashSet<&str> = node
+        .properties
+        .iter()
+        .filter(|property| property.key == "LB")
+        .flat_map(|property| property.values.iter())
+        .filter_map(|value| {
+            let (raw, text) = value.split_once(':')?;
+            let at = crate::parse_point(raw, width, height).ok();
+            at.filter(|at| at.x == point.x && at.y == point.y)
+                .is_none()
+                .then_some(text)
+        })
+        .collect();
+    for index in 1u32.. {
+        let label = if letters {
+            let mut n = index;
+            let mut result = String::new();
+            while n > 0 {
+                n -= 1;
+                result.insert(0, (b'A' + (n % 26) as u8) as char);
+                n /= 26;
+            }
+            result
+        } else {
+            index.to_string()
+        };
+        if !used.contains(label.as_str()) {
+            return label;
+        }
+    }
+    unreachable!("label sequence exhausted")
+}
+
+fn apply_markup(
+    node: &mut SgfNode,
+    action: SgfMarkupActionDto,
+    width: u8,
+    height: u8,
+    label: Option<String>,
+) {
+    let SgfMarkupActionDto::Point { point, tool } = action else {
+        node.properties.retain(|property| !is_markup_key(&property.key));
+        return;
+    };
+    for property in &mut node.properties {
+        if property.key == "LB" {
+            property.values.retain(|value| {
+                value
+                    .split_once(':')
+                    .and_then(|(raw, _)| crate::parse_point(raw, width, height).ok())
+                    .is_none_or(|p| p.x != point.x || p.y != point.y)
+            });
+        } else if is_markup_key(&property.key) {
+            property.values = property
+                .values
+                .iter()
+                .flat_map(|value| match crate::parse_setup_points(value, width, height) {
+                    Ok(points) => points
+                        .into_iter()
+                        .filter(|p| p.x != point.x || p.y != point.y)
+                        .map(|p| format!("{}{}", (b'a' + p.x) as char, (b'a' + p.y) as char))
+                        .collect::<Vec<_>>(),
+                    Err(_) => vec![value.clone()],
+                })
+                .collect();
+        }
+    }
+    node.properties
+        .retain(|property| !is_markup_key(&property.key) || !property.values.is_empty());
+    let key = match tool {
+        SgfMarkupToolDto::Label { .. } | SgfMarkupToolDto::Letters | SgfMarkupToolDto::Numbers => "LB",
+        SgfMarkupToolDto::Circle => "CR",
+        SgfMarkupToolDto::Square => "SQ",
+        SgfMarkupToolDto::Cross => "MA",
+        SgfMarkupToolDto::Triangle => "TR",
+        SgfMarkupToolDto::Erase => return,
+    };
+    let coordinate = format!("{}{}", (b'a' + point.x) as char, (b'a' + point.y) as char);
+    let value = label.map_or(coordinate.clone(), |text| format!("{coordinate}:{text}"));
+    if let Some(property) = node.properties.iter_mut().find(|property| property.key == key) {
+        property.values.push(value);
+    } else {
+        node.properties.push(SgfProperty {
+            key: key.into(),
+            values: vec![value],
+        });
     }
 }
 

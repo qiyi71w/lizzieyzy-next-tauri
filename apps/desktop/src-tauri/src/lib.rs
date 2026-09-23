@@ -536,6 +536,18 @@ fn set_current_game_metadata(
 }
 
 #[tauri::command]
+fn edit_current_game_markup(
+    state: State<CurrentGameState>,
+    path: NodePath,
+    generation: u64,
+    action: app_model::SgfMarkupActionDto,
+) -> Result<CurrentGameResultDto, String> {
+    state
+        .edit_markup(path, generation, action)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn remove_current_game_variation(
     state: State<CurrentGameState>,
     path: NodePath,
@@ -1220,6 +1232,7 @@ pub fn run() {
             play_current_game,
             set_current_game_personal_comment,
             set_current_game_metadata,
+            edit_current_game_markup,
             remove_current_game_variation,
             promote_current_game_to_main,
             apply_root_setup,

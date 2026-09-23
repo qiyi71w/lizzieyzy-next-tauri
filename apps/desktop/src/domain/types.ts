@@ -36,6 +36,13 @@ export type SgfTreeNodeDto = { properties: SgfPropertyDto[]; children: SgfTreeNo
 export type SgfMarkupDto =
   | { kind: "label"; point: PointDto; text: string }
   | { kind: "circle" | "square" | "cross" | "triangle"; point: PointDto };
+export type SgfMarkupToolDto =
+  | { kind: "label"; text: string }
+  | { kind: "letters" | "numbers" | "circle" | "square" | "cross" | "triangle" | "erase" };
+export type SgfMarkupActionDto =
+  | { kind: "clear" }
+  | { kind: "point"; point: PointDto; tool: SgfMarkupToolDto };
+
 export type SelectedNodeSnapshotDto = {
   path: NodePath;
   position: PositionDto;

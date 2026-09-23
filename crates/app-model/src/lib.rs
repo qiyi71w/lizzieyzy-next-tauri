@@ -157,6 +157,25 @@ pub enum SgfMarkupDto {
     Triangle { point: PointDto },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SgfMarkupToolDto {
+    Label { text: String },
+    Letters,
+    Numbers,
+    Circle,
+    Square,
+    Cross,
+    Triangle,
+    Erase,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SgfMarkupActionDto {
+    Clear,
+    Point { point: PointDto, tool: SgfMarkupToolDto },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SelectedNodeSnapshotDto {
     pub path: NodePath,

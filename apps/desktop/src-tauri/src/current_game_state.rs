@@ -530,6 +530,18 @@ impl CurrentGameState {
         Ok(result)
     }
 
+    pub fn edit_markup(
+        &self,
+        path: NodePath,
+        generation: u64,
+        action: app_model::SgfMarkupActionDto,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let mut holder = self.holder.lock().expect("current game state");
+        let result = holder.edit_markup(path, generation, action)?;
+        self.note_recovery(&holder);
+        Ok(result)
+    }
+
     pub fn remove_variation(
         &self,
         path: NodePath,
@@ -960,6 +972,32 @@ impl CurrentGameHolder {
             self.commit_edit(edit);
             self.generation = self.generation.saturating_add(1);
             self.selected_path = outcome.snapshot.path;
+            self.bump_snapshot();
+        }
+        self.current_result()
+    }
+
+    fn edit_markup(
+        &mut self,
+        path: NodePath,
+        generation: u64,
+        action: app_model::SgfMarkupActionDto,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.ensure_editable()?;
+        self.ensure_generation(generation)?;
+        if self.selected_path != path {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::InvalidNodePath,
+                message: "Selected node changed before markup was applied.".into(),
+            });
+        }
+        let outcome = self
+            .document
+            .as_mut()
+            .ok_or_else(no_current_game)?
+            .edit_markup_with_history(&self.selected_path, &path, action)?;
+        if let Some(edit) = outcome.edit {
+            self.commit_edit(edit);
             self.bump_snapshot();
         }
         self.current_result()
@@ -1857,5 +1895,65 @@ mod current_game_document_history {
         state.cancel_replacement(departure_id).unwrap();
         let undone = state.undo(opened.generation).unwrap();
         assert_eq!(undone.snapshot.personal_comment, opened.snapshot.personal_comment);
+    }
+}
+
+#[cfg(test)]
+mod current_game_markup_edit {
+    use super::*;
+    use app_model::{PointDto, SgfMarkupActionDto, SgfMarkupToolDto};
+
+    #[test]
+    fn markup_edit_uses_selected_document_identity_and_nonstructural_history() {
+        let state = CurrentGameState::default();
+        let opened = state
+            .replace("(;SZ[5:4]C[keep];B[aa](;W[bb])(;W[cb]))", None)
+            .unwrap();
+        let branch = opened.selected_path.clone();
+        let action = SgfMarkupActionDto::Point {
+            point: PointDto { x: 4, y: 3 },
+            tool: SgfMarkupToolDto::Circle,
+        };
+        let edited = state
+            .edit_markup(branch.clone(), opened.generation, action.clone())
+            .unwrap();
+        assert!(edited.dirty && edited.can_undo);
+        assert_eq!(edited.generation, opened.generation);
+        assert!(edited.snapshot_seq > opened.snapshot_seq);
+        assert_eq!(edited.snapshot.markup.len(), 1);
+        let duplicate = state
+            .edit_markup(branch.clone(), opened.generation, action.clone())
+            .unwrap();
+        assert_eq!(duplicate.snapshot_seq, edited.snapshot_seq);
+
+        let root = NodePath::default();
+        state.select_path(root.clone(), opened.generation).unwrap();
+        let before = state.serialize().unwrap();
+        assert_eq!(
+            state
+                .edit_markup(branch.clone(), opened.generation, action.clone())
+                .unwrap_err()
+                .kind,
+            CurrentGameErrorKind::InvalidNodePath
+        );
+        assert_eq!(state.serialize().unwrap(), before);
+        let restored = state.undo(opened.generation).unwrap();
+        assert_eq!(restored.selected_path, branch);
+        assert!(!restored.dirty);
+        assert!(restored.snapshot.markup.is_empty());
+        let redone = state.redo(opened.generation).unwrap();
+        assert_eq!(redone.snapshot.markup.len(), 1);
+        assert_eq!(redone.generation, opened.generation);
+
+        let replacement = state.replace("(;SZ[5:4])", None).unwrap();
+        assert_eq!(
+            state
+                .edit_markup(root, opened.generation, action)
+                .unwrap_err()
+                .kind,
+            CurrentGameErrorKind::InvalidNodePath
+        );
+        assert!(!replacement.dirty);
+        assert!(!replacement.can_undo);
     }
 }

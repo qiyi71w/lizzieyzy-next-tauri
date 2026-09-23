@@ -715,6 +715,7 @@ button[aria-pressed="true"] {
    ========================================================= */
 .diagram {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   place-items: center;
   min-width: 0;
   min-height: 0;
@@ -761,11 +762,35 @@ button[aria-pressed="true"] {
 .root-conversion-dialog h2 {
   margin-top: 0;
 }
+.markup-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 3px;
+  max-width: 100%;
+  z-index: 1;
+}
+
+.markup-toolbar button {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  padding: 3px 6px;
+  cursor: pointer;
+}
+
+.markup-toolbar button[aria-pressed="true"] {
+  background: var(--accent);
+  color: #fff;
+}
+
+.markup-toolbar button:disabled { opacity: 0.5; cursor: default; }
 
 
 .board-canvas {
-  width: min(100cqi, calc(100cqb * var(--board-ratio, 1)));
-  height: min(100cqb, calc(100cqi / var(--board-ratio, 1)));
+  width: min(100cqi, calc((100cqb - 55px) * var(--board-ratio, 1)));
+  height: min(calc(100cqb - 55px), calc(100cqi / var(--board-ratio, 1)));
   max-width: 100%;
   max-height: 100%;
   border: 1px solid #c9a35a;
