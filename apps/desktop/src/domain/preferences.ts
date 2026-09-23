@@ -5,6 +5,7 @@ export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
 export type GraphPerspective = "black" | "sideToPlay";
 export type SubBoardContentMode = "variation" | "raw";
+export type ScoringRule = "area" | "territory";
 export type { NextMoveReviewMarkerMode };
 
 export type AppPreferences = ContinuousAnalysisBudgetDto & {
@@ -35,6 +36,7 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   variationReplayIntervalMs: number;
   restoreLastSession: boolean;
   soundEnabled: boolean;
+  scoringRule: ScoringRule;
   continuousAnalysisEnabled: boolean;
   defaultBoardWidth: number;
   defaultBoardHeight: number;
@@ -97,6 +99,7 @@ export const defaultAppPreferences: AppPreferences = {
   variationReplayIntervalMs: 500,
   restoreLastSession: false,
   soundEnabled: true,
+  scoringRule: "area",
   continuousAnalysisEnabled: true,
   recentGamePaths: [],
   continuousTimeLimitEnabled: true,
@@ -159,6 +162,7 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
     ),
     restoreLastSession: booleanValue(value?.restoreLastSession, defaultAppPreferences.restoreLastSession),
     soundEnabled: booleanValue(value?.soundEnabled, defaultAppPreferences.soundEnabled),
+    scoringRule: value?.scoringRule === "territory" ? "territory" : "area",
     continuousAnalysisEnabled: booleanValue(value?.continuousAnalysisEnabled, defaultAppPreferences.continuousAnalysisEnabled),
     recentGamePaths: Array.isArray(value?.recentGamePaths) ? value.recentGamePaths : [],
     continuousTimeLimitEnabled: booleanValue(value?.continuousTimeLimitEnabled, defaultAppPreferences.continuousTimeLimitEnabled),

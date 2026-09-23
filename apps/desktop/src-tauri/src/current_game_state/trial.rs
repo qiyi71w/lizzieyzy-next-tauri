@@ -12,6 +12,9 @@ pub(super) enum TrialMode {
     Entering(TrialSession),
     Active(TrialSession),
     Leaving(TrialSession),
+    EnteringScoring(super::scoring::ScoringSession),
+    Scoring(super::scoring::ScoringSession),
+    LeavingScoring(super::scoring::ScoringSession),
 }
 
 pub(super) struct TrialSession {
@@ -36,11 +39,46 @@ impl TrialSession {
     }
 }
 
-fn mode_error() -> CurrentGameError {
+pub(super) fn mode_error() -> CurrentGameError {
     CurrentGameError {
         kind: CurrentGameErrorKind::DepartureBlocked,
-        message: "Try-play transition or session does not match the current mode.".into(),
+        message: "Temporary review mode transition or session does not match.".into(),
     }
+}
+
+pub(super) fn seal_review_jobs(
+    holder: &mut CurrentGameHolder,
+    manager: Option<&ForegroundEngineManager>,
+) -> Result<Vec<AnalysisJobStartedDto>, String> {
+    holder.analysis_target = None;
+    let Some(manager) = manager else {
+        return Ok(Vec::new());
+    };
+    let jobs = crate::document_departure::jobs_from_snapshot(&manager.snapshot());
+    for job in &jobs {
+        holder
+            .closed_jobs
+            .insert((job.run_id.clone(), job.job_id.clone()));
+    }
+    manager.clear_continuous_position();
+    if let Some(task) = manager.analysis_task_snapshot().filter(|task| {
+        matches!(
+            task.state,
+            AnalysisTaskStateDto::Queued | AnalysisTaskStateDto::Searching
+        )
+    }) {
+        manager
+            .pause_analysis_task(&task.run_id, &task.task_id)
+            .map_err(|error| error.message)?;
+    }
+    Ok(jobs)
+}
+
+pub(super) fn wait_temporary_jobs(
+    manager: &ForegroundEngineManager,
+    jobs: &[AnalysisJobStartedDto],
+) -> Result<(), String> {
+    wait_jobs(manager, jobs)
 }
 
 impl CurrentGameState {
@@ -65,35 +103,11 @@ impl CurrentGameState {
                 finite_job: None,
             };
             holder.trial_mode = TrialMode::Entering(session);
-            holder.analysis_target = None;
-            let jobs = manager
-                .map(|manager| {
-                    let snapshot = manager.snapshot();
-                    let jobs = crate::document_departure::jobs_from_snapshot(&snapshot);
-                    for job in &jobs {
-                        holder
-                            .closed_jobs
-                            .insert((job.run_id.clone(), job.job_id.clone()));
-                    }
-                    manager.clear_continuous_position();
-                    if let Some(task) = manager.analysis_task_snapshot().filter(|task| {
-                        matches!(
-                            task.state,
-                            AnalysisTaskStateDto::Queued | AnalysisTaskStateDto::Searching
-                        )
-                    }) {
-                        manager
-                            .pause_analysis_task(&task.run_id, &task.task_id)
-                            .map_err(|error| error.message)?;
-                    }
-                    Ok::<_, String>(jobs)
-                })
-                .transpose();
-            (id, jobs)
+            (id, seal_review_jobs(&mut holder, manager))
         };
         let result = jobs.and_then(|jobs| {
             if let Some(manager) = manager {
-                wait_jobs(manager, &jobs.unwrap_or_default())?;
+                wait_jobs(manager, &jobs)?;
             }
             Ok(())
         });

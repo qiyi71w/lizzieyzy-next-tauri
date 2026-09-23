@@ -4,8 +4,9 @@ use app_model::{
     EngineProfileDto, ForegroundEngineEventDto, ForegroundEngineSnapshotDto, GameFileFormatDto,
     GameFileImportDto, MoveVertex, NodePath, PlayerColor, PositionDto, ProviderError, ProviderErrorKind,
     ProviderFetchMethod, ProviderFetchRequest, ProviderFetchResult, ProviderGameMetadata,
-    ProviderImportRequest, ProviderImportResult, ProviderKind, ReadboardSidecarProbeRequest, StoneDto,
+    ProviderImportRequest, ProviderImportResult, ProviderKind, ReadboardSidecarProbeRequest,
     ReadboardSidecarProbeResult, ReadboardSidecarSyncSnapshotRequest, ReadboardSidecarSyncSnapshotResult,
+    StoneDto,
 };
 use engine_manager::{
     build_command_spec, check_assets, default_engine_profiles_settings, normalize_engine_profiles,
@@ -576,7 +577,9 @@ fn apply_root_setup(
     stones: Vec<StoneDto>,
     to_play: PlayerColor,
 ) -> Result<CurrentGameResultDto, String> {
-    state.apply_root_setup(generation, stones, to_play).map_err(|error| error.to_string())
+    state
+        .apply_root_setup(generation, stones, to_play)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -585,7 +588,9 @@ fn convert_to_root_setup(
     generation: u64,
     path: NodePath,
 ) -> Result<CurrentGameResultDto, String> {
-    state.convert_to_root_setup(generation, path).map_err(|error| error.to_string())
+    state
+        .convert_to_root_setup(generation, path)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -613,31 +618,79 @@ fn enter_trial(state: State<CurrentGameState>) -> Result<app_model::TrialSession
 fn exit_trial(state: State<CurrentGameState>, session_id: u64) -> Result<CurrentGameResultDto, String> {
     state.exit_trial(session_id)
 }
+#[tauri::command]
+fn enter_scoring(
+    state: State<CurrentGameState>,
+    rule: app_model::ScoringRuleDto,
+) -> Result<app_model::ScoringSessionDto, String> {
+    state.enter_scoring(rule)
+}
 
 #[tauri::command]
-fn trial_snapshot(state: State<CurrentGameState>, session_id: u64) -> Result<app_model::TrialSessionDto, CurrentGameError> {
+fn update_scoring(
+    state: State<CurrentGameState>,
+    session_id: u64,
+    revision: u64,
+    action: app_model::ScoringActionDto,
+) -> Result<app_model::ScoringSessionDto, CurrentGameError> {
+    state.update_scoring(session_id, revision, action)
+}
+
+#[tauri::command]
+fn exit_scoring(
+    state: State<CurrentGameState>,
+    session_id: u64,
+    revision: u64,
+    confirm: bool,
+) -> Result<CurrentGameResultDto, String> {
+    state.exit_scoring(session_id, revision, confirm)
+}
+
+#[tauri::command]
+fn trial_snapshot(
+    state: State<CurrentGameState>,
+    session_id: u64,
+) -> Result<app_model::TrialSessionDto, CurrentGameError> {
     state.trial_snapshot(session_id)
 }
 
 #[tauri::command]
-fn trial_select(state: State<CurrentGameState>, session_id: u64, revision: u64, path: NodePath) -> Result<app_model::TrialSessionDto, CurrentGameError> {
+fn trial_select(
+    state: State<CurrentGameState>,
+    session_id: u64,
+    revision: u64,
+    path: NodePath,
+) -> Result<app_model::TrialSessionDto, CurrentGameError> {
     state.trial_select(session_id, revision, path)
 }
 
 #[tauri::command]
-fn trial_play(state: State<CurrentGameState>, session_id: u64, revision: u64, vertex: MoveVertex) -> Result<app_model::TrialSessionDto, CurrentGameError> {
+fn trial_play(
+    state: State<CurrentGameState>,
+    session_id: u64,
+    revision: u64,
+    vertex: MoveVertex,
+) -> Result<app_model::TrialSessionDto, CurrentGameError> {
     state.trial_play(session_id, revision, vertex)
 }
 
 #[tauri::command]
-fn trial_undo(state: State<CurrentGameState>, session_id: u64, revision: u64) -> Result<app_model::TrialSessionDto, CurrentGameError> {
+fn trial_undo(
+    state: State<CurrentGameState>,
+    session_id: u64,
+    revision: u64,
+) -> Result<app_model::TrialSessionDto, CurrentGameError> {
     state.trial_undo(session_id, revision)
 }
 
 #[tauri::command]
 fn trial_start_finite(
-    manager: State<ForegroundEngineManager>, state: State<CurrentGameState>,
-    session_id: u64, revision: u64, run_id: String, max_visits: u32,
+    manager: State<ForegroundEngineManager>,
+    state: State<CurrentGameState>,
+    session_id: u64,
+    revision: u64,
+    run_id: String,
+    max_visits: u32,
 ) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
     state.trial_start_finite(&manager, session_id, revision, run_id, max_visits)
 }
@@ -1282,6 +1335,9 @@ pub fn run() {
             redo_current_game,
             enter_trial,
             exit_trial,
+            enter_scoring,
+            update_scoring,
+            exit_scoring,
             trial_snapshot,
             trial_select,
             trial_play,

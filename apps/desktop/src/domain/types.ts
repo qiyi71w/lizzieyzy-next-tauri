@@ -74,6 +74,34 @@ export type TrialSessionDto = {
   snapshot: SelectedNodeSnapshotDto;
   can_undo: boolean;
 };
+export type ScoringRuleDto = "area" | "territory";
+export type AreaCompensationDto = "none" | "handicap" | "handicap_minus_one";
+export type ScoringActionDto =
+  | { kind: "point"; point: PointDto }
+  | { kind: "settings"; rule: ScoringRuleDto; compensation: AreaCompensationDto; handicap: number };
+export type ScoringSessionDto = {
+  session_id: number;
+  revision: number;
+  entry_path: NodePath;
+  generation: number;
+  position: PositionDto;
+  dead: PointDto[];
+  neutral: PointDto[];
+  ownership: (PlayerColor | null)[];
+  rule: ScoringRuleDto;
+  compensation: AreaCompensationDto;
+  handicap: number;
+  komi: number;
+  black_stones: number;
+  white_stones: number;
+  black_territory: number;
+  white_territory: number;
+  black_dead: number;
+  white_dead: number;
+  black_total: string;
+  white_total: string;
+  result: string;
+};
 export type CurrentGameErrorKind =
   | "no_current_game"
   | "invalid_node_path"

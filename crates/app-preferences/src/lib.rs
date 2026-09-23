@@ -79,6 +79,8 @@ pub struct AppPreferencesDto {
     pub default_board_height: u8,
     #[serde(default = "default_komi")]
     pub default_komi: f32,
+    #[serde(default = "default_scoring_rule")]
+    pub scoring_rule: String,
     #[serde(default)]
     pub recent_game_paths: Vec<String>,
 }
@@ -136,6 +138,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         default_board_width: default_board_width(),
         default_board_height: default_board_height(),
         default_komi: default_komi(),
+        scoring_rule: default_scoring_rule(),
         recent_game_paths: Vec::new(),
     }
 }
@@ -166,6 +169,9 @@ pub fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPrefe
     }
     if preferences.sub_board_content_mode != "raw" {
         preferences.sub_board_content_mode = default_sub_board_content_mode();
+    }
+    if preferences.scoring_rule != "area" && preferences.scoring_rule != "territory" {
+        preferences.scoring_rule = default_scoring_rule();
     }
     let single_stage = preferences
         .task_single_stage_conditions
@@ -503,6 +509,10 @@ fn default_komi() -> f32 {
     7.5
 }
 
+fn default_scoring_rule() -> String {
+    "area".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -570,6 +580,7 @@ mod tests {
             default_board_width: 19,
             default_board_height: 19,
             default_komi: 7.5,
+            scoring_rule: default_scoring_rule(),
             recent_game_paths: Vec::new(),
         }
     }
@@ -716,6 +727,7 @@ mod tests {
         assert_eq!(loaded.preferences.default_board_width, 19);
         assert_eq!(loaded.preferences.default_board_height, 19);
         assert_eq!(loaded.preferences.default_komi, 7.5);
+        assert_eq!(loaded.preferences.scoring_rule, "area");
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -1016,6 +1028,112 @@ mod tests {
         assert!(!reloaded_updated.preferences.sound_enabled);
         assert_eq!(reloaded_updated.preferences.candidate_limit, 5);
         assert_eq!(reloaded_updated.preferences.board_theme, "high-contrast");
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn scoring_rule_defaults_to_area_and_normalizes_unknown() {
+        let (dir, path) = temp_prefs();
+
+        // Default preferences first use is "area"
+        let defaults = default_app_preferences();
+        assert_eq!(defaults.scoring_rule, "area");
+
+        // Serialized defaults contain camelCase scoringRule
+        let defaults_json = serde_json::to_value(&defaults).unwrap();
+        assert_eq!(defaults_json["scoringRule"], "area");
+        // No compensation or handicap values stored
+        let obj = defaults_json.as_object().unwrap();
+        assert!(!obj.contains_key("compensation"));
+        assert!(!obj.contains_key("handicapCompensation"));
+        assert!(!obj.contains_key("h"));
+
+        // Loading from nonexistent path defaults to area
+        let missing = load_from_path(&path).unwrap();
+        assert_eq!(missing.preferences.scoring_rule, "area");
+
+        // Legacy JSON without scoringRule defaults to area
+        fs::write(&path, r#"{"showCandidates":true}"#).unwrap();
+        let loaded_legacy = load_from_path(&path).unwrap();
+        assert_eq!(loaded_legacy.preferences.scoring_rule, "area");
+
+        // Normalization preserves "area" and "territory", maps unknown to "area"
+        for allowed in ["area", "territory"] {
+            let pref = AppPreferencesDto {
+                scoring_rule: allowed.to_string(),
+                ..default_app_preferences()
+            };
+            assert_eq!(normalize_app_preferences(pref).scoring_rule, allowed);
+        }
+
+        for unknown in ["", "japanese", "chinese", "AREA", "TERRITORY", "unknown", "aga"] {
+            let pref = AppPreferencesDto {
+                scoring_rule: unknown.to_string(),
+                ..default_app_preferences()
+            };
+            assert_eq!(normalize_app_preferences(pref).scoring_rule, "area");
+        }
+
+        // Loading file with unknown scoringRule normalizes to area
+        fs::write(&path, r#"{"showCandidates":true,"scoringRule":"japanese"}"#).unwrap();
+        let loaded_unknown = load_from_path(&path).unwrap();
+        assert_eq!(loaded_unknown.preferences.scoring_rule, "area");
+
+        // Saving unknown scoringRule normalizes and persists area
+        let mut to_save = sample_preferences();
+        to_save.scoring_rule = "invalid_rule".to_string();
+        let saved = save_to_path(&path, to_save).unwrap();
+        assert_eq!(saved.scoring_rule, "area");
+        let reloaded = load_from_path(&path).unwrap();
+        assert_eq!(reloaded.preferences.scoring_rule, "area");
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn scoring_rule_persists_area_and_territory_and_retains_durable_on_failed_replace() {
+        let (dir, path) = temp_prefs();
+        let mut prefs = sample_preferences();
+        prefs.scoring_rule = "territory".to_string();
+        let saved = save_to_path(&path, prefs.clone()).unwrap();
+        assert_eq!(saved.scoring_rule, "territory");
+
+        let reloaded = load_from_path(&path).unwrap();
+        assert_eq!(reloaded.preferences.scoring_rule, "territory");
+        let durable_json = fs::read_to_string(&path).unwrap();
+
+        // When atomic replace fails during save, previous durable scoringRule is retained
+        let mut new_prefs = reloaded.preferences.clone();
+        new_prefs.scoring_rule = "area".to_string();
+        let serialized = serde_json::to_string(&new_prefs).unwrap();
+        let err = atomic_replace_file_with(&path, &serialized, |_from, _to| {
+            Err(io::Error::other("rename failed"))
+        })
+        .unwrap_err();
+        assert!(err.contains("replace"));
+
+        // Verify previous durable file is untouched and still loads territory
+        assert_eq!(fs::read_to_string(&path).unwrap(), durable_json);
+        assert!(!tmp_path(&path).exists());
+        let reloaded_after_failure = load_from_path(&path).unwrap();
+        assert_eq!(reloaded_after_failure.preferences.scoring_rule, "territory");
+
+        // Normal successful save of area updates durable value
+        let saved_area = save_to_path(&path, new_prefs).unwrap();
+        assert_eq!(saved_area.scoring_rule, "area");
+        let reloaded_area = load_from_path(&path).unwrap();
+        assert_eq!(reloaded_area.preferences.scoring_rule, "area");
+
+        // Unrelated preference writes retain current durable scoring rule
+        let mut updated_unrelated = reloaded_area.preferences;
+        updated_unrelated.candidate_limit = 7;
+        let saved_unrelated = save_to_path(&path, updated_unrelated).unwrap();
+        assert_eq!(saved_unrelated.scoring_rule, "area");
+        assert_eq!(saved_unrelated.candidate_limit, 7);
+        let reloaded_unrelated = load_from_path(&path).unwrap();
+        assert_eq!(reloaded_unrelated.preferences.scoring_rule, "area");
+        assert_eq!(reloaded_unrelated.preferences.candidate_limit, 7);
 
         let _ = fs::remove_dir_all(dir);
     }

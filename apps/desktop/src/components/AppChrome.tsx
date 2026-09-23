@@ -77,6 +77,9 @@ type Props = {
   trialActive?: boolean;
   trialPending?: boolean;
   onToggleTrial?: () => void;
+  scoringActive?: boolean;
+  scoringPending?: boolean;
+  onEnterScoring?: () => void;
   komi: number;
   onNew: () => void;
   onRootSetup: () => void;
@@ -341,6 +344,7 @@ export function AppChrome(props: Props) {
           <ChromeMenu label="棋局" open={openMenu === "game"} onToggle={() => setOpenMenu(openMenu === "game" ? null : "game")}>
             <MenuItem label="新对局" onClick={() => run(props.onNew)} disabled={props.busy} />
             <MenuItem label={actionLabelFromRegistry("review.try-play", props.trialActive ? "退出试下" : "试下")} onClick={() => run(() => props.onToggleTrial?.())} disabled={!nativeAvailable || props.busy || props.trialPending || !props.onToggleTrial} />
+            <MenuItem label={actionLabelFromRegistry("review.scoring", props.scoringActive ? "计分中" : "本地计分")} onClick={() => run(() => props.onEnterScoring?.())} disabled={!nativeAvailable || props.busy || props.trialActive || props.trialPending || props.scoringActive || props.scoringPending || !props.onEnterScoring} />
             <SubMenu label="人机续弈">
               <MenuItem label="人机对局(N)" disabled title="人机对局尚未接入，N 不会新建棋谱。" />
               <MenuItem label="人机对局(分析模式)" disabled title={later} />

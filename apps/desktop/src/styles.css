@@ -727,6 +727,11 @@ button[aria-pressed="true"] {
 .diagram.setup-active {
   padding-bottom: 76px;
 }
+.diagram.scoring-active {
+  padding-bottom: min(170px, 30vh);
+}
+.scoring-tools input[type="number"] { width: 4.5rem; }
+.scoring-tools strong { color: var(--accent); }
 
 .root-setup-tools {
   position: absolute;
@@ -744,6 +749,11 @@ button[aria-pressed="true"] {
   background: var(--surface);
   z-index: 2;
   font-size: 12px;
+}
+.scoring-tools {
+  max-height: min(155px, 28vh);
+  overflow-y: auto;
+  justify-content: flex-start;
 }
 
 .root-setup-tools button[aria-pressed="true"] {

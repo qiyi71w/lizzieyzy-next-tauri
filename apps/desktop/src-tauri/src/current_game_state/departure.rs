@@ -272,7 +272,13 @@ impl CurrentGameState {
         if holder.departure.is_some() {
             return Err(departure_in_progress());
         }
-        if matches!(holder.trial_mode, super::trial::TrialMode::Entering(_) | super::trial::TrialMode::Leaving(_)) {
+        if matches!(
+            holder.trial_mode,
+            super::trial::TrialMode::Entering(_)
+                | super::trial::TrialMode::Leaving(_)
+                | super::trial::TrialMode::EnteringScoring(_)
+                | super::trial::TrialMode::LeavingScoring(_)
+        ) {
             return Err(departure_blocked());
         }
         holder.next_departure_id = holder.next_departure_id.saturating_add(1);

@@ -40,7 +40,10 @@ import type {
   RecoveryProtectionDto,
   RecoveryStartupDto,
   StoneDto,
-  TrialSessionDto
+  TrialSessionDto,
+  ScoringActionDto,
+  ScoringRuleDto,
+  ScoringSessionDto
 } from "../domain/types";
 import { emptyForegroundEngineSnapshot, mergeForegroundEngineSnapshot } from "../domain/foregroundEngine";
 import { ensureInitialPosition, replayGamePositions } from "../domain/board";
@@ -371,6 +374,20 @@ export async function enterTrial(): Promise<TrialSessionDto> {
 export async function exitTrial(sessionId: number): Promise<CurrentGameResultDto> {
   if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
   return invoke<CurrentGameResultDto>("exit_trial", { sessionId });
+}
+export async function enterScoring(rule: ScoringRuleDto): Promise<ScoringSessionDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<ScoringSessionDto>("enter_scoring", { rule });
+}
+
+export async function updateScoring(sessionId: number, revision: number, action: ScoringActionDto): Promise<ScoringSessionDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<ScoringSessionDto>("update_scoring", { sessionId, revision, action });
+}
+
+export async function exitScoring(sessionId: number, revision: number, confirm: boolean): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<CurrentGameResultDto>("exit_scoring", { sessionId, revision, confirm });
 }
 
 export async function trialSelect(sessionId: number, revision: number, path: NodePath): Promise<TrialSessionDto> {

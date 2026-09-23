@@ -221,6 +221,58 @@ pub struct TrialSessionDto {
     pub can_undo: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScoringRuleDto {
+    Area,
+    Territory,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AreaCompensationDto {
+    None,
+    Handicap,
+    HandicapMinusOne,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScoringSessionDto {
+    pub session_id: u64,
+    pub revision: u64,
+    pub entry_path: NodePath,
+    pub generation: u64,
+    pub position: PositionDto,
+    pub dead: Vec<PointDto>,
+    pub neutral: Vec<PointDto>,
+    pub ownership: Vec<Option<PlayerColor>>,
+    pub rule: ScoringRuleDto,
+    pub compensation: AreaCompensationDto,
+    pub handicap: u32,
+    pub komi: f32,
+    pub black_stones: u32,
+    pub white_stones: u32,
+    pub black_territory: u32,
+    pub white_territory: u32,
+    pub black_dead: u32,
+    pub white_dead: u32,
+    pub black_total: String,
+    pub white_total: String,
+    pub result: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ScoringActionDto {
+    Point {
+        point: PointDto,
+    },
+    Settings {
+        rule: ScoringRuleDto,
+        compensation: AreaCompensationDto,
+        handicap: u32,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CurrentGameError {
     pub kind: CurrentGameErrorKind,

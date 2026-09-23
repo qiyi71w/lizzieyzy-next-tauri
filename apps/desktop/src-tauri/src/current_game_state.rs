@@ -21,6 +21,7 @@ mod current_game_save_write;
 mod current_game_session_recovery;
 mod departure;
 mod trial;
+mod scoring;
 pub(crate) mod recovery;
 
 #[derive(Debug, Clone)]

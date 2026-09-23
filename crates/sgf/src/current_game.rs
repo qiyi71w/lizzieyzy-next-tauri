@@ -46,6 +46,10 @@ enum DocumentReversal {
         path: NodePath,
         properties: Vec<(usize, SgfProperty)>,
     },
+    SetResult {
+        properties: Vec<(usize, SgfProperty)>,
+        result: Option<String>,
+    },
     RemoveSubtree {
         parent: NodePath,
         index: usize,
@@ -240,6 +244,9 @@ impl TrialLine {
     pub fn komi(&self) -> f32 {
         self.document.komi()
     }
+    pub fn result(&self) -> Option<&str> {
+        self.document.result()
+    }
     pub fn rules(&self) -> String {
         self.document.rules()
     }
@@ -384,6 +391,43 @@ impl CurrentSgfDocument {
             node = child;
         }
         NodePath { indices }
+    }
+
+    pub fn scoring_handicap(&self) -> Result<Option<u32>, CurrentGameError> {
+        let root = self.root()?;
+        let property = |key| root.properties.iter().find(|p| p.key == key);
+        if let Some(explicit) = property("HA")
+            .and_then(|p| p.values.first())
+            .and_then(|v| v.parse::<u32>().ok())
+        {
+            return Ok(Some(explicit));
+        }
+        if !property("PL")
+            .and_then(|p| p.values.first())
+            .is_some_and(|v| v == "W")
+            || root
+                .properties
+                .iter()
+                .any(|p| matches!(p.key.as_str(), "AW" | "AE" | "B" | "W"))
+        {
+            return Ok(None);
+        }
+        let mut points = std::collections::HashSet::new();
+        for value in root
+            .properties
+            .iter()
+            .filter(|p| p.key == "AB")
+            .flat_map(|p| &p.values)
+        {
+            points.extend(
+                crate::parse_setup_points(value, self.document.board_width, self.document.board_height)
+                    .map_err(|error| CurrentGameError {
+                        kind: CurrentGameErrorKind::MalformedSgf,
+                        message: error.to_string(),
+                    })?,
+            );
+        }
+        Ok((!points.is_empty()).then_some(points.len() as u32))
     }
 
     pub fn snapshot(&self, path: &NodePath) -> Result<SelectedNodeSnapshotDto, CurrentGameError> {
@@ -588,6 +632,14 @@ impl CurrentSgfDocument {
         self.document.board_height
     }
 
+    pub fn result(&self) -> Option<&str> {
+        self.root()
+            .ok()
+            .and_then(|root| property_values(root, "RE"))
+            .and_then(|values| values.first())
+            .map(String::as_str)
+    }
+
     pub fn rules(&self) -> String {
         let raw = self
             .root()
@@ -677,6 +729,50 @@ impl CurrentSgfDocument {
                     properties: before,
                     komi: previous_komi,
                     analysis,
+                },
+                selected_before: selected_before.clone(),
+                selected_after: selected_before.clone(),
+            }),
+        })
+    }
+
+    pub fn set_result_with_history(
+        &mut self,
+        selected_before: &NodePath,
+        result: &str,
+    ) -> Result<DocumentEditOutcome, CurrentGameError> {
+        validate_result(result)?;
+        let before_snapshot = self.snapshot(selected_before)?;
+        let root = self.root()?;
+        let before = result_properties(root);
+        let same = before.len() == 1 && before[0].1.values.len() == 1 && before[0].1.values[0] == result;
+        if same {
+            return Ok(DocumentEditOutcome {
+                snapshot: before_snapshot,
+                edit: None,
+            });
+        }
+        let index = before
+            .first()
+            .map(|(index, _)| *index)
+            .unwrap_or_else(|| root.properties.len());
+        let desired = vec![(
+            index,
+            SgfProperty {
+                key: "RE".into(),
+                values: vec![result.to_owned()],
+            },
+        )];
+        let previous_result = self.document.result.clone();
+        let root = self.document.root.as_mut().expect("validated root");
+        replace_result_properties(root, &desired);
+        self.document.result = Some(result.to_owned());
+        Ok(DocumentEditOutcome {
+            snapshot: self.snapshot(selected_before)?,
+            edit: Some(SgfDocumentEdit {
+                reversal: DocumentReversal::SetResult {
+                    properties: before,
+                    result: previous_result,
                 },
                 selected_before: selected_before.clone(),
                 selected_after: selected_before.clone(),
@@ -1096,6 +1192,14 @@ impl CurrentSgfDocument {
                 *properties = inverse;
                 Ok(false)
             }
+            DocumentReversal::SetResult { properties, result } => {
+                let root = self.document.root.as_mut().expect("validated root");
+                let previous = result_properties(root);
+                replace_result_properties(root, properties);
+                *properties = previous;
+                std::mem::swap(result, &mut self.document.result);
+                Ok(false)
+            }
             DocumentReversal::RemoveSubtree { parent, index } => {
                 let parent_path = parent.clone();
                 let child_index = *index;
@@ -1398,6 +1502,7 @@ fn rule_error(error: RuleError) -> CurrentGameError {
         RuleError::Ko => CurrentGameErrorKind::SimpleKo,
         RuleError::InvalidBoardSize => CurrentGameErrorKind::UnsupportedBoardSize,
         RuleError::OutOfBounds => CurrentGameErrorKind::OccupiedPoint,
+        RuleError::InvalidScoringPoint => CurrentGameErrorKind::InvalidNodePath,
     };
     CurrentGameError {
         kind,
@@ -1442,6 +1547,75 @@ fn restore_metadata(properties: &mut Vec<SgfProperty>, desired: &[(usize, SgfPro
     for (index, property) in ordered {
         properties.insert(index.min(properties.len()), property);
     }
+}
+
+fn result_properties(node: &SgfNode) -> Vec<(usize, SgfProperty)> {
+    node.properties
+        .iter()
+        .enumerate()
+        .filter(|(_, property)| property.key == "RE")
+        .map(|(index, property)| (index, property.clone()))
+        .collect()
+}
+
+fn replace_result_properties(node: &mut SgfNode, desired: &[(usize, SgfProperty)]) {
+    node.properties.retain(|property| property.key != "RE");
+    let mut ordered = desired.to_vec();
+    ordered.sort_by_key(|(index, _)| *index);
+    for (index, property) in ordered {
+        node.properties.insert(index.min(node.properties.len()), property);
+    }
+}
+
+fn validate_result(result: &str) -> Result<(), CurrentGameError> {
+    if result == "0" {
+        return Ok(());
+    }
+    let Some(rest) = result.strip_prefix("B+").or_else(|| result.strip_prefix("W+")) else {
+        return Err(CurrentGameError {
+            kind: CurrentGameErrorKind::MalformedSgf,
+            message: format!("result must be 0, B+<n>, or W+<n>; found: {result}"),
+        });
+    };
+    if rest.is_empty() {
+        return Err(CurrentGameError {
+            kind: CurrentGameErrorKind::MalformedSgf,
+            message: "result margin cannot be empty".into(),
+        });
+    }
+    let mut dot_count = 0;
+    let mut digit_count = 0;
+    for c in rest.chars() {
+        if c.is_ascii_digit() {
+            digit_count += 1;
+        } else if c == '.' {
+            dot_count += 1;
+        } else {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::MalformedSgf,
+                message: format!("invalid character in result margin: {c}"),
+            });
+        }
+    }
+    if digit_count == 0 || dot_count > 1 || rest.starts_with('.') || rest.ends_with('.') {
+        return Err(CurrentGameError {
+            kind: CurrentGameErrorKind::MalformedSgf,
+            message: format!("invalid result margin format: {rest}"),
+        });
+    }
+    let Ok(val) = rest.parse::<f64>() else {
+        return Err(CurrentGameError {
+            kind: CurrentGameErrorKind::MalformedSgf,
+            message: format!("invalid result margin: {rest}"),
+        });
+    };
+    if !val.is_finite() || val < 0.0 {
+        return Err(CurrentGameError {
+            kind: CurrentGameErrorKind::MalformedSgf,
+            message: "result margin must be finite and non-negative".into(),
+        });
+    }
+    Ok(())
 }
 
 fn take_analysis(root: &mut SgfNode) -> Vec<(NodePath, Vec<(usize, SgfProperty)>)> {
@@ -3002,5 +3176,268 @@ mod snapshot_stone_move_numbers {
                 },
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod root_result_history {
+    use super::*;
+    use app_model::{CandidateMoveDto, CurrentGameErrorKind, MoveVertex, NodePath};
+
+    fn sample_payload(visits: u32) -> crate::SgfAnalysisPayload {
+        crate::SgfAnalysisPayload {
+            engine_name: "KataGo".to_string(),
+            visits,
+            winrate_black: 0.55,
+            score_mean_black: Some(1.5),
+            score_stdev: None,
+            pda: None,
+            candidates: vec![CandidateMoveDto {
+                vertex: MoveVertex::Pass,
+                visits,
+                winrate_black: 0.55,
+                score_mean_black: 1.5,
+                policy_prior: None,
+                pv: vec![MoveVertex::Pass],
+            }],
+            ownership: None,
+        }
+    }
+
+    #[test]
+    fn test_result_edit_standard_formats_and_outcomes() {
+        let mut document = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[9]KM[6.5];B[ee])").unwrap();
+        let selected = NodePath { indices: vec![0] };
+
+        let outcome = document.set_result_with_history(&selected, "B+0.5").unwrap();
+        assert!(outcome.edit.is_some());
+        assert_eq!(outcome.snapshot.path, selected);
+        assert_eq!(document.result(), Some("B+0.5"));
+        assert!(document.serialize().unwrap().contains("RE[B+0.5]"));
+
+        let outcome = document.set_result_with_history(&selected, "W+12.5").unwrap();
+        assert!(outcome.edit.is_some());
+        assert_eq!(document.result(), Some("W+12.5"));
+        assert!(document.serialize().unwrap().contains("RE[W+12.5]"));
+        assert!(!document.serialize().unwrap().contains("RE[B+0.5]"));
+
+        let outcome = document.set_result_with_history(&selected, "0").unwrap();
+        assert!(outcome.edit.is_some());
+        assert_eq!(document.result(), Some("0"));
+        assert!(document.serialize().unwrap().contains("RE[0]"));
+
+        let outcome = document.set_result_with_history(&selected, "B+0").unwrap();
+        assert!(outcome.edit.is_some());
+        assert_eq!(document.result(), Some("B+0"));
+
+        let outcome = document.set_result_with_history(&selected, "W+0").unwrap();
+        assert!(outcome.edit.is_some());
+        assert_eq!(document.result(), Some("W+0"));
+    }
+
+    #[test]
+    fn test_result_edit_noop_when_same() {
+        let mut document = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[9]RE[B+0.5];B[ee])").unwrap();
+        let selected = NodePath { indices: vec![0] };
+        let before_serialized = document.serialize().unwrap();
+        let before_snapshot = document.snapshot(&selected).unwrap();
+
+        let outcome = document.set_result_with_history(&selected, "B+0.5").unwrap();
+        assert!(outcome.edit.is_none());
+        assert_eq!(outcome.snapshot, before_snapshot);
+        assert_eq!(document.result(), Some("B+0.5"));
+        assert_eq!(document.serialize().unwrap(), before_serialized);
+    }
+
+    #[test]
+    fn test_result_edit_invalid_strings_reject_without_mutation() {
+        let mut document = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[9]RE[B+1.0];B[ee])").unwrap();
+        let selected = NodePath { indices: vec![0] };
+        let before_serialized = document.serialize().unwrap();
+
+        let invalid_results = [
+            "B+R",
+            "W+R",
+            "B+Resign",
+            "W+Resign",
+            "B+T",
+            "Draw",
+            "Void",
+            "arbitrary",
+            "",
+            "B+",
+            "W+",
+            "B+-1.0",
+            "B+1.2.3",
+            "B+.5",
+            "B+5.",
+            "B+NaN",
+            "B+inf",
+            "0.5",
+            "B+ 1.5",
+            " 0",
+        ];
+
+        for &invalid in &invalid_results {
+            let err = document.set_result_with_history(&selected, invalid).unwrap_err();
+            assert_eq!(err.kind, CurrentGameErrorKind::MalformedSgf);
+            assert_eq!(document.serialize().unwrap(), before_serialized);
+            assert_eq!(document.result(), Some("B+1.0"));
+        }
+
+        let invalid_path = NodePath { indices: vec![99] };
+        let err = document
+            .set_result_with_history(&invalid_path, "W+1.5")
+            .unwrap_err();
+        assert_eq!(err.kind, CurrentGameErrorKind::InvalidNodePath);
+        assert_eq!(document.serialize().unwrap(), before_serialized);
+        assert_eq!(document.result(), Some("B+1.0"));
+    }
+
+    #[test]
+    fn test_result_edit_history_undo_redo_swaps_only_re_and_structural_false() {
+        let mut document = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[9]RE[B+1.0];B[ee])").unwrap();
+        let selected = NodePath { indices: vec![0] };
+        let mut history = DocumentHistory::default();
+
+        let outcome = document.set_result_with_history(&selected, "W+2.5").unwrap();
+        history.commit(outcome.edit.unwrap());
+        assert_eq!(document.result(), Some("W+2.5"));
+        assert!(document.serialize().unwrap().contains("RE[W+2.5]"));
+
+        let undo_res = history.undo(&mut document).unwrap().expect("undo outcome");
+        assert_eq!(undo_res.structural, false);
+        assert_eq!(undo_res.selected_path, selected);
+        assert_eq!(document.result(), Some("B+1.0"));
+        assert!(document.serialize().unwrap().contains("RE[B+1.0]"));
+        assert!(!document.serialize().unwrap().contains("RE[W+2.5]"));
+
+        let redo_res = history.redo(&mut document).unwrap().expect("redo outcome");
+        assert_eq!(redo_res.structural, false);
+        assert_eq!(redo_res.selected_path, selected);
+        assert_eq!(document.result(), Some("W+2.5"));
+        assert!(document.serialize().unwrap().contains("RE[W+2.5]"));
+        assert!(!document.serialize().unwrap().contains("RE[B+1.0]"));
+
+        let undo_again = history.undo(&mut document).unwrap().expect("undo again");
+        assert_eq!(undo_again.structural, false);
+        assert_eq!(document.result(), Some("B+1.0"));
+    }
+
+    #[test]
+    fn test_result_edit_undo_redo_when_no_prior_re() {
+        let mut document = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[9]KM[6.5];B[ee])").unwrap();
+        let initial_serialized = document.serialize().unwrap();
+        assert_eq!(document.result(), None);
+        let selected = NodePath::default();
+        let mut history = DocumentHistory::default();
+
+        let outcome = document.set_result_with_history(&selected, "0").unwrap();
+        history.commit(outcome.edit.unwrap());
+        assert_eq!(document.result(), Some("0"));
+        assert!(document.serialize().unwrap().contains("RE[0]"));
+
+        let undo_res = history.undo(&mut document).unwrap().expect("undo outcome");
+        assert_eq!(undo_res.structural, false);
+        assert_eq!(undo_res.selected_path, selected);
+        assert_eq!(document.result(), None);
+        assert_eq!(document.serialize().unwrap(), initial_serialized);
+
+        let redo_res = history.redo(&mut document).unwrap().expect("redo outcome");
+        assert_eq!(redo_res.structural, false);
+        assert_eq!(document.result(), Some("0"));
+        assert!(document.serialize().unwrap().contains("RE[0]"));
+    }
+
+    #[test]
+    fn test_result_edit_preserves_unknown_properties_and_unrelated_root_metadata() {
+        let mut document = CurrentSgfDocument::open(
+            "(;GM[1]FF[4]SZ[9]KM[7.5]RU[Chinese]HA[2]PB[Alice]PW[Bob]DT[2026-09-23]XY[custom_root]ZZ[another_root];B[ee]C[move comment]YY[custom_move])",
+        )
+        .unwrap();
+        let selected = NodePath { indices: vec![0] };
+        let mut history = DocumentHistory::default();
+
+        let outcome = document.set_result_with_history(&selected, "B+3.5").unwrap();
+        history.commit(outcome.edit.unwrap());
+
+        let verify_properties = |doc: &CurrentSgfDocument, expected_re: Option<&str>| {
+            let tree = doc.tree().unwrap();
+            let prop_val = |key: &str| {
+                tree.properties
+                    .iter()
+                    .find(|p| p.key == key)
+                    .and_then(|p| p.values.first())
+                    .map(String::as_str)
+            };
+            assert_eq!(prop_val("RE"), expected_re);
+            assert_eq!(prop_val("KM"), Some("7.5"));
+            assert_eq!(prop_val("RU"), Some("Chinese"));
+            assert_eq!(prop_val("HA"), Some("2"));
+            assert_eq!(prop_val("PB"), Some("Alice"));
+            assert_eq!(prop_val("PW"), Some("Bob"));
+            assert_eq!(prop_val("DT"), Some("2026-09-23"));
+            assert_eq!(prop_val("XY"), Some("custom_root"));
+            assert_eq!(prop_val("ZZ"), Some("another_root"));
+
+            let child = &tree.children[0];
+            let child_prop_val = |key: &str| {
+                child
+                    .properties
+                    .iter()
+                    .find(|p| p.key == key)
+                    .and_then(|p| p.values.first())
+                    .map(String::as_str)
+            };
+            assert_eq!(child_prop_val("C"), Some("move comment"));
+            assert_eq!(child_prop_val("YY"), Some("custom_move"));
+        };
+
+        verify_properties(&document, Some("B+3.5"));
+
+        let undo_res = history.undo(&mut document).unwrap().expect("undo");
+        assert_eq!(undo_res.structural, false);
+        verify_properties(&document, None);
+
+        let redo_res = history.redo(&mut document).unwrap().expect("redo");
+        assert_eq!(redo_res.structural, false);
+        verify_properties(&document, Some("B+3.5"));
+    }
+
+    #[test]
+    fn test_result_edit_preserves_attached_analysis_on_root_and_descendants() {
+        let mut document = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[9]KM[6.5];B[ee];W[de])").unwrap();
+        let root_path = NodePath::default();
+        let move_path = NodePath { indices: vec![0] };
+
+        document
+            .replace_primary_analysis(&root_path, &sample_payload(100))
+            .unwrap();
+        document
+            .replace_primary_analysis(&move_path, &sample_payload(200))
+            .unwrap();
+
+        assert!(document.snapshot(&root_path).unwrap().primary_analysis.is_some());
+        assert!(document.snapshot(&move_path).unwrap().primary_analysis.is_some());
+
+        let mut history = DocumentHistory::default();
+        let outcome = document.set_result_with_history(&move_path, "W+0.5").unwrap();
+        history.commit(outcome.edit.unwrap());
+
+        assert_eq!(document.result(), Some("W+0.5"));
+        assert!(document.snapshot(&root_path).unwrap().primary_analysis.is_some());
+        assert!(document.snapshot(&move_path).unwrap().primary_analysis.is_some());
+
+        let undo_res = history.undo(&mut document).unwrap().expect("undo");
+        assert_eq!(undo_res.structural, false);
+        assert_eq!(document.result(), None);
+        assert!(document.snapshot(&root_path).unwrap().primary_analysis.is_some());
+        assert!(document.snapshot(&move_path).unwrap().primary_analysis.is_some());
+
+        let redo_res = history.redo(&mut document).unwrap().expect("redo");
+        assert_eq!(redo_res.structural, false);
+        assert_eq!(document.result(), Some("W+0.5"));
+        assert!(document.snapshot(&root_path).unwrap().primary_analysis.is_some());
+        assert!(document.snapshot(&move_path).unwrap().primary_analysis.is_some());
     }
 }

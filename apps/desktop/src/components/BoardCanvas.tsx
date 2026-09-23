@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
-import type { AnalysisFrameDto, MoveDto, PointDto, PositionDto, SgfMarkupDto } from "../domain/types";
+import type { AnalysisFrameDto, MoveDto, PointDto, PositionDto, ScoringSessionDto, SgfMarkupDto } from "../domain/types";
 import { isPoint } from "../domain/board";
 import type { NextMoveReviewMarker, NextMoveReviewMarkerMode } from "../domain/nextMoveReviewMarker";
 import { variationReplayPointSteps } from "../domain/variationReplay";
@@ -24,6 +24,7 @@ type Props = {
   hideCandidates?: boolean;
   onPointClick?: (point: PointDto) => void;
   keyboardPlacement?: boolean;
+  scoring?: ScoringSessionDto | null;
   onCandidatePreview?: (index: number | null) => void;
   previewScope?: ReviewPresentationScope;
   nextMoveMode?: NextMoveReviewMarkerMode;
@@ -55,6 +56,7 @@ export function BoardCanvas({
   onPointClick,
   keyboardPlacement = false,
   onCandidatePreview,
+  scoring,
   previewScope,
   nextMoveMode = "off",
   nextMoveMarkers = [],
@@ -286,6 +288,25 @@ export function BoardCanvas({
       }
     }
 
+    if (scoring) {
+      for (let y = 0; y < boardHeight; y += 1) for (let x = 0; x < boardWidth; x += 1) {
+        const owner = scoring.ownership[y * boardWidth + x];
+        if (!owner) continue;
+        ctx.fillStyle = owner === "black" ? "rgba(25,35,52,.6)" : "rgba(255,255,245,.8)";
+        ctx.beginPath(); ctx.arc(coordX(x), coordY(y), Math.max(2, grid * 0.13), 0, Math.PI * 2); ctx.fill();
+      }
+      for (const point of scoring.neutral) {
+        const cx = coordX(point.x); const cy = coordY(point.y); const r = grid * 0.23;
+        ctx.strokeStyle = "#a44229"; ctx.lineWidth = Math.max(2, grid * 0.09);
+        ctx.beginPath(); ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy); ctx.stroke();
+      }
+      for (const point of scoring.dead) {
+        const cx = coordX(point.x); const cy = coordY(point.y); const r = grid * 0.3;
+        ctx.strokeStyle = "#cc3b29"; ctx.lineWidth = Math.max(2, grid * 0.1);
+        ctx.beginPath(); ctx.moveTo(cx - r, cy - r); ctx.lineTo(cx + r, cy + r);
+        ctx.moveTo(cx + r, cy - r); ctx.lineTo(cx - r, cy + r); ctx.stroke();
+      }
+    }
     if (position.last_move && isPoint(position.last_move.vertex) &&
       !moveByPoint.has(`${position.last_move.vertex.point.x}:${position.last_move.vertex.point.y}`)) {
       const { x, y } = position.last_move.vertex.point;
@@ -399,7 +420,7 @@ export function BoardCanvas({
       ctx.lineWidth = Math.max(1.5, grid * 0.06);
       ctx.stroke();
     }
-  }, [position, markup, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, stoneMoveNumbers, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers, pvPrefixLength, replayCandidateIndex]);
+  }, [position, markup, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, stoneMoveNumbers, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers, pvPrefixLength, replayCandidateIndex, scoring]);
 
   const layerHost = document.getElementById("board-layers");
   const overlays = (
