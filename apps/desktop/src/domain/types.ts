@@ -65,6 +65,15 @@ export type CurrentGameResultDto = {
   dirty: boolean;
   native_path?: string | null;
 };
+export type TrialSessionDto = {
+  session_id: number;
+  revision: number;
+  entry_path: NodePath;
+  tree: SgfTreeNodeDto;
+  selected_path: NodePath;
+  snapshot: SelectedNodeSnapshotDto;
+  can_undo: boolean;
+};
 export type CurrentGameErrorKind =
   | "no_current_game"
   | "invalid_node_path"

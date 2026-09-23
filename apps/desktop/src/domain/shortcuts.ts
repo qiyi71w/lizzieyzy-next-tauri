@@ -54,6 +54,7 @@ const CLAIMED_SHORTCUTS: ShortcutDefinition[] = [
   { id: "file.copy-sgf", label: "复制棋谱", primary: { key: "c", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.paste-sgf", label: "粘贴棋谱", primary: { key: "v", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "game.human-vs-engine", label: "人机对局（未接入）", primary: { key: "n" }, aliases: [], focusRule: "focus-safe" },
+  { id: "review.try-play", label: "试下／返回复盘", primary: { key: "v" }, aliases: [], focusRule: "focus-safe" },
   { id: "game.board-dimensions", label: "设置棋盘大小", primary: { key: "i", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "game.root-setup", label: "起始局面设置", primary: { key: "l", ctrl: true, shift: true }, aliases: [], focusRule: "focus-safe" },
   { id: "game.convert-position", label: "转换为起始局面", primary: { key: "v", ctrl: true, shift: true }, aliases: [], focusRule: "focus-safe" },

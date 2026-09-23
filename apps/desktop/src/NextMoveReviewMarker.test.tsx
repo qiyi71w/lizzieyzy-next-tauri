@@ -58,6 +58,7 @@ const backend = vi.hoisted(() => ({
   startKataGoGameAnalysis: vi.fn(),
   loadEngineProfilesSettings: vi.fn(() => Promise.resolve({ selected_profile_id: "default", profiles: [] })),
   subscribeForegroundEngine: vi.fn(() => Promise.resolve(() => undefined)),
+  subscribeTrialAnalysis: vi.fn(async () => () => undefined),
   startForegroundEngine: vi.fn(),
   stopForegroundEngine: vi.fn(),
   restartForegroundEngine: vi.fn(),
