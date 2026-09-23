@@ -125,7 +125,7 @@ import {
   variationReplayPointSteps
 } from "./domain/variationReplay";
 import { newDocumentSgf, type NewDocumentParameters } from "./domain/newDocument";
-import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, AnalysisTaskStrategyDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, FileActivationDeliveryDto, ForegroundEngineSnapshotDto, GameDto, GameFileImportDto, MoveVertex, NodePath, PlayerColor, PointDto, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, ScoringActionDto, ScoringSessionDto, SgfMarkupActionDto, SgfMarkupToolDto, SgfTreeNodeDto, StoneDto, TrialSessionDto } from "./domain/types";
+import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, AnalysisTaskStrategyDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, FileActivationDeliveryDto, ForegroundEngineSnapshotDto, GameDto, GameFileImportDto, MoveVertex, NodePath, PlayerColor, PointDto, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, ScoringActionDto, ScoringSessionDto, SelectedNodeSnapshotDto, SgfMarkupActionDto, SgfMarkupToolDto, SgfTreeNodeDto, StoneDto, TrialSessionDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const demoGame = createDemoGame();
@@ -2834,9 +2834,9 @@ export function App() {
     }
   }
 
-  function soundAcceptedMove(before: CurrentGameResultDto, after: CurrentGameResultDto) {
+  function soundAcceptedMove(before: SelectedNodeSnapshotDto, after: SelectedNodeSnapshotDto) {
     if (!preferencesLoadSettledRef.current || !committedPreferencesRef.current.soundEnabled) return;
-    const kind = acceptedMoveSound(before.snapshot, after.snapshot);
+    const kind = acceptedMoveSound(before, after);
     if (kind) void playMoveSound(kind).catch((error) => setMessage(`声音播放失败: ${errorMessage(error)}`));
   }
 
@@ -2888,7 +2888,7 @@ export function App() {
             continue;
           }
           adoptCurrentGame(result);
-          if (requested.forward) soundAcceptedMove(current, result);
+          if (requested.forward) soundAcceptedMove(current.snapshot, result.snapshot);
           setChosenChildren((previous) => rememberChosenChildren(previous, result.selected_path));
           if (result.snapshot.primary_analysis) presentCurrentGameAnalysis(result);
           else {
@@ -3089,6 +3089,7 @@ export function App() {
         const result = await trialPlay(active.session_id, active.revision, vertex);
         if (trialRef.current?.session_id === active.session_id) {
           adoptTrial(result);
+          soundAcceptedMove(active.snapshot, result.snapshot);
           setChosenChildren((prev) => rememberChosenChildren(prev, result.selected_path));
           clearReviewData();
           setBoardIntentFeedback(null);
@@ -3105,7 +3106,7 @@ export function App() {
       setSelectedCandidateIndex(null);
       setBoardIntentFeedback(null);
       setMessage("落子已接受。");
-      soundAcceptedMove(currentGame, result);
+      soundAcceptedMove(currentGame.snapshot, result.snapshot);
       if (result.generation !== previousGeneration) {
         clearReviewData();
         await abandonAnalysisSessions();

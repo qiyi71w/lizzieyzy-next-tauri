@@ -63,6 +63,10 @@ const backend = vi.hoisted(() => ({
   loadEngineProfilesSettings: vi.fn(),
   subscribeForegroundEngine: vi.fn(),
   subscribeTrialAnalysis: vi.fn(async () => () => undefined),
+  enterTrial: vi.fn(),
+  exitTrial: vi.fn(),
+  trialPlay: vi.fn(),
+  analysisTaskSnapshot: vi.fn(async () => null),
   startForegroundEngine: vi.fn(),
   stopForegroundEngine: vi.fn(),
   restartForegroundEngine: vi.fn(),
@@ -480,6 +484,31 @@ describe("App board intent feedback", () => {
     expect(host.textContent).toContain("missing sound resource");
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
     expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  });
+
+  it("plays one sound for an accepted trial pass without changing the original document", async () => {
+    const entry = {
+      session_id: 3, revision: 1, entry_path: { indices: [] }, tree: { properties: [], children: [] },
+      selected_path: { indices: [] }, snapshot: initialGame.snapshot, can_undo: false
+    };
+    backend.enterTrial.mockResolvedValueOnce(entry);
+    backend.trialPlay.mockResolvedValueOnce({
+      ...entry, revision: 2, selected_path: { indices: [0] }, can_undo: true,
+      tree: { properties: [], children: [{ properties: [{ key: "B", values: [""] }], children: [] }] },
+      snapshot: {
+        ...entry.snapshot, path: { indices: [0] },
+        position: { ...emptyPosition, move_number: 1, to_play: "white",
+          last_move: { color: "black", vertex: "pass", move_number: 1 } }
+      }
+    });
+    const host = await renderApp();
+    act(() => buttonNamed(host, "棋局").click());
+    await act(async () => { buttonNamed(host, "试下(V)").click(); await backend.enterTrial.mock.results.at(-1)?.value; });
+    act(() => buttonLabeled(host, "虚手").click());
+    await flushLast(backend.trialPlay);
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    expect(backend.saveCurrentGame).not.toHaveBeenCalled();
   });
 
   it("keeps review interaction live, deduplicates a pending intent, and announces rejection until the next accepted intent", async () => {

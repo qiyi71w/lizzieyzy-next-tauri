@@ -11,6 +11,7 @@
 - Added confirmed subtree deletion, reversible promotion through every branching ancestor and navigation back to the main trunk. Root deletion uses the safe New flow; structural changes fence stale analysis by generation and preserve attached analysis with the moved nodes.
 - Added childless-root black/white/erase/clear/player-to-play setup drafts and confirmed conversion of the selected board into a root position. Each commit is one Undo/Redo step; Cancel preserves the original tree and source path.
 - Added durable coordinate and all-move-number controls shared by menus, C/M shortcuts and Preferences. Numbering follows surviving stones on the selected branch, including captures, setup and pass; cancelled or failed preference writes retain the saved display state.
+- Trial move and pass actions now use the same accepted-move sound classification as document play; scoring corrections remain silent.
 - Removed the legacy force-replace IPC and frontend wrapper. Native current-game replacement uses the shared candidate-validation and Save / Discard / Cancel workflow.
 - Added manual continuous current-node analysis with real KataGo progress, fixed 600-second search budgets, shared-Run queue liveness, target-final cancellation and bounded Run-failure cleanup. Accepted snapshots remain available to ordinary SGF Save and current-game recovery.
 - Added durable default-on continuous-analysis intent, manager-owned latest-node following, and contextual Start/Stop/Resume with limit, finite-job, error and document-departure inhibition.
@@ -30,6 +31,7 @@
 - 新增后续节点删除确认、多级祖先主线提升及返回主干导航；根节点删除走安全新建流程。结构编辑通过 generation 拦截旧分析，提升保留节点附带的分析并可撤销／重做。
 - 新增无后续根局面的黑白子、擦除、清空、执色草稿及当前局面确认转换；一次提交对应一步撤销／重做，取消不改变原树与源路径。
 - 坐标与全部手数设置现已持久化，菜单、C/M 快捷键与设置面板共享保存值；编号按当前真实分支的存活棋子来源显示，正确处理提子、setup 和 pass，取消或写入失败保留原设置。
+- 试下落子与虚手复用正式落子的成功动作声音分类；计分修正保持静默。
 - 移除旧强制替换 IPC 及前端 wrapper；原生当前棋谱替换统一使用候选验证与保存/放弃/取消流程。
 - 新增手动连续当前节点分析：接入真实 KataGo 进度、固定 600 秒搜索预算、共享 Run 排队保活、目标 final 取消与有界故障清理；已接纳快照可普通保存到 SGF，并纳入当前棋谱恢复。
 - 连续分析意图默认开启并持久化；由 manager 跟随最新节点，统一开始/停止/继续动作，并保留到限、有限请求、错误及离开棋谱后的自动工作抑制。
