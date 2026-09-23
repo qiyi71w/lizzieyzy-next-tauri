@@ -164,3 +164,74 @@ fn noops_and_failures_do_not_commit_and_branching_clears_redo() {
     history.commit(branch.edit.unwrap());
     assert!(!history.can_redo());
 }
+
+#[test]
+fn promoting_nested_variation_preserves_nodes_analysis_and_reversible_cursor() {
+    let source = "(;GM[1]FF[4]SZ[9]XY[root](;B[aa]C[first])(;B[bb]ZZ[branch](;W[cc]C[side])(;W[dd]C[chosen]TR[ee];B[ff])))";
+    let mut document = CurrentSgfDocument::open(source).unwrap();
+    let mut history = DocumentHistory::default();
+    let original = path(&[1, 1, 0]);
+    document
+        .replace_primary_analysis(&original, &payload(321))
+        .unwrap();
+    document
+        .replace_primary_analysis(&path(&[0]), &payload(654))
+        .unwrap();
+    let before = document.serialize().unwrap();
+
+    let promoted = document
+        .promote_to_main_with_history(&original, &original)
+        .unwrap();
+    assert_eq!(promoted.snapshot.path, path(&[0, 0, 0]));
+    history.commit(promoted.edit.unwrap());
+    assert_eq!(
+        document.tree().unwrap().children[1].properties[0].values,
+        vec!["aa"]
+    );
+    assert_eq!(
+        document.tree().unwrap().children[0].children[1].properties[0].values,
+        vec!["cc"]
+    );
+    assert_eq!(
+        document
+            .snapshot(&path(&[0, 0, 0]))
+            .unwrap()
+            .primary_analysis
+            .unwrap()
+            .visits,
+        321
+    );
+    assert_eq!(
+        document
+            .snapshot(&path(&[1]))
+            .unwrap()
+            .primary_analysis
+            .unwrap()
+            .visits,
+        654
+    );
+    assert!(document.serialize().unwrap().contains("ZZ[branch]"));
+    assert!(document.serialize().unwrap().contains("TR[ee]"));
+
+    let undone = history.undo(&mut document).unwrap().unwrap();
+    assert_eq!(undone.selected_path, original);
+    assert!(undone.structural);
+    assert_eq!(document.serialize().unwrap(), before);
+    let redone = history.redo(&mut document).unwrap().unwrap();
+    assert_eq!(redone.selected_path, path(&[0, 0, 0]));
+    assert!(redone.structural);
+    assert_eq!(
+        document
+            .snapshot(&redone.selected_path)
+            .unwrap()
+            .primary_analysis
+            .unwrap()
+            .visits,
+        321
+    );
+    assert!(document
+        .promote_to_main_with_history(&redone.selected_path, &redone.selected_path)
+        .unwrap()
+        .edit
+        .is_none());
+}

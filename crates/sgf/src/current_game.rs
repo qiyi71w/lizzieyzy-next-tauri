@@ -46,6 +46,10 @@ enum DocumentReversal {
         index: usize,
         subtree: SgfNode,
     },
+    PromoteMainline {
+        moves: Vec<(NodePath, usize)>,
+        to_front: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -580,6 +584,43 @@ impl CurrentSgfDocument {
         })
     }
 
+    pub fn promote_to_main_with_history(
+        &mut self,
+        selected_before: &NodePath,
+        path: &NodePath,
+    ) -> Result<DocumentEditOutcome, CurrentGameError> {
+        self.snapshot(selected_before)?;
+        self.snapshot(path)?;
+        let mut selected_after = path.clone();
+        let mut moves = Vec::new();
+        for depth in 0..path.indices.len() {
+            let index = path.indices[depth] as usize;
+            if index == 0 {
+                continue;
+            }
+            let parent = NodePath {
+                indices: selected_after.indices[..depth].to_vec(),
+            };
+            let children = &mut self.node_mut(&parent)?.children;
+            let promoted = children.remove(index);
+            children.insert(0, promoted);
+            moves.push((parent, index));
+            selected_after.indices[depth] = 0;
+        }
+        let edit = (!moves.is_empty()).then_some(SgfDocumentEdit {
+            reversal: DocumentReversal::PromoteMainline {
+                moves,
+                to_front: false,
+            },
+            selected_before: selected_before.clone(),
+            selected_after: selected_after.clone(),
+        });
+        Ok(DocumentEditOutcome {
+            snapshot: self.snapshot(&selected_after)?,
+            edit,
+        })
+    }
+
     fn apply_reversal(&mut self, reversal: &mut DocumentReversal) -> Result<bool, CurrentGameError> {
         match reversal {
             DocumentReversal::SetComment { path, properties } => {
@@ -627,6 +668,23 @@ impl CurrentSgfDocument {
                     parent: parent_path,
                     index: child_index,
                 };
+                Ok(true)
+            }
+            DocumentReversal::PromoteMainline { moves, to_front } => {
+                if *to_front {
+                    for (parent, index) in moves.iter() {
+                        let children = &mut self.node_mut(parent)?.children;
+                        let moved = children.remove(*index);
+                        children.insert(0, moved);
+                    }
+                } else {
+                    for (parent, index) in moves.iter().rev() {
+                        let children = &mut self.node_mut(parent)?.children;
+                        let moved = children.remove(0);
+                        children.insert(*index, moved);
+                    }
+                }
+                *to_front = !*to_front;
                 Ok(true)
             }
         }
@@ -704,8 +762,13 @@ impl CurrentSgfDocument {
                     continue;
                 }
                 for value in &property.values {
-                    for point in crate::parse_setup_points(value, self.document.board_width, self.document.board_height)? {
-                        stone_sources[point.y as usize * self.document.board_width as usize + point.x as usize] = None;
+                    for point in crate::parse_setup_points(
+                        value,
+                        self.document.board_width,
+                        self.document.board_height,
+                    )? {
+                        stone_sources
+                            [point.y as usize * self.document.board_width as usize + point.x as usize] = None;
                     }
                 }
             }
@@ -735,8 +798,8 @@ impl CurrentSgfDocument {
                             PlayerColor::White => captures_white += outcome.captured.len() as u32,
                         }
                         for captured in outcome.captured {
-                            let idx =
-                                captured.y as usize * self.document.board_width as usize + captured.x as usize;
+                            let idx = captured.y as usize * self.document.board_width as usize
+                                + captured.x as usize;
                             stone_sources[idx] = None;
                         }
                         if let MoveVertex::Point(point) = &sgf_move.vertex {
@@ -1923,9 +1986,7 @@ mod snapshot_stone_move_numbers {
         let document = CurrentSgfDocument::open(sgf).unwrap();
         let initial_serialized = document.serialize().unwrap();
 
-        let path_move2 = NodePath {
-            indices: vec![0, 0],
-        };
+        let path_move2 = NodePath { indices: vec![0, 0] };
         let snap2 = document.snapshot(&path_move2).unwrap();
         assert_eq!(snap2.position.move_number, 2);
         assert_eq!(

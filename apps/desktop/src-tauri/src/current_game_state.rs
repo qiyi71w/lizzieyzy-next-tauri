@@ -516,9 +516,29 @@ impl CurrentGameState {
         Ok(result)
     }
 
-    pub fn remove_variation(&self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
+    pub fn remove_variation(
+        &self,
+        path: NodePath,
+        generation: u64,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
+        holder.ensure_editable()?;
+        holder.ensure_generation(generation)?;
         let result = holder.remove_variation(path)?;
+        self.note_recovery(&holder);
+        self.follow_continuous_position(&mut holder);
+        Ok(result)
+    }
+
+    pub fn promote_to_main(
+        &self,
+        path: NodePath,
+        generation: u64,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let mut holder = self.holder.lock().expect("current game state");
+        holder.ensure_editable()?;
+        holder.ensure_generation(generation)?;
+        let result = holder.promote_to_main(path)?;
         self.note_recovery(&holder);
         self.follow_continuous_position(&mut holder);
         Ok(result)
@@ -822,6 +842,21 @@ impl CurrentGameHolder {
         self.current_result()
     }
 
+    fn promote_to_main(&mut self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.ensure_editable()?;
+        let outcome = self
+            .document
+            .as_mut()
+            .ok_or_else(no_current_game)?
+            .promote_to_main_with_history(&self.selected_path, &path)?;
+        if let Some(edit) = outcome.edit {
+            self.commit_edit(edit);
+            self.generation = self.generation.saturating_add(1);
+            self.selected_path = outcome.snapshot.path;
+            self.bump_snapshot();
+        }
+        self.current_result()
+    }
     fn undo(&mut self, generation: u64) -> Result<CurrentGameResultDto, CurrentGameError> {
         self.ensure_editable()?;
         self.ensure_generation(generation)?;
@@ -1195,7 +1230,7 @@ mod current_game_remove_variation {
         let state = CurrentGameState::default();
         assert_eq!(
             state
-                .remove_variation(NodePath { indices: vec![0] })
+                .remove_variation(NodePath { indices: vec![0] }, 0)
                 .unwrap_err()
                 .kind,
             CurrentGameErrorKind::NoCurrentGame
@@ -1209,7 +1244,7 @@ mod current_game_remove_variation {
         let before_serialize = state.serialize().unwrap();
 
         let root = state
-            .remove_variation(NodePath { indices: Vec::new() })
+            .remove_variation(NodePath { indices: Vec::new() }, opened.generation)
             .unwrap_err();
         assert_eq!(root.kind, CurrentGameErrorKind::RootRemoval);
         assert_eq!(state.inspect(), before);
@@ -1220,13 +1255,15 @@ mod current_game_remove_variation {
         );
 
         let invalid = state
-            .remove_variation(NodePath { indices: vec![0, 2] })
+            .remove_variation(NodePath { indices: vec![0, 2] }, opened.generation)
             .unwrap_err();
         assert_eq!(invalid.kind, CurrentGameErrorKind::InvalidNodePath);
         assert_eq!(state.inspect(), before);
         assert_eq!(state.serialize().unwrap(), before_serialize);
 
-        let removed = state.remove_variation(NodePath { indices: vec![0, 1] }).unwrap();
+        let removed = state
+            .remove_variation(NodePath { indices: vec![0, 1] }, opened.generation)
+            .unwrap();
         assert_eq!(removed.selected_path.indices, vec![0]);
         assert_eq!(removed.snapshot.path.indices, vec![0]);
         assert_eq!(removed.snapshot.personal_comment, "main move");
@@ -1247,6 +1284,49 @@ mod current_game_remove_variation {
             )
         );
         assert_eq!(state.mainline_projection().unwrap().moves.len(), 3);
+    }
+
+    #[test]
+    fn promoting_mainline_fences_old_paths_and_undo_restores_saved_tree() {
+        let state = CurrentGameState::default();
+        let opened = state
+            .replace(
+                "(;SZ[9](;B[aa]XY[first])(;B[bb]C[other](;W[cc])(;W[dd]XY[selected])))",
+                None,
+            )
+            .unwrap();
+        let selected = NodePath { indices: vec![1, 1] };
+        state.select_path(selected.clone(), opened.generation).unwrap();
+        let promoted = state
+            .promote_to_main(selected.clone(), opened.generation)
+            .unwrap();
+        assert_eq!(promoted.selected_path.indices, vec![0, 0]);
+        assert!(promoted.dirty && promoted.can_undo);
+        assert_eq!(promoted.generation, opened.generation + 1);
+        assert!(state.select_path(selected.clone(), opened.generation).is_err());
+        assert!(state
+            .remove_variation(selected.clone(), opened.generation)
+            .is_err());
+        assert!(state
+            .promote_to_main(selected.clone(), opened.generation)
+            .is_err());
+
+        let saved = state.serialize().unwrap();
+        let reopened = CurrentSgfDocument::open(&saved).unwrap();
+        assert_eq!(reopened.tree().unwrap(), promoted.tree);
+        let unchanged = state
+            .promote_to_main(promoted.selected_path.clone(), promoted.generation)
+            .unwrap();
+        assert_eq!(unchanged.generation, promoted.generation);
+        assert_eq!(unchanged.snapshot_seq, promoted.snapshot_seq);
+        let undone = state.undo(promoted.generation).unwrap();
+        assert_eq!(undone.selected_path, selected);
+        assert_eq!(undone.generation, promoted.generation + 1);
+        assert!(!undone.dirty);
+        assert_eq!(undone.tree, opened.tree);
+        let redone = state.redo(undone.generation).unwrap();
+        assert_eq!(redone.selected_path, promoted.selected_path);
+        assert_eq!(state.serialize().unwrap(), saved);
     }
 }
 

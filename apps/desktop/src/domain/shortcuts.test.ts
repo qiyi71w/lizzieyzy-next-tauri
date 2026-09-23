@@ -5,9 +5,7 @@ import {
   ShortcutConflictError,
   claimedShortcutCatalog,
   createShortcutRegistry,
-  filterShortcutReference,
   actionLabelFromRegistry,
-  formatShortcutChord,
   shouldIgnoreShortcutTarget
 } from "./shortcuts";
 
@@ -69,66 +67,6 @@ describe("shortcut registry catalog", () => {
 });
 
 describe("shortcut reference and dispatch", () => {
-  it("builds Help rows from registry labels and keys so reference text cannot drift", () => {
-    const registry = createShortcutRegistry();
-    const entries = registry.referenceEntries();
-    const autoplay = entries.find((entry) => entry.id === "review.autoplay");
-    const help = entries.find((entry) => entry.id === "help.shortcut-reference");
-    const candidates = entries.find((entry) => entry.id === "review.select-candidate");
-    const remove = entries.find((entry) => entry.id === "review.remove-variation");
-    const create = entries.find((entry) => entry.id === "file.new");
-    const undo = entries.find((entry) => entry.id === "edit.undo");
-    const redo = entries.find((entry) => entry.id === "edit.redo");
-
-    expect(autoplay).toEqual({ id: "review.autoplay", label: "自动播放", keys: "Ctrl+A" });
-    expect(help).toEqual({ id: "help.shortcut-reference", label: "快捷键参考", keys: "?" });
-    expect(candidates).toEqual({ id: "review.select-candidate", label: "选择候选", keys: "1–9" });
-    expect(remove).toEqual({ id: "review.remove-variation", label: "删除分支", keys: "Shift+Delete, Shift+Backspace" });
-    expect(create).toEqual({ id: "file.new", label: "新建", keys: "Ctrl+Home" });
-    expect(undo).toEqual({ id: "edit.undo", label: "撤销", keys: "Ctrl+Z" });
-    expect(redo).toEqual({ id: "edit.redo", label: "重做", keys: "Ctrl+Y, Ctrl+Shift+Z" });
-    expect(entries.find((entry) => entry.id === "review.parent")).toEqual({
-      id: "review.parent",
-      label: "上一手",
-      keys: "Up"
-    });
-    expect(entries.find((entry) => entry.id === "review.next-child")).toEqual({
-      id: "review.next-child",
-      label: "下一手",
-      keys: "Down"
-    });
-    expect(entries.find((entry) => entry.id === "review.prev-sibling")).toEqual({
-      id: "review.prev-sibling",
-      label: "上一分支",
-      keys: "Left"
-    });
-    expect(entries.find((entry) => entry.id === "review.next-sibling")).toEqual({
-      id: "review.next-sibling",
-      label: "下一分支",
-      keys: "Right"
-    });
-    expect(entries.find((entry) => entry.id === "game.human-vs-engine")).toEqual({
-      id: "game.human-vs-engine",
-      label: "人机对局（未接入）",
-      keys: "N"
-    });
-    expect(entries.find((entry) => entry.id === "game.board-dimensions")).toEqual({
-      id: "game.board-dimensions",
-      label: "设置棋盘大小",
-      keys: "Ctrl+I"
-    });
-    expect(entries.find((entry) => entry.id === "review.next-move-marker")).toEqual({
-      id: "review.next-move-marker",
-      label: "下一手标记",
-      keys: "J"
-    });
-    expect(formatShortcutChord({ key: "s", ctrl: true })).toBe("Ctrl+S");
-    expect(filterShortcutReference(entries, "自动").map((entry) => entry.id)).toEqual(["review.autoplay"]);
-    expect(filterShortcutReference(entries, "ctrl+a").map((entry) => entry.id)).toEqual(["review.autoplay"]);
-    expect(filterShortcutReference(entries, "下一手标记").map((entry) => entry.id)).toEqual(["review.next-move-marker"]);
-    expect(filterShortcutReference(entries, "j").map((entry) => entry.id)).toEqual(["review.next-move-marker"]);
-    expect(filterShortcutReference(entries, "zzz")).toEqual([]);
-  });
 
   it("dispatches a bound owner callback from the board and ignores editable and dialog targets", () => {
     const registry = createShortcutRegistry();

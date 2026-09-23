@@ -310,11 +310,18 @@ export async function setCurrentGamePersonalComment(path: NodePath, comment: str
   return invoke<CurrentGameResultDto>("set_current_game_personal_comment", { path, comment });
 }
 
-export async function removeCurrentGameVariation(path: NodePath): Promise<CurrentGameResultDto> {
+export async function removeCurrentGameVariation(path: NodePath, generation: number): Promise<CurrentGameResultDto> {
   if (!isTauriRuntime()) {
     throw new Error(nativeCurrentGameUnavailable);
   }
-  return invoke<CurrentGameResultDto>("remove_current_game_variation", { path });
+  return invoke<CurrentGameResultDto>("remove_current_game_variation", { path, generation });
+}
+
+export async function promoteCurrentGameToMain(path: NodePath, generation: number): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<CurrentGameResultDto>("promote_current_game_to_main", { path, generation });
 }
 
 export async function undoCurrentGame(generation: number): Promise<CurrentGameResultDto> {

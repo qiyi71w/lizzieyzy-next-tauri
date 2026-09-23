@@ -105,6 +105,11 @@ type Props = {
   onPass?: () => void;
   onRemoveVariation?: () => void;
   canRemoveVariation?: boolean;
+  canDeleteNode?: boolean;
+  canPromoteMain?: boolean;
+  canReturnMain?: boolean;
+  onPromoteMain?: () => void;
+  onReturnMain?: () => void;
   onFirstMove?: () => void;
   onAutoPlay: () => void;
   onOverlayMode: (mode: OverlayMode) => void;
@@ -372,11 +377,10 @@ export function AppChrome(props: Props) {
             <MenuItem label="交替落子" disabled title={later} />
             <MenuItem label={actionLabelFromRegistry("review.pass", "停一手")} onClick={() => run(() => props.onPass?.())} disabled={props.busy || !nativeAvailable || !props.onPass} title={!nativeAvailable ? nativeUnavailable : undefined} />
             <div className="menu-sep" role="separator" />
-            <MenuItem label="设为主分支(L)" disabled title={later} />
-            <MenuItem label="返回主分支(B)" disabled title={later} />
+            <MenuItem label={actionLabelFromRegistry("review.promote-main", "设为主分支")} onClick={() => run(() => props.onPromoteMain?.())} disabled={!props.canPromoteMain} />
+            <MenuItem label={actionLabelFromRegistry("review.return-main", "返回主干")} onClick={() => run(() => props.onReturnMain?.())} disabled={!props.canReturnMain} />
             <MenuItem label="跳转到最前" onClick={() => run(() => props.onFirstMove?.())} disabled={!props.onFirstMove} />
-            <MenuItem label="删除一手" disabled title={later} />
-            <MenuItem label="删除分支" onClick={() => run(() => props.onRemoveVariation?.())} disabled={!props.canRemoveVariation} title={props.canRemoveVariation ? "删除当前选中的非根变化" : (props.nativeUnavailable ?? "只能删除已选中的非根变化")} />
+            <MenuItem label={actionLabelFromRegistry("review.remove-variation", "删除当前节点")} onClick={() => run(() => props.onRemoveVariation?.())} disabled={!props.canDeleteNode} title={!nativeAvailable ? nativeUnavailable : undefined} />
             <div className="menu-sep" role="separator" />
             <MenuItem label="编辑棋谱原文" onClick={() => run(() => props.onToggleSheet("sgf"))} />
             <MenuItem label="交换黑白" disabled title={later} />

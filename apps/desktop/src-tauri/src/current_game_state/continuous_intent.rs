@@ -1009,7 +1009,9 @@ fn paused_task_invalidates_on_edit_outside_its_frozen_mainline() {
         .unwrap();
     std::fs::write(engine.directory.join("cancel-final"), "").unwrap();
     wait_live_task(&engine, app_model::AnalysisTaskStateDto::Paused);
-    state.remove_variation(NodePath { indices: vec![0, 1] }).unwrap();
+    state
+        .remove_variation(NodePath { indices: vec![0, 1] }, opened.generation)
+        .unwrap();
     assert_eq!(
         engine.manager.analysis_task_snapshot().unwrap().state,
         app_model::AnalysisTaskStateDto::Invalidated

@@ -60,10 +60,44 @@ fn semantic_replacement_rejects_old_analysis_at_surviving_paths() {
 }
 
 #[test]
+fn promotion_rejects_late_analysis_for_the_old_path_and_keeps_moved_node_analysis() {
+    let state = CurrentGameState::default();
+    let opened = state.replace("(;SZ[9](;B[aa])(;B[bb]C[moved]))", None).unwrap();
+    state
+        .attach_primary_analysis(opened.generation, path(&[1]), payload("KataGo", 100, 2, 2))
+        .unwrap();
+    state.select_path(path(&[1]), opened.generation).unwrap();
+    let promoted = state.promote_to_main(path(&[1]), opened.generation).unwrap();
+    assert_eq!(promoted.selected_path, path(&[0]));
+    assert!(state
+        .attach_primary_analysis(opened.generation, path(&[1]), payload("KataGo", 999, 3, 3))
+        .is_err());
+    assert_eq!(
+        state
+            .select_path(path(&[0]), promoted.generation)
+            .unwrap()
+            .snapshot
+            .primary_analysis
+            .unwrap()
+            .visits,
+        100
+    );
+    assert!(state
+        .select_path(path(&[1]), promoted.generation)
+        .unwrap()
+        .snapshot
+        .primary_analysis
+        .is_none());
+    let undone = state.undo(promoted.generation).unwrap();
+    assert_eq!(undone.selected_path, path(&[1]));
+    assert_eq!(undone.snapshot.primary_analysis.unwrap().visits, 100);
+}
+
+#[test]
 fn rejected_edits_and_existing_continuation_keep_admitted_analysis() {
     let state = CurrentGameState::default();
     let opened = state.replace("(;SZ[19];B[dd])", None).unwrap();
-    assert!(state.remove_variation(path(&[])).is_err());
+    assert!(state.remove_variation(path(&[]), opened.generation).is_err());
     assert!(state.set_personal_comment(path(&[9]), "invalid".into()).is_err());
     state.set_personal_comment(path(&[]), "".into()).unwrap();
     state

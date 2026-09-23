@@ -52,6 +52,7 @@ const backend = vi.hoisted(() => ({
   saveCurrentGame: vi.fn(),
   setCurrentGamePersonalComment: vi.fn(),
   removeCurrentGameVariation: vi.fn(),
+  promoteCurrentGameToMain: vi.fn(),
   undoCurrentGame: vi.fn(),
   redoCurrentGame: vi.fn(),
   startKataGoGameAnalysis: vi.fn(),
@@ -637,6 +638,13 @@ describe("App focus-safe review controls", () => {
       },
       generation: 4
     });
+    backend.promoteCurrentGameToMain.mockResolvedValue({
+      ...branchingGame,
+      selected_path: { indices: [0, 0] },
+      snapshot: { ...branchingGame.snapshot, path: { indices: [0, 0] } },
+      generation: 4,
+      snapshot_seq: 2
+    });
     backend.undoCurrentGame.mockResolvedValue({
       ...branchingGame,
       selected_path: { indices: [0] },
@@ -661,6 +669,48 @@ describe("App focus-safe review controls", () => {
       }
     });
     vi.spyOn(window, "confirm").mockReturnValue(true);
+  });
+
+  it("confirms subtree deletion but not a leaf, and routes root deletion through New", async () => {
+    currentGameFixture.mockResolvedValue({
+      ...branchingGame,
+      selected_path: { indices: [0] },
+      snapshot: { ...branchingGame.snapshot, path: { indices: [0] } }
+    });
+    vi.mocked(window.confirm).mockReturnValue(false);
+    const host = await renderApp();
+    backend.removeCurrentGameVariation.mockClear();
+    act(() => buttonNamed(host, "删除变化").click());
+    expect(window.confirm).toHaveBeenCalled();
+    expect(backend.removeCurrentGameVariation).not.toHaveBeenCalled();
+    vi.mocked(window.confirm).mockReturnValue(true);
+    act(() => buttonNamed(host, "删除变化").click());
+    await flushLast(backend.removeCurrentGameVariation);
+    expect(backend.removeCurrentGameVariation).toHaveBeenLastCalledWith({ indices: [0] }, 3);
+
+    currentGameFixture.mockResolvedValue(initialGame);
+    const rootHost = await renderApp();
+    backend.removeCurrentGameVariation.mockClear();
+    act(() => buttonNamed(rootHost, "编辑").click());
+    act(() => buttonNamed(rootHost, "删除当前节点(Shift+Delete)").click());
+    expect(backend.removeCurrentGameVariation).not.toHaveBeenCalled();
+    expect(rootHost.querySelector('[role="dialog"]')).not.toBeNull();
+  });
+
+  it("promotes through the Rust command and returns to the trunk by navigation only", async () => {
+    const host = await renderApp();
+    backend.promoteCurrentGameToMain.mockClear();
+    pressKey(buttonNamed(host, "坐标"), "l");
+    await flushLast(backend.promoteCurrentGameToMain);
+    expect(backend.promoteCurrentGameToMain).toHaveBeenLastCalledWith({ indices: [0, 1] }, 3);
+
+    const another = await renderApp();
+    backend.selectCurrentGameNode.mockClear();
+    backend.promoteCurrentGameToMain.mockClear();
+    pressKey(buttonNamed(another, "坐标"), "b");
+    await flushLast(backend.selectCurrentGameNode);
+    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] }, 3);
+    expect(backend.promoteCurrentGameToMain).not.toHaveBeenCalled();
   });
 
   it("keeps review shortcuts on the board while isolating text, select, contenteditable, and IME", async () => {
@@ -1058,7 +1108,7 @@ describe("App focus-safe review controls", () => {
     const hostRemove = await renderApp();
     backend.removeCurrentGameVariation.mockClear();
     act(() => buttonNamed(hostRemove, "编辑").click());
-    act(() => buttonNamed(hostRemove, "删除分支").click());
+    act(() => buttonNamed(hostRemove, "删除当前节点(Shift+Delete)").click());
     await flushLast(backend.removeCurrentGameVariation);
     expect(backend.removeCurrentGameVariation).toHaveBeenCalledTimes(1);
 
@@ -1231,18 +1281,12 @@ describe("App focus-safe review controls", () => {
     expect(backend.setCurrentGamePersonalComment).toHaveBeenLastCalledWith({ indices: [0, 1] }, "reviewer note");
   });
 
-  it("keeps unavailable editing tools disabled while Space remains stone-placement safe", async () => {
+  it("keeps unavailable tools disabled while Space remains stone-placement safe", async () => {
     const host = await renderApp();
     const hawkeye = buttonLabeled(host, "超级鹰眼");
     expect(hawkeye.disabled).toBe(true);
     expect(hawkeye.title).toBe("尚未接入");
     act(() => buttonNamed(host, "编辑").click());
-    const deleteMove = buttonNamed(host, "删除一手");
-    expect(deleteMove.disabled).toBe(true);
-    expect(deleteMove.title).toBe("尚未接入");
-    const setMain = buttonNamed(host, "设为主分支");
-    expect(setMain.disabled).toBe(true);
-    expect(setMain.title).toBe("尚未接入");
     const pass = buttonNamed(host, "停一手(P)");
     expect(pass.disabled).toBe(false);
 

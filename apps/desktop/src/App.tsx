@@ -62,6 +62,7 @@ import {
   selectCurrentGameNode,
   setCurrentGamePersonalComment,
   removeCurrentGameVariation,
+  promoteCurrentGameToMain,
   undoCurrentGame,
   redoCurrentGame,
   startAnalysisTask,
@@ -580,6 +581,9 @@ export function App() {
   const historyActionBlocked = documentFlowBusy || editActionPending;
   const canUndo = nativeRuntime && Boolean(currentGame?.can_undo) && !historyActionBlocked;
   const canRedo = nativeRuntime && Boolean(currentGame?.can_redo) && !historyActionBlocked;
+  const canDeleteNode = Boolean(nativeRuntime && currentGame && !historyActionBlocked);
+  const canPromoteMain = Boolean(nativeRuntime && currentGame && selectedPath.indices.some((index) => index !== 0) && !historyActionBlocked);
+  const canReturnMain = Boolean(currentGame && selectedPath.indices.some((index) => index !== 0) && !documentFlowBusy);
 
 
   useEffect(() => {
@@ -645,7 +649,13 @@ export function App() {
       if (passEnabled) void playAt("pass");
     });
     shortcutRegistry.bind("review.remove-variation", () => {
-      void handleRemoveVariation();
+      if (canDeleteNode) void handleRemoveVariation();
+    });
+    shortcutRegistry.bind("review.promote-main", () => {
+      if (canPromoteMain) void handlePromoteMain();
+    });
+    shortcutRegistry.bind("review.return-main", () => {
+      if (canReturnMain) handleReturnMain();
     });
     shortcutRegistry.bind("review.parent", () => {
       if (currentGame) handleParent();
@@ -725,6 +735,9 @@ export function App() {
     documentDirty,
     canUndo,
     canRedo,
+    canDeleteNode,
+    canPromoteMain,
+    canReturnMain,
     historyActionBlocked,
     nativeRuntime,
     positions,
@@ -2692,11 +2705,20 @@ export function App() {
   }
 
   async function handleRemoveVariation() {
-    if (!currentGame || selectedPath.indices.length === 0 || editActionPendingRef.current) return;
+    const before = currentGameRef.current;
+    if (!nativeRuntime || !before || documentFlowBusy || editActionPendingRef.current
+      || navigatingRef.current || queuedSelectionRef.current) return;
+    const path = before.selected_path;
+    if (path.indices.length === 0) {
+      await handleNewGame();
+      return;
+    }
+    const node = nodeAt(before.tree, path);
+    if (!node || (node.children.length > 0 && !window.confirm("删除当前节点及其全部后续？此操作可以撤销。"))) return;
     editActionPendingRef.current = true;
     setEditActionPending(true);
     try {
-      const result = await removeCurrentGameVariation(selectedPath);
+      const result = await removeCurrentGameVariation(path, before.generation);
       adoptCurrentGame(result);
       pendingSelectedPathRef.current = result.selected_path;
       setChosenChildren(chosenFromPath(result.selected_path));
@@ -2707,9 +2729,43 @@ export function App() {
       const artifacts = await artifactsFromCurrentGame();
       if (!isCurrentDocumentGeneration(result.generation)) return;
       setGame(artifacts.projection);
-      setMessage("已删除选中变化，并回到其父节点。");
+      setMessage("已删除当前节点及其后续，并回到父节点。");
     } catch (error) {
-      setMessage(`删除变化失败: ${errorMessage(error)}`);
+      setMessage(`删除节点失败: ${errorMessage(error)}`);
+    } finally {
+      editActionPendingRef.current = false;
+      setEditActionPending(false);
+    }
+  }
+
+  function handleReturnMain() {
+    if (!canReturnMain) return;
+    const firstVariation = selectedPath.indices.findIndex((index) => index !== 0);
+    if (firstVariation >= 0) void selectNode({ indices: selectedPath.indices.slice(0, firstVariation) });
+  }
+
+  async function handlePromoteMain() {
+    const before = currentGameRef.current;
+    if (!nativeRuntime || !before || documentFlowBusy || editActionPendingRef.current
+      || navigatingRef.current || queuedSelectionRef.current
+      || !before.selected_path.indices.some((index) => index !== 0)) return;
+    editActionPendingRef.current = true;
+    setEditActionPending(true);
+    try {
+      const result = await promoteCurrentGameToMain(before.selected_path, before.generation);
+      adoptCurrentGame(result);
+      pendingSelectedPathRef.current = result.selected_path;
+      setChosenChildren(chosenFromPath(result.selected_path));
+      setDirty(result.dirty);
+      setCurrentMove(result.snapshot.position.move_number);
+      clearReviewData();
+      await abandonAnalysisSessions();
+      const artifacts = await artifactsFromCurrentGame();
+      if (!isCurrentDocumentGeneration(result.generation)) return;
+      setGame(artifacts.projection);
+      setMessage("已设为主分支。");
+    } catch (error) {
+      setMessage(`设为主分支失败: ${errorMessage(error)}`);
     } finally {
       editActionPendingRef.current = false;
       setEditActionPending(false);
@@ -2853,6 +2909,11 @@ export function App() {
       onPass={() => void playAt("pass")}
       onRemoveVariation={() => void handleRemoveVariation()}
       canRemoveVariation={canRemoveVariation}
+      canDeleteNode={canDeleteNode}
+      canPromoteMain={canPromoteMain}
+      canReturnMain={canReturnMain}
+      onPromoteMain={() => void handlePromoteMain()}
+      onReturnMain={handleReturnMain}
       onFirstMove={() => handleMoveSelect(0)}
       onAutoPlay={() => setAutoPlaying((value) => !value)}
       onOverlayMode={setOverlayMode}
