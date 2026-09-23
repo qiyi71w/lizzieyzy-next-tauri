@@ -550,7 +550,8 @@ button[aria-pressed="true"] {
 /* 比分概览卡片 */
 .score-summary-card {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  min-width: 0;
   align-items: center;
   text-align: center;
   background: var(--hud-bg-darker);
@@ -561,6 +562,7 @@ button[aria-pressed="true"] {
 }
 
 .player-stat {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -577,7 +579,15 @@ button[aria-pressed="true"] {
 .black-dot { background: #111111; border: 1px solid #3f3f46; }
 .white-dot { background: #ffffff; border: 1px solid #d4d4d8; }
 
-.player-name { font-size: 11px; font-weight: 600; color: #fff; }
+.player-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+}
 .captures { font-size: 10px; color: var(--hud-text-muted); }
 
 .score-lead-box {

@@ -522,6 +522,18 @@ fn set_current_game_personal_comment(
         .set_personal_comment(path, comment)
         .map_err(|error| error.to_string())
 }
+#[tauri::command]
+fn set_current_game_metadata(
+    state: State<CurrentGameState>,
+    generation: u64,
+    black_name: String,
+    white_name: String,
+    komi: f32,
+) -> Result<CurrentGameResultDto, String> {
+    state
+        .set_metadata(generation, black_name, white_name, komi)
+        .map_err(|error| error.to_string())
+}
 
 #[tauri::command]
 fn remove_current_game_variation(
@@ -1207,6 +1219,7 @@ pub fn run() {
             select_current_game_node,
             play_current_game,
             set_current_game_personal_comment,
+            set_current_game_metadata,
             remove_current_game_variation,
             promote_current_game_to_main,
             apply_root_setup,

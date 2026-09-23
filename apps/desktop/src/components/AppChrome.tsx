@@ -81,6 +81,8 @@ type Props = {
   canRootSetup: boolean;
   canConvertPosition: boolean;
   onOpen: () => void;
+  onEditMetadata: () => void;
+  canEditMetadata: boolean;
   recentGamePaths: string[];
   recentHistoryBusy: boolean;
   recentHistoryError: string | null;
@@ -348,7 +350,7 @@ export function AppChrome(props: Props) {
             <MenuItem label="清空棋盘(Ctrl+Home)" onClick={() => run(props.onClearBoard)} disabled={props.busy} />
             <MenuItem label="棋谱原文" onClick={() => run(() => props.onToggleSheet("sgf"))} />
             <MenuItem label="解析棋谱" onClick={() => run(props.onParse)} disabled={props.busy} />
-            <MenuItem label="编辑棋局信息(I)" disabled title={later} />
+            <MenuItem label={actionLabelFromRegistry("game.metadata", "编辑棋局信息")} onClick={() => run(props.onEditMetadata)} disabled={!props.canEditMetadata} title={!nativeAvailable ? nativeUnavailable : undefined} />
             <MenuItem label={actionLabelFromRegistry("game.board-dimensions", "设置棋盘大小")} onClick={() => run(props.onClearBoard)} disabled={props.busy} />
           </ChromeMenu>
         </div>

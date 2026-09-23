@@ -310,6 +310,13 @@ export async function setCurrentGamePersonalComment(path: NodePath, comment: str
   }
   return invoke<CurrentGameResultDto>("set_current_game_personal_comment", { path, comment });
 }
+export async function setCurrentGameMetadata(
+  generation: number, blackName: string, whiteName: string, komi: number
+): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<CurrentGameResultDto>("set_current_game_metadata", { generation, blackName, whiteName, komi });
+}
+
 
 export async function removeCurrentGameVariation(path: NodePath, generation: number): Promise<CurrentGameResultDto> {
   if (!isTauriRuntime()) {

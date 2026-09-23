@@ -19,6 +19,8 @@ type Props = {
   boardHeight: number;
   currentMove: number;
   currentPosition?: PositionDto;
+  blackName?: string | null;
+  whiteName?: string | null;
   personalComment?: string;
   generatedInformation?: string | null;
   commentEditorEnabled?: boolean;
@@ -48,6 +50,8 @@ export function AnalysisPanel({
   boardWidth,
   boardHeight,
   currentMove,
+  blackName,
+  whiteName,
   currentPosition,
   personalComment = "",
   generatedInformation = null,
@@ -166,7 +170,7 @@ export function AnalysisPanel({
       <div className="score-summary-card">
         <div className="player-stat">
           <span className="stone-dot black-dot"></span>
-          <span className="player-name">黑棋</span>
+          <span className="player-name" title={blackName?.trim() ? blackName : "黑棋"}>{blackName?.trim() ? blackName : "黑棋"}</span>
           <span className="captures">提子: {currentPosition?.captures_black ?? 0}</span>
         </div>
         <div className="score-lead-box">
@@ -181,7 +185,7 @@ export function AnalysisPanel({
         </div>
         <div className="player-stat">
           <span className="stone-dot white-dot"></span>
-          <span className="player-name">白棋</span>
+          <span className="player-name" title={whiteName?.trim() ? whiteName : "白棋"}>{whiteName?.trim() ? whiteName : "白棋"}</span>
           <span className="captures">提子: {currentPosition?.captures_white ?? 0}</span>
         </div>
       </div>
