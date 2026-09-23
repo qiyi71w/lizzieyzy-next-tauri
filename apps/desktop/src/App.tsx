@@ -18,9 +18,11 @@ import { ProviderPanel } from "./components/ProviderPanel";
 import { NewDocumentDialog } from "./components/NewDocumentDialog";
 import {
   analysisTaskSnapshot,
+  applyRootSetup,
   cancelKataGoAnalysis,
   continueAnalysisTask,
   cancelSelectedNodeAnalysis,
+  convertToRootSetup,
   classifyProblems,
   fakeAnalyze,
   foregroundEngineContinuousAction,
@@ -109,7 +111,7 @@ import {
   variationReplayPointSteps
 } from "./domain/variationReplay";
 import { newDocumentSgf, type NewDocumentParameters } from "./domain/newDocument";
-import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, AnalysisTaskStrategyDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, FileActivationDeliveryDto, ForegroundEngineSnapshotDto, GameDto, GameFileImportDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, SgfTreeNodeDto } from "./domain/types";
+import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, AnalysisTaskStrategyDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, FileActivationDeliveryDto, ForegroundEngineSnapshotDto, GameDto, GameFileImportDto, MoveVertex, NodePath, PlayerColor, PointDto, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, SgfTreeNodeDto, StoneDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const demoGame = createDemoGame();
@@ -130,6 +132,7 @@ type ReplacementOptions = {
   failurePrefix: string;
   openedPath?: string | null;
 };
+type RootSetupDraft = { generation: number; stones: StoneDto[]; toPlay: PlayerColor; tool: PlayerColor | "erase" };
 const defaultAnalysisScopeDraft: AnalysisScopeDraft = {
   strategy: "all_positions_two_stage",
   mode: "first_child_mainline",
@@ -190,6 +193,8 @@ export function App() {
   const [fallbackFileName, setFallbackFileName] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [currentGame, setCurrentGame] = useState<CurrentGameResultDto | null>(null);
+  const [rootSetupDraft, setRootSetupDraft] = useState<RootSetupDraft | null>(null);
+  const [conversionPrompt, setConversionPrompt] = useState<{ generation: number; path: NodePath } | null>(null);
   const [chosenChildren, setChosenChildren] = useState<Map<string, number>>(() => new Map());
   const navigatingRef = useRef(false);
   const documentGenerationRef = useRef(0);
@@ -504,6 +509,11 @@ export function App() {
   const siblingIndex = selectedPath.indices.at(-1);
   const canParent = Boolean(currentGame && parentOfSelected);
   const canRemoveVariation = Boolean(nativeRuntime && currentGame && selectedPath.indices.length > 0);
+  const canRootSetup = nativeRuntime && Boolean(currentGame) && selectedPath.indices.length === 0
+    && currentGame?.tree.children.length === 0 && !rootSetupDraft && !conversionPrompt && !editActionPending;
+  const canConvertPosition = nativeRuntime && Boolean(currentGame)
+    && (Boolean(currentGame?.tree.children.length) || Boolean(currentGame?.tree.properties.some((property) => property.key === "B" || property.key === "W")))
+    && !rootSetupDraft && !conversionPrompt && !editActionPending;
   const canNext = Boolean(selectedNode && selectedNode.children.length > 0);
   const canPrevSibling = Boolean(parentNode && siblingIndex !== undefined && siblingIndex > 0);
   const canNextSibling = Boolean(parentNode && siblingIndex !== undefined && siblingIndex + 1 < parentNode.children.length);
@@ -577,7 +587,7 @@ export function App() {
   const documentPath = currentGame?.native_path ?? currentFilePath;
   const documentName = useMemo(() => documentPath ? fileNameFromPath(documentPath) : fallbackFileName ?? "未命名棋谱", [documentPath, fallbackFileName]);
   const saveFileName = documentName.toLowerCase().endsWith(".sgf") ? documentName : `${documentName}.sgf`;
-  const documentFlowBusy = fileFlowBusy || departurePending || Boolean(newDocumentOpen) || Boolean(departurePrompt) || Boolean(teardownPrompt) || Boolean(recoveryPrompt);
+  const documentFlowBusy = fileFlowBusy || departurePending || Boolean(newDocumentOpen) || Boolean(rootSetupDraft) || Boolean(conversionPrompt) || Boolean(departurePrompt) || Boolean(teardownPrompt) || Boolean(recoveryPrompt);
   const historyActionBlocked = documentFlowBusy || editActionPending;
   const canUndo = nativeRuntime && Boolean(currentGame?.can_undo) && !historyActionBlocked;
   const canRedo = nativeRuntime && Boolean(currentGame?.can_redo) && !historyActionBlocked;
@@ -606,6 +616,12 @@ export function App() {
     });
     shortcutRegistry.bind("game.board-dimensions", () => {
       void handleNewGame();
+    });
+    shortcutRegistry.bind("game.root-setup", () => {
+      if (canRootSetup && !historyActionBlocked) openRootSetup();
+    });
+    shortcutRegistry.bind("game.convert-position", () => {
+      if (canConvertPosition && !historyActionBlocked) promptPositionConversion();
     });
     shortcutRegistry.bind("game.human-vs-engine", () => {
       setMessage("人机对局尚未接入，N 不会新建棋谱。");
@@ -757,7 +773,7 @@ export function App() {
   ]);
 
   useEffect(() => {
-    if (!autoPlaying) return;
+    if (!autoPlaying || rootSetupDraft || conversionPrompt) return;
     const timer = window.setInterval(() => {
       if (currentGame) {
         const node = nodeAt(currentGame.tree, currentGame.selected_path);
@@ -778,7 +794,7 @@ export function App() {
       });
     }, 800);
     return () => window.clearInterval(timer);
-  }, [autoPlaying, positions, currentGame, chosenChildren]);
+  }, [autoPlaying, positions, currentGame, chosenChildren, rootSetupDraft, conversionPrompt]);
 
   function toggleSheet(next: SheetId) {
     setSheet((current) => current === next ? "none" : next);
@@ -1474,6 +1490,10 @@ export function App() {
     nativePath: string | null,
     options: ReplacementOptions
   ): Promise<boolean> {
+    if (rootSetupDraft || conversionPrompt) {
+      setMessage("请先完成或取消起始局面编辑。");
+      return false;
+    }
     if (!nativeRuntime) {
       try {
         const [parsed, replayed] = await Promise.all([parseSgfSummary(sgfInput), replaySgfPositions(sgfInput)]);
@@ -1564,7 +1584,7 @@ export function App() {
   }
 
   async function handleOpenRecent(index: number) {
-    if (!nativeRuntime || !preferencesLoaded || fileFlowDepthRef.current !== 0 || recentHistoryBusyRef.current) return;
+    if (!nativeRuntime || !preferencesLoaded || rootSetupDraft || conversionPrompt || fileFlowDepthRef.current !== 0 || recentHistoryBusyRef.current) return;
     const path = committedPreferencesRef.current.recentGamePaths[index];
     if (!path) return;
     await enterFileFlow();
@@ -1591,6 +1611,10 @@ export function App() {
   async function handleFileActivation(delivery: FileActivationDeliveryDto): Promise<void> {
     if (delivery.kind === "rejected") {
       setMessage(delivery.message);
+      return;
+    }
+    if (rootSetupDraft || conversionPrompt) {
+      setMessage("请先完成或取消起始局面编辑；外部打开请求已拒绝。");
       return;
     }
     if (fileFlowDepthRef.current !== 0) {
@@ -2462,7 +2486,7 @@ export function App() {
   }
 
   async function handleNewGame() {
-    if (!preferencesLoaded || newDocumentFlowReservedRef.current || departurePendingRef.current || departurePrompt) return;
+    if (!preferencesLoaded || rootSetupDraft || conversionPrompt || newDocumentFlowReservedRef.current || departurePendingRef.current || departurePrompt) return;
     newDocumentFlowReservedRef.current = true;
     const admission = enterFileFlow();
     newDocumentAdmissionRef.current = admission;
@@ -2529,7 +2553,7 @@ export function App() {
   }
 
   async function handleCommitPersonalComment(comment: string) {
-    if (!currentGame || editActionPendingRef.current) return;
+    if (!currentGame || rootSetupDraft || conversionPrompt || editActionPendingRef.current) return;
     if (!nativeRuntime) {
       setMessage(nativeCurrentGameUnavailable);
       return;
@@ -2572,7 +2596,7 @@ export function App() {
 
   async function selectNode(path: NodePath, generation = currentGame?.generation, forward = false) {
     const game = currentGameRef.current;
-    if (!game || editActionPendingRef.current || generation !== game.generation || departurePendingRef.current
+    if (!game || rootSetupDraft || conversionPrompt || editActionPendingRef.current || generation !== game.generation || departurePendingRef.current
       || !path.indices.every((index) => Number.isInteger(index) && index >= 0)
       || !nodeAt(game.tree, path)) return;
     if (!navigatingRef.current && samePath(path, game.selected_path)) return;
@@ -2664,12 +2688,79 @@ export function App() {
     void selectNode({ indices: [...selectedPath.indices.slice(0, -1), siblingIndex + 1] });
   }
 
+  function openRootSetup() {
+    const game = currentGameRef.current;
+    if (!game || !canRootSetup || documentFlowBusy || navigatingRef.current) return;
+    setAutoPlaying(false);
+    setRootSetupDraft({
+      generation: game.generation,
+      stones: game.snapshot.position.stones.map((stone) => ({ ...stone })),
+      toPlay: game.snapshot.position.to_play,
+      tool: "black"
+    });
+  }
+
+  function promptPositionConversion() {
+    const game = currentGameRef.current;
+    if (!game || !canConvertPosition || documentFlowBusy || navigatingRef.current) return;
+    setAutoPlaying(false);
+    setConversionPrompt({ generation: game.generation, path: game.selected_path });
+  }
+
+  function placeSetupStone(point: PointDto) {
+    setRootSetupDraft((draft) => {
+      if (!draft || point.x < 0 || point.y < 0 || point.x >= currentPosition.board_width || point.y >= currentPosition.board_height) return draft;
+      const stones = draft.stones.filter((stone) => stone.x !== point.x || stone.y !== point.y);
+      if (draft.tool !== "erase") stones.push({ ...point, color: draft.tool });
+      return { ...draft, stones };
+    });
+  }
+
+  async function finishRootEdit(kind: "setup" | "convert") {
+    const before = currentGameRef.current;
+    const draft = rootSetupDraft;
+    const prompt = conversionPrompt;
+    if (!before || editActionPendingRef.current || navigatingRef.current
+      || (kind === "setup" && (!draft || draft.generation !== before.generation || before.selected_path.indices.length !== 0))
+      || (kind === "convert" && (!prompt || prompt.generation !== before.generation || !samePath(prompt.path, before.selected_path)))) return;
+    editActionPendingRef.current = true;
+    setEditActionPending(true);
+    try {
+      const result = kind === "setup"
+        ? await applyRootSetup(draft!.generation, draft!.stones, draft!.toPlay)
+        : await convertToRootSetup(prompt!.generation, prompt!.path);
+      const latest = currentGameRef.current;
+      if (!latest || latest.generation !== before.generation || latest.snapshot_seq > result.snapshot_seq) return;
+      const changed = result.generation !== before.generation;
+      adoptCurrentGame(result);
+      pendingSelectedPathRef.current = result.selected_path;
+      setChosenChildren(chosenFromPath(result.selected_path));
+      setDirty(result.dirty);
+      setCurrentMove(result.snapshot.position.move_number);
+      setRootSetupDraft(null);
+      setConversionPrompt(null);
+      if (changed) {
+        clearReviewData();
+        await abandonAnalysisSessions();
+        const artifacts = await artifactsFromCurrentGame();
+        if (!isCurrentDocumentGeneration(result.generation)) return;
+        setGame(artifacts.projection);
+      }
+      setMessage(kind === "setup" ? "起始局面已应用。" : "当前局面已转换为可编辑起始局面。");
+    } catch (error) {
+      setMessage(`${kind === "setup" ? "起始局面应用" : "局面转换"}失败: ${errorMessage(error)}`);
+    } finally {
+      editActionPendingRef.current = false;
+      setEditActionPending(false);
+    }
+  }
+
   async function playAt(vertex: MoveVertex) {
     if (!nativeRuntime) {
       setMessage(nativeCurrentGameUnavailable);
       return;
     }
-    if (!currentGame || pendingBoardIntentRef.current !== null || editActionPendingRef.current) return;
+    if (!currentGame || rootSetupDraft || conversionPrompt || pendingBoardIntentRef.current !== null || editActionPendingRef.current) return;
     const intentKey = vertex === "pass" ? "pass" : `${vertex.point.x},${vertex.point.y}`;
     pendingBoardIntentRef.current = intentKey;
     editActionPendingRef.current = true;
@@ -2880,6 +2971,10 @@ export function App() {
       autoPlaying={autoPlaying}
       komi={game.summary.komi}
       onNew={() => void handleNewGame()}
+      onRootSetup={openRootSetup}
+      onConvertPosition={promptPositionConversion}
+      canRootSetup={canRootSetup && !documentFlowBusy}
+      canConvertPosition={canConvertPosition && !documentFlowBusy}
       onOpen={() => void handleOpenSgfDocument()}
       recentGamePaths={preferences.recentGamePaths}
       recentHistoryBusy={recentHistoryBusy || !preferencesLoaded}
@@ -2908,7 +3003,7 @@ export function App() {
       onClearBoard={() => void handleNewGame()}
       onPass={() => void playAt("pass")}
       onRemoveVariation={() => void handleRemoveVariation()}
-      canRemoveVariation={canRemoveVariation}
+      canRemoveVariation={canRemoveVariation && !documentFlowBusy}
       canDeleteNode={canDeleteNode}
       canPromoteMain={canPromoteMain}
       canReturnMain={canReturnMain}
@@ -2942,7 +3037,7 @@ export function App() {
           currentPosition={currentPosition}
           personalComment={selectedPersonalComment}
           generatedInformation={selectedGeneratedInformation}
-          commentEditorEnabled={nativeRuntime && Boolean(currentGame)}
+          commentEditorEnabled={nativeRuntime && Boolean(currentGame) && !documentFlowBusy}
           onCommitPersonalComment={(comment) => void handleCommitPersonalComment(comment)}
           selectedCandidateIndex={selectedCandidateIndex}
           onSelectCandidate={selectCandidate}
@@ -2950,15 +3045,15 @@ export function App() {
           selectedPath={selectedPath}
         />
       </aside>
-      <div className="diagram">
+      <div className={`diagram${rootSetupDraft ? " setup-active" : ""}`}>
         <BoardCanvas
-          position={currentPosition}
+          position={rootSetupDraft ? { ...currentPosition, stones: rootSetupDraft.stones, to_play: rootSetupDraft.toPlay, last_move: null, move_number: 0 } : currentPosition}
           markup={currentGame?.snapshot.markup}
-          analysis={visibleCurrentFrame}
+          analysis={rootSetupDraft ? undefined : visibleCurrentFrame}
           selectedCandidateIndex={selectedCandidateIndex}
           previewScope={activeScope}
           onCandidatePreview={previewCandidate}
-          stoneMoveNumbers={currentGame?.snapshot.stone_move_numbers}
+          stoneMoveNumbers={rootSetupDraft ? [] : currentGame?.snapshot.stone_move_numbers}
           showCoordinates={showCoordinates}
           showMoveNumbers={showMoveNumbers}
           overlayMode={overlayMode}
@@ -2966,11 +3061,24 @@ export function App() {
           hideCandidates={hideCandidates}
           pvPrefixLength={replayPrefix}
           replayCandidateIndex={activeCandidateIndex}
-          onPointClick={(point) => void playAt({ point })}
+          onPointClick={(point) => rootSetupDraft ? placeSetupStone(point) : void playAt({ point })}
           keyboardPlacement={keyboardPlacement}
-          nextMoveMode={preferences.nextMoveReviewMarker}
-          nextMoveMarkers={nextMoveMarkers}
+          nextMoveMode={rootSetupDraft ? "off" : preferences.nextMoveReviewMarker}
+          nextMoveMarkers={rootSetupDraft ? [] : nextMoveMarkers}
         />
+        {rootSetupDraft ? <div className="root-setup-tools" role="group" aria-label="起始局面草稿">
+          <span>起始局面 · 点击棋盘预览</span>
+          {(["black", "white", "erase"] as const).map((tool) => <button key={tool} type="button"
+            aria-pressed={rootSetupDraft.tool === tool} onClick={() => setRootSetupDraft({ ...rootSetupDraft, tool })}>
+            {tool === "black" ? "黑子" : tool === "white" ? "白子" : "擦除"}
+          </button>)}
+          <button type="button" onClick={() => setRootSetupDraft({ ...rootSetupDraft, stones: [] })}>清空</button>
+          <label>下一手 <select value={rootSetupDraft.toPlay} onChange={(event) => setRootSetupDraft({ ...rootSetupDraft, toPlay: event.target.value as PlayerColor })}>
+            <option value="black">黑</option><option value="white">白</option>
+          </select></label>
+          <button type="button" disabled={editActionPending} onClick={() => void finishRootEdit("setup")}>应用</button>
+          <button type="button" disabled={editActionPending} onClick={() => setRootSetupDraft(null)}>取消</button>
+        </div> : null}
         {boardIntentFeedback ? (
           <p className="board-intent-status" role="status" aria-live="polite">{boardIntentFeedback}</p>
         ) : null}
@@ -3132,6 +3240,16 @@ export function App() {
         onCancel={() => void handleCancelNewGame()}
       />
     ) : null}
+    {conversionPrompt ? <div className="shortcut-reference-backdrop" role="presentation">
+      <div className="root-conversion-dialog" role="dialog" aria-modal="true" aria-label="转换为起始局面">
+        <h2>转换为起始局面？</h2>
+        <p>将当前实际棋子及执色设为无后续根局面，并丢弃原着手树。此操作可撤销；原根信息、评论和源路径保留。</p>
+        <div className="button-row">
+          <button type="button" disabled={editActionPending} onClick={() => void finishRootEdit("convert")}>确认转换</button>
+          <button type="button" disabled={editActionPending} onClick={() => setConversionPrompt(null)}>取消</button>
+        </div>
+      </div>
+    </div> : null}
     {departurePrompt ? (
       <DocumentDepartureDialog
         message={departurePrompt.message}

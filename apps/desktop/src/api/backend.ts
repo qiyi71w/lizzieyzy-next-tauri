@@ -37,7 +37,8 @@ import type {
   PositionDto,
   ProblemMarkerDto,
   RecoveryProtectionDto,
-  RecoveryStartupDto
+  RecoveryStartupDto,
+  StoneDto
 } from "../domain/types";
 import { emptyForegroundEngineSnapshot, mergeForegroundEngineSnapshot } from "../domain/foregroundEngine";
 import { ensureInitialPosition, replayGamePositions } from "../domain/board";
@@ -322,6 +323,16 @@ export async function promoteCurrentGameToMain(path: NodePath, generation: numbe
     throw new Error(nativeCurrentGameUnavailable);
   }
   return invoke<CurrentGameResultDto>("promote_current_game_to_main", { path, generation });
+}
+
+export async function applyRootSetup(generation: number, stones: StoneDto[], toPlay: PlayerColor): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<CurrentGameResultDto>("apply_root_setup", { generation, stones, toPlay });
+}
+
+export async function convertToRootSetup(generation: number, path: NodePath): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<CurrentGameResultDto>("convert_to_root_setup", { generation, path });
 }
 
 export async function undoCurrentGame(generation: number): Promise<CurrentGameResultDto> {

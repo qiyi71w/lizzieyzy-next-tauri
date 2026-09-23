@@ -32,6 +32,8 @@ const backend = vi.hoisted(() => ({
   serializeCurrentGame: vi.fn(() => Promise.resolve("(;SZ[9])")),
   projectCurrentGameMainline: vi.fn(),
   playCurrentGame: vi.fn(),
+  applyRootSetup: vi.fn(),
+  convertToRootSetup: vi.fn(),
   selectCurrentGameNode: vi.fn(),
   startSelectedNodeAnalysis: vi.fn(),
   cancelSelectedNodeAnalysis: vi.fn(),
@@ -327,6 +329,99 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.clearAllMocks();
   vi.restoreAllMocks();
+});
+
+describe("App root setup editing", () => {
+  it("previews the draft without editing the document, cancels, then commits all changes once", async () => {
+    const host = await renderApp();
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "起始局面设置(Ctrl+Shift+L)").click());
+    act(() => buttonNamed(host, "键盘落子").click());
+    const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
+    dispatchKey(canvas, "Enter");
+    act(() => buttonNamed(host, "白子").click());
+    dispatchKey(canvas, "Enter");
+    act(() => buttonNamed(host, "黑子").click());
+    act(() => requiredElement<HTMLSelectElement>(host, '.root-setup-tools select').value = "white");
+    act(() => requiredElement<HTMLSelectElement>(host, '.root-setup-tools select').dispatchEvent(new Event("change", { bubbles: true })));
+    expect(backend.applyRootSetup).not.toHaveBeenCalled();
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    act(() => buttonNamed(host, "取消").click());
+    expect(backend.applyRootSetup).not.toHaveBeenCalled();
+    expect(host.querySelector(".root-setup-tools")).toBeNull();
+
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "起始局面设置(Ctrl+Shift+L)").click());
+    dispatchKey(canvas, "Enter");
+    act(() => buttonNamed(host, "白子").click());
+    dispatchKey(canvas, "Enter");
+    backend.applyRootSetup.mockResolvedValueOnce({ ...initialGame, generation: 2, snapshot_seq: 2, dirty: true, can_undo: true,
+      snapshot: { ...initialGame.snapshot, position: { ...emptyPosition, stones: [{ x: 4, y: 4, color: "white" }] } } });
+    act(() => buttonNamed(host, "应用").click());
+    await flushLast(backend.applyRootSetup);
+    expect(backend.applyRootSetup).toHaveBeenCalledOnce();
+    expect(backend.applyRootSetup).toHaveBeenCalledWith(1, [{ x: 4, y: 4, color: "white" }], "black");
+    expect(host.querySelector(".root-setup-tools")).toBeNull();
+    expect(host.querySelector(".doc-name")?.textContent).toContain("*");
+  });
+
+  it("requires explicit confirmation before discarding the selected move tree", async () => {
+    currentGameFixture.mockResolvedValueOnce(branchingGame);
+    backend.projectCurrentGameMainline.mockResolvedValueOnce({ ...initialProjection, summary: { ...initialProjection.summary, move_count: 2 } });
+    const host = await renderApp();
+    act(() => buttonNamed(host, "棋局").click());
+    expect(buttonNamed(host, "起始局面设置(Ctrl+Shift+L)").disabled).toBe(true);
+    act(() => buttonNamed(host, "转换为起始局面(Ctrl+Shift+V)").click());
+    expect(backend.convertToRootSetup).not.toHaveBeenCalled();
+    act(() => buttonNamed(host, "取消").click());
+    expect(backend.convertToRootSetup).not.toHaveBeenCalled();
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "转换为起始局面(Ctrl+Shift+V)").click());
+    backend.convertToRootSetup.mockResolvedValueOnce({ ...initialGame, generation: 4, snapshot_seq: 2, dirty: true, can_undo: true, native_path: branchingGame.native_path });
+    act(() => buttonNamed(host, "确认转换").click());
+    await flushLast(backend.convertToRootSetup);
+    expect(backend.convertToRootSetup).toHaveBeenCalledWith(3, { indices: [0, 1] });
+    expect(host.querySelector('[role="dialog"][aria-label="转换为起始局面"]')).toBeNull();
+  });
+  it("does not replace a document behind an active setup draft", async () => {
+    const path = "/games/other.sgf";
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, recentGamePaths: [path] } });
+    backend.readGameFile.mockResolvedValue({ format: "sgf", sgf_text: "(;SZ[9])", display_name: "other.sgf", display_path: path, native_path: path, opened_path: path });
+    preferencesApi.updateRecentGameHistory.mockResolvedValue([path]);
+    const host = await renderApp();
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "起始局面设置(Ctrl+Shift+L)").click());
+    currentGameFixture.mockResolvedValueOnce({ ...initialGame, generation: 2, native_path: path });
+    backend.takePendingFileActivation.mockResolvedValueOnce({ kind: "open", request_id: 9, path });
+    await act(async () => {
+      listeners.onActivationAvailable?.();
+      await vi.waitFor(() => expect(backend.takePendingFileActivation).toHaveBeenCalled());
+    });
+    expect(backend.readGameFile).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="dialog"][aria-label="新建对局"]')).toBeNull();
+    expect(host.querySelector(".root-setup-tools")).not.toBeNull();
+  });
+
+  it("stops already-running autoplay before confirming the selected position", async () => {
+    currentGameFixture.mockResolvedValueOnce({ ...branchingGame, selected_path: { indices: [] },
+      snapshot: { ...branchingGame.snapshot, path: { indices: [] }, position: emptyPosition } });
+    const host = await renderApp();
+    vi.useFakeTimers();
+    try {
+      act(() => buttonNamed(host, "自动播放").click());
+      act(() => buttonNamed(host, "棋局").click());
+      act(() => buttonNamed(host, "转换为起始局面(Ctrl+Shift+V)").click());
+      expect(host.querySelector('[role="dialog"][aria-label="转换为起始局面"]')).not.toBeNull();
+      act(() => vi.advanceTimersByTime(850));
+      expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+      backend.convertToRootSetup.mockResolvedValueOnce({ ...initialGame, generation: 4, snapshot_seq: 2, dirty: true, can_undo: true });
+      act(() => buttonNamed(host, "确认转换").click());
+      await flushLast(backend.convertToRootSetup);
+      expect(backend.convertToRootSetup).toHaveBeenCalledWith(3, { indices: [] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("App board intent feedback", () => {

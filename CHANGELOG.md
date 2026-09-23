@@ -9,6 +9,7 @@
 - Added five-entry durable native SGF/GIB history with safe reopen, full-path tooltips, narrow Clear, and explicit persistence-failure Retry. Successful opens remain installed when history persistence fails.
 - Added shared, bounded Undo/Redo for moves, passes, personal comments and variation deletion, with exact cursor restoration, Save-aware dirty state and preservation of unrelated analysis.
 - Added confirmed subtree deletion, reversible promotion through every branching ancestor and navigation back to the main trunk. Root deletion uses the safe New flow; structural changes fence stale analysis by generation and preserve attached analysis with the moved nodes.
+- Added childless-root black/white/erase/clear/player-to-play setup drafts and confirmed conversion of the selected board into a root position. Each commit is one Undo/Redo step; Cancel preserves the original tree and source path.
 - Added durable coordinate and all-move-number controls shared by menus, C/M shortcuts and Preferences. Numbering follows surviving stones on the selected branch, including captures, setup and pass; cancelled or failed preference writes retain the saved display state.
 - Removed the legacy force-replace IPC and frontend wrapper. Native current-game replacement uses the shared candidate-validation and Save / Discard / Cancel workflow.
 - Added manual continuous current-node analysis with real KataGo progress, fixed 600-second search budgets, shared-Run queue liveness, target-final cancellation and bounded Run-failure cleanup. Accepted snapshots remain available to ordinary SGF Save and current-game recovery.
@@ -27,6 +28,7 @@
 - 新增最近五个原生 SGF/GIB 的持久历史，支持安全重开、完整路径提示、单独清空和写失败显式重试；历史写入失败不撤销已打开的棋谱。
 - 落子、pass、个人评论和变化删除共用最多 100 条撤销／重做历史，恢复精确游标；保存保留历史并建立 dirty 保存点，反转保留无关的新分析。
 - 新增后续节点删除确认、多级祖先主线提升及返回主干导航；根节点删除走安全新建流程。结构编辑通过 generation 拦截旧分析，提升保留节点附带的分析并可撤销／重做。
+- 新增无后续根局面的黑白子、擦除、清空、执色草稿及当前局面确认转换；一次提交对应一步撤销／重做，取消不改变原树与源路径。
 - 坐标与全部手数设置现已持久化，菜单、C/M 快捷键与设置面板共享保存值；编号按当前真实分支的存活棋子来源显示，正确处理提子、setup 和 pass，取消或写入失败保留原设置。
 - 移除旧强制替换 IPC 及前端 wrapper；原生当前棋谱替换统一使用候选验证与保存/放弃/取消流程。
 - 新增手动连续当前节点分析：接入真实 KataGo 进度、固定 600 秒搜索预算、共享 Run 排队保活、目标 final 取消与有界故障清理；已接纳快照可普通保存到 SGF，并纳入当前棋谱恢复。
