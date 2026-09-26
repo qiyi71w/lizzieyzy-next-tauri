@@ -1,7 +1,5 @@
 use super::*;
-use app_model::{
-    AnalysisJobLaneDto, AnalysisJobStateDto, AnalysisTaskStateDto, EngineFailureDto, EngineFailureKind,
-};
+use app_model::{AnalysisJobLaneDto, AnalysisJobStateDto, AnalysisTaskStateDto, EngineFailureKind};
 use engine_manager::ForegroundEngineManager;
 use std::time::{Duration, Instant};
 
@@ -112,11 +110,11 @@ impl CurrentGameState {
             Ok(())
         });
         let mut holder = self.holder.lock().expect("current game state");
-        if result.is_err() {
+        if let Err(error) = result {
             holder.trial_mode = TrialMode::Review;
             holder.analysis_target = None;
             self.follow_continuous_position(&mut holder);
-            return Err(result.unwrap_err());
+            return Err(error);
         }
         let TrialMode::Entering(session) = std::mem::take(&mut holder.trial_mode) else {
             return Err(mode_error().message);
@@ -147,7 +145,7 @@ impl CurrentGameState {
                 return Err(mode_error().message);
             }
             holder.trial_mode = TrialMode::Leaving(session);
-            let jobs = manager
+            manager
                 .map(|manager| {
                     let jobs = crate::document_departure::jobs_from_snapshot(&manager.snapshot())
                         .into_iter()
@@ -161,8 +159,7 @@ impl CurrentGameState {
                     manager.clear_continuous_position();
                     jobs
                 })
-                .unwrap_or_default();
-            jobs
+                .unwrap_or_default()
         };
         let result = manager.map(|manager| wait_jobs(manager, &jobs)).unwrap_or(Ok(()));
         let mut holder = self.holder.lock().expect("current game state");
@@ -264,9 +261,9 @@ impl CurrentGameState {
         revision: u64,
         run_id: String,
         visits: u32,
-    ) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+    ) -> crate::EngineCommandResult<AnalysisJobStartedDto> {
         let mut holder = self.holder.lock().expect("current game state");
-        let invalid = |message| crate::job_failure(&run_id, EngineFailureKind::InvalidState, message);
+        let invalid = |message| Box::new(crate::job_failure(&run_id, EngineFailureKind::InvalidState, message));
         if holder.departure.is_some() || holder.edits_blocked {
             return Err(invalid("Document departure is pending.".into()));
         }

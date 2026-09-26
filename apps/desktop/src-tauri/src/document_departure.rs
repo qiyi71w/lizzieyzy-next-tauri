@@ -10,7 +10,7 @@ use engine_manager::ForegroundEngineManager;
 use save_as_dialog::persist_save_as;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 pub fn jobs_from_snapshot(snapshot: &ForegroundEngineSnapshotDto) -> Vec<AnalysisJobStartedDto> {
     let mut jobs = Vec::new();
@@ -92,16 +92,25 @@ pub fn complete_save(
     }
 }
 
+pub(crate) struct ReplacementResolution {
+    pub departure_id: u64,
+    pub action: DocumentDepartureActionDto,
+    pub selected_path: NodePath,
+}
+
 pub fn resolve_replacement(
     state: &CurrentGameState,
-    departure_id: u64,
-    action: DocumentDepartureActionDto,
-    selected_path: NodePath,
+    request: ReplacementResolution,
     closed_jobs: &[AnalysisJobStartedDto],
     cancel_job: impl Fn(&AnalysisJobStartedDto) -> Result<(), String>,
     wait_for_job: impl Fn(&AnalysisJobStartedDto, Duration) -> Result<(), String>,
     save_destination: impl FnOnce() -> Result<Option<String>, String>,
 ) -> Result<DocumentDepartureOutcomeDto, CurrentGameError> {
+    let ReplacementResolution {
+        departure_id,
+        action,
+        selected_path,
+    } = request;
     match action {
         DocumentDepartureActionDto::Cancel => state.cancel_replacement(departure_id),
         DocumentDepartureActionDto::Discard | DocumentDepartureActionDto::Save => {
@@ -248,18 +257,28 @@ fn finish_exit_save(
     }
 }
 
+pub(crate) struct ExitResolution {
+    pub departure_id: u64,
+    pub action: ApplicationExitActionDto,
+    pub selected_path: NodePath,
+    pub budget: Duration,
+}
+
 pub fn resolve_exit(
     state: &CurrentGameState,
-    departure_id: u64,
-    action: ApplicationExitActionDto,
-    selected_path: NodePath,
+    request: ExitResolution,
     closed_jobs: &[AnalysisJobStartedDto],
     cancel_job: impl Fn(&AnalysisJobStartedDto) -> Result<(), String>,
     wait_for_job: impl Fn(&AnalysisJobStartedDto, Duration) -> Result<(), String>,
     save_destination: impl FnOnce() -> Result<Option<String>, String>,
     teardown: impl FnOnce(Duration) -> Vec<String>,
-    budget: Duration,
 ) -> Result<ApplicationExitOutcomeDto, CurrentGameError> {
+    let ExitResolution {
+        departure_id,
+        action,
+        selected_path,
+        budget,
+    } = request;
     if matches!(action, ApplicationExitActionDto::Cancel) {
         let cancelled = state.cancel_replacement(departure_id)?;
         return Ok(ApplicationExitOutcomeDto {
@@ -383,7 +402,6 @@ pub async fn resolve_document_replacement(
     app: AppHandle,
     state: State<'_, CurrentGameState>,
     manager: State<'_, ForegroundEngineManager>,
-    store: State<'_, Mutex<FileRecoveryStore>>,
     departure_id: u64,
     action: DocumentDepartureActionDto,
     selected_path: NodePath,
@@ -418,15 +436,18 @@ pub async fn resolve_document_replacement(
         let save_path = state.native_path();
         resolve_replacement(
             &state,
-            departure_id,
-            action,
-            selected_path,
+            ReplacementResolution {
+                departure_id,
+                action,
+                selected_path,
+            },
             &closed_jobs,
             cancel_job,
             wait_for_job,
             || Ok(save_path),
         )?
     };
+    let store = app.state::<Mutex<FileRecoveryStore>>();
     Ok(persist_replacement_outcome(&app, &state, &store, outcome))
 }
 
@@ -454,7 +475,6 @@ pub async fn resolve_application_exit(
     app: AppHandle,
     state: State<'_, CurrentGameState>,
     manager: State<'_, ForegroundEngineManager>,
-    store: State<'_, Mutex<FileRecoveryStore>>,
     departure_id: u64,
     action: ApplicationExitActionDto,
     selected_path: NodePath,
@@ -501,17 +521,20 @@ pub async fn resolve_application_exit(
         let save_path = state.native_path();
         resolve_exit(
             &state,
-            departure_id,
-            action,
-            selected_path,
+            ExitResolution {
+                departure_id,
+                action,
+                selected_path,
+                budget: APPLICATION_TEARDOWN_BUDGET,
+            },
             &closed_jobs,
             cancel_job,
             wait_for_job,
             || Ok(save_path),
             |budget| stop_foreground_resources(&manager, budget),
-            APPLICATION_TEARDOWN_BUDGET,
         )?
     };
+    let store = app.state::<Mutex<FileRecoveryStore>>();
     Ok(persist_exit_outcome(&state, &store, outcome))
 }
 
@@ -624,9 +647,11 @@ mod tests {
         let cancelled = RefCell::new(Vec::new());
         let outcome = resolve_replacement(
             &state,
-            id,
-            DocumentDepartureActionDto::Cancel,
-            opened.selected_path.clone(),
+            ReplacementResolution {
+                departure_id: id,
+                action: DocumentDepartureActionDto::Cancel,
+                selected_path: opened.selected_path.clone(),
+            },
             &[job("run-1", "job-1", AnalysisJobLaneDto::SelectedNode)],
             |job| {
                 cancelled.borrow_mut().push(job.job_id.clone());
@@ -653,9 +678,11 @@ mod tests {
         let cancelled = RefCell::new(Vec::new());
         let outcome = resolve_replacement(
             &state,
-            id,
-            DocumentDepartureActionDto::Discard,
-            opened.selected_path,
+            ReplacementResolution {
+                departure_id: id,
+                action: DocumentDepartureActionDto::Discard,
+                selected_path: opened.selected_path,
+            },
             &[job("run-1", "job-1", AnalysisJobLaneDto::SelectedNode)],
             |job| {
                 cancelled.borrow_mut().push(job.job_id.clone());
@@ -686,9 +713,11 @@ mod tests {
         let cancelled = RefCell::new(Vec::new());
         let outcome = resolve_replacement(
             &state,
-            id,
-            DocumentDepartureActionDto::Save,
-            opened.selected_path.clone(),
+            ReplacementResolution {
+                departure_id: id,
+                action: DocumentDepartureActionDto::Save,
+                selected_path: opened.selected_path.clone(),
+            },
             &[job("run-1", "job-1", AnalysisJobLaneDto::SelectedNode)],
             |job| {
                 cancelled.borrow_mut().push(job.job_id.clone());
@@ -718,9 +747,11 @@ mod tests {
         let id = departure_id(state.prepare_replacement(EMPTY, None).unwrap());
         let outcome = resolve_replacement(
             &state,
-            id,
-            DocumentDepartureActionDto::Save,
-            opened.selected_path.clone(),
+            ReplacementResolution {
+                departure_id: id,
+                action: DocumentDepartureActionDto::Save,
+                selected_path: opened.selected_path.clone(),
+            },
             &[],
             |_| Ok(()),
             wait_succeeds,
@@ -745,9 +776,11 @@ mod tests {
         let id = departure_id(state.prepare_replacement(EMPTY, None).unwrap());
         let outcome = resolve_replacement(
             &state,
-            id,
-            DocumentDepartureActionDto::Save,
-            opened.selected_path,
+            ReplacementResolution {
+                departure_id: id,
+                action: DocumentDepartureActionDto::Save,
+                selected_path: opened.selected_path,
+            },
             &[],
             |_| Ok(()),
             wait_succeeds,
@@ -786,9 +819,12 @@ mod tests {
         let torn_down = RefCell::new(false);
         let outcome = resolve_exit(
             &state,
-            id,
-            ApplicationExitActionDto::Cancel,
-            opened.selected_path.clone(),
+            ExitResolution {
+                departure_id: id,
+                action: ApplicationExitActionDto::Cancel,
+                selected_path: opened.selected_path.clone(),
+                budget: Duration::from_secs(10),
+            },
             &[job("run-1", "job-1", AnalysisJobLaneDto::SelectedNode)],
             |job| {
                 cancelled.borrow_mut().push(job.job_id.clone());
@@ -800,7 +836,6 @@ mod tests {
                 *torn_down.borrow_mut() = true;
                 Vec::new()
             },
-            Duration::from_secs(10),
         )
         .unwrap();
         assert!(!outcome.committed);
@@ -823,9 +858,12 @@ mod tests {
         let torn_down = RefCell::new(false);
         let outcome = resolve_exit(
             &state,
-            id,
-            ApplicationExitActionDto::Save,
-            opened.selected_path.clone(),
+            ExitResolution {
+                departure_id: id,
+                action: ApplicationExitActionDto::Save,
+                selected_path: opened.selected_path.clone(),
+                budget: Duration::from_secs(10),
+            },
             &[job("run-1", "job-1", AnalysisJobLaneDto::SelectedNode)],
             |job| {
                 cancelled.borrow_mut().push(job.job_id.clone());
@@ -837,7 +875,6 @@ mod tests {
                 *torn_down.borrow_mut() = true;
                 Vec::new()
             },
-            Duration::from_secs(10),
         )
         .unwrap();
         assert!(!outcome.committed);
@@ -861,9 +898,12 @@ mod tests {
         let torn_down = RefCell::new(false);
         let outcome = resolve_exit(
             &state,
-            id,
-            ApplicationExitActionDto::Save,
-            opened.selected_path.clone(),
+            ExitResolution {
+                departure_id: id,
+                action: ApplicationExitActionDto::Save,
+                selected_path: opened.selected_path.clone(),
+                budget: Duration::from_secs(10),
+            },
             &[],
             |_| Ok(()),
             wait_succeeds,
@@ -872,7 +912,6 @@ mod tests {
                 *torn_down.borrow_mut() = true;
                 Vec::new()
             },
-            Duration::from_secs(10),
         )
         .unwrap();
         assert!(!outcome.committed);
@@ -895,9 +934,12 @@ mod tests {
 
         let outcome = resolve_exit(
             &state,
-            id,
-            ApplicationExitActionDto::Save,
-            opened.selected_path,
+            ExitResolution {
+                departure_id: id,
+                action: ApplicationExitActionDto::Save,
+                selected_path: opened.selected_path,
+                budget,
+            },
             &[],
             |_| Ok(()),
             wait_succeeds,
@@ -909,7 +951,6 @@ mod tests {
                 *observed_budget.borrow_mut() = Some(received);
                 Vec::new()
             },
-            budget,
         )
         .unwrap();
 
@@ -927,15 +968,17 @@ mod tests {
         let clean_id = departure_id(clean.prepare_exit().unwrap());
         let clean_outcome = resolve_exit(
             &clean,
-            clean_id,
-            ApplicationExitActionDto::Continue,
-            opened.selected_path.clone(),
+            ExitResolution {
+                departure_id: clean_id,
+                action: ApplicationExitActionDto::Continue,
+                selected_path: opened.selected_path.clone(),
+                budget: Duration::from_secs(10),
+            },
             &[job("run-1", "job-1", AnalysisJobLaneDto::SelectedNode)],
             |_| Ok(()),
             wait_succeeds,
             || panic!("clean exit must not save"),
             |_| Vec::new(),
-            Duration::from_secs(10),
         )
         .unwrap();
         assert!(clean_outcome.committed);
@@ -963,15 +1006,17 @@ mod tests {
         let dirty_id = departure_id(dirty.prepare_exit().unwrap());
         let discarded = resolve_exit(
             &dirty,
-            dirty_id,
-            ApplicationExitActionDto::Discard,
-            opened.selected_path,
+            ExitResolution {
+                departure_id: dirty_id,
+                action: ApplicationExitActionDto::Discard,
+                selected_path: opened.selected_path,
+                budget: Duration::from_secs(10),
+            },
             &[job("run-1", "job-1", AnalysisJobLaneDto::SelectedNode)],
             |_| Ok(()),
             wait_succeeds,
             || panic!("discard must not save"),
             |_| Vec::new(),
-            Duration::from_secs(10),
         )
         .unwrap();
         assert_eq!(fs::read_to_string(&source).unwrap(), before);
@@ -1023,9 +1068,12 @@ mod tests {
         let attempts = RefCell::new(0_u8);
         let outcome = resolve_exit(
             &state,
-            id,
-            ApplicationExitActionDto::Continue,
-            opened.selected_path.clone(),
+            ExitResolution {
+                departure_id: id,
+                action: ApplicationExitActionDto::Continue,
+                selected_path: opened.selected_path.clone(),
+                budget: Duration::from_millis(40),
+            },
             &[],
             |_| Ok(()),
             wait_succeeds,
@@ -1034,7 +1082,6 @@ mod tests {
                 *attempts.borrow_mut() += 1;
                 vec!["foreground engine".to_string()]
             },
-            Duration::from_millis(40),
         )
         .unwrap();
         assert_eq!(
@@ -1079,15 +1126,17 @@ mod tests {
         let id = departure_id(incomplete.prepare_exit().unwrap());
         resolve_exit(
             &incomplete,
-            id,
-            ApplicationExitActionDto::Continue,
-            opened.selected_path.clone(),
+            ExitResolution {
+                departure_id: id,
+                action: ApplicationExitActionDto::Continue,
+                selected_path: opened.selected_path.clone(),
+                budget: Duration::from_secs(10),
+            },
             &[],
             |_| Ok(()),
             wait_succeeds,
             || panic!("clean exit must not save"),
             |_| vec!["foreground engine".to_string()],
-            Duration::from_secs(10),
         )
         .unwrap();
         let forced = exit_anyway(
@@ -1152,9 +1201,11 @@ mod cancellation_failure_tests {
 
         let outcome = resolve_replacement(
             &state,
-            id,
-            DocumentDepartureActionDto::Save,
-            opened.selected_path.clone(),
+            ReplacementResolution {
+                departure_id: id,
+                action: DocumentDepartureActionDto::Save,
+                selected_path: opened.selected_path.clone(),
+            },
             &[continuous_job()],
             |_| Ok(()),
             |_, _| Err("target final did not arrive".to_string()),
@@ -1185,9 +1236,12 @@ mod cancellation_failure_tests {
 
         let outcome = resolve_exit(
             &state,
-            id,
-            ApplicationExitActionDto::Save,
-            opened.selected_path,
+            ExitResolution {
+                departure_id: id,
+                action: ApplicationExitActionDto::Save,
+                selected_path: opened.selected_path,
+                budget: APPLICATION_TEARDOWN_BUDGET,
+            },
             &[continuous_job()],
             |_| {
                 order.borrow_mut().push("cancel");
@@ -1205,7 +1259,6 @@ mod cancellation_failure_tests {
                 order.borrow_mut().push("teardown");
                 Vec::new()
             },
-            APPLICATION_TEARDOWN_BUDGET,
         )
         .unwrap();
 
@@ -1232,9 +1285,11 @@ mod cancellation_failure_tests {
 
         let outcome = resolve_replacement(
             &state,
-            id,
-            DocumentDepartureActionDto::Save,
-            opened.selected_path,
+            ReplacementResolution {
+                departure_id: id,
+                action: DocumentDepartureActionDto::Save,
+                selected_path: opened.selected_path,
+            },
             &[continuous_job()],
             |_| {
                 order.borrow_mut().push("cancel");
@@ -1272,9 +1327,11 @@ mod cancellation_failure_tests {
 
         let outcome = resolve_replacement(
             &state,
-            id,
-            DocumentDepartureActionDto::Save,
-            opened.selected_path,
+            ReplacementResolution {
+                departure_id: id,
+                action: DocumentDepartureActionDto::Save,
+                selected_path: opened.selected_path,
+            },
             &[continuous_job(), whole],
             |job| {
                 dispatched.borrow_mut().push(job.job_id.clone());

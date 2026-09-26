@@ -260,6 +260,7 @@ impl CurrentGameState {
         })
     }
 
+    #[cfg(test)]
     pub fn application_exit_disposition(&self) -> Option<ApplicationExitDispositionDto> {
         self.holder.lock().expect("current game state").exit_disposition
     }

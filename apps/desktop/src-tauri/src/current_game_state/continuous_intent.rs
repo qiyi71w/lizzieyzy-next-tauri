@@ -860,9 +860,11 @@ fn paused_task_does_not_resume_after_departure_save_cancellation_or_failure() {
         };
         let outcome = crate::document_departure::resolve_replacement(
             &state,
-            departure_id,
-            app_model::DocumentDepartureActionDto::Save,
-            opened.selected_path.clone(),
+            crate::document_departure::ReplacementResolution {
+                departure_id,
+                action: app_model::DocumentDepartureActionDto::Save,
+                selected_path: opened.selected_path.clone(),
+            },
             &[],
             |job| {
                 engine
@@ -941,9 +943,11 @@ fn task_pause_cleanup_failure_aborts_departure_and_retains_game() {
         let save_called = std::cell::Cell::new(false);
         let outcome = crate::document_departure::resolve_replacement(
             &state,
-            departure_id,
-            app_model::DocumentDepartureActionDto::Save,
-            opened.selected_path,
+            crate::document_departure::ReplacementResolution {
+                departure_id,
+                action: app_model::DocumentDepartureActionDto::Save,
+                selected_path: opened.selected_path,
+            },
             &[],
             |job| {
                 engine

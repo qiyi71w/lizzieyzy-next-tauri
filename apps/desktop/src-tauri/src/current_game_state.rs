@@ -253,6 +253,7 @@ impl CurrentGameState {
         self.with_document(|document| Ok(document.mainline_projection()))
     }
 
+    #[cfg(test)]
     pub fn admit_whole_game(&self, generation: u64) -> Result<WholeGameAdmission, CurrentGameError> {
         let holder = self.holder.lock().expect("current game state");
         holder.analysis_scope_admission(
@@ -274,7 +275,7 @@ impl CurrentGameState {
         run_id: String,
         generation: u64,
         max_visits: u32,
-    ) -> Result<AnalysisJobStartedDto, app_model::EngineFailureDto> {
+    ) -> crate::EngineCommandResult<AnalysisJobStartedDto> {
         let holder = self.holder.lock().expect("current game state");
         let scope = app_model::AnalysisScopeDto {
             mode: app_model::AnalysisScopeModeDto::FirstChildMainline,
@@ -294,6 +295,7 @@ impl CurrentGameState {
             generation,
             work_items,
         })
+        .map_err(Box::new)
     }
 
     pub fn preview_analysis_scope(
@@ -313,9 +315,10 @@ impl CurrentGameState {
         run_id: String,
         preview: app_model::AnalysisScopePreviewDto,
         conditions: app_model::AnalysisStageConditionsDto,
-    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
-        let invalid =
-            |message| crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message);
+    ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
+        let invalid = |message| {
+            Box::new(crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message))
+        };
         conditions.validate_single_stage().map_err(&invalid)?;
         // Keep semantic revalidation and manager admission under the same owner lock.
         let holder = self.holder.lock().expect("current game state");
@@ -337,6 +340,7 @@ impl CurrentGameState {
             preview.scope,
             conditions,
         )
+        .map_err(Box::new)
     }
 
     pub fn start_all_positions_analysis_task(
@@ -346,9 +350,10 @@ impl CurrentGameState {
         preview: app_model::AnalysisScopePreviewDto,
         overview_conditions: app_model::AnalysisStageConditionsDto,
         deep_conditions: app_model::AnalysisStageConditionsDto,
-    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
-        let invalid =
-            |message| crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message);
+    ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
+        let invalid = |message| {
+            Box::new(crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message))
+        };
         app_model::AnalysisStageConditionsDto::validate_all_positions_two_stage(
             &overview_conditions,
             &deep_conditions,
@@ -375,6 +380,7 @@ impl CurrentGameState {
             overview_conditions,
             deep_conditions,
         )
+        .map_err(Box::new)
     }
 
     pub fn start_swing_analysis_task(
@@ -384,9 +390,10 @@ impl CurrentGameState {
         preview: app_model::AnalysisScopePreviewDto,
         overview_conditions: app_model::AnalysisStageConditionsDto,
         deep_conditions: app_model::AnalysisStageConditionsDto,
-    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
-        let invalid =
-            |message| crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message);
+    ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
+        let invalid = |message| {
+            Box::new(crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message))
+        };
         overview_conditions.validate_single_stage().map_err(&invalid)?;
         deep_conditions.validate_single_stage().map_err(&invalid)?;
         let criteria = preview
@@ -419,6 +426,7 @@ impl CurrentGameState {
             overview_conditions,
             deep_conditions,
         })
+        .map_err(Box::new)
     }
 
     pub fn pause_analysis_task(
@@ -426,7 +434,7 @@ impl CurrentGameState {
         manager: &engine_manager::ForegroundEngineManager,
         run_id: &str,
         task_id: &str,
-    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
+    ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
         // The holder lock orders Pause against attachment of already queued events.
         let mut holder = self.holder.lock().expect("current game state");
         let task = manager.pause_analysis_task(run_id, task_id)?;
@@ -441,12 +449,13 @@ impl CurrentGameState {
         manager: &engine_manager::ForegroundEngineManager,
         run_id: &str,
         task_id: &str,
-    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
+    ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
         let holder = self.holder.lock().expect("current game state");
         holder.ensure_editable().map_err(|error| {
             crate::job_failure(run_id, app_model::EngineFailureKind::InvalidState, error.message)
         })?;
         manager.continue_analysis_task(run_id, task_id, holder.generation)
+            .map_err(Box::new)
     }
 
     pub fn admit_selected_node(
@@ -1141,10 +1150,6 @@ impl CurrentGameHolder {
         self.refresh_dirty();
     }
 
-    fn mark_dirty(&mut self) {
-        self.mark_nonhistory_change();
-    }
-
     fn content_version(&self) -> ContentVersion {
         ContentVersion {
             edit: self.edit_revision,
@@ -1630,7 +1635,7 @@ mod current_game_remove_variation {
 #[cfg(test)]
 impl CurrentGameState {
     pub(crate) fn force_dirty(&self) {
-        self.holder.lock().expect("current game state").mark_dirty();
+        self.holder.lock().expect("current game state").mark_nonhistory_change();
     }
 
     fn save_to_path_after_hook(

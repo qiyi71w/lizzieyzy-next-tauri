@@ -61,6 +61,8 @@ use uuid::Uuid;
 const ENGINE_PROFILE_FILE: &str = "lizzieyzy-next-engine-profile.json";
 const DEFAULT_PROVIDER_HTTP_TIMEOUT_MS: u64 = 30_000;
 
+type EngineCommandResult<T> = Result<T, Box<EngineFailureDto>>;
+
 #[derive(Debug, Default)]
 struct ReqwestProviderTransport;
 
@@ -691,7 +693,7 @@ fn trial_start_finite(
     revision: u64,
     run_id: String,
     max_visits: u32,
-) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+) -> EngineCommandResult<AnalysisJobStartedDto> {
     state.trial_start_finite(&manager, session_id, revision, run_id, max_visits)
 }
 
@@ -822,18 +824,20 @@ fn bind_selected_node_job(
     node_path: NodePath,
     mode: AnalysisJobModeDto,
     max_visits: Option<u32>,
-) -> Result<SelectedNodeJobRequest, EngineFailureDto> {
+) -> EngineCommandResult<SelectedNodeJobRequest> {
     let (snapshot, board_width, board_height, komi, rules) = current_game
         .admit_selected_node(generation, &node_path)
-        .map_err(|error| EngineFailureDto {
-            operation: EngineOperationDto::Job,
-            run_id: Some(run_id.clone()),
-            switch_id: None,
-            job_id: None,
-            profile_id: None,
-            kind: EngineFailureKind::InvalidState,
-            message: error.message,
-            diagnostic_summary: None,
+        .map_err(|error| {
+            Box::new(EngineFailureDto {
+                operation: EngineOperationDto::Job,
+                run_id: Some(run_id.clone()),
+                switch_id: None,
+                job_id: None,
+                profile_id: None,
+                kind: EngineFailureKind::InvalidState,
+                message: error.message,
+                diagnostic_summary: None,
+            })
         })?;
     let mut request = continuous_analysis::position_request(
         generation,
@@ -844,15 +848,17 @@ fn bind_selected_node_job(
         komi,
         rules,
     )
-    .map_err(|error| EngineFailureDto {
-        operation: EngineOperationDto::Job,
-        run_id: Some(run_id.clone()),
-        switch_id: None,
-        job_id: None,
-        profile_id: None,
-        kind: EngineFailureKind::Protocol,
-        message: error.to_string(),
-        diagnostic_summary: None,
+    .map_err(|error| {
+        Box::new(EngineFailureDto {
+            operation: EngineOperationDto::Job,
+            run_id: Some(run_id.clone()),
+            switch_id: None,
+            job_id: None,
+            profile_id: None,
+            kind: EngineFailureKind::Protocol,
+            message: error.to_string(),
+            diagnostic_summary: None,
+        })
     })?;
     request.run_id = run_id;
     request.mode = mode;
@@ -868,15 +874,17 @@ fn foreground_engine_start_selected_node(
     generation: u64,
     node_path: NodePath,
     max_visits: u32,
-) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
-    manager.start_selected_node_job(bind_selected_node_job(
-        &current_game,
-        run_id,
-        generation,
-        node_path,
-        AnalysisJobModeDto::Finite,
-        Some(max_visits),
-    )?)
+) -> EngineCommandResult<AnalysisJobStartedDto> {
+    manager
+        .start_selected_node_job(bind_selected_node_job(
+            &current_game,
+            run_id,
+            generation,
+            node_path,
+            AnalysisJobModeDto::Finite,
+            Some(max_visits),
+        )?)
+        .map_err(Box::new)
 }
 
 fn cancel_document_analysis_job(
@@ -884,13 +892,13 @@ fn cancel_document_analysis_job(
     manager: &ForegroundEngineManager,
     run_id: &str,
     job_id: &str,
-) -> Result<(), EngineFailureDto> {
+) -> EngineCommandResult<()> {
     for job in document_departure::jobs_from_snapshot(&manager.snapshot()) {
         if job.run_id == run_id && job.job_id == job_id {
             current_game.seal_job(&job);
         }
     }
-    manager.cancel_job(run_id, job_id)
+    manager.cancel_job(run_id, job_id).map_err(Box::new)
 }
 
 #[tauri::command]
@@ -899,7 +907,7 @@ fn foreground_engine_cancel_job(
     current_game: State<'_, CurrentGameState>,
     run_id: String,
     job_id: String,
-) -> Result<(), EngineFailureDto> {
+) -> EngineCommandResult<()> {
     cancel_document_analysis_job(&current_game, &manager, &run_id, &job_id)
 }
 
@@ -920,7 +928,7 @@ fn whole_game_work_items(
     admitted: &WholeGameAdmission,
     max_visits: u32,
     run_id: &str,
-) -> Result<Vec<WholeGameWorkItem>, EngineFailureDto> {
+) -> EngineCommandResult<Vec<WholeGameWorkItem>> {
     admitted
         .nodes
         .iter()
@@ -940,7 +948,7 @@ fn whole_game_work_items(
                     include_policy: Some(true),
                 },
             )
-            .map_err(|error| job_failure(run_id, EngineFailureKind::Protocol, error.to_string()))?;
+            .map_err(|error| Box::new(job_failure(run_id, EngineFailureKind::Protocol, error.to_string())))?;
             Ok(WholeGameWorkItem {
                 node_path: snapshot.path.clone(),
                 query,
@@ -959,7 +967,7 @@ fn katago_start_analyze_game(
     run_id: String,
     generation: u64,
     max_visits: u32,
-) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+) -> EngineCommandResult<AnalysisJobStartedDto> {
     current_game.start_first_child_analysis(&manager, run_id, generation, max_visits)
 }
 
@@ -982,7 +990,7 @@ fn start_analysis_task(
     strategy: app_model::AnalysisTaskStrategyDto,
     conditions: app_model::AnalysisStageConditionsDto,
     overview_conditions: Option<app_model::AnalysisStageConditionsDto>,
-) -> Result<app_model::AnalysisTaskDto, EngineFailureDto> {
+) -> EngineCommandResult<app_model::AnalysisTaskDto> {
     match strategy {
         app_model::AnalysisTaskStrategyDto::SingleStage => {
             current_game.start_analysis_task(&manager, run_id, preview, conditions)
@@ -1027,7 +1035,7 @@ fn pause_analysis_task(
     current_game: State<'_, CurrentGameState>,
     run_id: String,
     task_id: String,
-) -> Result<app_model::AnalysisTaskDto, EngineFailureDto> {
+) -> EngineCommandResult<app_model::AnalysisTaskDto> {
     current_game.pause_analysis_task(&manager, &run_id, &task_id)
 }
 
@@ -1037,7 +1045,7 @@ fn continue_analysis_task(
     current_game: State<'_, CurrentGameState>,
     run_id: String,
     task_id: String,
-) -> Result<app_model::AnalysisTaskDto, EngineFailureDto> {
+) -> EngineCommandResult<app_model::AnalysisTaskDto> {
     current_game.continue_analysis_task(&manager, &run_id, &task_id)
 }
 
@@ -1047,7 +1055,7 @@ fn katago_cancel_analysis(
     current_game: State<'_, CurrentGameState>,
     run_id: String,
     job_id: String,
-) -> Result<(), EngineFailureDto> {
+) -> EngineCommandResult<()> {
     cancel_document_analysis_job(&current_game, &manager, &run_id, &job_id)
 }
 
@@ -1222,26 +1230,26 @@ fn foreground_engine_snapshot(manager: State<'_, ForegroundEngineManager>) -> Fo
 fn foreground_engine_start(
     manager: State<'_, ForegroundEngineManager>,
     profile_id: String,
-) -> Result<(), EngineFailureDto> {
-    manager.start(&profile_id)
+) -> EngineCommandResult<()> {
+    manager.start(&profile_id).map_err(Box::new)
 }
 
 #[tauri::command]
-fn foreground_engine_stop(manager: State<'_, ForegroundEngineManager>) -> Result<(), EngineFailureDto> {
-    manager.stop()
+fn foreground_engine_stop(manager: State<'_, ForegroundEngineManager>) -> EngineCommandResult<()> {
+    manager.stop().map_err(Box::new)
 }
 
 #[tauri::command]
-fn foreground_engine_restart(manager: State<'_, ForegroundEngineManager>) -> Result<(), EngineFailureDto> {
-    manager.restart()
+fn foreground_engine_restart(manager: State<'_, ForegroundEngineManager>) -> EngineCommandResult<()> {
+    manager.restart().map_err(Box::new)
 }
 
 #[tauri::command]
 fn foreground_engine_switch(
     manager: State<'_, ForegroundEngineManager>,
     profile_id: String,
-) -> Result<(), EngineFailureDto> {
-    manager.switch_to(&profile_id)
+) -> EngineCommandResult<()> {
+    manager.switch_to(&profile_id).map_err(Box::new)
 }
 
 pub fn run() {
