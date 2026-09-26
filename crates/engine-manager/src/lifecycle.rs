@@ -2617,11 +2617,13 @@ impl Inner {
             return None;
         }
         if has_result && !has_data {
-            drop(state);
-            self.fail_unresponsive_run(
-                run_id,
-                "selected-node response contained invalid analysis values or geometry",
+            let (board_width, board_height) = (state.jobs[index].board_width, state.jobs[index].board_height);
+            let diagnostic = format!(
+                "selected-node response contained invalid analysis values or geometry; run={run_id} job={} query={response_id} board={board_width}x{board_height} raw={trimmed}",
+                started.job_id
             );
+            drop(state);
+            self.fail_unresponsive_run(run_id, &diagnostic);
             return None;
         }
         if started.mode == AnalysisJobModeDto::Continuous {
