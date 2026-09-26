@@ -1051,15 +1051,18 @@ mod tests {
 
         let checks = check_assets(&profile);
 
-        assert_eq!(checks[0].path, working_dir.join(engine_path).to_string_lossy());
+        assert_eq!(
+            std::fs::canonicalize(&checks[0].path).unwrap(),
+            std::fs::canonicalize(working_dir.join(&engine_path)).unwrap()
+        );
         assert_eq!(checks[1].path, working_dir.to_string_lossy());
         assert_eq!(
-            checks[2].path,
-            working_dir.join("models").join("model.bin").to_string_lossy()
+            std::fs::canonicalize(&checks[2].path).unwrap(),
+            std::fs::canonicalize(working_dir.join("models").join("model.bin")).unwrap()
         );
         assert_eq!(
-            checks[3].path,
-            working_dir.join("configs").join("analysis.cfg").to_string_lossy()
+            std::fs::canonicalize(&checks[3].path).unwrap(),
+            std::fs::canonicalize(working_dir.join("configs").join("analysis.cfg")).unwrap()
         );
         assert!(checks[0].exists);
         assert!(checks[1].exists);
@@ -1149,19 +1152,21 @@ mod tests {
         let spec = build_command_spec(&profile).unwrap();
 
         assert_eq!(
-            spec.program,
-            working_dir.join("bin").join("katago").to_string_lossy()
+            std::fs::canonicalize(&spec.program).unwrap(),
+            std::fs::canonicalize(working_dir.join("bin").join("katago")).unwrap()
         );
         assert_eq!(spec.working_dir.as_deref(), Some(working_dir.to_str().unwrap()));
+        assert_eq!(spec.args.len(), 5);
+        assert_eq!(spec.args[0], "analysis");
+        assert_eq!(spec.args[1], "-config");
         assert_eq!(
-            spec.args,
-            vec![
-                "analysis",
-                "-config",
-                working_dir.join("configs").join("analysis.cfg").to_str().unwrap(),
-                "-model",
-                working_dir.join("models").join("model.bin").to_str().unwrap(),
-            ]
+            std::fs::canonicalize(&spec.args[2]).unwrap(),
+            std::fs::canonicalize(working_dir.join("configs").join("analysis.cfg")).unwrap()
+        );
+        assert_eq!(spec.args[3], "-model");
+        assert_eq!(
+            std::fs::canonicalize(&spec.args[4]).unwrap(),
+            std::fs::canonicalize(working_dir.join("models").join("model.bin")).unwrap()
         );
     }
 
