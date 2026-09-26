@@ -252,13 +252,11 @@ mod tests {
             Path::new("C:/requesting cwd"),
         );
 
-        assert_eq!(
+        assert!(matches!(
             owner.take_startup(),
-            Some(FileActivationDeliveryDto::Open {
-                request_id: 1,
-                path: "C:/requesting cwd/棋谱 files/game one.gib".to_string(),
-            })
-        );
+            Some(FileActivationDeliveryDto::Open { request_id: 1, path })
+                if Path::new(&path) == Path::new("C:/requesting cwd/棋谱 files/game one.gib")
+        ));
         assert_eq!(owner.take_startup(), None);
     }
 
@@ -311,13 +309,11 @@ mod tests {
             owner.admit_warm(args(&["app", "two.sgf"]), Path::new("D:/source")),
             WarmAdmission::Rejected(_)
         ));
-        assert_eq!(
+        assert!(matches!(
             owner.take_warm(),
-            Some(FileActivationDeliveryDto::Open {
-                request_id: 1,
-                path: "D:/source/one.sgf".to_string(),
-            })
-        );
+            Some(FileActivationDeliveryDto::Open { request_id: 1, path })
+                if Path::new(&path) == Path::new("D:/source/one.sgf")
+        ));
         assert_eq!(owner.take_warm(), None);
     }
 

@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { acceptedMoveSound } from "./domain/acceptedMoveSound";
+import { playMoveSound } from "./domain/moveSound";
 import { BoardCanvas } from "./components/BoardCanvas";
+import { ScoringControls } from "./components/ScoringControls";
 import { WinrateChart } from "./components/WinrateChart";
+import { ReviewTree } from "./components/ReviewTree";
+import { reviewLineProblems, type ReviewProblem } from "./domain/reviewNavigation";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import { EngineSetupPanel } from "./components/EngineSetupPanel";
 import { AppChrome, BottomBar, type ContinuousAnalysisAction, type OverlayMode, type SheetId } from "./components/AppChrome";
@@ -11,13 +16,22 @@ import { ApplicationTeardownDialog } from "./components/ApplicationTeardownDialo
 import { CurrentGameRecoveryDialog } from "./components/CurrentGameRecoveryDialog";
 import { AnalysisTaskPanel, type AnalysisScopeDraft } from "./components/AnalysisTaskPanel";
 import { ProviderPanel } from "./components/ProviderPanel";
+import { NewDocumentDialog } from "./components/NewDocumentDialog";
+import { GameMetadataDialog } from "./components/GameMetadataDialog";
 import {
   analysisTaskSnapshot,
+  applyRootSetup,
   cancelKataGoAnalysis,
   continueAnalysisTask,
   cancelSelectedNodeAnalysis,
+  convertToRootSetup,
   classifyProblems,
   fakeAnalyze,
+  enterTrial,
+  exitTrial,
+  enterScoring,
+  updateScoring,
+  exitScoring,
   foregroundEngineContinuousAction,
   getHealth,
   isTauriRuntime,
@@ -33,6 +47,7 @@ import {
   subscribeFileActivationAvailable,
   subscribeFileActivationRejected,
   parseSgfSummary,
+  editCurrentGameMarkup,
   playCurrentGame,
   prepareApplicationExit,
   prepareDocumentReplacement,
@@ -56,7 +71,16 @@ import {
   serializeCurrentGame,
   selectCurrentGameNode,
   setCurrentGamePersonalComment,
+  setCurrentGameMetadata,
   removeCurrentGameVariation,
+  promoteCurrentGameToMain,
+  subscribeTrialAnalysis,
+  trialPlay,
+  trialSelect,
+  trialStartFinite,
+  trialUndo,
+  undoCurrentGame,
+  redoCurrentGame,
   startAnalysisTask,
   startKataGoGameAnalysis,
   startSelectedNodeAnalysis,
@@ -77,7 +101,7 @@ import {
   runFromSnapshot,
   shouldAcceptFailureEvent
 } from "./domain/foregroundEngine";
-import { loadAppPreferences, saveAppPreferences } from "./api/preferences";
+import { loadAppPreferences, saveAppPreferences, updateRecentGameHistory } from "./api/preferences";
 import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition } from "./domain/board";
 import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "./domain/preferences";
 import { buildNextMoveReviewMarkers, cycleNextMoveReviewMarker } from "./domain/nextMoveReviewMarker";
@@ -100,10 +124,10 @@ import {
   variationReplayIdentityKey,
   variationReplayPointSteps
 } from "./domain/variationReplay";
-import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, AnalysisTaskStrategyDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, FileActivationDeliveryDto, ForegroundEngineSnapshotDto, GameDto, GameFileImportDto, MoveVertex, NodePath, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, SgfTreeNodeDto } from "./domain/types";
+import { newDocumentSgf, type NewDocumentParameters } from "./domain/newDocument";
+import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, AnalysisTaskStrategyDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, FileActivationDeliveryDto, ForegroundEngineSnapshotDto, GameDto, GameFileImportDto, MoveVertex, NodePath, PlayerColor, PointDto, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, ScoringActionDto, ScoringSessionDto, SelectedNodeSnapshotDto, SgfMarkupActionDto, SgfMarkupToolDto, SgfTreeNodeDto, StoneDto, TrialSessionDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
-const emptySgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
 const demoGame = createDemoGame();
 const emptyChartRoot: SgfTreeNodeDto = { properties: [], children: [] };
 type WholeGameProgress = { completed: number; expected: number; remaining: number };
@@ -120,7 +144,9 @@ type ReplacementOptions = {
   fallbackName?: string | null;
   successMessage: (projection: GameDto, fileName: string) => string;
   failurePrefix: string;
+  openedPath?: string | null;
 };
+type RootSetupDraft = { generation: number; stones: StoneDto[]; toPlay: PlayerColor; tool: PlayerColor | "erase" };
 const defaultAnalysisScopeDraft: AnalysisScopeDraft = {
   strategy: "all_positions_two_stage",
   mode: "first_child_mainline",
@@ -181,14 +207,47 @@ export function App() {
   const [fallbackFileName, setFallbackFileName] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [currentGame, setCurrentGame] = useState<CurrentGameResultDto | null>(null);
+  const [rootSetupDraft, setRootSetupDraft] = useState<RootSetupDraft | null>(null);
+  const [conversionPrompt, setConversionPrompt] = useState<{ generation: number; path: NodePath } | null>(null);
+  const [trial, setTrial] = useState<TrialSessionDto | null>(null);
+  const trialRef = useRef<TrialSessionDto | null>(null);
+  const [trialPending, setTrialPending] = useState(false);
+  const trialTransitionRef = useRef(false);
+  const [scoring, setScoring] = useState<ScoringSessionDto | null>(null);
+  const scoringRef = useRef<ScoringSessionDto | null>(null);
+  const [scoringPending, setScoringPending] = useState(false);
+  const scoringPendingRef = useRef(false);
+  useEffect(() => {
+    if (!nativeRuntime) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void subscribeTrialAnalysis((next) => {
+      const current = trialRef.current;
+      if (!trialTransitionRef.current && current?.session_id === next.session_id && next.revision >= current.revision) {
+        adoptTrial(next);
+      }
+    }).then((stop) => { if (disposed) stop(); else unlisten = stop; });
+    return () => { disposed = true; unlisten?.(); };
+  }, [nativeRuntime]);
   const [chosenChildren, setChosenChildren] = useState<Map<string, number>>(() => new Map());
   const navigatingRef = useRef(false);
   const documentGenerationRef = useRef(0);
   const pendingSelectedPathRef = useRef<NodePath | null>(null);
+  const queuedSelectionRef = useRef<{ path: NodePath; generation: number; forward: boolean } | null>(null);
   const pendingBoardIntentRef = useRef<string | null>(null);
+  const [editActionPending, setEditActionPending] = useState(false);
+  const editActionPendingRef = useRef(false);
   const [preferences, setPreferences] = useState<AppPreferences>(() => defaultAppPreferences);
   const [preferencesStatus, setPreferencesStatus] = useState("正在载入设置…");
+  const [recentHistoryBusy, setRecentHistoryBusy] = useState(false);
+  const recentHistoryBusyRef = useRef(false);
+  const [recentHistoryError, setRecentHistoryError] = useState<string | null>(null);
+  const failedRecentActionRef = useRef<{ openedPath: string | null } | null>(null);
   const [sheet, setSheet] = useState<"none" | SheetId>("none");
+  const [newDocumentOpen, setNewDocumentOpen] = useState(false);
+  const [metadataDraft, setMetadataDraft] = useState<{
+    generation: number; blackName: string; whiteName: string; komi: number; handicap: string | null;
+  } | null>(null);
   const [engineSnapshot, setEngineSnapshot] = useState<ForegroundEngineSnapshotDto>(() => emptyForegroundEngineSnapshot());
   const [engineProfiles, setEngineProfiles] = useState<EngineProfileRecordDto[]>([]);
   const [engineFailure, setEngineFailure] = useState<EngineFailureDto | null>(null);
@@ -205,8 +264,7 @@ export function App() {
   );
   const engineLabel = engineStatusLabel(engineSnapshot);
   const engineReady = admitsForegroundEngineJobs(engineSnapshot);
-  const [showCoordinates, setShowCoordinates] = useState(true);
-  const [showMoveNumbers, setShowMoveNumbers] = useState(false);
+  const { showCoordinates, showMoveNumbers } = preferences;
   const [showBlackCandidates, setShowBlackCandidates] = useState(true);
   const [showWhiteCandidates, setShowWhiteCandidates] = useState(true);
   const [referenceRailCollapsed, setReferenceRailCollapsed] = useState(false);
@@ -215,6 +273,8 @@ export function App() {
   const [autoPlaying, setAutoPlaying] = useState(false);
   const [shortcutReferenceOpen, setShortcutReferenceOpen] = useState(false);
   const [keyboardPlacement, setKeyboardPlacement] = useState(false);
+  const [markupTool, setMarkupTool] = useState<"play" | SgfMarkupToolDto["kind"]>("play");
+  const [markupDialog, setMarkupDialog] = useState<{ point: PointDto; path: NodePath; generation: number; text: string } | null>(null);
   const [departurePrompt, setDeparturePrompt] = useState<{
     message: string;
     choose: (action: DocumentDepartureActionDto) => void;
@@ -230,6 +290,9 @@ export function App() {
   const [departurePending, setDeparturePending] = useState(false);
   const [fileFlowBusy, setFileFlowBusy] = useState(false);
   const fileFlowDepthRef = useRef(0);
+  const newDocumentFlowReservedRef = useRef(false);
+  const newDocumentAdmissionRef = useRef<Promise<void> | null>(null);
+  const newDocumentSubmittingRef = useRef(false);
   const pendingStartupActivationRef = useRef<Extract<FileActivationDeliveryDto, { kind: "open" }> | null>(null);
   const pendingStartupRejectionRef = useRef<string | null>(null);
   const importPickerActiveRef = useRef(false);
@@ -269,6 +332,10 @@ export function App() {
     getHealth()
       .then(setHealth)
       .catch((error: unknown) => setMessage(errorMessage(error)));
+  }, []);
+
+  useEffect(() => () => {
+    void releaseNewDocumentFlow(false);
   }, []);
 
   useEffect(() => {
@@ -392,25 +459,36 @@ export function App() {
     return () => input.removeEventListener("cancel", handleCancel);
   }, [sheet]);
 
+  const reviewGame = currentGame && trial ? {
+    ...currentGame, tree: trial.tree, selected_path: trial.selected_path,
+    snapshot: trial.snapshot, generation: trial.revision,
+    can_undo: trial.can_undo, can_redo: false
+  } : currentGame;
   const currentPosition = useMemo(() => {
-    if (currentGame) return currentGame.snapshot.position;
-    return selectExactPosition(positions, currentMove, game.summary.board_size);
-  }, [currentGame, currentMove, positions, game.summary.board_size]);
+    if (reviewGame) return reviewGame.snapshot.position;
+    return selectExactPosition(positions, currentMove, game.summary.board_width, game.summary.board_height);
+  }, [reviewGame, currentMove, positions, game.summary.board_width, game.summary.board_height]);
   currentGameRef.current = currentGame;
-  const selectedPersonalComment = currentGame ? currentGame.snapshot.personal_comment : "";
-  const selectedGeneratedInformation = currentGame?.snapshot.generated_information ?? null;
-  const selectedPath = currentGame?.selected_path ?? { indices: [] };
-  const selectedNode = currentGame ? nodeAt(currentGame.tree, selectedPath) : null;
+  const selectedPersonalComment = trial ? "" : currentGame ? currentGame.snapshot.personal_comment : "";
+  const selectedGeneratedInformation = trial ? null : currentGame?.snapshot.generated_information ?? null;
+  const selectedPath = reviewGame?.selected_path ?? { indices: [] };
+  const selectedNode = reviewGame ? nodeAt(reviewGame.tree, selectedPath) : null;
+  const blackName = currentGame
+    ? currentGame.tree.properties.find((property) => property.key === "PB")?.values[0]
+    : game.summary.black_name;
+  const whiteName = currentGame
+    ? currentGame.tree.properties.find((property) => property.key === "PW")?.values[0]
+    : game.summary.white_name;
   const selectedPathKey = selectedPath.indices.join(".");
   const activeScope = useMemo<ReviewPresentationScope>(() => ({
-    generation: currentGame?.generation ?? 0,
+    generation: reviewGame?.generation ?? 0,
     selectedPath: selectedPath.indices,
     requestToken: activeRequestToken
-  }), [currentGame?.generation, selectedPathKey, activeRequestToken]);
+  }), [reviewGame?.generation, selectedPathKey, activeRequestToken]);
   const presentationLive = publishedScope !== null && shouldPublishReviewPresentation(activeScope, publishedScope);
   const visibleFrames = useMemo(() => presentationLive ? frames : [], [presentationLive, frames]);
   const visibleProblems = useMemo(() => presentationLive ? problems : [], [presentationLive, problems]);
-  const treeFrame = currentGame?.snapshot.primary_analysis ?? undefined;
+  const treeFrame = reviewGame?.snapshot.primary_analysis ?? undefined;
   const currentFrame = useMemo(
     () => {
       const sessionFrame = visibleFrames.length <= 1
@@ -477,27 +555,32 @@ export function App() {
     replaySteps.length
   ]);
   const parentOfSelected = parentPath(selectedPath);
-  const parentNode = currentGame && parentOfSelected ? nodeAt(currentGame.tree, parentOfSelected) : null;
+  const parentNode = reviewGame && parentOfSelected ? nodeAt(reviewGame.tree, parentOfSelected) : null;
   const siblingIndex = selectedPath.indices.at(-1);
-  const canParent = Boolean(currentGame && parentOfSelected);
-  const canRemoveVariation = Boolean(nativeRuntime && currentGame && selectedPath.indices.length > 0);
-  const canNext = Boolean(selectedNode && selectedNode.children.length > 0);
-  const canPrevSibling = Boolean(parentNode && siblingIndex !== undefined && siblingIndex > 0);
-  const canNextSibling = Boolean(parentNode && siblingIndex !== undefined && siblingIndex + 1 < parentNode.children.length);
+  const canParent = Boolean(!scoring && !scoringPending && reviewGame && parentOfSelected);
+  const canRemoveVariation = Boolean(nativeRuntime && !trial && !trialPending && !scoring && !scoringPending && currentGame && selectedPath.indices.length > 0);
+  const canRootSetup = nativeRuntime && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending && selectedPath.indices.length === 0
+    && currentGame?.tree.children.length === 0 && !rootSetupDraft && !conversionPrompt && !editActionPending;
+  const canConvertPosition = nativeRuntime && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending
+    && (Boolean(currentGame?.tree.children.length) || Boolean(currentGame?.tree.properties.some((property) => property.key === "B" || property.key === "W")))
+    && !rootSetupDraft && !conversionPrompt && !editActionPending;
+  const canNext = Boolean(!scoring && !scoringPending && selectedNode && selectedNode.children.length > 0);
+  const canPrevSibling = Boolean(!scoring && !scoringPending && parentNode && siblingIndex !== undefined && siblingIndex > 0);
+  const canNextSibling = Boolean(!scoring && !scoringPending && parentNode && siblingIndex !== undefined && siblingIndex + 1 < parentNode.children.length);
   const siblingLabel = parentNode && siblingIndex !== undefined ? `${siblingIndex + 1}/${parentNode.children.length}` : "—";
   const maxMove = Math.max(positions.at(-1)?.move_number ?? 0, 1);
-  const reviewIndex = currentGame ? selectedPath.indices.length : currentMove;
-  const reviewMax = currentGame
-    ? chosenLeafPath(currentGame.tree, { indices: [] }, chosenChildren).indices.length
-    : maxMove;
+  const reviewIndex = currentGame ? currentPosition.move_number : currentMove;
   const chartModel = useMemo(() => buildWinrateChartModel({
-    root: currentGame?.tree ?? emptyChartRoot,
+    root: reviewGame?.tree ?? emptyChartRoot,
     chosen: chosenChildren,
-    selectedPathLength: currentGame ? selectedPath.indices.length : currentMove,
+    selectedPath,
     selectedToPlay: currentPosition.to_play,
     settings: preferences
-  }), [currentGame, chosenChildren, selectedPath.indices.length, currentMove, currentPosition.to_play, preferences]);
-  const currentChartPoint = chartModel.points.find((point) => point.moveNumber === chartModel.currentMove);
+  }), [reviewGame, chosenChildren, selectedPath.indices.length, currentMove, currentPosition.to_play, preferences]);
+  const reviewMax = currentGame ? chartModel.points.at(-1)?.moveNumber ?? 0 : maxMove;
+  const reviewProblems = useMemo(() => reviewGame ? reviewLineProblems(chartModel.points) : visibleProblems,
+    [reviewGame, chartModel.points, visibleProblems]);
+  const currentChartPoint = chartModel.points.find((point) => samePath(point.path, selectedPath));
   const chartWinrate = currentChartPoint
     ? displayedWinrate(currentChartPoint, chartModel.perspective, chartModel.selectedToPlay)
     : null;
@@ -507,8 +590,9 @@ export function App() {
     selectedNode,
     selectedIsRoot: selectedPath.indices.length === 0,
     toPlay: currentPosition.to_play,
-    boardSize: currentPosition.board_size
-  }), [preferences.nextMoveReviewMarker, selectedNode, selectedPath.indices.length, currentPosition.to_play, currentPosition.board_size]);
+    boardWidth: currentPosition.board_width,
+    boardHeight: currentPosition.board_height
+  }), [preferences.nextMoveReviewMarker, selectedNode, selectedPath.indices.length, currentPosition.to_play, currentPosition.board_width, currentPosition.board_height]);
   const documentDirty = currentGame?.dirty ?? dirty;
   const recoveryDiscardRetryPending = recoveryPrompt !== null
     && recoveryProtection.status === "unprotected"
@@ -520,6 +604,9 @@ export function App() {
     ? engineSnapshot.continuous.enabled
     : preferences.continuousAnalysisEnabled;
   const continuousAnalysisAction: ContinuousAnalysisAction = (() => {
+    if (scoring || scoringPending) {
+      return { label: CONTINUOUS_ANALYSIS_START_LABEL, disabled: true, title: "计分期间不能启动分析。", status: continuousPhaseStatus(continuousPhase) };
+    }
     if (!preferencesLoaded || continuousEnabled === null || continuousPhase === "loading") {
       return { label: CONTINUOUS_ANALYSIS_START_LABEL, disabled: true, title: "正在载入连续分析设置。", status: "连续分析：正在载入设置" };
     }
@@ -553,6 +640,13 @@ export function App() {
   const documentPath = currentGame?.native_path ?? currentFilePath;
   const documentName = useMemo(() => documentPath ? fileNameFromPath(documentPath) : fallbackFileName ?? "未命名棋谱", [documentPath, fallbackFileName]);
   const saveFileName = documentName.toLowerCase().endsWith(".sgf") ? documentName : `${documentName}.sgf`;
+  const documentFlowBusy = fileFlowBusy || departurePending || Boolean(newDocumentOpen) || Boolean(rootSetupDraft) || Boolean(conversionPrompt) || Boolean(metadataDraft) || Boolean(markupDialog) || Boolean(departurePrompt) || Boolean(teardownPrompt) || Boolean(recoveryPrompt);
+  const historyActionBlocked = documentFlowBusy || editActionPending;
+  const canUndo = nativeRuntime && !scoring && !scoringPending && Boolean(trial ? trial.can_undo : currentGame?.can_undo) && !historyActionBlocked && !trialPending;
+  const canRedo = nativeRuntime && !scoring && !scoringPending && !trial && Boolean(currentGame?.can_redo) && !historyActionBlocked && !trialPending;
+  const canDeleteNode = Boolean(nativeRuntime && !scoring && !scoringPending && !trial && !trialPending && currentGame && !historyActionBlocked);
+  const canPromoteMain = Boolean(nativeRuntime && !scoring && !scoringPending && !trial && !trialPending && currentGame && selectedPath.indices.some((index) => index !== 0) && !historyActionBlocked);
+  const canReturnMain = Boolean(!scoring && !scoringPending && reviewGame && selectedPath.indices.some((index) => index !== 0) && !documentFlowBusy && !trialPending);
 
 
   useEffect(() => {
@@ -566,16 +660,33 @@ export function App() {
   }, [preferences.showCandidates, preferences.candidateLimit, selectedCandidateIndex]);
 
   useEffect(() => {
-    const openEnabled = nativeRuntime;
+    const openEnabled = nativeRuntime && !historyActionBlocked;
     const saveEnabled = openEnabled && documentDirty;
     const passEnabled = openEnabled;
 
     shortcutRegistry.bind("file.new", () => {
       void handleNewGame();
     });
+    shortcutRegistry.bind("game.board-dimensions", () => {
+      void handleNewGame();
+    });
+    shortcutRegistry.bind("game.root-setup", () => {
+      if (canRootSetup && !historyActionBlocked) openRootSetup();
+    });
+    shortcutRegistry.bind("game.convert-position", () => {
+      if (canConvertPosition && !historyActionBlocked) promptPositionConversion();
+    });
+    shortcutRegistry.bind("game.metadata", (event) => {
+      event.preventDefault();
+      openMetadataEditor();
+    });
     shortcutRegistry.bind("game.human-vs-engine", () => {
       setMessage("人机对局尚未接入，N 不会新建棋谱。");
     });
+    shortcutRegistry.bind("review.try-play", () => {
+      if (nativeRuntime && !trialPending) void handleToggleTrial();
+    });
+    shortcutRegistry.bind("review.scoring", () => { if (!scoringPending) void handleEnterScoring(); });
     shortcutRegistry.bind("analysis.continuous", () => {
       void handleContinuousAnalysisAction();
     });
@@ -588,6 +699,11 @@ export function App() {
     shortcutRegistry.bind("file.open", () => {
       if (openEnabled) void handleOpenSgfDocument();
     });
+    for (let index = 0; index < 5; index += 1) {
+      shortcutRegistry.bind(`file.recent-${index + 1}`, () => void handleOpenRecent(index));
+    }
+    shortcutRegistry.bind("file.clear-recent", () => void handleClearRecentHistory());
+    shortcutRegistry.bind("file.retry-recent", () => void handleRetryRecentHistory());
     shortcutRegistry.bind("file.save", () => {
       if (saveEnabled) void handleSaveSgfDocument(false);
     });
@@ -600,11 +716,27 @@ export function App() {
     shortcutRegistry.bind("file.paste-sgf", () => {
       void handlePasteSgf();
     });
+    shortcutRegistry.bind("edit.undo", () => {
+      if (canUndo) void handleHistoryAction("undo");
+    });
+    shortcutRegistry.bind("edit.redo", () => {
+      if (canRedo) void handleHistoryAction("redo");
+    });
+    for (const tool of ["label", "letters", "numbers", "circle", "square", "cross", "triangle", "erase"] as const) {
+      shortcutRegistry.bind(`markup.${tool}`, () => { if (openEnabled && !trial && !trialPending) setMarkupTool(tool); });
+    }
+    shortcutRegistry.bind("markup.clear", () => { if (openEnabled && !trial && !trialPending) void commitMarkup({ kind: "clear" }); });
     shortcutRegistry.bind("review.pass", () => {
       if (passEnabled) void playAt("pass");
     });
     shortcutRegistry.bind("review.remove-variation", () => {
-      void handleRemoveVariation();
+      if (canDeleteNode) void handleRemoveVariation();
+    });
+    shortcutRegistry.bind("review.promote-main", () => {
+      if (canPromoteMain) void handlePromoteMain();
+    });
+    shortcutRegistry.bind("review.return-main", () => {
+      if (canReturnMain) handleReturnMain();
     });
     shortcutRegistry.bind("review.parent", () => {
       if (currentGame) handleParent();
@@ -623,20 +755,20 @@ export function App() {
       handleMoveSelect(reviewMax);
     });
     shortcutRegistry.bind("review.back-10", () => {
-      handleMoveSelect(reviewIndex - 10);
+      handleMoveSelect(Math.max(0, reviewIndex - 10));
     });
     shortcutRegistry.bind("review.forward-10", () => {
-      handleMoveSelect(reviewIndex + 10);
+      handleMoveSelect(Math.min(reviewMax, reviewIndex + 10));
     });
     shortcutRegistry.bind("review.select-candidate", (event) => {
       const index = Number(event.key) - 1;
       if (visibleCurrentFrame?.candidates[index]) setSelectedCandidateIndex(index);
     });
     shortcutRegistry.bind("view.coordinates", () => {
-      setShowCoordinates((value) => !value);
+      handlePreferencesChange({ ...preferences, showCoordinates: !preferences.showCoordinates });
     });
     shortcutRegistry.bind("view.move-numbers", () => {
-      setShowMoveNumbers((value) => !value);
+      handlePreferencesChange({ ...preferences, showMoveNumbers: !preferences.showMoveNumbers });
     });
     shortcutRegistry.bind("view.policy", () => {
       void handlePreferencesChange({ ...preferences, showPolicy: !preferences.showPolicy });
@@ -651,7 +783,7 @@ export function App() {
       });
     });
     shortcutRegistry.bind("review.autoplay", () => {
-      setAutoPlaying((value) => !value);
+      if (!scoring && !scoringPending) setAutoPlaying((value) => !value);
     });
     shortcutRegistry.bind("help.shortcut-reference", () => {
       setShortcutReferenceOpen((value) => !value);
@@ -681,7 +813,17 @@ export function App() {
   }, [
     chosenChildren,
     currentGame,
+    trial,
+    trialPending,
+    scoring,
+    scoringPending,
     documentDirty,
+    canUndo,
+    canRedo,
+    canDeleteNode,
+    canPromoteMain,
+    canReturnMain,
+    historyActionBlocked,
     nativeRuntime,
     positions,
     preferences,
@@ -700,18 +842,18 @@ export function App() {
   ]);
 
   useEffect(() => {
-    if (!autoPlaying) return;
+    if (!autoPlaying || rootSetupDraft || conversionPrompt || markupDialog) return;
     const timer = window.setInterval(() => {
-      if (currentGame) {
-        const node = nodeAt(currentGame.tree, currentGame.selected_path);
+      if (reviewGame) {
+        const node = nodeAt(reviewGame.tree, reviewGame.selected_path);
         if (!node || node.children.length === 0) {
           setAutoPlaying(false);
           return;
         }
         void selectNode(childPath(
-          currentGame.selected_path,
-          chosenChildIndex(chosenChildren, currentGame.selected_path, node.children.length)
-        ));
+          reviewGame.selected_path,
+          chosenChildIndex(chosenChildren, reviewGame.selected_path, node.children.length)
+        ), reviewGame.generation, true);
         return;
       }
       setCurrentMove((move) => {
@@ -721,7 +863,7 @@ export function App() {
       });
     }, 800);
     return () => window.clearInterval(timer);
-  }, [autoPlaying, positions, currentGame, chosenChildren]);
+  }, [autoPlaying, positions, reviewGame, chosenChildren, rootSetupDraft, conversionPrompt, markupDialog]);
 
   function toggleSheet(next: SheetId) {
     setSheet((current) => current === next ? "none" : next);
@@ -814,6 +956,7 @@ export function App() {
 
 
   function handleEngineCommand(kind: "once" | "game") {
+    if (scoringRef.current || scoringPendingRef.current || (trialRef.current && kind === "game")) return;
     const run = runFromSnapshot(engineSnapshot);
     if (!run || !engineReady) return;
     const record = engineProfiles.find((profile) => profile.id === run.profile_id);
@@ -916,7 +1059,7 @@ export function App() {
       while (pendingPreferencesSaveRef.current && !continuousActionInFlightRef.current) {
         const pending = pendingPreferencesSaveRef.current;
         try {
-          const saved = await saveAppPreferences(pending.preferences);
+          const saved = { ...await saveAppPreferences(pending.preferences), recentGamePaths: committedPreferencesRef.current.recentGamePaths };
           committedPreferencesRef.current = saved;
           setPreferences(saved);
           pending.onSaved?.(saved);
@@ -969,12 +1112,147 @@ export function App() {
     }
   }
 
+  function adoptTrial(next: TrialSessionDto) {
+    if (trialRef.current?.session_id !== next.session_id || trialRef.current.revision <= next.revision) {
+      trialRef.current = next;
+      setTrial(next);
+      setCurrentMove(next.snapshot.position.move_number);
+      setSelectedCandidateIndex(null);
+    }
+  }
+
+  async function handleToggleTrial() {
+    if (!nativeRuntime || !currentGameRef.current || scoringRef.current || scoringPendingRef.current || trialTransitionRef.current || (!trialRef.current && documentFlowBusy) || departurePendingRef.current || fileFlowDepthRef.current !== 0 || navigatingRef.current || analysisTaskActionInFlightRef.current || editActionPendingRef.current) return;
+    trialTransitionRef.current = true;
+    setTrialPending(true);
+    setAutoPlaying(false);
+    sealReviewPresentation();
+    try {
+      const active = trialRef.current;
+      if (active) {
+        const returned = await exitTrial(active.session_id);
+        selectedNodeJobRef.current = null;
+        setSelectedNodeRunning(false);
+        trialRef.current = null;
+        setTrial(null);
+        setChosenChildren(chosenFromPath(returned.selected_path));
+        adoptCurrentGame(returned);
+        setCurrentMove(returned.snapshot.position.move_number);
+        setMessage("已退出试下，回到原谱节点。");
+      } else {
+        const entered = await enterTrial();
+        selectedNodeJobRef.current = null;
+        setSelectedNodeRunning(false);
+        adoptTrial(entered);
+        setChosenChildren(new Map());
+        setAnalysisScopePreview(null);
+        void analysisTaskSnapshot().then(adoptAnalysisTask).catch((error) => {
+          setMessage(`试下已进入；范围任务状态读取失败: ${errorMessage(error)}`);
+        });
+        setMessage("已进入独立试下；保存和复制仍使用原谱。");
+      }
+    } catch (error) {
+      setMessage(`试下切换失败: ${errorMessage(error)}`);
+    } finally {
+      trialTransitionRef.current = false;
+      setTrialPending(false);
+    }
+  }
+  async function handleEnterScoring() {
+    if (!nativeRuntime || !currentGameRef.current || scoringRef.current || scoringPendingRef.current || trialRef.current || trialTransitionRef.current || documentFlowBusy || navigatingRef.current || analysisTaskActionInFlightRef.current || editActionPendingRef.current) return;
+    scoringPendingRef.current = true;
+    setScoringPending(true);
+    setAutoPlaying(false);
+    sealReviewPresentation();
+    try {
+      const entered = await enterScoring(preferences.scoringRule);
+      scoringRef.current = entered;
+      setScoring(entered);
+      selectedNodeJobRef.current = null;
+      setSelectedNodeRunning(false);
+      setAnalysisScopePreview(null);
+      void analysisTaskSnapshot().then(adoptAnalysisTask).catch((error) => setMessage(`计分已进入；范围任务状态读取失败: ${errorMessage(error)}`));
+      setMessage("本地计分：点击棋子切换整组死活，点击空点切换中立。原谱尚未更改。");
+    } catch (error) {
+      setMessage(`进入计分失败: ${errorMessage(error)}`);
+    } finally {
+      scoringPendingRef.current = false;
+      setScoringPending(false);
+    }
+  }
+
+  async function handleUpdateScoring(action: ScoringActionDto) {
+    const active = scoringRef.current;
+    if (!active || scoringPendingRef.current) return;
+    scoringPendingRef.current = true;
+    setScoringPending(true);
+    try {
+      const next = await updateScoring(active.session_id, active.revision, action);
+      if (scoringRef.current?.session_id === active.session_id) {
+        scoringRef.current = next;
+        setScoring(next);
+      }
+    } catch (error) {
+      setMessage(`计分修正失败: ${errorMessage(error)}`);
+    } finally {
+      scoringPendingRef.current = false;
+      setScoringPending(false);
+    }
+  }
+
+  function handleScoringRule(rule: "area" | "territory") {
+    const active = scoringRef.current;
+    if (!active || scoringPendingRef.current || rule === active.rule) return;
+    if (preferencesSaveInFlightRef.current || pendingPreferencesSaveRef.current || continuousActionInFlightRef.current) {
+      setMessage("请等待当前设置保存完成后再更换计分规则。");
+      return;
+    }
+    scoringPendingRef.current = true;
+    setScoringPending(true);
+    const pending = queuePreferencesSave(committedPreferencesRef.current, { scoringRule: rule });
+    pending.onSaved = () => {
+      scoringPendingRef.current = false;
+      setScoringPending(false);
+      void handleUpdateScoring({ kind: "settings", rule, compensation: active.compensation, handicap: active.handicap });
+    };
+    pending.onFailed = (error) => {
+      scoringPendingRef.current = false;
+      setScoringPending(false);
+      setMessage(`计分规则保存失败: ${errorMessage(error)}`);
+    };
+  }
+
+  async function handleExitScoring(confirm: boolean) {
+    const active = scoringRef.current;
+    if (!active || scoringPendingRef.current) return;
+    scoringPendingRef.current = true;
+    setScoringPending(true);
+    try {
+      const result = await exitScoring(active.session_id, active.revision, confirm);
+      scoringRef.current = null;
+      setScoring(null);
+      adoptCurrentGame(result);
+      setDirty(result.dirty);
+      setCurrentMove(result.snapshot.position.move_number);
+      if (confirm) {
+        const projection = await projectCurrentGameMainline();
+        if (isCurrentDocumentGeneration(result.generation)) setGame(projection);
+      }
+      setMessage(confirm ? `已确认并写入结果 ${active.result}。` : "已取消计分，原谱结果未变。");
+    } catch (error) {
+      setMessage(`退出计分失败: ${errorMessage(error)}`);
+    } finally {
+      scoringPendingRef.current = false;
+      setScoringPending(false);
+    }
+  }
+
   async function refreshCurrentGameAfterAttach() {
     const game = currentGameRef.current;
     if (!nativeRuntime || !game || departurePendingRef.current || navigatingRef.current) return;
     const requestToken = activeRequestTokenRef.current;
     try {
-      const refreshed = await selectCurrentGameNode(game.selected_path);
+      const refreshed = await selectCurrentGameNode(game.selected_path, game.generation);
       if (!refreshed || departurePendingRef.current || navigatingRef.current
         || requestToken !== activeRequestTokenRef.current
         || !samePath(game.selected_path, currentGameRef.current?.selected_path ?? { indices: [] })
@@ -1080,14 +1358,26 @@ export function App() {
     }
   }
 
-  async function leaveFileFlow(): Promise<void> {
+  async function leaveFileFlow(updateState = true): Promise<void> {
     fileFlowDepthRef.current = Math.max(0, fileFlowDepthRef.current - 1);
     if (fileFlowDepthRef.current !== 0) return;
     try {
       await setFileActivationBusy(false);
     } finally {
-      setFileFlowBusy(false);
+      if (updateState) setFileFlowBusy(false);
     }
+  }
+
+  async function releaseNewDocumentFlow(updateState = true): Promise<void> {
+    if (!newDocumentFlowReservedRef.current) return;
+    newDocumentFlowReservedRef.current = false;
+    const admission = newDocumentAdmissionRef.current;
+    newDocumentAdmissionRef.current = null;
+    if (admission) {
+      await admission.then(() => leaveFileFlow(updateState), () => undefined);
+      return;
+    }
+    await leaveFileFlow(updateState);
   }
 
   function requestDepartureDecision(message: string): Promise<DocumentDepartureActionDto> {
@@ -1180,8 +1470,11 @@ export function App() {
       }
       if (!outcome.committed) {
         setMessage(action === "cancel" ? "已取消退出，当前棋谱和分析保持不变。" : outcome.message);
+        if (outcome.analysis_stopped) void refreshAnalysisTaskSnapshot(true);
         return;
       }
+      trialRef.current = null;
+      setTrial(null);
       if (outcome.current) {
         adoptCurrentGame(outcome.current);
         setDirty(outcome.current.dirty);
@@ -1257,6 +1550,10 @@ export function App() {
       successMessage: (projection: GameDto, fileName: string) => string;
     }
   ) {
+    trialRef.current = null;
+    setTrial(null);
+    scoringRef.current = null;
+    setScoring(null);
     adoptCurrentGame(result);
     clearLocalAnalysisSession();
     beginReviewRequest();
@@ -1283,11 +1580,7 @@ export function App() {
     action: DocumentDepartureActionDto,
     sgfInput: string,
     nativePath: string | null,
-    options: {
-      fallbackName?: string | null;
-      successMessage: (projection: GameDto, fileName: string) => string;
-      failurePrefix: string;
-    }
+    options: Omit<ReplacementOptions, "confirmMessage">
   ): Promise<boolean> {
     const outcome = await resolveDocumentReplacement({
       departureId,
@@ -1305,12 +1598,14 @@ export function App() {
         setCurrentFilePath(outcome.current.native_path ?? null);
       }
       setMessage(action === "cancel" ? "已取消替换，当前棋谱和分析保持不变。" : outcome.message);
+      if (outcome.analysis_stopped) void refreshAnalysisTaskSnapshot(true);
       return false;
     }
     if (!outcome.current) {
       setMessage(`${options.failurePrefix}: replacement committed without a current game`);
       return false;
     }
+    if (options.openedPath) await persistRecentHistory(options.openedPath);
     await adoptCommittedReplacement(outcome.current, sgfInput, nativePath, options);
     return true;
   }
@@ -1408,6 +1703,10 @@ export function App() {
     nativePath: string | null,
     options: ReplacementOptions
   ): Promise<boolean> {
+    if (rootSetupDraft || conversionPrompt || metadataDraft || markupDialog) {
+      setMessage("请先完成或取消当前棋谱编辑。");
+      return false;
+    }
     if (!nativeRuntime) {
       try {
         const [parsed, replayed] = await Promise.all([parseSgfSummary(sgfInput), replaySgfPositions(sgfInput)]);
@@ -1474,13 +1773,61 @@ export function App() {
         ? document.display_name.replace(/\.gib$/i, ".sgf")
         : null,
       successMessage: (projection, fileName) => `Opened ${fileName}: ${projection.summary.move_count} moves.`,
-      failurePrefix: "Open failed"
+      failurePrefix: "Open failed",
+      openedPath: document.opened_path,
     });
+  }
+
+  async function persistRecentHistory(openedPath: string | null) {
+    recentHistoryBusyRef.current = true;
+    setRecentHistoryBusy(true);
+    try {
+      const recentGamePaths = await updateRecentGameHistory(openedPath);
+      committedPreferencesRef.current = { ...committedPreferencesRef.current, recentGamePaths };
+      setPreferences((current) => ({ ...current, recentGamePaths }));
+      failedRecentActionRef.current = null;
+      setRecentHistoryError(null);
+    } catch (error) {
+      failedRecentActionRef.current = { openedPath };
+      setRecentHistoryError(`最近记录写入失败，保留已保存列表：${errorMessage(error)}`);
+    } finally {
+      recentHistoryBusyRef.current = false;
+      setRecentHistoryBusy(false);
+    }
+  }
+
+  async function handleOpenRecent(index: number) {
+    if (!nativeRuntime || !preferencesLoaded || documentFlowBusy || fileFlowDepthRef.current !== 0 || recentHistoryBusyRef.current) return;
+    const path = committedPreferencesRef.current.recentGamePaths[index];
+    if (!path) return;
+    await enterFileFlow();
+    try {
+      await replaceImportedGame(await readGameFile(path));
+    } catch (error) {
+      setMessage(`Open failed: ${errorMessage(error)}`);
+    } finally {
+      await leaveFileFlow();
+    }
+  }
+
+  async function handleClearRecentHistory() {
+    if (!nativeRuntime || !preferencesLoaded || fileFlowDepthRef.current !== 0 || recentHistoryBusyRef.current) return;
+    await persistRecentHistory(null);
+  }
+
+  async function handleRetryRecentHistory() {
+    if (!nativeRuntime || !preferencesLoaded || fileFlowDepthRef.current !== 0 || recentHistoryBusyRef.current) return;
+    const action = failedRecentActionRef.current;
+    if (action) await persistRecentHistory(action.openedPath);
   }
 
   async function handleFileActivation(delivery: FileActivationDeliveryDto): Promise<void> {
     if (delivery.kind === "rejected") {
       setMessage(delivery.message);
+      return;
+    }
+    if (rootSetupDraft || conversionPrompt || metadataDraft || markupDialog) {
+      setMessage("请先完成或取消当前棋谱编辑；外部打开请求已拒绝。");
       return;
     }
     if (fileFlowDepthRef.current !== 0) {
@@ -1501,6 +1848,7 @@ export function App() {
   activationHandlerRef.current = handleFileActivation;
 
   async function handleOpenSgfDocument() {
+    if (documentFlowBusy) return;
     if (!nativeRuntime) {
       setMessage(nativeCurrentGameUnavailable);
       return;
@@ -1645,6 +1993,20 @@ export function App() {
 
 
   handleSelectedNodeJobRef.current = (job: AnalysisJobEventDto) => {
+    if (trialRef.current) {
+      if (job.outcome === "started" && job.lane === "selected_node" && job.generation === trialRef.current.revision && samePath(job.node_path, trialRef.current.selected_path)) {
+        selectedNodeJobRef.current = {
+          run_id: job.run_id, job_id: job.job_id, lane: job.lane, mode: job.mode,
+          state: "queued", generation: job.generation, node_path: job.node_path
+        };
+        setSelectedNodeRunning(true);
+      } else if (selectedNodeJobRef.current?.job_id === job.job_id && job.outcome !== "progress") {
+        if (["completed", "cancelled", "superseded", "timeout", "failed", "time_limited", "visits_limited"].includes(job.outcome)) {
+          clearSelectedNodeRunning(job.job_id);
+        }
+      }
+      return;
+    }
     if (job.outcome === "started") {
       const started: AnalysisJobStartedDto = {
         run_id: job.run_id,
@@ -1671,7 +2033,7 @@ export function App() {
       } else if ((job.outcome === "time_limited" || job.outcome === "visits_limited") && (phase === "queued" || phase === "searching" || phase === job.outcome)) {
         if (admitsAnalysisAttachment(job)) void publishAuthoritativeContinuousFrame(job);
         setMessage(`${continuousPhaseStatus(job.outcome)}；可显式继续。`);
-      } else if ((job.outcome === "failed" || job.outcome === "timeout") && phase === "error") {
+      } else if ((job.outcome === "failed" || job.outcome === "timeout") && (phase === "queued" || phase === "searching" || phase === "error")) {
         setMessage(job.failure?.message ?? "连续分析失败；请显式继续或重启引擎。");
       }
       return;
@@ -1729,6 +2091,19 @@ export function App() {
 
   async function handleRunKataGo(_profile: EngineProfileDto, maxVisits: number) {
     const run = runFromSnapshot(engineSnapshot);
+    const active = trialRef.current;
+    if (active) {
+      const run = runFromSnapshot(engineSnapshotRef.current);
+      if (!run) { setMessage("试下分析需要可用的前台引擎。"); return; }
+      try {
+        const started = await trialStartFinite(active.session_id, active.revision, run.run_id, resolveAnalysisMaxVisits(maxVisits, preferences));
+        if (trialRef.current?.session_id !== active.session_id || trialRef.current.revision !== active.revision) return;
+        selectedNodeJobRef.current = started;
+        setSelectedNodeRunning(true);
+        setMessage(`正在分析试下节点 (${started.job_id})。`);
+      } catch (error) { setMessage(`试下分析失败: ${errorMessage(error)}`); }
+      return;
+    }
     const game = currentGameRef.current;
     if (!run || !game) {
       setMessage("Selected-node analysis requires a Ready Foreground Engine Run and current game.");
@@ -1763,6 +2138,7 @@ export function App() {
   }
 
   async function handleContinuousAnalysisAction() {
+    if (trialTransitionRef.current || scoringRef.current || scoringPendingRef.current) return;
     if (!preferencesLoadSettledRef.current || continuousActionInFlightRef.current) return;
     const snapshot = engineSnapshotRef.current;
     if (preferencesSaveInFlightRef.current || pendingPreferencesSaveRef.current) return;
@@ -1791,7 +2167,7 @@ export function App() {
     continuousActionInFlightRef.current = true;
     setContinuousActionPending(true);
     try {
-      const saved = await foregroundEngineContinuousAction();
+      const saved = { ...await foregroundEngineContinuousAction(), recentGamePaths: committedPreferencesRef.current.recentGamePaths };
       committedPreferencesRef.current = saved;
       setPreferences(saved);
       setPreferencesStatus("Preferences saved.");
@@ -2053,6 +2429,7 @@ export function App() {
   }
 
   async function handleStartAnalysisTask() {
+    if (trialRef.current || trialTransitionRef.current || scoringRef.current || scoringPendingRef.current) return;
     const run = runFromSnapshot(engineSnapshotRef.current);
     if (!run || !analysisScopePreview) return;
     setAnalysisTaskRequestPending(true);
@@ -2089,6 +2466,7 @@ export function App() {
   }
 
   async function handleQuickAnalysisTask() {
+    if (trialRef.current || trialTransitionRef.current || scoringRef.current || scoringPendingRef.current) return;
     const run = runFromSnapshot(engineSnapshotRef.current);
     const game = currentGameRef.current;
     if (!run || !game || !admitsForegroundEngineJobs(engineSnapshotRef.current) || departurePendingRef.current || isAnalysisTaskReserved(analysisTaskRef.current)) return;
@@ -2115,6 +2493,7 @@ export function App() {
   }
 
   async function handleAllPositionsAnalysisTask() {
+    if (trialRef.current || trialTransitionRef.current || scoringRef.current || scoringPendingRef.current) return;
     const run = runFromSnapshot(engineSnapshotRef.current);
     const game = currentGameRef.current;
     if (!run || !game || !admitsForegroundEngineJobs(engineSnapshotRef.current) || departurePendingRef.current || isAnalysisTaskReserved(analysisTaskRef.current)) return;
@@ -2172,6 +2551,7 @@ export function App() {
   }
 
   async function handleContinueAnalysisTask() {
+    if (trialRef.current || trialTransitionRef.current) return;
     const task = analysisTaskRef.current;
     const run = runFromSnapshot(engineSnapshotRef.current);
     if (analysisTaskActionInFlightRef.current
@@ -2352,11 +2732,42 @@ export function App() {
   }
 
   async function handleNewGame() {
-    await applyReplacement(emptySgf, null, {
-      confirmMessage: "放弃未保存的棋谱并新建对局？",
-      successMessage: () => "已新建空谱。",
-      failurePrefix: "New game failed"
-    });
+    if (!preferencesLoaded || documentFlowBusy || newDocumentFlowReservedRef.current || departurePendingRef.current || departurePrompt) return;
+    newDocumentFlowReservedRef.current = true;
+    const admission = enterFileFlow();
+    newDocumentAdmissionRef.current = admission;
+    setNewDocumentOpen(true);
+    try {
+      await admission;
+      newDocumentAdmissionRef.current = null;
+    } catch (error) {
+      setNewDocumentOpen(false);
+      await releaseNewDocumentFlow();
+      setMessage(`New game failed: ${errorMessage(error)}`);
+    }
+  }
+
+  async function handleCancelNewGame() {
+    if (newDocumentSubmittingRef.current) return;
+    setNewDocumentOpen(false);
+    await releaseNewDocumentFlow();
+  }
+
+  async function handleCreateNewGame(parameters: NewDocumentParameters) {
+    if (!newDocumentFlowReservedRef.current || newDocumentSubmittingRef.current) return;
+    newDocumentSubmittingRef.current = true;
+    setNewDocumentOpen(false);
+    try {
+      const sgf = newDocumentSgf(parameters);
+      await applyReplacement(sgf, null, {
+        confirmMessage: "放弃未保存的棋谱并新建对局？",
+        successMessage: () => `已新建 ${parameters.boardWidth} × ${parameters.boardHeight} 空谱。`,
+        failurePrefix: "New game failed"
+      });
+    } finally {
+      newDocumentSubmittingRef.current = false;
+      await releaseNewDocumentFlow();
+    }
   }
 
   async function handleCopySgf() {
@@ -2388,13 +2799,15 @@ export function App() {
   }
 
   async function handleCommitPersonalComment(comment: string) {
-    if (!currentGame) return;
+    if (trialRef.current || trialTransitionRef.current || !currentGame || rootSetupDraft || conversionPrompt || editActionPendingRef.current) return;
     if (!nativeRuntime) {
       setMessage(nativeCurrentGameUnavailable);
       return;
     }
     if (comment === currentGame.snapshot.personal_comment) return;
     const editedPath = currentGame.selected_path;
+    editActionPendingRef.current = true;
+    setEditActionPending(true);
     try {
       const result = await setCurrentGamePersonalComment(editedPath, comment);
       if (!isCurrentGameSnapshot(result)) return;
@@ -2415,32 +2828,67 @@ export function App() {
       setMessage("已更新选中节点的个人评论。");
     } catch (error) {
       setMessage(`评论更新失败: ${errorMessage(error)}`);
+    } finally {
+      editActionPendingRef.current = false;
+      setEditActionPending(false);
     }
   }
 
-  async function selectNode(path: NodePath) {
+  function soundAcceptedMove(before: SelectedNodeSnapshotDto, after: SelectedNodeSnapshotDto) {
+    if (!preferencesLoadSettledRef.current || !committedPreferencesRef.current.soundEnabled) return;
+    const kind = acceptedMoveSound(before, after);
+    if (kind) void playMoveSound(kind).catch((error) => setMessage(`声音播放失败: ${errorMessage(error)}`));
+  }
+
+  async function selectNode(path: NodePath, generation = reviewGame?.generation, forward = false) {
+    if (scoringRef.current || scoringPendingRef.current) return;
+    const active = trialRef.current;
+    if (active || trialTransitionRef.current) {
+      if (!active || trialTransitionRef.current || editActionPendingRef.current || navigatingRef.current || generation !== active.revision || !nodeAt(active.tree, path) || samePath(active.selected_path, path)) return;
+      navigatingRef.current = true;
+      try {
+        beginReviewRequest();
+        const selected = await trialSelect(active.session_id, active.revision, path);
+        if (trialRef.current?.session_id === active.session_id) {
+          adoptTrial(selected);
+          setChosenChildren((previous) => rememberChosenChildren(previous, selected.selected_path));
+        }
+      } catch (error) {
+        setMessage(`试下导航失败: ${errorMessage(error)}`);
+      } finally {
+        navigatingRef.current = false;
+      }
+      return;
+    }
     const game = currentGameRef.current;
-    if (!game) return;
+    if (!game || rootSetupDraft || conversionPrompt || markupDialog || editActionPendingRef.current || generation !== game.generation || departurePendingRef.current
+      || !path.indices.every((index) => Number.isInteger(index) && index >= 0)
+      || !nodeAt(game.tree, path)) return;
     if (!navigatingRef.current && samePath(path, game.selected_path)) return;
-    pendingSelectedPathRef.current = path;
+    const request = { path: { indices: [...path.indices] }, generation, forward };
+    queuedSelectionRef.current = request;
+    pendingSelectedPathRef.current = request.path;
     beginReviewRequest();
     if (navigatingRef.current) return;
 
     navigatingRef.current = true;
     try {
-      while (pendingSelectedPathRef.current) {
-        const requestedPath: NodePath = pendingSelectedPathRef.current;
-        pendingSelectedPathRef.current = null;
+      while (queuedSelectionRef.current) {
+        const requested: { path: NodePath; generation: number; forward: boolean } = queuedSelectionRef.current;
+        queuedSelectionRef.current = null;
+        if (currentGameRef.current?.generation !== requested.generation) continue;
         try {
-          const result = await selectCurrentGameNode(requestedPath);
+          const result = await selectCurrentGameNode(requested.path, requested.generation);
           const current = currentGameRef.current;
-          if (!current || result.generation < current.generation) continue;
-          if (result.generation === current.generation && result.snapshot_seq < current.snapshot_seq) {
-            // Keep the latest cursor intent, but obtain its snapshot after the accepted edit/Save.
-            pendingSelectedPathRef.current ??= requestedPath;
+          if (!current || current.generation !== requested.generation
+            || result.generation !== requested.generation || queuedSelectionRef.current) continue;
+          if (result.snapshot_seq < current.snapshot_seq) {
+            // Refresh the latest cursor against a newer accepted comment/Save snapshot.
+            queuedSelectionRef.current = requested;
             continue;
           }
           adoptCurrentGame(result);
+          if (requested.forward) soundAcceptedMove(current.snapshot, result.snapshot);
           setChosenChildren((previous) => rememberChosenChildren(previous, result.selected_path));
           if (result.snapshot.primary_analysis) presentCurrentGameAnalysis(result);
           else {
@@ -2450,7 +2898,9 @@ export function App() {
           setCurrentMove(result.snapshot.position.move_number);
           setSelectedCandidateIndex(null);
         } catch (error) {
-          if (!pendingSelectedPathRef.current) setMessage(`导航失败: ${errorMessage(error)}`);
+          if (!queuedSelectionRef.current && currentGameRef.current?.generation === requested.generation) {
+            setMessage(`导航失败: ${errorMessage(error)}`);
+          }
         }
       }
     } finally {
@@ -2459,15 +2909,29 @@ export function App() {
     }
   }
 
-  function handleMoveSelect(moveNumber: number) {
-    if (currentGame) {
-      const leaf = chosenLeafPath(currentGame.tree, { indices: [] }, chosenChildren);
-      const depth = Math.max(0, Math.min(moveNumber, leaf.indices.length));
-      void selectNode({ indices: leaf.indices.slice(0, depth) });
+  function handleMoveSelect(moveNumber: number, forward = false) {
+    if (reviewGame) {
+      if (!Number.isInteger(moveNumber) || moveNumber < 0) return;
+      const target = moveNumber === 0
+        ? chartModel.points[0]
+        : chartModel.points.find((point) => point.isMove && point.moveNumber === moveNumber);
+      if (target) void selectNode(target.path, reviewGame.generation, forward);
       return;
     }
     setCurrentMove(clampMoveNumberToPositions(positions, moveNumber));
     setSelectedCandidateIndex(null);
+  }
+
+  function handleReviewNodeSelect(path: NodePath) {
+    if (!reviewGame || !chartModel.points.some((point) => samePath(point.path, path))) return;
+    void selectNode(path, reviewGame.generation);
+  }
+
+  function handleProblemSelect(problem: ReviewProblem) {
+    if (!reviewProblems.includes(problem)) return;
+    if (reviewGame) {
+      if (problem.path) void selectNode(problem.path, reviewGame.generation);
+    } else handleMoveSelect(problem.turn);
   }
 
   function handleParent() {
@@ -2476,7 +2940,7 @@ export function App() {
 
   function handleNextChild() {
     if (!selectedNode || selectedNode.children.length === 0) return;
-    void selectNode(childPath(selectedPath, chosenChildIndex(chosenChildren, selectedPath, selectedNode.children.length)));
+    void selectNode(childPath(selectedPath, chosenChildIndex(chosenChildren, selectedPath, selectedNode.children.length)), reviewGame?.generation, true);
   }
 
   function handlePrevSibling() {
@@ -2489,19 +2953,152 @@ export function App() {
     void selectNode({ indices: [...selectedPath.indices.slice(0, -1), siblingIndex + 1] });
   }
 
+  function openRootSetup() {
+    const game = currentGameRef.current;
+    if (trialRef.current || trialTransitionRef.current || !game || !canRootSetup || documentFlowBusy || navigatingRef.current) return;
+    setAutoPlaying(false);
+    setRootSetupDraft({
+      generation: game.generation,
+      stones: game.snapshot.position.stones.map((stone) => ({ ...stone })),
+      toPlay: game.snapshot.position.to_play,
+      tool: "black"
+    });
+  }
+
+  function promptPositionConversion() {
+    const game = currentGameRef.current;
+    if (trialRef.current || trialTransitionRef.current || !game || !canConvertPosition || documentFlowBusy || navigatingRef.current) return;
+    setAutoPlaying(false);
+    setConversionPrompt({ generation: game.generation, path: game.selected_path });
+  }
+
+  function placeSetupStone(point: PointDto) {
+    setRootSetupDraft((draft) => {
+      if (!draft || point.x < 0 || point.y < 0 || point.x >= currentPosition.board_width || point.y >= currentPosition.board_height) return draft;
+      const stones = draft.stones.filter((stone) => stone.x !== point.x || stone.y !== point.y);
+      if (draft.tool !== "erase") stones.push({ ...point, color: draft.tool });
+      return { ...draft, stones };
+    });
+  }
+
+  async function finishRootEdit(kind: "setup" | "convert") {
+    const before = currentGameRef.current;
+    const draft = rootSetupDraft;
+    const prompt = conversionPrompt;
+    if (trialRef.current || trialTransitionRef.current || !before || editActionPendingRef.current || navigatingRef.current
+      || (kind === "setup" && (!draft || draft.generation !== before.generation || before.selected_path.indices.length !== 0))
+      || (kind === "convert" && (!prompt || prompt.generation !== before.generation || !samePath(prompt.path, before.selected_path)))) return;
+    editActionPendingRef.current = true;
+    setEditActionPending(true);
+    try {
+      const result = kind === "setup"
+        ? await applyRootSetup(draft!.generation, draft!.stones, draft!.toPlay)
+        : await convertToRootSetup(prompt!.generation, prompt!.path);
+      const latest = currentGameRef.current;
+      if (!latest || latest.generation !== before.generation || latest.snapshot_seq > result.snapshot_seq) return;
+      const changed = result.generation !== before.generation;
+      adoptCurrentGame(result);
+      pendingSelectedPathRef.current = result.selected_path;
+      setChosenChildren(chosenFromPath(result.selected_path));
+      setDirty(result.dirty);
+      setCurrentMove(result.snapshot.position.move_number);
+      setRootSetupDraft(null);
+      setConversionPrompt(null);
+      if (changed) {
+        clearReviewData();
+        await abandonAnalysisSessions();
+        const artifacts = await artifactsFromCurrentGame();
+        if (!isCurrentDocumentGeneration(result.generation)) return;
+        setGame(artifacts.projection);
+      }
+      setMessage(kind === "setup" ? "起始局面已应用。" : "当前局面已转换为可编辑起始局面。");
+    } catch (error) {
+      setMessage(`${kind === "setup" ? "起始局面应用" : "局面转换"}失败: ${errorMessage(error)}`);
+    } finally {
+      editActionPendingRef.current = false;
+      setEditActionPending(false);
+    }
+  }
+
+  async function commitMarkup(action: SgfMarkupActionDto, captured?: { path: NodePath; generation: number }) {
+    const before = currentGameRef.current;
+    if (trialRef.current || trialTransitionRef.current || !nativeRuntime || !before || rootSetupDraft || conversionPrompt || metadataDraft || newDocumentOpen || editActionPendingRef.current || departurePendingRef.current || fileFlowBusy) return;
+    const path = captured?.path ?? before.selected_path;
+    const generation = captured?.generation ?? before.generation;
+    if (generation !== before.generation || !samePath(path, before.selected_path)) {
+      setMessage("标记未提交：选中节点或棋谱已改变。");
+      return;
+    }
+    editActionPendingRef.current = true;
+    setEditActionPending(true);
+    try {
+      const result = await editCurrentGameMarkup(path, generation, action);
+      if (!isCurrentGameSnapshot(result) || !samePath(currentGameRef.current?.selected_path ?? { indices: [] }, path)) return;
+      adoptCurrentGame(result);
+      setDirty(result.dirty);
+      setMessage(result.snapshot_seq === before.snapshot_seq ? "标记未变化。" : "已更新当前节点标记。");
+    } catch (error) {
+      setMessage(`标记更新失败: ${errorMessage(error)}`);
+    } finally {
+      editActionPendingRef.current = false;
+      setEditActionPending(false);
+    }
+  }
+
+  function handleBoardPoint(point: PointDto) {
+    if (scoringRef.current || scoringPendingRef.current) {
+      if (scoringRef.current) void handleUpdateScoring({ kind: "point", point });
+      return;
+    }
+    if (trialRef.current || trialTransitionRef.current) {
+      void playAt({ point });
+      return;
+    }
+    if (rootSetupDraft) {
+      placeSetupStone(point);
+      return;
+    }
+    const before = currentGameRef.current;
+    if (markupTool === "play") {
+      void playAt({ point });
+      return;
+    }
+    if (!before || !nativeRuntime || documentFlowBusy || editActionPendingRef.current) return;
+    if (markupTool === "label") {
+      const existing = before.snapshot.markup.find((mark) => mark.kind === "label" && mark.point.x === point.x && mark.point.y === point.y);
+      setMarkupDialog({ point, path: before.selected_path, generation: before.generation, text: existing?.kind === "label" ? existing.text : "" });
+      return;
+    }
+    void commitMarkup({ kind: "point", point, tool: { kind: markupTool } });
+  }
+
   async function playAt(vertex: MoveVertex) {
     if (!nativeRuntime) {
       setMessage(nativeCurrentGameUnavailable);
       return;
     }
-    if (!currentGame || pendingBoardIntentRef.current !== null) return;
+    if (!currentGame || scoringRef.current || scoringPendingRef.current || trialTransitionRef.current || documentFlowBusy || pendingBoardIntentRef.current !== null || editActionPendingRef.current) return;
     const intentKey = vertex === "pass" ? "pass" : `${vertex.point.x},${vertex.point.y}`;
     pendingBoardIntentRef.current = intentKey;
+    editActionPendingRef.current = true;
+    setEditActionPending(true);
     const previousGeneration = currentGame.generation;
     try {
+      const active = trialRef.current;
+      if (active) {
+        const result = await trialPlay(active.session_id, active.revision, vertex);
+        if (trialRef.current?.session_id === active.session_id) {
+          adoptTrial(result);
+          soundAcceptedMove(active.snapshot, result.snapshot);
+          setChosenChildren((prev) => rememberChosenChildren(prev, result.selected_path));
+          clearReviewData();
+          setBoardIntentFeedback(null);
+          setMessage("试下落子已接受（原谱未更改）。");
+        }
+        return;
+      }
       const result = await playCurrentGame(currentGame.selected_path, vertex);
-      documentGenerationRef.current = result.generation;
-      setCurrentGame(result);
+      adoptCurrentGame(result);
       pendingSelectedPathRef.current = result.selected_path;
       setChosenChildren((prev) => rememberChosenChildren(prev, result.selected_path));
       setDirty(result.dirty);
@@ -2509,6 +3106,7 @@ export function App() {
       setSelectedCandidateIndex(null);
       setBoardIntentFeedback(null);
       setMessage("落子已接受。");
+      soundAcceptedMove(currentGame.snapshot, result.snapshot);
       if (result.generation !== previousGeneration) {
         clearReviewData();
         await abandonAnalysisSessions();
@@ -2522,13 +3120,26 @@ export function App() {
       setMessage(feedback);
     } finally {
       if (pendingBoardIntentRef.current === intentKey) pendingBoardIntentRef.current = null;
+      editActionPendingRef.current = false;
+      setEditActionPending(false);
     }
   }
 
   async function handleRemoveVariation() {
-    if (!currentGame || selectedPath.indices.length === 0) return;
+    const before = currentGameRef.current;
+    if (trialRef.current || trialTransitionRef.current || !nativeRuntime || !before || documentFlowBusy || editActionPendingRef.current
+      || navigatingRef.current || queuedSelectionRef.current) return;
+    const path = before.selected_path;
+    if (path.indices.length === 0) {
+      await handleNewGame();
+      return;
+    }
+    const node = nodeAt(before.tree, path);
+    if (!node || (node.children.length > 0 && !window.confirm("删除当前节点及其全部后续？此操作可以撤销。"))) return;
+    editActionPendingRef.current = true;
+    setEditActionPending(true);
     try {
-      const result = await removeCurrentGameVariation(selectedPath);
+      const result = await removeCurrentGameVariation(path, before.generation);
       adoptCurrentGame(result);
       pendingSelectedPathRef.current = result.selected_path;
       setChosenChildren(chosenFromPath(result.selected_path));
@@ -2539,9 +3150,153 @@ export function App() {
       const artifacts = await artifactsFromCurrentGame();
       if (!isCurrentDocumentGeneration(result.generation)) return;
       setGame(artifacts.projection);
-      setMessage("已删除选中变化，并回到其父节点。");
+      setMessage("已删除当前节点及其后续，并回到父节点。");
     } catch (error) {
-      setMessage(`删除变化失败: ${errorMessage(error)}`);
+      setMessage(`删除节点失败: ${errorMessage(error)}`);
+    } finally {
+      editActionPendingRef.current = false;
+      setEditActionPending(false);
+    }
+  }
+
+  function handleReturnMain() {
+    if (!canReturnMain) return;
+    const firstVariation = selectedPath.indices.findIndex((index) => index !== 0);
+    if (firstVariation >= 0) void selectNode({ indices: selectedPath.indices.slice(0, firstVariation) });
+  }
+
+  async function handlePromoteMain() {
+    const before = currentGameRef.current;
+    if (trialRef.current || trialTransitionRef.current || !nativeRuntime || !before || documentFlowBusy || editActionPendingRef.current
+      || navigatingRef.current || queuedSelectionRef.current
+      || !before.selected_path.indices.some((index) => index !== 0)) return;
+    editActionPendingRef.current = true;
+    setEditActionPending(true);
+    try {
+      const result = await promoteCurrentGameToMain(before.selected_path, before.generation);
+      adoptCurrentGame(result);
+      pendingSelectedPathRef.current = result.selected_path;
+      setChosenChildren(chosenFromPath(result.selected_path));
+      setDirty(result.dirty);
+      setCurrentMove(result.snapshot.position.move_number);
+      clearReviewData();
+      await abandonAnalysisSessions();
+      const artifacts = await artifactsFromCurrentGame();
+      if (!isCurrentDocumentGeneration(result.generation)) return;
+      setGame(artifacts.projection);
+      setMessage("已设为主分支。");
+    } catch (error) {
+      setMessage(`设为主分支失败: ${errorMessage(error)}`);
+    } finally {
+      editActionPendingRef.current = false;
+      setEditActionPending(false);
+    }
+  }
+  function openMetadataEditor() {
+    const game = currentGameRef.current;
+    if (trialRef.current || trialTransitionRef.current || !nativeRuntime || !game || documentFlowBusy || editActionPendingRef.current || navigatingRef.current) return;
+    const value = (key: string) => game.tree.properties.find((property) => property.key === key)?.values[0];
+    setMetadataDraft({
+      generation: game.generation,
+      blackName: value("PB") ?? "",
+      whiteName: value("PW") ?? "",
+      komi: Number.isFinite(Number(value("KM"))) && value("KM")?.trim() ? Number(value("KM")) : 7.5,
+      handicap: value("HA") ?? null
+    });
+  }
+
+  async function handleApplyMetadata(generation: number, black: string, white: string, komi: number) {
+    const before = currentGameRef.current;
+    if (trialRef.current || trialTransitionRef.current || !nativeRuntime || !before || before.generation !== generation || departurePendingRef.current
+      || editActionPendingRef.current || navigatingRef.current) {
+      throw new Error("棋谱已变化，请重新打开棋局信息。");
+    }
+    editActionPendingRef.current = true;
+    setEditActionPending(true);
+    try {
+      let result = await setCurrentGameMetadata(generation, black, white, komi);
+      const latest = currentGameRef.current;
+      if (!latest || latest.generation !== generation) throw new Error("棋谱已变化，请重新打开棋局信息。");
+      if (latest.snapshot_seq > result.snapshot_seq) {
+        result = await selectCurrentGameNode(latest.selected_path, result.generation);
+        if (currentGameRef.current?.generation !== generation) throw new Error("棋谱已变化，请重新打开棋局信息。");
+      }
+      adoptCurrentGame(result);
+      setDirty(result.dirty);
+      if (result.generation !== generation) {
+        clearReviewData();
+        await abandonAnalysisSessions();
+      }
+      setMetadataDraft(null);
+      const projection = await projectCurrentGameMainline();
+      if (isCurrentDocumentGeneration(result.generation)) setGame(projection);
+      setMessage("已更新棋局信息。");
+    } catch (error) {
+      setMessage(`棋局信息更新失败: ${errorMessage(error)}`);
+      throw error;
+    } finally {
+      editActionPendingRef.current = false;
+      setEditActionPending(false);
+    }
+  }
+
+
+  async function handleHistoryAction(action: "undo" | "redo") {
+    if (scoringRef.current || scoringPendingRef.current) return;
+    const active = trialRef.current;
+    if (active || trialTransitionRef.current) {
+      if (!active || action !== "undo" || !active.can_undo || editActionPendingRef.current || trialTransitionRef.current) return;
+      editActionPendingRef.current = true;
+      setEditActionPending(true);
+      try {
+        const result = await trialUndo(active.session_id, active.revision);
+        if (trialRef.current?.session_id === active.session_id) {
+          adoptTrial(result);
+          setChosenChildren(chosenFromPath(result.selected_path));
+          clearReviewData();
+          setMessage("已撤销试下的一手（原谱未更改）。");
+        }
+      } catch (error) {
+        setMessage(`试下撤销失败: ${errorMessage(error)}`);
+      } finally {
+        editActionPendingRef.current = false;
+        setEditActionPending(false);
+      }
+      return;
+    }
+    const before = currentGameRef.current;
+    if (!nativeRuntime || !before || documentFlowBusy || editActionPendingRef.current
+      || navigatingRef.current || queuedSelectionRef.current) return;
+    if (action === "undo" ? !before.can_undo : !before.can_redo) return;
+    editActionPendingRef.current = true;
+    setEditActionPending(true);
+    try {
+      const result = await (action === "undo" ? undoCurrentGame(before.generation) : redoCurrentGame(before.generation));
+      const latest = currentGameRef.current;
+      if (!latest || latest.generation !== before.generation || latest.snapshot_seq > result.snapshot_seq) return;
+      const changed = result.generation !== before.generation || result.snapshot_seq !== before.snapshot_seq;
+      const structural = result.generation !== before.generation;
+      adoptCurrentGame(result);
+      pendingSelectedPathRef.current = result.selected_path;
+      setChosenChildren(chosenFromPath(result.selected_path));
+      setDirty(result.dirty);
+      setCurrentMove(result.snapshot.position.move_number);
+      setSelectedCandidateIndex(null);
+      if (structural) {
+        clearReviewData();
+        await abandonAnalysisSessions();
+        const artifacts = await artifactsFromCurrentGame();
+        if (!isCurrentDocumentGeneration(result.generation)) return;
+        setGame(artifacts.projection);
+      }
+      setMessage(changed
+        ? (action === "undo" ? "已撤销上一次编辑。" : "已重做上一次编辑。")
+        : (action === "undo" ? "没有可撤销的编辑。" : "没有可重做的编辑。"));
+    } catch (error) {
+      setMessage(`${action === "undo" ? "撤销" : "重做"}失败: ${errorMessage(error)}`);
+    } finally {
+      editActionPendingRef.current = false;
+      setEditActionPending(false);
     }
   }
 
@@ -2567,7 +3322,13 @@ export function App() {
     <AppChrome
       sheet={sheet}
       onToggleSheet={toggleSheet}
-      busy={fileFlowBusy || departurePending || Boolean(departurePrompt) || Boolean(teardownPrompt) || Boolean(recoveryPrompt)}
+      busy={historyActionBlocked}
+      trialActive={Boolean(trial)}
+      trialPending={trialPending || Boolean(scoring) || scoringPending}
+      onToggleTrial={() => void handleToggleTrial()}
+      scoringActive={Boolean(scoring)}
+      scoringPending={scoringPending}
+      onEnterScoring={() => void handleEnterScoring()}
       dirty={documentDirty}
       documentName={documentName}
       engineLabel={engineLabel}
@@ -2603,8 +3364,8 @@ export function App() {
       scoreLeadAvailable={chartModel.scoreAvailable}
       showCoordinates={showCoordinates}
       showMoveNumbers={showMoveNumbers}
-      onShowCoordinates={setShowCoordinates}
-      onShowMoveNumbers={setShowMoveNumbers}
+      onShowCoordinates={(value) => handlePreferencesChange({ ...preferences, showCoordinates: value })}
+      onShowMoveNumbers={(value) => handlePreferencesChange({ ...preferences, showMoveNumbers: value })}
       showBlackCandidates={showBlackCandidates}
       showWhiteCandidates={showWhiteCandidates}
       onShowBlackCandidates={setShowBlackCandidates}
@@ -2616,7 +3377,19 @@ export function App() {
       autoPlaying={autoPlaying}
       komi={game.summary.komi}
       onNew={() => void handleNewGame()}
+      onRootSetup={openRootSetup}
+      onConvertPosition={promptPositionConversion}
+      canRootSetup={canRootSetup && !documentFlowBusy}
+      canConvertPosition={canConvertPosition && !documentFlowBusy}
+      onEditMetadata={openMetadataEditor}
+      canEditMetadata={nativeRuntime && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending && !documentFlowBusy && !editActionPending}
       onOpen={() => void handleOpenSgfDocument()}
+      recentGamePaths={preferences.recentGamePaths}
+      recentHistoryBusy={recentHistoryBusy || !preferencesLoaded}
+      recentHistoryError={recentHistoryError}
+      onOpenRecent={(index) => void handleOpenRecent(index)}
+      onClearRecentHistory={() => void handleClearRecentHistory()}
+      onRetryRecentHistory={() => void handleRetryRecentHistory()}
       nativeRuntime={nativeRuntime}
       nativeUnavailable={nativeCurrentGameUnavailable}
       onSave={() => void handleSaveSgfDocument(false)}
@@ -2631,14 +3404,23 @@ export function App() {
       onCopySgf={() => void handleCopySgf()}
       onPasteSgf={() => void handlePasteSgf()}
       onExit={() => void handleApplicationExit()}
+      onUndo={() => void handleHistoryAction("undo")}
+      onRedo={() => void handleHistoryAction("redo")}
+      canUndo={canUndo}
+      canRedo={canRedo}
       onClearBoard={() => void handleNewGame()}
       onPass={() => void playAt("pass")}
       onRemoveVariation={() => void handleRemoveVariation()}
-      canRemoveVariation={canRemoveVariation}
+      canRemoveVariation={canRemoveVariation && !documentFlowBusy}
+      canDeleteNode={canDeleteNode}
+      canPromoteMain={canPromoteMain}
+      canReturnMain={canReturnMain}
+      onPromoteMain={() => void handlePromoteMain()}
+      onReturnMain={handleReturnMain}
       onFirstMove={() => handleMoveSelect(0)}
-      onAutoPlay={() => setAutoPlaying((value) => !value)}
+      onAutoPlay={() => { if (!scoringRef.current && !scoringPendingRef.current) setAutoPlaying((value) => !value); }}
       onOverlayMode={setOverlayMode}
-      message={message}
+      message={recentHistoryError ? `${message} ${recentHistoryError}` : message}
       toPlay={currentPosition.to_play}
     />
     <section className="spread">
@@ -2650,34 +3432,48 @@ export function App() {
               {`${((chartWinrate ?? 0.5) * 100).toFixed(1)}%`}
             </span>
           </h2>
-          <WinrateChart model={chartModel} />
+          <WinrateChart model={chartModel} onSelectNode={handleReviewNodeSelect} />
           <div id="board-layers" />
         </div>
         <AnalysisPanel
           pane="commentary"
           frame={visibleCurrentFrame}
-          problems={visibleProblems}
-          moves={game.moves}
-          boardSize={game.summary.board_size}
+          problems={reviewProblems}
+          boardWidth={game.summary.board_width}
+          boardHeight={game.summary.board_height}
           currentMove={currentMove}
+          blackName={blackName}
+          whiteName={whiteName}
           currentPosition={currentPosition}
           personalComment={selectedPersonalComment}
           generatedInformation={selectedGeneratedInformation}
-          commentEditorEnabled={nativeRuntime && Boolean(currentGame)}
+          commentEditorEnabled={nativeRuntime && Boolean(currentGame) && !documentFlowBusy && !trial && !trialPending && !scoring && !scoringPending}
           onCommitPersonalComment={(comment) => void handleCommitPersonalComment(comment)}
           selectedCandidateIndex={selectedCandidateIndex}
           onSelectCandidate={selectCandidate}
-          onSelectProblem={handleMoveSelect}
+          onSelectProblem={handleProblemSelect}
+          selectedPath={selectedPath}
         />
       </aside>
-      <div className="diagram">
+      <div className={`diagram${rootSetupDraft ? " setup-active" : ""}${scoring ? " scoring-active" : ""}`}>
+      <div className="markup-toolbar" role="toolbar" aria-label="节点标记工具">
+        {([
+          ["play", "落子"], ["label", "文字"], ["letters", "字母"], ["numbers", "数字"],
+          ["circle", "圆"], ["square", "方"], ["cross", "叉"], ["triangle", "三角"], ["erase", "擦除"]
+        ] as const).map(([tool, label]) => <button key={tool} type="button" aria-pressed={markupTool === tool}
+          disabled={!nativeRuntime || !currentGame || historyActionBlocked || trialPending || scoringPending || Boolean(scoring) || (tool !== "play" && Boolean(trial))} onClick={() => setMarkupTool(tool)}>{label}</button>)}
+        <button type="button" disabled={!nativeRuntime || !currentGame || historyActionBlocked || trialPending || scoringPending || Boolean(scoring) || Boolean(trial)}
+          onClick={() => void commitMarkup({ kind: "clear" })}>清空标记</button>
+      </div>
         <BoardCanvas
-          position={currentPosition}
-          analysis={visibleCurrentFrame}
+          position={rootSetupDraft ? { ...currentPosition, stones: rootSetupDraft.stones, to_play: rootSetupDraft.toPlay, last_move: null, move_number: 0 } : currentPosition}
+          markup={reviewGame?.snapshot.markup}
+          analysis={rootSetupDraft || scoring ? undefined : visibleCurrentFrame}
+          scoring={scoring}
           selectedCandidateIndex={selectedCandidateIndex}
           previewScope={activeScope}
           onCandidatePreview={previewCandidate}
-          moves={game.moves}
+          stoneMoveNumbers={rootSetupDraft ? [] : reviewGame?.snapshot.stone_move_numbers}
           showCoordinates={showCoordinates}
           showMoveNumbers={showMoveNumbers}
           overlayMode={overlayMode}
@@ -2685,28 +3481,56 @@ export function App() {
           hideCandidates={hideCandidates}
           pvPrefixLength={replayPrefix}
           replayCandidateIndex={activeCandidateIndex}
-          onPointClick={(point) => void playAt({ point })}
+          onPointClick={handleBoardPoint}
           keyboardPlacement={keyboardPlacement}
-          nextMoveMode={preferences.nextMoveReviewMarker}
-          nextMoveMarkers={nextMoveMarkers}
+          nextMoveMode={rootSetupDraft || scoring ? "off" : preferences.nextMoveReviewMarker}
+          nextMoveMarkers={rootSetupDraft || scoring ? [] : nextMoveMarkers}
         />
+        {rootSetupDraft ? <div className="root-setup-tools" role="group" aria-label="起始局面草稿">
+          <span>起始局面 · 点击棋盘预览</span>
+          {(["black", "white", "erase"] as const).map((tool) => <button key={tool} type="button"
+            aria-pressed={rootSetupDraft.tool === tool} onClick={() => setRootSetupDraft({ ...rootSetupDraft, tool })}>
+            {tool === "black" ? "黑子" : tool === "white" ? "白子" : "擦除"}
+          </button>)}
+          <button type="button" onClick={() => setRootSetupDraft({ ...rootSetupDraft, stones: [] })}>清空</button>
+          <label>下一手 <select value={rootSetupDraft.toPlay} onChange={(event) => setRootSetupDraft({ ...rootSetupDraft, toPlay: event.target.value as PlayerColor })}>
+            <option value="black">黑</option><option value="white">白</option>
+          </select></label>
+          <button type="button" disabled={editActionPending} onClick={() => void finishRootEdit("setup")}>应用</button>
+          <button type="button" disabled={editActionPending} onClick={() => setRootSetupDraft(null)}>取消</button>
+        </div> : null}
+        {scoring ? <ScoringControls scoring={scoring} busy={scoringPending} onRule={handleScoringRule}
+          onSettings={(compensation, handicap) => void handleUpdateScoring({ kind: "settings", rule: scoring.rule, compensation, handicap })}
+          onExit={(confirm) => void handleExitScoring(confirm)} /> : null}
         {boardIntentFeedback ? (
           <p className="board-intent-status" role="status" aria-live="polite">{boardIntentFeedback}</p>
         ) : null}
       </div>
       <aside className="sheet-col" hidden={referenceRailCollapsed}>
+        {reviewGame ? <ReviewTree
+          key={trial ? `trial-${trial.session_id}` : reviewGame.generation}
+          root={reviewGame.tree}
+          selectedPath={selectedPath}
+          generation={reviewGame.generation}
+          onSelectNode={(path, generation) => {
+            if (!referenceRailCollapsed) void selectNode(path, generation);
+          }}
+        /> : null}
         <AnalysisPanel
           pane="reference"
           frame={visibleCurrentFrame}
-          problems={visibleProblems}
-          moves={game.moves}
-          boardSize={game.summary.board_size}
+          problems={reviewProblems}
+          boardWidth={game.summary.board_width}
+          boardHeight={game.summary.board_height}
           currentMove={currentMove}
           currentPosition={currentPosition}
           selectedCandidateIndex={selectedCandidateIndex}
           previewCandidateIndex={previewCandidateIndex}
           onSelectCandidate={selectCandidate}
-          onSelectProblem={handleMoveSelect}
+          onSelectProblem={handleProblemSelect}
+          selectedPath={selectedPath}
+          reviewLine={reviewGame ? chartModel.points : undefined}
+          onSelectNode={handleReviewNodeSelect}
           contentMode={preferences.subBoardContentMode}
           pvPrefixLength={replayPrefix}
         />
@@ -2725,7 +3549,7 @@ export function App() {
       draft={analysisScopeDraft}
       preview={analysisScopePreview}
       task={analysisTask}
-      canRun={nativeRuntime && engineReady && Boolean(currentGame) && !departurePending && !departurePrompt}
+      canRun={nativeRuntime && engineReady && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending && !departurePending && !departurePrompt}
       busy={analysisTaskRequestPending}
       error={analysisTaskError}
       onDraftChange={handleAnalysisScopeDraftChange}
@@ -2770,16 +3594,16 @@ export function App() {
       onRefresh={() => void handleParseSgf()}
       onClearBoard={() => void handleNewGame()}
       onEstimate={() => setOverlayMode("ownership")}
-      onAutoPlay={() => setAutoPlaying((value) => !value)}
+      onAutoPlay={() => { if (!scoringRef.current && !scoringPendingRef.current) setAutoPlaying((value) => !value); }}
       autoPlaying={autoPlaying}
       showCoordinates={showCoordinates}
       showMoveNumbers={showMoveNumbers}
-      onShowCoordinates={setShowCoordinates}
-      onShowMoveNumbers={setShowMoveNumbers}
+      onShowCoordinates={(value) => handlePreferencesChange({ ...preferences, showCoordinates: value })}
+      onShowMoveNumbers={(value) => handlePreferencesChange({ ...preferences, showMoveNumbers: value })}
       keyboardPlacement={keyboardPlacement}
       onKeyboardPlacement={setKeyboardPlacement}
       jumpRef={jumpRef}
-      message={message}
+      message={[message, recentHistoryError, preferencesStatus.startsWith("Save failed:") ? preferencesStatus : null].filter(Boolean).join(" ")}
       toPlay={currentPosition.to_play}
     />
     <section className="sheet-row" hidden={sheet === "none"}>
@@ -2830,6 +3654,56 @@ export function App() {
         onChange={(nextPreferences) => void handlePreferencesChange(nextPreferences)}
       /> : null}
     </section>
+    {newDocumentOpen ? (
+      <NewDocumentDialog
+        defaultBoardWidth={preferences.defaultBoardWidth}
+        defaultBoardHeight={preferences.defaultBoardHeight}
+        defaultKomi={preferences.defaultKomi}
+        onCreate={(parameters) => void handleCreateNewGame(parameters)}
+        onCancel={() => void handleCancelNewGame()}
+      />
+    ) : null}
+    {conversionPrompt ? <div className="shortcut-reference-backdrop" role="presentation">
+      <div className="root-conversion-dialog" role="dialog" aria-modal="true" aria-label="转换为起始局面">
+        <h2>转换为起始局面？</h2>
+        <p>将当前实际棋子及执色设为无后续根局面，并丢弃原着手树。此操作可撤销；原根信息、评论和源路径保留。</p>
+        <div className="button-row">
+          <button type="button" disabled={editActionPending} onClick={() => void finishRootEdit("convert")}>确认转换</button>
+          <button type="button" disabled={editActionPending} onClick={() => setConversionPrompt(null)}>取消</button>
+        </div>
+      </div>
+    </div> : null}
+    {metadataDraft ? (
+      <GameMetadataDialog
+        blackName={metadataDraft.blackName}
+        whiteName={metadataDraft.whiteName}
+        komi={metadataDraft.komi}
+        handicap={metadataDraft.handicap}
+        onApply={(black, white, komi) => handleApplyMetadata(metadataDraft.generation, black, white, komi)}
+        onCancel={() => setMetadataDraft(null)}
+      />
+    ) : null}
+    {markupDialog ? (
+      <div className="shortcut-reference-backdrop" onClick={() => setMarkupDialog(null)}>
+        <form className="new-document-dialog" role="dialog" aria-modal="true" aria-label="编辑文字标记"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setMarkupDialog(null); } }}
+          onSubmit={(event) => {
+            event.preventDefault();
+            const pending = markupDialog;
+            setMarkupDialog(null);
+            void commitMarkup({ kind: "point", point: pending.point, tool: { kind: "label", text: pending.text } }, pending);
+          }}>
+          <h2>当前节点文字标记</h2>
+          <label>文字 <input type="text" autoFocus value={markupDialog.text}
+            onChange={(event) => setMarkupDialog({ ...markupDialog, text: event.target.value })} /></label>
+          <div className="new-document-actions">
+            <button type="button" onClick={() => setMarkupDialog(null)}>取消</button>
+            <button type="submit">应用</button>
+          </div>
+        </form>
+      </div>
+    ) : null}
     {departurePrompt ? (
       <DocumentDepartureDialog
         message={departurePrompt.message}
@@ -2862,6 +3736,7 @@ export function App() {
     ) : null}
   </main>;
 }
+
 
 function isAnalysisTaskReserved(task: AnalysisTaskDto | null): boolean {
   return task != null && (task.state === "queued"
@@ -3030,16 +3905,6 @@ function chosenChildIndex(chosen: Map<string, number>, path: NodePath, childCoun
   return 0;
 }
 
-function chosenLeafPath(root: SgfTreeNodeDto, start: NodePath, chosen: Map<string, number>): NodePath {
-  const indices = [...start.indices];
-  let node = nodeAt(root, start);
-  while (node && node.children.length > 0) {
-    const index = chosenChildIndex(chosen, { indices }, node.children.length);
-    indices.push(index);
-    node = node.children[index];
-  }
-  return { indices };
-}
 
 function taskConditionsFromDraft(
   draft: AnalysisScopeDraft,

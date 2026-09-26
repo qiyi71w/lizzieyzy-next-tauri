@@ -504,13 +504,15 @@ fn metadata_from_sgf(sgf: &str) -> ProviderGameMetadata {
 }
 
 fn metadata_summary(metadata: &ProviderGameMetadata) -> ProviderGameSummary {
+    let board_size = metadata
+        .extra
+        .get("board_size")
+        .and_then(|value| value.parse().ok());
     ProviderGameSummary {
         provider: ProviderKind::Fox,
         source_id: metadata.source_id.clone(),
-        board_size: metadata
-            .extra
-            .get("board_size")
-            .and_then(|value| value.parse().ok()),
+        board_width: board_size,
+        board_height: board_size,
         komi: metadata.extra.get("komi").and_then(|value| value.parse().ok()),
         handicap: metadata
             .extra

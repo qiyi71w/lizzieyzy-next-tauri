@@ -4,7 +4,8 @@ export type MoveVertex = { point: PointDto } | "pass";
 export type MoveDto = { color: PlayerColor; vertex: MoveVertex; move_number: number };
 export type StoneDto = PointDto & { color: PlayerColor };
 export type PositionDto = {
-  board_size: number;
+  board_width: number;
+  board_height: number;
   move_number: number;
   to_play: PlayerColor;
   stones: StoneDto[];
@@ -13,7 +14,7 @@ export type PositionDto = {
   last_move?: MoveDto | null;
   errors: string[];
 };
-export type GameSummaryDto = { id: string; board_size: number; komi: number; black_name?: string | null; white_name?: string | null; result?: string | null; move_count: number };
+export type GameSummaryDto = { id: string; board_width: number; board_height: number; komi: number; black_name?: string | null; white_name?: string | null; result?: string | null; move_count: number };
 export type GameDto = { summary: GameSummaryDto; moves: MoveDto[] };
 export type GameFileFormatDto = "sgf" | "gib";
 export type GameFileImportDto = {
@@ -22,6 +23,7 @@ export type GameFileImportDto = {
   display_path: string;
   display_name: string;
   native_path?: string | null;
+  opened_path?: string | null;
 };
 export type FileActivationDeliveryDto =
   | { kind: "open"; request_id: number; path: string }
@@ -31,10 +33,22 @@ export type FileActivationRejectionDto = { message: string };
 export type NodePath = { indices: number[] };
 export type SgfPropertyDto = { key: string; values: string[] };
 export type SgfTreeNodeDto = { properties: SgfPropertyDto[]; children: SgfTreeNodeDto[] };
+export type SgfMarkupDto =
+  | { kind: "label"; point: PointDto; text: string }
+  | { kind: "circle" | "square" | "cross" | "triangle"; point: PointDto };
+export type SgfMarkupToolDto =
+  | { kind: "label"; text: string }
+  | { kind: "letters" | "numbers" | "circle" | "square" | "cross" | "triangle" | "erase" };
+export type SgfMarkupActionDto =
+  | { kind: "clear" }
+  | { kind: "point"; point: PointDto; tool: SgfMarkupToolDto };
+
 export type SelectedNodeSnapshotDto = {
   path: NodePath;
   position: PositionDto;
+  stone_move_numbers: MoveDto[];
   personal_comment: string;
+  markup: SgfMarkupDto[];
   generated_information?: string | null;
   primary_analysis?: AnalysisFrameDto | null;
   secondary_analysis?: AnalysisFrameDto | null;
@@ -46,8 +60,47 @@ export type CurrentGameResultDto = {
   /** Semantic position/tree identity; comments, navigation and Save preserve it. */
   generation: number;
   snapshot_seq: number;
+  can_undo: boolean;
+  can_redo: boolean;
   dirty: boolean;
   native_path?: string | null;
+};
+export type TrialSessionDto = {
+  session_id: number;
+  revision: number;
+  entry_path: NodePath;
+  tree: SgfTreeNodeDto;
+  selected_path: NodePath;
+  snapshot: SelectedNodeSnapshotDto;
+  can_undo: boolean;
+};
+export type ScoringRuleDto = "area" | "territory";
+export type AreaCompensationDto = "none" | "handicap" | "handicap_minus_one";
+export type ScoringActionDto =
+  | { kind: "point"; point: PointDto }
+  | { kind: "settings"; rule: ScoringRuleDto; compensation: AreaCompensationDto; handicap: number };
+export type ScoringSessionDto = {
+  session_id: number;
+  revision: number;
+  entry_path: NodePath;
+  generation: number;
+  position: PositionDto;
+  dead: PointDto[];
+  neutral: PointDto[];
+  ownership: (PlayerColor | null)[];
+  rule: ScoringRuleDto;
+  compensation: AreaCompensationDto;
+  handicap: number;
+  komi: number;
+  black_stones: number;
+  white_stones: number;
+  black_territory: number;
+  white_territory: number;
+  black_dead: number;
+  white_dead: number;
+  black_total: string;
+  white_total: string;
+  result: string;
 };
 export type CurrentGameErrorKind =
   | "no_current_game"

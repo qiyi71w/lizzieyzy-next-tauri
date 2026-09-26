@@ -39,7 +39,7 @@ fn payload_value<'a>(sgf: &'a str, key: &str) -> &'a str {
 #[test]
 fn frozen_java_root_lzop_parses_engine_visits_winrate_candidates_and_pv() {
     let payload =
-        parse_analysis_payload(payload_value(ROOT_LZOP, "LZOP"), 19).expect("root LZOP should parse");
+        parse_analysis_payload(payload_value(ROOT_LZOP, "LZOP"), 19, 19).expect("root LZOP should parse");
 
     assert_eq!(payload.engine_name, "MainEngine");
     assert_eq!(payload.visits, 120);
@@ -57,7 +57,7 @@ fn frozen_java_root_lzop_parses_engine_visits_winrate_candidates_and_pv() {
 #[test]
 fn frozen_java_root_lzop2_parses_secondary_payload() {
     let payload =
-        parse_analysis_payload(payload_value(ROOT_LZOP, "LZOP2"), 19).expect("root LZOP2 should parse");
+        parse_analysis_payload(payload_value(ROOT_LZOP, "LZOP2"), 19, 19).expect("root LZOP2 should parse");
 
     assert_eq!(payload.engine_name, "SubEngine");
     assert_eq!(payload.visits, 150);
@@ -68,7 +68,7 @@ fn frozen_java_root_lzop2_parses_secondary_payload() {
 #[test]
 fn frozen_java_payload_parses_score_ownership_and_playout_shorthand() {
     let payload =
-        parse_analysis_payload(payload_value(BRANCHING, "LZOP"), 19).expect("kata LZOP should parse");
+        parse_analysis_payload(payload_value(BRANCHING, "LZOP"), 19, 19).expect("kata LZOP should parse");
 
     assert_eq!(payload.visits, 1500);
     assert_close(payload.score_mean_black.unwrap(), 3.5);
@@ -81,31 +81,31 @@ fn frozen_java_payload_parses_score_ownership_and_playout_shorthand() {
 
 #[test]
 fn malformed_and_zero_visit_payloads_are_not_projectable_analysis() {
-    assert!(parse_analysis_payload("not-analysis", 19).is_none());
-    assert!(parse_analysis_payload("Engine", 19).is_none());
-    assert!(parse_analysis_payload("", 19).is_none());
+    assert!(parse_analysis_payload("not-analysis", 19, 19).is_none());
+    assert!(parse_analysis_payload("Engine", 19, 19).is_none());
+    assert!(parse_analysis_payload("", 19, 19).is_none());
 
-    let header_only = parse_analysis_payload("Main 44.0 120", 19).expect("header parses");
+    let header_only = parse_analysis_payload("Main 44.0 120", 19, 19).expect("header parses");
     assert!(header_only.is_projectable());
 
-    let zero_visits = parse_analysis_payload("Main 44.0 0 3.5 0.7", 19).expect("zero visits parses");
+    let zero_visits = parse_analysis_payload("Main 44.0 0 3.5 0.7", 19, 19).expect("zero visits parses");
     assert!(!zero_visits.is_projectable());
 }
 
 #[test]
 fn canonical_encode_uses_lzop_at_root_and_lz_elsewhere() {
-    let parsed = parse_analysis_payload(payload_value(ROOT_LZOP, "LZOP"), 19).unwrap();
+    let parsed = parse_analysis_payload(payload_value(ROOT_LZOP, "LZOP"), 19, 19).unwrap();
 
-    let root = encode_analysis_payload(&parsed, AnalysisSlot::Primary { root: true }, 19);
-    let node = encode_analysis_payload(&parsed, AnalysisSlot::Primary { root: false }, 19);
-    let secondary = encode_analysis_payload(&parsed, AnalysisSlot::Secondary { root: true }, 19);
+    let root = encode_analysis_payload(&parsed, AnalysisSlot::Primary { root: true }, 19, 19);
+    let node = encode_analysis_payload(&parsed, AnalysisSlot::Primary { root: false }, 19, 19);
+    let secondary = encode_analysis_payload(&parsed, AnalysisSlot::Secondary { root: true }, 19, 19);
 
     assert_eq!(root.key, "LZOP");
     assert_eq!(node.key, "LZ");
     assert_eq!(secondary.key, "LZOP2");
     assert_eq!(root.values.len(), 1);
 
-    let reparsed = parse_analysis_payload(&root.values[0], 19).unwrap();
+    let reparsed = parse_analysis_payload(&root.values[0], 19, 19).unwrap();
     assert_eq!(reparsed.engine_name, parsed.engine_name);
     assert_eq!(reparsed.visits, parsed.visits);
     assert_close(reparsed.winrate_black, parsed.winrate_black);
@@ -120,8 +120,8 @@ fn canonical_encode_uses_lzop_at_root_and_lz_elsewhere() {
 
 #[test]
 fn encode_does_not_emit_next_companion_context_or_comment_stats() {
-    let parsed = parse_analysis_payload(payload_value(ROOT_LZOP, "LZOP"), 19).unwrap();
-    let encoded = encode_analysis_payload(&parsed, AnalysisSlot::Primary { root: true }, 19);
+    let parsed = parse_analysis_payload(payload_value(ROOT_LZOP, "LZOP"), 19, 19).unwrap();
+    let encoded = encode_analysis_payload(&parsed, AnalysisSlot::Primary { root: true }, 19, 19);
     let body = &encoded.values[0];
     assert!(!body.contains("AnalysisContext"));
     assert!(!body.contains("visits:"));
@@ -202,9 +202,9 @@ fn save_reopen_preserves_secondary_unknown_comment_and_malformed_payloads() {
 
 #[test]
 fn encoded_root_and_node_payloads_reopen_as_equivalent_primary_analysis() {
-    let parsed = parse_analysis_payload(payload_value(ROOT_LZOP, "LZOP"), 19).unwrap();
-    let root_prop = encode_analysis_payload(&parsed, AnalysisSlot::Primary { root: true }, 19);
-    let node_prop = encode_analysis_payload(&parsed, AnalysisSlot::Primary { root: false }, 19);
+    let parsed = parse_analysis_payload(payload_value(ROOT_LZOP, "LZOP"), 19, 19).unwrap();
+    let root_prop = encode_analysis_payload(&parsed, AnalysisSlot::Primary { root: true }, 19, 19);
+    let node_prop = encode_analysis_payload(&parsed, AnalysisSlot::Primary { root: false }, 19, 19);
     let root_sgf = format!(
         "(;FF[4]GM[1]SZ[19]KM[7.5]{}[{}])",
         root_prop.key, root_prop.values[0]

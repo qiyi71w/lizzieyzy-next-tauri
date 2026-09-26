@@ -180,7 +180,8 @@ fn selected_request(run_id: &str, generation: u64, indices: Vec<u32>) -> Selecte
         generation,
         node_path: NodePath { indices },
         query: sample_query(),
-        board_size: 9,
+        board_width: 9,
+        board_height: 9,
         position_empty: true,
     }
 }
@@ -195,7 +196,8 @@ fn whole_game_request(run_id: &str, generation: u64, expected_responses: usize) 
                     indices: vec![0; depth],
                 },
                 query: sample_query(),
-                board_size: 9,
+                board_width: 9,
+                board_height: 9,
                 move_number: depth as u32,
             })
             .collect(),
@@ -779,7 +781,8 @@ fn selected_node_completion_publishes_normalized_candidates_pv_ownership_policy_
             generation: 4,
             node_path: NodePath { indices: vec![0, 1] },
             query,
-            board_size: 2,
+            board_width: 2,
+            board_height: 2,
             position_empty: true,
         })
         .unwrap();
@@ -880,6 +883,85 @@ fn selected_node_protocol_stderr_failure_is_typed_and_publishes_no_frame() {
     assert!(matches!(
         manager.snapshot().lifecycle,
         ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_board_size_refusal_fails_only_the_job_and_keeps_exact_ready_run() {
+    let temp = TestTempDir::new("continuous-board-size-refusal");
+    let script = selected_node_final_script(
+        r#"printf '{"id":"%s","error":"Must provide an integer from 2 to 19","field":"boardXSize"}\n' "$id""#,
+    );
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let mut request = continuous_request(&run_id, 4, vec![]);
+    request.query.board_x_size = 25;
+    request.query.board_y_size = 2;
+    request.board_width = 25;
+    request.board_height = 2;
+    let started = manager.start_selected_node_job(request).unwrap();
+
+    let failed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    let failure = failed.failure.expect("typed capability refusal");
+    assert_eq!(failure.kind, EngineFailureKind::UnsupportedCapability);
+    assert!(failure.message.contains("25×2"), "{}", failure.message);
+    assert!(failure.message.contains("2 to 19"), "{}", failure.message);
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { ref run } if run.run_id == run_id
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn finite_board_size_refusal_fails_only_the_job_and_keeps_exact_ready_run() {
+    let temp = TestTempDir::new("finite-board-size-refusal");
+    let script = selected_node_final_script(
+        r#"printf '{"id":"%s","error":"Must provide an integer from 2 to 19","field":"boardYSize"}\n' "$id""#,
+    );
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let mut request = selected_request(&run_id, 4, vec![]);
+    request.query.board_x_size = 2;
+    request.query.board_y_size = 25;
+    request.board_width = 2;
+    request.board_height = 25;
+    let started = manager.start_selected_node_job(request).unwrap();
+
+    let failed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    let failure = failed.failure.expect("typed capability refusal");
+    assert_eq!(failure.kind, EngineFailureKind::UnsupportedCapability);
+    assert!(failure.message.contains("2×25"), "{}", failure.message);
+    assert!(failure.message.contains("2 to 19"), "{}", failure.message);
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { ref run } if run.run_id == run_id
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn generic_integer_error_for_another_field_remains_a_protocol_failure() {
+    let temp = TestTempDir::new("non-board-integer-refusal");
+    let script = selected_node_final_script(
+        r#"printf '{"id":"%s","error":"Must provide an integer from 2 to 19","field":"maxVisits"}\n' "$id""#,
+    );
+    let (manager, _, events, run_id) = ready_manager(&temp, &script);
+    let started = manager
+        .start_selected_node_job(selected_request(&run_id, 4, vec![]))
+        .unwrap();
+
+    let failed = wait_job(&events, Duration::from_secs(2), |job| {
+        job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    let failure = failed.failure.expect("typed protocol failure");
+    assert_eq!(failure.kind, EngineFailureKind::Protocol);
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { ref run } if run.run_id == run_id
     ));
 }
 
@@ -1610,7 +1692,9 @@ for line in sys.stdin:
         .map(|index| (if index % 2 == 0 { "B" } else { "W" }.into(), "pass".into()))
         .collect();
     let writer = manager.clone();
-    let selected_thread = std::thread::spawn(move || writer.start_selected_node_job(selected));
+    let selected_thread = std::thread::spawn(move || {
+        writer.start_selected_node_job(selected).unwrap();
+    });
     std::thread::sleep(Duration::from_millis(100));
     std::fs::write(temp.path().join("release-overview"), "go").unwrap();
     let boundary = wait_task_stage(&manager, AnalysisTaskStageDto::Deep, AnalysisTaskStateDto::Queued);
@@ -1630,7 +1714,7 @@ for line in sys.stdin:
     assert_eq!(continued.stage, AnalysisTaskStageDto::Deep);
     assert_ne!(continued.job_id, task.job_id);
     std::fs::write(temp.path().join("release-reader"), "go").unwrap();
-    selected_thread.join().unwrap().unwrap();
+    selected_thread.join().unwrap();
     let completed = wait_task(&manager, AnalysisTaskStateDto::Completed);
     assert_eq!(completed.overview_completed, completed.requested);
     assert_eq!(completed.completed, completed.requested);
@@ -1806,7 +1890,9 @@ for line in sys.stdin:
         .map(|i| (if i % 2 == 0 { "B" } else { "W" }.into(), "pass".into()))
         .collect();
     let writer = manager.clone();
-    let selected_thread = std::thread::spawn(move || writer.start_selected_node_job(selected));
+    let selected_thread = std::thread::spawn(move || {
+        writer.start_selected_node_job(selected).unwrap();
+    });
     std::thread::sleep(Duration::from_millis(100));
     let task = manager
         .start_analysis_task(
@@ -1819,7 +1905,7 @@ for line in sys.stdin:
     assert_eq!(paused.state, AnalysisTaskStateDto::Paused);
     assert!(paused.completed.is_empty());
     std::fs::write(temp.path().join("release"), "").unwrap();
-    selected_thread.join().unwrap().unwrap();
+    selected_thread.join().unwrap();
     std::thread::sleep(Duration::from_millis(100));
     let delivered = std::fs::read_to_string(temp.path().join("delivered.jsonl")).unwrap();
     assert!(
@@ -3120,13 +3206,15 @@ fn whole_game_progress_publishes_exact_node_path_and_writes_one_query_per_node()
                 WholeGameWorkItem {
                     node_path: NodePath { indices: Vec::new() },
                     query: root_query,
-                    board_size: 5,
+                    board_width: 5,
+                    board_height: 5,
                     move_number: 0,
                 },
                 WholeGameWorkItem {
                     node_path: NodePath { indices: vec![0] },
                     query: child_query,
-                    board_size: 5,
+                    board_width: 5,
+                    board_height: 5,
                     move_number: 1,
                 },
             ],

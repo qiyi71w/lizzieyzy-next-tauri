@@ -54,9 +54,12 @@ const backend = vi.hoisted(() => ({
   saveCurrentGame: vi.fn(),
   setCurrentGamePersonalComment: vi.fn(),
   removeCurrentGameVariation: vi.fn(),
+  undoCurrentGame: vi.fn(),
+  redoCurrentGame: vi.fn(),
   startKataGoGameAnalysis: vi.fn(),
   loadEngineProfilesSettings: vi.fn(() => Promise.resolve({ selected_profile_id: "default", profiles: [] })),
   subscribeForegroundEngine: vi.fn(async (_onSnapshot?: (snapshot: unknown) => void) => () => undefined),
+  subscribeTrialAnalysis: vi.fn(async () => () => undefined),
   startForegroundEngine: vi.fn(),
   stopForegroundEngine: vi.fn(),
   restartForegroundEngine: vi.fn(),
@@ -100,7 +103,8 @@ vi.mock("./components/WinrateChart", () => ({
 import { App } from "./App";
 
 const emptyPosition = {
-  board_size: 9,
+  board_width: 9,
+  board_height: 9,
   move_number: 0,
   to_play: "black" as const,
   stones: [],
@@ -113,15 +117,17 @@ const emptyPosition = {
 const initialGame: CurrentGameResultDto = {
   tree: { properties: [], children: [] },
   selected_path: { indices: [] },
-  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "" },
+  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "", markup: [], stone_move_numbers: [] },
   generation: 1,
   snapshot_seq: 1,
+  can_undo: false,
+  can_redo: false,
   dirty: false,
   native_path: null
 };
 
 const initialProjection: GameDto = {
-  summary: { id: "test", board_size: 9, komi: 7.5, move_count: 0 },
+  summary: { id: "test", board_width: 9, board_height: 9, komi: 7.5, move_count: 0 },
   moves: []
 };
 
@@ -147,6 +153,51 @@ afterEach(() => {
 });
 
 describe("durable preferences surface", () => {
+  it("keeps display controls committed until a write succeeds and reports failed shortcut writes", async () => {
+    let finishSave!: (value: AppPreferences) => void;
+    const pendingSave = new Promise<AppPreferences>((resolve) => { finishSave = resolve; });
+    preferencesApi.saveAppPreferences.mockReturnValueOnce(pendingSave);
+    const host = await renderApp();
+    const coordinates = () => buttonNamed(host, "坐标");
+    act(() => coordinates().click());
+    expect(coordinates().getAttribute("aria-pressed")).toBe("true");
+    await act(async () => {
+      finishSave({ ...defaultAppPreferences, showCoordinates: false });
+      await pendingSave;
+    });
+    expect(coordinates().getAttribute("aria-pressed")).toBe("false");
+    act(() => buttonNamed(host, "显示").click());
+    expect(menuCheck(host, "坐标(C)").getAttribute("aria-checked")).toBe("false");
+    act(() => buttonNamed(host, "显示").click());
+    preferencesApi.saveAppPreferences.mockRejectedValueOnce(new Error("display disk full"));
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "c", bubbles: true })));
+    await act(async () => { await preferencesApi.saveAppPreferences.mock.results.at(-1)?.value.catch(() => undefined); });
+    expect(coordinates().getAttribute("aria-pressed")).toBe("false");
+    expect(host.textContent).toContain("display disk full");
+    openPreferences(host);
+    expect(labeledCheckbox(host, "坐标").checked).toBe(false);
+    expect(buttonNamed(host, "手数").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("adopts mute only after a successful durable write and retains it after failure", async () => {
+    const host = await renderApp();
+    openPreferences(host);
+    let resolveSave!: (value: AppPreferences) => void;
+    preferencesApi.saveAppPreferences.mockImplementationOnce(() => new Promise<AppPreferences>((resolve) => { resolveSave = resolve; }));
+    act(() => labeledCheckbox(host, "落子声音").click());
+    expect(labeledCheckbox(host, "落子声音").checked).toBe(true);
+    await act(async () => {
+      resolveSave({ ...defaultAppPreferences, soundEnabled: false });
+      await preferencesApi.saveAppPreferences.mock.results.at(-1)?.value;
+    });
+    expect(labeledCheckbox(host, "落子声音").checked).toBe(false);
+    preferencesApi.saveAppPreferences.mockRejectedValueOnce(new Error("disk full"));
+    act(() => labeledCheckbox(host, "落子声音").click());
+    await act(async () => { await preferencesApi.saveAppPreferences.mock.results.at(-1)?.value.catch(() => undefined); });
+    expect(labeledCheckbox(host, "落子声音").checked).toBe(false);
+    expect(preferencesStatus(host)).toContain("disk full");
+  });
+
   it("keeps invalid budgets local and restores the committed values when persistence fails", async () => {
     const host = await renderApp();
     act(() => buttonNamed(host, "分析").click());

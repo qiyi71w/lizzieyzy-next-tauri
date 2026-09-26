@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { continuousBudgetError, type AppPreferences, type BoardTheme, type GraphPerspective, type NextMoveReviewMarkerMode, type ReviewMode, type SubBoardContentMode } from "../domain/preferences";
+import { continuousBudgetError, newGameDefaultsError, type AppPreferences, type BoardTheme, type GraphPerspective, type NextMoveReviewMarkerMode, type ReviewMode, type SubBoardContentMode } from "../domain/preferences";
 import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
 
 type Props = {
@@ -98,6 +98,12 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
       <ContinuousBudgetEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       <fieldset className="preferences-grid">
         <legend>复盘</legend>
+        <Toggle
+          label="落子声音"
+          checked={preferences.soundEnabled}
+          disabled={disabled}
+          onChange={(checked) => update({ soundEnabled: checked })}
+        />
         <label>
           <span>默认计算量</span>
           <input
@@ -127,6 +133,8 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
           </select>
         </label>
       </fieldset>
+      <DisplayPreferencesEditor preferences={preferences} disabled={disabled} onChange={onChange} />
+      <NewGameDefaultsEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       <fieldset className="preferences-grid">
         <legend>胜率图</legend>
         <label>
@@ -175,6 +183,105 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
         </label>
       </fieldset>
     </section>
+  );
+}
+
+function DisplayPreferencesEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
+  const [edited, setEdited] = useState<{ showCoordinates: boolean; showMoveNumbers: boolean } | null>(null);
+  const draft = edited ?? {
+    showCoordinates: preferences.showCoordinates,
+    showMoveNumbers: preferences.showMoveNumbers
+  };
+
+  function apply() {
+    if (edited === null) return;
+    onChange({
+      ...preferences,
+      showCoordinates: draft.showCoordinates,
+      showMoveNumbers: draft.showMoveNumbers
+    });
+    setEdited(null);
+  }
+
+  return (
+    <fieldset className="preferences-grid" disabled={disabled}>
+      <legend>棋盘显示</legend>
+      <Toggle
+        label="坐标"
+        checked={draft.showCoordinates}
+        disabled={disabled}
+        onChange={(checked) => setEdited({ ...draft, showCoordinates: checked })}
+      />
+      <Toggle
+        label="全部手数"
+        checked={draft.showMoveNumbers}
+        disabled={disabled}
+        onChange={(checked) => setEdited({ ...draft, showMoveNumbers: checked })}
+      />
+      <button
+        type="button"
+        aria-label="应用显示设置"
+        disabled={disabled || edited === null}
+        onClick={apply}
+      >
+        应用
+      </button>
+      <button
+        type="button"
+        aria-label="取消显示设置"
+        disabled={disabled || edited === null}
+        onClick={() => setEdited(null)}
+      >
+        取消
+      </button>
+    </fieldset>
+  );
+}
+
+function NewGameDefaultsEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
+  const [edited, setEdited] = useState<{ width: string; height: string; komi: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const draft = edited ?? {
+    width: String(preferences.defaultBoardWidth),
+    height: String(preferences.defaultBoardHeight),
+    komi: String(preferences.defaultKomi)
+  };
+  const emptyKomiError = draft.komi.trim() === "" ? "贴目须为有限数值。" : null;
+  function apply() {
+    const next = {
+      ...preferences,
+      defaultBoardWidth: Number(draft.width),
+      defaultBoardHeight: Number(draft.height),
+      defaultKomi: Number(draft.komi)
+    };
+    const invalid = emptyKomiError ?? newGameDefaultsError(next);
+    setError(invalid);
+    if (invalid) return;
+    onChange(next);
+    setEdited(null);
+  }
+  return (
+    <fieldset className="preferences-grid" disabled={disabled}>
+      <legend>新建棋谱默认值</legend>
+      <label>
+        <span>默认宽度</span>
+        <input type="number" min={2} max={25} step={1} value={draft.width}
+          onChange={(event) => setEdited({ ...draft, width: event.target.value })} />
+      </label>
+      <label>
+        <span>默认高度</span>
+        <input type="number" min={2} max={25} step={1} value={draft.height}
+          onChange={(event) => setEdited({ ...draft, height: event.target.value })} />
+      </label>
+      <label>
+        <span>默认贴目</span>
+        <input type="number" step="any" value={draft.komi}
+          onChange={(event) => setEdited({ ...draft, komi: event.target.value })} />
+      </label>
+      <button type="button" disabled={disabled || edited === null} onClick={apply}>保存新建默认值</button>
+      <p>新建表单可临时修改这些值，不会反向改写默认值。</p>
+      {error ? <p role="alert">{error}</p> : null}
+    </fieldset>
   );
 }
 

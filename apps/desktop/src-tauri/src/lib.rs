@@ -2,10 +2,11 @@ use app_model::{
     AnalysisFrameDto, AnalysisJobModeDto, AnalysisJobStartedDto, AppHealthDto, CurrentGameError,
     CurrentGameResultDto, EngineBackend, EngineFailureDto, EngineFailureKind, EngineOperationDto,
     EngineProfileDto, ForegroundEngineEventDto, ForegroundEngineSnapshotDto, GameFileFormatDto,
-    GameFileImportDto, MoveVertex, NodePath, PositionDto, ProviderError, ProviderErrorKind,
+    GameFileImportDto, MoveVertex, NodePath, PlayerColor, PositionDto, ProviderError, ProviderErrorKind,
     ProviderFetchMethod, ProviderFetchRequest, ProviderFetchResult, ProviderGameMetadata,
     ProviderImportRequest, ProviderImportResult, ProviderKind, ReadboardSidecarProbeRequest,
     ReadboardSidecarProbeResult, ReadboardSidecarSyncSnapshotRequest, ReadboardSidecarSyncSnapshotResult,
+    StoneDto,
 };
 use engine_manager::{
     build_command_spec, check_assets, default_engine_profiles_settings, normalize_engine_profiles,
@@ -59,6 +60,8 @@ use uuid::Uuid;
 
 const ENGINE_PROFILE_FILE: &str = "lizzieyzy-next-engine-profile.json";
 const DEFAULT_PROVIDER_HTTP_TIMEOUT_MS: u64 = 30_000;
+
+type EngineCommandResult<T> = Result<T, Box<EngineFailureDto>>;
 
 #[derive(Debug, Default)]
 struct ReqwestProviderTransport;
@@ -396,6 +399,8 @@ fn replay_sgf_positions(sgf_text: String) -> Result<Vec<PositionDto>, String> {
 #[tauri::command]
 fn read_game_file(path: String) -> Result<GameFileImportDto, String> {
     let path = non_empty_path(path)?;
+    let path = fs::canonicalize(&path)
+        .map_err(|error| format!("failed to read game file {}: {error}", path.display()))?;
     let display_path = path.display().to_string();
     let input =
         fs::read(&path).map_err(|error| format!("failed to read game file {display_path}: {error}"))?;
@@ -427,6 +432,7 @@ fn import_game_input(
     if !matches!(extension.as_str(), "sgf" | "txt" | "gib") {
         return Err(format!("unsupported game file: {display_path}"));
     }
+    let opened_path = source_native_path.clone();
     let (format, sgf_text, native_path) = if extension == "gib" {
         (
             GameFileFormatDto::Gib,
@@ -448,6 +454,7 @@ fn import_game_input(
         display_path,
         display_name,
         native_path,
+        opened_path,
     })
 }
 
@@ -492,8 +499,11 @@ fn project_current_game_mainline(
 fn select_current_game_node(
     state: State<CurrentGameState>,
     path: NodePath,
+    generation: u64,
 ) -> Result<CurrentGameResultDto, String> {
-    state.select_path(path).map_err(|error| error.to_string())
+    state
+        .select_path(path, generation)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -515,13 +525,176 @@ fn set_current_game_personal_comment(
         .set_personal_comment(path, comment)
         .map_err(|error| error.to_string())
 }
+#[tauri::command]
+fn set_current_game_metadata(
+    state: State<CurrentGameState>,
+    generation: u64,
+    black_name: String,
+    white_name: String,
+    komi: f32,
+) -> Result<CurrentGameResultDto, String> {
+    state
+        .set_metadata(generation, black_name, white_name, komi)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn edit_current_game_markup(
+    state: State<CurrentGameState>,
+    path: NodePath,
+    generation: u64,
+    action: app_model::SgfMarkupActionDto,
+) -> Result<CurrentGameResultDto, String> {
+    state
+        .edit_markup(path, generation, action)
+        .map_err(|error| error.to_string())
+}
 
 #[tauri::command]
 fn remove_current_game_variation(
     state: State<CurrentGameState>,
     path: NodePath,
+    generation: u64,
 ) -> Result<CurrentGameResultDto, String> {
-    state.remove_variation(path).map_err(|error| error.to_string())
+    state
+        .remove_variation(path, generation)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn promote_current_game_to_main(
+    state: State<CurrentGameState>,
+    path: NodePath,
+    generation: u64,
+) -> Result<CurrentGameResultDto, String> {
+    state
+        .promote_to_main(path, generation)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn apply_root_setup(
+    state: State<CurrentGameState>,
+    generation: u64,
+    stones: Vec<StoneDto>,
+    to_play: PlayerColor,
+) -> Result<CurrentGameResultDto, String> {
+    state
+        .apply_root_setup(generation, stones, to_play)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn convert_to_root_setup(
+    state: State<CurrentGameState>,
+    generation: u64,
+    path: NodePath,
+) -> Result<CurrentGameResultDto, String> {
+    state
+        .convert_to_root_setup(generation, path)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn undo_current_game(
+    state: State<CurrentGameState>,
+    generation: u64,
+) -> Result<CurrentGameResultDto, String> {
+    state.undo(generation).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn redo_current_game(
+    state: State<CurrentGameState>,
+    generation: u64,
+) -> Result<CurrentGameResultDto, String> {
+    state.redo(generation).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn enter_trial(state: State<CurrentGameState>) -> Result<app_model::TrialSessionDto, String> {
+    state.enter_trial()
+}
+
+#[tauri::command]
+fn exit_trial(state: State<CurrentGameState>, session_id: u64) -> Result<CurrentGameResultDto, String> {
+    state.exit_trial(session_id)
+}
+#[tauri::command]
+fn enter_scoring(
+    state: State<CurrentGameState>,
+    rule: app_model::ScoringRuleDto,
+) -> Result<app_model::ScoringSessionDto, String> {
+    state.enter_scoring(rule)
+}
+
+#[tauri::command]
+fn update_scoring(
+    state: State<CurrentGameState>,
+    session_id: u64,
+    revision: u64,
+    action: app_model::ScoringActionDto,
+) -> Result<app_model::ScoringSessionDto, CurrentGameError> {
+    state.update_scoring(session_id, revision, action)
+}
+
+#[tauri::command]
+fn exit_scoring(
+    state: State<CurrentGameState>,
+    session_id: u64,
+    revision: u64,
+    confirm: bool,
+) -> Result<CurrentGameResultDto, String> {
+    state.exit_scoring(session_id, revision, confirm)
+}
+
+#[tauri::command]
+fn trial_snapshot(
+    state: State<CurrentGameState>,
+    session_id: u64,
+) -> Result<app_model::TrialSessionDto, CurrentGameError> {
+    state.trial_snapshot(session_id)
+}
+
+#[tauri::command]
+fn trial_select(
+    state: State<CurrentGameState>,
+    session_id: u64,
+    revision: u64,
+    path: NodePath,
+) -> Result<app_model::TrialSessionDto, CurrentGameError> {
+    state.trial_select(session_id, revision, path)
+}
+
+#[tauri::command]
+fn trial_play(
+    state: State<CurrentGameState>,
+    session_id: u64,
+    revision: u64,
+    vertex: MoveVertex,
+) -> Result<app_model::TrialSessionDto, CurrentGameError> {
+    state.trial_play(session_id, revision, vertex)
+}
+
+#[tauri::command]
+fn trial_undo(
+    state: State<CurrentGameState>,
+    session_id: u64,
+    revision: u64,
+) -> Result<app_model::TrialSessionDto, CurrentGameError> {
+    state.trial_undo(session_id, revision)
+}
+
+#[tauri::command]
+fn trial_start_finite(
+    manager: State<ForegroundEngineManager>,
+    state: State<CurrentGameState>,
+    session_id: u64,
+    revision: u64,
+    run_id: String,
+    max_visits: u32,
+) -> EngineCommandResult<AnalysisJobStartedDto> {
+    state.trial_start_finite(&manager, session_id, revision, run_id, max_visits)
 }
 
 #[tauri::command]
@@ -562,6 +735,15 @@ fn save_app_preferences(
 ) -> Result<AppPreferencesDto, String> {
     let path = app_preferences_path(&app_handle)?;
     state.save(&path, &manager, preferences)
+}
+
+#[tauri::command]
+fn update_recent_game_history(
+    app_handle: AppHandle,
+    state: State<PreferencesState>,
+    opened_path: Option<String>,
+) -> Result<Vec<String>, String> {
+    state.update_recent_history(&app_preferences_path(&app_handle)?, opened_path.as_deref())
 }
 
 #[tauri::command]
@@ -642,31 +824,42 @@ fn bind_selected_node_job(
     node_path: NodePath,
     mode: AnalysisJobModeDto,
     max_visits: Option<u32>,
-) -> Result<SelectedNodeJobRequest, EngineFailureDto> {
-    let (snapshot, board_size, komi, rules) = current_game
+) -> EngineCommandResult<SelectedNodeJobRequest> {
+    let (snapshot, board_width, board_height, komi, rules) = current_game
         .admit_selected_node(generation, &node_path)
-        .map_err(|error| EngineFailureDto {
-            operation: EngineOperationDto::Job,
-            run_id: Some(run_id.clone()),
-            switch_id: None,
-            job_id: None,
-            profile_id: None,
-            kind: EngineFailureKind::InvalidState,
-            message: error.message,
-            diagnostic_summary: None,
-        })?;
-    let mut request =
-        continuous_analysis::position_request(generation, node_path, snapshot, board_size, komi, rules)
-            .map_err(|error| EngineFailureDto {
+        .map_err(|error| {
+            Box::new(EngineFailureDto {
                 operation: EngineOperationDto::Job,
                 run_id: Some(run_id.clone()),
                 switch_id: None,
                 job_id: None,
                 profile_id: None,
-                kind: EngineFailureKind::Protocol,
-                message: error.to_string(),
+                kind: EngineFailureKind::InvalidState,
+                message: error.message,
                 diagnostic_summary: None,
-            })?;
+            })
+        })?;
+    let mut request = continuous_analysis::position_request(
+        generation,
+        node_path,
+        snapshot,
+        board_width,
+        board_height,
+        komi,
+        rules,
+    )
+    .map_err(|error| {
+        Box::new(EngineFailureDto {
+            operation: EngineOperationDto::Job,
+            run_id: Some(run_id.clone()),
+            switch_id: None,
+            job_id: None,
+            profile_id: None,
+            kind: EngineFailureKind::Protocol,
+            message: error.to_string(),
+            diagnostic_summary: None,
+        })
+    })?;
     request.run_id = run_id;
     request.mode = mode;
     request.query.max_visits = max_visits;
@@ -681,15 +874,17 @@ fn foreground_engine_start_selected_node(
     generation: u64,
     node_path: NodePath,
     max_visits: u32,
-) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
-    manager.start_selected_node_job(bind_selected_node_job(
-        &current_game,
-        run_id,
-        generation,
-        node_path,
-        AnalysisJobModeDto::Finite,
-        Some(max_visits),
-    )?)
+) -> EngineCommandResult<AnalysisJobStartedDto> {
+    manager
+        .start_selected_node_job(bind_selected_node_job(
+            &current_game,
+            run_id,
+            generation,
+            node_path,
+            AnalysisJobModeDto::Finite,
+            Some(max_visits),
+        )?)
+        .map_err(Box::new)
 }
 
 fn cancel_document_analysis_job(
@@ -697,13 +892,13 @@ fn cancel_document_analysis_job(
     manager: &ForegroundEngineManager,
     run_id: &str,
     job_id: &str,
-) -> Result<(), EngineFailureDto> {
+) -> EngineCommandResult<()> {
     for job in document_departure::jobs_from_snapshot(&manager.snapshot()) {
         if job.run_id == run_id && job.job_id == job_id {
             current_game.seal_job(&job);
         }
     }
-    manager.cancel_job(run_id, job_id)
+    manager.cancel_job(run_id, job_id).map_err(Box::new)
 }
 
 #[tauri::command]
@@ -712,7 +907,7 @@ fn foreground_engine_cancel_job(
     current_game: State<'_, CurrentGameState>,
     run_id: String,
     job_id: String,
-) -> Result<(), EngineFailureDto> {
+) -> EngineCommandResult<()> {
     cancel_document_analysis_job(&current_game, &manager, &run_id, &job_id)
 }
 
@@ -733,13 +928,14 @@ fn whole_game_work_items(
     admitted: &WholeGameAdmission,
     max_visits: u32,
     run_id: &str,
-) -> Result<Vec<WholeGameWorkItem>, EngineFailureDto> {
+) -> EngineCommandResult<Vec<WholeGameWorkItem>> {
     admitted
         .nodes
         .iter()
         .map(|snapshot| {
             let query = analysis_query_from_position(
-                admitted.board_size,
+                admitted.board_width,
+                admitted.board_height,
                 admitted.komi,
                 &snapshot.position.stones,
                 snapshot.position.to_play,
@@ -752,11 +948,12 @@ fn whole_game_work_items(
                     include_policy: Some(true),
                 },
             )
-            .map_err(|error| job_failure(run_id, EngineFailureKind::Protocol, error.to_string()))?;
+            .map_err(|error| Box::new(job_failure(run_id, EngineFailureKind::Protocol, error.to_string())))?;
             Ok(WholeGameWorkItem {
                 node_path: snapshot.path.clone(),
                 query,
-                board_size: admitted.board_size,
+                board_width: admitted.board_width,
+                board_height: admitted.board_height,
                 move_number: snapshot.position.move_number,
             })
         })
@@ -770,7 +967,7 @@ fn katago_start_analyze_game(
     run_id: String,
     generation: u64,
     max_visits: u32,
-) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+) -> EngineCommandResult<AnalysisJobStartedDto> {
     current_game.start_first_child_analysis(&manager, run_id, generation, max_visits)
 }
 
@@ -793,7 +990,7 @@ fn start_analysis_task(
     strategy: app_model::AnalysisTaskStrategyDto,
     conditions: app_model::AnalysisStageConditionsDto,
     overview_conditions: Option<app_model::AnalysisStageConditionsDto>,
-) -> Result<app_model::AnalysisTaskDto, EngineFailureDto> {
+) -> EngineCommandResult<app_model::AnalysisTaskDto> {
     match strategy {
         app_model::AnalysisTaskStrategyDto::SingleStage => {
             current_game.start_analysis_task(&manager, run_id, preview, conditions)
@@ -838,7 +1035,7 @@ fn pause_analysis_task(
     current_game: State<'_, CurrentGameState>,
     run_id: String,
     task_id: String,
-) -> Result<app_model::AnalysisTaskDto, EngineFailureDto> {
+) -> EngineCommandResult<app_model::AnalysisTaskDto> {
     current_game.pause_analysis_task(&manager, &run_id, &task_id)
 }
 
@@ -848,7 +1045,7 @@ fn continue_analysis_task(
     current_game: State<'_, CurrentGameState>,
     run_id: String,
     task_id: String,
-) -> Result<app_model::AnalysisTaskDto, EngineFailureDto> {
+) -> EngineCommandResult<app_model::AnalysisTaskDto> {
     current_game.continue_analysis_task(&manager, &run_id, &task_id)
 }
 
@@ -858,7 +1055,7 @@ fn katago_cancel_analysis(
     current_game: State<'_, CurrentGameState>,
     run_id: String,
     job_id: String,
-) -> Result<(), EngineFailureDto> {
+) -> EngineCommandResult<()> {
     cancel_document_analysis_job(&current_game, &manager, &run_id, &job_id)
 }
 
@@ -965,7 +1162,8 @@ fn enrich_provider_import_result(
         message: format!("failed to parse imported provider SGF: {err}"),
     })?;
     result.summary.provider = result.provider;
-    result.summary.board_size = Some(document.board_size);
+    result.summary.board_width = Some(document.board_width);
+    result.summary.board_height = Some(document.board_height);
     result.summary.komi = Some(document.komi);
     result.summary.handicap = document.handicap;
     result.summary.black_name = document.black_name;
@@ -1032,26 +1230,26 @@ fn foreground_engine_snapshot(manager: State<'_, ForegroundEngineManager>) -> Fo
 fn foreground_engine_start(
     manager: State<'_, ForegroundEngineManager>,
     profile_id: String,
-) -> Result<(), EngineFailureDto> {
-    manager.start(&profile_id)
+) -> EngineCommandResult<()> {
+    manager.start(&profile_id).map_err(Box::new)
 }
 
 #[tauri::command]
-fn foreground_engine_stop(manager: State<'_, ForegroundEngineManager>) -> Result<(), EngineFailureDto> {
-    manager.stop()
+fn foreground_engine_stop(manager: State<'_, ForegroundEngineManager>) -> EngineCommandResult<()> {
+    manager.stop().map_err(Box::new)
 }
 
 #[tauri::command]
-fn foreground_engine_restart(manager: State<'_, ForegroundEngineManager>) -> Result<(), EngineFailureDto> {
-    manager.restart()
+fn foreground_engine_restart(manager: State<'_, ForegroundEngineManager>) -> EngineCommandResult<()> {
+    manager.restart().map_err(Box::new)
 }
 
 #[tauri::command]
 fn foreground_engine_switch(
     manager: State<'_, ForegroundEngineManager>,
     profile_id: String,
-) -> Result<(), EngineFailureDto> {
-    manager.switch_to(&profile_id)
+) -> EngineCommandResult<()> {
+    manager.switch_to(&profile_id).map_err(Box::new)
 }
 
 pub fn run() {
@@ -1085,6 +1283,9 @@ pub fn run() {
                         ForegroundEngineEventDto::Job { mut job } => {
                             if let Some(state) = emit_handle.try_state::<CurrentGameState>() {
                                 job.current_game = state.attach_from_job_event(&job);
+                                if let Some(trial) = state.attach_trial_from_job_event(&job) {
+                                    let _ = emit_handle.emit("trial://analysis", trial);
+                                }
                             }
                             let _ = emit_handle.emit("foreground-engine://job", job);
                         }
@@ -1132,12 +1333,30 @@ pub fn run() {
             select_current_game_node,
             play_current_game,
             set_current_game_personal_comment,
+            set_current_game_metadata,
+            edit_current_game_markup,
             remove_current_game_variation,
+            promote_current_game_to_main,
+            apply_root_setup,
+            convert_to_root_setup,
+            undo_current_game,
+            redo_current_game,
+            enter_trial,
+            exit_trial,
+            enter_scoring,
+            update_scoring,
+            exit_scoring,
+            trial_snapshot,
+            trial_select,
+            trial_play,
+            trial_undo,
+            trial_start_finite,
             classify_problems,
             katago_launch_plan,
             engine_asset_checks,
             load_app_preferences,
             save_app_preferences,
+            update_recent_game_history,
             load_engine_profile_settings,
             save_engine_profile_settings,
             load_engine_profiles_settings,
@@ -1309,16 +1528,21 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn whole_game_work_items_use_current_game_owned_rules() {
+    fn whole_game_work_items_use_current_game_owned_rules_and_dimensions() {
         let state = CurrentGameState::default();
         let opened = state
-            .replace("(;GM[1]FF[4]SZ[9]KM[6.5]RU[Japanese];B[dd])", None)
+            .replace("(;GM[1]FF[4]SZ[9:13]KM[6.5]RU[Japanese];B[di])", None)
             .unwrap();
         let admitted = state.admit_whole_game(opened.generation).unwrap();
         let items = whole_game_work_items(&admitted, 32, "run-rules").unwrap();
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].query.rules, "japanese");
-        assert_eq!(items[1].query.rules, "japanese");
+        for item in items {
+            assert_eq!(item.board_width, 9);
+            assert_eq!(item.board_height, 13);
+            assert_eq!(item.query.board_x_size, 9);
+            assert_eq!(item.query.board_y_size, 13);
+            assert_eq!(item.query.rules, "japanese");
+        }
     }
 
     fn registered_tauri_commands(source: &str) -> Vec<&str> {
@@ -1379,13 +1603,13 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn selected_node_request_captures_exact_position_turn_rules_and_komi_before_protocol() {
+    fn selected_node_request_captures_exact_position_turn_rules_komi_and_dimensions_before_protocol() {
         let state = CurrentGameState::default();
         let opened = state
-            .replace("(;GM[1]FF[4]SZ[5]KM[6.5]RU[Japanese];B[cc];W[ee])", None)
+            .replace("(;GM[1]FF[4]SZ[5:7]KM[6.5]RU[Japanese];B[cc];W[eg])", None)
             .unwrap();
         let path = NodePath { indices: vec![0, 0] };
-        let selected = state.select_path(path.clone()).unwrap();
+        let selected = state.select_path(path.clone(), opened.generation).unwrap();
         assert_eq!(selected.snapshot.position.move_number, 2);
         assert_eq!(selected.snapshot.position.to_play, app_model::PlayerColor::Black);
 
@@ -1403,7 +1627,10 @@ for line in sys.stdin:
         assert_eq!(request.generation, opened.generation);
         assert_eq!(request.node_path, path);
         assert_eq!(request.mode, AnalysisJobModeDto::Finite);
-        assert_eq!(request.board_size, 5);
+        assert_eq!(request.board_width, 5);
+        assert_eq!(request.board_height, 7);
+        assert_eq!(request.query.board_x_size, 5);
+        assert_eq!(request.query.board_y_size, 7);
         assert_eq!(request.query.komi, 6.5);
         assert_eq!(request.query.rules, "japanese");
         assert_eq!(request.query.include_ownership, Some(true));
@@ -1412,7 +1639,7 @@ for line in sys.stdin:
         assert_eq!(
             request.query.initial_stones,
             vec![
-                ("B".to_string(), "C3".to_string()),
+                ("B".to_string(), "C5".to_string()),
                 ("W".to_string(), "E1".to_string()),
             ]
         );
@@ -1636,6 +1863,33 @@ for line in sys.stdin:
     }
 
     #[test]
+    fn provider_enrichment_projects_rectangular_dimensions() {
+        let enriched = enrich_provider_import_result(ProviderImportResult {
+            provider: ProviderKind::Yike,
+            sgf_text: "(;GM[1]FF[4]SZ[9:13]KM[7.5])".to_string(),
+            summary: app_model::ProviderGameSummary {
+                provider: ProviderKind::Yike,
+                source_id: None,
+                board_width: None,
+                board_height: None,
+                komi: None,
+                handicap: None,
+                black_name: None,
+                white_name: None,
+                result: None,
+                date: None,
+                move_count: None,
+            },
+            metadata: ProviderGameMetadata::default(),
+            warnings: Vec::new(),
+        })
+        .unwrap();
+
+        assert_eq!(enriched.summary.board_width, Some(9));
+        assert_eq!(enriched.summary.board_height, Some(13));
+    }
+
+    #[test]
     fn readboard_sidecar_probe_returns_structured_runtime_status() {
         let result = readboard_sidecar_probe(ReadboardSidecarProbeRequest {
             endpoint: Some("local-test-endpoint".to_string()),
@@ -1666,7 +1920,8 @@ for line in sys.stdin:
 
         assert_eq!(result.snapshot_id, "snapshot-1");
         let position = result.position.unwrap();
-        assert_eq!(position.board_size, 2);
+        assert_eq!(position.board_width, 2);
+        assert_eq!(position.board_height, 2);
         assert_eq!(position.move_number, 1);
         assert_eq!(position.stones.len(), 1);
     }
@@ -1732,7 +1987,10 @@ for line in sys.stdin:
         let sgf_import = read_game_file(sgf_path.to_string_lossy().into_owned()).unwrap();
         assert_eq!(sgf_import.format, app_model::GameFileFormatDto::Sgf);
         assert_eq!(sgf_import.display_name, "named.sgf");
-        assert_eq!(sgf_import.native_path.as_deref(), sgf_path.to_str());
+        assert_eq!(
+            sgf_import.native_path.as_deref(),
+            std::fs::canonicalize(&sgf_path).unwrap().to_str()
+        );
         assert_eq!(sgf_import.sgf_text, "(;SZ[9]PB[Black]PW[White];B[dd])");
 
         let gib_path =
@@ -1742,6 +2000,10 @@ for line in sys.stdin:
         assert_eq!(gib_import.format, app_model::GameFileFormatDto::Gib);
         assert_eq!(gib_import.display_name, "tygem-named-pass-lf.gib");
         assert_eq!(gib_import.native_path, None);
+        assert_eq!(
+            gib_import.opened_path.as_deref(),
+            std::fs::canonicalize(&gib_path).unwrap().to_str()
+        );
         assert_eq!(std::fs::read(&gib_path).unwrap(), original);
         let imported = sgf::CurrentSgfDocument::open(&gib_import.sgf_text).unwrap();
         assert_eq!(imported.default_selected_path().indices, vec![0, 0, 0]);
@@ -1750,6 +2012,7 @@ for line in sys.stdin:
         assert_eq!(uploaded.format, app_model::GameFileFormatDto::Gib);
         assert_eq!(uploaded.display_name, "uploaded.gib");
         assert_eq!(uploaded.native_path, None);
+        assert_eq!(uploaded.opened_path, None);
         assert_eq!(uploaded.sgf_text, gib_import.sgf_text);
 
         let unsupported = directory.join("unsupported.ngf");

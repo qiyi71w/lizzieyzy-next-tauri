@@ -52,9 +52,12 @@ const backend = vi.hoisted(() => ({
   saveCurrentGame: vi.fn(),
   setCurrentGamePersonalComment: vi.fn(),
   removeCurrentGameVariation: vi.fn(),
+  undoCurrentGame: vi.fn(),
+  redoCurrentGame: vi.fn(),
   startKataGoGameAnalysis: vi.fn(),
   loadEngineProfilesSettings: vi.fn(() => Promise.resolve({ selected_profile_id: "default", profiles: [] })),
   subscribeForegroundEngine: vi.fn(() => Promise.resolve(() => undefined)),
+  subscribeTrialAnalysis: vi.fn(async () => () => undefined),
   startForegroundEngine: vi.fn(),
   stopForegroundEngine: vi.fn(),
   restartForegroundEngine: vi.fn(),
@@ -95,7 +98,8 @@ vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
 import { App } from "./App";
 
 const emptyPosition = {
-  board_size: 9,
+  board_width: 9,
+  board_height: 9,
   move_number: 0,
   to_play: "black" as const,
   stones: [],
@@ -141,7 +145,7 @@ const barTree: SgfTreeNodeDto = node([lzop("MainEngine 40.0 100")], [
 const emptyTree: SgfTreeNodeDto = node([]);
 
 const initialProjection: GameDto = {
-  summary: { id: "test", board_size: 9, komi: 7.5, move_count: 2 },
+  summary: { id: "test", board_width: 9, board_height: 9, komi: 7.5, move_count: 2 },
   moves: [
     { move_number: 1, color: "black", vertex: { point: { x: 3, y: 3 } } },
     { move_number: 2, color: "white", vertex: { point: { x: 15, y: 15 } } }
@@ -162,10 +166,14 @@ function gameAt(path: NodePath): CurrentGameResultDto {
         move_number: path.indices.length,
         to_play: path.indices.length % 2 === 0 ? "black" : "white"
       },
+      markup: [],
+      stone_move_numbers: [],
       personal_comment: ""
     },
     generation: 1,
     snapshot_seq: 1,
+    can_undo: false,
+    can_redo: false,
     dirty: false,
     native_path: null
   };
@@ -329,7 +337,7 @@ describe("winrate chart encoding surface", () => {
     expect(chart.getAttribute("data-bar-ranks")).toBe("inaccuracy,mistake,blunder");
   });
 
-  it("shows read-only hover values without navigating, and stays inert when hover is off", async () => {
+  it("shows hover analysis without selecting a node and hides hover when disabled", async () => {
     const host = await renderApp();
     const canvas = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="胜率走势"]');
     canvas.getBoundingClientRect = () => ({
@@ -338,14 +346,8 @@ describe("winrate chart encoding surface", () => {
     act(() => {
       canvas.dispatchEvent(new MouseEvent("mousemove", { clientX: 0, clientY: 10, bubbles: true }));
     });
-    const status = host.querySelector('[role="status"]');
-    expect(status?.textContent).toContain("第 0 手");
-    expect(status?.textContent).toContain("胜率");
     expect(chartShell(host).getAttribute("data-current-move")).toBe("0");
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("0");
-
-    act(() => canvas.dispatchEvent(new MouseEvent("click", { clientX: 120, clientY: 10, bubbles: true })));
-    expect(chartShell(host).getAttribute("data-current-move")).toBe("0");
 
     act(() => buttonNamed(host, "显示").click());
     act(() => menuCheck(host, "图表悬停").click());

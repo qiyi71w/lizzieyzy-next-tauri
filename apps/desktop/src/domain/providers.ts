@@ -17,7 +17,8 @@ export type ProviderGameMetadata = {
 export type ProviderGameSummary = {
   provider: ProviderKind;
   source_id?: string | null;
-  board_size?: number | null;
+  board_width?: number | null;
+  board_height?: number | null;
   komi?: number | null;
   handicap?: number | null;
   black_name?: string | null;

@@ -134,34 +134,39 @@ impl CurrentGameState {
         envelope: RecoveryEnvelopeDto,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let document = CurrentSgfDocument::open(&envelope.sgf_text)?;
-        let snapshot = document.snapshot(&envelope.selected_path)?;
-        let tree = document.tree()?;
+        document.snapshot(&envelope.selected_path)?;
         let mut holder = self.holder.lock().expect("current game state");
         if holder.departure.is_some() {
             return Err(departure::departure_in_progress());
         }
         holder.document = Some(document);
         holder.generation = holder.generation.saturating_add(1);
-        holder.dirty = envelope.dirty;
-        if envelope.dirty {
-            holder.dirty_epoch = holder.dirty_epoch.saturating_add(1);
-        }
-        holder.native_path = envelope.source_path.clone();
-        holder.selected_path = envelope.selected_path.clone();
+        holder.history.clear();
+        holder.undo_revisions.clear();
+        holder.redo_revisions.clear();
+        holder.next_edit_revision = holder.next_edit_revision.saturating_add(1);
+        holder.edit_revision = holder.next_edit_revision;
+        let saved_nonhistory = holder.nonhistory_revision;
+        holder.nonhistory_revision = holder.nonhistory_revision.saturating_add(1);
+        holder.saved_version = ContentVersion {
+            edit: holder.edit_revision,
+            nonhistory: if envelope.dirty {
+                saved_nonhistory
+            } else {
+                holder.nonhistory_revision
+            },
+        };
+        holder.refresh_dirty();
+        holder.native_path = envelope.source_path;
+        holder.selected_path = envelope.selected_path;
         holder.document_seq = envelope.document_seq;
+        holder.document_identity = holder.document_identity.saturating_add(1);
         holder.snapshot_seq = envelope.snapshot_seq;
         holder.edits_blocked = false;
         holder.closed_jobs.clear();
+        holder.analysis_target = None;
         self.follow_continuous_position(&mut holder);
-        Ok(CurrentGameResultDto {
-            tree,
-            selected_path: envelope.selected_path,
-            snapshot,
-            generation: holder.generation,
-            snapshot_seq: holder.snapshot_seq,
-            dirty: holder.dirty,
-            native_path: holder.native_path.clone(),
-        })
+        holder.current_result()
     }
 }
 

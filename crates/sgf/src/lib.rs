@@ -8,11 +8,14 @@ mod analysis;
 mod current_game;
 mod gib;
 pub use analysis::{encode_analysis_payload, parse_analysis_payload, AnalysisSlot, SgfAnalysisPayload};
-pub use current_game::CurrentSgfDocument;
+pub use current_game::{
+    CurrentSgfDocument, DocumentEditOutcome, DocumentHistory, DocumentHistoryOutcome, SgfDocumentEdit, TrialLine,
+};
 pub use gib::{import_gib, GibError};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SgfDocument {
-    pub board_size: u8,
+    pub board_width: u8,
+    pub board_height: u8,
     pub komi: f32,
     pub handicap: Option<u8>,
     pub black_name: Option<String>,
@@ -41,8 +44,8 @@ pub enum SgfError {
     Empty,
     #[error("unsupported or malformed SGF")]
     Malformed,
-    #[error("unsupported board size: {0}")]
-    UnsupportedBoardSize(u8),
+    #[error("unsupported board dimensions: {width}x{height}")]
+    UnsupportedBoardDimensions { width: u8, height: u8 },
 }
 
 const FOX_ROOT_PROPERTY_ORDER: &[&str] = &[
@@ -136,18 +139,45 @@ pub fn normalize_fox_sgf(input: &str) -> String {
     serialize_sgf_document(&normalized).unwrap_or(sanitized)
 }
 
+fn parse_board_dimensions(raw: &str) -> Result<(u8, u8), SgfError> {
+    let (width, height) = match raw.split_once(':') {
+        Some((width, height)) if !width.is_empty() && !height.is_empty() && !height.contains(':') => (
+            width.parse::<u8>().map_err(|_| SgfError::Malformed)?,
+            height.parse::<u8>().map_err(|_| SgfError::Malformed)?,
+        ),
+        None => {
+            let size = raw.parse::<u8>().map_err(|_| SgfError::Malformed)?;
+            (size, size)
+        }
+        _ => return Err(SgfError::Malformed),
+    };
+    validate_board_dimensions(width, height)?;
+    Ok((width, height))
+}
+
+fn validate_board_dimensions(width: u8, height: u8) -> Result<(), SgfError> {
+    if (2..=25).contains(&width) && (2..=25).contains(&height) {
+        Ok(())
+    } else {
+        Err(SgfError::UnsupportedBoardDimensions { width, height })
+    }
+}
+
+fn serialize_board_dimensions(width: u8, height: u8) -> String {
+    if width == height {
+        width.to_string()
+    } else {
+        format!("{width}:{height}")
+    }
+}
+
 pub fn parse_sgf(input: &str) -> Result<SgfDocument, SgfError> {
     if input.trim().is_empty() {
         return Err(SgfError::Empty);
     }
     let root = SgfParser::new(input).parse()?;
-    let board_size = property_values(&root, "SZ")
-        .and_then(|v| v.first())
-        .and_then(|v| v.parse::<u8>().ok())
-        .unwrap_or(19);
-    if !(2..=25).contains(&board_size) {
-        return Err(SgfError::UnsupportedBoardSize(board_size));
-    }
+    let (board_width, board_height) = root_board_dimensions(&root)?;
+    validate_tree_properties(&root, board_width, board_height)?;
     let komi = property_values(&root, "KM")
         .and_then(|v| v.first())
         .and_then(|v| v.parse::<f32>().ok())
@@ -164,7 +194,7 @@ pub fn parse_sgf(input: &str) -> Result<SgfDocument, SgfError> {
             if let (Some(color), Some(raw)) = (color, property.values.first()) {
                 moves.push(MoveDto {
                     color,
-                    vertex: parse_vertex(raw, board_size)?,
+                    vertex: parse_vertex(raw, board_width, board_height)?,
                     move_number,
                 });
                 move_number += 1;
@@ -172,7 +202,8 @@ pub fn parse_sgf(input: &str) -> Result<SgfDocument, SgfError> {
         }
     }
     Ok(SgfDocument {
-        board_size,
+        board_width,
+        board_height,
         komi,
         handicap: property_values(&root, "HA")
             .and_then(|v| v.first())
@@ -185,16 +216,59 @@ pub fn parse_sgf(input: &str) -> Result<SgfDocument, SgfError> {
     })
 }
 
-pub fn serialize_sgf_document(document: &SgfDocument) -> Result<String, SgfError> {
-    if !(2..=25).contains(&document.board_size) {
-        return Err(SgfError::UnsupportedBoardSize(document.board_size));
+fn root_board_dimensions(root: &SgfNode) -> Result<(u8, u8), SgfError> {
+    let mut properties = root.properties.iter().filter(|property| property.key == "SZ");
+    let Some(property) = properties.next() else {
+        return Ok((19, 19));
+    };
+    if properties.next().is_some() || property.values.len() != 1 {
+        return Err(SgfError::Malformed);
     }
+    parse_board_dimensions(&property.values[0])
+}
+
+fn validate_tree_properties(root: &SgfNode, board_width: u8, board_height: u8) -> Result<(), SgfError> {
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        for property in &node.properties {
+            for value in &property.values {
+                match property.key.as_str() {
+                    "B" | "W" => {
+                        parse_vertex(value, board_width, board_height)?;
+                    }
+                    "AB" | "AW" | "AE" => {
+                        parse_setup_point_bounds(value, board_width, board_height)?;
+                    }
+                    "PL" => {
+                        parse_player_to_play(value)?;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        pending.extend(&node.children);
+    }
+    Ok(())
+}
+
+pub fn serialize_sgf_document(document: &SgfDocument) -> Result<String, SgfError> {
+    validate_board_dimensions(document.board_width, document.board_height)?;
+    let dimensions = serialize_board_dimensions(document.board_width, document.board_height);
     if let Some(root) = &document.root {
-        return serialize_sgf_tree(root);
+        let mut root = root.clone();
+        if let Some(property) = root.properties.iter_mut().find(|property| property.key == "SZ") {
+            property.values = vec![dimensions];
+        } else {
+            root.properties.push(SgfProperty {
+                key: "SZ".to_string(),
+                values: vec![dimensions],
+            });
+        }
+        return serialize_sgf_tree(&root);
     }
 
     let mut output = String::from("(;FF[4]GM[1]");
-    push_property(&mut output, "SZ", &document.board_size.to_string());
+    push_property(&mut output, "SZ", &dimensions);
     push_property(&mut output, "KM", &document.komi.to_string());
     if let Some(black_name) = &document.black_name {
         push_property(&mut output, "PB", black_name);
@@ -216,7 +290,11 @@ pub fn serialize_sgf_document(document: &SgfDocument) -> Result<String, SgfError
             PlayerColor::White => "W",
         });
         output.push('[');
-        output.push_str(&serialize_vertex(&sgf_move.vertex, document.board_size)?);
+        output.push_str(&serialize_vertex(
+            &sgf_move.vertex,
+            document.board_width,
+            document.board_height,
+        )?);
         output.push(']');
     }
     output.push(')');
@@ -230,7 +308,7 @@ pub fn to_sgf(document: &SgfDocument) -> Result<String, SgfError> {
 pub fn replay_sgf_positions(input: &str) -> Result<Vec<PositionDto>, SgfError> {
     let document = parse_sgf(input)?;
     let mut board =
-        Board::new(document.board_size).map_err(|_| SgfError::UnsupportedBoardSize(document.board_size))?;
+        Board::new(document.board_width, document.board_height).map_err(|_| SgfError::Malformed)?;
     let mut captures_black = 0u32;
     let mut captures_white = 0u32;
     let mut to_play = PlayerColor::Black;
@@ -240,7 +318,7 @@ pub fn replay_sgf_positions(input: &str) -> Result<Vec<PositionDto>, SgfError> {
         if has_move_property(node) {
             break;
         }
-        apply_setup_properties(&mut board, node, document.board_size)?;
+        apply_setup_properties(&mut board, node, document.board_width, document.board_height)?;
         if let Some(color) = player_to_play(node)? {
             to_play = color;
         }
@@ -248,7 +326,8 @@ pub fn replay_sgf_positions(input: &str) -> Result<Vec<PositionDto>, SgfError> {
 
     let mut positions = Vec::with_capacity(document.moves.len() + 1);
     positions.push(PositionDto {
-        board_size: document.board_size,
+        board_width: document.board_width,
+        board_height: document.board_height,
         move_number: 0,
         to_play,
         stones: stones_from_board(&board),
@@ -261,7 +340,7 @@ pub fn replay_sgf_positions(input: &str) -> Result<Vec<PositionDto>, SgfError> {
     if document.root.is_some() {
         let mut move_number = 1;
         for node in mainline {
-            apply_setup_properties(&mut board, node, document.board_size)?;
+            apply_setup_properties(&mut board, node, document.board_width, document.board_height)?;
             for property in &node.properties {
                 let color = match property.key.as_str() {
                     "B" => Some(PlayerColor::Black),
@@ -276,7 +355,7 @@ pub fn replay_sgf_positions(input: &str) -> Result<Vec<PositionDto>, SgfError> {
                 };
                 let sgf_move = MoveDto {
                     color,
-                    vertex: parse_vertex(raw, document.board_size)?,
+                    vertex: parse_vertex(raw, document.board_width, document.board_height)?,
                     move_number,
                 };
                 move_number += 1;
@@ -292,7 +371,8 @@ pub fn replay_sgf_positions(input: &str) -> Result<Vec<PositionDto>, SgfError> {
 
                 let to_play = player_to_play(node)?.unwrap_or_else(|| sgf_move.color.opponent());
                 positions.push(PositionDto {
-                    board_size: document.board_size,
+                    board_width: document.board_width,
+                    board_height: document.board_height,
                     move_number: sgf_move.move_number,
                     to_play,
                     stones: stones_from_board(&board),
@@ -319,7 +399,8 @@ pub fn replay_sgf_positions(input: &str) -> Result<Vec<PositionDto>, SgfError> {
         }
 
         positions.push(PositionDto {
-            board_size: document.board_size,
+            board_width: document.board_width,
+            board_height: document.board_height,
             move_number: sgf_move.move_number,
             to_play: sgf_move.color.opponent(),
             stones: stones_from_board(&board),
@@ -337,7 +418,8 @@ pub fn to_game_dto(doc: SgfDocument) -> GameDto {
     GameDto {
         summary: GameSummaryDto {
             id: Uuid::new_v4(),
-            board_size: doc.board_size,
+            board_width: doc.board_width,
+            board_height: doc.board_height,
             komi: doc.komi,
             black_name: doc.black_name,
             white_name: doc.white_name,
@@ -1029,15 +1111,15 @@ pub(crate) fn to_core_vertex(vertex: &MoveVertex) -> Vertex {
 }
 
 pub(crate) fn stones_from_board(board: &Board) -> Vec<StoneDto> {
-    let size = board.size();
+    let width = board.width();
     board
         .stones_snapshot()
         .into_iter()
         .enumerate()
         .filter_map(|(index, color)| {
             color.map(|color| StoneDto {
-                x: (index % size as usize) as u8,
-                y: (index / size as usize) as u8,
+                x: (index % width as usize) as u8,
+                y: (index / width as usize) as u8,
                 color: from_core_color(color),
             })
         })
@@ -1081,10 +1163,14 @@ fn escape_sgf_value(value: &str) -> String {
     escaped
 }
 
-pub(crate) fn serialize_vertex(vertex: &MoveVertex, board_size: u8) -> Result<String, SgfError> {
+pub(crate) fn serialize_vertex(
+    vertex: &MoveVertex,
+    board_width: u8,
+    board_height: u8,
+) -> Result<String, SgfError> {
     match vertex {
         MoveVertex::Pass => Ok(String::new()),
-        MoveVertex::Point(point) if point.x < board_size && point.y < board_size => Ok(format!(
+        MoveVertex::Point(point) if point.x < board_width && point.y < board_height => Ok(format!(
             "{}{}",
             char::from(b'a' + point.x),
             char::from(b'a' + point.y)
@@ -1144,12 +1230,16 @@ fn mainline_nodes(root: &SgfNode) -> Vec<&SgfNode> {
 }
 
 pub(crate) fn player_to_play(node: &SgfNode) -> Result<Option<PlayerColor>, SgfError> {
-    let Some(value) = property_values(node, "PL").and_then(|values| values.first()) else {
-        return Ok(None);
-    };
-    match value.as_str() {
-        "B" | "b" => Ok(Some(PlayerColor::Black)),
-        "W" | "w" => Ok(Some(PlayerColor::White)),
+    property_values(node, "PL")
+        .and_then(|values| values.first())
+        .map(|value| parse_player_to_play(value))
+        .transpose()
+}
+
+fn parse_player_to_play(raw: &str) -> Result<PlayerColor, SgfError> {
+    match raw {
+        "B" | "b" => Ok(PlayerColor::Black),
+        "W" | "w" => Ok(PlayerColor::White),
         _ => Err(SgfError::Malformed),
     }
 }
@@ -1163,7 +1253,8 @@ fn has_move_property(node: &SgfNode) -> bool {
 pub(crate) fn apply_setup_properties(
     board: &mut Board,
     node: &SgfNode,
-    board_size: u8,
+    board_width: u8,
+    board_height: u8,
 ) -> Result<(), SgfError> {
     for property in &node.properties {
         let color = match property.key.as_str() {
@@ -1176,7 +1267,7 @@ pub(crate) fn apply_setup_properties(
             continue;
         };
         for value in &property.values {
-            for point in parse_setup_points(value, board_size)? {
+            for point in parse_setup_points(value, board_width, board_height)? {
                 board.set_stone(point, color).map_err(|_| SgfError::Malformed)?;
             }
         }
@@ -1184,33 +1275,46 @@ pub(crate) fn apply_setup_properties(
     Ok(())
 }
 
-fn parse_setup_points(raw: &str, board_size: u8) -> Result<Vec<Point>, SgfError> {
-    if raw.len() == 5 && raw.as_bytes()[2] == b':' {
-        let start = parse_point(&raw[..2], board_size)?;
-        let end = parse_point(&raw[3..], board_size)?;
-        let min_x = start.x.min(end.x);
-        let max_x = start.x.max(end.x);
-        let min_y = start.y.min(end.y);
-        let max_y = start.y.max(end.y);
-        let mut points = Vec::new();
-        for y in min_y..=max_y {
-            for x in min_x..=max_x {
-                points.push(Point { x, y });
-            }
+fn parse_setup_points(raw: &str, board_width: u8, board_height: u8) -> Result<Vec<Point>, SgfError> {
+    let (start, end) = parse_setup_point_bounds(raw, board_width, board_height)?;
+    let Some(end) = end else {
+        return Ok(vec![start]);
+    };
+    let min_x = start.x.min(end.x);
+    let max_x = start.x.max(end.x);
+    let min_y = start.y.min(end.y);
+    let max_y = start.y.max(end.y);
+    let mut points = Vec::new();
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            points.push(Point { x, y });
         }
-        return Ok(points);
     }
-    Ok(vec![parse_point(raw, board_size)?])
+    Ok(points)
 }
 
-fn parse_point(raw: &str, board_size: u8) -> Result<Point, SgfError> {
+fn parse_setup_point_bounds(
+    raw: &str,
+    board_width: u8,
+    board_height: u8,
+) -> Result<(Point, Option<Point>), SgfError> {
+    if raw.len() == 5 && raw.as_bytes()[2] == b':' {
+        return Ok((
+            parse_point(&raw[..2], board_width, board_height)?,
+            Some(parse_point(&raw[3..], board_width, board_height)?),
+        ));
+    }
+    Ok((parse_point(raw, board_width, board_height)?, None))
+}
+
+fn parse_point(raw: &str, board_width: u8, board_height: u8) -> Result<Point, SgfError> {
     let bytes = raw.as_bytes();
     if bytes.len() != 2 || !bytes[0].is_ascii_lowercase() || !bytes[1].is_ascii_lowercase() {
         return Err(SgfError::Malformed);
     }
     let x = bytes[0] - b'a';
     let y = bytes[1] - b'a';
-    if x >= board_size || y >= board_size {
+    if x >= board_width || y >= board_height {
         return Err(SgfError::Malformed);
     }
     Ok(Point { x, y })
@@ -1375,11 +1479,11 @@ fn chain_sequence(mut sequence: Vec<SgfNode>) -> SgfNode {
     node
 }
 
-pub(crate) fn parse_vertex(raw: &str, board_size: u8) -> Result<MoveVertex, SgfError> {
-    if raw.is_empty() || (raw.eq_ignore_ascii_case("tt") && board_size <= 19) {
+pub(crate) fn parse_vertex(raw: &str, board_width: u8, board_height: u8) -> Result<MoveVertex, SgfError> {
+    if raw.is_empty() || (raw.eq_ignore_ascii_case("tt") && board_width <= 19 && board_height <= 19) {
         return Ok(MoveVertex::Pass);
     }
-    let point = parse_point(raw, board_size)?;
+    let point = parse_point(raw, board_width, board_height)?;
     Ok(MoveVertex::Point(PointDto {
         x: point.x,
         y: point.y,
@@ -1392,7 +1496,7 @@ mod tests {
     #[test]
     fn parses_basic_sgf() {
         let doc = parse_sgf("(;GM[1]FF[4]SZ[19]KM[7.5]PB[Black]PW[White];B[pd];W[dd];B[])").unwrap();
-        assert_eq!(doc.board_size, 19);
+        assert_eq!((doc.board_width, doc.board_height), (19, 19));
         assert_eq!(doc.moves.len(), 3);
         assert!(matches!(doc.moves[2].vertex, MoveVertex::Pass));
     }
@@ -1400,7 +1504,8 @@ mod tests {
     #[test]
     fn serializes_root_metadata() {
         let doc = SgfDocument {
-            board_size: 13,
+            board_width: 13,
+            board_height: 13,
             komi: 6.5,
             handicap: Some(2),
             black_name: Some("Black".to_string()),
@@ -1417,7 +1522,7 @@ mod tests {
             "(;FF[4]GM[1]SZ[13]KM[6.5]PB[Black]PW[White]RE[B+R]HA[2])"
         );
         let parsed = parse_sgf(&serialized).unwrap();
-        assert_eq!(parsed.board_size, 13);
+        assert_eq!((parsed.board_width, parsed.board_height), (13, 13));
         assert_eq!(parsed.komi, 6.5);
         assert_eq!(parsed.handicap, Some(2));
         assert_eq!(parsed.black_name.as_deref(), Some("Black"));
@@ -1428,7 +1533,8 @@ mod tests {
     #[test]
     fn serializes_pass_and_point_moves() {
         let doc = SgfDocument {
-            board_size: 9,
+            board_width: 9,
+            board_height: 9,
             komi: 0.5,
             handicap: None,
             black_name: None,
@@ -1458,7 +1564,8 @@ mod tests {
     #[test]
     fn serializes_escaped_property_values() {
         let doc = SgfDocument {
-            board_size: 19,
+            board_width: 19,
+            board_height: 19,
             komi: 7.5,
             handicap: None,
             black_name: Some("A]B\\C\r\nD\rE".to_string()),
@@ -1486,7 +1593,8 @@ mod tests {
         let serialized = serialize_sgf_document(&original).unwrap();
         let reparsed = parse_sgf(&serialized).unwrap();
 
-        assert_eq!(reparsed.board_size, original.board_size);
+        assert_eq!(reparsed.board_width, original.board_width);
+        assert_eq!(reparsed.board_height, original.board_height);
         assert_eq!(reparsed.komi, original.komi);
         assert_eq!(reparsed.handicap, original.handicap);
         assert_eq!(reparsed.black_name, original.black_name);
@@ -1565,7 +1673,7 @@ mod tests {
         assert!(!normalized.contains("sibling"));
 
         let doc = parse_sgf(&normalized).unwrap();
-        assert_eq!(doc.board_size, 5);
+        assert_eq!((doc.board_width, doc.board_height), (5, 5));
         assert_eq!(doc.black_name.as_deref(), Some("Black"));
         assert_eq!(doc.white_name.as_deref(), Some("White"));
         assert_eq!(doc.result.as_deref(), Some("B+R"));
@@ -1629,7 +1737,7 @@ mod tests {
         let input = include_str!("../../../tests/golden/sgf_compat_variations.sgf");
         let doc = parse_sgf(input).unwrap();
 
-        assert_eq!(doc.board_size, 5);
+        assert_eq!((doc.board_width, doc.board_height), (5, 5));
         assert_eq!(doc.komi, 0.5);
         assert_eq!(doc.black_name.as_deref(), Some("A]lice"));
         assert_eq!(doc.white_name.as_deref(), Some("Bob\\Lee"));
@@ -1664,7 +1772,7 @@ mod tests {
         let input = include_str!("../../../tests/golden/sgf_ff4_compat.sgf").trim();
         let doc = parse_sgf(input).unwrap();
 
-        assert_eq!(doc.board_size, 9);
+        assert_eq!((doc.board_width, doc.board_height), (9, 9));
         assert_eq!(doc.komi, 6.5);
         assert_eq!(doc.handicap, Some(2));
         assert_eq!(doc.black_name.as_deref(), Some("A]lice"));

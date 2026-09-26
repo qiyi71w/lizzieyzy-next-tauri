@@ -56,6 +56,8 @@ const backend = vi.hoisted(() => ({
   saveCurrentGame: vi.fn(),
   setCurrentGamePersonalComment: vi.fn(),
   removeCurrentGameVariation: vi.fn(),
+  undoCurrentGame: vi.fn(),
+  redoCurrentGame: vi.fn(),
   startKataGoGameAnalysis: vi.fn(),
   loadEngineProfilesSettings: vi.fn(),
   saveEngineProfilesSettings: vi.fn(),
@@ -67,6 +69,7 @@ const backend = vi.hoisted(() => ({
   getForegroundEngineSnapshot: vi.fn(),
   foregroundEngineContinuousAction: vi.fn(),
   subscribeForegroundEngine: vi.fn(),
+  subscribeTrialAnalysis: vi.fn(async () => () => undefined),
   inspectCurrentGameRecovery: vi.fn(async (): Promise<{ status: "none" | "abnormal" | "normal" | "unreadable"; envelope?: unknown; message?: string }> => ({ status: "none" })),
   restoreCurrentGameRecovery: vi.fn(),
   discardCurrentGameRecovery: vi.fn(async () => undefined),
@@ -94,7 +97,8 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 import { App } from "./App";
 
 const emptyPosition = {
-  board_size: 9,
+  board_width: 9,
+  board_height: 9,
   move_number: 0,
   to_play: "black" as const,
   stones: [],
@@ -107,15 +111,17 @@ const emptyPosition = {
 const initialGame: CurrentGameResultDto = {
   tree: { properties: [], children: [] },
   selected_path: { indices: [] },
-  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "" },
+  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "", markup: [], stone_move_numbers: [] },
   generation: 1,
   snapshot_seq: 1,
+  can_undo: false,
+  can_redo: false,
   dirty: false,
   native_path: null
 };
 
 const initialProjection: GameDto = {
-  summary: { id: "game", board_size: 9, komi: 7.5, move_count: 0 },
+  summary: { id: "game", board_width: 9, board_height: 9, komi: 7.5, move_count: 0 },
   moves: []
 };
 
@@ -138,6 +144,8 @@ function snapshotAt(path: NodePath): CurrentGameResultDto {
         move_number: path.indices.length,
         to_play: path.indices.length % 2 === 0 ? "black" : "white"
       },
+      markup: [],
+      stone_move_numbers: [],
       personal_comment: ""
     }
   };
@@ -849,7 +857,7 @@ describe("foreground engine lifecycle UI", () => {
       nextMove.click();
       await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
     });
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0] });
     expect(backend.cancelKataGoAnalysis).not.toHaveBeenCalled();
     expect(buttonNamed(host, "取消整局")).toBeTruthy();
     expect(host.querySelector(".nav-progress")?.textContent).toContain("整局 1/2");
@@ -861,7 +869,7 @@ describe("foreground engine lifecycle UI", () => {
       prevMove.click();
       await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
     });
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [] });
     expect(backend.cancelKataGoAnalysis).not.toHaveBeenCalled();
     expect((host.querySelector('input[aria-label="跳转手数"]') as HTMLInputElement).value).toBe("0");
     expect(host.textContent).toContain("61.0%");

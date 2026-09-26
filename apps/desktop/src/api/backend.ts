@@ -36,8 +36,14 @@ import type {
   PlayerColor,
   PositionDto,
   ProblemMarkerDto,
+  SgfMarkupActionDto,
   RecoveryProtectionDto,
-  RecoveryStartupDto
+  RecoveryStartupDto,
+  StoneDto,
+  TrialSessionDto,
+  ScoringActionDto,
+  ScoringRuleDto,
+  ScoringSessionDto
 } from "../domain/types";
 import { emptyForegroundEngineSnapshot, mergeForegroundEngineSnapshot } from "../domain/foregroundEngine";
 import { ensureInitialPosition, replayGamePositions } from "../domain/board";
@@ -289,11 +295,11 @@ export async function projectCurrentGameMainline(): Promise<GameDto> {
   return invoke<GameDto>("project_current_game_mainline");
 }
 
-export async function selectCurrentGameNode(path: NodePath): Promise<CurrentGameResultDto> {
+export async function selectCurrentGameNode(path: NodePath, generation: number): Promise<CurrentGameResultDto> {
   if (!isTauriRuntime()) {
     throw new Error("Native current-game navigation requires the Tauri desktop backend.");
   }
-  return invoke<CurrentGameResultDto>("select_current_game_node", { path });
+  return invoke<CurrentGameResultDto>("select_current_game_node", { path, generation });
 }
 
 export async function playCurrentGame(path: NodePath, vertex: MoveVertex): Promise<CurrentGameResultDto> {
@@ -309,12 +315,100 @@ export async function setCurrentGamePersonalComment(path: NodePath, comment: str
   }
   return invoke<CurrentGameResultDto>("set_current_game_personal_comment", { path, comment });
 }
+export async function setCurrentGameMetadata(
+  generation: number, blackName: string, whiteName: string, komi: number
+): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<CurrentGameResultDto>("set_current_game_metadata", { generation, blackName, whiteName, komi });
+}
 
-export async function removeCurrentGameVariation(path: NodePath): Promise<CurrentGameResultDto> {
+
+export async function editCurrentGameMarkup(path: NodePath, generation: number, action: SgfMarkupActionDto): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<CurrentGameResultDto>("edit_current_game_markup", { path, generation, action });
+}
+
+export async function removeCurrentGameVariation(path: NodePath, generation: number): Promise<CurrentGameResultDto> {
   if (!isTauriRuntime()) {
     throw new Error(nativeCurrentGameUnavailable);
   }
-  return invoke<CurrentGameResultDto>("remove_current_game_variation", { path });
+  return invoke<CurrentGameResultDto>("remove_current_game_variation", { path, generation });
+}
+
+export async function promoteCurrentGameToMain(path: NodePath, generation: number): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<CurrentGameResultDto>("promote_current_game_to_main", { path, generation });
+}
+
+export async function applyRootSetup(generation: number, stones: StoneDto[], toPlay: PlayerColor): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<CurrentGameResultDto>("apply_root_setup", { generation, stones, toPlay });
+}
+
+export async function convertToRootSetup(generation: number, path: NodePath): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<CurrentGameResultDto>("convert_to_root_setup", { generation, path });
+}
+
+export async function undoCurrentGame(generation: number): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<CurrentGameResultDto>("undo_current_game", { generation });
+}
+
+export async function redoCurrentGame(generation: number): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) {
+    throw new Error(nativeCurrentGameUnavailable);
+  }
+  return invoke<CurrentGameResultDto>("redo_current_game", { generation });
+}
+
+export async function enterTrial(): Promise<TrialSessionDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<TrialSessionDto>("enter_trial");
+}
+
+export async function exitTrial(sessionId: number): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<CurrentGameResultDto>("exit_trial", { sessionId });
+}
+export async function enterScoring(rule: ScoringRuleDto): Promise<ScoringSessionDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<ScoringSessionDto>("enter_scoring", { rule });
+}
+
+export async function updateScoring(sessionId: number, revision: number, action: ScoringActionDto): Promise<ScoringSessionDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<ScoringSessionDto>("update_scoring", { sessionId, revision, action });
+}
+
+export async function exitScoring(sessionId: number, revision: number, confirm: boolean): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<CurrentGameResultDto>("exit_scoring", { sessionId, revision, confirm });
+}
+
+export async function trialSelect(sessionId: number, revision: number, path: NodePath): Promise<TrialSessionDto> {
+  return invoke<TrialSessionDto>("trial_select", { sessionId, revision, path });
+}
+
+export async function trialPlay(sessionId: number, revision: number, vertex: MoveVertex): Promise<TrialSessionDto> {
+  return invoke<TrialSessionDto>("trial_play", { sessionId, revision, vertex });
+}
+
+export async function trialUndo(sessionId: number, revision: number): Promise<TrialSessionDto> {
+  return invoke<TrialSessionDto>("trial_undo", { sessionId, revision });
+}
+
+export async function trialStartFinite(sessionId: number, revision: number, runId: string, maxVisits: number): Promise<AnalysisJobStartedDto> {
+  return invoke<AnalysisJobStartedDto>("trial_start_finite", { sessionId, revision, runId, maxVisits });
+}
+
+export async function subscribeTrialAnalysis(onTrial: (trial: TrialSessionDto) => void): Promise<() => void> {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen<TrialSessionDto>("trial://analysis", (event) => onTrial(event.payload));
 }
 
 export async function saveCurrentGame(
@@ -546,7 +640,7 @@ export async function replaySgfPositions(sgfText: string): Promise<PositionDto[]
   try {
     const parsed = await parseSgfSummary(sgfText);
     const positions = await invoke<PositionDto[]>("replay_sgf_positions", { sgfText });
-    return ensureInitialPosition(parsed.summary.board_size, positions);
+    return ensureInitialPosition(parsed.summary.board_width, parsed.summary.board_height, positions);
   } catch {
     return replayGamePositions(parseSgfLocally(sgfText));
   }
@@ -672,7 +766,7 @@ function parseSgfLocally(sgfText: string): GameDto {
     throw new Error("The SGF text does not look like a game tree.");
   }
 
-  const boardSize = numberProperty(text, "SZ") ?? 19;
+  const { width: boardWidth, height: boardHeight } = parseBoardDimensions(textProperty(text, "SZ"));
   const komi = numberProperty(text, "KM") ?? 7.5;
   const moves = extractMainVariationNodes(text)
     .flatMap((node) => {
@@ -682,18 +776,16 @@ function parseSgfLocally(sgfText: string): GameDto {
     })
     .map<MoveDto>((move, index) => ({
       color: move.color,
-      vertex: parseVertex(move.rawVertex, boardSize),
+      vertex: parseVertex(move.rawVertex, boardWidth, boardHeight),
       move_number: index + 1
     }));
 
-  if (moves.length === 0) {
-    throw new Error("No main-line moves were found in the SGF text.");
-  }
 
   return {
     summary: {
       id: sampleGameId,
-      board_size: boardSize,
+      board_width: boardWidth,
+      board_height: boardHeight,
       komi,
       black_name: textProperty(text, "PB") ?? "Black",
       white_name: textProperty(text, "PW") ?? "White",
@@ -793,12 +885,24 @@ export function extractMainVariationNodes(sgfText: string): string[] {
   }
 }
 
-function parseVertex(raw: string, boardSize: number): MoveVertex {
+function parseVertex(raw: string, boardWidth: number, boardHeight: number): MoveVertex {
   if (raw.length !== 2) return "pass";
   const x = letters.indexOf(raw[0].toLowerCase());
   const y = letters.indexOf(raw[1].toLowerCase());
-  if (x < 0 || y < 0 || x >= boardSize || y >= boardSize) return "pass";
+  if (x < 0 || y < 0 || x >= boardWidth || y >= boardHeight) return "pass";
   return { point: { x, y } };
+}
+
+function parseBoardDimensions(raw: string | null): { width: number; height: number } {
+  if (raw === null) return { width: 19, height: 19 };
+  const match = /^(\d+)(?::(\d+))?$/.exec(raw.trim());
+  const width = Number(match?.[1]);
+  const height = Number(match?.[2] ?? match?.[1]);
+  if (!match || !Number.isInteger(width) || !Number.isInteger(height)
+    || width < 2 || width > 25 || height < 2 || height > 25) {
+    throw new Error("SGF SZ must contain board width and height from 2 to 25.");
+  }
+  return { width, height };
 }
 
 function numberProperty(text: string, property: string): number | null {
@@ -842,9 +946,9 @@ function buildCandidates(game: GameDto, turn: number, winrate: number): Candidat
   );
   const candidates: CandidateMoveDto[] = [];
   let cursor = turn * 5 + 3;
-  while (candidates.length < 8 && cursor < game.summary.board_size * game.summary.board_size * 3) {
-    const x = (cursor * 7 + 3) % game.summary.board_size;
-    const y = (cursor * 11 + 5) % game.summary.board_size;
+  while (candidates.length < 8 && cursor < game.summary.board_width * game.summary.board_height * 3) {
+    const x = (cursor * 7 + 3) % game.summary.board_width;
+    const y = (cursor * 11 + 5) % game.summary.board_height;
     cursor += 1;
     if (occupied.has(`${x}:${y}`)) continue;
     const rank = candidates.length;

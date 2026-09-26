@@ -6,6 +6,9 @@ use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod recent;
+pub use recent::recent_game_paths;
+
 pub const APP_PREFERENCES_FILE: &str = "lizzieyzy-next-app-preferences.json";
 pub const UNREADABLE_RECOVERY_MESSAGE: &str = "Unreadable preferences isolated; restored defaults.";
 
@@ -16,6 +19,10 @@ pub struct AppPreferencesDto {
     pub continuous_analysis_enabled: bool,
     #[serde(flatten)]
     pub continuous_budget: ContinuousAnalysisBudgetDto,
+    #[serde(default = "default_show_coordinates")]
+    pub show_coordinates: bool,
+    #[serde(default)]
+    pub show_move_numbers: bool,
     #[serde(default = "default_show_ownership")]
     pub show_ownership: bool,
     #[serde(default = "default_show_policy")]
@@ -64,6 +71,18 @@ pub struct AppPreferencesDto {
     pub variation_replay_interval_ms: u32,
     #[serde(default = "default_restore_last_session")]
     pub restore_last_session: bool,
+    #[serde(default = "default_sound_enabled")]
+    pub sound_enabled: bool,
+    #[serde(default = "default_board_width")]
+    pub default_board_width: u8,
+    #[serde(default = "default_board_height")]
+    pub default_board_height: u8,
+    #[serde(default = "default_komi")]
+    pub default_komi: f32,
+    #[serde(default = "default_scoring_rule")]
+    pub scoring_rule: String,
+    #[serde(default)]
+    pub recent_game_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,10 +100,16 @@ pub struct AppPreferencesLoadResultDto {
     pub recovery: Option<AppPreferencesRecoveryDto>,
 }
 
+fn default_show_coordinates() -> bool {
+    true
+}
+
 pub fn default_app_preferences() -> AppPreferencesDto {
     AppPreferencesDto {
         continuous_analysis_enabled: default_continuous_analysis_enabled(),
         continuous_budget: ContinuousAnalysisBudgetDto::default(),
+        show_coordinates: default_show_coordinates(),
+        show_move_numbers: false,
         show_ownership: default_show_ownership(),
         show_policy: default_show_policy(),
         show_candidates: default_show_candidates(),
@@ -109,6 +134,12 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         variation_replay_enabled: default_variation_replay_enabled(),
         variation_replay_interval_ms: default_variation_replay_interval_ms(),
         restore_last_session: default_restore_last_session(),
+        sound_enabled: default_sound_enabled(),
+        default_board_width: default_board_width(),
+        default_board_height: default_board_height(),
+        default_komi: default_komi(),
+        scoring_rule: default_scoring_rule(),
+        recent_game_paths: Vec::new(),
     }
 }
 
@@ -138,6 +169,9 @@ pub fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPrefe
     }
     if preferences.sub_board_content_mode != "raw" {
         preferences.sub_board_content_mode = default_sub_board_content_mode();
+    }
+    if preferences.scoring_rule != "area" && preferences.scoring_rule != "territory" {
+        preferences.scoring_rule = default_scoring_rule();
     }
     let single_stage = preferences
         .task_single_stage_conditions
@@ -211,6 +245,21 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
 }
 
 pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPreferencesDto, String> {
+    if !(2..=25).contains(&preferences.default_board_width) {
+        return Err(format!(
+            "Default board width must be between 2 and 25, got {}.",
+            preferences.default_board_width
+        ));
+    }
+    if !(2..=25).contains(&preferences.default_board_height) {
+        return Err(format!(
+            "Default board height must be between 2 and 25, got {}.",
+            preferences.default_board_height
+        ));
+    }
+    if !preferences.default_komi.is_finite() {
+        return Err("Default komi must be finite.".to_string());
+    }
     preferences.continuous_budget.validate()?;
     let single_stage = preferences
         .task_single_stage_conditions
@@ -444,6 +493,26 @@ fn default_restore_last_session() -> bool {
     false
 }
 
+fn default_sound_enabled() -> bool {
+    true
+}
+
+fn default_board_width() -> u8 {
+    19
+}
+
+fn default_board_height() -> u8 {
+    19
+}
+
+fn default_komi() -> f32 {
+    7.5
+}
+
+fn default_scoring_rule() -> String {
+    "area".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,6 +550,8 @@ mod tests {
                 continuous_visits_limit: 123,
                 continuous_stop_on_empty_board: true,
             },
+            show_coordinates: false,
+            show_move_numbers: true,
             show_ownership: false,
             show_policy: false,
             show_candidates: false,
@@ -505,6 +576,12 @@ mod tests {
             variation_replay_enabled: true,
             variation_replay_interval_ms: 250,
             restore_last_session: true,
+            sound_enabled: true,
+            default_board_width: 19,
+            default_board_height: 19,
+            default_komi: 7.5,
+            scoring_rule: default_scoring_rule(),
+            recent_game_paths: Vec::new(),
         }
     }
 
@@ -632,6 +709,8 @@ mod tests {
         fs::write(&path, r#"{"showCandidates":false,"candidateLimit":2}"#).unwrap();
 
         let loaded = load_from_path(&path).unwrap();
+        assert!(loaded.preferences.show_coordinates);
+        assert!(!loaded.preferences.show_move_numbers);
         assert!(loaded.preferences.continuous_analysis_enabled);
         assert!(!loaded.preferences.show_candidates);
         assert_eq!(loaded.preferences.candidate_limit, 2);
@@ -644,6 +723,11 @@ mod tests {
         assert!(!loaded.preferences.variation_replay_enabled);
         assert_eq!(loaded.preferences.variation_replay_interval_ms, 500);
         assert!(loaded.recovery.is_none());
+        assert!(loaded.preferences.sound_enabled);
+        assert_eq!(loaded.preferences.default_board_width, 19);
+        assert_eq!(loaded.preferences.default_board_height, 19);
+        assert_eq!(loaded.preferences.default_komi, 7.5);
+        assert_eq!(loaded.preferences.scoring_rule, "area");
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -836,5 +920,221 @@ mod tests {
             roundtrip_object.get("showCandidates"),
             Some(&serde_json::json!(true))
         );
+    }
+
+    #[test]
+    fn default_board_and_komi_preferences_roundtrip_and_reject_invalid_writes() {
+        let (dir, path) = temp_prefs();
+        let mut custom = sample_preferences();
+        custom.default_board_width = 13;
+        custom.default_board_height = 17;
+        custom.default_komi = 6.5;
+
+        let saved = save_to_path(&path, custom.clone()).unwrap();
+        assert_eq!(saved.default_board_width, 13);
+        assert_eq!(saved.default_board_height, 17);
+        assert_eq!(saved.default_komi, 6.5);
+
+        let reloaded = load_from_path(&path).unwrap();
+        assert_eq!(reloaded.preferences.default_board_width, 13);
+        assert_eq!(reloaded.preferences.default_board_height, 17);
+        assert_eq!(reloaded.preferences.default_komi, 6.5);
+
+        let serialized = serde_json::to_value(&reloaded.preferences).unwrap();
+        assert_eq!(serialized["defaultBoardWidth"], 13);
+        assert_eq!(serialized["defaultBoardHeight"], 17);
+        assert_eq!(serialized["defaultKomi"], 6.5);
+
+        let durable = fs::read(&path).unwrap();
+
+        // Invalid width (< 2, > 25)
+        let mut invalid_width_low = custom.clone();
+        invalid_width_low.default_board_width = 1;
+        assert!(save_to_path(&path, invalid_width_low).is_err());
+        assert_eq!(fs::read(&path).unwrap(), durable);
+
+        let mut invalid_width_high = custom.clone();
+        invalid_width_high.default_board_width = 26;
+        assert!(save_to_path(&path, invalid_width_high).is_err());
+        assert_eq!(fs::read(&path).unwrap(), durable);
+
+        // Invalid height (< 2, > 25)
+        let mut invalid_height_low = custom.clone();
+        invalid_height_low.default_board_height = 1;
+        assert!(save_to_path(&path, invalid_height_low).is_err());
+        assert_eq!(fs::read(&path).unwrap(), durable);
+
+        let mut invalid_height_high = custom.clone();
+        invalid_height_high.default_board_height = 26;
+        assert!(save_to_path(&path, invalid_height_high).is_err());
+        assert_eq!(fs::read(&path).unwrap(), durable);
+
+        // Nonfinite komi (NaN, infinity, neg infinity)
+        let mut invalid_komi_nan = custom.clone();
+        invalid_komi_nan.default_komi = f32::NAN;
+        assert!(save_to_path(&path, invalid_komi_nan).is_err());
+        assert_eq!(fs::read(&path).unwrap(), durable);
+
+        let mut invalid_komi_inf = custom.clone();
+        invalid_komi_inf.default_komi = f32::INFINITY;
+        assert!(save_to_path(&path, invalid_komi_inf).is_err());
+        assert_eq!(fs::read(&path).unwrap(), durable);
+
+        let mut invalid_komi_neginf = custom.clone();
+        invalid_komi_neginf.default_komi = f32::NEG_INFINITY;
+        assert!(save_to_path(&path, invalid_komi_neginf).is_err());
+        assert_eq!(fs::read(&path).unwrap(), durable);
+
+        // Verify durable preferences still load untouched
+        let reloaded_after_rejects = load_from_path(&path).unwrap();
+        assert_eq!(reloaded_after_rejects.preferences.default_board_width, 13);
+        assert_eq!(reloaded_after_rejects.preferences.default_board_height, 17);
+        assert_eq!(reloaded_after_rejects.preferences.default_komi, 6.5);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sound_enabled_defaults_to_true_and_disabled_survives_roundtrip_and_unrelated_writes() {
+        let (dir, path) = temp_prefs();
+
+        // Missing old JSON defaults to soundEnabled: true
+        fs::write(&path, r#"{"showCandidates":true}"#).unwrap();
+        let loaded = load_from_path(&path).unwrap();
+        assert!(loaded.preferences.sound_enabled);
+        assert!(default_app_preferences().sound_enabled);
+
+        // Disabling sound survives save and durable reload
+        let mut prefs = loaded.preferences;
+        prefs.sound_enabled = false;
+        let saved = save_to_path(&path, prefs).unwrap();
+        assert!(!saved.sound_enabled);
+
+        let reloaded = load_from_path(&path).unwrap();
+        assert!(!reloaded.preferences.sound_enabled);
+
+        let serialized = serde_json::to_value(&reloaded.preferences).unwrap();
+        assert_eq!(serialized["soundEnabled"], false);
+
+        // Unrelated preference writes retain disabled sound
+        let mut updated = reloaded.preferences;
+        updated.candidate_limit = 5;
+        updated.board_theme = "high-contrast".to_string();
+        let saved_updated = save_to_path(&path, updated).unwrap();
+        assert!(!saved_updated.sound_enabled);
+        assert_eq!(saved_updated.candidate_limit, 5);
+
+        let reloaded_updated = load_from_path(&path).unwrap();
+        assert!(!reloaded_updated.preferences.sound_enabled);
+        assert_eq!(reloaded_updated.preferences.candidate_limit, 5);
+        assert_eq!(reloaded_updated.preferences.board_theme, "high-contrast");
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn scoring_rule_defaults_to_area_and_normalizes_unknown() {
+        let (dir, path) = temp_prefs();
+
+        // Default preferences first use is "area"
+        let defaults = default_app_preferences();
+        assert_eq!(defaults.scoring_rule, "area");
+
+        // Serialized defaults contain camelCase scoringRule
+        let defaults_json = serde_json::to_value(&defaults).unwrap();
+        assert_eq!(defaults_json["scoringRule"], "area");
+        // No compensation or handicap values stored
+        let obj = defaults_json.as_object().unwrap();
+        assert!(!obj.contains_key("compensation"));
+        assert!(!obj.contains_key("handicapCompensation"));
+        assert!(!obj.contains_key("h"));
+
+        // Loading from nonexistent path defaults to area
+        let missing = load_from_path(&path).unwrap();
+        assert_eq!(missing.preferences.scoring_rule, "area");
+
+        // Legacy JSON without scoringRule defaults to area
+        fs::write(&path, r#"{"showCandidates":true}"#).unwrap();
+        let loaded_legacy = load_from_path(&path).unwrap();
+        assert_eq!(loaded_legacy.preferences.scoring_rule, "area");
+
+        // Normalization preserves "area" and "territory", maps unknown to "area"
+        for allowed in ["area", "territory"] {
+            let pref = AppPreferencesDto {
+                scoring_rule: allowed.to_string(),
+                ..default_app_preferences()
+            };
+            assert_eq!(normalize_app_preferences(pref).scoring_rule, allowed);
+        }
+
+        for unknown in ["", "japanese", "chinese", "AREA", "TERRITORY", "unknown", "aga"] {
+            let pref = AppPreferencesDto {
+                scoring_rule: unknown.to_string(),
+                ..default_app_preferences()
+            };
+            assert_eq!(normalize_app_preferences(pref).scoring_rule, "area");
+        }
+
+        // Loading file with unknown scoringRule normalizes to area
+        fs::write(&path, r#"{"showCandidates":true,"scoringRule":"japanese"}"#).unwrap();
+        let loaded_unknown = load_from_path(&path).unwrap();
+        assert_eq!(loaded_unknown.preferences.scoring_rule, "area");
+
+        // Saving unknown scoringRule normalizes and persists area
+        let mut to_save = sample_preferences();
+        to_save.scoring_rule = "invalid_rule".to_string();
+        let saved = save_to_path(&path, to_save).unwrap();
+        assert_eq!(saved.scoring_rule, "area");
+        let reloaded = load_from_path(&path).unwrap();
+        assert_eq!(reloaded.preferences.scoring_rule, "area");
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn scoring_rule_persists_area_and_territory_and_retains_durable_on_failed_replace() {
+        let (dir, path) = temp_prefs();
+        let mut prefs = sample_preferences();
+        prefs.scoring_rule = "territory".to_string();
+        let saved = save_to_path(&path, prefs.clone()).unwrap();
+        assert_eq!(saved.scoring_rule, "territory");
+
+        let reloaded = load_from_path(&path).unwrap();
+        assert_eq!(reloaded.preferences.scoring_rule, "territory");
+        let durable_json = fs::read_to_string(&path).unwrap();
+
+        // When atomic replace fails during save, previous durable scoringRule is retained
+        let mut new_prefs = reloaded.preferences.clone();
+        new_prefs.scoring_rule = "area".to_string();
+        let serialized = serde_json::to_string(&new_prefs).unwrap();
+        let err = atomic_replace_file_with(&path, &serialized, |_from, _to| {
+            Err(io::Error::other("rename failed"))
+        })
+        .unwrap_err();
+        assert!(err.contains("replace"));
+
+        // Verify previous durable file is untouched and still loads territory
+        assert_eq!(fs::read_to_string(&path).unwrap(), durable_json);
+        assert!(!tmp_path(&path).exists());
+        let reloaded_after_failure = load_from_path(&path).unwrap();
+        assert_eq!(reloaded_after_failure.preferences.scoring_rule, "territory");
+
+        // Normal successful save of area updates durable value
+        let saved_area = save_to_path(&path, new_prefs).unwrap();
+        assert_eq!(saved_area.scoring_rule, "area");
+        let reloaded_area = load_from_path(&path).unwrap();
+        assert_eq!(reloaded_area.preferences.scoring_rule, "area");
+
+        // Unrelated preference writes retain current durable scoring rule
+        let mut updated_unrelated = reloaded_area.preferences;
+        updated_unrelated.candidate_limit = 7;
+        let saved_unrelated = save_to_path(&path, updated_unrelated).unwrap();
+        assert_eq!(saved_unrelated.scoring_rule, "area");
+        assert_eq!(saved_unrelated.candidate_limit, 7);
+        let reloaded_unrelated = load_from_path(&path).unwrap();
+        assert_eq!(reloaded_unrelated.preferences.scoring_rule, "area");
+        assert_eq!(reloaded_unrelated.preferences.candidate_limit, 7);
+
+        let _ = fs::remove_dir_all(dir);
     }
 }

@@ -93,7 +93,7 @@ pub struct AnalysisResponse {
 
 impl AnalysisResponse {
     /// Validates positive root search accounting and any supplied candidates or geometry.
-    pub fn has_valid_search_result(&self, board_size: u8) -> bool {
+    pub fn has_valid_search_result(&self, board_width: u8, board_height: u8) -> bool {
         let Some(root) = &self.root_info else {
             return false;
         };
@@ -107,12 +107,12 @@ impl AnalysisResponse {
             }
             let col = bytes[0].to_ascii_uppercase();
             let x = col - b'A' - u8::from(col > b'I');
-            x < board_size
+            x < board_width
                 && vertex[1..]
                     .parse::<u8>()
-                    .is_ok_and(|row| row > 0 && row <= board_size)
+                    .is_ok_and(|row| row > 0 && row <= board_height)
         };
-        let area = usize::from(board_size).pow(2);
+        let area = usize::from(board_width) * usize::from(board_height);
         !self.no_results
             && root.visits > 0
             && (0.0..=1.0).contains(&root.winrate)
@@ -179,8 +179,15 @@ pub enum ProtocolError {
     Json(#[from] serde_json::Error),
     #[error("KataGo returned error: {0}")]
     Engine(String),
-    #[error("move vertex ({x}, {y}) is outside board size {board_size}")]
-    InvalidVertex { x: u8, y: u8, board_size: u8 },
+    #[error("KataGo returned error for {field}: {message}")]
+    EngineField { message: String, field: String },
+    #[error("move vertex ({x}, {y}) is outside board {board_width}x{board_height}")]
+    InvalidVertex {
+        x: u8,
+        y: u8,
+        board_width: u8,
+        board_height: u8,
+    },
 }
 
 impl AnalysisQuery {
@@ -254,10 +261,35 @@ impl AnalysisResponse {
     }
 }
 
+/// KataGo can emit an epsilon-sized overshoot from floating-point search math.
+/// Normalize only roundoff; substantial out-of-range values remain invalid.
+fn normalize_winrate_roundoff(value: f32) -> f32 {
+    const TOLERANCE: f32 = 1e-6;
+    if (-TOLERANCE..0.0).contains(&value) {
+        0.0
+    } else if value > 1.0 && value <= 1.0 + TOLERANCE {
+        1.0
+    } else {
+        value
+    }
+}
+
 pub fn parse_response_line(line: &str) -> Result<AnalysisResponse, ProtocolError> {
-    let response: AnalysisResponse = serde_json::from_str(line)?;
+    let mut response: AnalysisResponse = serde_json::from_str(line)?;
     if let Some(error) = &response.error {
-        return Err(ProtocolError::Engine(error.clone()));
+        return match &response.field {
+            Some(field) => Err(ProtocolError::EngineField {
+                message: error.clone(),
+                field: field.clone(),
+            }),
+            None => Err(ProtocolError::Engine(error.clone())),
+        };
+    }
+    if let Some(root) = response.root_info.as_mut() {
+        root.winrate = normalize_winrate_roundoff(root.winrate);
+    }
+    for candidate in &mut response.move_infos {
+        candidate.winrate = normalize_winrate_roundoff(candidate.winrate);
     }
     Ok(response)
 }
@@ -266,13 +298,14 @@ pub fn analysis_query_from_game(
     game: &GameDto,
     options: AnalysisQueryOptions,
 ) -> Result<AnalysisQuery, ProtocolError> {
-    let board_size = game.summary.board_size;
+    let board_width = game.summary.board_width;
+    let board_height = game.summary.board_height;
     let turn = options.turn.min(game.moves.len() as u32);
     let moves = game
         .moves
         .iter()
         .take(turn as usize)
-        .map(|move_| move_dto_to_kata_move(move_, board_size))
+        .map(|move_| move_dto_to_kata_move(move_, board_width, board_height))
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(AnalysisQuery {
@@ -281,8 +314,8 @@ pub fn analysis_query_from_game(
         initial_stones: Vec::new(),
         rules: options.rules,
         komi: game.summary.komi,
-        board_x_size: board_size,
-        board_y_size: board_size,
+        board_x_size: board_width,
+        board_y_size: board_height,
         analyze_turns: Some(vec![turn]),
         max_visits: options.max_visits,
         include_ownership: options.include_ownership,
@@ -293,7 +326,8 @@ pub fn analysis_query_from_game(
 }
 
 pub fn analysis_query_from_position(
-    board_size: u8,
+    board_width: u8,
+    board_height: u8,
     komi: f32,
     stones: &[app_model::StoneDto],
     to_play: PlayerColor,
@@ -309,7 +343,8 @@ pub fn analysis_query_from_position(
                         x: stone.x,
                         y: stone.y,
                     },
-                    board_size,
+                    board_width,
+                    board_height,
                 )?,
             ))
         })
@@ -326,8 +361,8 @@ pub fn analysis_query_from_position(
         initial_stones,
         rules: options.rules,
         komi,
-        board_x_size: board_size,
-        board_y_size: board_size,
+        board_x_size: board_width,
+        board_y_size: board_height,
         analyze_turns: Some(vec![turn]),
         max_visits: options.max_visits,
         include_ownership: options.include_ownership,
@@ -348,12 +383,13 @@ pub fn analysis_batch_query_from_game(
     game: &GameDto,
     options: AnalysisBatchQueryOptions,
 ) -> Result<AnalysisQuery, ProtocolError> {
-    let board_size = game.summary.board_size;
+    let board_width = game.summary.board_width;
+    let board_height = game.summary.board_height;
     let move_count = game.moves.len() as u32;
     let moves = game
         .moves
         .iter()
-        .map(|move_| move_dto_to_kata_move(move_, board_size))
+        .map(|move_| move_dto_to_kata_move(move_, board_width, board_height))
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(AnalysisQuery {
@@ -362,8 +398,8 @@ pub fn analysis_batch_query_from_game(
         initial_stones: Vec::new(),
         rules: options.rules,
         komi: game.summary.komi,
-        board_x_size: board_size,
-        board_y_size: board_size,
+        board_x_size: board_width,
+        board_y_size: board_height,
         analyze_turns: Some(normalize_analysis_turns(options.analyze_turns, move_count)),
         max_visits: options.max_visits,
         include_ownership: options.include_ownership,
@@ -383,10 +419,14 @@ fn normalize_analysis_turns(turns: Option<Vec<u32>>, move_count: u32) -> Vec<u32
     turns
 }
 
-pub fn move_dto_to_kata_move(move_: &MoveDto, board_size: u8) -> Result<KataMove, ProtocolError> {
+pub fn move_dto_to_kata_move(
+    move_: &MoveDto,
+    board_width: u8,
+    board_height: u8,
+) -> Result<KataMove, ProtocolError> {
     Ok((
         player_color_to_kata(move_.color).to_string(),
-        move_vertex_to_kata_coordinate(&move_.vertex, board_size)?,
+        move_vertex_to_kata_coordinate(&move_.vertex, board_width, board_height)?,
     ))
 }
 
@@ -397,19 +437,28 @@ pub fn player_color_to_kata(color: PlayerColor) -> &'static str {
     }
 }
 
-pub fn move_vertex_to_kata_coordinate(vertex: &MoveVertex, board_size: u8) -> Result<String, ProtocolError> {
+pub fn move_vertex_to_kata_coordinate(
+    vertex: &MoveVertex,
+    board_width: u8,
+    board_height: u8,
+) -> Result<String, ProtocolError> {
     match vertex {
         MoveVertex::Pass => Ok("pass".to_string()),
-        MoveVertex::Point(point) => point_to_kata_coordinate(point, board_size),
+        MoveVertex::Point(point) => point_to_kata_coordinate(point, board_width, board_height),
     }
 }
 
-pub fn point_to_kata_coordinate(point: &PointDto, board_size: u8) -> Result<String, ProtocolError> {
-    if point.x >= board_size || point.y >= board_size {
+pub fn point_to_kata_coordinate(
+    point: &PointDto,
+    board_width: u8,
+    board_height: u8,
+) -> Result<String, ProtocolError> {
+    if point.x >= board_width || point.y >= board_height {
         return Err(ProtocolError::InvalidVertex {
             x: point.x,
             y: point.y,
-            board_size,
+            board_width,
+            board_height,
         });
     }
     let col = if point.x >= 8 {
@@ -417,14 +466,15 @@ pub fn point_to_kata_coordinate(point: &PointDto, board_size: u8) -> Result<Stri
     } else {
         (b'A' + point.x) as char
     };
-    let row = board_size - point.y;
+    let row = board_height - point.y;
     Ok(format!("{col}{row}"))
 }
 
 pub fn normalize_responses_for_turns(
     job_id: AnalysisJobId,
     responses: Vec<AnalysisResponse>,
-    board_size: u8,
+    board_width: u8,
+    board_height: u8,
     turns: &[u32],
 ) -> Vec<AnalysisFrameDto> {
     let mut turns = turns.to_vec();
@@ -434,7 +484,7 @@ pub fn normalize_responses_for_turns(
     let mut frames = responses
         .into_iter()
         .filter(|response| turns.binary_search(&response.turn_number).is_ok())
-        .map(|response| normalize_response(job_id, response, board_size))
+        .map(|response| normalize_response(job_id, response, board_width, board_height))
         .collect::<Vec<_>>();
     frames.sort_by_key(|frame| frame.turn);
     frames
@@ -443,7 +493,8 @@ pub fn normalize_responses_for_turns(
 pub fn normalize_response(
     job_id: AnalysisJobId,
     response: AnalysisResponse,
-    board_size: u8,
+    board_width: u8,
+    board_height: u8,
 ) -> AnalysisFrameDto {
     let root = response.root_info.unwrap_or(RootInfo {
         visits: 0,
@@ -468,13 +519,17 @@ pub fn normalize_response(
                 vertex: info
                     .move_
                     .as_deref()
-                    .map(|m| gtp_vertex_to_dto(m, board_size))
+                    .map(|m| gtp_vertex_to_dto(m, board_width, board_height))
                     .unwrap_or(MoveVertex::Pass),
                 visits: info.visits,
                 winrate_black: info.winrate,
                 score_mean_black: info.score_mean,
                 policy_prior: info.prior,
-                pv: info.pv.iter().map(|m| gtp_vertex_to_dto(m, board_size)).collect(),
+                pv: info
+                    .pv
+                    .iter()
+                    .map(|m| gtp_vertex_to_dto(m, board_width, board_height))
+                    .collect(),
             })
             .collect(),
         ownership: response.ownership,
@@ -482,7 +537,7 @@ pub fn normalize_response(
     }
 }
 
-pub fn gtp_vertex_to_dto(vertex: &str, board_size: u8) -> MoveVertex {
+pub fn gtp_vertex_to_dto(vertex: &str, board_width: u8, board_height: u8) -> MoveVertex {
     if vertex.eq_ignore_ascii_case("pass") || vertex.is_empty() {
         return MoveVertex::Pass;
     }
@@ -497,8 +552,8 @@ pub fn gtp_vertex_to_dto(vertex: &str, board_size: u8) -> MoveVertex {
     let col_upper = col.to_ascii_uppercase();
     let skipped_i = if col_upper > 'I' { 1 } else { 0 };
     let x = (col_upper as u8).saturating_sub(b'A').saturating_sub(skipped_i);
-    let y = board_size.saturating_sub(row_num);
-    if x >= board_size || y >= board_size {
+    let y = board_height.saturating_sub(row_num);
+    if row_num == 0 || row_num > board_height || x >= board_width || y >= board_height {
         MoveVertex::Pass
     } else {
         MoveVertex::Point(PointDto { x, y })
@@ -509,6 +564,27 @@ pub fn gtp_vertex_to_dto(vertex: &str, board_size: u8) -> MoveVertex {
 mod tests {
     use super::*;
     use app_model::{GameId, GameSummaryDto};
+
+    #[test]
+    fn rectangular_coordinates_and_heatmaps_use_independent_axes() {
+        let point = PointDto { x: 8, y: 1 };
+        assert_eq!(point_to_kata_coordinate(&point, 9, 2).unwrap(), "J1");
+        assert_eq!(gtp_vertex_to_dto("J1", 9, 2), MoveVertex::Point(point));
+        assert!(point_to_kata_coordinate(&PointDto { x: 2, y: 8 }, 2, 9).is_err());
+        assert_eq!(
+            point_to_kata_coordinate(&PointDto { x: 1, y: 8 }, 2, 9).unwrap(),
+            "B1"
+        );
+        let mut response = parse_response_line(
+            r#"{"id":"rect","turnNumber":0,"rootInfo":{"visits":1,"winrate":0.5},"moveInfos":[{"move":"J1","visits":1,"winrate":0.5,"scoreMean":0.0,"pv":["J1"]}]}"#,
+        ).unwrap();
+        response.ownership = Some(vec![0.0; 18]);
+        response.policy = Some(vec![0.0; 19]);
+        assert!(response.has_valid_search_result(9, 2));
+        assert!(!response.has_valid_search_result(2, 9));
+        response.ownership = Some(vec![0.0; 81]);
+        assert!(!response.has_valid_search_result(9, 2));
+    }
 
     fn move_at(color: PlayerColor, x: u8, y: u8, move_number: u32) -> MoveDto {
         MoveDto {
@@ -530,7 +606,8 @@ mod tests {
         GameDto {
             summary: GameSummaryDto {
                 id: GameId::nil(),
-                board_size: 19,
+                board_width: 19,
+                board_height: 19,
                 komi: 7.5,
                 black_name: None,
                 white_name: None,
@@ -587,7 +664,23 @@ mod tests {
     }
 
     #[test]
-    fn parse_response_line_returns_engine_error_field() {
+    fn parse_response_line_preserves_engine_error_field() {
+        let error = parse_response_line(
+            r#"{"id":"query-1","error":"Must provide an integer from 2 to 19","field":"boardXSize"}"#,
+        )
+        .unwrap_err();
+
+        match error {
+            ProtocolError::EngineField { message, field } => {
+                assert_eq!(message, "Must provide an integer from 2 to 19");
+                assert_eq!(field, "boardXSize");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_response_line_preserves_engine_error_without_field() {
         let error = parse_response_line(r#"{"id":"query-1","error":"bad query"}"#).unwrap_err();
 
         match error {
@@ -615,31 +708,50 @@ mod tests {
         )
         .unwrap();
 
-        assert!(response.has_valid_search_result(19));
+        assert!(response.has_valid_search_result(19, 19));
         assert_eq!(response.root_info.as_ref().unwrap().score_mean, None);
-        let frame = normalize_response(AnalysisJobId::nil(), response, 19);
+        let frame = normalize_response(AnalysisJobId::nil(), response, 19, 19);
         assert_eq!(frame.score_mean_black, None);
+    }
+
+    #[test]
+    fn accepts_katago_winrate_roundoff_without_leaking_out_of_range_values() {
+        let response = parse_response_line(
+            r#"{"id":"small-board","rootInfo":{"visits":47,"winrate":1.00000012},"moveInfos":[{"move":"D2","visits":3,"winrate":-2.22044605e-16,"scoreMean":-23.6659461}]}"#,
+        )
+        .unwrap();
+
+        assert!(response.has_valid_search_result(5, 4));
+        let frame = normalize_response(AnalysisJobId::nil(), response, 5, 4);
+        assert_eq!(frame.winrate_black, 1.0);
+        assert_eq!(frame.candidates[0].winrate_black, 0.0);
+
+        let invalid = parse_response_line(
+            r#"{"id":"invalid","rootInfo":{"visits":47,"winrate":0.5},"moveInfos":[{"move":"D2","winrate":-0.001,"scoreMean":0.0}]}"#,
+        )
+        .unwrap();
+        assert!(!invalid.has_valid_search_result(5, 4));
     }
 
     #[test]
     fn converts_pass_to_katago_pass() {
         let move_ = pass(PlayerColor::Black, 1);
-        let kata_move = move_dto_to_kata_move(&move_, 19).unwrap();
+        let kata_move = move_dto_to_kata_move(&move_, 19, 19).unwrap();
 
         assert_eq!(kata_move, ("B".to_string(), "pass".to_string()));
     }
 
     #[test]
     fn skips_i_column_in_katago_coordinates() {
-        let coordinate = point_to_kata_coordinate(&PointDto { x: 8, y: 9 }, 19).unwrap();
+        let coordinate = point_to_kata_coordinate(&PointDto { x: 8, y: 9 }, 19, 19).unwrap();
 
         assert_eq!(coordinate, "J10");
     }
 
     #[test]
     fn converts_19_line_board_edges() {
-        let top_left = point_to_kata_coordinate(&PointDto { x: 0, y: 0 }, 19).unwrap();
-        let bottom_right = point_to_kata_coordinate(&PointDto { x: 18, y: 18 }, 19).unwrap();
+        let top_left = point_to_kata_coordinate(&PointDto { x: 0, y: 0 }, 19, 19).unwrap();
+        let bottom_right = point_to_kata_coordinate(&PointDto { x: 18, y: 18 }, 19, 19).unwrap();
 
         assert_eq!(top_left, "A19");
         assert_eq!(bottom_right, "T1");
@@ -712,6 +824,7 @@ mod tests {
             job_id,
             vec![response(3, 30), response(1, 10), response(2, 20)],
             19,
+            19,
             &[3, 1, 3],
         );
 
@@ -731,6 +844,7 @@ mod tests {
         let frames = normalize_responses_for_turns(
             job_id,
             vec![response(1, 10), response(2, 20), response(1, 11)],
+            19,
             19,
             &[1, 1],
         );
@@ -753,7 +867,7 @@ mod tests {
         )
         .unwrap();
 
-        let frame = normalize_response(job_id, response, 19);
+        let frame = normalize_response(job_id, response, 19, 19);
 
         assert_eq!(frame.ownership, Some(vec![0.1, -0.2, 0.3]));
         assert_eq!(frame.policy, Some(vec![0.01, 0.02, 0.03]));
@@ -777,6 +891,7 @@ mod tests {
             color: PlayerColor::Black,
         }];
         let query = analysis_query_from_position(
+            9,
             9,
             6.5,
             &stones,

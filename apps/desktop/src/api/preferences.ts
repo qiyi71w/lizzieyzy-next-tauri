@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "../domain/preferences";
+import { continuousBudgetError, defaultAppPreferences, newGameDefaultsError, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "../domain/preferences";
 
 declare global {
   interface Window {
@@ -33,7 +33,8 @@ export async function loadAppPreferences(): Promise<AppPreferencesLoadResult> {
 }
 
 export async function saveAppPreferences(preferences: AppPreferences): Promise<AppPreferences> {
-  const error = continuousBudgetError(preferences)
+  const error = newGameDefaultsError(preferences)
+    ?? continuousBudgetError(preferences)
     ?? taskConditionsError(preferences.taskSingleStageConditions)
     ?? taskStageConditionsError(preferences.taskOverviewConditions, preferences.taskDeepConditions)
     ?? taskConditionsError(preferences.taskSwingOverviewConditions)
@@ -48,13 +49,19 @@ export async function saveAppPreferences(preferences: AppPreferences): Promise<A
   return normalizeAppPreferences(await invoke<AppPreferences>("save_app_preferences", { preferences: normalized }));
 }
 
+export async function updateRecentGameHistory(openedPath: string | null): Promise<string[]> {
+  if (!isTauriRuntime()) throw new Error("Recent game history requires the native Tauri desktop backend.");
+  return invoke<string[]>("update_recent_game_history", { openedPath });
+}
+
 function loadBrowserPreferences(): AppPreferencesLoadResult {
   if (typeof window === "undefined") return { preferences: defaultAppPreferences };
   const raw = window.localStorage.getItem(browserPreferencesKey);
   if (!raw) return { preferences: defaultAppPreferences };
   try {
     const preferences = normalizeAppPreferences(JSON.parse(raw) as Partial<AppPreferences>);
-    const error = continuousBudgetError(preferences)
+    const error = newGameDefaultsError(preferences)
+      ?? continuousBudgetError(preferences)
       ?? taskConditionsError(preferences.taskSingleStageConditions)
       ?? taskStageConditionsError(preferences.taskOverviewConditions, preferences.taskDeepConditions)
       ?? taskConditionsError(preferences.taskSwingOverviewConditions)

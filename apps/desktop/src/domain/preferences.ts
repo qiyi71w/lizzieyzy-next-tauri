@@ -5,9 +5,12 @@ export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
 export type GraphPerspective = "black" | "sideToPlay";
 export type SubBoardContentMode = "variation" | "raw";
+export type ScoringRule = "area" | "territory";
 export type { NextMoveReviewMarkerMode };
 
 export type AppPreferences = ContinuousAnalysisBudgetDto & {
+  showCoordinates: boolean;
+  showMoveNumbers: boolean;
   showOwnership: boolean;
   showPolicy: boolean;
   showCandidates: boolean;
@@ -32,15 +35,26 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   variationReplayEnabled: boolean;
   variationReplayIntervalMs: number;
   restoreLastSession: boolean;
+  soundEnabled: boolean;
+  scoringRule: ScoringRule;
   continuousAnalysisEnabled: boolean;
+  defaultBoardWidth: number;
+  defaultBoardHeight: number;
+  defaultKomi: number;
+  recentGamePaths: string[];
 };
 
 export const defaultAppPreferences: AppPreferences = {
+  showCoordinates: true,
+  showMoveNumbers: false,
   showOwnership: true,
   showPolicy: true,
   showCandidates: true,
   candidateLimit: 8,
   defaultMaxVisits: 800,
+  defaultBoardWidth: 19,
+  defaultBoardHeight: 19,
+  defaultKomi: 7.5,
   taskSingleStageConditions: {
     time_seconds: { enabled: false, value: 10 },
     total_visits: { enabled: true, value: 800 },
@@ -84,7 +98,10 @@ export const defaultAppPreferences: AppPreferences = {
   variationReplayEnabled: false,
   variationReplayIntervalMs: 500,
   restoreLastSession: false,
+  soundEnabled: true,
+  scoringRule: "area",
   continuousAnalysisEnabled: true,
+  recentGamePaths: [],
   continuousTimeLimitEnabled: true,
   continuousTimeLimitSeconds: 600,
   continuousVisitsLimitEnabled: false,
@@ -101,11 +118,16 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
   const scoreLeadLine = booleanValue(value?.scoreLeadLine, defaultAppPreferences.scoreLeadLine);
   const defaultMaxVisits = integerValue(value?.defaultMaxVisits, defaultAppPreferences.defaultMaxVisits, 1, 1_000_000);
   return {
+    showCoordinates: booleanValue(value?.showCoordinates, defaultAppPreferences.showCoordinates),
+    showMoveNumbers: booleanValue(value?.showMoveNumbers, defaultAppPreferences.showMoveNumbers),
     showOwnership: booleanValue(value?.showOwnership, defaultAppPreferences.showOwnership),
     showPolicy: booleanValue(value?.showPolicy, defaultAppPreferences.showPolicy),
     showCandidates: booleanValue(value?.showCandidates, defaultAppPreferences.showCandidates),
     candidateLimit: integerValue(value?.candidateLimit, defaultAppPreferences.candidateLimit, 1, 20),
     defaultMaxVisits,
+    defaultBoardWidth: integerValue(value?.defaultBoardWidth, defaultAppPreferences.defaultBoardWidth, 2, 25),
+    defaultBoardHeight: integerValue(value?.defaultBoardHeight, defaultAppPreferences.defaultBoardHeight, 2, 25),
+    defaultKomi: finiteValue(value?.defaultKomi, defaultAppPreferences.defaultKomi),
     taskSingleStageConditions: normalizeSingleStageTaskConditions(value, defaultMaxVisits),
     taskOverviewConditions: normalizeTaskConditions(
       value?.taskOverviewConditions,
@@ -139,13 +161,25 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
       5000
     ),
     restoreLastSession: booleanValue(value?.restoreLastSession, defaultAppPreferences.restoreLastSession),
+    soundEnabled: booleanValue(value?.soundEnabled, defaultAppPreferences.soundEnabled),
+    scoringRule: value?.scoringRule === "territory" ? "territory" : "area",
     continuousAnalysisEnabled: booleanValue(value?.continuousAnalysisEnabled, defaultAppPreferences.continuousAnalysisEnabled),
+    recentGamePaths: Array.isArray(value?.recentGamePaths) ? value.recentGamePaths : [],
     continuousTimeLimitEnabled: booleanValue(value?.continuousTimeLimitEnabled, defaultAppPreferences.continuousTimeLimitEnabled),
     continuousTimeLimitSeconds: value?.continuousTimeLimitSeconds ?? defaultAppPreferences.continuousTimeLimitSeconds,
     continuousVisitsLimitEnabled: booleanValue(value?.continuousVisitsLimitEnabled, defaultAppPreferences.continuousVisitsLimitEnabled),
     continuousVisitsLimit: value?.continuousVisitsLimit ?? defaultAppPreferences.continuousVisitsLimit,
     continuousStopOnEmptyBoard: booleanValue(value?.continuousStopOnEmptyBoard, defaultAppPreferences.continuousStopOnEmptyBoard)
   };
+}
+
+export function newGameDefaultsError(value: Pick<AppPreferences, "defaultBoardWidth" | "defaultBoardHeight" | "defaultKomi">): string | null {
+  if (!Number.isInteger(value.defaultBoardWidth) || value.defaultBoardWidth < 2 || value.defaultBoardWidth > 25
+    || !Number.isInteger(value.defaultBoardHeight) || value.defaultBoardHeight < 2 || value.defaultBoardHeight > 25) {
+    return "棋盘宽高须为 2–25 的整数。";
+  }
+  if (!Number.isFinite(value.defaultKomi)) return "贴目须为有限数值。";
+  return null;
 }
 
 export function continuousBudgetError(value: ContinuousAnalysisBudgetDto): string | null {
@@ -274,6 +308,11 @@ function nextMoveReviewMarkerValue(value: unknown): NextMoveReviewMarkerMode {
 
 function booleanValue(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+function finiteValue(value: unknown, fallback: number): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function integerValue(value: unknown, fallback: number, min: number, max: number): number {

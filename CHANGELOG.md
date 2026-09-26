@@ -4,6 +4,14 @@
 
 ### English
 
+- Added rectangular 2–25-axis boards across SGF, rules, main/sub-board rendering and KataGo analysis, plus shared New/Clear/Set Board Size parameters and durable new-document dimension/komi defaults.
+- Added complete SGF tree navigation and exact-path links from variations, charts and problem lists. Move jumps count pass while skipping setup/comment nodes; selected SGF labels and marks follow the cursor, and stale-document navigation is rejected.
+- Added five-entry durable native SGF/GIB history with safe reopen, full-path tooltips, narrow Clear, and explicit persistence-failure Retry. Successful opens remain installed when history persistence fails.
+- Added shared, bounded Undo/Redo for moves, passes, personal comments and variation deletion, with exact cursor restoration, Save-aware dirty state and preservation of unrelated analysis.
+- Added confirmed subtree deletion, reversible promotion through every branching ancestor and navigation back to the main trunk. Root deletion uses the safe New flow; structural changes fence stale analysis by generation and preserve attached analysis with the moved nodes.
+- Added childless-root black/white/erase/clear/player-to-play setup drafts and confirmed conversion of the selected board into a root position. Each commit is one Undo/Redo step; Cancel preserves the original tree and source path.
+- Added durable coordinate and all-move-number controls shared by menus, C/M shortcuts and Preferences. Numbering follows surviving stones on the selected branch, including captures, setup and pass; cancelled or failed preference writes retain the saved display state.
+- Trial move and pass actions now use the same accepted-move sound classification as document play; scoring corrections remain silent.
 - Removed the legacy force-replace IPC and frontend wrapper. Native current-game replacement uses the shared candidate-validation and Save / Discard / Cancel workflow.
 - Added manual continuous current-node analysis with real KataGo progress, fixed 600-second search budgets, shared-Run queue liveness, target-final cancellation and bounded Run-failure cleanup. Accepted snapshots remain available to ordinary SGF Save and current-game recovery.
 - Added durable default-on continuous-analysis intent, manager-owned latest-node following, and contextual Start/Stop/Resume with limit, finite-job, error and document-departure inhibition.
@@ -13,9 +21,20 @@
 - Analysis tasks support immediate Pause with target-final cleanup and Continue on the same Run with a fresh Job, retaining completed positions and restarting interrupted work at its full budget. Paused tasks reserve their lane; Cancel, semantic edits, Run replacement and confirmed departure prevent continuation.
 - Added independent, durable task search-time, total-visit and leading-candidate-visit conditions with OR stopping, observed ending causes, per-position query identity and target-final cleanup. Preset writes leave active task conditions unchanged.
 - Added an all-position two-stage task strategy: a 32-visit overview of every target precedes an independently persisted deep pass with a 500-visit minimum, stage-local Pause/Continue progress, retained overview summaries, and Ctrl+Shift+B access.
+- KataGo JSONL parsing now clamps only epsilon-sized winrate roundoff at 0/1 before strict frame validation; material out-of-range values remain invalid.
+- Grouped swing-analysis admission into a named Rust request while preserving stage budgets, target identities and continuous no-result failure handling. Simplified equivalent protocol/history checks and lifecycle test result handling for strict lint checks.
+- Boxed desktop engine-command errors and grouped replacement/exit requests for strict workspace lint checks, preserving serialized errors and Save / Discard / Cancel ordering.
 
 ### 中文
 
+- 新增宽高各 2–25 的矩形棋盘，贯通 SGF、规则、主副棋盘与 KataGo 分析；新建／清空／设置棋盘大小共用参数表单，并持久化新建宽高与贴目默认值。
+- 新增完整 SGF 树及变化、图表、问题列表的精确路径导航；跳手计入 pass、跳过 setup/注释节点，标签与标记随选点同步，过期文档请求不会改变选择。
+- 新增最近五个原生 SGF/GIB 的持久历史，支持安全重开、完整路径提示、单独清空和写失败显式重试；历史写入失败不撤销已打开的棋谱。
+- 落子、pass、个人评论和变化删除共用最多 100 条撤销／重做历史，恢复精确游标；保存保留历史并建立 dirty 保存点，反转保留无关的新分析。
+- 新增后续节点删除确认、多级祖先主线提升及返回主干导航；根节点删除走安全新建流程。结构编辑通过 generation 拦截旧分析，提升保留节点附带的分析并可撤销／重做。
+- 新增无后续根局面的黑白子、擦除、清空、执色草稿及当前局面确认转换；一次提交对应一步撤销／重做，取消不改变原树与源路径。
+- 坐标与全部手数设置现已持久化，菜单、C/M 快捷键与设置面板共享保存值；编号按当前真实分支的存活棋子来源显示，正确处理提子、setup 和 pass，取消或写入失败保留原设置。
+- 试下落子与虚手复用正式落子的成功动作声音分类；计分修正保持静默。
 - 移除旧强制替换 IPC 及前端 wrapper；原生当前棋谱替换统一使用候选验证与保存/放弃/取消流程。
 - 新增手动连续当前节点分析：接入真实 KataGo 进度、固定 600 秒搜索预算、共享 Run 排队保活、目标 final 取消与有界故障清理；已接纳快照可普通保存到 SGF，并纳入当前棋谱恢复。
 - 连续分析意图默认开启并持久化；由 manager 跟随最新节点，统一开始/停止/继续动作，并保留到限、有限请求、错误及离开棋谱后的自动工作抑制。
@@ -25,6 +44,9 @@
 - 分析任务支持暂停／继续：等待目标 final 清理后进入 Paused，在同一 Run 上以新 Job 保留完成位置并为中断位置恢复完整预算。暂停任务继续占有整局通道；取消、语义编辑、Run 替换及确认离开会终止继续资格。
 - 分析任务新增独立持久化的搜索时间、总 visits 与首选候选 visits 条件，任一到限即停止实际查询；记录观测到的结束原因，以逐位置查询身份和目标 final 清理保护完成进度。预设写入不改变当前任务预算。
 - 新增全位置两阶段分析任务：先以 32 visits 概览全部目标，再按独立持久化且不低于 500 visits 的深度预算逐点分析；暂停／继续保留阶段进度与概览摘要，并支持 Ctrl+Shift+B 启动。
+- KataGo JSONL 解析在严格帧校验前仅校正 0/1 附近的微小胜率浮点误差；明显越界值仍被拒绝。
+- swing 分析准入改用具名 Rust 请求，保留阶段预算、目标身份与连续分析无结果失败处理；对协议／历史检查及生命周期测试结果处理做等价 lint 修正。
+- 桌面引擎命令错误采用 Rust 装箱返回，替换／退出使用具名请求，通过严格工作区 lint 检查；保留错误序列化内容与保存／放弃／取消顺序。
 
 ## [0.1.0] - 2026-05-01
 

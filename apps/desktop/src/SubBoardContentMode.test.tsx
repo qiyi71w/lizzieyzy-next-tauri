@@ -58,6 +58,8 @@ const backend = vi.hoisted(() => ({
   saveCurrentGame: vi.fn(),
   setCurrentGamePersonalComment: vi.fn(),
   removeCurrentGameVariation: vi.fn(),
+  undoCurrentGame: vi.fn(),
+  redoCurrentGame: vi.fn(),
   startKataGoGameAnalysis: vi.fn(),
   loadEngineProfilesSettings: vi.fn(),
   saveEngineProfilesSettings: vi.fn(),
@@ -69,6 +71,7 @@ const backend = vi.hoisted(() => ({
   getForegroundEngineSnapshot: vi.fn(),
   foregroundEngineContinuousAction: vi.fn(),
   subscribeForegroundEngine: vi.fn(),
+  subscribeTrialAnalysis: vi.fn(async () => () => undefined),
   inspectCurrentGameRecovery: vi.fn(async (): Promise<{ status: "none" | "abnormal" | "normal" | "unreadable"; envelope?: unknown; message?: string }> => ({ status: "none" })),
   restoreCurrentGameRecovery: vi.fn(),
   discardCurrentGameRecovery: vi.fn(async () => undefined),
@@ -107,7 +110,8 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 import { App } from "./App";
 
 const emptyPosition = {
-  board_size: 9,
+  board_width: 9,
+  board_height: 9,
   move_number: 0,
   to_play: "black" as const,
   stones: [],
@@ -123,15 +127,17 @@ const initialGame: CurrentGameResultDto = {
     children: [{ properties: [{ key: "B", values: ["fe"] }], children: [] }]
   },
   selected_path: { indices: [] },
-  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "" },
+  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "", markup: [], stone_move_numbers: [] },
   generation: 1,
   snapshot_seq: 1,
+  can_undo: false,
+  can_redo: false,
   dirty: false,
   native_path: null
 };
 
 const initialProjection: GameDto = {
-  summary: { id: "test", board_size: 9, komi: 7.5, move_count: 1 },
+  summary: { id: "test", board_width: 9, board_height: 9, komi: 7.5, move_count: 1 },
   moves: [{ move_number: 1, color: "black", vertex: { point: { x: 5, y: 4 } } }]
 };
 

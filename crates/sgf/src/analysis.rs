@@ -56,7 +56,12 @@ pub struct NodeAnalysisProjection {
     pub secondary: Option<SgfAnalysisPayload>,
 }
 
-pub fn project_node_analysis(node: &SgfNode, board_size: u8, is_root: bool) -> NodeAnalysisProjection {
+pub fn project_node_analysis(
+    node: &SgfNode,
+    board_width: u8,
+    board_height: u8,
+    is_root: bool,
+) -> NodeAnalysisProjection {
     let primary_keys = if is_root { ["LZOP", "LZ"] } else { ["LZ", "LZOP"] };
     let secondary_keys = if is_root {
         ["LZOP2", "LZ2"]
@@ -64,12 +69,17 @@ pub fn project_node_analysis(node: &SgfNode, board_size: u8, is_root: bool) -> N
         ["LZ2", "LZOP2"]
     };
     NodeAnalysisProjection {
-        primary: first_projectable(node, &primary_keys, board_size),
-        secondary: first_projectable(node, &secondary_keys, board_size),
+        primary: first_projectable(node, &primary_keys, board_width, board_height),
+        secondary: first_projectable(node, &secondary_keys, board_width, board_height),
     }
 }
 
-fn first_projectable(node: &SgfNode, keys: &[&str], board_size: u8) -> Option<SgfAnalysisPayload> {
+fn first_projectable(
+    node: &SgfNode,
+    keys: &[&str],
+    board_width: u8,
+    board_height: u8,
+) -> Option<SgfAnalysisPayload> {
     for key in keys {
         let Some(values) = property_values(node, key) else {
             continue;
@@ -77,7 +87,7 @@ fn first_projectable(node: &SgfNode, keys: &[&str], board_size: u8) -> Option<Sg
         let Some(raw) = values.first() else {
             continue;
         };
-        let Some(payload) = parse_analysis_payload(raw, board_size) else {
+        let Some(payload) = parse_analysis_payload(raw, board_width, board_height) else {
             continue;
         };
         if payload.is_projectable() {
@@ -87,7 +97,7 @@ fn first_projectable(node: &SgfNode, keys: &[&str], board_size: u8) -> Option<Sg
     None
 }
 
-pub fn parse_analysis_payload(raw: &str, board_size: u8) -> Option<SgfAnalysisPayload> {
+pub fn parse_analysis_payload(raw: &str, board_width: u8, board_height: u8) -> Option<SgfAnalysisPayload> {
     let raw = raw.trim();
     if raw.is_empty() {
         return None;
@@ -107,7 +117,7 @@ pub fn parse_analysis_payload(raw: &str, board_size: u8) -> Option<SgfAnalysisPa
     let score_stdev = header.get(4).and_then(|value| parse_f32(value));
     let pda = header.get(5).and_then(|value| parse_f32(value));
     let (analysis_line, ownership) = split_ownership(detail_line);
-    let candidates = parse_candidates(analysis_line, board_size, score_mean_black);
+    let candidates = parse_candidates(analysis_line, board_width, board_height, score_mean_black);
     Some(SgfAnalysisPayload {
         engine_name,
         visits,
@@ -136,18 +146,20 @@ fn split_ownership(detail_line: &str) -> (&str, Option<Vec<f32>>) {
 
 fn parse_candidates(
     analysis_line: &str,
-    board_size: u8,
+    board_width: u8,
+    board_height: u8,
     header_score_mean: Option<f32>,
 ) -> Vec<CandidateMoveDto> {
     analysis_line
         .split(" info ")
-        .filter_map(|variation| parse_candidate(variation, board_size, header_score_mean))
+        .filter_map(|variation| parse_candidate(variation, board_width, board_height, header_score_mean))
         .collect()
 }
 
 fn parse_candidate(
     variation: &str,
-    board_size: u8,
+    board_width: u8,
+    board_height: u8,
     header_score_mean: Option<f32>,
 ) -> Option<CandidateMoveDto> {
     let tokens: Vec<&str> = variation.split_whitespace().collect();
@@ -171,13 +183,13 @@ fn parse_candidate(
                 .unwrap_or(tokens.len());
             pv = tokens[index + 1..pv_end]
                 .iter()
-                .map(|token| gtp_vertex(token, board_size))
+                .map(|token| gtp_vertex(token, board_width, board_height))
                 .collect();
             break;
         }
         let value = tokens[index + 1];
         match key {
-            "move" => coordinate = Some(gtp_vertex(value, board_size)),
+            "move" => coordinate = Some(gtp_vertex(value, board_width, board_height)),
             "visits" => visits = parse_playouts(value),
             "winrate" => winrate_black = parse_playouts(value) as f32 / 10_000.0,
             "prior" => policy_prior = Some(parse_prior(value)),
@@ -241,7 +253,7 @@ fn parse_f32(raw: &str) -> Option<f32> {
     raw.parse().ok()
 }
 
-fn gtp_vertex(vertex: &str, board_size: u8) -> MoveVertex {
+fn gtp_vertex(vertex: &str, board_width: u8, board_height: u8) -> MoveVertex {
     if vertex.eq_ignore_ascii_case("pass") || vertex.is_empty() {
         return MoveVertex::Pass;
     }
@@ -255,8 +267,8 @@ fn gtp_vertex(vertex: &str, board_size: u8) -> MoveVertex {
     let col_upper = col.to_ascii_uppercase();
     let skipped_i = u8::from(col_upper > 'I');
     let x = (col_upper as u8).saturating_sub(b'A').saturating_sub(skipped_i);
-    let y = board_size.saturating_sub(row_num);
-    if x >= board_size || y >= board_size {
+    let y = board_height.saturating_sub(row_num);
+    if x >= board_width || y >= board_height {
         MoveVertex::Pass
     } else {
         MoveVertex::Point(PointDto { x, y })
@@ -283,11 +295,12 @@ impl AnalysisSlot {
 pub fn encode_analysis_payload(
     payload: &SgfAnalysisPayload,
     slot: AnalysisSlot,
-    board_size: u8,
+    board_width: u8,
+    board_height: u8,
 ) -> SgfProperty {
     SgfProperty {
         key: slot.property_key().to_string(),
-        values: vec![format_analysis_payload(payload, board_size)],
+        values: vec![format_analysis_payload(payload, board_width, board_height)],
     }
 }
 
@@ -296,13 +309,19 @@ const PRIMARY_PROPERTY_KEYS: [&str; 2] = ["LZ", "LZOP"];
 pub fn replace_primary_analysis(
     node: &mut SgfNode,
     payload: &SgfAnalysisPayload,
-    board_size: u8,
+    board_width: u8,
+    board_height: u8,
     is_root: bool,
 ) -> bool {
     if !payload.is_projectable() {
         return false;
     }
-    let encoded = encode_analysis_payload(payload, AnalysisSlot::Primary { root: is_root }, board_size);
+    let encoded = encode_analysis_payload(
+        payload,
+        AnalysisSlot::Primary { root: is_root },
+        board_width,
+        board_height,
+    );
     let primary_count = node
         .properties
         .iter()
@@ -335,7 +354,7 @@ pub fn replace_primary_analysis(
     true
 }
 
-fn format_analysis_payload(payload: &SgfAnalysisPayload, board_size: u8) -> String {
+fn format_analysis_payload(payload: &SgfAnalysisPayload, board_width: u8, board_height: u8) -> String {
     let white_winrate = (1.0 - payload.winrate_black) * 100.0;
     let mut header = format!(
         "{} {:.1} {}",
@@ -355,7 +374,7 @@ fn format_analysis_payload(payload: &SgfAnalysisPayload, board_size: u8) -> Stri
             }
         }
     }
-    let detail = format_detail_line(payload, board_size);
+    let detail = format_detail_line(payload, board_width, board_height);
     if detail.is_empty() {
         header
     } else {
@@ -363,11 +382,11 @@ fn format_analysis_payload(payload: &SgfAnalysisPayload, board_size: u8) -> Stri
     }
 }
 
-fn format_detail_line(payload: &SgfAnalysisPayload, board_size: u8) -> String {
+fn format_detail_line(payload: &SgfAnalysisPayload, board_width: u8, board_height: u8) -> String {
     let mut detail = payload
         .candidates
         .iter()
-        .map(|candidate| format_candidate(candidate, board_size))
+        .map(|candidate| format_candidate(candidate, board_width, board_height))
         .collect::<Vec<_>>()
         .join(" info ");
     if let Some(ownership) = &payload.ownership {
@@ -385,10 +404,10 @@ fn format_detail_line(payload: &SgfAnalysisPayload, board_size: u8) -> String {
     detail
 }
 
-fn format_candidate(candidate: &CandidateMoveDto, board_size: u8) -> String {
+fn format_candidate(candidate: &CandidateMoveDto, board_width: u8, board_height: u8) -> String {
     let mut body = format!(
         "move {} visits {} winrate {} prior {}",
-        vertex_to_gtp(&candidate.vertex, board_size),
+        vertex_to_gtp(&candidate.vertex, board_width, board_height),
         candidate.visits,
         (candidate.winrate_black * 10_000.0).round() as i32,
         (candidate.policy_prior.unwrap_or(0.0) * 10_000.0).round() as i32
@@ -402,7 +421,7 @@ fn format_candidate(candidate: &CandidateMoveDto, board_size: u8) -> String {
     };
     for vertex in pv {
         body.push(' ');
-        body.push_str(&vertex_to_gtp(&vertex, board_size));
+        body.push_str(&vertex_to_gtp(&vertex, board_width, board_height));
     }
     body
 }
@@ -428,13 +447,13 @@ fn format_analysis_scalar(value: f32) -> String {
     }
 }
 
-fn vertex_to_gtp(vertex: &MoveVertex, board_size: u8) -> String {
+fn vertex_to_gtp(vertex: &MoveVertex, _board_width: u8, board_height: u8) -> String {
     match vertex {
         MoveVertex::Pass => "pass".to_string(),
         MoveVertex::Point(point) => {
             let col_index = if point.x >= 8 { point.x + 1 } else { point.x };
             let col = char::from(b'A' + col_index);
-            let row = board_size.saturating_sub(point.y);
+            let row = board_height.saturating_sub(point.y);
             format!("{col}{row}")
         }
     }

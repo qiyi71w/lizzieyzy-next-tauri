@@ -32,6 +32,8 @@ const backend = vi.hoisted(() => ({
   serializeCurrentGame: vi.fn(() => Promise.resolve("(;SZ[9])")),
   projectCurrentGameMainline: vi.fn(),
   playCurrentGame: vi.fn(),
+  applyRootSetup: vi.fn(),
+  convertToRootSetup: vi.fn(),
   selectCurrentGameNode: vi.fn(),
   startSelectedNodeAnalysis: vi.fn(),
   cancelSelectedNodeAnalysis: vi.fn(),
@@ -51,10 +53,20 @@ const backend = vi.hoisted(() => ({
   replaySgfPositions: vi.fn(),
   saveCurrentGame: vi.fn(),
   setCurrentGamePersonalComment: vi.fn(),
+  setCurrentGameMetadata: vi.fn(),
+  editCurrentGameMarkup: vi.fn(),
   removeCurrentGameVariation: vi.fn(),
+  promoteCurrentGameToMain: vi.fn(),
+  undoCurrentGame: vi.fn(),
+  redoCurrentGame: vi.fn(),
   startKataGoGameAnalysis: vi.fn(),
   loadEngineProfilesSettings: vi.fn(),
   subscribeForegroundEngine: vi.fn(),
+  subscribeTrialAnalysis: vi.fn(async () => () => undefined),
+  enterTrial: vi.fn(),
+  exitTrial: vi.fn(),
+  trialPlay: vi.fn(),
+  analysisTaskSnapshot: vi.fn(async () => null),
   startForegroundEngine: vi.fn(),
   stopForegroundEngine: vi.fn(),
   restartForegroundEngine: vi.fn(),
@@ -84,7 +96,8 @@ vi.mock("./api/backend", () => ({
 
 const preferencesApi = vi.hoisted(() => ({
   loadAppPreferences: vi.fn<() => Promise<{ preferences: AppPreferences; recovery?: { message: string } }>>(() => Promise.reject(new Error("preferences unavailable in test"))),
-  saveAppPreferences: vi.fn(async (preferences: unknown) => preferences)
+  saveAppPreferences: vi.fn(async (preferences: unknown) => preferences),
+  updateRecentGameHistory: vi.fn<(openedPath: string | null) => Promise<string[]>>(),
 }));
 
 vi.mock("./api/preferences", () => preferencesApi);
@@ -100,7 +113,8 @@ import { App } from "./App";
 import { defaultAppPreferences } from "./domain/preferences";
 
 const emptyPosition = {
-  board_size: 9,
+  board_width: 9,
+  board_height: 9,
   move_number: 0,
   to_play: "black" as const,
   stones: [],
@@ -113,15 +127,17 @@ const emptyPosition = {
 const initialGame: CurrentGameResultDto = {
   tree: { properties: [], children: [] },
   selected_path: { indices: [] },
-  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "" },
+  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "", markup: [], stone_move_numbers: [] },
   generation: 1,
   snapshot_seq: 1,
+  can_undo: false,
+  can_redo: false,
   dirty: false,
   native_path: null
 };
 
 const initialProjection: GameDto = {
-  summary: { id: "test", board_size: 9, komi: 7.5, move_count: 0 },
+  summary: { id: "test", board_width: 9, board_height: 9, komi: 7.5, move_count: 0 },
   moves: []
 };
 
@@ -177,10 +193,14 @@ const acceptedGame: CurrentGameResultDto = {
       stones: [{ x: 5, y: 4, color: "black" as const }],
       last_move: { color: "black", vertex: { point: { x: 5, y: 4 } }, move_number: 1 }
     },
+    markup: [],
+    stone_move_numbers: [],
     personal_comment: ""
   },
   generation: 2,
   snapshot_seq: 1,
+  can_undo: true,
+  can_redo: false,
   dirty: true,
   native_path: null
 };
@@ -199,6 +219,8 @@ const navigableChild: CurrentGameResultDto = {
   snapshot: {
     path: { indices: [0] },
     position: acceptedGame.snapshot.position,
+    markup: [],
+    stone_move_numbers: [],
     personal_comment: ""
   }
 };
@@ -246,10 +268,14 @@ const branchingGame: CurrentGameResultDto = {
   snapshot: {
     path: { indices: [0, 1] },
     position: { ...emptyPosition, move_number: 2, to_play: "black" },
+    markup: [],
+    stone_move_numbers: [],
     personal_comment: ""
   },
   generation: 3,
   snapshot_seq: 1,
+  can_undo: true,
+  can_redo: false,
   dirty: true,
   native_path: "/tmp/review.sgf"
 };
@@ -258,6 +284,7 @@ let root: Root | null = null;
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
     return canvasContext(this);
   });
@@ -310,8 +337,180 @@ afterEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
 });
+describe("node markup authoring", () => {
+  it("cancels text without a write and commits only the selected point through the native wrapper", async () => {
+    backend.editCurrentGameMarkup.mockImplementation(async (_path, _generation, action) => ({
+      ...initialGame, snapshot_seq: 2, dirty: true, can_undo: true,
+      snapshot: { ...initialGame.snapshot, markup: action.kind === "clear" ? [] : [{ kind: "label", point: action.point, text: action.tool.text }] }
+    }));
+    const host = await renderApp();
+    const canvas = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 450, 450);
+    const center = () => act(() => canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 225, clientY: 225 })));
+    act(() => buttonLabeled(host, "文字").click());
+    center();
+    expect(host.querySelector('[role="dialog"][aria-label="编辑文字标记"]')).not.toBeNull();
+    act(() => buttonLabeled(host, "取消").click());
+    expect(backend.editCurrentGameMarkup).not.toHaveBeenCalled();
+    center();
+    const dialog = requiredElement<HTMLFormElement>(host, '[role="dialog"][aria-label="编辑文字标记"]');
+    const input = requiredElement<HTMLInputElement>(dialog, "input");
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "a]\\中");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { buttonLabeled(dialog, "应用").click(); await Promise.resolve(); });
+    expect(backend.editCurrentGameMarkup).toHaveBeenCalledWith({ indices: [] }, 1,
+      { kind: "point", point: { x: 4, y: 4 }, tool: { kind: "label", text: "a]\\中" } });
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    await act(async () => { buttonLabeled(host, "清空标记").click(); await Promise.resolve(); });
+    expect(backend.editCurrentGameMarkup).toHaveBeenLastCalledWith({ indices: [] }, 1, { kind: "clear" });
+  });
+});
+
+
+describe("App root setup editing", () => {
+  it("previews the draft without editing the document, cancels, then commits all changes once", async () => {
+    const host = await renderApp();
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "起始局面设置(Ctrl+Shift+L)").click());
+    act(() => buttonNamed(host, "键盘落子").click());
+    const canvas = requiredElement(host, 'canvas[aria-label="棋盘"]');
+    dispatchKey(canvas, "Enter");
+    act(() => buttonNamed(host, "白子").click());
+    dispatchKey(canvas, "Enter");
+    act(() => buttonNamed(host, "黑子").click());
+    act(() => requiredElement<HTMLSelectElement>(host, '.root-setup-tools select').value = "white");
+    act(() => requiredElement<HTMLSelectElement>(host, '.root-setup-tools select').dispatchEvent(new Event("change", { bubbles: true })));
+    expect(backend.applyRootSetup).not.toHaveBeenCalled();
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    act(() => buttonNamed(host, "取消").click());
+    expect(backend.applyRootSetup).not.toHaveBeenCalled();
+    expect(host.querySelector(".root-setup-tools")).toBeNull();
+
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "起始局面设置(Ctrl+Shift+L)").click());
+    dispatchKey(canvas, "Enter");
+    act(() => buttonNamed(host, "白子").click());
+    dispatchKey(canvas, "Enter");
+    backend.applyRootSetup.mockResolvedValueOnce({ ...initialGame, generation: 2, snapshot_seq: 2, dirty: true, can_undo: true,
+      snapshot: { ...initialGame.snapshot, position: { ...emptyPosition, stones: [{ x: 4, y: 4, color: "white" }] } } });
+    act(() => buttonNamed(host, "应用").click());
+    await flushLast(backend.applyRootSetup);
+    expect(backend.applyRootSetup).toHaveBeenCalledOnce();
+    expect(backend.applyRootSetup).toHaveBeenCalledWith(1, [{ x: 4, y: 4, color: "white" }], "black");
+    expect(host.querySelector(".root-setup-tools")).toBeNull();
+    expect(host.querySelector(".doc-name")?.textContent).toContain("*");
+  });
+
+  it("requires explicit confirmation before discarding the selected move tree", async () => {
+    currentGameFixture.mockResolvedValueOnce(branchingGame);
+    backend.projectCurrentGameMainline.mockResolvedValueOnce({ ...initialProjection, summary: { ...initialProjection.summary, move_count: 2 } });
+    const host = await renderApp();
+    act(() => buttonNamed(host, "棋局").click());
+    expect(buttonNamed(host, "起始局面设置(Ctrl+Shift+L)").disabled).toBe(true);
+    act(() => buttonNamed(host, "转换为起始局面(Ctrl+Shift+V)").click());
+    expect(backend.convertToRootSetup).not.toHaveBeenCalled();
+    act(() => buttonNamed(host, "取消").click());
+    expect(backend.convertToRootSetup).not.toHaveBeenCalled();
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "转换为起始局面(Ctrl+Shift+V)").click());
+    backend.convertToRootSetup.mockResolvedValueOnce({ ...initialGame, generation: 4, snapshot_seq: 2, dirty: true, can_undo: true, native_path: branchingGame.native_path });
+    act(() => buttonNamed(host, "确认转换").click());
+    await flushLast(backend.convertToRootSetup);
+    expect(backend.convertToRootSetup).toHaveBeenCalledWith(3, { indices: [0, 1] });
+    expect(host.querySelector('[role="dialog"][aria-label="转换为起始局面"]')).toBeNull();
+  });
+  it("does not replace a document behind an active setup draft", async () => {
+    const path = "/games/other.sgf";
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, recentGamePaths: [path] } });
+    backend.readGameFile.mockResolvedValue({ format: "sgf", sgf_text: "(;SZ[9])", display_name: "other.sgf", display_path: path, native_path: path, opened_path: path });
+    preferencesApi.updateRecentGameHistory.mockResolvedValue([path]);
+    const host = await renderApp();
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "起始局面设置(Ctrl+Shift+L)").click());
+    currentGameFixture.mockResolvedValueOnce({ ...initialGame, generation: 2, native_path: path });
+    backend.takePendingFileActivation.mockResolvedValueOnce({ kind: "open", request_id: 9, path });
+    await act(async () => {
+      listeners.onActivationAvailable?.();
+      await vi.waitFor(() => expect(backend.takePendingFileActivation).toHaveBeenCalled());
+    });
+    expect(backend.readGameFile).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="dialog"][aria-label="新建对局"]')).toBeNull();
+    expect(host.querySelector(".root-setup-tools")).not.toBeNull();
+  });
+
+  it("stops already-running autoplay before confirming the selected position", async () => {
+    currentGameFixture.mockResolvedValueOnce({ ...branchingGame, selected_path: { indices: [] },
+      snapshot: { ...branchingGame.snapshot, path: { indices: [] }, position: emptyPosition } });
+    const host = await renderApp();
+    vi.useFakeTimers();
+    try {
+      act(() => buttonNamed(host, "自动播放").click());
+      act(() => buttonNamed(host, "棋局").click());
+      act(() => buttonNamed(host, "转换为起始局面(Ctrl+Shift+V)").click());
+      expect(host.querySelector('[role="dialog"][aria-label="转换为起始局面"]')).not.toBeNull();
+      act(() => vi.advanceTimersByTime(850));
+      expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+      backend.convertToRootSetup.mockResolvedValueOnce({ ...initialGame, generation: 4, snapshot_seq: 2, dirty: true, can_undo: true });
+      act(() => buttonNamed(host, "确认转换").click());
+      await flushLast(backend.convertToRootSetup);
+      expect(backend.convertToRootSetup).toHaveBeenCalledWith(3, { indices: [] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("App board intent feedback", () => {
+  it("keeps accepted moves silent when durable sound is disabled", async () => {
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, soundEnabled: false } });
+    backend.playCurrentGame.mockResolvedValueOnce(acceptedGame);
+    const host = await renderApp();
+    act(() => buttonNamed(host, "键盘落子").click());
+    dispatchKey(requiredElement(host, 'canvas[aria-label="棋盘"]'), "Enter");
+    await flushLast(backend.playCurrentGame);
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
+    expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+  });
+
+  it("reports a missing audio resource without changing the sound preference or undoing the move", async () => {
+    vi.mocked(HTMLMediaElement.prototype.play).mockRejectedValueOnce(new Error("missing sound resource"));
+    backend.playCurrentGame.mockResolvedValueOnce(acceptedGame);
+    const host = await renderApp();
+    act(() => buttonNamed(host, "键盘落子").click());
+    dispatchKey(requiredElement(host, 'canvas[aria-label="棋盘"]'), "Enter");
+    await flushLast(backend.playCurrentGame);
+    expect(host.textContent).toContain("missing sound resource");
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  });
+
+  it("plays one sound for an accepted trial pass without changing the original document", async () => {
+    const entry = {
+      session_id: 3, revision: 1, entry_path: { indices: [] }, tree: { properties: [], children: [] },
+      selected_path: { indices: [] }, snapshot: initialGame.snapshot, can_undo: false
+    };
+    backend.enterTrial.mockResolvedValueOnce(entry);
+    backend.trialPlay.mockResolvedValueOnce({
+      ...entry, revision: 2, selected_path: { indices: [0] }, can_undo: true,
+      tree: { properties: [], children: [{ properties: [{ key: "B", values: [""] }], children: [] }] },
+      snapshot: {
+        ...entry.snapshot, path: { indices: [0] },
+        position: { ...emptyPosition, move_number: 1, to_play: "white",
+          last_move: { color: "black", vertex: "pass", move_number: 1 } }
+      }
+    });
+    const host = await renderApp();
+    act(() => buttonNamed(host, "棋局").click());
+    await act(async () => { buttonNamed(host, "试下(V)").click(); await backend.enterTrial.mock.results.at(-1)?.value; });
+    act(() => buttonLabeled(host, "虚手").click());
+    await flushLast(backend.trialPlay);
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    expect(backend.saveCurrentGame).not.toHaveBeenCalled();
+  });
+
   it("keeps review interaction live, deduplicates a pending intent, and announces rejection until the next accepted intent", async () => {
     let rejectPendingMove = false;
     backend.playCurrentGame
@@ -347,6 +546,7 @@ describe("App board intent feedback", () => {
     const coordinates = buttonNamed(host, "坐标");
     expect(coordinates.getAttribute("aria-pressed")).toBe("true");
     act(() => coordinates.click());
+    await flushLast(preferencesApi.saveAppPreferences);
     expect(coordinates.getAttribute("aria-pressed")).toBe("false");
 
     const rejectedMove = backend.playCurrentGame.mock.results[0].value;
@@ -359,6 +559,7 @@ describe("App board intent feedback", () => {
     expect(status.getAttribute("aria-live")).toBe("polite");
     expect(status.textContent).toContain("落子失败: point is occupied");
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("0");
+    expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
 
     act(() => canvas.focus());
     dispatchKey(canvas, "Enter");
@@ -371,8 +572,17 @@ describe("App board intent feedback", () => {
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
     expect(host.querySelector(".board-intent-status")).toBeNull();
     expect(requiredElement(host, ".nav-message").textContent).toBe("落子已接受。");
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
   });
 });
+
+function renderedBoardPoint(canvas: HTMLCanvasElement, column: string, row: string) {
+  const labels = (canvas.dataset.drawn ?? "").split("|").map((entry) => entry.split("@"));
+  const x = labels.find(([text]) => text === column)?.[1]?.split(",")[0];
+  const y = labels.find(([text]) => text === row)?.[1]?.split(",")[1];
+  if (!x || !y) throw new Error("Board coordinates were not rendered");
+  return { clientX: Number(x), clientY: Number(y) };
+}
 
 describe("App candidate continuation preview", () => {
   it("propagates board dwell to the mini-board without mutating the selected game", async () => {
@@ -386,7 +596,7 @@ describe("App candidate continuation preview", () => {
 
     const board = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
     const miniBoard = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="参考图变化副棋盘"]');
-    board.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
+    board.getBoundingClientRect = () => new DOMRect(0, 0, board.width, board.height);
     const beforePreview = miniBoard.dataset.drawn;
     const serializedCalls = backend.serializeCurrentGame.mock.calls.length;
     const currentMove = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value;
@@ -394,8 +604,7 @@ describe("App candidate continuation preview", () => {
     await act(async () => {
       board.dispatchEvent(new MouseEvent("pointermove", {
         bubbles: true,
-        clientX: 70.5,
-        clientY: 60.25
+        ...renderedBoardPoint(board, "G", "4")
       }));
       await new Promise((resolve) => setTimeout(resolve, 130));
     });
@@ -425,30 +634,21 @@ describe("App stale review presentation", () => {
     backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => (
       path.indices.length === 0 ? navigableRoot : navigableChild
     ));
-    backend.classifyProblems.mockResolvedValue([{
-      turn: 1,
-      severity: "mistake",
-      winrate_loss: 0.12,
-      score_loss: 3,
-      label: "恶手"
-    }]);
 
     const host = await renderApp();
     await readyEngine(host);
     await startSelectedNode(host);
     await completeSelectedNode("job-1", { indices: [] }, analysisFrame);
     expect(candidateCoords(host)).toEqual(["C6", "G4"]);
-    expect(buttonNamed(host, "问题手 (1)")).toBeTruthy();
 
     const board = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
     const miniBoard = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="参考图变化副棋盘"]');
-    board.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
+    board.getBoundingClientRect = () => new DOMRect(0, 0, board.width, board.height);
     const beforePreview = miniBoard.dataset.drawn;
     await act(async () => {
       board.dispatchEvent(new MouseEvent("pointermove", {
         bubbles: true,
-        clientX: 70.5,
-        clientY: 60.25
+        ...renderedBoardPoint(board, "G", "4")
       }));
       await new Promise((resolve) => setTimeout(resolve, 130));
     });
@@ -458,11 +658,21 @@ describe("App stale review presentation", () => {
       buttonNamed(host, "下一变化").click();
       await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
     });
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      buttonNamed(host, "父节点").click();
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
+    });
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      buttonNamed(host, "下一变化").click();
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
+    });
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(2);
 
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
     expect(candidateCoords(host)).toEqual([]);
     expect(host.querySelector(".cand-row.is-selected")).toBeNull();
-    expect(buttonNamed(host, "问题手 (0)")).toBeTruthy();
   });
 
   it("ignores a late completion after the selected NodePath has already changed", async () => {
@@ -511,6 +721,9 @@ describe("App stale review presentation", () => {
 
     await act(async () => {
       buttonNamed(host, "新对局").click();
+    });
+    await act(async () => {
+      buttonLabeled(host, "创建").click();
       await currentGameFixture.mock.results.at(-1)?.value;
       await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
     });
@@ -544,11 +757,88 @@ describe("App stale review presentation", () => {
   });
 });
 
+describe("App game metadata", () => {
+  it("shows root names without an engine and preserves raw long names with a blank fallback", async () => {
+    const longName = "甲".repeat(90);
+    currentGameFixture.mockResolvedValue({
+      ...initialGame,
+      tree: { properties: [{ key: "PB", values: [longName] }, { key: "PW", values: ["   "] }], children: [] }
+    });
+    const host = await renderApp();
+    const names = host.querySelectorAll(".score-summary-card .player-name");
+    expect(names[0].textContent).toBe(longName);
+    expect(names[0].getAttribute("title")).toBe(longName);
+    expect(names[1].textContent).toBe("白棋");
+  });
+
+  it("keeps cancel and invalid komi atomic, then applies both names and komi once", async () => {
+    currentGameFixture.mockResolvedValue({
+      ...initialGame,
+      tree: { properties: [{ key: "PB", values: ["原黑"] }, { key: "PW", values: ["原白"] }, { key: "KM", values: ["6.5"] }, { key: "HA", values: ["2"] }], children: [] }
+    });
+    const host = await renderApp();
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "编辑棋局信息(I)").click());
+    let dialog = requiredElement(host, '[role="dialog"][aria-label="编辑棋局信息"]');
+    expect([...dialog.querySelectorAll("input")].map((input) => input.value)).toEqual(["原黑", "原白", "6.5", "2"]);
+    act(() => buttonNamed(dialog, "取消").click());
+    expect(backend.setCurrentGameMetadata).not.toHaveBeenCalled();
+
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "编辑棋局信息(I)").click());
+    dialog = requiredElement(host, '[role="dialog"][aria-label="编辑棋局信息"]');
+    const fields = dialog.querySelectorAll("input");
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(fields[0], "新黑");
+      fields[0].dispatchEvent(new Event("input", { bubbles: true }));
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(fields[2], "");
+      fields[2].dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    act(() => buttonNamed(dialog, "应用").click());
+    expect(dialog.textContent).toContain("贴目须为有限数值");
+    expect(backend.setCurrentGameMetadata).not.toHaveBeenCalled();
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(fields[2], "7.5");
+      fields[2].dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    backend.setCurrentGameMetadata.mockResolvedValue({
+      ...initialGame,
+      generation: 2,
+      snapshot_seq: 2,
+      dirty: true,
+      can_undo: true,
+      tree: { properties: [{ key: "PB", values: ["新黑"] }, { key: "PW", values: ["原白"] }, { key: "KM", values: ["7.5"] }, { key: "HA", values: ["2"] }], children: [] }
+    });
+    act(() => buttonNamed(dialog, "应用").click());
+    await flushLast(backend.setCurrentGameMetadata);
+    expect(backend.setCurrentGameMetadata).toHaveBeenCalledExactlyOnceWith(1, "新黑", "原白", 7.5);
+    expect(host.querySelector('[role="dialog"][aria-label="编辑棋局信息"]')).toBeNull();
+    expect(host.querySelector(".score-summary-card .player-name")?.textContent).toBe("新黑");
+    expect(host.textContent).toContain("贴目:");
+  });
+  it("consumes the opening I key before autofocus can insert it into the player name", async () => {
+    currentGameFixture.mockResolvedValue({
+      ...initialGame,
+      tree: { properties: [{ key: "PB", values: ["Original"] }], children: [] }
+    });
+    const host = await renderApp();
+    const openingKey = new KeyboardEvent("keydown", { key: "i", bubbles: true, cancelable: true });
+    act(() => requiredElement(host, 'canvas[aria-label="棋盘"]').dispatchEvent(openingKey));
+    expect(openingKey.defaultPrevented).toBe(true);
+    const name = requiredElement<HTMLInputElement>(host, '[role="dialog"] input[type="text"]');
+    expect(name.value).toBe("Original");
+    const typingKey = new KeyboardEvent("keydown", { key: "i", bubbles: true, cancelable: true });
+    act(() => name.dispatchEvent(typingKey));
+    expect(typingKey.defaultPrevented).toBe(false);
+  });
+
+});
+
 describe("App focus-safe review controls", () => {
   beforeEach(() => {
     currentGameFixture.mockResolvedValue(branchingGame);
     backend.projectCurrentGameMainline.mockResolvedValue({
-      summary: { id: "branch", board_size: 9, komi: 7.5, move_count: 2 },
+      summary: { id: "branch", board_width: 9, board_height: 9, komi: 7.5, move_count: 2 },
       moves: []
     });
     backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => ({
@@ -583,6 +873,29 @@ describe("App focus-safe review controls", () => {
       },
       generation: 4
     });
+    backend.promoteCurrentGameToMain.mockResolvedValue({
+      ...branchingGame,
+      selected_path: { indices: [0, 0] },
+      snapshot: { ...branchingGame.snapshot, path: { indices: [0, 0] } },
+      generation: 4,
+      snapshot_seq: 2
+    });
+    backend.undoCurrentGame.mockResolvedValue({
+      ...branchingGame,
+      selected_path: { indices: [0] },
+      snapshot: { ...branchingGame.snapshot, path: { indices: [0] }, position: { ...emptyPosition, move_number: 1 } },
+      generation: 4,
+      snapshot_seq: 2,
+      can_undo: false,
+      can_redo: true
+    });
+    backend.redoCurrentGame.mockResolvedValue({
+      ...branchingGame,
+      generation: 4,
+      snapshot_seq: 2,
+      can_undo: true,
+      can_redo: false
+    });
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: {
@@ -591,6 +904,48 @@ describe("App focus-safe review controls", () => {
       }
     });
     vi.spyOn(window, "confirm").mockReturnValue(true);
+  });
+
+  it("confirms subtree deletion but not a leaf, and routes root deletion through New", async () => {
+    currentGameFixture.mockResolvedValue({
+      ...branchingGame,
+      selected_path: { indices: [0] },
+      snapshot: { ...branchingGame.snapshot, path: { indices: [0] } }
+    });
+    vi.mocked(window.confirm).mockReturnValue(false);
+    const host = await renderApp();
+    backend.removeCurrentGameVariation.mockClear();
+    act(() => buttonNamed(host, "删除变化").click());
+    expect(window.confirm).toHaveBeenCalled();
+    expect(backend.removeCurrentGameVariation).not.toHaveBeenCalled();
+    vi.mocked(window.confirm).mockReturnValue(true);
+    act(() => buttonNamed(host, "删除变化").click());
+    await flushLast(backend.removeCurrentGameVariation);
+    expect(backend.removeCurrentGameVariation).toHaveBeenLastCalledWith({ indices: [0] }, 3);
+
+    currentGameFixture.mockResolvedValue(initialGame);
+    const rootHost = await renderApp();
+    backend.removeCurrentGameVariation.mockClear();
+    act(() => buttonNamed(rootHost, "编辑").click());
+    act(() => buttonNamed(rootHost, "删除当前节点(Shift+Delete)").click());
+    expect(backend.removeCurrentGameVariation).not.toHaveBeenCalled();
+    expect(rootHost.querySelector('[role="dialog"]')).not.toBeNull();
+  });
+
+  it("promotes through the Rust command and returns to the trunk by navigation only", async () => {
+    const host = await renderApp();
+    backend.promoteCurrentGameToMain.mockClear();
+    pressKey(buttonNamed(host, "坐标"), "l");
+    await flushLast(backend.promoteCurrentGameToMain);
+    expect(backend.promoteCurrentGameToMain).toHaveBeenLastCalledWith({ indices: [0, 1] }, 3);
+
+    const another = await renderApp();
+    backend.selectCurrentGameNode.mockClear();
+    backend.promoteCurrentGameToMain.mockClear();
+    pressKey(buttonNamed(another, "坐标"), "b");
+    await flushLast(backend.selectCurrentGameNode);
+    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] }, 3);
+    expect(backend.promoteCurrentGameToMain).not.toHaveBeenCalled();
   });
 
   it("keeps review shortcuts on the board while isolating text, select, contenteditable, and IME", async () => {
@@ -611,10 +966,12 @@ describe("App focus-safe review controls", () => {
     expect(backend.saveCurrentGame).toHaveBeenCalledTimes(1);
     pressKey(canvas, "ArrowUp");
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0] });
     pressKey(canvas, "c");
+    await flushLast(preferencesApi.saveAppPreferences);
     expect(coordinates.getAttribute("aria-pressed")).toBe("false");
     pressKey(canvas, "c");
+    await flushLast(preferencesApi.saveAppPreferences);
     expect(coordinates.getAttribute("aria-pressed")).toBe("true");
 
     const composing = new KeyboardEvent("keydown", { key: "c", bubbles: true, cancelable: true });
@@ -654,14 +1011,14 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonNamed(hostParent, "父节点").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0] });
     expect(requiredElement<HTMLInputElement>(hostParent, 'input[aria-label="跳转手数"]').value).toBe("1");
 
     const hostLeft = await renderApp();
     backend.selectCurrentGameNode.mockClear();
     pressKey(buttonNamed(hostLeft, "坐标"), "ArrowUp");
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0] });
 
     const hostBoardUp = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -669,26 +1026,26 @@ describe("App focus-safe review controls", () => {
     act(() => board.focus());
     pressKey(board, "ArrowUp");
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0] });
 
     const hostPrevMove = await renderApp();
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonLabeled(hostPrevMove, "上一手").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0] });
 
     const hostUp = await renderApp();
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonNamed(hostUp, "上一分支").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 0] });
     expect(requiredElement(hostUp, '.nav-cluster[aria-label="变化导航"] .move-indicator').textContent).toBe("分支 1/2");
 
     const hostUpKey = await renderApp();
     backend.selectCurrentGameNode.mockClear();
     pressKey(buttonNamed(hostUpKey, "坐标"), "ArrowLeft");
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 0] });
 
     const hostRight = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -697,7 +1054,7 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonNamed(hostRight, "下一变化").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 1] });
 
     const hostRightKey = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -706,7 +1063,7 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     pressKey(buttonNamed(hostRightKey, "坐标"), "ArrowDown");
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 1] });
 
     const hostDown = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -715,7 +1072,7 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonNamed(hostDown, "下一分支").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 1] });
 
     const hostDownKey = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -724,15 +1081,15 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     pressKey(buttonNamed(hostDownKey, "坐标"), "ArrowRight");
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 1] });
 
     const hostFirst = await renderApp();
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonLabeled(hostFirst, "首手").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [] });
     pressKey(buttonNamed(hostFirst, "坐标"), "Home");
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [] });
 
     const hostLast = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -741,7 +1098,7 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonLabeled(hostLast, "末手").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 1] });
 
     const hostEnd = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -750,15 +1107,15 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     pressKey(buttonNamed(hostEnd, "坐标"), "End");
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 1] });
 
     const hostBack = await renderApp();
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonLabeled(hostBack, "回退 10 手").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [] });
     pressKey(buttonNamed(hostBack, "坐标"), "PageUp");
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [] });
 
     const hostForward = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -767,7 +1124,7 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonLabeled(hostForward, "前进 10 手").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 1] });
 
     const hostPage = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -776,7 +1133,7 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     pressKey(buttonNamed(hostPage, "坐标"), "PageDown");
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0, 1] });
 
     const hostNextMove = await renderApp();
     backend.selectCurrentGameNode.mockClear();
@@ -785,7 +1142,7 @@ describe("App focus-safe review controls", () => {
     backend.selectCurrentGameNode.mockClear();
     act(() => buttonLabeled(hostNextMove, "下一手").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [0] });
   });
 
   it("dispatches claimed file and edit shortcuts through the same actions as the visible controls", async () => {
@@ -866,6 +1223,8 @@ describe("App focus-safe review controls", () => {
 
     currentGameFixture.mockResolvedValue(branchingGame);
     pressKey(buttonNamed(hostKeys, "坐标"), "Home", { ctrlKey: true });
+    await act(async () => { await Promise.resolve(); });
+    act(() => buttonLabeled(hostKeys, "创建").click());
     await act(async () => {
       await Promise.resolve();
       await currentGameFixture.mock.results.at(-1)?.value;
@@ -879,13 +1238,82 @@ describe("App focus-safe review controls", () => {
     expect(backend.saveCurrentGame).toHaveBeenLastCalledWith(null, { indices: [0, 1] }, "review.sgf");
   });
 
+  it("runs native Undo and Redo from the Edit menu and registered aliases", async () => {
+    const hostUndo = await renderApp();
+    act(() => buttonNamed(hostUndo, "编辑").click());
+    const undo = buttonNamed(hostUndo, "撤销(Ctrl+Z)");
+    expect(undo.disabled).toBe(false);
+    act(() => undo.click());
+    await flushLast(backend.undoCurrentGame);
+    await flushLast(backend.projectCurrentGameMainline);
+    expect(backend.undoCurrentGame).toHaveBeenLastCalledWith(3);
+    expect(requiredElement<HTMLInputElement>(hostUndo, 'input[aria-label="跳转手数"]').value).toBe("1");
+
+    currentGameFixture.mockResolvedValue({ ...branchingGame, can_redo: true });
+    const hostRedo = await renderApp();
+    pressKey(buttonNamed(hostRedo, "坐标"), "y", { ctrlKey: true });
+    await flushLast(backend.redoCurrentGame);
+    expect(backend.redoCurrentGame).toHaveBeenLastCalledWith(3);
+
+    const hostAlias = await renderApp();
+    backend.redoCurrentGame.mockClear();
+    pressKey(buttonNamed(hostAlias, "坐标"), "z", { ctrlKey: true, shiftKey: true });
+    await flushLast(backend.redoCurrentGame);
+    expect(backend.redoCurrentGame).toHaveBeenLastCalledWith(3);
+  });
+
+  it("disables empty native history and leaves text Undo to the focused editor", async () => {
+    currentGameFixture.mockResolvedValue({ ...branchingGame, can_undo: false, can_redo: false });
+    const host = await renderApp();
+    act(() => buttonNamed(host, "编辑").click());
+    expect(buttonNamed(host, "撤销(Ctrl+Z)").disabled).toBe(true);
+    expect(buttonNamed(host, "重做(Ctrl+Y)").disabled).toBe(true);
+
+    const editor = requiredElement<HTMLTextAreaElement>(host, 'textarea[aria-label="个人评论"]');
+    act(() => editor.focus());
+    pressKey(editor, "z", { ctrlKey: true });
+    pressKey(editor, "y", { ctrlKey: true });
+    pressKey(editor, "z", { ctrlKey: true, shiftKey: true });
+    expect(backend.undoCurrentGame).not.toHaveBeenCalled();
+    expect(backend.redoCurrentGame).not.toHaveBeenCalled();
+  });
+
+  it("fences navigation while a native history mutation is pending", async () => {
+    let releaseUndo!: (result: CurrentGameResultDto) => void;
+    backend.undoCurrentGame.mockReturnValueOnce(new Promise<CurrentGameResultDto>((resolve) => {
+      releaseUndo = resolve;
+    }));
+    const host = await renderApp();
+    backend.selectCurrentGameNode.mockClear();
+    pressKey(buttonNamed(host, "坐标"), "z", { ctrlKey: true });
+    pressKey(buttonNamed(host, "坐标"), "ArrowUp");
+    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releaseUndo({
+        ...branchingGame,
+        selected_path: { indices: [0] },
+        snapshot: { ...branchingGame.snapshot, path: { indices: [0] }, position: { ...emptyPosition, move_number: 1 } },
+        generation: 4,
+        snapshot_seq: 2,
+        can_undo: false,
+        can_redo: true
+      });
+      await backend.undoCurrentGame.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
+  });
+
   it("dispatches claimed view shortcuts through the same actions as the visible controls", async () => {
     const host = await renderApp();
     const moveNumbers = buttonNamed(host, "手数");
     expect(moveNumbers.getAttribute("aria-pressed")).toBe("false");
     pressKey(buttonNamed(host, "坐标"), "c");
+    await flushLast(preferencesApi.saveAppPreferences);
     expect(buttonNamed(host, "坐标").getAttribute("aria-pressed")).toBe("false");
     pressKey(buttonNamed(host, "坐标"), "m");
+    await flushLast(preferencesApi.saveAppPreferences);
     expect(moveNumbers.getAttribute("aria-pressed")).toBe("true");
 
     const autoplay = buttonNamed(host, "自动播放");
@@ -910,12 +1338,12 @@ describe("App focus-safe review controls", () => {
     act(() => buttonNamed(hostFirst, "编辑").click());
     act(() => buttonNamed(hostFirst, "跳转到最前").click());
     await flushLast(backend.selectCurrentGameNode);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [] });
 
     const hostRemove = await renderApp();
     backend.removeCurrentGameVariation.mockClear();
     act(() => buttonNamed(hostRemove, "编辑").click());
-    act(() => buttonNamed(hostRemove, "删除分支").click());
+    act(() => buttonNamed(hostRemove, "删除当前节点(Shift+Delete)").click());
     await flushLast(backend.removeCurrentGameVariation);
     expect(backend.removeCurrentGameVariation).toHaveBeenCalledTimes(1);
 
@@ -1088,18 +1516,12 @@ describe("App focus-safe review controls", () => {
     expect(backend.setCurrentGamePersonalComment).toHaveBeenLastCalledWith({ indices: [0, 1] }, "reviewer note");
   });
 
-  it("keeps unavailable editing tools disabled while Space remains stone-placement safe", async () => {
+  it("keeps unavailable tools disabled while Space remains stone-placement safe", async () => {
     const host = await renderApp();
     const hawkeye = buttonLabeled(host, "超级鹰眼");
     expect(hawkeye.disabled).toBe(true);
     expect(hawkeye.title).toBe("尚未接入");
     act(() => buttonNamed(host, "编辑").click());
-    const deleteMove = buttonNamed(host, "删除一手");
-    expect(deleteMove.disabled).toBe(true);
-    expect(deleteMove.title).toBe("尚未接入");
-    const setMain = buttonNamed(host, "设为主分支");
-    expect(setMain.disabled).toBe(true);
-    expect(setMain.title).toBe("尚未接入");
     const pass = buttonNamed(host, "停一手(P)");
     expect(pass.disabled).toBe(false);
 
@@ -1111,6 +1533,37 @@ describe("App focus-safe review controls", () => {
     expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
     expect(backend.startKataGoGameAnalysis).not.toHaveBeenCalled();
     expect(backend.playCurrentGame).not.toHaveBeenCalled();
+  });
+
+  it("waits for durable new-document defaults before opening the form", async () => {
+    let finish!: (value: { preferences: AppPreferences }) => void;
+    const promise = new Promise<{ preferences: AppPreferences }>((resolve) => { finish = resolve; });
+    preferencesApi.loadAppPreferences.mockReturnValue(promise);
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => { root?.render(<App />); });
+    act(() => buttonLabeled(host, "新建").click());
+    expect(host.querySelector('[role="dialog"][aria-label="新建棋谱"]')).toBeNull();
+    await act(async () => { finish({ preferences: { ...defaultAppPreferences, defaultBoardWidth: 13, defaultBoardHeight: 9, defaultKomi: 0.5 } }); });
+    act(() => buttonLabeled(host, "新建").click());
+    const dialog = requiredElement(host, '[role="dialog"][aria-label="新建棋谱"]');
+    expect([...dialog.querySelectorAll('input[type="number"]')].map(input => (input as HTMLInputElement).value)).toEqual(["13", "9", "0.5"]);
+  });
+
+  it("opens the same new-document form from board dimensions and Ctrl+I without preparing on cancel", async () => {
+    const host = await renderApp();
+    backend.prepareDocumentReplacement.mockClear();
+
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "设置棋盘大小(Ctrl+I)").click());
+    expect(host.querySelector('[role="dialog"][aria-label="新建棋谱"]')).not.toBeNull();
+    await act(async () => buttonLabeled(host, "取消").click());
+
+    pressKey(buttonNamed(host, "坐标"), "i", { ctrlKey: true });
+    expect(host.querySelector('[role="dialog"][aria-label="新建棋谱"]')).not.toBeNull();
+    await act(async () => buttonLabeled(host, "取消").click());
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
   });
 
   it("opens the same searchable Shortcut Reference from Help and focus-safe ?", async () => {
@@ -1252,8 +1705,12 @@ describe("App document replacement", () => {
     const host = await renderApp();
     backend.cancelSelectedNodeAnalysis.mockClear();
     backend.resolveDocumentReplacement.mockClear();
-    await act(async () => {
+    act(() => {
       buttonLabeled(host, "新建").click();
+    });
+    expect(backend.prepareDocumentReplacement).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      buttonLabeled(host, "创建").click();
       await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
     });
     expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).not.toBeNull();
@@ -1278,8 +1735,11 @@ describe("App document replacement", () => {
     const host = await renderApp();
     backend.saveCurrentGame.mockClear();
     backend.resolveDocumentReplacement.mockClear();
-    await act(async () => {
+    act(() => {
       buttonLabeled(host, "新建").click();
+    });
+    await act(async () => {
+      buttonLabeled(host, "创建").click();
       await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
     });
     await act(async () => {
@@ -1300,8 +1760,11 @@ describe("App document replacement", () => {
     const host = await renderApp();
     backend.saveCurrentGame.mockClear();
     backend.resolveDocumentReplacement.mockClear();
-    await act(async () => {
+    act(() => {
       buttonLabeled(host, "新建").click();
+    });
+    await act(async () => {
+      buttonLabeled(host, "创建").click();
       await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
     });
     await act(async () => {
@@ -1404,8 +1867,11 @@ describe("App document replacement", () => {
       buttonNamed(host, "载入示例").click();
       await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
     });
-    await act(async () => {
+    act(() => {
       buttonLabeled(host, "新建").click();
+    });
+    await act(async () => {
+      buttonLabeled(host, "创建").click();
       await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
     });
     await act(async () => {
@@ -1424,8 +1890,11 @@ describe("App document replacement", () => {
     expect(buttonNamed(host, "键盘落子").getAttribute("aria-pressed")).toBe("true");
     backend.prepareDocumentReplacement.mockClear();
     backend.prepareDocumentReplacement.mockResolvedValue({ status: "ready", departure_id: 9 });
-    await act(async () => {
+    act(() => {
       buttonLabeled(host, "新建").click();
+    });
+    await act(async () => {
+      buttonLabeled(host, "创建").click();
       await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
       await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
     });
@@ -1737,6 +2206,70 @@ describe("App native file activation", () => {
       input.dispatchEvent(new Event("cancel"));
     });
     expect(backend.setFileActivationBusy.mock.calls).toEqual([[true], [false], [true], [false]]);
+  });
+
+  it("reserves external activation while the new-document form is open and releases it on Cancel", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await startSelectedNode(host);
+    backend.setFileActivationBusy.mockClear();
+    backend.prepareDocumentReplacement.mockClear();
+    backend.resolveDocumentReplacement.mockClear();
+    backend.cancelSelectedNodeAnalysis.mockClear();
+    const moveBeforeActivation = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value;
+
+    await act(async () => {
+      buttonLabeled(host, "新建").click();
+      buttonLabeled(host, "新建").click();
+      await backend.setFileActivationBusy.mock.results.at(-1)?.value;
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="新建棋谱"]')).not.toBeNull();
+    expect(backend.setFileActivationBusy.mock.calls).toEqual([[true]]);
+
+    backend.takePendingFileActivation.mockResolvedValueOnce({
+      kind: "open",
+      request_id: 7,
+      path: activatedFile.display_path
+    });
+    await act(async () => {
+      listeners.onActivationAvailable?.();
+      await backend.takePendingFileActivation.mock.results.at(-1)?.value;
+      await Promise.resolve();
+    });
+
+    expect(backend.readGameFile).not.toHaveBeenCalled();
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+    expect(backend.resolveDocumentReplacement).not.toHaveBeenCalled();
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe(moveBeforeActivation);
+    expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="dialog"][aria-label="新建棋谱"]')).not.toBeNull();
+
+    await act(async () => {
+      buttonLabeled(host, "取消").click();
+      await backend.setFileActivationBusy.mock.results.at(-1)?.value;
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="新建棋谱"]')).toBeNull();
+    expect(backend.setFileActivationBusy.mock.calls).toEqual([[true], [false]]);
+    expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+  });
+
+  it("balances repeated new-document requests when the app unmounts", async () => {
+    const host = await renderApp();
+    backend.setFileActivationBusy.mockClear();
+
+    await act(async () => {
+      buttonLabeled(host, "新建").click();
+      buttonLabeled(host, "新建").click();
+      await backend.setFileActivationBusy.mock.results.at(-1)?.value;
+    });
+    expect(backend.setFileActivationBusy.mock.calls).toEqual([[true]]);
+
+    act(() => root?.unmount());
+    root = null;
+    await act(async () => {
+      await backend.setFileActivationBusy.mock.results.at(-1)?.value;
+    });
+    expect(backend.setFileActivationBusy.mock.calls).toEqual([[true], [false]]);
   });
 
   it("reports a retained startup rejection after abnormal recovery is resolved", async () => {
@@ -2266,6 +2799,56 @@ describe("App current-game recovery", () => {
   });
 });
 
+describe("App recent history", () => {
+  it("keeps the opened GIB and durable list on history failure, then explicitly retries", async () => {
+    const oldPath = "/games/previous.sgf";
+    const gibPath = "/games/import.gib";
+    preferencesApi.loadAppPreferences.mockResolvedValue({ preferences: { ...defaultAppPreferences, recentGamePaths: [oldPath] } });
+    preferencesApi.updateRecentGameHistory.mockRejectedValueOnce(new Error("disk denied"));
+    backend.openSgfDocument.mockResolvedValue({ format: "gib", sgf_text: "(;SZ[9])", display_name: "import.gib", display_path: gibPath, native_path: null, opened_path: gibPath });
+    const host = await renderApp();
+    pressKey(window, "o");
+    await act(async () => { await vi.waitFor(() => expect(preferencesApi.updateRecentGameHistory).toHaveBeenCalledTimes(1)); });
+    expect(host.textContent).toContain("Opened import.sgf");
+    expect(host.textContent).toContain("disk denied");
+    act(() => buttonNamed(host, "文件").click());
+    expect(host.querySelector('button[title="/games/previous.sgf"]')).not.toBeNull();
+    expect(host.querySelector('button[title="/games/import.gib"]')).toBeNull();
+    expect(preferencesApi.updateRecentGameHistory).toHaveBeenCalledTimes(1);
+    preferencesApi.updateRecentGameHistory.mockResolvedValueOnce([gibPath, oldPath]);
+    act(() => buttonNamed(host, "重试最近记录写入").click());
+    await flushLast(preferencesApi.updateRecentGameHistory);
+    act(() => buttonNamed(host, "文件").click());
+    expect(host.querySelector('button[title="/games/import.gib"]')).not.toBeNull();
+    expect(host.textContent).not.toContain("disk denied");
+    expect(preferencesApi.updateRecentGameHistory).toHaveBeenLastCalledWith(gibPath);
+  });
+
+  it("keeps the original game and list when a recent reopen is cancelled or unreadable", async () => {
+    const path = "/games/kept.sgf";
+    preferencesApi.loadAppPreferences.mockResolvedValue({ preferences: { ...defaultAppPreferences, recentGamePaths: [path] } });
+    backend.readGameFile.mockResolvedValue({ format: "sgf", sgf_text: "(;SZ[9])", display_name: "kept.sgf", display_path: path, native_path: path, opened_path: path });
+    const host = await renderApp();
+    await act(async () => { await vi.waitFor(() => expect(backend.markFileActivationReady).toHaveBeenCalled()); });
+    backend.prepareDocumentReplacement.mockResolvedValueOnce({ status: "needs_decision", departure_id: 9 });
+    pressKey(window, "1", { altKey: true });
+    await flushLast(backend.readGameFile);
+    await flushLast(backend.prepareDocumentReplacement);
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).not.toBeNull();
+    act(() => buttonLabeled(host, "Cancel").click());
+    await flushLast(backend.resolveDocumentReplacement);
+    expect(preferencesApi.updateRecentGameHistory).not.toHaveBeenCalled();
+    backend.readGameFile.mockRejectedValueOnce(new Error("file missing"));
+    pressKey(window, "1", { altKey: true });
+    await act(async () => { await backend.readGameFile.mock.results.at(-1)?.value.catch(() => undefined); });
+    expect(host.textContent).toContain("file missing");
+    expect(preferencesApi.updateRecentGameHistory).not.toHaveBeenCalled();
+    act(() => buttonNamed(host, "文件").click());
+    expect(host.querySelector('button[title="/games/kept.sgf"]')).not.toBeNull();
+    expect(host.querySelector(".doc-name")?.textContent).not.toContain("kept.sgf");
+  });
+});
+
 async function renderApp(): Promise<HTMLElement> {
   act(() => root?.unmount());
   root = null;
@@ -2326,6 +2909,68 @@ function installCandidateAnalysis() {
 }
 
 describe("accepted navigation coalescing", () => {
+  it("discards queued navigation when a new document replaces the tree", async () => {
+    currentGameFixture.mockResolvedValue({ ...branchingGame, dirty: false });
+    const host = await renderApp();
+    let release!: (value: CurrentGameResultDto) => void;
+    const pending = new Promise<CurrentGameResultDto>((resolve) => { release = resolve; });
+    backend.selectCurrentGameNode.mockReset();
+    backend.selectCurrentGameNode.mockReturnValueOnce(pending);
+    act(() => buttonNamed(host, "父节点").click());
+    const jump = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(jump, "0");
+      jump.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const replacement = { ...initialGame, generation: 4, snapshot: { ...initialGame.snapshot, personal_comment: "new document" } };
+    currentGameFixture.mockResolvedValue(replacement);
+    act(() => buttonLabeled(host, "新建").click());
+    await act(async () => {
+      buttonLabeled(host, "创建").click();
+      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      release({ ...branchingGame, selected_path: { indices: [0] }, snapshot: navigableChild.snapshot });
+      await pending;
+    });
+    expect(jump.value).toBe("0");
+    expect(requiredElement<HTMLTextAreaElement>(host, 'textarea[aria-label="个人评论"]').value).toBe("new document");
+  });
+
+  it("jumps to the actual pass node beyond setup and comments, not path depth", async () => {
+    const tree = {
+      properties: [],
+      children: [{ properties: [{ key: "AB", values: ["aa"] }], children: [
+        { properties: [{ key: "C", values: ["before move"] }], children: [
+          { properties: [{ key: "B", values: [""] }], children: [
+            { properties: [{ key: "C", values: ["after pass"] }], children: [] }
+          ] }
+        ] }
+      ] }]
+    };
+    currentGameFixture.mockResolvedValue({ ...initialGame, tree });
+    backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => ({
+      ...initialGame, tree, selected_path: path,
+      snapshot: {
+        ...initialGame.snapshot, path,
+        position: { ...emptyPosition, move_number: path.indices.length >= 3 ? 1 : 0 },
+        personal_comment: path.indices.length === 3 ? "pass selected" : "wrong nonmove"
+      }
+    }));
+    const host = await renderApp();
+    const jump = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(jump, "1");
+      jump.dispatchEvent(new Event("input", { bubbles: true }));
+      await backend.selectCurrentGameNode.mock.results.at(-1)?.value;
+    });
+    expect(requiredElement<HTMLTextAreaElement>(host, 'textarea[aria-label="个人评论"]').value).toBe("pass selected");
+    expect(requiredElement<HTMLInputElement>(host, 'input[type="range"].move-slider').max).toBe("1");
+    expect(jump.value).toBe("1");
+  });
+
   it.each([false, true])("preserves newer comment and Save state behind delayed navigation (save=%s)", async (save) => {
     const initial = { ...navigableRoot, dirty: save, native_path: "/tmp/original.sgf" };
     currentGameFixture.mockResolvedValue(initial);
@@ -2401,7 +3046,7 @@ describe("accepted navigation coalescing", () => {
       await Promise.resolve();
     });
     expect(backend.selectCurrentGameNode).toHaveBeenCalledTimes(2);
-    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] });
+    expect(backend.selectCurrentGameNode.mock.lastCall?.[0]).toEqual({ indices: [] });
     expect(jump.value).toBe("0");
     expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
   });

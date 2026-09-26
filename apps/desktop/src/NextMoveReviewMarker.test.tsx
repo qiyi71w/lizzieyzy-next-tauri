@@ -53,9 +53,12 @@ const backend = vi.hoisted(() => ({
   saveCurrentGame: vi.fn(),
   setCurrentGamePersonalComment: vi.fn(),
   removeCurrentGameVariation: vi.fn(),
+  undoCurrentGame: vi.fn(),
+  redoCurrentGame: vi.fn(),
   startKataGoGameAnalysis: vi.fn(),
   loadEngineProfilesSettings: vi.fn(() => Promise.resolve({ selected_profile_id: "default", profiles: [] })),
   subscribeForegroundEngine: vi.fn(() => Promise.resolve(() => undefined)),
+  subscribeTrialAnalysis: vi.fn(async () => () => undefined),
   startForegroundEngine: vi.fn(),
   stopForegroundEngine: vi.fn(),
   restartForegroundEngine: vi.fn(),
@@ -99,7 +102,8 @@ vi.mock("./components/WinrateChart", () => ({
 import { App } from "./App";
 
 const emptyPosition = {
-  board_size: 19,
+  board_width: 19,
+  board_height: 19,
   move_number: 0,
   to_play: "black" as const,
   stones: [],
@@ -149,7 +153,7 @@ const staleFrame: AnalysisFrameDto = {
 };
 
 const initialProjection: GameDto = {
-  summary: { id: "test", board_size: 19, komi: 7.5, move_count: 2 },
+  summary: { id: "test", board_width: 19, board_height: 19, komi: 7.5, move_count: 2 },
   moves: [
     { move_number: 1, color: "black", vertex: { point: { x: 3, y: 3 } } },
     { move_number: 2, color: "white", vertex: { point: { x: 15, y: 15 } } }
@@ -171,11 +175,15 @@ function gameAt(path: NodePath): CurrentGameResultDto {
         move_number: path.indices.length,
         to_play: path.indices.length % 2 === 0 ? "black" : "white"
       },
+      markup: [],
+      stone_move_numbers: [],
       personal_comment: "",
       primary_analysis: snapshotAnalysis
     },
     generation: 1,
     snapshot_seq: 1,
+    can_undo: false,
+    can_redo: false,
     dirty: false,
     native_path: null
   };

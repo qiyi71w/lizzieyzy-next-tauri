@@ -14,7 +14,7 @@ use app_model::{
     ForegroundEngineEventDto, ForegroundEngineLifecycleDto, ForegroundEngineSnapshotDto, NodePath,
     PlayerColor,
 };
-use katago_protocol::{normalize_response, parse_response_line, AnalysisQuery};
+use katago_protocol::{normalize_response, parse_response_line, AnalysisQuery, ProtocolError};
 use std::io;
 use std::process::{Child, ChildStdin};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -96,7 +96,8 @@ pub struct SelectedNodeJobRequest {
     pub generation: u64,
     pub node_path: NodePath,
     pub query: AnalysisQuery,
-    pub board_size: u8,
+    pub board_width: u8,
+    pub board_height: u8,
     pub position_empty: bool,
 }
 
@@ -104,7 +105,8 @@ pub struct SelectedNodeJobRequest {
 pub struct WholeGameWorkItem {
     pub node_path: NodePath,
     pub query: AnalysisQuery,
-    pub board_size: u8,
+    pub board_width: u8,
+    pub board_height: u8,
     pub move_number: u32,
 }
 
@@ -122,6 +124,17 @@ pub struct WholeGameJobRequest {
     pub run_id: String,
     pub generation: u64,
     pub work_items: Vec<WholeGameWorkItem>,
+}
+
+pub struct SwingAnalysisTaskRequest {
+    pub job: WholeGameJobRequest,
+    pub scope: AnalysisScopeDto,
+    pub requested: Vec<NodePath>,
+    pub supporting: Vec<NodePath>,
+    pub swing_comparisons: Vec<AnalysisSwingComparisonDto>,
+    pub swing_criteria: AnalysisSwingCriteriaDto,
+    pub overview_conditions: AnalysisStageConditionsDto,
+    pub deep_conditions: AnalysisStageConditionsDto,
 }
 
 #[derive(Default)]
@@ -158,7 +171,8 @@ struct RegisteredJob {
     submitted_at: Instant,
     generation: u64,
     node_path: NodePath,
-    board_size: u8,
+    board_width: u8,
+    board_height: u8,
     cancel: Arc<dyn AnalysisJobCancel>,
     disposition: JobDisposition,
     expected: Option<usize>,
@@ -706,7 +720,8 @@ impl ForegroundEngineManager {
             cleanup_deadline: None,
             submitted_at: Instant::now(),
             node_path: NodePath { indices: Vec::new() },
-            board_size: 19,
+            board_width: 19,
+            board_height: 19,
             cancel,
             disposition: JobDisposition::Running,
             expected: None,
@@ -842,7 +857,8 @@ impl ForegroundEngineManager {
             submitted_at: Instant::now(),
             generation: request.generation,
             node_path: request.node_path,
-            board_size: request.board_size,
+            board_width: request.board_width,
+            board_height: request.board_height,
             cancel: Arc::new(AnalysisCancelToken::new()),
             disposition: JobDisposition::Running,
             expected: Some(1),
@@ -961,15 +977,18 @@ impl ForegroundEngineManager {
 
     pub fn start_swing_analysis_task(
         &self,
-        request: WholeGameJobRequest,
-        scope: AnalysisScopeDto,
-        requested: Vec<NodePath>,
-        supporting: Vec<NodePath>,
-        swing_comparisons: Vec<AnalysisSwingComparisonDto>,
-        swing_criteria: AnalysisSwingCriteriaDto,
-        overview_conditions: AnalysisStageConditionsDto,
-        deep_conditions: AnalysisStageConditionsDto,
+        request: SwingAnalysisTaskRequest,
     ) -> Result<AnalysisTaskDto, EngineFailureDto> {
+        let SwingAnalysisTaskRequest {
+            job: request,
+            scope,
+            requested,
+            supporting,
+            swing_comparisons,
+            swing_criteria,
+            overview_conditions,
+            deep_conditions,
+        } = request;
         overview_conditions
             .validate_single_stage()
             .and_then(|_| deep_conditions.validate_single_stage())
@@ -1089,7 +1108,8 @@ impl ForegroundEngineManager {
             let job_id = Uuid::new_v4().to_string();
             let query_id = target_query_id(&job_id);
             let first_node_path = request.work_items[0].node_path.clone();
-            let first_board_size = request.work_items[0].board_size;
+            let first_board_width = request.work_items[0].board_width;
+            let first_board_height = request.work_items[0].board_height;
             let bound_query = bound_work_item_query(&request.work_items[0], &query_id, &job_id)?;
             let started = AnalysisJobStartedDto {
                 run_id: request.run_id.clone(),
@@ -1148,7 +1168,8 @@ impl ForegroundEngineManager {
                 submitted_at: Instant::now(),
                 generation: request.generation,
                 node_path: first_node_path,
-                board_size: first_board_size,
+                board_width: first_board_width,
+                board_height: first_board_height,
                 cancel: Arc::new(cancel),
                 disposition: JobDisposition::Running,
                 expected: Some(expected),
@@ -2498,17 +2519,30 @@ impl Inner {
                 {
                     return None;
                 }
-                let published = failure(
-                    EngineOperationDto::Job,
-                    EngineFailureKind::Protocol,
-                    format!("analysis response was not parseable: {error}"),
-                    Some(run_id),
-                    None,
-                    None,
-                )
-                .with_job_id(&started.job_id);
-                if started.mode == AnalysisJobModeDto::Continuous
-                    || state.jobs[index].disposition == JobDisposition::BudgetReached
+                let job = &state.jobs[index];
+                let (board_width, board_height) = job
+                    .work_items
+                    .get(job.current_index)
+                    .map(|item| (item.board_width, item.board_height))
+                    .unwrap_or((job.board_width, job.board_height));
+                let capability_refusal = board_dimension_capability_refusal(&error);
+                let (kind, message) = match capability_refusal {
+                    Some(reason) => (
+                        EngineFailureKind::UnsupportedCapability,
+                        format!(
+                            "The current engine does not support {board_width}×{board_height} boards: {reason}"
+                        ),
+                    ),
+                    None => (
+                        EngineFailureKind::Protocol,
+                        format!("analysis response was not parseable: {error}"),
+                    ),
+                };
+                let published = failure(EngineOperationDto::Job, kind, message, Some(run_id), None, None)
+                    .with_job_id(&started.job_id);
+                if capability_refusal.is_none()
+                    && (started.mode == AnalysisJobModeDto::Continuous
+                        || state.jobs[index].disposition == JobDisposition::BudgetReached)
                 {
                     drop(state);
                     self.fail_unresponsive_run(run_id, &published.message);
@@ -2572,7 +2606,10 @@ impl Inner {
             let job = &state.jobs[index];
             let invalid_budget_final = job.disposition == JobDisposition::BudgetReached
                 && response.is_during_search == Some(false)
-                && !response.has_valid_search_result(job.work_items[job.current_index].board_size);
+                && !response.has_valid_search_result(
+                    job.work_items[job.current_index].board_width,
+                    job.work_items[job.current_index].board_height,
+                );
             if response.is_during_search.is_none() || invalid_budget_final {
                 drop(state);
                 self.fail_unresponsive_run(run_id, "task response did not establish a valid target final");
@@ -2583,7 +2620,8 @@ impl Inner {
         let during = response.is_during_search == Some(true);
         let visits = response.root_info.as_ref().map_or(0, |root| root.visits);
         let has_result = visits > 0 && !response.no_results;
-        let has_data = response.has_valid_search_result(state.jobs[index].board_size);
+        let has_data =
+            response.has_valid_search_result(state.jobs[index].board_width, state.jobs[index].board_height);
         if has_result && response.is_during_search.is_none() {
             drop(state);
             self.fail_unresponsive_run(
@@ -2600,21 +2638,19 @@ impl Inner {
             );
             return None;
         }
-        if started.mode == AnalysisJobModeDto::Continuous {
-            if !during && !has_result {
-                let published = failure(
-                    EngineOperationDto::Job,
-                    EngineFailureKind::Protocol,
-                    "continuous search ended without valid analysis".into(),
-                    Some(run_id),
-                    None,
-                    None,
-                )
-                .with_job_id(&started.job_id);
-                finish_failed_job(&mut state, &started, published);
-                publish_snapshot(&mut state);
-                return None;
-            }
+        if started.mode == AnalysisJobModeDto::Continuous && !during && !has_result {
+            let published = failure(
+                EngineOperationDto::Job,
+                EngineFailureKind::Protocol,
+                "continuous search ended without valid analysis".into(),
+                Some(run_id),
+                None,
+                None,
+            )
+            .with_job_id(&started.job_id);
+            finish_failed_job(&mut state, &started, published);
+            publish_snapshot(&mut state);
+            return None;
         }
         if during && !has_data {
             return None;
@@ -2623,7 +2659,8 @@ impl Inner {
             normalize_response(
                 Uuid::parse_str(&started.job_id).expect("manager job UUID"),
                 response,
-                state.jobs[index].board_size,
+                state.jobs[index].board_width,
+                state.jobs[index].board_height,
             )
         });
         if has_data {
@@ -2705,7 +2742,7 @@ impl Inner {
                     return None;
                 }
                 let during = response.is_during_search == Some(true);
-                let has_search_data = response.has_valid_search_result(item.board_size);
+                let has_search_data = response.has_valid_search_result(item.board_width, item.board_height);
                 if has_search_data {
                     state.last_activity = Instant::now();
                     if state.jobs[job_index].disposition == JobDisposition::Running {
@@ -2778,7 +2815,7 @@ impl Inner {
                 }
 
                 let job_uuid = Uuid::parse_str(&started.job_id).unwrap_or_else(|_| Uuid::nil());
-                let mut frame = normalize_response(job_uuid, response, item.board_size);
+                let mut frame = normalize_response(job_uuid, response, item.board_width, item.board_height);
                 frame.turn = item.move_number;
                 let requires_root_score = state.analysis_task.as_ref().is_some_and(|task| {
                     task.job_id == started.job_id
@@ -3962,6 +3999,13 @@ fn finish_failed_job(state: &mut ManagerState, started: &AnalysisJobStartedDto, 
             Some(published),
         );
     }
+}
+
+fn board_dimension_capability_refusal(error: &ProtocolError) -> Option<&str> {
+    let ProtocolError::EngineField { message, field } = error else {
+        return None;
+    };
+    matches!(field.as_str(), "boardXSize" | "boardYSize").then_some(message.as_str())
 }
 
 fn extract_response_id(line: &str) -> Option<String> {

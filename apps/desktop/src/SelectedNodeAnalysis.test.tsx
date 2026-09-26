@@ -57,6 +57,8 @@ const backend = vi.hoisted(() => ({
   saveCurrentGame: vi.fn(),
   setCurrentGamePersonalComment: vi.fn(),
   removeCurrentGameVariation: vi.fn(),
+  undoCurrentGame: vi.fn(),
+  redoCurrentGame: vi.fn(),
   startKataGoGameAnalysis: vi.fn(),
   loadEngineProfilesSettings: vi.fn(),
   saveEngineProfilesSettings: vi.fn(),
@@ -67,6 +69,7 @@ const backend = vi.hoisted(() => ({
   switchForegroundEngine: vi.fn(() => Promise.resolve()),
   getForegroundEngineSnapshot: vi.fn(),
   subscribeForegroundEngine: vi.fn(),
+  subscribeTrialAnalysis: vi.fn(async () => () => undefined),
   inspectCurrentGameRecovery: vi.fn(async (): Promise<{ status: "none" | "abnormal" | "normal" | "unreadable"; envelope?: unknown; message?: string }> => ({ status: "none" })),
   restoreCurrentGameRecovery: vi.fn(),
   discardCurrentGameRecovery: vi.fn(async () => undefined),
@@ -94,7 +97,8 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 import { App } from "./App";
 
 const emptyPosition = {
-  board_size: 9,
+  board_width: 9,
+  board_height: 9,
   move_number: 0,
   to_play: "black" as const,
   stones: [],
@@ -107,15 +111,17 @@ const emptyPosition = {
 const initialGame: CurrentGameResultDto = {
   tree: { properties: [], children: [] },
   selected_path: { indices: [] },
-  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "" },
+  snapshot: { path: { indices: [] }, position: emptyPosition, personal_comment: "", markup: [], stone_move_numbers: [] },
   generation: 1,
   snapshot_seq: 1,
+  can_undo: false,
+  can_redo: false,
   dirty: false,
   native_path: null
 };
 
 const initialProjection: GameDto = {
-  summary: { id: "game", board_size: 9, komi: 7.5, move_count: 0 },
+  summary: { id: "game", board_width: 9, board_height: 9, komi: 7.5, move_count: 0 },
   moves: []
 };
 
@@ -603,6 +609,24 @@ describe("authoritative continuous selected-node analysis", () => {
     expect(backend.foregroundEngineContinuousAction).not.toHaveBeenCalled();
   });
 
+  it("shows a continuous capability refusal before the terminal snapshot", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    act(() => emitContinuousSnapshot("searching"));
+    const message = "The current engine does not support 25×2 boards: Must provide an integer from 2 to 19";
+    act(() => {
+      listeners.onJob?.({
+        run_id: "run-1", job_id: "job-continuous", lane: "selected_node", mode: "continuous",
+        generation: 1, node_path: { indices: [] }, outcome: "failed",
+        failure: { operation: "job", kind: "unsupported_capability", message, run_id: "run-1", job_id: "job-continuous" }
+      });
+      emitContinuousSnapshot("error", { job: false });
+    });
+    expect(host.textContent).toContain(message);
+    expect(buttonNamed(host, "继续连续分析").disabled).toBe(false);
+    expect(host.querySelector(".engine-failure")).toBeNull();
+  });
+
   it("routes focus-safe Space, visible, and menu actions through the same contextual command", async () => {
     const host = await renderApp();
     await readyEngine(host);
@@ -785,7 +809,12 @@ describe("authoritative continuous selected-node analysis", () => {
     await readyEngine(host);
     await publishContinuousProgress(28);
 
-    act(() => (host.querySelector('button[aria-label="新建"]') as HTMLButtonElement).click());
+    act(() => {
+      (host.querySelector('button[aria-label="新建"]') as HTMLButtonElement).click();
+    });
+    act(() => {
+      buttonNamed(host, "创建").click();
+    });
     await act(async () => {
       await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
       await Promise.resolve();

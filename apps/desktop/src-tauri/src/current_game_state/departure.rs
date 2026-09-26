@@ -260,6 +260,7 @@ impl CurrentGameState {
         })
     }
 
+    #[cfg(test)]
     pub fn application_exit_disposition(&self) -> Option<ApplicationExitDispositionDto> {
         self.holder.lock().expect("current game state").exit_disposition
     }
@@ -271,6 +272,15 @@ impl CurrentGameState {
         let mut holder = self.holder.lock().expect("current game state");
         if holder.departure.is_some() {
             return Err(departure_in_progress());
+        }
+        if matches!(
+            holder.trial_mode,
+            super::trial::TrialMode::Entering(_)
+                | super::trial::TrialMode::Leaving(_)
+                | super::trial::TrialMode::EnteringScoring(_)
+                | super::trial::TrialMode::LeavingScoring(_)
+        ) {
+            return Err(departure_blocked());
         }
         holder.next_departure_id = holder.next_departure_id.saturating_add(1);
         let departure_id = holder.next_departure_id;
@@ -290,16 +300,7 @@ impl CurrentGameState {
 
 impl CurrentGameHolder {
     fn result_dto(&self, selected_path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
-        let document = self.document.as_ref().ok_or_else(no_current_game)?;
-        Ok(CurrentGameResultDto {
-            tree: document.tree()?,
-            snapshot: document.snapshot(&selected_path)?,
-            selected_path,
-            generation: self.generation,
-            snapshot_seq: self.snapshot_seq,
-            dirty: self.dirty,
-            native_path: self.native_path.clone(),
-        })
+        self.result_at(&selected_path)
     }
 
     pub(super) fn install_document(
@@ -308,27 +309,28 @@ impl CurrentGameHolder {
         native_path: Option<String>,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let selected_path = document.default_selected_path();
-        let snapshot = document.snapshot(&selected_path)?;
-        let tree = document.tree()?;
+        document.snapshot(&selected_path)?;
         self.document = Some(document);
-        self.generation += 1;
-        self.dirty = false;
+        self.generation = self.generation.saturating_add(1);
+        self.history.clear();
+        self.undo_revisions.clear();
+        self.redo_revisions.clear();
+        self.next_edit_revision = self.next_edit_revision.saturating_add(1);
+        self.edit_revision = self.next_edit_revision;
+        self.nonhistory_revision = self.nonhistory_revision.saturating_add(1);
+        self.saved_version = self.content_version();
+        self.refresh_dirty();
         self.native_path = native_path;
-        self.selected_path = selected_path.clone();
+        self.selected_path = selected_path;
         self.document_seq = self.document_seq.saturating_add(1);
+        self.document_identity = self.document_identity.saturating_add(1);
         self.snapshot_seq = 1;
         self.edits_blocked = false;
         self.departure = None;
         self.closed_jobs.clear();
-        Ok(CurrentGameResultDto {
-            tree,
-            selected_path,
-            snapshot,
-            generation: self.generation,
-            snapshot_seq: self.snapshot_seq,
-            dirty: self.dirty,
-            native_path: self.native_path.clone(),
-        })
+        self.analysis_target = None;
+        self.trial_mode = super::trial::TrialMode::Review;
+        self.current_result()
     }
 
     pub(super) fn rejects_job(&self, run_id: &str, job_id: &str) -> bool {
@@ -340,6 +342,10 @@ impl CurrentGameHolder {
 
     pub(super) fn ensure_editable(&self) -> Result<(), CurrentGameError> {
         if self.edits_blocked {
+            Err(departure_blocked())
+        } else if self.departure.is_some() {
+            Err(departure_in_progress())
+        } else if !matches!(self.trial_mode, super::trial::TrialMode::Review) {
             Err(departure_blocked())
         } else {
             Ok(())

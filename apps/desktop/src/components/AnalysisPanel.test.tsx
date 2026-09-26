@@ -11,7 +11,8 @@ declare global {
 }
 
 const position: PositionDto = {
-  board_size: 9,
+  board_width: 9,
+  board_height: 9,
   move_number: 0,
   to_play: "black",
   stones: [],
@@ -74,7 +75,8 @@ describe("AnalysisPanel candidate preview", () => {
         pane="reference"
         frame={frame}
         problems={[]}
-        boardSize={9}
+        boardWidth={9}
+        boardHeight={9}
         currentMove={0}
         currentPosition={position}
         selectedCandidateIndex={0}
@@ -106,7 +108,8 @@ describe("AnalysisPanel sub-board content mode", () => {
         pane="reference"
         frame={frame}
         problems={[]}
-        boardSize={9}
+        boardWidth={9}
+        boardHeight={9}
         currentMove={0}
         currentPosition={stonesOnBoard}
         selectedCandidateIndex={0}

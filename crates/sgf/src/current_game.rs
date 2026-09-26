@@ -1,7 +1,7 @@
 use app_model::{
     AnalysisMoveActorFilterDto, AnalysisSwingComparisonDto, CurrentGameError, CurrentGameErrorKind, GameDto,
-    MoveDto, MoveVertex, NodePath, PlayerColor, PositionDto, SelectedNodeSnapshotDto, SgfPropertyDto,
-    SgfTreeNodeDto,
+    MoveDto, MoveVertex, NodePath, PlayerColor, PositionDto, SelectedNodeSnapshotDto, SgfMarkupActionDto,
+    SgfMarkupToolDto, SgfPropertyDto, SgfTreeNodeDto, StoneDto,
 };
 
 use crate::{
@@ -16,11 +16,354 @@ pub struct CurrentSgfDocument {
     document: SgfDocument,
 }
 
+const DOCUMENT_HISTORY_LIMIT: usize = 100;
+
+#[derive(Debug, Default)]
+pub struct DocumentHistory {
+    undo: Vec<SgfDocumentEdit>,
+    redo: Vec<SgfDocumentEdit>,
+}
+
+#[derive(Debug)]
+pub struct SgfDocumentEdit {
+    reversal: DocumentReversal,
+    selected_before: NodePath,
+    selected_after: NodePath,
+}
+
+type SavedAnalysisProperties = Vec<(NodePath, Vec<(usize, SgfProperty)>)>;
+
+#[derive(Debug)]
+enum DocumentReversal {
+    SetComment {
+        path: NodePath,
+        properties: Vec<(usize, SgfProperty)>,
+    },
+    SetMetadata {
+        properties: Vec<(usize, SgfProperty)>,
+        komi: f32,
+        analysis: Option<SavedAnalysisProperties>,
+    },
+    SetMarkup {
+        path: NodePath,
+        properties: Vec<(usize, SgfProperty)>,
+    },
+    SetResult {
+        properties: Vec<(usize, SgfProperty)>,
+        result: Option<String>,
+    },
+    RemoveSubtree {
+        parent: NodePath,
+        index: usize,
+    },
+    InsertSubtree {
+        parent: NodePath,
+        index: usize,
+        subtree: SgfNode,
+    },
+    PromoteMainline {
+        moves: Vec<(NodePath, usize)>,
+        to_front: bool,
+    },
+    RootSetup {
+        properties: Vec<(usize, SgfProperty)>,
+        children: Option<Vec<SgfNode>>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentHistoryOutcome {
+    pub selected_path: NodePath,
+    pub structural: bool,
+}
+
+#[derive(Debug)]
+pub struct DocumentEditOutcome {
+    pub snapshot: SelectedNodeSnapshotDto,
+    pub edit: Option<SgfDocumentEdit>,
+}
+
+/// A session-only branch rooted at the selected position. The retained ancestors
+/// preserve replay and simple-ko context; only the branch below the entry is exposed.
+pub struct TrialLine {
+    document: CurrentSgfDocument,
+    entry: NodePath,
+    entry_move_number: u32,
+    selected: NodePath,
+    history: DocumentHistory,
+}
+
+impl TrialLine {
+    pub fn new(source: &CurrentSgfDocument, entry: &NodePath) -> Result<Self, CurrentGameError> {
+        let ancestors = source.nodes_on_path(entry)?;
+        let mut root = SgfNode {
+            properties: ancestors[0].properties.clone(),
+            children: Vec::new(),
+        };
+        let mut cursor = &mut root;
+        for ancestor in ancestors.iter().skip(1) {
+            let node = SgfNode {
+                properties: ancestor.properties.clone(),
+                children: Vec::new(),
+            };
+            cursor.children.push(node);
+            cursor = &mut cursor.children[0];
+        }
+        cursor
+            .properties
+            .retain(|property| !matches!(property.key.as_str(), "LZ" | "LZ2" | "LZOP" | "LZOP2"));
+        let entry_move_number = source.snapshot(entry)?.position.move_number;
+        let internal = NodePath {
+            indices: vec![0; entry.indices.len()],
+        };
+        let document = SgfDocument {
+            board_width: source.document.board_width,
+            board_height: source.document.board_height,
+            komi: source.document.komi,
+            handicap: source.document.handicap,
+            black_name: source.document.black_name.clone(),
+            white_name: source.document.white_name.clone(),
+            result: source.document.result.clone(),
+            moves: Vec::new(),
+            root: Some(root),
+        };
+        Ok(Self {
+            document: CurrentSgfDocument { document },
+            entry: internal.clone(),
+            entry_move_number,
+            selected: internal,
+            history: DocumentHistory::default(),
+        })
+    }
+
+    fn absolute(&self, path: &NodePath) -> NodePath {
+        let mut indices = self.entry.indices.clone();
+        indices.extend_from_slice(&path.indices);
+        NodePath { indices }
+    }
+
+    fn relative(&self, path: &NodePath) -> NodePath {
+        NodePath {
+            indices: path.indices[self.entry.indices.len()..].to_vec(),
+        }
+    }
+
+    pub fn selected_path(&self) -> NodePath {
+        self.relative(&self.selected)
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    pub fn tree(&self) -> Result<SgfTreeNodeDto, CurrentGameError> {
+        let node = *self
+            .document
+            .nodes_on_path(&self.entry)?
+            .last()
+            .expect("entry exists");
+        let mut tree = tree_dto(node);
+        tree.properties
+            .retain(|property| property.key != "B" && property.key != "W");
+        Ok(tree)
+    }
+
+    pub fn raw_snapshot(&self) -> Result<SelectedNodeSnapshotDto, CurrentGameError> {
+        let mut snapshot = self.document.snapshot(&self.selected)?;
+        snapshot.path = self.relative(&self.selected);
+        Ok(snapshot)
+    }
+
+    pub fn snapshot(&self) -> Result<SelectedNodeSnapshotDto, CurrentGameError> {
+        let mut snapshot = self.raw_snapshot()?;
+        snapshot.position.move_number -= self.entry_move_number;
+        snapshot.position.last_move = snapshot.position.last_move.and_then(|mut last| {
+            if last.move_number <= self.entry_move_number {
+                None
+            } else {
+                last.move_number -= self.entry_move_number;
+                Some(last)
+            }
+        });
+        snapshot
+            .stone_move_numbers
+            .retain(|m| m.move_number > self.entry_move_number);
+        for number in &mut snapshot.stone_move_numbers {
+            number.move_number -= self.entry_move_number;
+        }
+        for frame in [&mut snapshot.primary_analysis, &mut snapshot.secondary_analysis]
+            .into_iter()
+            .flatten()
+        {
+            frame.turn = frame.turn.saturating_sub(self.entry_move_number);
+        }
+        Ok(snapshot)
+    }
+
+    pub fn select(&mut self, path: &NodePath) -> Result<(), CurrentGameError> {
+        let absolute = self.absolute(path);
+        self.document.snapshot(&absolute)?;
+        self.selected = absolute;
+        Ok(())
+    }
+
+    pub fn play(&mut self, vertex: MoveVertex) -> Result<bool, CurrentGameError> {
+        let outcome = self
+            .document
+            .play_with_history(&self.selected, &self.selected, vertex)?;
+        let changed = outcome.edit.is_some();
+        if let Some(edit) = outcome.edit {
+            self.history.commit(edit);
+        }
+        self.selected = outcome.snapshot.path;
+        Ok(changed)
+    }
+
+    pub fn undo(&mut self) -> Result<bool, CurrentGameError> {
+        let Some(outcome) = self.history.undo(&mut self.document)? else {
+            return Ok(false);
+        };
+        self.selected = outcome.selected_path;
+        Ok(true)
+    }
+
+    pub fn attach_analysis(
+        &mut self,
+        path: &NodePath,
+        payload: &crate::SgfAnalysisPayload,
+    ) -> Result<(), CurrentGameError> {
+        self.document
+            .replace_primary_analysis(&self.absolute(path), payload)?;
+        Ok(())
+    }
+
+    pub fn board_width(&self) -> u8 {
+        self.document.board_width()
+    }
+    pub fn board_height(&self) -> u8 {
+        self.document.board_height()
+    }
+    pub fn komi(&self) -> f32 {
+        self.document.komi()
+    }
+    pub fn result(&self) -> Option<&str> {
+        self.document.result()
+    }
+    pub fn rules(&self) -> String {
+        self.document.rules()
+    }
+}
+
+impl DocumentHistory {
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+    }
+
+    pub fn commit(&mut self, edit: SgfDocumentEdit) {
+        self.redo.clear();
+        self.undo.push(edit);
+        if self.undo.len() > DOCUMENT_HISTORY_LIMIT {
+            self.undo.remove(0);
+        }
+    }
+
+    pub fn undo(
+        &mut self,
+        document: &mut CurrentSgfDocument,
+    ) -> Result<Option<DocumentHistoryOutcome>, CurrentGameError> {
+        let Some(mut edit) = self.undo.pop() else {
+            return Ok(None);
+        };
+        let structural = match document.apply_reversal(&mut edit.reversal) {
+            Ok(structural) => structural,
+            Err(error) => {
+                self.undo.push(edit);
+                return Err(error);
+            }
+        };
+        let selected_path = edit.selected_before.clone();
+        self.redo.push(edit);
+        Ok(Some(DocumentHistoryOutcome {
+            selected_path,
+            structural,
+        }))
+    }
+
+    pub fn redo(
+        &mut self,
+        document: &mut CurrentSgfDocument,
+    ) -> Result<Option<DocumentHistoryOutcome>, CurrentGameError> {
+        let Some(mut edit) = self.redo.pop() else {
+            return Ok(None);
+        };
+        let structural = match document.apply_reversal(&mut edit.reversal) {
+            Ok(structural) => structural,
+            Err(error) => {
+                self.redo.push(edit);
+                return Err(error);
+            }
+        };
+        let selected_path = edit.selected_after.clone();
+        self.undo.push(edit);
+        Ok(Some(DocumentHistoryOutcome {
+            selected_path,
+            structural,
+        }))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SwingAnalysisScopeResolution {
     pub requested: Vec<SelectedNodeSnapshotDto>,
     pub supporting: Vec<SelectedNodeSnapshotDto>,
     pub comparisons: Vec<AnalysisSwingComparisonDto>,
+}
+
+fn selected_markup(node: &SgfNode, board_width: u8, board_height: u8) -> Vec<app_model::SgfMarkupDto> {
+    use app_model::{PointDto, SgfMarkupDto};
+    let mut markup = Vec::new();
+    for property in &node.properties {
+        for value in &property.values {
+            if property.key == "LB" {
+                if let Some((raw_point, text)) = value.split_once(':') {
+                    if let Ok(point) = crate::parse_point(raw_point, board_width, board_height) {
+                        markup.push(SgfMarkupDto::Label {
+                            point: PointDto {
+                                x: point.x,
+                                y: point.y,
+                            },
+                            text: text.to_string(),
+                        });
+                    }
+                }
+            } else if matches!(property.key.as_str(), "CR" | "SQ" | "MA" | "TR") {
+                if let Ok(points) = crate::parse_setup_points(value, board_width, board_height) {
+                    for point in points {
+                        let point = PointDto {
+                            x: point.x,
+                            y: point.y,
+                        };
+                        markup.push(match property.key.as_str() {
+                            "CR" => SgfMarkupDto::Circle { point },
+                            "SQ" => SgfMarkupDto::Square { point },
+                            "MA" => SgfMarkupDto::Cross { point },
+                            _ => SgfMarkupDto::Triangle { point },
+                        });
+                    }
+                }
+            }
+        }
+    }
+    markup
 }
 
 impl CurrentSgfDocument {
@@ -52,19 +395,59 @@ impl CurrentSgfDocument {
         NodePath { indices }
     }
 
+    pub fn scoring_handicap(&self) -> Result<Option<u32>, CurrentGameError> {
+        let root = self.root()?;
+        let property = |key| root.properties.iter().find(|p| p.key == key);
+        if let Some(explicit) = property("HA")
+            .and_then(|p| p.values.first())
+            .and_then(|v| v.parse::<u32>().ok())
+        {
+            return Ok(Some(explicit));
+        }
+        if !property("PL")
+            .and_then(|p| p.values.first())
+            .is_some_and(|v| v == "W")
+            || root
+                .properties
+                .iter()
+                .any(|p| matches!(p.key.as_str(), "AW" | "AE" | "B" | "W"))
+        {
+            return Ok(None);
+        }
+        let mut points = std::collections::HashSet::new();
+        for value in root
+            .properties
+            .iter()
+            .filter(|p| p.key == "AB")
+            .flat_map(|p| &p.values)
+        {
+            points.extend(
+                crate::parse_setup_points(value, self.document.board_width, self.document.board_height)
+                    .map_err(|error| CurrentGameError {
+                        kind: CurrentGameErrorKind::MalformedSgf,
+                        message: error.to_string(),
+                    })?,
+            );
+        }
+        Ok((!points.is_empty()).then_some(points.len() as u32))
+    }
+
     pub fn snapshot(&self, path: &NodePath) -> Result<SelectedNodeSnapshotDto, CurrentGameError> {
         let nodes = self.nodes_on_path(path)?;
         let selected = *nodes.last().expect("path walk includes the root");
-        let position = self.replay_nodes(&nodes)?;
+        let (position, stone_move_numbers) = self.replay_nodes(&nodes)?;
         let projected = crate::analysis::project_node_analysis(
             selected,
-            self.document.board_size,
+            self.document.board_width,
+            self.document.board_height,
             path.indices.is_empty(),
         );
         Ok(SelectedNodeSnapshotDto {
             path: path.clone(),
             position: position.clone(),
+            stone_move_numbers,
             personal_comment: personal_comment(selected),
+            markup: selected_markup(selected, self.document.board_width, self.document.board_height),
             generated_information: None,
             primary_analysis: projected
                 .primary
@@ -243,8 +626,20 @@ impl CurrentSgfDocument {
         self.document.komi
     }
 
-    pub fn board_size(&self) -> u8 {
-        self.document.board_size
+    pub fn board_width(&self) -> u8 {
+        self.document.board_width
+    }
+
+    pub fn board_height(&self) -> u8 {
+        self.document.board_height
+    }
+
+    pub fn result(&self) -> Option<&str> {
+        self.root()
+            .ok()
+            .and_then(|root| property_values(root, "RE"))
+            .and_then(|values| values.first())
+            .map(String::as_str)
     }
 
     pub fn rules(&self) -> String {
@@ -264,24 +659,161 @@ impl CurrentSgfDocument {
     pub fn tree(&self) -> Result<SgfTreeNodeDto, CurrentGameError> {
         Ok(tree_dto(self.root()?))
     }
+    pub fn set_metadata_with_history(
+        &mut self,
+        selected_before: &NodePath,
+        black_name: &str,
+        white_name: &str,
+        komi: f32,
+    ) -> Result<DocumentEditOutcome, CurrentGameError> {
+        if !komi.is_finite() {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::MalformedSgf,
+                message: "komi must be finite".into(),
+            });
+        }
+        let before_snapshot = self.snapshot(selected_before)?;
+        let root = self.root()?;
+        let stored_name = |key| {
+            property_values(root, key)
+                .and_then(|values| values.first())
+                .map(String::as_str)
+                .unwrap_or("")
+        };
+        let black_changed = stored_name("PB") != black_name;
+        let white_changed = stored_name("PW") != white_name;
+        let previous_komi = self.document.komi;
+        let komi_changed = previous_komi != komi;
+        if !black_changed && !white_changed && !komi_changed {
+            return Ok(DocumentEditOutcome {
+                snapshot: before_snapshot,
+                edit: None,
+            });
+        }
+        let before = metadata_properties(root);
+        let mut desired = before.clone();
+        for (key, changed) in [("PB", black_changed), ("PW", white_changed), ("KM", komi_changed)] {
+            if changed {
+                let value = match key {
+                    "PB" => black_name.to_owned(),
+                    "PW" => white_name.to_owned(),
+                    _ => komi.to_string(),
+                };
+                let index = before
+                    .iter()
+                    .find(|(_, property)| property.key == key)
+                    .map(|(index, _)| *index)
+                    .unwrap_or(root.properties.len() + desired.len());
+                desired.retain(|(_, property)| property.key != key);
+                desired.push((
+                    index,
+                    SgfProperty {
+                        key: key.into(),
+                        values: vec![value],
+                    },
+                ));
+            }
+        }
+        let analysis = if komi_changed {
+            Some(take_analysis(
+                self.document.root.as_mut().expect("validated root"),
+            ))
+        } else {
+            None
+        };
+        let root = self.document.root.as_mut().expect("validated root");
+        restore_metadata(&mut root.properties, &desired);
+        self.document.komi = komi;
+        Ok(DocumentEditOutcome {
+            snapshot: self.snapshot(selected_before)?,
+            edit: Some(SgfDocumentEdit {
+                reversal: DocumentReversal::SetMetadata {
+                    properties: before,
+                    komi: previous_komi,
+                    analysis,
+                },
+                selected_before: selected_before.clone(),
+                selected_after: selected_before.clone(),
+            }),
+        })
+    }
+
+    pub fn set_result_with_history(
+        &mut self,
+        selected_before: &NodePath,
+        result: &str,
+    ) -> Result<DocumentEditOutcome, CurrentGameError> {
+        validate_result(result)?;
+        let before_snapshot = self.snapshot(selected_before)?;
+        let root = self.root()?;
+        let before = result_properties(root);
+        let same = before.len() == 1 && before[0].1.values.len() == 1 && before[0].1.values[0] == result;
+        if same {
+            return Ok(DocumentEditOutcome {
+                snapshot: before_snapshot,
+                edit: None,
+            });
+        }
+        let index = before
+            .first()
+            .map(|(index, _)| *index)
+            .unwrap_or_else(|| root.properties.len());
+        let desired = vec![(
+            index,
+            SgfProperty {
+                key: "RE".into(),
+                values: vec![result.to_owned()],
+            },
+        )];
+        let previous_result = self.document.result.clone();
+        let root = self.document.root.as_mut().expect("validated root");
+        replace_result_properties(root, &desired);
+        self.document.result = Some(result.to_owned());
+        Ok(DocumentEditOutcome {
+            snapshot: self.snapshot(selected_before)?,
+            edit: Some(SgfDocumentEdit {
+                reversal: DocumentReversal::SetResult {
+                    properties: before,
+                    result: previous_result,
+                },
+                selected_before: selected_before.clone(),
+                selected_after: selected_before.clone(),
+            }),
+        })
+    }
 
     pub fn play(
         &mut self,
         path: &NodePath,
         vertex: MoveVertex,
     ) -> Result<SelectedNodeSnapshotDto, CurrentGameError> {
+        Ok(self.play_with_history(path, path, vertex)?.snapshot)
+    }
+
+    pub fn play_with_history(
+        &mut self,
+        selected_before: &NodePath,
+        path: &NodePath,
+        vertex: MoveVertex,
+    ) -> Result<DocumentEditOutcome, CurrentGameError> {
+        if selected_before != path {
+            self.snapshot(selected_before)?;
+        }
         let to_play = self.snapshot(path)?.position.to_play;
         if let Some(index) = self.existing_child_index(path, to_play, &vertex)? {
             let mut indices = path.indices.clone();
             indices.push(index);
-            return self.snapshot(&NodePath { indices });
+            return Ok(DocumentEditOutcome {
+                snapshot: self.snapshot(&NodePath { indices })?,
+                edit: None,
+            });
         }
 
         let mut board = self.board_after(path)?;
         board
             .play(to_core_color(to_play), to_core_vertex(&vertex))
             .map_err(rule_error)?;
-        let encoded = serialize_vertex(&vertex, self.document.board_size)?;
+        let encoded = serialize_vertex(&vertex, self.document.board_width, self.document.board_height)?;
         let index = {
             let parent = self.node_at_mut(path)?;
             parent.children.push(SgfNode {
@@ -294,11 +826,22 @@ impl CurrentSgfDocument {
                 }],
                 children: Vec::new(),
             });
-            u32::try_from(parent.children.len() - 1).expect("child index fits u32")
+            parent.children.len() - 1
         };
         let mut indices = path.indices.clone();
-        indices.push(index);
-        self.snapshot(&NodePath { indices })
+        indices.push(u32::try_from(index).expect("child index fits u32"));
+        let selected_after = NodePath { indices };
+        Ok(DocumentEditOutcome {
+            snapshot: self.snapshot(&selected_after)?,
+            edit: Some(SgfDocumentEdit {
+                reversal: DocumentReversal::RemoveSubtree {
+                    parent: path.clone(),
+                    index,
+                },
+                selected_before: selected_before.clone(),
+                selected_after,
+            }),
+        })
     }
 
     pub fn set_personal_comment(
@@ -306,8 +849,224 @@ impl CurrentSgfDocument {
         path: &NodePath,
         comment: &str,
     ) -> Result<SelectedNodeSnapshotDto, CurrentGameError> {
+        Ok(self
+            .set_personal_comment_with_history(path, path, comment)?
+            .snapshot)
+    }
+
+    pub fn set_personal_comment_with_history(
+        &mut self,
+        selected_before: &NodePath,
+        path: &NodePath,
+        comment: &str,
+    ) -> Result<DocumentEditOutcome, CurrentGameError> {
+        if selected_before != path {
+            self.snapshot(selected_before)?;
+        }
+        let before_snapshot = self.snapshot(path)?;
+        let before = comment_properties(self.node_mut(path)?);
         apply_personal_comment(self.node_mut(path)?, comment);
-        self.snapshot(path)
+        let after = comment_properties(self.node_mut(path)?);
+        if before == after {
+            return Ok(DocumentEditOutcome {
+                snapshot: before_snapshot,
+                edit: None,
+            });
+        }
+        Ok(DocumentEditOutcome {
+            snapshot: self.snapshot(path)?,
+            edit: Some(SgfDocumentEdit {
+                reversal: DocumentReversal::SetComment {
+                    path: path.clone(),
+                    properties: before,
+                },
+                selected_before: selected_before.clone(),
+                selected_after: path.clone(),
+            }),
+        })
+    }
+
+    pub fn apply_root_setup_with_history(
+        &mut self,
+        selected_before: &NodePath,
+        stones: &[StoneDto],
+        to_play: PlayerColor,
+    ) -> Result<DocumentEditOutcome, CurrentGameError> {
+        let root_path = NodePath::default();
+        self.snapshot(selected_before)?;
+        if !selected_before.indices.is_empty() || !self.root()?.children.is_empty() {
+            return Err(root_setup_error(
+                "Direct setup requires a childless selected root.",
+            ));
+        }
+        validate_setup_stones(stones, self.document.board_width, self.document.board_height)?;
+        let before = self.snapshot(&root_path)?;
+        if same_setup(&before.position.stones, stones) && before.position.to_play == to_play {
+            return Ok(DocumentEditOutcome {
+                snapshot: before,
+                edit: None,
+            });
+        }
+        let properties = root_setup_properties(self.root()?);
+        replace_root_setup_properties(self.node_mut(&root_path)?, stones, to_play, false);
+        Ok(DocumentEditOutcome {
+            snapshot: self.snapshot(&root_path)?,
+            edit: Some(SgfDocumentEdit {
+                reversal: DocumentReversal::RootSetup {
+                    properties,
+                    children: None,
+                },
+                selected_before: selected_before.clone(),
+                selected_after: root_path,
+            }),
+        })
+    }
+
+    pub fn convert_to_root_setup_with_history(
+        &mut self,
+        selected_before: &NodePath,
+    ) -> Result<DocumentEditOutcome, CurrentGameError> {
+        let position = self.snapshot(selected_before)?.position;
+        let original_position = self.snapshot(&NodePath::default())?.position;
+        let root_path = NodePath::default();
+        let root = self.root()?;
+        if root.children.is_empty() && !root.properties.iter().any(|p| p.key == "B" || p.key == "W") {
+            return Ok(DocumentEditOutcome {
+                snapshot: self.snapshot(&root_path)?,
+                edit: None,
+            });
+        }
+        let properties = root_setup_properties(root);
+        let root = self.node_mut(&root_path)?;
+        let children = std::mem::take(&mut root.children);
+        replace_root_setup_properties(
+            root,
+            &position.stones,
+            position.to_play,
+            same_setup(&position.stones, &original_position.stones)
+                && position.to_play == original_position.to_play,
+        );
+        Ok(DocumentEditOutcome {
+            snapshot: self.snapshot(&root_path)?,
+            edit: Some(SgfDocumentEdit {
+                reversal: DocumentReversal::RootSetup {
+                    properties,
+                    children: Some(children),
+                },
+                selected_before: selected_before.clone(),
+                selected_after: root_path,
+            }),
+        })
+    }
+
+    pub fn edit_markup_with_history(
+        &mut self,
+        selected_before: &NodePath,
+        path: &NodePath,
+        action: SgfMarkupActionDto,
+    ) -> Result<DocumentEditOutcome, CurrentGameError> {
+        self.snapshot(selected_before)?;
+        let before_snapshot = self.snapshot(path)?;
+        if let SgfMarkupActionDto::Point { point, .. } = &action {
+            if point.x >= self.document.board_width || point.y >= self.document.board_height {
+                return Err(CurrentGameError {
+                    kind: CurrentGameErrorKind::InvalidNodePath,
+                    message: "markup point is outside the board".into(),
+                });
+            }
+            if matches!(action, SgfMarkupActionDto::Point { tool: SgfMarkupToolDto::Label { ref text }, .. } if text.is_empty())
+            {
+                return Err(CurrentGameError {
+                    kind: CurrentGameErrorKind::InvalidNodePath,
+                    message: "label text must not be empty; use Erase instead".into(),
+                });
+            }
+        }
+        let before = markup_properties(self.node_mut(path)?);
+        let width = self.document.board_width;
+        let height = self.document.board_height;
+        let label = match &action {
+            SgfMarkupActionDto::Point { point, tool } => match tool {
+                SgfMarkupToolDto::Letters => Some(next_markup_label(
+                    self.node_mut(path)?,
+                    *point,
+                    true,
+                    width,
+                    height,
+                )),
+                SgfMarkupToolDto::Numbers => Some(next_markup_label(
+                    self.node_mut(path)?,
+                    *point,
+                    false,
+                    width,
+                    height,
+                )),
+                SgfMarkupToolDto::Label { text } => Some(text.clone()),
+                _ => None,
+            },
+            SgfMarkupActionDto::Clear => None,
+        };
+        if let SgfMarkupActionDto::Point { point, tool } = &action {
+            let mut matching = before_snapshot.markup.iter().filter(|mark| match mark {
+                app_model::SgfMarkupDto::Label { point: at, .. }
+                | app_model::SgfMarkupDto::Circle { point: at }
+                | app_model::SgfMarkupDto::Square { point: at }
+                | app_model::SgfMarkupDto::Cross { point: at }
+                | app_model::SgfMarkupDto::Triangle { point: at } => at == point,
+            });
+            let first = matching.next();
+            let exactly_one = first.is_some() && matching.next().is_none();
+            if first.is_none() && matches!(tool, SgfMarkupToolDto::Erase) {
+                return Ok(DocumentEditOutcome {
+                    snapshot: before_snapshot,
+                    edit: None,
+                });
+            }
+            if exactly_one
+                && matches!(first.unwrap(), app_model::SgfMarkupDto::Label { text, .. }
+                if label.as_deref() == Some(text.as_str()))
+            {
+                return Ok(DocumentEditOutcome {
+                    snapshot: before_snapshot,
+                    edit: None,
+                });
+            }
+            if exactly_one
+                && matches!(
+                    (first.unwrap(), tool),
+                    (app_model::SgfMarkupDto::Circle { .. }, SgfMarkupToolDto::Circle)
+                        | (app_model::SgfMarkupDto::Square { .. }, SgfMarkupToolDto::Square)
+                        | (app_model::SgfMarkupDto::Cross { .. }, SgfMarkupToolDto::Cross)
+                        | (
+                            app_model::SgfMarkupDto::Triangle { .. },
+                            SgfMarkupToolDto::Triangle
+                        )
+                )
+            {
+                return Ok(DocumentEditOutcome {
+                    snapshot: before_snapshot,
+                    edit: None,
+                });
+            }
+        }
+        apply_markup(self.node_mut(path)?, action, width, height, label);
+        if before == markup_properties(self.node_mut(path)?) {
+            return Ok(DocumentEditOutcome {
+                snapshot: before_snapshot,
+                edit: None,
+            });
+        }
+        Ok(DocumentEditOutcome {
+            snapshot: self.snapshot(path)?,
+            edit: Some(SgfDocumentEdit {
+                reversal: DocumentReversal::SetMarkup {
+                    path: path.clone(),
+                    properties: before,
+                },
+                selected_before: selected_before.clone(),
+                selected_after: path.clone(),
+            }),
+        })
     }
 
     pub fn replace_primary_analysis(
@@ -315,27 +1074,202 @@ impl CurrentSgfDocument {
         path: &NodePath,
         payload: &crate::SgfAnalysisPayload,
     ) -> Result<(SelectedNodeSnapshotDto, bool), CurrentGameError> {
-        let board_size = self.document.board_size;
+        let board_width = self.document.board_width;
+        let board_height = self.document.board_height;
         let is_root = path.indices.is_empty();
-        let changed =
-            crate::analysis::replace_primary_analysis(self.node_mut(path)?, payload, board_size, is_root);
+        let changed = crate::analysis::replace_primary_analysis(
+            self.node_mut(path)?,
+            payload,
+            board_width,
+            board_height,
+            is_root,
+        );
         Ok((self.snapshot(path)?, changed))
     }
 
     pub fn remove_variation(&mut self, path: &NodePath) -> Result<NodePath, CurrentGameError> {
+        Ok(self.remove_variation_with_history(path, path)?.snapshot.path)
+    }
+
+    pub fn remove_variation_with_history(
+        &mut self,
+        selected_before: &NodePath,
+        path: &NodePath,
+    ) -> Result<DocumentEditOutcome, CurrentGameError> {
         if path.indices.is_empty() {
             return Err(CurrentGameError {
                 kind: CurrentGameErrorKind::RootRemoval,
                 message: "cannot remove the root".to_string(),
             });
         }
+        self.snapshot(selected_before)?;
         let _ = self.nodes_on_path(path)?;
-        let child_index = *path.indices.last().expect("non-root path") as usize;
-        let parent_path = NodePath {
+        let index = *path.indices.last().expect("non-root path") as usize;
+        let parent = NodePath {
             indices: path.indices[..path.indices.len() - 1].to_vec(),
         };
-        self.node_mut(&parent_path)?.children.remove(child_index);
-        Ok(parent_path)
+        self.snapshot(&parent)?;
+        let subtree = self.node_mut(&parent)?.children.remove(index);
+        Ok(DocumentEditOutcome {
+            snapshot: self.snapshot(&parent)?,
+            edit: Some(SgfDocumentEdit {
+                reversal: DocumentReversal::InsertSubtree {
+                    parent: parent.clone(),
+                    index,
+                    subtree,
+                },
+                selected_before: selected_before.clone(),
+                selected_after: parent,
+            }),
+        })
+    }
+
+    pub fn promote_to_main_with_history(
+        &mut self,
+        selected_before: &NodePath,
+        path: &NodePath,
+    ) -> Result<DocumentEditOutcome, CurrentGameError> {
+        self.snapshot(selected_before)?;
+        self.snapshot(path)?;
+        let mut selected_after = path.clone();
+        let mut moves = Vec::new();
+        for depth in 0..path.indices.len() {
+            let index = path.indices[depth] as usize;
+            if index == 0 {
+                continue;
+            }
+            let parent = NodePath {
+                indices: selected_after.indices[..depth].to_vec(),
+            };
+            let children = &mut self.node_mut(&parent)?.children;
+            let promoted = children.remove(index);
+            children.insert(0, promoted);
+            moves.push((parent, index));
+            selected_after.indices[depth] = 0;
+        }
+        let edit = (!moves.is_empty()).then_some(SgfDocumentEdit {
+            reversal: DocumentReversal::PromoteMainline {
+                moves,
+                to_front: false,
+            },
+            selected_before: selected_before.clone(),
+            selected_after: selected_after.clone(),
+        });
+        Ok(DocumentEditOutcome {
+            snapshot: self.snapshot(&selected_after)?,
+            edit,
+        })
+    }
+
+    fn apply_reversal(&mut self, reversal: &mut DocumentReversal) -> Result<bool, CurrentGameError> {
+        match reversal {
+            DocumentReversal::SetComment { path, properties } => {
+                let node = self.node_mut(path)?;
+                let inverse = comment_properties(node);
+                replace_comment_properties(node, properties);
+                *properties = inverse;
+                Ok(false)
+            }
+            DocumentReversal::SetMetadata {
+                properties,
+                komi,
+                analysis,
+            } => {
+                let root = self.document.root.as_mut().expect("validated root");
+                let previous = metadata_properties(root);
+                restore_metadata(&mut root.properties, properties);
+                *properties = previous;
+                std::mem::swap(komi, &mut self.document.komi);
+                if let Some(saved) = analysis {
+                    let current = take_analysis(root);
+                    restore_analysis(root, saved);
+                    *saved = current;
+                }
+                Ok(analysis.is_some())
+            }
+            DocumentReversal::SetMarkup { path, properties } => {
+                let node = self.node_mut(path)?;
+                let inverse = markup_properties(node);
+                replace_markup_properties(node, properties);
+                *properties = inverse;
+                Ok(false)
+            }
+            DocumentReversal::SetResult { properties, result } => {
+                let root = self.document.root.as_mut().expect("validated root");
+                let previous = result_properties(root);
+                replace_result_properties(root, properties);
+                *properties = previous;
+                std::mem::swap(result, &mut self.document.result);
+                Ok(false)
+            }
+            DocumentReversal::RemoveSubtree { parent, index } => {
+                let parent_path = parent.clone();
+                let child_index = *index;
+                let node = self.node_mut(&parent_path)?;
+                if child_index >= node.children.len() {
+                    return Err(invalid_history_path());
+                }
+                let subtree = node.children.remove(child_index);
+                *reversal = DocumentReversal::InsertSubtree {
+                    parent: parent_path,
+                    index: child_index,
+                    subtree,
+                };
+                Ok(true)
+            }
+            DocumentReversal::InsertSubtree {
+                parent,
+                index,
+                subtree,
+            } => {
+                let parent_path = parent.clone();
+                let child_index = *index;
+                let node = self.node_mut(&parent_path)?;
+                if child_index > node.children.len() {
+                    return Err(invalid_history_path());
+                }
+                let inserted = std::mem::replace(
+                    subtree,
+                    SgfNode {
+                        properties: Vec::new(),
+                        children: Vec::new(),
+                    },
+                );
+                node.children.insert(child_index, inserted);
+                *reversal = DocumentReversal::RemoveSubtree {
+                    parent: parent_path,
+                    index: child_index,
+                };
+                Ok(true)
+            }
+            DocumentReversal::PromoteMainline { moves, to_front } => {
+                if *to_front {
+                    for (parent, index) in moves.iter() {
+                        let children = &mut self.node_mut(parent)?.children;
+                        let moved = children.remove(*index);
+                        children.insert(0, moved);
+                    }
+                } else {
+                    for (parent, index) in moves.iter().rev() {
+                        let children = &mut self.node_mut(parent)?.children;
+                        let moved = children.remove(0);
+                        children.insert(*index, moved);
+                    }
+                }
+                *to_front = !*to_front;
+                Ok(true)
+            }
+            DocumentReversal::RootSetup { properties, children } => {
+                let root = self.node_mut(&NodePath::default())?;
+                let inverse = root_setup_properties(root);
+                restore_root_setup_properties(root, properties);
+                *properties = inverse;
+                if let Some(children) = children {
+                    std::mem::swap(&mut root.children, children);
+                }
+                Ok(true)
+            }
+        }
     }
 
     fn root(&self) -> Result<&SgfNode, CurrentGameError> {
@@ -378,10 +1312,16 @@ impl CurrentSgfDocument {
         Ok(nodes)
     }
 
-    fn replay_nodes(&self, nodes: &[&SgfNode]) -> Result<PositionDto, CurrentGameError> {
-        let mut board = Board::new(self.document.board_size).map_err(|_| CurrentGameError {
-            kind: CurrentGameErrorKind::UnsupportedBoardSize,
-            message: SgfError::UnsupportedBoardSize(self.document.board_size).to_string(),
+    fn replay_nodes(&self, nodes: &[&SgfNode]) -> Result<(PositionDto, Vec<MoveDto>), CurrentGameError> {
+        let mut board = Board::new(self.document.board_width, self.document.board_height).map_err(|_| {
+            CurrentGameError {
+                kind: CurrentGameErrorKind::UnsupportedBoardSize,
+                message: SgfError::UnsupportedBoardDimensions {
+                    width: self.document.board_width,
+                    height: self.document.board_height,
+                }
+                .to_string(),
+            }
         })?;
         let mut captures_black = 0u32;
         let mut captures_white = 0u32;
@@ -389,9 +1329,31 @@ impl CurrentSgfDocument {
         let mut last_move = None;
         let mut move_number = 0u32;
         let mut errors = Vec::new();
+        let mut stone_sources: Vec<Option<MoveDto>> =
+            vec![None; self.document.board_width as usize * self.document.board_height as usize];
 
         for node in nodes {
-            apply_setup_properties(&mut board, node, self.document.board_size)?;
+            apply_setup_properties(
+                &mut board,
+                node,
+                self.document.board_width,
+                self.document.board_height,
+            )?;
+            for property in &node.properties {
+                if !matches!(property.key.as_str(), "AB" | "AW" | "AE") {
+                    continue;
+                }
+                for value in &property.values {
+                    for point in crate::parse_setup_points(
+                        value,
+                        self.document.board_width,
+                        self.document.board_height,
+                    )? {
+                        stone_sources
+                            [point.y as usize * self.document.board_width as usize + point.x as usize] = None;
+                    }
+                }
+            }
             if let Some(color) = player_to_play(node)? {
                 to_play = color;
             }
@@ -408,14 +1370,26 @@ impl CurrentSgfDocument {
                 move_number += 1;
                 let sgf_move = MoveDto {
                     color,
-                    vertex: parse_vertex(raw, self.document.board_size)?,
+                    vertex: parse_vertex(raw, self.document.board_width, self.document.board_height)?,
                     move_number,
                 };
                 match board.play(to_core_color(sgf_move.color), to_core_vertex(&sgf_move.vertex)) {
-                    Ok(outcome) => match sgf_move.color {
-                        PlayerColor::Black => captures_black += outcome.captured.len() as u32,
-                        PlayerColor::White => captures_white += outcome.captured.len() as u32,
-                    },
+                    Ok(outcome) => {
+                        match sgf_move.color {
+                            PlayerColor::Black => captures_black += outcome.captured.len() as u32,
+                            PlayerColor::White => captures_white += outcome.captured.len() as u32,
+                        }
+                        for captured in outcome.captured {
+                            let idx = captured.y as usize * self.document.board_width as usize
+                                + captured.x as usize;
+                            stone_sources[idx] = None;
+                        }
+                        if let MoveVertex::Point(point) = &sgf_move.vertex {
+                            let idx =
+                                point.y as usize * self.document.board_width as usize + point.x as usize;
+                            stone_sources[idx] = Some(sgf_move.clone());
+                        }
+                    }
                     Err(error) => errors.push(format!("{error}")),
                 }
                 to_play = player_to_play(node)?.unwrap_or_else(|| sgf_move.color.opponent());
@@ -423,18 +1397,24 @@ impl CurrentSgfDocument {
             }
         }
 
-        Ok(PositionDto {
-            board_size: self.document.board_size,
-            move_number,
-            to_play,
-            stones: stones_from_board(&board),
-            captures_black,
-            captures_white,
-            last_move,
-            errors,
-        })
-    }
+        let mut stone_move_numbers: Vec<MoveDto> = stone_sources.into_iter().flatten().collect();
+        stone_move_numbers.sort_by_key(|m| m.move_number);
 
+        Ok((
+            PositionDto {
+                board_width: self.document.board_width,
+                board_height: self.document.board_height,
+                move_number,
+                to_play,
+                stones: stones_from_board(&board),
+                captures_black,
+                captures_white,
+                last_move,
+                errors,
+            },
+            stone_move_numbers,
+        ))
+    }
     fn existing_child_index(
         &self,
         path: &NodePath,
@@ -455,7 +1435,7 @@ impl CurrentSgfDocument {
                     continue;
                 }
                 let raw = property.values.first().ok_or(SgfError::Malformed)?;
-                if &parse_vertex(raw, self.document.board_size)? == vertex {
+                if &parse_vertex(raw, self.document.board_width, self.document.board_height)? == vertex {
                     return Ok(Some(u32::try_from(index).expect("child index fits u32")));
                 }
             }
@@ -465,12 +1445,23 @@ impl CurrentSgfDocument {
 
     fn board_after(&self, path: &NodePath) -> Result<Board, CurrentGameError> {
         let nodes = self.nodes_on_path(path)?;
-        let mut board = Board::new(self.document.board_size).map_err(|_| CurrentGameError {
-            kind: CurrentGameErrorKind::UnsupportedBoardSize,
-            message: SgfError::UnsupportedBoardSize(self.document.board_size).to_string(),
+        let mut board = Board::new(self.document.board_width, self.document.board_height).map_err(|_| {
+            CurrentGameError {
+                kind: CurrentGameErrorKind::UnsupportedBoardSize,
+                message: SgfError::UnsupportedBoardDimensions {
+                    width: self.document.board_width,
+                    height: self.document.board_height,
+                }
+                .to_string(),
+            }
         })?;
         for node in nodes {
-            apply_setup_properties(&mut board, node, self.document.board_size)?;
+            apply_setup_properties(
+                &mut board,
+                node,
+                self.document.board_width,
+                self.document.board_height,
+            )?;
             for property in &node.properties {
                 let color = match property.key.as_str() {
                     "B" => Some(PlayerColor::Black),
@@ -481,7 +1472,7 @@ impl CurrentSgfDocument {
                     continue;
                 };
                 let raw = property.values.first().ok_or(SgfError::Malformed)?;
-                let played = parse_vertex(raw, self.document.board_size)?;
+                let played = parse_vertex(raw, self.document.board_width, self.document.board_height)?;
                 let _ = board.play(to_core_color(color), to_core_vertex(&played));
             }
         }
@@ -513,6 +1504,7 @@ fn rule_error(error: RuleError) -> CurrentGameError {
         RuleError::Ko => CurrentGameErrorKind::SimpleKo,
         RuleError::InvalidBoardSize => CurrentGameErrorKind::UnsupportedBoardSize,
         RuleError::OutOfBounds => CurrentGameErrorKind::OccupiedPoint,
+        RuleError::InvalidScoringPoint => CurrentGameErrorKind::InvalidNodePath,
     };
     CurrentGameError {
         kind,
@@ -523,7 +1515,7 @@ fn rule_error(error: RuleError) -> CurrentGameError {
 impl From<SgfError> for CurrentGameError {
     fn from(error: SgfError) -> Self {
         match error {
-            SgfError::UnsupportedBoardSize(_) => CurrentGameError {
+            SgfError::UnsupportedBoardDimensions { .. } => CurrentGameError {
                 kind: CurrentGameErrorKind::UnsupportedBoardSize,
                 message: error.to_string(),
             },
@@ -532,6 +1524,363 @@ impl From<SgfError> for CurrentGameError {
                 message: error.to_string(),
             },
         }
+    }
+}
+
+fn invalid_history_path() -> CurrentGameError {
+    CurrentGameError {
+        kind: CurrentGameErrorKind::InvalidNodePath,
+        message: "document history no longer matches the current tree".to_string(),
+    }
+}
+fn metadata_properties(node: &SgfNode) -> Vec<(usize, SgfProperty)> {
+    node.properties
+        .iter()
+        .enumerate()
+        .filter(|(_, property)| matches!(property.key.as_str(), "PB" | "PW" | "KM"))
+        .map(|(index, property)| (index, property.clone()))
+        .collect()
+}
+
+fn restore_metadata(properties: &mut Vec<SgfProperty>, desired: &[(usize, SgfProperty)]) {
+    properties.retain(|property| !matches!(property.key.as_str(), "PB" | "PW" | "KM"));
+    let mut ordered = desired.to_vec();
+    ordered.sort_by_key(|(index, _)| *index);
+    for (index, property) in ordered {
+        properties.insert(index.min(properties.len()), property);
+    }
+}
+
+fn result_properties(node: &SgfNode) -> Vec<(usize, SgfProperty)> {
+    node.properties
+        .iter()
+        .enumerate()
+        .filter(|(_, property)| property.key == "RE")
+        .map(|(index, property)| (index, property.clone()))
+        .collect()
+}
+
+fn replace_result_properties(node: &mut SgfNode, desired: &[(usize, SgfProperty)]) {
+    node.properties.retain(|property| property.key != "RE");
+    let mut ordered = desired.to_vec();
+    ordered.sort_by_key(|(index, _)| *index);
+    for (index, property) in ordered {
+        node.properties.insert(index.min(node.properties.len()), property);
+    }
+}
+
+fn validate_result(result: &str) -> Result<(), CurrentGameError> {
+    if result == "0" {
+        return Ok(());
+    }
+    let Some(rest) = result.strip_prefix("B+").or_else(|| result.strip_prefix("W+")) else {
+        return Err(CurrentGameError {
+            kind: CurrentGameErrorKind::MalformedSgf,
+            message: format!("result must be 0, B+<n>, or W+<n>; found: {result}"),
+        });
+    };
+    if rest.is_empty() {
+        return Err(CurrentGameError {
+            kind: CurrentGameErrorKind::MalformedSgf,
+            message: "result margin cannot be empty".into(),
+        });
+    }
+    let mut dot_count = 0;
+    let mut digit_count = 0;
+    for c in rest.chars() {
+        if c.is_ascii_digit() {
+            digit_count += 1;
+        } else if c == '.' {
+            dot_count += 1;
+        } else {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::MalformedSgf,
+                message: format!("invalid character in result margin: {c}"),
+            });
+        }
+    }
+    if digit_count == 0 || dot_count > 1 || rest.starts_with('.') || rest.ends_with('.') {
+        return Err(CurrentGameError {
+            kind: CurrentGameErrorKind::MalformedSgf,
+            message: format!("invalid result margin format: {rest}"),
+        });
+    }
+    let Ok(val) = rest.parse::<f64>() else {
+        return Err(CurrentGameError {
+            kind: CurrentGameErrorKind::MalformedSgf,
+            message: format!("invalid result margin: {rest}"),
+        });
+    };
+    if !val.is_finite() || val < 0.0 {
+        return Err(CurrentGameError {
+            kind: CurrentGameErrorKind::MalformedSgf,
+            message: "result margin must be finite and non-negative".into(),
+        });
+    }
+    Ok(())
+}
+
+fn take_analysis(root: &mut SgfNode) -> SavedAnalysisProperties {
+    fn visit(
+        node: &mut SgfNode,
+        path: &mut Vec<u32>,
+        removed: &mut SavedAnalysisProperties,
+    ) {
+        let properties: Vec<_> = node
+            .properties
+            .iter()
+            .enumerate()
+            .filter(|(_, property)| matches!(property.key.as_str(), "LZ" | "LZ2" | "LZOP" | "LZOP2"))
+            .map(|(index, property)| (index, property.clone()))
+            .collect();
+        if !properties.is_empty() {
+            node.properties
+                .retain(|property| !matches!(property.key.as_str(), "LZ" | "LZ2" | "LZOP" | "LZOP2"));
+            removed.push((
+                NodePath {
+                    indices: path.clone(),
+                },
+                properties,
+            ));
+        }
+        for (index, child) in node.children.iter_mut().enumerate() {
+            path.push(u32::try_from(index).expect("child index fits u32"));
+            visit(child, path, removed);
+            path.pop();
+        }
+    }
+    let mut removed = Vec::new();
+    visit(root, &mut Vec::new(), &mut removed);
+    removed
+}
+
+fn restore_analysis(root: &mut SgfNode, saved: &[(NodePath, Vec<(usize, SgfProperty)>)]) {
+    for (path, properties) in saved {
+        let mut node = &mut *root;
+        for &index in &path.indices {
+            node = &mut node.children[index as usize];
+        }
+        for (index, property) in properties {
+            node.properties
+                .insert((*index).min(node.properties.len()), property.clone());
+        }
+    }
+}
+
+fn root_setup_error(message: &str) -> CurrentGameError {
+    CurrentGameError {
+        kind: CurrentGameErrorKind::InvalidNodePath,
+        message: message.into(),
+    }
+}
+
+fn is_root_setup_property(key: &str) -> bool {
+    matches!(
+        key,
+        "AB" | "AW" | "AE" | "PL" | "B" | "W" | "LZ" | "LZ2" | "LZOP" | "LZOP2"
+    )
+}
+
+fn root_setup_properties(root: &SgfNode) -> Vec<(usize, SgfProperty)> {
+    root.properties
+        .iter()
+        .enumerate()
+        .filter(|(_, property)| is_root_setup_property(&property.key))
+        .map(|(index, property)| (index, property.clone()))
+        .collect()
+}
+
+fn restore_root_setup_properties(root: &mut SgfNode, properties: &[(usize, SgfProperty)]) {
+    root.properties
+        .retain(|property| !is_root_setup_property(&property.key));
+    for (index, property) in properties {
+        root.properties
+            .insert((*index).min(root.properties.len()), property.clone());
+    }
+}
+
+fn replace_root_setup_properties(
+    root: &mut SgfNode,
+    stones: &[StoneDto],
+    to_play: PlayerColor,
+    retain_analysis: bool,
+) {
+    root.properties.retain(|property| {
+        !is_root_setup_property(&property.key)
+            || retain_analysis && matches!(property.key.as_str(), "LZ" | "LZ2" | "LZOP" | "LZOP2")
+    });
+    for (color, key) in [(PlayerColor::Black, "AB"), (PlayerColor::White, "AW")] {
+        let values: Vec<String> = stones
+            .iter()
+            .filter(|stone| stone.color == color)
+            .map(|stone| format!("{}{}", char::from(b'a' + stone.x), char::from(b'a' + stone.y)))
+            .collect();
+        if !values.is_empty() {
+            root.properties.push(SgfProperty {
+                key: key.into(),
+                values,
+            });
+        }
+    }
+    root.properties.push(SgfProperty {
+        key: "PL".into(),
+        values: vec![match to_play {
+            PlayerColor::Black => "B",
+            PlayerColor::White => "W",
+        }
+        .into()],
+    });
+}
+
+fn validate_setup_stones(stones: &[StoneDto], width: u8, height: u8) -> Result<(), CurrentGameError> {
+    let mut used = vec![false; width as usize * height as usize];
+    for stone in stones {
+        if stone.x >= width || stone.y >= height {
+            return Err(root_setup_error("Setup point is outside the board."));
+        }
+        let index = stone.y as usize * width as usize + stone.x as usize;
+        if std::mem::replace(&mut used[index], true) {
+            return Err(root_setup_error("Setup point occurs more than once."));
+        }
+    }
+    Ok(())
+}
+
+fn same_setup(left: &[StoneDto], right: &[StoneDto]) -> bool {
+    left.len() == right.len() && left.iter().all(|stone| right.contains(stone))
+}
+
+fn comment_properties(node: &SgfNode) -> Vec<(usize, SgfProperty)> {
+    node.properties
+        .iter()
+        .enumerate()
+        .filter(|(_, property)| property.key == "C")
+        .map(|(index, property)| (index, property.clone()))
+        .collect()
+}
+
+fn replace_comment_properties(node: &mut SgfNode, properties: &[(usize, SgfProperty)]) {
+    node.properties.retain(|property| property.key != "C");
+    for (index, property) in properties {
+        node.properties
+            .insert((*index).min(node.properties.len()), property.clone());
+    }
+}
+
+fn is_markup_key(key: &str) -> bool {
+    matches!(key, "LB" | "CR" | "SQ" | "MA" | "TR")
+}
+
+fn markup_properties(node: &SgfNode) -> Vec<(usize, SgfProperty)> {
+    node.properties
+        .iter()
+        .enumerate()
+        .filter(|(_, property)| is_markup_key(&property.key))
+        .map(|(index, property)| (index, property.clone()))
+        .collect()
+}
+
+fn replace_markup_properties(node: &mut SgfNode, properties: &[(usize, SgfProperty)]) {
+    node.properties.retain(|property| !is_markup_key(&property.key));
+    for (index, property) in properties {
+        node.properties
+            .insert((*index).min(node.properties.len()), property.clone());
+    }
+}
+
+fn next_markup_label(
+    node: &SgfNode,
+    point: app_model::PointDto,
+    letters: bool,
+    width: u8,
+    height: u8,
+) -> String {
+    let used: std::collections::HashSet<&str> = node
+        .properties
+        .iter()
+        .filter(|property| property.key == "LB")
+        .flat_map(|property| property.values.iter())
+        .filter_map(|value| {
+            let (raw, text) = value.split_once(':')?;
+            let at = crate::parse_point(raw, width, height).ok();
+            at.filter(|at| at.x == point.x && at.y == point.y)
+                .is_none()
+                .then_some(text)
+        })
+        .collect();
+    for index in 1u32.. {
+        let label = if letters {
+            let mut n = index;
+            let mut result = String::new();
+            while n > 0 {
+                n -= 1;
+                result.insert(0, (b'A' + (n % 26) as u8) as char);
+                n /= 26;
+            }
+            result
+        } else {
+            index.to_string()
+        };
+        if !used.contains(label.as_str()) {
+            return label;
+        }
+    }
+    unreachable!("label sequence exhausted")
+}
+
+fn apply_markup(
+    node: &mut SgfNode,
+    action: SgfMarkupActionDto,
+    width: u8,
+    height: u8,
+    label: Option<String>,
+) {
+    let SgfMarkupActionDto::Point { point, tool } = action else {
+        node.properties.retain(|property| !is_markup_key(&property.key));
+        return;
+    };
+    for property in &mut node.properties {
+        if property.key == "LB" {
+            property.values.retain(|value| {
+                value
+                    .split_once(':')
+                    .and_then(|(raw, _)| crate::parse_point(raw, width, height).ok())
+                    .is_none_or(|p| p.x != point.x || p.y != point.y)
+            });
+        } else if is_markup_key(&property.key) {
+            property.values = property
+                .values
+                .iter()
+                .flat_map(|value| match crate::parse_setup_points(value, width, height) {
+                    Ok(points) => points
+                        .into_iter()
+                        .filter(|p| p.x != point.x || p.y != point.y)
+                        .map(|p| format!("{}{}", (b'a' + p.x) as char, (b'a' + p.y) as char))
+                        .collect::<Vec<_>>(),
+                    Err(_) => vec![value.clone()],
+                })
+                .collect();
+        }
+    }
+    node.properties
+        .retain(|property| !is_markup_key(&property.key) || !property.values.is_empty());
+    let key = match tool {
+        SgfMarkupToolDto::Label { .. } | SgfMarkupToolDto::Letters | SgfMarkupToolDto::Numbers => "LB",
+        SgfMarkupToolDto::Circle => "CR",
+        SgfMarkupToolDto::Square => "SQ",
+        SgfMarkupToolDto::Cross => "MA",
+        SgfMarkupToolDto::Triangle => "TR",
+        SgfMarkupToolDto::Erase => return,
+    };
+    let coordinate = format!("{}{}", (b'a' + point.x) as char, (b'a' + point.y) as char);
+    let value = label.map_or(coordinate.clone(), |text| format!("{coordinate}:{text}"));
+    if let Some(property) = node.properties.iter_mut().find(|property| property.key == key) {
+        property.values.push(value);
+    } else {
+        node.properties.push(SgfProperty {
+            key: key.into(),
+            values: vec![value],
+        });
     }
 }
 
@@ -591,6 +1940,52 @@ fn tree_dto(node: &SgfNode) -> SgfTreeNodeDto {
 }
 
 #[cfg(test)]
+mod trial_line_isolation {
+    use super::*;
+    use app_model::{MoveVertex, PointDto};
+
+    #[test]
+    fn branch_entry_replays_legal_moves_without_changing_the_source() {
+        let source = CurrentSgfDocument::open("(;SZ[5]C[root];B[aa];W[bb]C[entry]LZ[old];B[cc])").unwrap();
+        let entry = NodePath { indices: vec![0, 0] };
+        let serialized = source.serialize().unwrap();
+        let mut trial = TrialLine::new(&source, &entry).unwrap();
+        assert_eq!(trial.snapshot().unwrap().position.move_number, 0);
+        assert!(trial.snapshot().unwrap().primary_analysis.is_none());
+        assert!(trial.tree().unwrap().children.is_empty());
+        assert!(!trial.tree().unwrap().properties.iter().any(|p| p.key == "W"));
+
+        assert_eq!(
+            trial
+                .play(MoveVertex::Point(PointDto { x: 0, y: 0 }))
+                .unwrap_err()
+                .kind,
+            CurrentGameErrorKind::OccupiedPoint
+        );
+        assert!(!trial.can_undo());
+        trial.play(MoveVertex::Pass).unwrap();
+        assert_eq!(trial.snapshot().unwrap().position.move_number, 1);
+        assert_eq!(
+            trial.snapshot().unwrap().position.last_move.unwrap().vertex,
+            MoveVertex::Pass
+        );
+        trial.play(MoveVertex::Point(PointDto { x: 2, y: 2 })).unwrap();
+        assert_eq!(trial.snapshot().unwrap().position.move_number, 2);
+        assert_eq!(trial.selected_path().indices, vec![0, 0]);
+        trial.select(&NodePath { indices: vec![0] }).unwrap();
+        assert_eq!(trial.snapshot().unwrap().position.move_number, 1);
+        trial.undo().unwrap();
+        assert_eq!(trial.snapshot().unwrap().position.move_number, 1);
+        trial.undo().unwrap();
+        assert_eq!(trial.snapshot().unwrap().position.move_number, 0);
+        assert!(!trial.can_undo());
+        assert_eq!(source.serialize().unwrap(), serialized);
+        assert_eq!(source.snapshot(&entry).unwrap().personal_comment, "entry");
+        assert_eq!(source.tree().unwrap().children[0].children[0].children.len(), 1);
+    }
+}
+
+#[cfg(test)]
 mod editable_workspace_open {
     use super::*;
     use app_model::{CurrentGameErrorKind, MoveVertex, PlayerColor, PointDto, PositionDto};
@@ -620,7 +2015,10 @@ mod editable_workspace_open {
             Some(vec!["second continuation".to_string()])
         );
 
-        assert_eq!(snapshot.position.board_size, 5);
+        assert_eq!(
+            (snapshot.position.board_width, snapshot.position.board_height),
+            (5, 5)
+        );
         assert_eq!(snapshot.position.move_number, 3);
         assert_eq!(snapshot.position.to_play, PlayerColor::Black);
         assert_eq!(snapshot.position.captures_black, 0);
@@ -738,7 +2136,13 @@ mod editable_workspace_navigation {
         let root_snapshot = document.snapshot(&root).unwrap();
         assert_eq!(root_snapshot.path.indices, root.indices);
         assert_eq!(root_snapshot.personal_comment, "root personal");
-        assert_eq!(root_snapshot.position.board_size, 5);
+        assert_eq!(
+            (
+                root_snapshot.position.board_width,
+                root_snapshot.position.board_height
+            ),
+            (5, 5)
+        );
         assert_eq!(root_snapshot.position.move_number, 0);
         assert_eq!(root_snapshot.position.to_play, PlayerColor::White);
         assert_eq!(root_snapshot.position.captures_black, 0);
@@ -1315,7 +2719,7 @@ mod selected_node_analysis_capture {
         let japanese = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[5]KM[6.5]RU[Japanese];B[cc])").unwrap();
         assert_eq!(japanese.rules(), "japanese");
         assert_eq!(japanese.komi(), 6.5);
-        assert_eq!(japanese.board_size(), 5);
+        assert_eq!((japanese.board_width(), japanese.board_height()), (5, 5));
 
         let defaulted = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[9]KM[7.5];B[cc])").unwrap();
         assert_eq!(defaulted.rules(), "chinese");
@@ -1375,7 +2779,7 @@ mod first_child_mainline_worklist {
         let snapshots = document.first_child_mainline_snapshots().unwrap();
         assert_eq!(snapshots.len(), 4);
         assert_eq!(document.komi(), 0.5);
-        assert_eq!(document.board_size(), 5);
+        assert_eq!((document.board_width(), document.board_height()), (5, 5));
         assert_eq!(document.rules(), "chinese");
 
         let root = &snapshots[0];
@@ -1426,5 +2830,616 @@ mod first_child_mainline_worklist {
             .stones
             .iter()
             .any(|stone| stone.x == x && stone.y == y && stone.color == color)
+    }
+}
+
+#[cfg(test)]
+mod snapshot_stone_move_numbers {
+    use super::*;
+    use app_model::{MoveDto, MoveVertex, NodePath, PlayerColor, PointDto};
+
+    #[test]
+    fn snapshot_stone_move_numbers_multilevel_alternate_branch_vs_mainline() {
+        let sgf = "(;SZ[5]\
+            ;B[aa]\
+            (;W[bb];B[cc])\
+            (;W[dd];B[ee]\
+                (;W[ab])\
+                (;W[ba])\
+            )\
+        )";
+        let document = CurrentSgfDocument::open(sgf).unwrap();
+        let initial_serialized = document.serialize().unwrap();
+
+        let mainline_path = NodePath {
+            indices: vec![0, 0, 0],
+        };
+        let mainline_snap = document.snapshot(&mainline_path).unwrap();
+        assert_eq!(mainline_snap.position.move_number, 3);
+        assert_eq!(
+            mainline_snap.stone_move_numbers,
+            vec![
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 0 }),
+                    move_number: 1,
+                },
+                MoveDto {
+                    color: PlayerColor::White,
+                    vertex: MoveVertex::Point(PointDto { x: 1, y: 1 }),
+                    move_number: 2,
+                },
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 2, y: 2 }),
+                    move_number: 3,
+                },
+            ]
+        );
+
+        let branch_a_path = NodePath {
+            indices: vec![0, 1, 0, 0],
+        };
+        let branch_a_snap = document.snapshot(&branch_a_path).unwrap();
+        assert_eq!(branch_a_snap.position.move_number, 4);
+        assert_eq!(
+            branch_a_snap.stone_move_numbers,
+            vec![
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 0 }),
+                    move_number: 1,
+                },
+                MoveDto {
+                    color: PlayerColor::White,
+                    vertex: MoveVertex::Point(PointDto { x: 3, y: 3 }),
+                    move_number: 2,
+                },
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 4, y: 4 }),
+                    move_number: 3,
+                },
+                MoveDto {
+                    color: PlayerColor::White,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 1 }),
+                    move_number: 4,
+                },
+            ]
+        );
+
+        let branch_b_path = NodePath {
+            indices: vec![0, 1, 0, 1],
+        };
+        let branch_b_snap = document.snapshot(&branch_b_path).unwrap();
+        assert_eq!(branch_b_snap.position.move_number, 4);
+        assert_eq!(
+            branch_b_snap.stone_move_numbers,
+            vec![
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 0 }),
+                    move_number: 1,
+                },
+                MoveDto {
+                    color: PlayerColor::White,
+                    vertex: MoveVertex::Point(PointDto { x: 3, y: 3 }),
+                    move_number: 2,
+                },
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 4, y: 4 }),
+                    move_number: 3,
+                },
+                MoveDto {
+                    color: PlayerColor::White,
+                    vertex: MoveVertex::Point(PointDto { x: 1, y: 0 }),
+                    move_number: 4,
+                },
+            ]
+        );
+
+        assert_eq!(document.serialize().unwrap(), initial_serialized);
+    }
+
+    #[test]
+    fn snapshot_stone_move_numbers_capture_and_replay_same_point() {
+        let sgf = "(;SZ[5];B[ab];W[aa];B[ba];W[];B[aa])";
+        let document = CurrentSgfDocument::open(sgf).unwrap();
+        let initial_serialized = document.serialize().unwrap();
+
+        let path_move2 = NodePath { indices: vec![0, 0] };
+        let snap2 = document.snapshot(&path_move2).unwrap();
+        assert_eq!(snap2.position.move_number, 2);
+        assert_eq!(
+            snap2.stone_move_numbers,
+            vec![
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 1 }),
+                    move_number: 1,
+                },
+                MoveDto {
+                    color: PlayerColor::White,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 0 }),
+                    move_number: 2,
+                },
+            ]
+        );
+
+        let path_move3 = NodePath {
+            indices: vec![0, 0, 0],
+        };
+        let snap3 = document.snapshot(&path_move3).unwrap();
+        assert_eq!(snap3.position.move_number, 3);
+        assert_eq!(snap3.position.captures_black, 1);
+        assert_eq!(
+            snap3.stone_move_numbers,
+            vec![
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 1 }),
+                    move_number: 1,
+                },
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 1, y: 0 }),
+                    move_number: 3,
+                },
+            ]
+        );
+
+        let path_move4 = NodePath {
+            indices: vec![0, 0, 0, 0],
+        };
+        let snap4 = document.snapshot(&path_move4).unwrap();
+        assert_eq!(snap4.position.move_number, 4);
+        assert_eq!(snap4.stone_move_numbers, snap3.stone_move_numbers);
+
+        let path_move5 = NodePath {
+            indices: vec![0, 0, 0, 0, 0],
+        };
+        let snap5 = document.snapshot(&path_move5).unwrap();
+        assert_eq!(snap5.position.move_number, 5);
+        assert_eq!(
+            snap5.stone_move_numbers,
+            vec![
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 1 }),
+                    move_number: 1,
+                },
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 1, y: 0 }),
+                    move_number: 3,
+                },
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 0 }),
+                    move_number: 5,
+                },
+            ]
+        );
+
+        assert_eq!(document.serialize().unwrap(), initial_serialized);
+    }
+
+    #[test]
+    fn snapshot_stone_move_numbers_setup_same_color_reassertion_pass_comment() {
+        let sgf = "(;SZ[5]AB[ba]AW[bb]C[root setup]PL[B]\
+            ;B[ab]C[first move]\
+            ;W[]\
+            ;C[tactical note]\
+            ;AB[ab]AE[ba]AW[cc]\
+            ;W[dd]\
+        )";
+        let document = CurrentSgfDocument::open(sgf).unwrap();
+        let initial_serialized = document.serialize().unwrap();
+
+        let root_path = NodePath { indices: Vec::new() };
+        let root_snap = document.snapshot(&root_path).unwrap();
+        assert_eq!(root_snap.position.move_number, 0);
+        assert!(root_snap.stone_move_numbers.is_empty());
+        assert_eq!(root_snap.position.to_play, PlayerColor::Black);
+
+        let path_1 = NodePath { indices: vec![0] };
+        let snap_1 = document.snapshot(&path_1).unwrap();
+        assert_eq!(snap_1.position.move_number, 1);
+        assert_eq!(
+            snap_1.stone_move_numbers,
+            vec![MoveDto {
+                color: PlayerColor::Black,
+                vertex: MoveVertex::Point(PointDto { x: 0, y: 1 }),
+                move_number: 1,
+            }]
+        );
+
+        let path_2 = NodePath { indices: vec![0, 0] };
+        let snap_2 = document.snapshot(&path_2).unwrap();
+        assert_eq!(snap_2.position.move_number, 2);
+        assert_eq!(snap_2.stone_move_numbers, snap_1.stone_move_numbers);
+
+        let path_3 = NodePath {
+            indices: vec![0, 0, 0],
+        };
+        let snap_3 = document.snapshot(&path_3).unwrap();
+        assert_eq!(snap_3.position.move_number, 2);
+        assert_eq!(snap_3.stone_move_numbers, snap_1.stone_move_numbers);
+
+        let path_4 = NodePath {
+            indices: vec![0, 0, 0, 0],
+        };
+        let snap_4 = document.snapshot(&path_4).unwrap();
+        assert_eq!(snap_4.position.move_number, 2);
+        assert!(
+            snap_4.stone_move_numbers.is_empty(),
+            "same-color reassertion AB[ab] clears move source for (0, 1)"
+        );
+        assert!(snap_4
+            .position
+            .stones
+            .iter()
+            .any(|s| s.x == 0 && s.y == 1 && s.color == PlayerColor::Black));
+
+        let path_5 = NodePath {
+            indices: vec![0, 0, 0, 0, 0],
+        };
+        let snap_5 = document.snapshot(&path_5).unwrap();
+        assert_eq!(snap_5.position.move_number, 3);
+        assert_eq!(
+            snap_5.stone_move_numbers,
+            vec![MoveDto {
+                color: PlayerColor::White,
+                vertex: MoveVertex::Point(PointDto { x: 3, y: 3 }),
+                move_number: 3,
+            }]
+        );
+
+        assert_eq!(document.serialize().unwrap(), initial_serialized);
+    }
+
+    #[test]
+    fn snapshot_stone_move_numbers_rectangular_edge_and_illegal_replay_move() {
+        let sgf = "(;SZ[4:6];B[ad];W[df];B[da];W[af];B[ad])";
+        let document = CurrentSgfDocument::open(sgf).unwrap();
+        let initial_serialized = document.serialize().unwrap();
+
+        let leaf_path = NodePath {
+            indices: vec![0, 0, 0, 0, 0],
+        };
+        let snap = document.snapshot(&leaf_path).unwrap();
+
+        assert_eq!((snap.position.board_width, snap.position.board_height), (4, 6));
+        assert_eq!(snap.position.move_number, 5);
+        assert_eq!(snap.position.errors.len(), 1);
+        assert!(snap.position.errors[0].contains("already occupied"));
+
+        assert_eq!(
+            snap.stone_move_numbers,
+            vec![
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 3 }),
+                    move_number: 1,
+                },
+                MoveDto {
+                    color: PlayerColor::White,
+                    vertex: MoveVertex::Point(PointDto { x: 3, y: 5 }),
+                    move_number: 2,
+                },
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 3, y: 0 }),
+                    move_number: 3,
+                },
+                MoveDto {
+                    color: PlayerColor::White,
+                    vertex: MoveVertex::Point(PointDto { x: 0, y: 5 }),
+                    move_number: 4,
+                },
+            ]
+        );
+
+        assert_eq!(document.serialize().unwrap(), initial_serialized);
+    }
+
+    #[test]
+    fn snapshot_stone_move_numbers_root_move_counts() {
+        let sgf = "(;SZ[5]B[cc];W[dd])";
+        let document = CurrentSgfDocument::open(sgf).unwrap();
+        let root_path = NodePath { indices: Vec::new() };
+        let root_snap = document.snapshot(&root_path).unwrap();
+        assert_eq!(root_snap.position.move_number, 1);
+        assert_eq!(
+            root_snap.stone_move_numbers,
+            vec![MoveDto {
+                color: PlayerColor::Black,
+                vertex: MoveVertex::Point(PointDto { x: 2, y: 2 }),
+                move_number: 1,
+            }]
+        );
+
+        let child_path = NodePath { indices: vec![0] };
+        let child_snap = document.snapshot(&child_path).unwrap();
+        assert_eq!(child_snap.position.move_number, 2);
+        assert_eq!(
+            child_snap.stone_move_numbers,
+            vec![
+                MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: MoveVertex::Point(PointDto { x: 2, y: 2 }),
+                    move_number: 1,
+                },
+                MoveDto {
+                    color: PlayerColor::White,
+                    vertex: MoveVertex::Point(PointDto { x: 3, y: 3 }),
+                    move_number: 2,
+                },
+            ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod root_result_history {
+    use super::*;
+    use app_model::{CandidateMoveDto, CurrentGameErrorKind, MoveVertex, NodePath};
+
+    fn sample_payload(visits: u32) -> crate::SgfAnalysisPayload {
+        crate::SgfAnalysisPayload {
+            engine_name: "KataGo".to_string(),
+            visits,
+            winrate_black: 0.55,
+            score_mean_black: Some(1.5),
+            score_stdev: None,
+            pda: None,
+            candidates: vec![CandidateMoveDto {
+                vertex: MoveVertex::Pass,
+                visits,
+                winrate_black: 0.55,
+                score_mean_black: 1.5,
+                policy_prior: None,
+                pv: vec![MoveVertex::Pass],
+            }],
+            ownership: None,
+        }
+    }
+
+    #[test]
+    fn test_result_edit_standard_formats_and_outcomes() {
+        let mut document = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[9]KM[6.5];B[ee])").unwrap();
+        let selected = NodePath { indices: vec![0] };
+
+        let outcome = document.set_result_with_history(&selected, "B+0.5").unwrap();
+        assert!(outcome.edit.is_some());
+        assert_eq!(outcome.snapshot.path, selected);
+        assert_eq!(document.result(), Some("B+0.5"));
+        assert!(document.serialize().unwrap().contains("RE[B+0.5]"));
+
+        let outcome = document.set_result_with_history(&selected, "W+12.5").unwrap();
+        assert!(outcome.edit.is_some());
+        assert_eq!(document.result(), Some("W+12.5"));
+        assert!(document.serialize().unwrap().contains("RE[W+12.5]"));
+        assert!(!document.serialize().unwrap().contains("RE[B+0.5]"));
+
+        let outcome = document.set_result_with_history(&selected, "0").unwrap();
+        assert!(outcome.edit.is_some());
+        assert_eq!(document.result(), Some("0"));
+        assert!(document.serialize().unwrap().contains("RE[0]"));
+
+        let outcome = document.set_result_with_history(&selected, "B+0").unwrap();
+        assert!(outcome.edit.is_some());
+        assert_eq!(document.result(), Some("B+0"));
+
+        let outcome = document.set_result_with_history(&selected, "W+0").unwrap();
+        assert!(outcome.edit.is_some());
+        assert_eq!(document.result(), Some("W+0"));
+    }
+
+    #[test]
+    fn test_result_edit_noop_when_same() {
+        let mut document = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[9]RE[B+0.5];B[ee])").unwrap();
+        let selected = NodePath { indices: vec![0] };
+        let before_serialized = document.serialize().unwrap();
+        let before_snapshot = document.snapshot(&selected).unwrap();
+
+        let outcome = document.set_result_with_history(&selected, "B+0.5").unwrap();
+        assert!(outcome.edit.is_none());
+        assert_eq!(outcome.snapshot, before_snapshot);
+        assert_eq!(document.result(), Some("B+0.5"));
+        assert_eq!(document.serialize().unwrap(), before_serialized);
+    }
+
+    #[test]
+    fn test_result_edit_invalid_strings_reject_without_mutation() {
+        let mut document = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[9]RE[B+1.0];B[ee])").unwrap();
+        let selected = NodePath { indices: vec![0] };
+        let before_serialized = document.serialize().unwrap();
+
+        let invalid_results = [
+            "B+R",
+            "W+R",
+            "B+Resign",
+            "W+Resign",
+            "B+T",
+            "Draw",
+            "Void",
+            "arbitrary",
+            "",
+            "B+",
+            "W+",
+            "B+-1.0",
+            "B+1.2.3",
+            "B+.5",
+            "B+5.",
+            "B+NaN",
+            "B+inf",
+            "0.5",
+            "B+ 1.5",
+            " 0",
+        ];
+
+        for &invalid in &invalid_results {
+            let err = document.set_result_with_history(&selected, invalid).unwrap_err();
+            assert_eq!(err.kind, CurrentGameErrorKind::MalformedSgf);
+            assert_eq!(document.serialize().unwrap(), before_serialized);
+            assert_eq!(document.result(), Some("B+1.0"));
+        }
+
+        let invalid_path = NodePath { indices: vec![99] };
+        let err = document
+            .set_result_with_history(&invalid_path, "W+1.5")
+            .unwrap_err();
+        assert_eq!(err.kind, CurrentGameErrorKind::InvalidNodePath);
+        assert_eq!(document.serialize().unwrap(), before_serialized);
+        assert_eq!(document.result(), Some("B+1.0"));
+    }
+
+    #[test]
+    fn test_result_edit_history_undo_redo_swaps_only_re_and_structural_false() {
+        let mut document = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[9]RE[B+1.0];B[ee])").unwrap();
+        let selected = NodePath { indices: vec![0] };
+        let mut history = DocumentHistory::default();
+
+        let outcome = document.set_result_with_history(&selected, "W+2.5").unwrap();
+        history.commit(outcome.edit.unwrap());
+        assert_eq!(document.result(), Some("W+2.5"));
+        assert!(document.serialize().unwrap().contains("RE[W+2.5]"));
+
+        let undo_res = history.undo(&mut document).unwrap().expect("undo outcome");
+        assert!(!undo_res.structural);
+        assert_eq!(undo_res.selected_path, selected);
+        assert_eq!(document.result(), Some("B+1.0"));
+        assert!(document.serialize().unwrap().contains("RE[B+1.0]"));
+        assert!(!document.serialize().unwrap().contains("RE[W+2.5]"));
+
+        let redo_res = history.redo(&mut document).unwrap().expect("redo outcome");
+        assert!(!redo_res.structural);
+        assert_eq!(redo_res.selected_path, selected);
+        assert_eq!(document.result(), Some("W+2.5"));
+        assert!(document.serialize().unwrap().contains("RE[W+2.5]"));
+        assert!(!document.serialize().unwrap().contains("RE[B+1.0]"));
+
+        let undo_again = history.undo(&mut document).unwrap().expect("undo again");
+        assert!(!undo_again.structural);
+        assert_eq!(document.result(), Some("B+1.0"));
+    }
+
+    #[test]
+    fn test_result_edit_undo_redo_when_no_prior_re() {
+        let mut document = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[9]KM[6.5];B[ee])").unwrap();
+        let initial_serialized = document.serialize().unwrap();
+        assert_eq!(document.result(), None);
+        let selected = NodePath::default();
+        let mut history = DocumentHistory::default();
+
+        let outcome = document.set_result_with_history(&selected, "0").unwrap();
+        history.commit(outcome.edit.unwrap());
+        assert_eq!(document.result(), Some("0"));
+        assert!(document.serialize().unwrap().contains("RE[0]"));
+
+        let undo_res = history.undo(&mut document).unwrap().expect("undo outcome");
+        assert!(!undo_res.structural);
+        assert_eq!(undo_res.selected_path, selected);
+        assert_eq!(document.result(), None);
+        assert_eq!(document.serialize().unwrap(), initial_serialized);
+
+        let redo_res = history.redo(&mut document).unwrap().expect("redo outcome");
+        assert!(!redo_res.structural);
+        assert_eq!(document.result(), Some("0"));
+        assert!(document.serialize().unwrap().contains("RE[0]"));
+    }
+
+    #[test]
+    fn test_result_edit_preserves_unknown_properties_and_unrelated_root_metadata() {
+        let mut document = CurrentSgfDocument::open(
+            "(;GM[1]FF[4]SZ[9]KM[7.5]RU[Chinese]HA[2]PB[Alice]PW[Bob]DT[2026-09-23]XY[custom_root]ZZ[another_root];B[ee]C[move comment]YY[custom_move])",
+        )
+        .unwrap();
+        let selected = NodePath { indices: vec![0] };
+        let mut history = DocumentHistory::default();
+
+        let outcome = document.set_result_with_history(&selected, "B+3.5").unwrap();
+        history.commit(outcome.edit.unwrap());
+
+        let verify_properties = |doc: &CurrentSgfDocument, expected_re: Option<&str>| {
+            let tree = doc.tree().unwrap();
+            let prop_val = |key: &str| {
+                tree.properties
+                    .iter()
+                    .find(|p| p.key == key)
+                    .and_then(|p| p.values.first())
+                    .map(String::as_str)
+            };
+            assert_eq!(prop_val("RE"), expected_re);
+            assert_eq!(prop_val("KM"), Some("7.5"));
+            assert_eq!(prop_val("RU"), Some("Chinese"));
+            assert_eq!(prop_val("HA"), Some("2"));
+            assert_eq!(prop_val("PB"), Some("Alice"));
+            assert_eq!(prop_val("PW"), Some("Bob"));
+            assert_eq!(prop_val("DT"), Some("2026-09-23"));
+            assert_eq!(prop_val("XY"), Some("custom_root"));
+            assert_eq!(prop_val("ZZ"), Some("another_root"));
+
+            let child = &tree.children[0];
+            let child_prop_val = |key: &str| {
+                child
+                    .properties
+                    .iter()
+                    .find(|p| p.key == key)
+                    .and_then(|p| p.values.first())
+                    .map(String::as_str)
+            };
+            assert_eq!(child_prop_val("C"), Some("move comment"));
+            assert_eq!(child_prop_val("YY"), Some("custom_move"));
+        };
+
+        verify_properties(&document, Some("B+3.5"));
+
+        let undo_res = history.undo(&mut document).unwrap().expect("undo");
+        assert!(!undo_res.structural);
+        verify_properties(&document, None);
+
+        let redo_res = history.redo(&mut document).unwrap().expect("redo");
+        assert!(!redo_res.structural);
+        verify_properties(&document, Some("B+3.5"));
+    }
+
+    #[test]
+    fn test_result_edit_preserves_attached_analysis_on_root_and_descendants() {
+        let mut document = CurrentSgfDocument::open("(;GM[1]FF[4]SZ[9]KM[6.5];B[ee];W[de])").unwrap();
+        let root_path = NodePath::default();
+        let move_path = NodePath { indices: vec![0] };
+
+        document
+            .replace_primary_analysis(&root_path, &sample_payload(100))
+            .unwrap();
+        document
+            .replace_primary_analysis(&move_path, &sample_payload(200))
+            .unwrap();
+
+        assert!(document.snapshot(&root_path).unwrap().primary_analysis.is_some());
+        assert!(document.snapshot(&move_path).unwrap().primary_analysis.is_some());
+
+        let mut history = DocumentHistory::default();
+        let outcome = document.set_result_with_history(&move_path, "W+0.5").unwrap();
+        history.commit(outcome.edit.unwrap());
+
+        assert_eq!(document.result(), Some("W+0.5"));
+        assert!(document.snapshot(&root_path).unwrap().primary_analysis.is_some());
+        assert!(document.snapshot(&move_path).unwrap().primary_analysis.is_some());
+
+        let undo_res = history.undo(&mut document).unwrap().expect("undo");
+        assert!(!undo_res.structural);
+        assert_eq!(document.result(), None);
+        assert!(document.snapshot(&root_path).unwrap().primary_analysis.is_some());
+        assert!(document.snapshot(&move_path).unwrap().primary_analysis.is_some());
+
+        let redo_res = history.redo(&mut document).unwrap().expect("redo");
+        assert!(!redo_res.structural);
+        assert_eq!(document.result(), Some("W+0.5"));
+        assert!(document.snapshot(&root_path).unwrap().primary_analysis.is_some());
+        assert!(document.snapshot(&move_path).unwrap().primary_analysis.is_some());
     }
 }

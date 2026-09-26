@@ -53,10 +53,10 @@ describe("winrate chart selected line", () => {
       }]
     };
     const points = walkSelectedLine(gapped, new Map());
-    expect(points.map((point) => [point.moveNumber, point.toPlay, point.analysis != null])).toEqual([
-      [0, "black", true],
-      [1, "white", false],
-      [2, "black", true]
+    expect(points.map((point) => [point.path.indices, point.moveNumber, point.isMove, point.toPlay, point.analysis != null])).toEqual([
+      [[], 0, false, "black", true],
+      [[0], 1, true, "white", false],
+      [[0, 0], 2, true, "black", true]
     ]);
   });
 
@@ -65,6 +65,38 @@ describe("winrate chart selected line", () => {
     expect(points.map((point) => point.moveNumber)).toEqual([0, 1, 2]);
     expect(points[2]?.analysis?.winrateBlack).toBeCloseTo(0.45);
     expect(points[2]?.analysis?.scoreMeanBlack).toBeUndefined();
+  });
+
+  it("keeps pass, setup, and comment nodes as exact paths while counting only moves", () => {
+    const exactLine: SgfTreeNodeDto = {
+      properties: [{ key: "HA", values: ["2"] }],
+      children: [{
+        properties: [{ key: "C", values: ["root reply"] }],
+        children: [{
+          properties: [{ key: "W", values: [""] }],
+          children: [{
+            properties: [{ key: "AB", values: ["dd"] }, { key: "PL", values: ["B"] }],
+            children: [{
+              properties: [{ key: "C", values: ["same hand"] }],
+              children: [{
+                properties: [{ key: "B", values: ["pp"] }],
+                children: []
+              }]
+            }]
+          }]
+        }]
+      }]
+    };
+
+    const points = walkSelectedLine(exactLine, new Map());
+    expect(points.map(({ path, moveNumber, isMove, toPlay }) => ({ path: path.indices, moveNumber, isMove, toPlay }))).toEqual([
+      { path: [], moveNumber: 0, isMove: false, toPlay: "white" },
+      { path: [0], moveNumber: 0, isMove: false, toPlay: "white" },
+      { path: [0, 0], moveNumber: 1, isMove: true, toPlay: "black" },
+      { path: [0, 0, 0], moveNumber: 1, isMove: false, toPlay: "black" },
+      { path: [0, 0, 0, 0], moveNumber: 1, isMove: false, toPlay: "black" },
+      { path: [0, 0, 0, 0, 0], moveNumber: 2, isMove: true, toPlay: "white" }
+    ]);
   });
 
   it("rejects malformed and zero-visit payloads", () => {
@@ -88,7 +120,7 @@ describe("winrate chart encoding", () => {
     const model = buildWinrateChartModel({
       root: branching,
       chosen: new Map(),
-      selectedPathLength: 2,
+      selectedPath: { indices: [0, 0] },
       selectedToPlay: "black",
       settings: { ...settings, graphPerspective: "sideToPlay" }
     });
@@ -115,7 +147,7 @@ describe("winrate chart encoding", () => {
     const model = buildWinrateChartModel({
       root: noScore,
       chosen: new Map(),
-      selectedPathLength: 0,
+      selectedPath: { indices: [] },
       selectedToPlay: "black",
       settings: { ...settings, winrateLine: false, scoreLeadLine: true }
     });
@@ -128,7 +160,7 @@ describe("winrate chart encoding", () => {
     const points = walkSelectedLine(branching, new Map());
     expect(sessionScoreLeadScale(15, points)).toBe(15);
     expect(sessionScoreLeadScale(15, [
-      { moveNumber: 0, toPlay: "black", analysis: { visits: 10, winrateBlack: 0.5, scoreMeanBlack: 21 } }
+      { path: { indices: [] }, moveNumber: 0, isMove: false, toPlay: "black", analysis: { visits: 10, winrateBlack: 0.5, scoreMeanBlack: 21 } }
     ])).toBe(21);
     expect(parsePositiveScoreLeadScale(-1)).toBeNull();
     expect(parsePositiveScoreLeadScale("abc")).toBeNull();
@@ -152,8 +184,31 @@ describe("winrate chart encoding", () => {
     };
     const bars = blunderBars(walkSelectedLine(tree, new Map()));
     expect(bars).toEqual([
-      { fromMove: 0, toMove: 1, rank: "mistake" },
-      { fromMove: 1, toMove: 3, rank: "mistake" }
+      { fromIndex: 0, toIndex: 1, rank: "mistake" },
+      { fromIndex: 1, toIndex: 3, rank: "mistake" }
     ]);
+  });
+
+  it("derives currentMove from the exact selected path instead of path depth", () => {
+    const tree: SgfTreeNodeDto = {
+      properties: [],
+      children: [{
+        properties: [{ key: "B", values: ["dd"] }],
+        children: [{
+          properties: [{ key: "C", values: ["same hand"] }],
+          children: []
+        }]
+      }]
+    };
+    const model = buildWinrateChartModel({
+      root: tree,
+      chosen: new Map(),
+      selectedPath: { indices: [0, 0] },
+      selectedToPlay: "white",
+      settings
+    });
+
+    expect(model.currentMove).toBe(1);
+    expect(model.selectedPath).toEqual({ indices: [0, 0] });
   });
 });

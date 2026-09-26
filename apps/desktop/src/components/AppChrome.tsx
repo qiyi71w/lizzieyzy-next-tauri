@@ -74,9 +74,27 @@ type Props = {
   selectedNodeRunning: boolean;
   wholeGameRunning: boolean;
   autoPlaying: boolean;
+  trialActive?: boolean;
+  trialPending?: boolean;
+  onToggleTrial?: () => void;
+  scoringActive?: boolean;
+  scoringPending?: boolean;
+  onEnterScoring?: () => void;
   komi: number;
   onNew: () => void;
+  onRootSetup: () => void;
+  onConvertPosition: () => void;
+  canRootSetup: boolean;
+  canConvertPosition: boolean;
   onOpen: () => void;
+  onEditMetadata: () => void;
+  canEditMetadata: boolean;
+  recentGamePaths: string[];
+  recentHistoryBusy: boolean;
+  recentHistoryError: string | null;
+  onOpenRecent: (index: number) => void;
+  onClearRecentHistory: () => void;
+  onRetryRecentHistory: () => void;
   nativeRuntime?: boolean;
   nativeUnavailable?: string;
   onSave: () => void;
@@ -91,10 +109,19 @@ type Props = {
   onCopySgf: () => void;
   onPasteSgf: () => void;
   onExit: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
   onClearBoard: () => void;
   onPass?: () => void;
   onRemoveVariation?: () => void;
   canRemoveVariation?: boolean;
+  canDeleteNode?: boolean;
+  canPromoteMain?: boolean;
+  canReturnMain?: boolean;
+  onPromoteMain?: () => void;
+  onReturnMain?: () => void;
   onFirstMove?: () => void;
   onAutoPlay: () => void;
   onOverlayMode: (mode: OverlayMode) => void;
@@ -115,8 +142,11 @@ export function AppChrome(props: Props) {
   const nativeAvailable = props.nativeRuntime !== false;
   const nativeUnavailable = props.nativeUnavailable ?? "Native current-game, edit, and authoritative Save require the Tauri desktop backend. Browser preview is non-authoritative.";
   const openDisabled = props.busy || !nativeAvailable;
-  const saveDisabled = !nativeAvailable || !props.dirty;
-  const saveAsDisabled = !nativeAvailable;
+  const saveDisabled = props.busy || !nativeAvailable || !props.dirty;
+  const saveAsDisabled = props.busy || !nativeAvailable;
+  const recentOpenDisabled = props.busy || props.recentHistoryBusy || !nativeAvailable;
+  const clearRecentDisabled = props.recentGamePaths.length === 0 || props.busy || props.recentHistoryBusy || !nativeAvailable;
+  const retryRecentDisabled = props.busy || props.recentHistoryBusy || !nativeAvailable;
 
   useEffect(() => {
     function onPointerDown(event: PointerEvent) {
@@ -145,7 +175,42 @@ export function AppChrome(props: Props) {
           <ChromeMenu label="文件" open={openMenu === "file"} onToggle={() => setOpenMenu(openMenu === "file" ? null : "file")}>
             <MenuItem label="新建(Ctrl+Home)" onClick={() => run(props.onNew)} disabled={props.busy} />
             <MenuItem label="打开棋谱(O)" onClick={() => run(props.onOpen)} disabled={openDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
-            <MenuItem label="最近打开" disabled title={later} />
+            <SubMenu label="最近打开">
+              {props.recentGamePaths.length === 0 ? (
+                <MenuItem label="最近列表为空" disabled />
+              ) : (
+                props.recentGamePaths.map((path, index) => (
+                  <MenuItem
+                    key={`${path}-${index}`}
+                    label={getBasename(path)}
+                    title={path}
+                    onClick={() => run(() => props.onOpenRecent(index))}
+                    disabled={recentOpenDisabled}
+                  />
+                ))
+              )}
+              <div className="menu-sep" role="separator" />
+              <MenuItem
+                label="清空最近记录"
+                onClick={() => run(props.onClearRecentHistory)}
+                disabled={clearRecentDisabled}
+                title={!nativeAvailable ? nativeUnavailable : undefined}
+              />
+              {props.recentHistoryError ? (
+                <>
+                  <div className="menu-sep" role="separator" />
+                  <div role="alert" className="menu-item menu-error" title={props.recentHistoryError} style={{ color: "var(--danger)" }}>
+                    {props.recentHistoryError}
+                  </div>
+                  <MenuItem
+                    label="重试最近记录写入"
+                    onClick={() => run(props.onRetryRecentHistory)}
+                    disabled={retryRecentDisabled}
+                    title={!nativeAvailable ? nativeUnavailable : undefined}
+                  />
+                </>
+              ) : null}
+            </SubMenu>
             <MenuItem label="打开在线链接(Q)" disabled title={later} />
             <div className="menu-sep" role="separator" />
             <MenuItem label="保存(Ctrl+S)" onClick={() => run(props.onSave)} disabled={saveDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
@@ -278,6 +343,8 @@ export function AppChrome(props: Props) {
           </ChromeMenu>
           <ChromeMenu label="棋局" open={openMenu === "game"} onToggle={() => setOpenMenu(openMenu === "game" ? null : "game")}>
             <MenuItem label="新对局" onClick={() => run(props.onNew)} disabled={props.busy} />
+            <MenuItem label={actionLabelFromRegistry("review.try-play", props.trialActive ? "退出试下" : "试下")} onClick={() => run(() => props.onToggleTrial?.())} disabled={!nativeAvailable || props.busy || props.trialPending || !props.onToggleTrial} />
+            <MenuItem label={actionLabelFromRegistry("review.scoring", props.scoringActive ? "计分中" : "本地计分")} onClick={() => run(() => props.onEnterScoring?.())} disabled={!nativeAvailable || props.busy || props.trialActive || props.trialPending || props.scoringActive || props.scoringPending || !props.onEnterScoring} />
             <SubMenu label="人机续弈">
               <MenuItem label="人机对局(N)" disabled title="人机对局尚未接入，N 不会新建棋谱。" />
               <MenuItem label="人机对局(分析模式)" disabled title={later} />
@@ -286,12 +353,13 @@ export function AppChrome(props: Props) {
               <MenuItem label="续弈[AI执白]" disabled title={later} />
             </SubMenu>
             <MenuItem label="引擎对局" disabled title={later} />
-            <MenuItem label="起始局面设置" disabled title={later} />
+            <MenuItem label={actionLabelFromRegistry("game.root-setup", "起始局面设置")} onClick={() => run(props.onRootSetup)} disabled={!props.canRootSetup} title={!props.canRootSetup ? "仅无后续的根节点可直接设置起始局面" : undefined} />
+            <MenuItem label={actionLabelFromRegistry("game.convert-position", "转换为起始局面")} onClick={() => run(props.onConvertPosition)} disabled={!props.canConvertPosition} title="确认后丢弃原着手树；可撤销" />
             <MenuItem label="清空棋盘(Ctrl+Home)" onClick={() => run(props.onClearBoard)} disabled={props.busy} />
             <MenuItem label="棋谱原文" onClick={() => run(() => props.onToggleSheet("sgf"))} />
             <MenuItem label="解析棋谱" onClick={() => run(props.onParse)} disabled={props.busy} />
-            <MenuItem label="编辑棋局信息(I)" disabled title={later} />
-            <MenuItem label="设置棋盘大小(Ctrl+I)" disabled title={later} />
+            <MenuItem label={actionLabelFromRegistry("game.metadata", "编辑棋局信息")} onClick={() => run(props.onEditMetadata)} disabled={!props.canEditMetadata} title={!nativeAvailable ? nativeUnavailable : undefined} />
+            <MenuItem label={actionLabelFromRegistry("game.board-dimensions", "设置棋盘大小")} onClick={() => run(props.onClearBoard)} disabled={props.busy} />
           </ChromeMenu>
         </div>
         <span className="menu-div" />
@@ -316,16 +384,18 @@ export function AppChrome(props: Props) {
             <MenuItem label="清除分析信息(此手)" disabled title={later} />
           </ChromeMenu>
           <ChromeMenu label="编辑" open={openMenu === "edit"} onToggle={() => setOpenMenu(openMenu === "edit" ? null : "edit")}>
+            <MenuItem label={actionLabelFromRegistry("edit.undo", "撤销")} onClick={() => run(props.onUndo)} disabled={!props.canUndo} />
+            <MenuItem label={actionLabelFromRegistry("edit.redo", "重做")} onClick={() => run(props.onRedo)} disabled={!props.canRedo} />
+            <div className="menu-sep" role="separator" />
             <MenuItem label="添加黑子" disabled title={later} />
             <MenuItem label="添加白子" disabled title={later} />
             <MenuItem label="交替落子" disabled title={later} />
             <MenuItem label={actionLabelFromRegistry("review.pass", "停一手")} onClick={() => run(() => props.onPass?.())} disabled={props.busy || !nativeAvailable || !props.onPass} title={!nativeAvailable ? nativeUnavailable : undefined} />
             <div className="menu-sep" role="separator" />
-            <MenuItem label="设为主分支(L)" disabled title={later} />
-            <MenuItem label="返回主分支(B)" disabled title={later} />
+            <MenuItem label={actionLabelFromRegistry("review.promote-main", "设为主分支")} onClick={() => run(() => props.onPromoteMain?.())} disabled={!props.canPromoteMain} />
+            <MenuItem label={actionLabelFromRegistry("review.return-main", "返回主干")} onClick={() => run(() => props.onReturnMain?.())} disabled={!props.canReturnMain} />
             <MenuItem label="跳转到最前" onClick={() => run(() => props.onFirstMove?.())} disabled={!props.onFirstMove} />
-            <MenuItem label="删除一手" disabled title={later} />
-            <MenuItem label="删除分支" onClick={() => run(() => props.onRemoveVariation?.())} disabled={!props.canRemoveVariation} title={props.canRemoveVariation ? "删除当前选中的非根变化" : (props.nativeUnavailable ?? "只能删除已选中的非根变化")} />
+            <MenuItem label={actionLabelFromRegistry("review.remove-variation", "删除当前节点")} onClick={() => run(() => props.onRemoveVariation?.())} disabled={!props.canDeleteNode} title={!nativeAvailable ? nativeUnavailable : undefined} />
             <div className="menu-sep" role="separator" />
             <MenuItem label="编辑棋谱原文" onClick={() => run(() => props.onToggleSheet("sgf"))} />
             <MenuItem label="交换黑白" disabled title={later} />
@@ -495,7 +565,7 @@ export function AppChrome(props: Props) {
 export function BottomBar(props: {
   currentMove: number;
   maxMove: number;
-  onMove: (move: number) => void;
+  onMove: (move: number, forward?: boolean) => void;
   canParent: boolean;
   canNext: boolean;
   canPrevSibling: boolean;
@@ -577,7 +647,7 @@ export function BottomBar(props: {
       <span className="spacer" />
       <div className="nav-cluster" aria-label="手数导航">
         <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(0)} disabled={props.currentMove <= 0} title="首手">|&lt;</button>
-        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.currentMove - 10)} disabled={props.currentMove <= 0} title="回退 10 手">&lt;&lt;</button>
+        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(Math.max(0, props.currentMove - 10))} disabled={props.currentMove <= 0} title="回退 10 手">&lt;&lt;</button>
         <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.currentMove - 1)} disabled={props.currentMove <= 0} title="上一手">&lt;</button>
         <input
           ref={(node) => { props.jumpRef.current = node; }}
@@ -586,8 +656,8 @@ export function BottomBar(props: {
           aria-label="跳转手数"
           onChange={(event) => props.onMove(Number(event.target.value))}
         />
-        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.currentMove + 1)} disabled={props.currentMove >= props.maxMove} title="下一手">&gt;</button>
-        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.currentMove + 10)} disabled={props.currentMove >= props.maxMove} title="前进 10 手">&gt;&gt;</button>
+        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.currentMove + 1, true)} disabled={props.currentMove >= props.maxMove} title="下一手">&gt;</button>
+        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(Math.min(props.maxMove, props.currentMove + 10))} disabled={props.currentMove >= props.maxMove} title="前进 10 手">&gt;&gt;</button>
         <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.maxMove)} disabled={props.currentMove >= props.maxMove} title="末手">&gt;|</button>
         <input
           className="move-slider"
@@ -671,4 +741,10 @@ function IconBtn({ src, label, onClick, disabled, title }: { src: string; label:
       <img src={src} width={16} height={16} alt="" draggable={false} />
     </button>
   );
+}
+
+function getBasename(path: string): string {
+  const trimmed = path.replace(/[/\\]+$/, "");
+  const index = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  return (index >= 0 ? trimmed.slice(index + 1) : trimmed) || path;
 }

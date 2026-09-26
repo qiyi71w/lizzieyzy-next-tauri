@@ -70,13 +70,15 @@ function importProviderPayloadLocally(request: ProviderImportRequest): ProviderI
     source_id: request.metadata.source_id ?? request.source_id ?? null,
     extra: request.metadata.extra ?? {}
   });
+  const dimensions = boardDimensionsProperty(sgfText);
   return {
     provider: request.provider,
     sgf_text: sgfText,
     summary: {
       provider: request.provider,
       source_id: metadata.source_id,
-      board_size: numberProperty(sgfText, "SZ"),
+      board_width: dimensions?.width ?? null,
+      board_height: dimensions?.height ?? null,
       komi: numberProperty(sgfText, "KM"),
       black_name: textProperty(sgfText, "PB"),
       white_name: textProperty(sgfText, "PW"),
@@ -275,6 +277,16 @@ function numberProperty(text: string, property: string): number | null {
 function textProperty(text: string, property: string): string | null {
   const match = new RegExp(`${property}\\[([^\\]]*)\\]`, "i").exec(text);
   return match?.[1] ?? null;
+}
+
+function boardDimensionsProperty(sgfText: string): { width: number; height: number } | null {
+  const raw = textProperty(sgfText, "SZ");
+  if (raw === null) return null;
+  const match = /^(\d+)(?::(\d+))?$/.exec(raw.trim());
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2] ?? match[1]);
+  return Number.isFinite(width) && Number.isFinite(height) ? { width, height } : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

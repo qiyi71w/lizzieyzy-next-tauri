@@ -71,7 +71,8 @@ pub struct StoneDto {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PositionDto {
-    pub board_size: u8,
+    pub board_width: u8,
+    pub board_height: u8,
     pub move_number: u32,
     pub to_play: PlayerColor,
     pub stones: Vec<StoneDto>,
@@ -84,7 +85,8 @@ pub struct PositionDto {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameSummaryDto {
     pub id: GameId,
-    pub board_size: u8,
+    pub board_width: u8,
+    pub board_height: u8,
     pub komi: f32,
     pub black_name: Option<String>,
     pub white_name: Option<String>,
@@ -112,6 +114,8 @@ pub struct GameFileImportDto {
     pub display_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,10 +148,43 @@ pub struct SgfTreeNodeDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SgfMarkupDto {
+    Label { point: PointDto, text: String },
+    Circle { point: PointDto },
+    Square { point: PointDto },
+    Cross { point: PointDto },
+    Triangle { point: PointDto },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SgfMarkupToolDto {
+    Label { text: String },
+    Letters,
+    Numbers,
+    Circle,
+    Square,
+    Cross,
+    Triangle,
+    Erase,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SgfMarkupActionDto {
+    Clear,
+    Point { point: PointDto, tool: SgfMarkupToolDto },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SelectedNodeSnapshotDto {
     pub path: NodePath,
     pub position: PositionDto,
+    /// Successful moves whose stones survive on the selected root-to-node line.
+    pub stone_move_numbers: Vec<MoveDto>,
     pub personal_comment: String,
+    #[serde(default)]
+    pub markup: Vec<SgfMarkupDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generated_information: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -166,8 +203,74 @@ pub struct CurrentGameResultDto {
     /// Document snapshot ordering within this semantic identity, including Save state.
     pub snapshot_seq: u64,
     pub dirty: bool,
+    pub can_undo: bool,
+    pub can_redo: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_path: Option<String>,
+}
+
+/// Session-only projection. Paths and revisions belong to this trial, not the saved game.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrialSessionDto {
+    pub session_id: u64,
+    pub revision: u64,
+    pub entry_path: NodePath,
+    pub tree: SgfTreeNodeDto,
+    pub selected_path: NodePath,
+    pub snapshot: SelectedNodeSnapshotDto,
+    pub can_undo: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScoringRuleDto {
+    Area,
+    Territory,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AreaCompensationDto {
+    None,
+    Handicap,
+    HandicapMinusOne,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScoringSessionDto {
+    pub session_id: u64,
+    pub revision: u64,
+    pub entry_path: NodePath,
+    pub generation: u64,
+    pub position: PositionDto,
+    pub dead: Vec<PointDto>,
+    pub neutral: Vec<PointDto>,
+    pub ownership: Vec<Option<PlayerColor>>,
+    pub rule: ScoringRuleDto,
+    pub compensation: AreaCompensationDto,
+    pub handicap: u32,
+    pub komi: f32,
+    pub black_stones: u32,
+    pub white_stones: u32,
+    pub black_territory: u32,
+    pub white_territory: u32,
+    pub black_dead: u32,
+    pub white_dead: u32,
+    pub black_total: String,
+    pub white_total: String,
+    pub result: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ScoringActionDto {
+    Point {
+        point: PointDto,
+    },
+    Settings {
+        rule: ScoringRuleDto,
+        compensation: AreaCompensationDto,
+        handicap: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -500,7 +603,9 @@ pub struct ProviderGameSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub board_size: Option<u8>,
+    pub board_width: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_height: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub komi: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -656,7 +761,8 @@ impl ProviderGameSummary {
         Self {
             provider,
             source_id: None,
-            board_size: None,
+            board_width: None,
+            board_height: None,
             komi: None,
             handicap: None,
             black_name: None,
@@ -795,7 +901,8 @@ mod current_game_wire {
                     indices: vec![0, 0, 0],
                 },
                 position: PositionDto {
-                    board_size: 5,
+                    board_width: 5,
+                    board_height: 5,
                     move_number: 3,
                     to_play: PlayerColor::Black,
                     stones: vec![StoneDto {
@@ -812,7 +919,9 @@ mod current_game_wire {
                     }),
                     errors: Vec::new(),
                 },
+                stone_move_numbers: Vec::new(),
                 personal_comment: "mainline pass".to_string(),
+                markup: Vec::new(),
                 generated_information: None,
                 primary_analysis: None,
                 secondary_analysis: None,
@@ -820,6 +929,8 @@ mod current_game_wire {
             generation: 1,
             snapshot_seq: 1,
             dirty: false,
+            can_undo: true,
+            can_redo: false,
             native_path: Some("/tmp/game.sgf".to_string()),
         };
 
@@ -833,6 +944,8 @@ mod current_game_wire {
         assert_eq!(json["snapshot"]["position"]["captures_white"], 1);
         assert_eq!(json["generation"], 1);
         assert_eq!(json["dirty"], false);
+        assert_eq!(json["can_undo"], true);
+        assert_eq!(json["can_redo"], false);
         assert_eq!(json["native_path"], "/tmp/game.sgf");
         assert_eq!(json["tree"]["children"][0]["properties"][0]["key"], "W");
         assert!(json["snapshot"].get("generated_information").is_none());

@@ -514,7 +514,8 @@ pub fn snapshot_to_position(snapshot: &ReadBoardSnapshot) -> PositionDto {
         PlayerColor::White
     };
     PositionDto {
-        board_size: snapshot.board_size,
+        board_width: snapshot.board_size,
+        board_height: snapshot.board_size,
         move_number,
         to_play,
         stones: snapshot

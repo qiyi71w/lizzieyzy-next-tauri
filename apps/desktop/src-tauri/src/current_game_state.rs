@@ -2,9 +2,10 @@ use ::current_game_recovery::RecoveryCoordinator;
 use app_model::{
     admits_analysis_attachment, AnalysisJobEventDto, AnalysisJobModeDto, AnalysisJobStartedDto,
     ApplicationExitDispositionDto, CurrentGameError, CurrentGameErrorKind, CurrentGameResultDto, GameDto,
-    MoveVertex, NodePath, RecoveryEnvelopeDto, RecoveryProtectionDto, SelectedNodeSnapshotDto,
+    MoveVertex, NodePath, PlayerColor, RecoveryEnvelopeDto, RecoveryProtectionDto, SelectedNodeSnapshotDto,
+    StoneDto, TrialSessionDto,
 };
-use sgf::{CurrentSgfDocument, SgfAnalysisPayload};
+use sgf::{CurrentSgfDocument, DocumentHistory, SgfAnalysisPayload, SgfDocumentEdit, TrialLine};
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
@@ -19,12 +20,15 @@ mod current_game_save_write;
 #[cfg(test)]
 mod current_game_session_recovery;
 mod departure;
+mod trial;
+mod scoring;
 pub(crate) mod recovery;
 
 #[derive(Debug, Clone)]
 pub struct WholeGameAdmission {
     pub generation: u64,
-    pub board_size: u8,
+    pub board_width: u8,
+    pub board_height: u8,
     pub komi: f32,
     pub rules: String,
     pub nodes: Vec<SelectedNodeSnapshotDto>,
@@ -34,6 +38,11 @@ pub struct WholeGameAdmission {
     pub swing_criteria: Option<app_model::AnalysisSwingCriteriaDto>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ContentVersion {
+    edit: u64,
+    nonhistory: u64,
+}
 #[derive(Default)]
 pub struct CurrentGameState {
     holder: Mutex<CurrentGameHolder>,
@@ -46,7 +55,13 @@ struct CurrentGameHolder {
     document: Option<CurrentSgfDocument>,
     generation: u64,
     dirty: bool,
-    dirty_epoch: u64,
+    history: DocumentHistory,
+    undo_revisions: Vec<(u64, u64)>,
+    redo_revisions: Vec<(u64, u64)>,
+    next_edit_revision: u64,
+    edit_revision: u64,
+    nonhistory_revision: u64,
+    saved_version: ContentVersion,
     native_path: Option<String>,
     departure: Option<departure::DepartureSession>,
     next_departure_id: u64,
@@ -55,8 +70,12 @@ struct CurrentGameHolder {
     exit_disposition: Option<ApplicationExitDispositionDto>,
     selected_path: NodePath,
     document_seq: u64,
+    document_identity: u64,
     snapshot_seq: u64,
     analysis_target: Option<(u64, NodePath)>,
+    trial_mode: trial::TrialMode,
+    next_trial_id: u64,
+    next_trial_revision: u64,
 }
 
 impl CurrentGameState {
@@ -71,6 +90,9 @@ impl CurrentGameState {
 
     // Called with the holder locked: accepted cursor/edit order is also target order.
     fn follow_continuous_position(&self, holder: &mut CurrentGameHolder) {
+        if !matches!(holder.trial_mode, trial::TrialMode::Review) {
+            return;
+        }
         let Some(manager) = self.analysis_manager.get() else {
             return;
         };
@@ -99,7 +121,8 @@ impl CurrentGameState {
                     holder.generation,
                     holder.selected_path.clone(),
                     snapshot,
-                    document.board_size(),
+                    document.board_width(),
+                    document.board_height(),
                     document.komi(),
                     document.rules(),
                 )
@@ -193,7 +216,7 @@ impl CurrentGameState {
             return Err("path must not be empty".to_string());
         }
         let target = std::path::PathBuf::from(trimmed);
-        let (serialized, epoch) = {
+        let (serialized, version, document_identity) = {
             let holder = self.holder.lock().expect("current game state");
             if holder.edits_blocked && !allow_departure {
                 return Err("cannot save while a document departure is in progress".to_string());
@@ -202,45 +225,35 @@ impl CurrentGameState {
                 .document
                 .as_ref()
                 .ok_or_else(|| no_current_game().to_string())?;
+            document
+                .snapshot(&selected_path)
+                .map_err(|error| error.to_string())?;
             (
                 document.serialize().map_err(|error| error.to_string())?,
-                holder.dirty_epoch,
+                holder.content_version(),
+                holder.document_identity,
             )
         };
         after_snapshot();
         std::fs::write(&target, &serialized)
             .map_err(|err| format!("failed to write SGF file {}: {err}", target.display()))?;
         let mut holder = self.holder.lock().expect("current game state");
-        holder.native_path = Some(trimmed.to_string());
-        if holder.dirty_epoch == epoch {
-            holder.dirty = false;
+        if holder.document_identity != document_identity {
+            return holder.current_result().map_err(|error| error.to_string());
         }
-        let document = holder
-            .document
-            .as_ref()
-            .ok_or_else(|| no_current_game().to_string())?;
-        let snapshot = document
-            .snapshot(&selected_path)
-            .map_err(|error| error.to_string())?;
-        let tree = document.tree().map_err(|error| error.to_string())?;
-        holder.selected_path = selected_path.clone();
+        holder.native_path = Some(trimmed.to_string());
+        holder.saved_version = version;
+        holder.refresh_dirty();
         holder.bump_snapshot();
         self.note_recovery(&holder);
-        Ok(CurrentGameResultDto {
-            tree,
-            selected_path,
-            snapshot,
-            generation: holder.generation,
-            snapshot_seq: holder.snapshot_seq,
-            dirty: holder.dirty,
-            native_path: holder.native_path.clone(),
-        })
+        holder.current_result().map_err(|error| error.to_string())
     }
 
     pub fn mainline_projection(&self) -> Result<GameDto, CurrentGameError> {
         self.with_document(|document| Ok(document.mainline_projection()))
     }
 
+    #[cfg(test)]
     pub fn admit_whole_game(&self, generation: u64) -> Result<WholeGameAdmission, CurrentGameError> {
         let holder = self.holder.lock().expect("current game state");
         holder.analysis_scope_admission(
@@ -262,7 +275,7 @@ impl CurrentGameState {
         run_id: String,
         generation: u64,
         max_visits: u32,
-    ) -> Result<AnalysisJobStartedDto, app_model::EngineFailureDto> {
+    ) -> crate::EngineCommandResult<AnalysisJobStartedDto> {
         let holder = self.holder.lock().expect("current game state");
         let scope = app_model::AnalysisScopeDto {
             mode: app_model::AnalysisScopeModeDto::FirstChildMainline,
@@ -282,6 +295,7 @@ impl CurrentGameState {
             generation,
             work_items,
         })
+        .map_err(Box::new)
     }
 
     pub fn preview_analysis_scope(
@@ -301,9 +315,10 @@ impl CurrentGameState {
         run_id: String,
         preview: app_model::AnalysisScopePreviewDto,
         conditions: app_model::AnalysisStageConditionsDto,
-    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
-        let invalid =
-            |message| crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message);
+    ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
+        let invalid = |message| {
+            Box::new(crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message))
+        };
         conditions.validate_single_stage().map_err(&invalid)?;
         // Keep semantic revalidation and manager admission under the same owner lock.
         let holder = self.holder.lock().expect("current game state");
@@ -325,6 +340,7 @@ impl CurrentGameState {
             preview.scope,
             conditions,
         )
+        .map_err(Box::new)
     }
 
     pub fn start_all_positions_analysis_task(
@@ -334,9 +350,10 @@ impl CurrentGameState {
         preview: app_model::AnalysisScopePreviewDto,
         overview_conditions: app_model::AnalysisStageConditionsDto,
         deep_conditions: app_model::AnalysisStageConditionsDto,
-    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
-        let invalid =
-            |message| crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message);
+    ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
+        let invalid = |message| {
+            Box::new(crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message))
+        };
         app_model::AnalysisStageConditionsDto::validate_all_positions_two_stage(
             &overview_conditions,
             &deep_conditions,
@@ -363,6 +380,7 @@ impl CurrentGameState {
             overview_conditions,
             deep_conditions,
         )
+        .map_err(Box::new)
     }
 
     pub fn start_swing_analysis_task(
@@ -372,9 +390,10 @@ impl CurrentGameState {
         preview: app_model::AnalysisScopePreviewDto,
         overview_conditions: app_model::AnalysisStageConditionsDto,
         deep_conditions: app_model::AnalysisStageConditionsDto,
-    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
-        let invalid =
-            |message| crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message);
+    ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
+        let invalid = |message| {
+            Box::new(crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message))
+        };
         overview_conditions.validate_single_stage().map_err(&invalid)?;
         deep_conditions.validate_single_stage().map_err(&invalid)?;
         let criteria = preview
@@ -393,20 +412,21 @@ impl CurrentGameState {
         }
         let work_items =
             crate::whole_game_work_items(&admitted, deep_conditions.total_visits.value, &run_id)?;
-        manager.start_swing_analysis_task(
-            engine_manager::WholeGameJobRequest {
+        manager.start_swing_analysis_task(engine_manager::SwingAnalysisTaskRequest {
+            job: engine_manager::WholeGameJobRequest {
                 run_id,
                 generation: admitted.generation,
                 work_items,
             },
-            preview.scope,
-            admitted.requested,
-            admitted.supporting,
-            admitted.swing_comparisons,
-            criteria,
+            scope: preview.scope,
+            requested: admitted.requested,
+            supporting: admitted.supporting,
+            swing_comparisons: admitted.swing_comparisons,
+            swing_criteria: criteria,
             overview_conditions,
             deep_conditions,
-        )
+        })
+        .map_err(Box::new)
     }
 
     pub fn pause_analysis_task(
@@ -414,7 +434,7 @@ impl CurrentGameState {
         manager: &engine_manager::ForegroundEngineManager,
         run_id: &str,
         task_id: &str,
-    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
+    ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
         // The holder lock orders Pause against attachment of already queued events.
         let mut holder = self.holder.lock().expect("current game state");
         let task = manager.pause_analysis_task(run_id, task_id)?;
@@ -429,19 +449,20 @@ impl CurrentGameState {
         manager: &engine_manager::ForegroundEngineManager,
         run_id: &str,
         task_id: &str,
-    ) -> Result<app_model::AnalysisTaskDto, app_model::EngineFailureDto> {
+    ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
         let holder = self.holder.lock().expect("current game state");
         holder.ensure_editable().map_err(|error| {
             crate::job_failure(run_id, app_model::EngineFailureKind::InvalidState, error.message)
         })?;
         manager.continue_analysis_task(run_id, task_id, holder.generation)
+            .map_err(Box::new)
     }
 
     pub fn admit_selected_node(
         &self,
         generation: u64,
         path: &NodePath,
-    ) -> Result<(SelectedNodeSnapshotDto, u8, f32, String), CurrentGameError> {
+    ) -> Result<(SelectedNodeSnapshotDto, u8, u8, f32, String), CurrentGameError> {
         let holder = self.holder.lock().expect("current game state");
         holder.ensure_editable()?;
         let document = holder.document.as_ref().ok_or_else(no_current_game)?;
@@ -452,7 +473,13 @@ impl CurrentGameState {
             });
         }
         let snapshot = document.snapshot(path)?;
-        Ok((snapshot, document.board_size(), document.komi(), document.rules()))
+        Ok((
+            snapshot,
+            document.board_width(),
+            document.board_height(),
+            document.komi(),
+            document.rules(),
+        ))
     }
 
     #[allow(dead_code)]
@@ -460,8 +487,22 @@ impl CurrentGameState {
         self.holder.lock().expect("current game state").dirty
     }
 
-    pub fn select_path(&self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
+    pub fn select_path(
+        &self,
+        path: NodePath,
+        generation: u64,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
+        holder.ensure_editable()?;
+        if holder.document.is_none() {
+            return Err(no_current_game());
+        }
+        if holder.generation != generation {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::InvalidNodePath,
+                message: "Current game semantics changed; select a node from the current tree.".into(),
+            });
+        }
         let changed = holder.selected_path != path;
         let mut result = holder.select_path(path)?;
         if changed {
@@ -492,10 +533,96 @@ impl CurrentGameState {
         self.follow_continuous_position(&mut holder);
         Ok(result)
     }
-
-    pub fn remove_variation(&self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
+    pub fn set_metadata(
+        &self,
+        generation: u64,
+        black_name: String,
+        white_name: String,
+        komi: f32,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
+        let result = holder.set_metadata(generation, &black_name, &white_name, komi)?;
+        self.note_recovery(&holder);
+        self.follow_continuous_position(&mut holder);
+        Ok(result)
+    }
+
+    pub fn edit_markup(
+        &self,
+        path: NodePath,
+        generation: u64,
+        action: app_model::SgfMarkupActionDto,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let mut holder = self.holder.lock().expect("current game state");
+        let result = holder.edit_markup(path, generation, action)?;
+        self.note_recovery(&holder);
+        Ok(result)
+    }
+
+    pub fn remove_variation(
+        &self,
+        path: NodePath,
+        generation: u64,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let mut holder = self.holder.lock().expect("current game state");
+        holder.ensure_editable()?;
+        holder.ensure_generation(generation)?;
         let result = holder.remove_variation(path)?;
+        self.note_recovery(&holder);
+        self.follow_continuous_position(&mut holder);
+        Ok(result)
+    }
+
+    pub fn promote_to_main(
+        &self,
+        path: NodePath,
+        generation: u64,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let mut holder = self.holder.lock().expect("current game state");
+        holder.ensure_editable()?;
+        holder.ensure_generation(generation)?;
+        let result = holder.promote_to_main(path)?;
+        self.note_recovery(&holder);
+        self.follow_continuous_position(&mut holder);
+        Ok(result)
+    }
+
+    pub fn apply_root_setup(
+        &self,
+        generation: u64,
+        stones: Vec<StoneDto>,
+        to_play: PlayerColor,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let mut holder = self.holder.lock().expect("current game state");
+        let result = holder.apply_root_setup(generation, &stones, to_play)?;
+        self.note_recovery(&holder);
+        self.follow_continuous_position(&mut holder);
+        Ok(result)
+    }
+
+    pub fn convert_to_root_setup(
+        &self,
+        generation: u64,
+        path: NodePath,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let mut holder = self.holder.lock().expect("current game state");
+        let result = holder.convert_to_root_setup(generation, path)?;
+        self.note_recovery(&holder);
+        self.follow_continuous_position(&mut holder);
+        Ok(result)
+    }
+
+    pub fn undo(&self, generation: u64) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let mut holder = self.holder.lock().expect("current game state");
+        let result = holder.undo(generation)?;
+        self.note_recovery(&holder);
+        self.follow_continuous_position(&mut holder);
+        Ok(result)
+    }
+
+    pub fn redo(&self, generation: u64) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let mut holder = self.holder.lock().expect("current game state");
+        let result = holder.redo(generation)?;
         self.note_recovery(&holder);
         self.follow_continuous_position(&mut holder);
         Ok(result)
@@ -550,6 +677,9 @@ impl CurrentGameState {
         }
         let payload = SgfAnalysisPayload::from_frame(frame, "KataGo");
         let mut holder = self.holder.lock().expect("current game state");
+        if !matches!(holder.trial_mode, trial::TrialMode::Review) {
+            return None;
+        }
         if holder.rejects_job(&event.run_id, &event.job_id)
             || (event.mode == AnalysisJobModeDto::Continuous && holder.selected_path != event.node_path)
         {
@@ -684,7 +814,8 @@ impl CurrentGameHolder {
         };
         Ok(WholeGameAdmission {
             generation: self.generation,
-            board_size: document.board_size(),
+            board_width: document.board_width(),
+            board_height: document.board_height(),
             komi: document.komi(),
             rules: document.rules(),
             nodes,
@@ -719,48 +850,30 @@ impl CurrentGameHolder {
 
     fn play(&mut self, path: NodePath, vertex: MoveVertex) -> Result<CurrentGameResultDto, CurrentGameError> {
         self.ensure_editable()?;
-        let (snapshot, tree, changed) = {
-            let document = self.document.as_mut().ok_or_else(no_current_game)?;
-            let before = document.serialize()?;
-            let snapshot = document.play(&path, vertex)?;
-            let changed = document.serialize()? != before;
-            (snapshot, document.tree()?, changed)
-        };
-        if changed {
-            self.generation += 1;
-            self.mark_dirty();
+        let outcome = self
+            .document
+            .as_mut()
+            .ok_or_else(no_current_game)?
+            .play_with_history(&self.selected_path, &path, vertex)?;
+        let changed = outcome.edit.is_some();
+        if let Some(edit) = outcome.edit {
+            self.commit_edit(edit);
+            self.generation = self.generation.saturating_add(1);
         }
-        if changed || self.selected_path != snapshot.path {
-            self.selected_path = snapshot.path.clone();
+        if changed || self.selected_path != outcome.snapshot.path {
+            self.selected_path = outcome.snapshot.path;
             self.bump_snapshot();
         }
-        Ok(CurrentGameResultDto {
-            tree,
-            selected_path: snapshot.path.clone(),
-            snapshot,
-            generation: self.generation,
-            snapshot_seq: self.snapshot_seq,
-            dirty: self.dirty,
-            native_path: self.native_path.clone(),
-        })
+        self.current_result()
     }
 
     fn select_path(&mut self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
-        let document = self.document.as_ref().ok_or_else(|| CurrentGameError {
-            kind: CurrentGameErrorKind::NoCurrentGame,
-            message: "no current game".to_string(),
-        })?;
-        let snapshot = document.snapshot(&path)?;
-        self.selected_path = path.clone();
-        Ok(CurrentGameResultDto {
-            tree: document.tree()?,
-            selected_path: path,
-            snapshot,
-            generation: self.generation,
-            snapshot_seq: self.snapshot_seq,
-            dirty: self.dirty,
-            native_path: self.native_path.clone(),
-        })
+        self.document
+            .as_ref()
+            .ok_or_else(no_current_game)?
+            .snapshot(&path)?;
+        self.selected_path = path;
+        self.current_result()
     }
 
     fn set_personal_comment(
@@ -769,48 +882,193 @@ impl CurrentGameHolder {
         comment: &str,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
         self.ensure_editable()?;
-        let (snapshot, tree, changed) = {
-            let document = self.document.as_mut().ok_or_else(no_current_game)?;
-            let before = document.serialize()?;
-            let snapshot = document.set_personal_comment(&path, comment)?;
-            let changed = document.serialize()? != before;
-            (snapshot, document.tree()?, changed)
-        };
-        if changed {
-            self.mark_dirty();
-            self.selected_path = path.clone();
+        let outcome = self
+            .document
+            .as_mut()
+            .ok_or_else(no_current_game)?
+            .set_personal_comment_with_history(&self.selected_path, &path, comment)?;
+        if let Some(edit) = outcome.edit {
+            self.commit_edit(edit);
+            self.selected_path = outcome.snapshot.path;
             self.bump_snapshot();
         }
-        Ok(CurrentGameResultDto {
-            tree,
-            selected_path: path,
-            snapshot,
-            generation: self.generation,
-            snapshot_seq: self.snapshot_seq,
-            dirty: self.dirty,
-            native_path: self.native_path.clone(),
-        })
+        self.current_result()
+    }
+
+    fn set_metadata(
+        &mut self,
+        generation: u64,
+        black_name: &str,
+        white_name: &str,
+        komi: f32,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.ensure_editable()?;
+        self.ensure_generation(generation)?;
+        let document = self.document.as_mut().ok_or_else(no_current_game)?;
+        let previous_komi = document.komi();
+        let outcome =
+            document.set_metadata_with_history(&self.selected_path, black_name, white_name, komi)?;
+        if let Some(edit) = outcome.edit {
+            self.commit_edit(edit);
+            if previous_komi != komi {
+                self.generation = self.generation.saturating_add(1);
+            }
+            self.bump_snapshot();
+        }
+        self.current_result()
     }
 
     fn remove_variation(&mut self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
         self.ensure_editable()?;
-        let document = self.document.as_mut().ok_or_else(no_current_game)?;
-        let selected_path = document.remove_variation(&path)?;
-        let snapshot = document.snapshot(&selected_path)?;
-        let tree = document.tree()?;
-        self.generation += 1;
-        self.mark_dirty();
-        self.selected_path = selected_path.clone();
+        let outcome = self
+            .document
+            .as_mut()
+            .ok_or_else(no_current_game)?
+            .remove_variation_with_history(&self.selected_path, &path)?;
+        self.commit_edit(
+            outcome
+                .edit
+                .expect("variation removal always changes the document"),
+        );
+        self.generation = self.generation.saturating_add(1);
+        self.selected_path = outcome.snapshot.path;
         self.bump_snapshot();
-        Ok(CurrentGameResultDto {
-            tree,
-            selected_path,
-            snapshot,
-            generation: self.generation,
-            snapshot_seq: self.snapshot_seq,
-            dirty: self.dirty,
-            native_path: self.native_path.clone(),
-        })
+        self.current_result()
+    }
+
+    fn promote_to_main(&mut self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.ensure_editable()?;
+        let outcome = self.document.as_mut().ok_or_else(no_current_game)?
+            .promote_to_main_with_history(&self.selected_path, &path)?;
+        if let Some(edit) = outcome.edit {
+            self.commit_edit(edit);
+            self.generation = self.generation.saturating_add(1);
+            self.selected_path = outcome.snapshot.path;
+            self.bump_snapshot();
+        }
+        self.current_result()
+    }
+
+    fn apply_root_setup(
+        &mut self,
+        generation: u64,
+        stones: &[StoneDto],
+        to_play: PlayerColor,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.ensure_editable()?;
+        self.ensure_generation(generation)?;
+        let outcome = self
+            .document
+            .as_mut()
+            .ok_or_else(no_current_game)?
+            .apply_root_setup_with_history(&self.selected_path, stones, to_play)?;
+        if let Some(edit) = outcome.edit {
+            self.commit_edit(edit);
+            self.generation = self.generation.saturating_add(1);
+            self.bump_snapshot();
+        }
+        self.current_result()
+    }
+
+    fn convert_to_root_setup(
+        &mut self,
+        generation: u64,
+        path: NodePath,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.ensure_editable()?;
+        self.ensure_generation(generation)?;
+        if self.selected_path != path {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::InvalidNodePath,
+                message: "Selected node changed; confirm conversion again.".into(),
+            });
+        }
+        let outcome = self
+            .document
+            .as_mut()
+            .ok_or_else(no_current_game)?
+            .convert_to_root_setup_with_history(&path)?;
+        if let Some(edit) = outcome.edit {
+            self.commit_edit(edit);
+            self.generation = self.generation.saturating_add(1);
+            self.selected_path = outcome.snapshot.path;
+            self.bump_snapshot();
+        }
+        self.current_result()
+    }
+
+    fn edit_markup(
+        &mut self,
+        path: NodePath,
+        generation: u64,
+        action: app_model::SgfMarkupActionDto,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.ensure_editable()?;
+        self.ensure_generation(generation)?;
+        if self.selected_path != path {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::InvalidNodePath,
+                message: "Selected node changed before markup was applied.".into(),
+            });
+        }
+        let outcome = self
+            .document
+            .as_mut()
+            .ok_or_else(no_current_game)?
+            .edit_markup_with_history(&self.selected_path, &path, action)?;
+        if let Some(edit) = outcome.edit {
+            self.commit_edit(edit);
+            self.bump_snapshot();
+        }
+        self.current_result()
+    }
+
+    fn undo(&mut self, generation: u64) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.ensure_editable()?;
+        self.ensure_generation(generation)?;
+        let Some(outcome) = self
+            .history
+            .undo(self.document.as_mut().ok_or_else(no_current_game)?)?
+        else {
+            return self.current_result();
+        };
+        let (before, after) = self
+            .undo_revisions
+            .pop()
+            .expect("history revisions follow SGF history");
+        self.redo_revisions.push((before, after));
+        self.edit_revision = before;
+        if outcome.structural {
+            self.generation = self.generation.saturating_add(1);
+        }
+        self.selected_path = outcome.selected_path;
+        self.refresh_dirty();
+        self.bump_snapshot();
+        self.current_result()
+    }
+
+    fn redo(&mut self, generation: u64) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.ensure_editable()?;
+        self.ensure_generation(generation)?;
+        let Some(outcome) = self
+            .history
+            .redo(self.document.as_mut().ok_or_else(no_current_game)?)?
+        else {
+            return self.current_result();
+        };
+        let (before, after) = self
+            .redo_revisions
+            .pop()
+            .expect("history revisions follow SGF history");
+        self.undo_revisions.push((before, after));
+        self.edit_revision = after;
+        if outcome.structural {
+            self.generation = self.generation.saturating_add(1);
+        }
+        self.selected_path = outcome.selected_path;
+        self.refresh_dirty();
+        self.bump_snapshot();
+        self.current_result()
     }
 
     fn attach_primary_analysis(
@@ -820,42 +1078,87 @@ impl CurrentGameHolder {
         payload: SgfAnalysisPayload,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
         self.ensure_editable()?;
-        if self.document.is_none() {
-            return Err(no_current_game());
-        }
         if self.generation != generation {
             return Err(CurrentGameError {
                 kind: CurrentGameErrorKind::NoCurrentGame,
                 message: "current game generation does not match".to_string(),
             });
         }
-        let (tree, snapshot, changed) = {
-            let document = self.document.as_mut().ok_or_else(no_current_game)?;
-            let (snapshot, changed) = document.replace_primary_analysis(&path, &payload)?;
-            (document.tree()?, snapshot, changed)
-        };
+        let changed = self
+            .document
+            .as_mut()
+            .ok_or_else(no_current_game)?
+            .replace_primary_analysis(&path, &payload)?
+            .1;
         if changed {
-            self.mark_dirty();
+            self.mark_nonhistory_change();
             self.bump_snapshot();
         }
+        self.result_at(&path)
+    }
+
+    fn current_result(&self) -> Result<CurrentGameResultDto, CurrentGameError> {
+        self.result_at(&self.selected_path)
+    }
+
+    fn result_at(&self, selected_path: &NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let document = self.document.as_ref().ok_or_else(no_current_game)?;
         Ok(CurrentGameResultDto {
-            tree,
-            selected_path: path,
-            snapshot,
+            tree: document.tree()?,
+            selected_path: selected_path.clone(),
+            snapshot: document.snapshot(selected_path)?,
             generation: self.generation,
             snapshot_seq: self.snapshot_seq,
             dirty: self.dirty,
+            can_undo: self.history.can_undo(),
+            can_redo: self.history.can_redo(),
             native_path: self.native_path.clone(),
         })
+    }
+
+    fn ensure_generation(&self, generation: u64) -> Result<(), CurrentGameError> {
+        if self.generation == generation {
+            Ok(())
+        } else {
+            Err(CurrentGameError {
+                kind: CurrentGameErrorKind::InvalidNodePath,
+                message: "Current game semantics changed; use the latest document state.".to_string(),
+            })
+        }
+    }
+
+    fn commit_edit(&mut self, edit: SgfDocumentEdit) {
+        let before = self.edit_revision;
+        self.next_edit_revision = self.next_edit_revision.saturating_add(1);
+        let after = self.next_edit_revision;
+        self.history.commit(edit);
+        self.redo_revisions.clear();
+        self.undo_revisions.push((before, after));
+        if self.undo_revisions.len() > 100 {
+            self.undo_revisions.remove(0);
+        }
+        self.edit_revision = after;
+        self.refresh_dirty();
     }
 
     fn bump_snapshot(&mut self) {
         self.snapshot_seq = self.snapshot_seq.saturating_add(1);
     }
 
-    fn mark_dirty(&mut self) {
-        self.dirty = true;
-        self.dirty_epoch = self.dirty_epoch.saturating_add(1);
+    fn mark_nonhistory_change(&mut self) {
+        self.nonhistory_revision = self.nonhistory_revision.saturating_add(1);
+        self.refresh_dirty();
+    }
+
+    fn content_version(&self) -> ContentVersion {
+        ContentVersion {
+            edit: self.edit_revision,
+            nonhistory: self.nonhistory_revision,
+        }
+    }
+
+    fn refresh_dirty(&mut self) {
+        self.dirty = self.content_version() != self.saved_version;
     }
 }
 
@@ -865,7 +1168,61 @@ mod current_game_replacement {
     use app_model::{CurrentGameErrorKind, MoveVertex, NodePath};
 
     const BRANCHING: &str = include_str!("../../../../tests/golden/editable-workspace-branching.sgf");
-    const EMPTY: &str = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[黑]PW[白])";
+    const EMPTY: &str = "(;GM[1]FF[4]SZ[13:9]KM[7.5]PB[黑]PW[白])";
+
+    #[test]
+    fn root_setup_and_conversion_keep_source_and_reverse_as_single_edits() {
+        let state = CurrentGameState::default();
+        let source = Some("/tmp/root-setup.sgf".to_string());
+        let opened = state
+            .replace("(;SZ[2:3]C[root]XY[keep];B[aa];W[bb])", source.clone())
+            .unwrap();
+        let original = state.serialize().unwrap();
+        let selected = opened.selected_path.clone();
+        let converted = state
+            .convert_to_root_setup(opened.generation, selected.clone())
+            .unwrap();
+        assert!(converted.tree.children.is_empty());
+        assert!(converted.dirty && converted.can_undo);
+        assert_eq!(converted.native_path, source);
+        assert_eq!(converted.snapshot.position.move_number, 0);
+        assert_eq!(
+            converted.snapshot.position.stones,
+            opened.snapshot.position.stones
+        );
+        assert!(converted.generation > opened.generation);
+        assert!(state.convert_to_root_setup(opened.generation, selected).is_err());
+
+        let edited = state
+            .apply_root_setup(
+                converted.generation,
+                vec![StoneDto {
+                    x: 1,
+                    y: 2,
+                    color: PlayerColor::White,
+                }],
+                PlayerColor::Black,
+            )
+            .unwrap();
+        assert_eq!(edited.snapshot.position.stones.len(), 1);
+        let undone_setup = state.undo(edited.generation).unwrap();
+        assert_eq!(
+            undone_setup.snapshot.position.stones,
+            converted.snapshot.position.stones
+        );
+        let undone_conversion = state.undo(undone_setup.generation).unwrap();
+        assert_eq!(undone_conversion.selected_path, opened.selected_path);
+        assert_eq!(state.serialize().unwrap(), original);
+        assert!(!undone_conversion.dirty);
+        assert_eq!(undone_conversion.native_path, source);
+        let redo_conversion = state.redo(undone_conversion.generation).unwrap();
+        let redo_setup = state.redo(redo_conversion.generation).unwrap();
+        assert_eq!(
+            redo_setup.snapshot.position.stones,
+            edited.snapshot.position.stones
+        );
+        assert!(redo_setup.dirty);
+    }
 
     #[test]
     fn current_game_replacement_installs_shared_result_and_preserves_state_on_cancel_or_failure() {
@@ -899,6 +1256,8 @@ mod current_game_replacement {
         assert!(imported.native_path.is_none());
         assert!(imported.selected_path.indices.is_empty());
         assert_eq!(imported.snapshot.position.move_number, 0);
+        assert_eq!(imported.snapshot.position.board_width, 13);
+        assert_eq!(imported.snapshot.position.board_height, 9);
         assert!(state.mainline_projection().unwrap().moves.is_empty());
 
         state.force_dirty();
@@ -941,7 +1300,9 @@ mod current_game_replacement {
     #[test]
     fn select_path_returns_snapshot_without_mutating_document_identity() {
         let state = CurrentGameState::default();
-        let missing = state.select_path(NodePath { indices: Vec::new() }).unwrap_err();
+        let missing = state
+            .select_path(NodePath { indices: Vec::new() }, state.inspect().0)
+            .unwrap_err();
         assert_eq!(missing.kind, CurrentGameErrorKind::NoCurrentGame);
 
         let opened = state
@@ -949,7 +1310,9 @@ mod current_game_replacement {
             .unwrap();
         let before = state.holder.lock().expect("current game state").snapshot_state();
 
-        let second = state.select_path(NodePath { indices: vec![0, 1] }).unwrap();
+        let second = state
+            .select_path(NodePath { indices: vec![0, 1] }, state.inspect().0)
+            .unwrap();
         assert_eq!(
             state.holder.lock().expect("current game state").snapshot_state(),
             before
@@ -964,7 +1327,9 @@ mod current_game_replacement {
         assert_eq!(second.snapshot.position.move_number, 2);
         assert_eq!(second.snapshot.position.to_play, app_model::PlayerColor::White);
 
-        let invalid = state.select_path(NodePath { indices: vec![0, 2] }).unwrap_err();
+        let invalid = state
+            .select_path(NodePath { indices: vec![0, 2] }, state.inspect().0)
+            .unwrap_err();
         assert_eq!(invalid.kind, CurrentGameErrorKind::InvalidNodePath);
         assert_eq!(
             state.holder.lock().expect("current game state").snapshot_state(),
@@ -974,14 +1339,46 @@ mod current_game_replacement {
     }
 
     #[test]
+    fn exact_navigation_rejects_old_document_and_invalid_paths_without_dirtying() {
+        let state = CurrentGameState::default();
+        let old = state.replace(BRANCHING, None).unwrap();
+        let current = state
+            .replace(
+                include_str!("../../../../tests/golden/r6-exact-navigation.sgf"),
+                None,
+            )
+            .unwrap();
+        let before = state.serialize().unwrap();
+        assert!(state.select_path(NodePath::default(), old.generation).is_err());
+        assert!(state
+            .select_path(NodePath { indices: vec![9] }, current.generation)
+            .is_err());
+        let selected = state
+            .select_path(current.selected_path.clone(), current.generation)
+            .unwrap();
+        assert_eq!(selected, current);
+        for path in [vec![], vec![0], vec![0, 0], vec![0, 0, 0], vec![0, 0, 0, 1, 0]] {
+            let result = state
+                .select_path(NodePath { indices: path }, current.generation)
+                .unwrap();
+            assert!(!result.dirty);
+            assert_eq!(result.generation, current.generation);
+            assert_eq!(state.serialize().unwrap(), before);
+        }
+    }
+
+    #[test]
     fn admit_selected_node_requires_matching_generation_and_existing_path() {
         let state = CurrentGameState::default();
-        let opened = state.replace(EMPTY, None).unwrap();
-        let (snapshot, board_size, komi, rules) = state
+        let opened = state
+            .replace("(;GM[1]FF[4]SZ[13:9]KM[7.5]RU[Chinese])", None)
+            .unwrap();
+        let (snapshot, board_width, board_height, komi, rules) = state
             .admit_selected_node(opened.generation, &opened.selected_path)
             .unwrap();
         assert_eq!(snapshot.path, opened.selected_path);
-        assert_eq!(board_size, 19);
+        assert_eq!(board_width, 13);
+        assert_eq!(board_height, 9);
         assert_eq!(komi, 7.5);
         assert_eq!(rules, "chinese");
 
@@ -1005,15 +1402,21 @@ mod current_game_replacement {
         );
 
         let opened = state
-            .replace(BRANCHING, Some("/tmp/branching.sgf".to_string()))
+            .replace(
+                "(;GM[1]FF[4]SZ[5:7]KM[0.5]RU[Chinese];B[aa](;W[bb];B[cc])(;W[dd];B[]))",
+                Some("/tmp/branching.sgf".to_string()),
+            )
             .unwrap();
-        let sibling = state.select_path(NodePath { indices: vec![0, 1] }).unwrap();
+        let sibling = state
+            .select_path(NodePath { indices: vec![0, 1] }, state.inspect().0)
+            .unwrap();
         assert_eq!(sibling.generation, opened.generation);
         assert_eq!(sibling.selected_path.indices, vec![0, 1]);
 
         let admitted = state.admit_whole_game(opened.generation).unwrap();
         assert_eq!(admitted.generation, opened.generation);
-        assert_eq!(admitted.board_size, 5);
+        assert_eq!(admitted.board_width, 5);
+        assert_eq!(admitted.board_height, 7);
         assert_eq!(admitted.komi, 0.5);
         assert_eq!(admitted.rules, "chinese");
         let paths: Vec<Vec<u32>> = admitted
@@ -1024,10 +1427,96 @@ mod current_game_replacement {
         assert_eq!(paths, vec![Vec::new(), vec![0], vec![0, 0], vec![0, 0, 0]]);
         assert_eq!(
             admitted.nodes[3].position.last_move.as_ref().unwrap().vertex,
-            MoveVertex::Pass
+            MoveVertex::Point(app_model::PointDto { x: 2, y: 2 })
         );
 
         assert!(state.admit_whole_game(opened.generation + 1).is_err());
+    }
+    #[test]
+    fn metadata_commit_is_atomic_and_komi_fences_old_analysis() {
+        let state = CurrentGameState::default();
+        let original =
+            "(;GM[1]SZ[5]KM[6.5]PB[甲]PW[乙]HA[2]XY[keep]LZOP[engine 50 100];B[aa]LZ[engine 50 100])";
+        let opened = state.replace(original, None).unwrap();
+        let selected = opened.selected_path.clone();
+        let rejected = state
+            .set_metadata(opened.generation, "丙".into(), "丁".into(), f32::NAN)
+            .unwrap_err();
+        assert_eq!(rejected.kind, CurrentGameErrorKind::MalformedSgf);
+        assert_eq!(state.serialize().unwrap(), original);
+        assert!(!state.inspect().1);
+
+        let names = state
+            .set_metadata(opened.generation, "长名 黑".into(), "白]名".into(), 6.5)
+            .unwrap();
+        assert_eq!(names.generation, opened.generation);
+        assert!(names.can_undo && names.dirty);
+        assert!(names.snapshot.primary_analysis.is_some());
+        assert!(state.admit_selected_node(names.generation, &selected).is_ok());
+        assert!(state.serialize().unwrap().contains("PW[白\\]名]"));
+
+        let changed = state
+            .set_metadata(names.generation, "长名 黑".into(), "白]名".into(), 7.5)
+            .unwrap();
+        assert!(changed.generation > names.generation);
+        assert!(changed.snapshot.primary_analysis.is_none());
+        assert!(!state.serialize().unwrap().contains("LZ["));
+        assert!(state.admit_selected_node(names.generation, &selected).is_err());
+        assert_eq!(
+            state
+                .admit_selected_node(changed.generation, &selected)
+                .unwrap()
+                .3,
+            7.5
+        );
+        assert!(state
+            .set_metadata(names.generation, "过期".into(), "过期".into(), 0.5)
+            .is_err());
+
+        let undone_komi = state.undo(changed.generation).unwrap();
+        assert!(undone_komi.generation > changed.generation);
+        assert!(undone_komi.snapshot.primary_analysis.is_some());
+        assert_eq!(
+            state
+                .admit_selected_node(undone_komi.generation, &selected)
+                .unwrap()
+                .3,
+            6.5
+        );
+        let undone_names = state.undo(undone_komi.generation).unwrap();
+        assert_eq!(undone_names.generation, undone_komi.generation);
+        assert!(!undone_names.dirty);
+        assert_eq!(state.serialize().unwrap(), original);
+        let redone_names = state.redo(undone_names.generation).unwrap();
+        assert_eq!(redone_names.generation, undone_names.generation);
+        let redone_komi = state.redo(redone_names.generation).unwrap();
+        assert!(redone_komi.generation > redone_names.generation);
+        assert!(!state.serialize().unwrap().contains("LZOP["));
+    }
+    #[test]
+    fn untouched_metadata_retains_original_sgf_and_history() {
+        let state = CurrentGameState::default();
+        let original = "(;GM[1]SZ[9]KM[6.50]XY[keep]LZOP[engine 50 100])";
+        let opened = state.replace(original, None).unwrap();
+        let unchanged = state
+            .set_metadata(opened.generation, String::new(), String::new(), 6.5)
+            .unwrap();
+        assert_eq!(state.serialize().unwrap(), original);
+        assert_eq!(unchanged.generation, opened.generation);
+        assert_eq!(unchanged.snapshot_seq, opened.snapshot_seq);
+        assert!(!unchanged.dirty && !unchanged.can_undo);
+        assert!(unchanged.snapshot.primary_analysis.is_some());
+
+        let renamed = state
+            .set_metadata(unchanged.generation, "Black".into(), String::new(), 6.5)
+            .unwrap();
+        assert!(renamed.can_undo);
+        assert_eq!(renamed.generation, opened.generation);
+        assert!(renamed.snapshot.primary_analysis.is_some());
+        assert!(state.serialize().unwrap().contains("KM[6.50]"));
+        let undone = state.undo(renamed.generation).unwrap();
+        assert!(!undone.dirty);
+        assert_eq!(state.serialize().unwrap(), original);
     }
 }
 
@@ -1043,7 +1532,7 @@ mod current_game_remove_variation {
         let state = CurrentGameState::default();
         assert_eq!(
             state
-                .remove_variation(NodePath { indices: vec![0] })
+                .remove_variation(NodePath { indices: vec![0] }, 0)
                 .unwrap_err()
                 .kind,
             CurrentGameErrorKind::NoCurrentGame
@@ -1057,7 +1546,7 @@ mod current_game_remove_variation {
         let before_serialize = state.serialize().unwrap();
 
         let root = state
-            .remove_variation(NodePath { indices: Vec::new() })
+            .remove_variation(NodePath { indices: Vec::new() }, opened.generation)
             .unwrap_err();
         assert_eq!(root.kind, CurrentGameErrorKind::RootRemoval);
         assert_eq!(state.inspect(), before);
@@ -1068,13 +1557,15 @@ mod current_game_remove_variation {
         );
 
         let invalid = state
-            .remove_variation(NodePath { indices: vec![0, 2] })
+            .remove_variation(NodePath { indices: vec![0, 2] }, opened.generation)
             .unwrap_err();
         assert_eq!(invalid.kind, CurrentGameErrorKind::InvalidNodePath);
         assert_eq!(state.inspect(), before);
         assert_eq!(state.serialize().unwrap(), before_serialize);
 
-        let removed = state.remove_variation(NodePath { indices: vec![0, 1] }).unwrap();
+        let removed = state
+            .remove_variation(NodePath { indices: vec![0, 1] }, opened.generation)
+            .unwrap();
         assert_eq!(removed.selected_path.indices, vec![0]);
         assert_eq!(removed.snapshot.path.indices, vec![0]);
         assert_eq!(removed.snapshot.personal_comment, "main move");
@@ -1096,12 +1587,55 @@ mod current_game_remove_variation {
         );
         assert_eq!(state.mainline_projection().unwrap().moves.len(), 3);
     }
+
+    #[test]
+    fn promoting_mainline_fences_old_paths_and_undo_restores_saved_tree() {
+        let state = CurrentGameState::default();
+        let opened = state
+            .replace(
+                "(;SZ[9](;B[aa]XY[first])(;B[bb]C[other](;W[cc])(;W[dd]XY[selected])))",
+                None,
+            )
+            .unwrap();
+        let selected = NodePath { indices: vec![1, 1] };
+        state.select_path(selected.clone(), opened.generation).unwrap();
+        let promoted = state
+            .promote_to_main(selected.clone(), opened.generation)
+            .unwrap();
+        assert_eq!(promoted.selected_path.indices, vec![0, 0]);
+        assert!(promoted.dirty && promoted.can_undo);
+        assert_eq!(promoted.generation, opened.generation + 1);
+        assert!(state.select_path(selected.clone(), opened.generation).is_err());
+        assert!(state
+            .remove_variation(selected.clone(), opened.generation)
+            .is_err());
+        assert!(state
+            .promote_to_main(selected.clone(), opened.generation)
+            .is_err());
+
+        let saved = state.serialize().unwrap();
+        let reopened = CurrentSgfDocument::open(&saved).unwrap();
+        assert_eq!(reopened.tree().unwrap(), promoted.tree);
+        let unchanged = state
+            .promote_to_main(promoted.selected_path.clone(), promoted.generation)
+            .unwrap();
+        assert_eq!(unchanged.generation, promoted.generation);
+        assert_eq!(unchanged.snapshot_seq, promoted.snapshot_seq);
+        let undone = state.undo(promoted.generation).unwrap();
+        assert_eq!(undone.selected_path, selected);
+        assert_eq!(undone.generation, promoted.generation + 1);
+        assert!(!undone.dirty);
+        assert_eq!(undone.tree, opened.tree);
+        let redone = state.redo(undone.generation).unwrap();
+        assert_eq!(redone.selected_path, promoted.selected_path);
+        assert_eq!(state.serialize().unwrap(), saved);
+    }
 }
 
 #[cfg(test)]
 impl CurrentGameState {
     pub(crate) fn force_dirty(&self) {
-        self.holder.lock().expect("current game state").mark_dirty();
+        self.holder.lock().expect("current game state").mark_nonhistory_change();
     }
 
     fn save_to_path_after_hook(
@@ -1276,5 +1810,166 @@ mod current_game_comment_edit {
             .set_personal_comment(NodePath { indices: Vec::new() }, "note".to_string())
             .unwrap_err();
         assert_eq!(error.kind, CurrentGameErrorKind::NoCurrentGame);
+    }
+}
+
+#[cfg(test)]
+mod current_game_document_history {
+    use super::*;
+    use app_model::{CurrentGameErrorKind, MoveVertex, NodePath, PointDto};
+
+    const BRANCHING: &str = include_str!("../../../../tests/golden/editable-workspace-branching.sgf");
+
+    #[test]
+    fn mixed_undo_redo_restores_exact_cursor_and_fences_stale_generations() {
+        let state = CurrentGameState::default();
+        let opened = state
+            .replace(BRANCHING, Some("/tmp/source.sgf".to_string()))
+            .unwrap();
+        assert!(!opened.can_undo);
+        assert!(!opened.can_redo);
+
+        let comment_path = NodePath { indices: vec![0, 1] };
+        let commented = state
+            .set_personal_comment(comment_path.clone(), "history comment".to_string())
+            .unwrap();
+        assert_eq!(commented.generation, opened.generation);
+        assert!(commented.can_undo);
+
+        let played = state
+            .play(
+                NodePath { indices: vec![0] },
+                MoveVertex::Point(PointDto { x: 1, y: 1 }),
+            )
+            .unwrap();
+        let generation_before_undo = played.generation;
+        let undone_play = state.undo(generation_before_undo).unwrap();
+        assert!(undone_play.generation > generation_before_undo);
+        assert_eq!(undone_play.selected_path, comment_path);
+        assert!(undone_play.can_redo);
+
+        let before_stale = state.inspect();
+        let stale = state.undo(generation_before_undo).unwrap_err();
+        assert_eq!(stale.kind, CurrentGameErrorKind::InvalidNodePath);
+        assert_eq!(state.inspect(), before_stale);
+
+        let undone_comment = state.undo(undone_play.generation).unwrap();
+        assert_eq!(undone_comment.generation, undone_play.generation);
+        assert_eq!(undone_comment.selected_path, opened.selected_path);
+        assert!(!undone_comment.can_undo);
+        assert!(undone_comment.can_redo);
+
+        let redone_comment = state.redo(undone_comment.generation).unwrap();
+        assert_eq!(redone_comment.generation, undone_comment.generation);
+        assert_eq!(redone_comment.selected_path, comment_path);
+        let redone_play = state.redo(redone_comment.generation).unwrap();
+        assert!(redone_play.generation > redone_comment.generation);
+        assert_eq!(redone_play.selected_path, played.selected_path);
+        assert!(!redone_play.can_redo);
+    }
+
+    #[test]
+    fn empty_history_is_unchanged_and_new_branch_or_replacement_clears_redo() {
+        let state = CurrentGameState::default();
+        let opened = state.replace(BRANCHING, None).unwrap();
+        let empty = state.undo(opened.generation).unwrap();
+        assert_eq!(empty, opened);
+
+        let edited = state
+            .set_personal_comment(NodePath::default(), "first".to_string())
+            .unwrap();
+        let undone = state.undo(edited.generation).unwrap();
+        assert!(undone.can_redo);
+        let branched = state
+            .set_personal_comment(NodePath::default(), "branch".to_string())
+            .unwrap();
+        assert!(!branched.can_redo);
+
+        let replaced = state.replace("(;GM[1]FF[4]SZ[9])", None).unwrap();
+        assert!(!replaced.can_undo);
+        assert!(!replaced.can_redo);
+        assert_eq!(state.undo(replaced.generation).unwrap(), replaced);
+    }
+
+    #[test]
+    fn pending_departure_rejects_history_without_mutation() {
+        let state = CurrentGameState::default();
+        let opened = state.replace(BRANCHING, None).unwrap();
+        let edited = state
+            .set_personal_comment(NodePath::default(), "pending".to_string())
+            .unwrap();
+        let before = state.serialize().unwrap();
+        let admission = state.prepare_replacement("(;GM[1]FF[4]SZ[9])", None).unwrap();
+        let departure_id = match admission {
+            app_model::DocumentDepartureAdmissionDto::NeedsDecision { departure_id }
+            | app_model::DocumentDepartureAdmissionDto::Ready { departure_id } => departure_id,
+        };
+
+        let error = state.undo(edited.generation).unwrap_err();
+        assert_eq!(error.kind, CurrentGameErrorKind::DepartureInProgress);
+        assert_eq!(state.serialize().unwrap(), before);
+        state.cancel_replacement(departure_id).unwrap();
+        let undone = state.undo(opened.generation).unwrap();
+        assert_eq!(undone.snapshot.personal_comment, opened.snapshot.personal_comment);
+    }
+}
+
+#[cfg(test)]
+mod current_game_markup_edit {
+    use super::*;
+    use app_model::{PointDto, SgfMarkupActionDto, SgfMarkupToolDto};
+
+    #[test]
+    fn markup_edit_uses_selected_document_identity_and_nonstructural_history() {
+        let state = CurrentGameState::default();
+        let opened = state
+            .replace("(;SZ[5:4]C[keep];B[aa](;W[bb])(;W[cb]))", None)
+            .unwrap();
+        let branch = opened.selected_path.clone();
+        let action = SgfMarkupActionDto::Point {
+            point: PointDto { x: 4, y: 3 },
+            tool: SgfMarkupToolDto::Circle,
+        };
+        let edited = state
+            .edit_markup(branch.clone(), opened.generation, action.clone())
+            .unwrap();
+        assert!(edited.dirty && edited.can_undo);
+        assert_eq!(edited.generation, opened.generation);
+        assert!(edited.snapshot_seq > opened.snapshot_seq);
+        assert_eq!(edited.snapshot.markup.len(), 1);
+        let duplicate = state
+            .edit_markup(branch.clone(), opened.generation, action.clone())
+            .unwrap();
+        assert_eq!(duplicate.snapshot_seq, edited.snapshot_seq);
+
+        let root = NodePath::default();
+        state.select_path(root.clone(), opened.generation).unwrap();
+        let before = state.serialize().unwrap();
+        assert_eq!(
+            state
+                .edit_markup(branch.clone(), opened.generation, action.clone())
+                .unwrap_err()
+                .kind,
+            CurrentGameErrorKind::InvalidNodePath
+        );
+        assert_eq!(state.serialize().unwrap(), before);
+        let restored = state.undo(opened.generation).unwrap();
+        assert_eq!(restored.selected_path, branch);
+        assert!(!restored.dirty);
+        assert!(restored.snapshot.markup.is_empty());
+        let redone = state.redo(opened.generation).unwrap();
+        assert_eq!(redone.snapshot.markup.len(), 1);
+        assert_eq!(redone.generation, opened.generation);
+
+        let replacement = state.replace("(;SZ[5:4])", None).unwrap();
+        assert_eq!(
+            state
+                .edit_markup(root, opened.generation, action)
+                .unwrap_err()
+                .kind,
+            CurrentGameErrorKind::InvalidNodePath
+        );
+        assert!(!replacement.dirty);
+        assert!(!replacement.can_undo);
     }
 }
