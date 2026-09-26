@@ -23,7 +23,8 @@ pub use catalog::{
 };
 pub use lifecycle::{
     AnalysisJobCancel, AnalysisJobEventDto, AnalysisJobLane, ContinuousPrimaryAction, ForegroundEngineConfig,
-    ForegroundEngineManager, SelectedNodeJobRequest, WholeGameJobRequest, WholeGameWorkItem,
+    ForegroundEngineManager, SelectedNodeJobRequest, SwingAnalysisTaskRequest, WholeGameJobRequest,
+    WholeGameWorkItem,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

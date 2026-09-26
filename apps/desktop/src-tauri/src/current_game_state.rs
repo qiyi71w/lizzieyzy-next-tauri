@@ -405,20 +405,20 @@ impl CurrentGameState {
         }
         let work_items =
             crate::whole_game_work_items(&admitted, deep_conditions.total_visits.value, &run_id)?;
-        manager.start_swing_analysis_task(
-            engine_manager::WholeGameJobRequest {
+        manager.start_swing_analysis_task(engine_manager::SwingAnalysisTaskRequest {
+            job: engine_manager::WholeGameJobRequest {
                 run_id,
                 generation: admitted.generation,
                 work_items,
             },
-            preview.scope,
-            admitted.requested,
-            admitted.supporting,
-            admitted.swing_comparisons,
-            criteria,
+            scope: preview.scope,
+            requested: admitted.requested,
+            supporting: admitted.supporting,
+            swing_comparisons: admitted.swing_comparisons,
+            swing_criteria: criteria,
             overview_conditions,
             deep_conditions,
-        )
+        })
     }
 
     pub fn pause_analysis_task(

@@ -126,6 +126,17 @@ pub struct WholeGameJobRequest {
     pub work_items: Vec<WholeGameWorkItem>,
 }
 
+pub struct SwingAnalysisTaskRequest {
+    pub job: WholeGameJobRequest,
+    pub scope: AnalysisScopeDto,
+    pub requested: Vec<NodePath>,
+    pub supporting: Vec<NodePath>,
+    pub swing_comparisons: Vec<AnalysisSwingComparisonDto>,
+    pub swing_criteria: AnalysisSwingCriteriaDto,
+    pub overview_conditions: AnalysisStageConditionsDto,
+    pub deep_conditions: AnalysisStageConditionsDto,
+}
+
 #[derive(Default)]
 struct AnalysisTaskTargets {
     requested: Option<Vec<NodePath>>,
@@ -966,15 +977,18 @@ impl ForegroundEngineManager {
 
     pub fn start_swing_analysis_task(
         &self,
-        request: WholeGameJobRequest,
-        scope: AnalysisScopeDto,
-        requested: Vec<NodePath>,
-        supporting: Vec<NodePath>,
-        swing_comparisons: Vec<AnalysisSwingComparisonDto>,
-        swing_criteria: AnalysisSwingCriteriaDto,
-        overview_conditions: AnalysisStageConditionsDto,
-        deep_conditions: AnalysisStageConditionsDto,
+        request: SwingAnalysisTaskRequest,
     ) -> Result<AnalysisTaskDto, EngineFailureDto> {
+        let SwingAnalysisTaskRequest {
+            job: request,
+            scope,
+            requested,
+            supporting,
+            swing_comparisons,
+            swing_criteria,
+            overview_conditions,
+            deep_conditions,
+        } = request;
         overview_conditions
             .validate_single_stage()
             .and_then(|_| deep_conditions.validate_single_stage())
@@ -2624,21 +2638,19 @@ impl Inner {
             );
             return None;
         }
-        if started.mode == AnalysisJobModeDto::Continuous {
-            if !during && !has_result {
-                let published = failure(
-                    EngineOperationDto::Job,
-                    EngineFailureKind::Protocol,
-                    "continuous search ended without valid analysis".into(),
-                    Some(run_id),
-                    None,
-                    None,
-                )
-                .with_job_id(&started.job_id);
-                finish_failed_job(&mut state, &started, published);
-                publish_snapshot(&mut state);
-                return None;
-            }
+        if started.mode == AnalysisJobModeDto::Continuous && !during && !has_result {
+            let published = failure(
+                EngineOperationDto::Job,
+                EngineFailureKind::Protocol,
+                "continuous search ended without valid analysis".into(),
+                Some(run_id),
+                None,
+                None,
+            )
+            .with_job_id(&started.job_id);
+            finish_failed_job(&mut state, &started, published);
+            publish_snapshot(&mut state);
+            return None;
         }
         if during && !has_data {
             return None;
