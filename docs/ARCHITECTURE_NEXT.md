@@ -119,6 +119,8 @@ Analysis-derived helpers such as candidate sorting and problem marker classifica
 
 Engine profile catalog, Autoload Default, asset checks, and the manager-owned Foreground Engine Run: lifecycle snapshot, Start/Stop/Restart/Switch, selected-node and whole-game Analysis Jobs, process execution, cancellation, and typed failure.
 
+`start_swing_analysis_task` receives one Rust-only `SwingAnalysisTaskRequest` containing the captured whole-game job, scope, requested/supporting paths, swing comparisons and criteria, and overview/deep conditions. The current-game owner still revalidates the preview before admission; this request grouping does not change command payloads or event identities.
+
 ### `crates/app-preferences`
 
 Durable app preference storage for the categorized Preferences surface. Missing files load owner defaults. Unreadable files are isolated beside the original path and recovered to defaults with a user-visible report. Explicit writes use replace-safe persist; serialize/write/replace failures keep the previous durable value. This crate owns the preference mechanism only. It does not absorb analysis, shortcut, layout, scoring, window, or engine-domain semantics.

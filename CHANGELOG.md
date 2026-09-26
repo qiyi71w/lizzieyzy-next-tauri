@@ -22,6 +22,7 @@
 - Added independent, durable task search-time, total-visit and leading-candidate-visit conditions with OR stopping, observed ending causes, per-position query identity and target-final cleanup. Preset writes leave active task conditions unchanged.
 - Added an all-position two-stage task strategy: a 32-visit overview of every target precedes an independently persisted deep pass with a 500-visit minimum, stage-local Pause/Continue progress, retained overview summaries, and Ctrl+Shift+B access.
 - KataGo JSONL parsing now clamps only epsilon-sized winrate roundoff at 0/1 before strict frame validation; material out-of-range values remain invalid.
+- Grouped swing-analysis admission into a named Rust request while preserving stage budgets, target identities and continuous no-result failure handling. Simplified equivalent protocol/history checks and lifecycle test result handling for strict lint checks.
 
 ### 中文
 
@@ -43,6 +44,7 @@
 - 分析任务新增独立持久化的搜索时间、总 visits 与首选候选 visits 条件，任一到限即停止实际查询；记录观测到的结束原因，以逐位置查询身份和目标 final 清理保护完成进度。预设写入不改变当前任务预算。
 - 新增全位置两阶段分析任务：先以 32 visits 概览全部目标，再按独立持久化且不低于 500 visits 的深度预算逐点分析；暂停／继续保留阶段进度与概览摘要，并支持 Ctrl+Shift+B 启动。
 - KataGo JSONL 解析在严格帧校验前仅校正 0/1 附近的微小胜率浮点误差；明显越界值仍被拒绝。
+- swing 分析准入改用具名 Rust 请求，保留阶段预算、目标身份与连续分析无结果失败处理；对协议／历史检查及生命周期测试结果处理做等价 lint 修正。
 
 ## [0.1.0] - 2026-05-01
 

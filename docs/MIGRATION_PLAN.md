@@ -69,7 +69,7 @@ The existing Tauri implementation is the migration starting point and must be pr
 - Rust-owned current-game state, tree-shaped DTOs, `NodePath`, SGF mutation/serialization, Go-rule validation, and fresh projections for remaining analysis consumers.
 - Native SGF Open/Save/Save As, including cancellation and failed-write preservation; browser preview remains explicitly non-authoritative.
 - Variation navigation, legal move/pass editing, branch removal, personal comments, and semantic save/reopen without an engine.
-- Unified 100-commit Undo/Redo for move/pass insertion, personal comments and variation removal, with semantic reversals, exact cursors and Save-aware dirty state. R6 ticket 04 owns the Windows/native and real-KataGo acceptance record; implementation alone does not close `SGF-12` history acceptance.
+- Unified 100-commit Undo/Redo for moves, passes, comments, metadata, markup, root setup/conversion, result edits and structural tree changes, with semantic reversals, exact cursors and Save-aware dirty state. Owner acceptance and the R6 integrated Windows gate cover native Save/reopen and real-KataGo identity preservation.
 - Board, exact-node analysis presentation, candidate/PV/ownership/policy paths, Java-compatible Move Rank markers, configurable win-rate/score chart, Sub-Board Variation/Raw, and synchronized Variation Replay.
 - Persisted engine profiles, asset checks, KataGo command construction, one manager-owned event contract, independent selected-node and first-child-mainline lanes, incremental progress, lane-local cancellation, timeout/error propagation, and exact identity rejection.
 - Java-compatible `LZ` / `LZOP` / `LZ2` / `LZOP2` SGF exchange and exact-node attachment. Save / Save As is the only active analysis persistence path; the unshipped SQLite analysis-cache product surface and runtime are removed.
@@ -82,8 +82,9 @@ The existing Tauri implementation is the migration starting point and must be pr
 - `UI-02` remains Partial: there is still no evidence that engine events are delivered while a board mutation promise is pending. That residual does not reopen R4.
 - R4 Analysis has exited with all ten owner items plus pulled-forward `PREF-01` and `APP-05` Accepted.
 - R5 has exited on integrated Windows candidate `48db2b2833f9deb45bd7dcd47181f5da77348a0c`. `SGF-08`, `APP-02`, `APP-03`, `APP-04`, and `ANA-15` are Accepted; the `APP-01` R5 semantic gate passed. Final `APP-01` acceptance remains an R11 / `REL-04` installer-association and Canonical Artifact Installed Live Evidence obligation.
+- R6 has exited on integrated Windows candidate `be6951bf57afa07c4a1ae6d57075573b308f5dfd`; all thirteen authoring/review owner items are Accepted. R7 remains the next numbered phase.
 - Layout rails are fixed at `228px` and `260px`; splitters, rail visibility, window-geometry reset, and narrow Restore Default are absent.
-- Review HUD player labels read root `PB`/`PW` with missing/blank fallback; native metadata editing for names and komi belongs to R6 ticket 07. Main-window always-on-top is absent (`WINDOW-02`).
+- Main-window always-on-top remains absent (`WINDOW-02`); accepted R6 metadata and HUD player-name behavior retain their owner scopes.
 - Multi-backend profiles, Generic GTP, and Match Sessions are absent.
 - Provider/readboard repository plumbing exists, but live sessions remain unvalidated; Yike ongoing sync and Tencent kifu import are unclaimed; readboard snapshots are previewed rather than synchronized into the active game.
 - Signing, notarization, production updater apply/handoff/rollback, bundled installed-runtime resolution, and Canonical Artifact Installed Live Evidence remain incomplete.
@@ -198,9 +199,9 @@ flowchart TB
   R2[R2 Core Review UI - done]
   R3[R3 Foreground Engine - done]
   R4[R4 Analysis - done]
-  R5[R5 Safe Current Game - next]
-  R6[R6 SGF Authoring / Review]
-  R7[R7 Adaptive Workspace]
+  R5[R5 Safe Current Game - done]
+  R6[R6 SGF Authoring / Review - done]
+  R7[R7 Adaptive Workspace - next]
   R8[R8 Engine Adapters]
   R9[R9 Game Modes]
   R10[R10 Providers / readboard]
@@ -612,9 +613,11 @@ The [independent R5 native failure-evidence ticket](../.scratch/r5-native-failur
 
 **Migration Phase Gate:** `SGF-07` and `PREF-01` accepted.
 
-`SGF-10` repository implementation supports rectangular 2–25-axis boards and shared New/Clear/Set Board Size parameters with durable new-document defaults. Its independent Ticket 01 completion record tracks exact-candidate Windows native and real-KataGo acceptance; repository checks alone do not mark this owner Accepted or close R6.
+**Status:** Exited on Windows candidate `be6951bf57afa07c4a1ae6d57075573b308f5dfd`. Ticket 13's terminal Standards and Spec reviews both returned SUCCESS, with zero unresolved in-scope blockers and zero follow-up. Exact-candidate native evidence covers authoring and SGF/GIB intake, Save/recovery faults and explicit retries, real KataGo across finite/range/continuous and trial/scoring modes, and actual human hearing. Ticket 14 completed owner-record and follow-up reconciliation; its independent `03/STD-02` lint candidate does not reopen the R6 feature gate. Item evidence remains in `PARITY_MATRIX.md`.
 
-`SGF-11` adds childless-root setup drafts and confirmed selected-position conversion, each submitted as one reversible Rust document edit. Its independent Ticket 06 record distinguishes repository checks from exact-candidate Windows native Save/reopen and real-KataGo identity acceptance; this implementation alone does not close R6.
+`SGF-10` supports rectangular 2–25-axis boards and shared New/Clear/Set Board Size parameters with durable new-document defaults. Its independent Ticket 01 native and real-KataGo acceptance is supplemented by the completed Ticket 13 combined-candidate gate.
+
+`SGF-11` adds childless-root setup drafts and confirmed selected-position conversion, each submitted as one reversible Rust document edit. Its independent Ticket 06 native Save/reopen and real-KataGo identity acceptance is supplemented by the completed Ticket 13 combined-candidate gate.
 
 **Delivery Order:**
 
