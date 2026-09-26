@@ -1,17 +1,16 @@
 import captureLargeUrl from "../assets/sounds/capture-large.wav";
 import captureSmallUrl from "../assets/sounds/capture-small.wav";
 import moveUrl from "../assets/sounds/move.wav";
-import passUrl from "../assets/sounds/pass.wav";
 
 export type MoveSoundKind = "move" | "capture-small" | "capture-large" | "pass";
 
-// These original assets were generated for this project with deterministic synthesis:
-// mono 44.1 kHz PCM using short decaying resonances/noise, with no external samples.
+// Reuse the GPL-3.0 LizzieYzy Next PCM assets: Stone.wav, deadStone.wav,
+// and deadStoneMore.wav. Legacy pass playback uses Stone.wav as well.
 const moveSoundUrls: Record<MoveSoundKind, string> = {
   move: moveUrl,
   "capture-small": captureSmallUrl,
   "capture-large": captureLargeUrl,
-  pass: passUrl
+  pass: moveUrl
 };
 
 export async function playMoveSound(kind: MoveSoundKind): Promise<void> {

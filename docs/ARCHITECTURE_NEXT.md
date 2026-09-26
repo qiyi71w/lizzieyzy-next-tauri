@@ -129,6 +129,8 @@ Durable app preference storage for the categorized Preferences surface. Missing 
 
 `soundEnabled` defaults to true and uses the same durable preference transaction. Preferences → Review exposes the sound toggle; failed writes retain the committed setting. Successful local move/pass replies and explicitly requested forward review steps trigger one bundled sound, classified by the authoritative before/after replay capture totals on the selected branch (ordinary, 1–2 captures, 3+ captures, or pass). Single-step buttons, the next-child shortcut and autoplay identify forward intent; jump controls, tree selection, backward navigation, imports and snapshot redraws are silent. Audio failure is reported without changing preferences. Sound has no document/history/SGF side effects. Actual audibility and native restart persistence remain separate Windows acceptance gates.
 
+Bundled move sounds reuse the unmodified PCM audio from the GPL-3.0 Java maintenance line at `src/main/resources/assets/sound`: `Stone.wav` for ordinary moves and passes, `deadStone.wav` for 1–2 captures, and `deadStoneMore.wav` for 3+ captures. The desktop copies live under `apps/desktop/src/assets/sounds`; only the playback mapping is local to the frontend. User-perceived sound and silence still require native auditory acceptance on the updated candidate.
+
 Trial move/pass replies use the session's before/after authoritative replay snapshots for the same once-per-action sound classification. Exiting trial restores the original node silently; scoring correction and result confirmation are silent.
 
 ### `crates/current-game-recovery`
