@@ -261,8 +261,21 @@ impl AnalysisResponse {
     }
 }
 
+/// KataGo can emit an epsilon-sized overshoot from floating-point search math.
+/// Normalize only roundoff; substantial out-of-range values remain invalid.
+fn normalize_winrate_roundoff(value: f32) -> f32 {
+    const TOLERANCE: f32 = 1e-6;
+    if value < 0.0 && value >= -TOLERANCE {
+        0.0
+    } else if value > 1.0 && value <= 1.0 + TOLERANCE {
+        1.0
+    } else {
+        value
+    }
+}
+
 pub fn parse_response_line(line: &str) -> Result<AnalysisResponse, ProtocolError> {
-    let response: AnalysisResponse = serde_json::from_str(line)?;
+    let mut response: AnalysisResponse = serde_json::from_str(line)?;
     if let Some(error) = &response.error {
         return match &response.field {
             Some(field) => Err(ProtocolError::EngineField {
@@ -271,6 +284,12 @@ pub fn parse_response_line(line: &str) -> Result<AnalysisResponse, ProtocolError
             }),
             None => Err(ProtocolError::Engine(error.clone())),
         };
+    }
+    if let Some(root) = response.root_info.as_mut() {
+        root.winrate = normalize_winrate_roundoff(root.winrate);
+    }
+    for candidate in &mut response.move_infos {
+        candidate.winrate = normalize_winrate_roundoff(candidate.winrate);
     }
     Ok(response)
 }
@@ -693,6 +712,25 @@ mod tests {
         assert_eq!(response.root_info.as_ref().unwrap().score_mean, None);
         let frame = normalize_response(AnalysisJobId::nil(), response, 19, 19);
         assert_eq!(frame.score_mean_black, None);
+    }
+
+    #[test]
+    fn accepts_katago_winrate_roundoff_without_leaking_out_of_range_values() {
+        let response = parse_response_line(
+            r#"{"id":"small-board","rootInfo":{"visits":47,"winrate":1.00000012},"moveInfos":[{"move":"D2","visits":3,"winrate":-2.22044605e-16,"scoreMean":-23.6659461}]}"#,
+        )
+        .unwrap();
+
+        assert!(response.has_valid_search_result(5, 4));
+        let frame = normalize_response(AnalysisJobId::nil(), response, 5, 4);
+        assert_eq!(frame.winrate_black, 1.0);
+        assert_eq!(frame.candidates[0].winrate_black, 0.0);
+
+        let invalid = parse_response_line(
+            r#"{"id":"invalid","rootInfo":{"visits":47,"winrate":0.5},"moveInfos":[{"move":"D2","winrate":-0.001,"scoreMean":0.0}]}"#,
+        )
+        .unwrap();
+        assert!(!invalid.has_valid_search_result(5, 4));
     }
 
     #[test]
