@@ -193,7 +193,7 @@ mod tests {
         assert_eq!(updated, vec![live_str, vanished_str.clone()]);
 
         // Opening a vanished file itself must record it at the front without canonicalization failure.
-        let opened_ghost = recent_game_paths(&[vanished_str.clone()], &vanished_str);
+        let opened_ghost = recent_game_paths(std::slice::from_ref(&vanished_str), &vanished_str);
         assert_eq!(opened_ghost, vec![vanished_str]);
     }
 }

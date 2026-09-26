@@ -265,7 +265,7 @@ impl AnalysisResponse {
 /// Normalize only roundoff; substantial out-of-range values remain invalid.
 fn normalize_winrate_roundoff(value: f32) -> f32 {
     const TOLERANCE: f32 = 1e-6;
-    if value < 0.0 && value >= -TOLERANCE {
+    if (-TOLERANCE..0.0).contains(&value) {
         0.0
     } else if value > 1.0 && value <= 1.0 + TOLERANCE {
         1.0

@@ -1692,7 +1692,9 @@ for line in sys.stdin:
         .map(|index| (if index % 2 == 0 { "B" } else { "W" }.into(), "pass".into()))
         .collect();
     let writer = manager.clone();
-    let selected_thread = std::thread::spawn(move || writer.start_selected_node_job(selected));
+    let selected_thread = std::thread::spawn(move || {
+        writer.start_selected_node_job(selected).unwrap();
+    });
     std::thread::sleep(Duration::from_millis(100));
     std::fs::write(temp.path().join("release-overview"), "go").unwrap();
     let boundary = wait_task_stage(&manager, AnalysisTaskStageDto::Deep, AnalysisTaskStateDto::Queued);
@@ -1712,7 +1714,7 @@ for line in sys.stdin:
     assert_eq!(continued.stage, AnalysisTaskStageDto::Deep);
     assert_ne!(continued.job_id, task.job_id);
     std::fs::write(temp.path().join("release-reader"), "go").unwrap();
-    selected_thread.join().unwrap().unwrap();
+    selected_thread.join().unwrap();
     let completed = wait_task(&manager, AnalysisTaskStateDto::Completed);
     assert_eq!(completed.overview_completed, completed.requested);
     assert_eq!(completed.completed, completed.requested);
@@ -1888,7 +1890,9 @@ for line in sys.stdin:
         .map(|i| (if i % 2 == 0 { "B" } else { "W" }.into(), "pass".into()))
         .collect();
     let writer = manager.clone();
-    let selected_thread = std::thread::spawn(move || writer.start_selected_node_job(selected));
+    let selected_thread = std::thread::spawn(move || {
+        writer.start_selected_node_job(selected).unwrap();
+    });
     std::thread::sleep(Duration::from_millis(100));
     let task = manager
         .start_analysis_task(
@@ -1901,7 +1905,7 @@ for line in sys.stdin:
     assert_eq!(paused.state, AnalysisTaskStateDto::Paused);
     assert!(paused.completed.is_empty());
     std::fs::write(temp.path().join("release"), "").unwrap();
-    selected_thread.join().unwrap().unwrap();
+    selected_thread.join().unwrap();
     std::thread::sleep(Duration::from_millis(100));
     let delivered = std::fs::read_to_string(temp.path().join("delivered.jsonl")).unwrap();
     assert!(

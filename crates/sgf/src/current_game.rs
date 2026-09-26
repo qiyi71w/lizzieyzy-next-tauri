@@ -31,6 +31,8 @@ pub struct SgfDocumentEdit {
     selected_after: NodePath,
 }
 
+type SavedAnalysisProperties = Vec<(NodePath, Vec<(usize, SgfProperty)>)>;
+
 #[derive(Debug)]
 enum DocumentReversal {
     SetComment {
@@ -40,7 +42,7 @@ enum DocumentReversal {
     SetMetadata {
         properties: Vec<(usize, SgfProperty)>,
         komi: f32,
-        analysis: Option<Vec<(NodePath, Vec<(usize, SgfProperty)>)>>,
+        analysis: Option<SavedAnalysisProperties>,
     },
     SetMarkup {
         path: NodePath,
@@ -1618,11 +1620,11 @@ fn validate_result(result: &str) -> Result<(), CurrentGameError> {
     Ok(())
 }
 
-fn take_analysis(root: &mut SgfNode) -> Vec<(NodePath, Vec<(usize, SgfProperty)>)> {
+fn take_analysis(root: &mut SgfNode) -> SavedAnalysisProperties {
     fn visit(
         node: &mut SgfNode,
         path: &mut Vec<u32>,
-        removed: &mut Vec<(NodePath, Vec<(usize, SgfProperty)>)>,
+        removed: &mut SavedAnalysisProperties,
     ) {
         let properties: Vec<_> = node
             .properties
@@ -3306,21 +3308,21 @@ mod root_result_history {
         assert!(document.serialize().unwrap().contains("RE[W+2.5]"));
 
         let undo_res = history.undo(&mut document).unwrap().expect("undo outcome");
-        assert_eq!(undo_res.structural, false);
+        assert!(!undo_res.structural);
         assert_eq!(undo_res.selected_path, selected);
         assert_eq!(document.result(), Some("B+1.0"));
         assert!(document.serialize().unwrap().contains("RE[B+1.0]"));
         assert!(!document.serialize().unwrap().contains("RE[W+2.5]"));
 
         let redo_res = history.redo(&mut document).unwrap().expect("redo outcome");
-        assert_eq!(redo_res.structural, false);
+        assert!(!redo_res.structural);
         assert_eq!(redo_res.selected_path, selected);
         assert_eq!(document.result(), Some("W+2.5"));
         assert!(document.serialize().unwrap().contains("RE[W+2.5]"));
         assert!(!document.serialize().unwrap().contains("RE[B+1.0]"));
 
         let undo_again = history.undo(&mut document).unwrap().expect("undo again");
-        assert_eq!(undo_again.structural, false);
+        assert!(!undo_again.structural);
         assert_eq!(document.result(), Some("B+1.0"));
     }
 
@@ -3338,13 +3340,13 @@ mod root_result_history {
         assert!(document.serialize().unwrap().contains("RE[0]"));
 
         let undo_res = history.undo(&mut document).unwrap().expect("undo outcome");
-        assert_eq!(undo_res.structural, false);
+        assert!(!undo_res.structural);
         assert_eq!(undo_res.selected_path, selected);
         assert_eq!(document.result(), None);
         assert_eq!(document.serialize().unwrap(), initial_serialized);
 
         let redo_res = history.redo(&mut document).unwrap().expect("redo outcome");
-        assert_eq!(redo_res.structural, false);
+        assert!(!redo_res.structural);
         assert_eq!(document.result(), Some("0"));
         assert!(document.serialize().unwrap().contains("RE[0]"));
     }
@@ -3396,11 +3398,11 @@ mod root_result_history {
         verify_properties(&document, Some("B+3.5"));
 
         let undo_res = history.undo(&mut document).unwrap().expect("undo");
-        assert_eq!(undo_res.structural, false);
+        assert!(!undo_res.structural);
         verify_properties(&document, None);
 
         let redo_res = history.redo(&mut document).unwrap().expect("redo");
-        assert_eq!(redo_res.structural, false);
+        assert!(!redo_res.structural);
         verify_properties(&document, Some("B+3.5"));
     }
 
@@ -3429,13 +3431,13 @@ mod root_result_history {
         assert!(document.snapshot(&move_path).unwrap().primary_analysis.is_some());
 
         let undo_res = history.undo(&mut document).unwrap().expect("undo");
-        assert_eq!(undo_res.structural, false);
+        assert!(!undo_res.structural);
         assert_eq!(document.result(), None);
         assert!(document.snapshot(&root_path).unwrap().primary_analysis.is_some());
         assert!(document.snapshot(&move_path).unwrap().primary_analysis.is_some());
 
         let redo_res = history.redo(&mut document).unwrap().expect("redo");
-        assert_eq!(redo_res.structural, false);
+        assert!(!redo_res.structural);
         assert_eq!(document.result(), Some("W+0.5"));
         assert!(document.snapshot(&root_path).unwrap().primary_analysis.is_some());
         assert!(document.snapshot(&move_path).unwrap().primary_analysis.is_some());
