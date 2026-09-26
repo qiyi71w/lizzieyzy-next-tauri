@@ -23,6 +23,7 @@
 - Added an all-position two-stage task strategy: a 32-visit overview of every target precedes an independently persisted deep pass with a 500-visit minimum, stage-local Pause/Continue progress, retained overview summaries, and Ctrl+Shift+B access.
 - KataGo JSONL parsing now clamps only epsilon-sized winrate roundoff at 0/1 before strict frame validation; material out-of-range values remain invalid.
 - Grouped swing-analysis admission into a named Rust request while preserving stage budgets, target identities and continuous no-result failure handling. Simplified equivalent protocol/history checks and lifecycle test result handling for strict lint checks.
+- Boxed desktop engine-command errors and grouped replacement/exit requests for strict workspace lint checks, preserving serialized errors and Save / Discard / Cancel ordering.
 
 ### 中文
 
@@ -45,6 +46,7 @@
 - 新增全位置两阶段分析任务：先以 32 visits 概览全部目标，再按独立持久化且不低于 500 visits 的深度预算逐点分析；暂停／继续保留阶段进度与概览摘要，并支持 Ctrl+Shift+B 启动。
 - KataGo JSONL 解析在严格帧校验前仅校正 0/1 附近的微小胜率浮点误差；明显越界值仍被拒绝。
 - swing 分析准入改用具名 Rust 请求，保留阶段预算、目标身份与连续分析无结果失败处理；对协议／历史检查及生命周期测试结果处理做等价 lint 修正。
+- 桌面引擎命令错误采用 Rust 装箱返回，替换／退出使用具名请求，通过严格工作区 lint 检查；保留错误序列化内容与保存／放弃／取消顺序。
 
 ## [0.1.0] - 2026-05-01
 
