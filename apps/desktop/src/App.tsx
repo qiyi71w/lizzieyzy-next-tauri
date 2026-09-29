@@ -103,7 +103,7 @@ import {
   runFromSnapshot,
   shouldAcceptFailureEvent
 } from "./domain/foregroundEngine";
-import { loadAppPreferences, saveAppPreferences, updateRecentGameHistory } from "./api/preferences";
+import { loadAppPreferences, saveAppPreferences, updateRecentGameHistory, updateWorkspaceVisibility } from "./api/preferences";
 import { flushWindowGeometry, freezeWindowGeometry, nativeWindowGeometryUnavailable, resetWindowGeometry, retryWindowGeometry, subscribeWindowGeometryStatus, windowGeometryStatus } from "./api/windowGeometry";
 import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition } from "./domain/board";
 import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "./domain/preferences";
@@ -270,7 +270,12 @@ export function App() {
   const { showCoordinates, showMoveNumbers } = preferences;
   const [showBlackCandidates, setShowBlackCandidates] = useState(true);
   const [showWhiteCandidates, setShowWhiteCandidates] = useState(true);
-  const [referenceRailCollapsed, setReferenceRailCollapsed] = useState(false);
+  const [railVisibilityBusy, setRailVisibilityBusy] = useState(false);
+  const railVisibilityBusyRef = useRef(false);
+  const [railVisibilityError, setRailVisibilityError] = useState<string | null>(null);
+  const leftRailRef = useRef<HTMLElement>(null);
+  const rightRailRef = useRef<HTMLElement>(null);
+  const railRestoreRef = useRef<HTMLButtonElement>(null);
   const workspace = useWorkspace();
   const [windowGeometry, setWindowGeometry] = useState<WindowGeometryStatusDto>({ phase: "loading", geometry: null, error: null });
   const [windowGeometryActionPending, setWindowGeometryActionPending] = useState(false);
@@ -567,7 +572,7 @@ export function App() {
   const replayArmed = preferences.variationReplayEnabled && replaySteps.length > 0;
   const replayEligible = replayArmed && (
     (preferences.showCandidates && overlayMode === "candidates" && !hideCandidates)
-    || (preferences.showCandidates && preferences.subBoardContentMode === "variation" && !referenceRailCollapsed)
+    || (preferences.showCandidates && preferences.subBoardContentMode === "variation" && preferences.workspaceVisibility.right)
   );
   const replayPrefix = replayArmed
     ? (replayProgress.identity !== replayIdentityKeyValue ? 1 : Math.max(replayProgress.prefix, 1))
@@ -1052,6 +1057,29 @@ export function App() {
     queuePreferencesSave(pendingPreferencesSaveRef.current?.preferences ?? committedPreferencesRef.current, patch);
   }
 
+  async function handleRailVisibility(side: "left" | "right", visible: boolean) {
+    if (!preferencesLoadSettledRef.current || railVisibilityBusyRef.current || departurePendingRef.current || departurePrompt) return;
+    railVisibilityBusyRef.current = true;
+    setRailVisibilityBusy(true);
+    setRailVisibilityError(null);
+    try {
+      const workspaceVisibility = await updateWorkspaceVisibility({ [side]: visible });
+      const rail = side === "left" ? leftRailRef.current : rightRailRef.current;
+      const active = document.activeElement;
+      const matchingSeparatorFocused = Boolean(
+        active && (active.classList?.contains(`workspace-separator-${side}`) || active.closest?.(`.workspace-separator-${side}`))
+      );
+      if (!visible && (rail?.contains(active) || matchingSeparatorFocused)) railRestoreRef.current?.focus();
+      committedPreferencesRef.current = { ...committedPreferencesRef.current, workspaceVisibility };
+      setPreferences((current) => ({ ...current, workspaceVisibility }));
+    } catch (error) {
+      setRailVisibilityError(`侧栏保存失败：${errorMessage(error)}；请再次操作重试。`);
+    } finally {
+      railVisibilityBusyRef.current = false;
+      setRailVisibilityBusy(false);
+    }
+  }
+
   function settleLoadedPreferences(loaded: AppPreferences, status: string) {
     preferencesLoadSettledRef.current = true;
     setPreferencesLoaded(true);
@@ -1110,7 +1138,7 @@ export function App() {
       while (pendingPreferencesSaveRef.current && !continuousActionInFlightRef.current) {
         const pending = pendingPreferencesSaveRef.current;
         try {
-          const saved = { ...await saveAppPreferences(pending.preferences), recentGamePaths: committedPreferencesRef.current.recentGamePaths, windowGeometry: committedPreferencesRef.current.windowGeometry };
+          const saved = { ...await saveAppPreferences(pending.preferences), recentGamePaths: committedPreferencesRef.current.recentGamePaths, windowGeometry: committedPreferencesRef.current.windowGeometry, workspaceVisibility: committedPreferencesRef.current.workspaceVisibility };
           committedPreferencesRef.current = saved;
           setPreferences(saved);
           pending.onSaved?.(saved);
@@ -2292,7 +2320,7 @@ export function App() {
     continuousActionInFlightRef.current = true;
     setContinuousActionPending(true);
     try {
-      const saved = { ...await foregroundEngineContinuousAction(), recentGamePaths: committedPreferencesRef.current.recentGamePaths, windowGeometry: committedPreferencesRef.current.windowGeometry };
+      const saved = { ...await foregroundEngineContinuousAction(), recentGamePaths: committedPreferencesRef.current.recentGamePaths, windowGeometry: committedPreferencesRef.current.windowGeometry, workspaceVisibility: committedPreferencesRef.current.workspaceVisibility };
       committedPreferencesRef.current = saved;
       setPreferences(saved);
       setPreferencesStatus("Preferences saved.");
@@ -3495,8 +3523,6 @@ export function App() {
       showWhiteCandidates={showWhiteCandidates}
       onShowBlackCandidates={setShowBlackCandidates}
       onShowWhiteCandidates={setShowWhiteCandidates}
-      referenceRailCollapsed={referenceRailCollapsed}
-      onReferenceRailCollapsed={setReferenceRailCollapsed}
       onRestoreWorkspace={workspace.restoreDefaults}
       workspaceDisabled={workspace.disabled}
       windowGeometryStatus={windowGeometryStatusText}
@@ -3504,6 +3530,8 @@ export function App() {
       windowGeometryDisabled={windowGeometryDisabled}
       onResetWindowGeometry={() => void performWindowGeometryAction(resetWindowGeometry)}
       onRetryWindowGeometry={() => void performWindowGeometryAction(retryWindowGeometry)}
+      railVisibilityDisabled={!preferencesLoaded || railVisibilityBusy || departurePending || Boolean(departurePrompt)}
+      onRailVisibility={(side, visible) => void handleRailVisibility(side, visible)}
       selectedNodeRunning={selectedNodeRunning}
       wholeGameRunning={wholeGameRunning}
       autoPlaying={autoPlaying}
@@ -3555,9 +3583,19 @@ export function App() {
       message={recentHistoryError ? `${message} ${recentHistoryError}` : message}
       toPlay={currentPosition.to_play}
     />
+    <div className="workspace-visibility-controls" role="toolbar" aria-label="侧栏显隐">
+      <button ref={railRestoreRef} type="button" aria-pressed={preferences.workspaceVisibility.left}
+        disabled={!preferencesLoaded || departurePending || Boolean(departurePrompt)}
+        onClick={() => void handleRailVisibility("left", !preferences.workspaceVisibility.left)}>左侧栏</button>
+      <button type="button" aria-pressed={preferences.workspaceVisibility.right}
+        disabled={!preferencesLoaded || departurePending || Boolean(departurePrompt)}
+        onClick={() => void handleRailVisibility("right", !preferences.workspaceVisibility.right)}>右侧栏</button>
+      {railVisibilityBusy ? <span role="status">正在保存侧栏…</span> : null}
+      {railVisibilityError ? <span role="alert">{railVisibilityError}</span> : null}
+    </div>
     <Workspace shares={workspace.shares} onSharesChange={workspace.setShares} disabled={workspace.disabled}
-      visibility={{ left: true, right: !referenceRailCollapsed }}>
-      <aside className="rail">
+      visibility={preferences.workspaceVisibility}>
+      <aside ref={leftRailRef} className="rail" hidden={!preferences.workspaceVisibility.left}>
         <div className="rail-block">
           <h2>
             <span>胜率走势 ({chartTitleSide})</span>
@@ -3565,7 +3603,7 @@ export function App() {
               {`${((chartWinrate ?? 0.5) * 100).toFixed(1)}%`}
             </span>
           </h2>
-          <WinrateChart model={chartModel} onSelectNode={handleReviewNodeSelect} />
+          <WinrateChart model={preferences.workspaceVisibility.left ? chartModel : { ...chartModel, hoverEnabled: false }} onSelectNode={(path) => { if (preferences.workspaceVisibility.left) handleReviewNodeSelect(path); }} />
           <div id="board-layers" />
         </div>
         <AnalysisPanel
@@ -3583,8 +3621,8 @@ export function App() {
           commentEditorEnabled={nativeRuntime && Boolean(currentGame) && !documentFlowBusy && !trial && !trialPending && !scoring && !scoringPending}
           onCommitPersonalComment={(comment) => void handleCommitPersonalComment(comment)}
           selectedCandidateIndex={selectedCandidateIndex}
-          onSelectCandidate={selectCandidate}
-          onSelectProblem={handleProblemSelect}
+          onSelectCandidate={(index) => { if (preferences.workspaceVisibility.left) selectCandidate(index); }}
+          onSelectProblem={(problem) => { if (preferences.workspaceVisibility.left) handleProblemSelect(problem); }}
           selectedPath={selectedPath}
         />
       </aside>
@@ -3639,14 +3677,14 @@ export function App() {
           <p className="board-intent-status" role="status" aria-live="polite">{boardIntentFeedback}</p>
         ) : null}
       </div>
-      <aside className="sheet-col" hidden={referenceRailCollapsed}>
+      <aside ref={rightRailRef} className="sheet-col" hidden={!preferences.workspaceVisibility.right}>
         {reviewGame ? <ReviewTree
           key={trial ? `trial-${trial.session_id}` : reviewGame.generation}
           root={reviewGame.tree}
           selectedPath={selectedPath}
           generation={reviewGame.generation}
           onSelectNode={(path, generation) => {
-            if (!referenceRailCollapsed) void selectNode(path, generation);
+            if (preferences.workspaceVisibility.right) void selectNode(path, generation);
           }}
         /> : null}
         <AnalysisPanel
@@ -3659,11 +3697,11 @@ export function App() {
           currentPosition={currentPosition}
           selectedCandidateIndex={selectedCandidateIndex}
           previewCandidateIndex={previewCandidateIndex}
-          onSelectCandidate={selectCandidate}
-          onSelectProblem={handleProblemSelect}
+          onSelectCandidate={(index) => { if (preferences.workspaceVisibility.right) selectCandidate(index); }}
+          onSelectProblem={(problem) => { if (preferences.workspaceVisibility.right) handleProblemSelect(problem); }}
           selectedPath={selectedPath}
           reviewLine={reviewGame ? chartModel.points : undefined}
-          onSelectNode={handleReviewNodeSelect}
+          onSelectNode={(path) => { if (preferences.workspaceVisibility.right) handleReviewNodeSelect(path); }}
           contentMode={preferences.subBoardContentMode}
           pvPrefixLength={replayPrefix}
         />
@@ -3794,6 +3832,8 @@ export function App() {
         windowGeometryStatus={windowGeometryStatusText}
         windowGeometryDisabled={windowGeometryDisabled}
         onResetWindowGeometry={() => void performWindowGeometryAction(resetWindowGeometry)}
+        railVisibilityDisabled={!preferencesLoaded || railVisibilityBusy || departurePending || Boolean(departurePrompt)}
+        onRailVisibility={(side, visible) => void handleRailVisibility(side, visible)}
       /> : null}
     </section>
     {layoutExitPrompt ? <div className="shortcut-reference-backdrop" role="presentation">

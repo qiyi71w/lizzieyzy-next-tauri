@@ -1533,7 +1533,7 @@ describe("App focus-safe review controls", () => {
       valueSetter?.call(editor, "reviewer note");
       editor.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    act(() => editor.blur());
+    act(() => buttonNamed(host, "应用评论").click());
     await flushLast(backend.setCurrentGamePersonalComment);
     expect(backend.setCurrentGamePersonalComment).toHaveBeenLastCalledWith({ indices: [0, 1] }, "reviewer note");
   });
@@ -3161,7 +3161,7 @@ describe("accepted navigation coalescing", () => {
       editor.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => {
-      editor.blur();
+      buttonNamed(host, "应用评论").click();
       await backend.setCurrentGamePersonalComment.mock.results.at(-1)?.value;
     });
     if (save) {

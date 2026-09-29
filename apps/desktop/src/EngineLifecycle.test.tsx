@@ -530,7 +530,7 @@ describe("foreground engine lifecycle UI", () => {
       editor.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => {
-      editor.blur();
+      buttonNamed(host, "应用评论").click();
       await backend.setCurrentGamePersonalComment.mock.results.at(-1)?.value;
     });
     expect(host.querySelector(".doc-name")?.textContent).toContain("*");

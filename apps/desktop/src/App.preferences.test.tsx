@@ -82,7 +82,8 @@ vi.mock("./api/backend", () => ({
 
 const preferencesApi = vi.hoisted(() => ({
   loadAppPreferences: vi.fn(),
-  saveAppPreferences: vi.fn()
+  saveAppPreferences: vi.fn(),
+  updateWorkspaceVisibility: vi.fn()
 }));
 
 vi.mock("./api/preferences", async (importOriginal) => {
@@ -90,7 +91,8 @@ vi.mock("./api/preferences", async (importOriginal) => {
   return {
     ...original,
     loadAppPreferences: preferencesApi.loadAppPreferences,
-    saveAppPreferences: preferencesApi.saveAppPreferences
+    saveAppPreferences: preferencesApi.saveAppPreferences,
+    updateWorkspaceVisibility: preferencesApi.updateWorkspaceVisibility
   };
 });
 
@@ -142,6 +144,7 @@ beforeEach(() => {
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
   preferencesApi.loadAppPreferences.mockResolvedValue({ preferences: defaultAppPreferences });
   preferencesApi.saveAppPreferences.mockImplementation(async (preferences: AppPreferences) => preferences);
+  preferencesApi.updateWorkspaceVisibility.mockImplementation(async (patch) => ({ left: true, right: true, ...patch }));
 });
 
 afterEach(() => {
@@ -153,6 +156,51 @@ afterEach(() => {
 });
 
 describe("durable preferences surface", () => {
+  it("retains an unapplied focused comment across rail hiding until explicit Apply", async () => {
+    const host = await renderApp();
+    const editor = requiredElement<HTMLTextAreaElement>(host, 'textarea[aria-label="个人评论"]');
+    act(() => {
+      editor.focus();
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(editor, "retained rail draft");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => buttonNamed(host, "左侧栏").click());
+    expect(document.activeElement).toBe(buttonNamed(host, "左侧栏"));
+    expect(backend.setCurrentGamePersonalComment).not.toHaveBeenCalled();
+    await act(async () => buttonNamed(host, "左侧栏").click());
+    expect(editor.value).toBe("retained rail draft");
+    backend.setCurrentGamePersonalComment.mockResolvedValueOnce({ ...initialGame, dirty: true, snapshot: { ...initialGame.snapshot, personal_comment: "retained rail draft" } });
+    await act(async () => buttonNamed(host, "应用评论").click());
+    expect(backend.setCurrentGamePersonalComment).toHaveBeenCalledWith(initialGame.selected_path, "retained rail draft");
+  });
+
+  it("returns focus from a separator removed by a pending visibility commit", async () => {
+    const host = await renderApp();
+    let finish!: (value: { left: boolean; right: boolean }) => void;
+    preferencesApi.updateWorkspaceVisibility.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    act(() => buttonNamed(host, "左侧栏").click());
+    act(() => requiredElement<HTMLElement>(host, ".workspace-separator-left").focus());
+    await act(async () => finish({ left: false, right: true }));
+    expect(document.activeElement).toBe(buttonNamed(host, "左侧栏"));
+    expect(host.querySelector(".workspace-separator-left")).toBeNull();
+  });
+
+  it("commits rail visibility only after success and survives an older ordinary save response", async () => {
+    const host = await renderApp();
+    let finish!: (value: AppPreferences) => void;
+    preferencesApi.saveAppPreferences.mockReturnValueOnce(new Promise<AppPreferences>((resolve) => { finish = resolve; }));
+    act(() => buttonNamed(host, "坐标").click());
+    preferencesApi.updateWorkspaceVisibility.mockRejectedValueOnce(new Error("rail disk full"));
+    await act(async () => buttonNamed(host, "左侧栏").click());
+    expect(host.querySelector(".rail")?.hasAttribute("hidden")).toBe(false);
+    expect(host.textContent).toContain("rail disk full");
+    await act(async () => buttonNamed(host, "左侧栏").click());
+    expect(host.querySelector(".rail")?.hasAttribute("hidden")).toBe(true);
+    await act(async () => finish({ ...defaultAppPreferences, showCoordinates: false }));
+    expect(host.querySelector(".rail")?.hasAttribute("hidden")).toBe(true);
+    expect(buttonNamed(host, "坐标").getAttribute("aria-pressed")).toBe("false");
+  });
+
   it("keeps display controls committed until a write succeeds and reports failed shortcut writes", async () => {
     let finishSave!: (value: AppPreferences) => void;
     const pendingSave = new Promise<AppPreferences>((resolve) => { finishSave = resolve; });

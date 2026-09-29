@@ -8,9 +8,12 @@ export type SubBoardContentMode = "variation" | "raw";
 export type ScoringRule = "area" | "territory";
 export type { NextMoveReviewMarkerMode };
 
+import type { WorkspaceVisibilityDto } from "./types";
+
 export type AppPreferences = ContinuousAnalysisBudgetDto & {
   workspaceShares: WorkspaceSharesDto | null;
   windowGeometry: WindowGeometryDto | null;
+  workspaceVisibility: WorkspaceVisibilityDto;
   showCoordinates: boolean;
   showMoveNumbers: boolean;
   showOwnership: boolean;
@@ -49,6 +52,7 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
 export const defaultAppPreferences: AppPreferences = {
   workspaceShares: null,
   windowGeometry: null,
+  workspaceVisibility: { left: true, right: true },
   showCoordinates: true,
   showMoveNumbers: false,
   showOwnership: true,
@@ -138,6 +142,10 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
   return {
     workspaceShares: normalizeWorkspaceShares(value?.workspaceShares),
     windowGeometry: normalizeWindowGeometry(value?.windowGeometry),
+    workspaceVisibility: {
+      left: booleanValue(value?.workspaceVisibility?.left, true),
+      right: booleanValue(value?.workspaceVisibility?.right, true)
+    },
     showCoordinates: booleanValue(value?.showCoordinates, defaultAppPreferences.showCoordinates),
     showMoveNumbers: booleanValue(value?.showMoveNumbers, defaultAppPreferences.showMoveNumbers),
     showOwnership: booleanValue(value?.showOwnership, defaultAppPreferences.showOwnership),

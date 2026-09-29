@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode, type PointerEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type ReactNode, type PointerEvent, type KeyboardEvent } from "react";
 import { projectWorkspace, resizeWorkspace, type ProjectedWorkspace, type WorkspaceShares, type WorkspaceVisibility } from "./projection";
 import { useElementSize } from "./useElementSize";
 
@@ -14,9 +14,42 @@ export function Workspace({ shares, onSharesChange, visibility, children, disabl
   const containerRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(containerRef);
   const projected = projectWorkspace(size.width, shares, visibility);
-  const drag = useRef<{ pointerId: number; side: "left" | "right"; x: number; projected: ProjectedWorkspace; shares: WorkspaceShares | null; visibility: WorkspaceVisibility } | null>(null);
+  const drag = useRef<{ pointerId: number; side: "left" | "right"; x: number; projected: ProjectedWorkspace; shares: WorkspaceShares | null; visibility: WorkspaceVisibility; element?: HTMLDivElement } | null>(null);
   const [dragging, setDragging] = useState(false);
   const suppressClick = useRef(false);
+
+  useEffect(() => {
+    const current = drag.current;
+    if (current && !visibility[current.side]) {
+      try {
+        if (current.element?.hasPointerCapture?.(current.pointerId)) {
+          current.element.releasePointerCapture(current.pointerId);
+        }
+      } catch {
+        // Ignore detached element or missing pointer capture support.
+      }
+      drag.current = null;
+      setDragging(false);
+      suppressClick.current = false;
+    }
+  }, [visibility]);
+
+  useEffect(() => {
+    return () => {
+      const current = drag.current;
+      if (current) {
+        try {
+          if (current.element?.hasPointerCapture?.(current.pointerId)) {
+            current.element.releasePointerCapture(current.pointerId);
+          }
+        } catch {
+          // Ignore
+        }
+        drag.current = null;
+        suppressClick.current = false;
+      }
+    };
+  }, []);
 
   function adjust(side: "left" | "right", delta: number) {
     onSharesChange(resizeWorkspace(projected, side, delta, shares, visibility));
@@ -26,8 +59,12 @@ export function Workspace({ shares, onSharesChange, visibility, children, disabl
     if (drag.current?.pointerId !== event.pointerId) return;
     drag.current = null;
     setDragging(false);
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
+    try {
+      if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    } catch {
+      // Ignore
     }
   }
 
@@ -55,8 +92,12 @@ export function Workspace({ shares, onSharesChange, visibility, children, disabl
         if (disabled || event.button !== 0 || drag.current) return;
         event.preventDefault();
         event.currentTarget.focus();
-        event.currentTarget.setPointerCapture(event.pointerId);
-        drag.current = { pointerId: event.pointerId, side, x: event.clientX, projected, shares, visibility };
+        try {
+          event.currentTarget.setPointerCapture?.(event.pointerId);
+        } catch {
+          // Ignore
+        }
+        drag.current = { pointerId: event.pointerId, side, x: event.clientX, projected, shares, visibility, element: event.currentTarget };
         suppressClick.current = true;
         setDragging(true);
       }}

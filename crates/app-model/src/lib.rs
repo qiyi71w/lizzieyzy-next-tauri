@@ -27,6 +27,19 @@ pub use current_game_recovery::{
     RecoveryEnvelopeDto, RecoveryProtectionDto, RecoveryStartupDto, RECOVERY_UNREADABLE_MESSAGE,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WorkspaceVisibilityDto {
+    pub left: bool,
+    pub right: bool,
+}
+
+impl Default for WorkspaceVisibilityDto {
+    fn default() -> Self {
+        Self { left: true, right: true }
+    }
+}
+
 pub type GameId = Uuid;
 pub type NodeId = Uuid;
 pub type AnalysisJobId = Uuid;
