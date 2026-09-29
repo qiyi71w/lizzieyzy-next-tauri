@@ -116,7 +116,6 @@ vi.mock("./api/windowGeometry", () => ({ ...geometryApi, nativeWindowGeometryUna
 vi.mock("./api/preferences", () => preferencesApi);
 
 vi.mock("./components/EngineSetupPanel", () => ({ EngineSetupPanel: () => null }));
-vi.mock("./components/PreferencesPanel", () => ({ PreferencesPanel: () => null }));
 vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
 vi.mock("./components/WinrateChart", () => ({
   WinrateChart: () => <canvas aria-label="胜率走势" />
@@ -3216,6 +3215,192 @@ describe("accepted navigation coalescing", () => {
     expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
   });
 });
+
+describe("App appearance theme persistence and layout stability", () => {
+  it("commits boardTheme only on successful save, avoids optimistic flash and failure adoption, and commits on retry", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: defaultAppPreferences });
+
+    const host = await renderApp();
+    const appShell = requiredElement(host, ".app-shell");
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(false);
+
+    openPreferences(host);
+    const themeSelect = labeledSelect(host, "棋盘对比");
+    expect(themeSelect.value).toBe("classic");
+
+    let rejectSave!: (error: Error) => void;
+    const deferredSave = new Promise<AppPreferences>((_, reject) => {
+      rejectSave = reject;
+    });
+    preferencesApi.saveAppPreferences.mockImplementationOnce(() => deferredSave);
+
+    act(() => {
+      themeSelect.value = "high-contrast";
+      themeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(false);
+    expect(themeSelect.value).toBe("classic");
+    expect(preferencesStatus(host)).toBe("Saving preferences...");
+
+    await act(async () => {
+      rejectSave(new Error("disk write error"));
+      await preferencesApi.saveAppPreferences.mock.results.at(-1)?.value.catch(() => undefined);
+    });
+
+    expect(preferencesStatus(host)).toContain("Save failed: disk write error");
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(false);
+    expect(themeSelect.value).toBe("classic");
+
+    let resolveRetry!: (prefs: AppPreferences) => void;
+    const retryPromise = new Promise<AppPreferences>((resolve) => {
+      resolveRetry = resolve;
+    });
+    preferencesApi.saveAppPreferences.mockImplementationOnce(() => retryPromise);
+
+    act(() => {
+      themeSelect.value = "high-contrast";
+      themeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    await act(async () => {
+      resolveRetry({ ...defaultAppPreferences, boardTheme: "high-contrast" });
+      await retryPromise;
+    });
+
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(true);
+    expect(themeSelect.value).toBe("high-contrast");
+    expect(preferencesStatus(host)).toBe("Preferences saved.");
+
+    const leftSeparator = requiredElement(host, '.workspace-separator[aria-label="调整左栏宽度"]');
+    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("228");
+
+    let resolveUnrelated!: (prefs: AppPreferences) => void;
+    const unrelatedPromise = new Promise<AppPreferences>((resolve) => {
+      resolveUnrelated = resolve;
+    });
+    preferencesApi.saveAppPreferences.mockImplementationOnce(() => unrelatedPromise);
+
+    const soundCheckbox = labeledCheckbox(host, "落子声音");
+    act(() => {
+      soundCheckbox.click();
+    });
+
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(true);
+    expect(preferencesStatus(host)).toBe("Saving preferences...");
+
+    act(() => {
+      leftSeparator.focus();
+      leftSeparator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
+    });
+    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("236");
+
+    act(() => {
+      leftSeparator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", shiftKey: true, bubbles: true, cancelable: true }));
+    });
+    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("268");
+
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("268");
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(true);
+
+    await act(async () => {
+      resolveUnrelated({
+        ...defaultAppPreferences,
+        boardTheme: "high-contrast",
+        soundEnabled: false
+      });
+      await unrelatedPromise;
+    });
+
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(true);
+    expect(themeSelect.value).toBe("high-contrast");
+    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("268");
+    expect(preferencesStatus(host)).toBe("Preferences saved.");
+  });
+
+  it("preserves committed high-contrast theme and adjusted geometry when a concurrent unrelated save rejects", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({
+      preferences: { ...defaultAppPreferences, boardTheme: "high-contrast" }
+    });
+
+    const host = await renderApp();
+    const appShell = requiredElement(host, ".app-shell");
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(true);
+
+    openPreferences(host);
+    const themeSelect = labeledSelect(host, "棋盘对比");
+    expect(themeSelect.value).toBe("high-contrast");
+
+    const leftSeparator = requiredElement(host, '.workspace-separator[aria-label="调整左栏宽度"]');
+    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("228");
+
+    let rejectUnrelated!: (error: Error) => void;
+    const unrelatedPromise = new Promise<AppPreferences>((_, reject) => {
+      rejectUnrelated = reject;
+    });
+    preferencesApi.saveAppPreferences.mockImplementationOnce(() => unrelatedPromise);
+
+    const soundCheckbox = labeledCheckbox(host, "落子声音");
+    act(() => {
+      soundCheckbox.click();
+    });
+
+    act(() => {
+      leftSeparator.focus();
+      leftSeparator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", shiftKey: true, bubbles: true, cancelable: true }));
+    });
+    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("260");
+
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("260");
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(true);
+
+    await act(async () => {
+      rejectUnrelated(new Error("unrelated disk error"));
+      await preferencesApi.saveAppPreferences.mock.results.at(-1)?.value.catch(() => undefined);
+    });
+
+    expect(preferencesStatus(host)).toContain("Save failed: unrelated disk error");
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(true);
+    expect(themeSelect.value).toBe("high-contrast");
+    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("260");
+  });
+
+});
+
+function openPreferences(host: HTMLElement) {
+  act(() => buttonNamed(host, "参数").click());
+}
+
+function preferencesStatus(host: HTMLElement): string {
+  return requiredElement(host, ".preferences-header span").textContent ?? "";
+}
+
+function labeledSelect(host: HTMLElement, name: string): HTMLSelectElement {
+  const label = [...host.querySelectorAll(".preferences-panel label")].find((candidate) => (
+    candidate.querySelector("span")?.textContent === name
+  ));
+  const control = label?.querySelector("select");
+  if (!control) throw new Error(`Missing preference select: ${name}`);
+  return control as HTMLSelectElement;
+}
+
+function labeledCheckbox(host: HTMLElement, name: string): HTMLInputElement {
+  const label = [...host.querySelectorAll(".preferences-panel label")].find((candidate) => (
+    candidate.querySelector("span")?.textContent === name
+  ));
+  const control = label?.querySelector("input");
+  if (!control) throw new Error(`Missing preference checkbox: ${name}`);
+  return control as HTMLInputElement;
+}
+
 
 function pressKey(target: EventTarget, key: string, init: KeyboardEventInit = {}) {
   act(() => {

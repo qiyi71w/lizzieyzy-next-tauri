@@ -144,7 +144,7 @@ export function AnalysisPanel({
               </table>
             </div>
           ) : (
-            <p className="muted commentary" style={{ padding: "12px 10px", margin: 0, color: "#8b919c" }}>
+            <p className="muted commentary" style={{ padding: "12px 10px", margin: 0 }}>
               暂无候选点。点击“分析当前节点”或“分析第一子主线”。
             </p>
           )}
