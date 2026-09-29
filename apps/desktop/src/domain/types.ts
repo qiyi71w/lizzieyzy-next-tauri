@@ -1,3 +1,5 @@
+export type WorkspaceVisibilityDto = { left: boolean; right: boolean };
+
 export type PlayerColor = "black" | "white";
 export type PointDto = { x: number; y: number };
 export type MoveVertex = { point: PointDto } | "pass";

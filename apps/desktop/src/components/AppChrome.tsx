@@ -69,8 +69,8 @@ type Props = {
   showWhiteCandidates: boolean;
   onShowBlackCandidates: (value: boolean) => void;
   onShowWhiteCandidates: (value: boolean) => void;
-  referenceRailCollapsed: boolean;
-  onReferenceRailCollapsed: (value: boolean) => void;
+  railVisibilityDisabled: boolean;
+  onRailVisibility: (side: "left" | "right", visible: boolean) => void;
   selectedNodeRunning: boolean;
   wholeGameRunning: boolean;
   autoPlaying: boolean;
@@ -234,11 +234,14 @@ export function AppChrome(props: Props) {
           </ChromeMenu>
           <ChromeMenu label="显示" open={openMenu === "view"} onToggle={() => setOpenMenu(openMenu === "view" ? null : "view")}>
             <SubMenu label="面板">
-              <MenuItem label="胜率图(Alt+W)" disabled title={later} />
+              <MenuCheck label="左侧栏" checked={props.preferences.workspaceVisibility.left}
+                disabled={props.railVisibilityDisabled}
+                onClick={() => run(() => props.onRailVisibility("left", !props.preferences.workspaceVisibility.left))} />
               <MenuCheck
                 label="选点列表面板"
-                checked={!props.referenceRailCollapsed}
-                onClick={() => run(() => props.onReferenceRailCollapsed(!props.referenceRailCollapsed))}
+                checked={props.preferences.workspaceVisibility.right}
+                disabled={props.railVisibilityDisabled}
+                onClick={() => run(() => props.onRailVisibility("right", !props.preferences.workspaceVisibility.right))}
               />
               <MenuItem label="分支面板(Shift+G)" disabled title={later} />
             </SubMenu>

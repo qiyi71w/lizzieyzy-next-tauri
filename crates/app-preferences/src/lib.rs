@@ -15,6 +15,8 @@ pub const UNREADABLE_RECOVERY_MESSAGE: &str = "Unreadable preferences isolated; 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppPreferencesDto {
+    #[serde(default)]
+    pub workspace_visibility: app_model::WorkspaceVisibilityDto,
     #[serde(default = "default_continuous_analysis_enabled")]
     pub continuous_analysis_enabled: bool,
     #[serde(flatten)]
@@ -106,6 +108,7 @@ fn default_show_coordinates() -> bool {
 
 pub fn default_app_preferences() -> AppPreferencesDto {
     AppPreferencesDto {
+        workspace_visibility: app_model::WorkspaceVisibilityDto::default(),
         continuous_analysis_enabled: default_continuous_analysis_enabled(),
         continuous_budget: ContinuousAnalysisBudgetDto::default(),
         show_coordinates: default_show_coordinates(),
@@ -542,6 +545,7 @@ mod tests {
 
     fn sample_preferences() -> AppPreferencesDto {
         AppPreferencesDto {
+            workspace_visibility: app_model::WorkspaceVisibilityDto { left: false, right: true },
             continuous_analysis_enabled: false,
             continuous_budget: ContinuousAnalysisBudgetDto {
                 continuous_time_limit_enabled: false,

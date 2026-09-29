@@ -5,6 +5,7 @@ import { defaultAppPreferences } from "../domain/preferences";
 import {
   loadAppPreferences,
   saveAppPreferences,
+  updateWorkspaceVisibility,
   UNREADABLE_PREFERENCES_RECOVERY_MESSAGE
 } from "./preferences";
 
@@ -16,6 +17,18 @@ afterEach(() => {
 });
 
 describe("browser preference storage", () => {
+  it("protects rail visibility from stale ordinary saves while retaining other preferences", async () => {
+    const stale = (await loadAppPreferences()).preferences;
+    await updateWorkspaceVisibility({ left: false });
+    await saveAppPreferences({ ...stale, boardTheme: "classic", showCoordinates: false });
+    await updateWorkspaceVisibility({ right: false });
+    const loaded = (await loadAppPreferences()).preferences;
+    expect(loaded.workspaceVisibility).toEqual({ left: false, right: false });
+    expect(loaded.showCoordinates).toBe(false);
+    await updateWorkspaceVisibility({ left: true });
+    expect((await loadAppPreferences()).preferences.workspaceVisibility).toEqual({ left: true, right: false });
+  });
+
   it("loads owner defaults when storage is missing", async () => {
     const loaded = await loadAppPreferences();
     expect(loaded.preferences).toEqual(defaultAppPreferences);

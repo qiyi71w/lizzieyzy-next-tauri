@@ -738,6 +738,16 @@ fn save_app_preferences(
 }
 
 #[tauri::command]
+fn update_workspace_visibility(
+    app_handle: AppHandle,
+    state: State<PreferencesState>,
+    left: Option<bool>,
+    right: Option<bool>,
+) -> Result<app_model::WorkspaceVisibilityDto, String> {
+    state.update_workspace_visibility(&app_preferences_path(&app_handle)?, left, right)
+}
+
+#[tauri::command]
 fn update_recent_game_history(
     app_handle: AppHandle,
     state: State<PreferencesState>,
@@ -1356,6 +1366,7 @@ pub fn run() {
             engine_asset_checks,
             load_app_preferences,
             save_app_preferences,
+            update_workspace_visibility,
             update_recent_game_history,
             load_engine_profile_settings,
             save_engine_profile_settings,

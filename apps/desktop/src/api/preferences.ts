@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { continuousBudgetError, defaultAppPreferences, newGameDefaultsError, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "../domain/preferences";
+import type { WorkspaceVisibilityDto } from "../domain/types";
 
 declare global {
   interface Window {
@@ -43,10 +44,20 @@ export async function saveAppPreferences(preferences: AppPreferences): Promise<A
   if (error) throw new Error(error);
   const normalized = normalizeAppPreferences(preferences);
   if (!isTauriRuntime()) {
-    saveBrowserPreferences(normalized);
-    return normalized;
+    const latest = loadBrowserPreferences().preferences;
+    const saved = { ...normalized, workspaceVisibility: latest.workspaceVisibility, recentGamePaths: latest.recentGamePaths };
+    saveBrowserPreferences(saved);
+    return saved;
   }
   return normalizeAppPreferences(await invoke<AppPreferences>("save_app_preferences", { preferences: normalized }));
+}
+
+export async function updateWorkspaceVisibility(patch: Partial<WorkspaceVisibilityDto>): Promise<WorkspaceVisibilityDto> {
+  if (isTauriRuntime()) return invoke<WorkspaceVisibilityDto>("update_workspace_visibility", patch);
+  const latest = loadBrowserPreferences().preferences;
+  const workspaceVisibility = { ...latest.workspaceVisibility, ...patch };
+  saveBrowserPreferences({ ...latest, workspaceVisibility });
+  return workspaceVisibility;
 }
 
 export async function updateRecentGameHistory(openedPath: string | null): Promise<string[]> {

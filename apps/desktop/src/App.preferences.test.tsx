@@ -82,7 +82,8 @@ vi.mock("./api/backend", () => ({
 
 const preferencesApi = vi.hoisted(() => ({
   loadAppPreferences: vi.fn(),
-  saveAppPreferences: vi.fn()
+  saveAppPreferences: vi.fn(),
+  updateWorkspaceVisibility: vi.fn()
 }));
 
 vi.mock("./api/preferences", async (importOriginal) => {
@@ -90,7 +91,8 @@ vi.mock("./api/preferences", async (importOriginal) => {
   return {
     ...original,
     loadAppPreferences: preferencesApi.loadAppPreferences,
-    saveAppPreferences: preferencesApi.saveAppPreferences
+    saveAppPreferences: preferencesApi.saveAppPreferences,
+    updateWorkspaceVisibility: preferencesApi.updateWorkspaceVisibility
   };
 });
 
@@ -142,6 +144,7 @@ beforeEach(() => {
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
   preferencesApi.loadAppPreferences.mockResolvedValue({ preferences: defaultAppPreferences });
   preferencesApi.saveAppPreferences.mockImplementation(async (preferences: AppPreferences) => preferences);
+  preferencesApi.updateWorkspaceVisibility.mockImplementation(async (patch) => ({ left: true, right: true, ...patch }));
 });
 
 afterEach(() => {
@@ -153,6 +156,22 @@ afterEach(() => {
 });
 
 describe("durable preferences surface", () => {
+  it("commits rail visibility only after success and survives an older ordinary save response", async () => {
+    const host = await renderApp();
+    let finish!: (value: AppPreferences) => void;
+    preferencesApi.saveAppPreferences.mockReturnValueOnce(new Promise<AppPreferences>((resolve) => { finish = resolve; }));
+    act(() => buttonNamed(host, "坐标").click());
+    preferencesApi.updateWorkspaceVisibility.mockRejectedValueOnce(new Error("rail disk full"));
+    await act(async () => buttonNamed(host, "左侧栏").click());
+    expect(host.querySelector(".rail")?.hasAttribute("hidden")).toBe(false);
+    expect(host.textContent).toContain("rail disk full");
+    await act(async () => buttonNamed(host, "左侧栏").click());
+    expect(host.querySelector(".rail")?.hasAttribute("hidden")).toBe(true);
+    await act(async () => finish({ ...defaultAppPreferences, showCoordinates: false }));
+    expect(host.querySelector(".rail")?.hasAttribute("hidden")).toBe(true);
+    expect(buttonNamed(host, "坐标").getAttribute("aria-pressed")).toBe("false");
+  });
+
   it("keeps display controls committed until a write succeeds and reports failed shortcut writes", async () => {
     let finishSave!: (value: AppPreferences) => void;
     const pendingSave = new Promise<AppPreferences>((resolve) => { finishSave = resolve; });

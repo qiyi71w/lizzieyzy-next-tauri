@@ -8,9 +8,11 @@ type Props = {
   disabled?: boolean;
   scoreLeadAvailable?: boolean;
   onChange: (preferences: AppPreferences) => void;
+  railVisibilityDisabled?: boolean;
+  onRailVisibility: (side: "left" | "right", visible: boolean) => void;
 };
 
-export function PreferencesPanel({ preferences, status, disabled = false, scoreLeadAvailable = true, onChange }: Props) {
+export function PreferencesPanel({ preferences, status, disabled = false, scoreLeadAvailable = true, onChange, railVisibilityDisabled = false, onRailVisibility }: Props) {
   function update(patch: Partial<AppPreferences>) {
     onChange({ ...preferences, ...patch });
   }
@@ -21,6 +23,11 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
         <h2>设置</h2>
         <span>{status}</span>
       </div>
+      <fieldset className="preferences-grid">
+        <legend>侧栏</legend>
+        <Toggle label="左侧栏" checked={preferences.workspaceVisibility.left} disabled={railVisibilityDisabled} onChange={(visible) => onRailVisibility("left", visible)} />
+        <Toggle label="右侧栏" checked={preferences.workspaceVisibility.right} disabled={railVisibilityDisabled} onChange={(visible) => onRailVisibility("right", visible)} />
+      </fieldset>
       <fieldset className="preferences-grid">
         <legend>分析呈现</legend>
         <Toggle label="候选" checked={preferences.showCandidates} disabled={disabled} onChange={(checked) => update({ showCandidates: checked })} />

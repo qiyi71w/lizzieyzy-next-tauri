@@ -8,7 +8,10 @@ export type SubBoardContentMode = "variation" | "raw";
 export type ScoringRule = "area" | "territory";
 export type { NextMoveReviewMarkerMode };
 
+import type { WorkspaceVisibilityDto } from "./types";
+
 export type AppPreferences = ContinuousAnalysisBudgetDto & {
+  workspaceVisibility: WorkspaceVisibilityDto;
   showCoordinates: boolean;
   showMoveNumbers: boolean;
   showOwnership: boolean;
@@ -45,6 +48,7 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
 };
 
 export const defaultAppPreferences: AppPreferences = {
+  workspaceVisibility: { left: true, right: true },
   showCoordinates: true,
   showMoveNumbers: false,
   showOwnership: true,
@@ -118,6 +122,10 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
   const scoreLeadLine = booleanValue(value?.scoreLeadLine, defaultAppPreferences.scoreLeadLine);
   const defaultMaxVisits = integerValue(value?.defaultMaxVisits, defaultAppPreferences.defaultMaxVisits, 1, 1_000_000);
   return {
+    workspaceVisibility: {
+      left: booleanValue(value?.workspaceVisibility?.left, true),
+      right: booleanValue(value?.workspaceVisibility?.right, true)
+    },
     showCoordinates: booleanValue(value?.showCoordinates, defaultAppPreferences.showCoordinates),
     showMoveNumbers: booleanValue(value?.showMoveNumbers, defaultAppPreferences.showMoveNumbers),
     showOwnership: booleanValue(value?.showOwnership, defaultAppPreferences.showOwnership),

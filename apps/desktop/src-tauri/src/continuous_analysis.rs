@@ -35,10 +35,10 @@ impl PreferencesState {
         mut preferences: AppPreferencesDto,
     ) -> Result<AppPreferencesDto, String> {
         let mut committed = self.0.lock().expect("preferences transaction");
-        preferences.recent_game_paths = committed
-            .as_ref()
-            .ok_or("Preferences must finish loading before saving.")?
-            .preferences.recent_game_paths.clone();
+        let latest = &committed.as_ref()
+            .ok_or("Preferences must finish loading before saving.")?.preferences;
+        preferences.recent_game_paths = latest.recent_game_paths.clone();
+        preferences.workspace_visibility = latest.workspace_visibility;
         let saved = app_preferences::save_to_path(path, preferences)?;
         manager.set_continuous_preferences(saved.continuous_analysis_enabled, saved.continuous_budget)?;
         *committed = Some(AppPreferencesLoadResultDto {
@@ -46,6 +46,24 @@ impl PreferencesState {
             recovery: None,
         });
         Ok(saved)
+    }
+
+    pub fn update_workspace_visibility(
+        &self,
+        path: &Path,
+        left: Option<bool>,
+        right: Option<bool>,
+    ) -> Result<app_model::WorkspaceVisibilityDto, String> {
+        let mut committed = self.0.lock().expect("preferences transaction");
+        let mut preferences = committed.as_ref()
+            .ok_or("Preferences must finish loading before changing rail visibility.")?
+            .preferences.clone();
+        if let Some(value) = left { preferences.workspace_visibility.left = value; }
+        if let Some(value) = right { preferences.workspace_visibility.right = value; }
+        let saved = app_preferences::save_to_path(path, preferences)?;
+        let visibility = saved.workspace_visibility;
+        *committed = Some(AppPreferencesLoadResultDto { preferences: saved, recovery: None });
+        Ok(visibility)
     }
 
     pub fn update_recent_history(&self, path: &Path, opened_path: Option<&str>) -> Result<Vec<String>, String> {
@@ -156,6 +174,31 @@ mod tests {
     use app_model::{ContinuousAnalysisPhaseDto, ForegroundEngineLifecycleDto};
     use engine_manager::{ForegroundEngineConfig, InMemoryEngineProfileCatalog};
     use std::sync::Arc;
+
+    #[test]
+    fn rail_visibility_preserves_other_owners_and_failed_writes_do_not_commit() {
+        let directory = std::env::temp_dir().join(format!("rail-prefs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("preferences.json");
+        let manager = ForegroundEngineManager::new(
+            Arc::new(InMemoryEngineProfileCatalog::new()), ForegroundEngineConfig::for_tests(),
+        );
+        let state = PreferencesState::default();
+        let mut stale = state.load(&path, &manager).unwrap().preferences;
+        state.update_workspace_visibility(&path, Some(false), None).unwrap();
+        stale.show_coordinates = false;
+        state.save(&path, &manager, stale).unwrap();
+        state.update_recent_history(&path, Some("/games/test.sgf")).unwrap();
+        state.update_workspace_visibility(&path, None, Some(false)).unwrap();
+        assert!(state.update_workspace_visibility(&directory, Some(true), None).is_err());
+        let loaded = state.load(&path, &manager).unwrap().preferences;
+        assert_eq!(loaded.workspace_visibility, app_model::WorkspaceVisibilityDto { left: false, right: false });
+        assert!(!loaded.show_coordinates);
+        assert_eq!(loaded.recent_game_paths, ["/games/test.sgf"]);
+        let restarted = PreferencesState::default().load(&path, &manager).unwrap().preferences;
+        assert_eq!(restarted, loaded);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn recent_history_failure_clear_restart_and_stale_preferences_are_atomic() {
