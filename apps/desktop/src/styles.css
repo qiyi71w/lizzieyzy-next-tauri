@@ -578,6 +578,8 @@ button[aria-pressed="true"] {
 .board-overlays button:hover { background: rgba(255,255,255,0.06); color: #fff; }
 .board-overlays button.active { background: var(--accent); color: var(--accent-fg); font-weight: 700; }
 
+.board-overlays button:focus-visible { outline-offset: -3px; }
+
 /* 比分概览卡片 */
 .score-summary-card {
   display: grid;
@@ -1200,6 +1202,11 @@ textarea {
 .file-button {
   position: relative;
   overflow: hidden;
+}
+
+.file-button:has(input:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
 }
 
 .file-button input {

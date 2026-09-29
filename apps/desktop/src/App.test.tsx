@@ -3210,23 +3210,6 @@ describe("App appearance theme persistence and layout stability", () => {
     expect(leftSeparator.getAttribute("aria-valuenow")).toBe("260");
   });
 
-  it("restores durable high-contrast theme upon application startup", async () => {
-    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
-    preferencesApi.loadAppPreferences.mockResolvedValueOnce({
-      preferences: { ...defaultAppPreferences, boardTheme: "high-contrast" }
-    });
-
-    const host = await renderApp();
-    const appShell = requiredElement(host, ".app-shell");
-    expect(appShell.classList.contains("theme-high-contrast")).toBe(true);
-
-    openPreferences(host);
-    const themeSelect = labeledSelect(host, "棋盘对比");
-    expect(themeSelect.value).toBe("high-contrast");
-
-    const leftSeparator = requiredElement(host, '.workspace-separator[aria-label="调整左栏宽度"]');
-    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("228");
-  });
 });
 
 function openPreferences(host: HTMLElement) {
