@@ -124,7 +124,8 @@ export function normalizeWorkspaceShares(value: WorkspaceSharesDto | null | unde
 }
 
 function normalizeWindowGeometry(value: WindowGeometryDto | null | undefined): WindowGeometryDto | null {
-  if (!value || !Number.isFinite(value.x) || !Number.isFinite(value.y)
+  if (!value || !((value.x === null && value.y === null)
+    || (Number.isFinite(value.x) && Number.isFinite(value.y)))
     || !Number.isFinite(value.width) || !Number.isFinite(value.height) || !Number.isFinite(value.scaleFactor)
     || value.width <= 0 || value.height <= 0 || value.scaleFactor <= 0 || typeof value.maximized !== "boolean") return null;
   return { x: value.x, y: value.y, width: value.width, height: value.height, scaleFactor: value.scaleFactor, maximized: value.maximized };

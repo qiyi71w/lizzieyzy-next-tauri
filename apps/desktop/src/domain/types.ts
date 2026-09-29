@@ -1,8 +1,8 @@
 export type WorkspaceSharesDto = { left: number; right: number };
 
 export type WindowGeometryDto = {
-  x: number;
-  y: number;
+  x: number | null;
+  y: number | null;
   width: number;
   height: number;
   scaleFactor: number;

@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-/// Outer origin is physical; client dimensions are logical at the recorded scale.
+/// Known outer origin is physical; compositor-managed windows omit both coordinates.
+/// Client dimensions are logical at the recorded scale.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WindowGeometryDto {
-    pub x: f64,
-    pub y: f64,
+    pub x: Option<f64>,
+    pub y: Option<f64>,
     pub width: f64,
     pub height: f64,
     pub scale_factor: f64,

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it } from "vitest";
-import { defaultAppPreferences } from "../domain/preferences";
+import { defaultAppPreferences, normalizeAppPreferences } from "../domain/preferences";
 import {
   loadAppPreferences,
   saveAppPreferences,
@@ -27,6 +27,43 @@ describe("browser preference storage", () => {
     const loaded = await loadAppPreferences();
     expect(loaded.preferences).toEqual({ ...defaultAppPreferences, showCandidates: false });
     expect(loaded.recovery).toBeUndefined();
+  });
+
+  it("preserves compositor-managed dimensions and legacy physical positions", async () => {
+    const managed = { x: null, y: null, width: 1033.5, height: 725.25, scaleFactor: 1.25, maximized: true };
+    const positioned = { ...managed, x: -240, y: 0, maximized: false };
+    for (const geometry of [managed, positioned]) {
+      window.localStorage.setItem(storageKey, JSON.stringify({ windowGeometry: geometry }));
+      expect((await loadAppPreferences()).preferences.windowGeometry).toEqual(geometry);
+    }
+  });
+
+  it("rejects mixed, nonfinite, and invalid geometry fields without losing other preferences", () => {
+    const geometry = { x: null, y: null, width: 800, height: 600, scaleFactor: 1, maximized: false };
+    for (const invalid of [
+      { ...geometry, x: 0 },
+      { ...geometry, y: 0 },
+      { ...geometry, x: Number.NaN, y: 0 },
+      { ...geometry, x: Number.POSITIVE_INFINITY, y: 0 },
+      { ...geometry, width: 0 },
+      { ...geometry, height: -1 },
+      { ...geometry, scaleFactor: Number.NaN }
+    ]) {
+      const normalized = normalizeAppPreferences({ windowGeometry: invalid, showCandidates: false });
+      expect(normalized.windowGeometry).toBeNull();
+      expect(normalized.showCandidates).toBe(false);
+    }
+  });
+
+  it("rejects malformed stored geometry values", async () => {
+    for (const invalid of [
+      { x: "0", y: 0, width: 800, height: 600, scaleFactor: 1, maximized: false },
+      { x: null, y: null, width: 800, height: 600, scaleFactor: 0, maximized: false },
+      { x: null, y: null, width: 800, height: 600, scaleFactor: 1, maximized: "false" }
+    ]) {
+      window.localStorage.setItem(storageKey, JSON.stringify({ windowGeometry: invalid }));
+      expect((await loadAppPreferences()).preferences.windowGeometry).toBeNull();
+    }
   });
 
   it("derives missing stage presets from the legacy selected-node visit preference", async () => {

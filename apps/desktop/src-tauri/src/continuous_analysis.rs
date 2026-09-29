@@ -203,7 +203,7 @@ mod tests {
         let initial = state.load(&path, &manager).unwrap();
         assert!(initial.recovery.is_some());
         state.update_window_geometry(&path, app_model::WindowGeometryDto {
-            x: 40.0, y: 50.0, width: 1100.0, height: 720.0, scale_factor: 1.0, maximized: false,
+            x: Some(40.0), y: Some(50.0), width: 1100.0, height: 720.0, scale_factor: 1.0, maximized: false,
         }).unwrap();
         assert_eq!(state.load(&path, &manager).unwrap().recovery, initial.recovery);
         std::fs::remove_dir_all(directory).unwrap();
@@ -223,7 +223,7 @@ mod tests {
         let before = manager.snapshot();
         state.update_workspace_shares(&path, shares).unwrap();
         let geometry = app_model::WindowGeometryDto {
-            x: -1200.0, y: 50.0, width: 1100.0, height: 720.0,
+            x: Some(-1200.0), y: Some(50.0), width: 1100.0, height: 720.0,
             scale_factor: 1.25, maximized: true,
         };
         state.update_window_geometry(&path, geometry).unwrap();
@@ -241,7 +241,7 @@ mod tests {
         assert_eq!(state.load(&path, &manager).unwrap().preferences, before_reset);
         assert!(state.update_workspace_shares(&path, Some(WorkspaceSharesDto { left: 0.6, right: 0.4 })).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), durable);
-        let changed = app_model::WindowGeometryDto { x: 40.0, maximized: false, ..geometry };
+        let changed = app_model::WindowGeometryDto { x: Some(40.0), maximized: false, ..geometry };
         assert!(state.update_window_geometry(&directory, changed).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), durable);
         assert_eq!(state.load(&path, &manager).unwrap().preferences, before_reset);

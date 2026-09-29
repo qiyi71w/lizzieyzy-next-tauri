@@ -10,6 +10,13 @@ use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use crate::continuous_analysis::PreferencesState;
 use engine_manager::ForegroundEngineManager;
 
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos::title_insets;
+
 const DEBOUNCE: Duration = Duration::from_millis(500);
 const SETTLE: Duration = Duration::from_millis(75);
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -109,21 +116,21 @@ fn title_insets(window: &WebviewWindow, scale: f64) -> Result<(f64, f64, f64, f6
         f64::from(bottom - top) / scale))
 }
 
+#[cfg(not(target_os = "linux"))]
 fn frame(window: &WebviewWindow) -> Result<FrameInsets, String> {
     let outer = window.outer_size().map_err(|e| e.to_string())?;
     let inner = window.inner_size().map_err(|e| e.to_string())?;
     let scale = window.scale_factor().map_err(|e| e.to_string())?;
-    #[cfg(windows)]
     let (title_left, title_right, title_top, title_height) = title_insets(window, scale)?;
-    // Other window systems retain their existing outer-title approximation.
-    #[cfg(not(windows))]
-    let (title_left, title_right, title_top, title_height) = (0.0, 0.0, 0.0, 32.0);
     Ok(FrameInsets {
         width: f64::from(outer.width.saturating_sub(inner.width)) / scale,
         height: f64::from(outer.height.saturating_sub(inner.height)) / scale,
         title_left, title_right, title_top, title_height,
     })
 }
+
+#[cfg(target_os = "linux")]
+use linux::frame;
 
 fn usable_area(area: &WorkArea, frame: FrameInsets) -> bool {
     area.scale_factor.is_finite() && area.scale_factor > 0.0
@@ -138,9 +145,20 @@ fn sample(window: &WebviewWindow, previous: Option<WindowGeometryDto>) -> Result
     if window.is_maximized().map_err(|e| e.to_string())? {
         return Ok(record_sample(previous, WindowSample::Maximized));
     }
-    let origin = window.outer_position().map_err(|e| e.to_string())?;
-    let client = window.inner_size().map_err(|e| e.to_string())?;
-    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "linux")]
+    let geometry = linux::normal_bounds(window)?;
+    #[cfg(not(target_os = "linux"))]
+    let geometry = {
+        let origin = window.outer_position().map_err(|e| e.to_string())?;
+        let client = window.inner_size().map_err(|e| e.to_string())?;
+        let scale = window.scale_factor().map_err(|e| e.to_string())?;
+        WindowGeometryDto {
+            x: Some(f64::from(origin.x)), y: Some(f64::from(origin.y)),
+            width: f64::from(client.width) / scale,
+            height: f64::from(client.height) / scale,
+            scale_factor: scale, maximized: false,
+        }
+    };
     // Recheck state after the separate native queries; transient minimize/maximize
     // bounds must never replace normal bounds.
     if window.is_minimized().map_err(|e| e.to_string())?
@@ -148,19 +166,20 @@ fn sample(window: &WebviewWindow, previous: Option<WindowGeometryDto>) -> Result
     {
         return Ok(previous);
     }
-    Ok(record_sample(previous, WindowSample::Normal(WindowGeometryDto {
-        x: f64::from(origin.x), y: f64::from(origin.y),
-        width: f64::from(client.width) / scale, height: f64::from(client.height) / scale,
-        scale_factor: scale, maximized: false,
-    })))
+    Ok(record_sample(previous, WindowSample::Normal(geometry)))
 }
 
 fn apply(window: &WebviewWindow, geometry: WindowGeometryDto) -> Result<(), String> {
     window.unmaximize().map_err(|e| e.to_string())?;
     // Move first so the client setter uses the destination DPI. Never pass outer
     // dimensions to this setter.
-    window.set_position(tauri::PhysicalPosition::new(geometry.x as i32, geometry.y as i32))
-        .map_err(|e| e.to_string())?;
+    if let (Some(x), Some(y)) = (geometry.x, geometry.y) {
+        #[cfg(target_os = "linux")]
+        linux::set_position(window, x, y)?;
+        #[cfg(not(target_os = "linux"))]
+        window.set_position(tauri::PhysicalPosition::new(x as i32, y as i32))
+            .map_err(|e| e.to_string())?;
+    }
     window.set_size(tauri::LogicalSize::new(geometry.width, geometry.height))
         .map_err(|e| e.to_string())?;
     if geometry.maximized { window.maximize().map_err(|e| e.to_string())?; }
@@ -184,6 +203,18 @@ impl Session {
             &path, &self.app.state::<ForegroundEngineManager>(),
         )?;
         self.durable = loaded.preferences.window_geometry;
+        #[cfg(target_os = "linux")]
+        if linux::position_is_managed(&self.window)? {
+            let current = linux::normal_bounds(&self.window)?;
+            let target = app_preferences::window_geometry::restore_managed_geometry(self.durable, current);
+            if current != target { apply(&self.window, target)?; }
+            self.geometry = Some(target);
+            self.suspended = false;
+            self.error = None;
+            self.phase = if self.geometry == self.durable { "saved" } else { "pending" };
+            self.due = (self.geometry != self.durable).then(|| Instant::now() + DEBOUNCE);
+            return Ok(());
+        }
         let frame = frame(&self.window)?;
         let areas = self.window.available_monitors().map(|monitors| monitors.iter().map(work_area).collect::<Vec<_>>()).map_err(|e| e.to_string());
         let current = sample(&self.window, None)?;
@@ -237,6 +268,19 @@ impl Session {
     }
     fn reset(&mut self) -> Result<(), String> {
         if self.frozen || self.sealed { return Err("Window changes are frozen during document departure.".into()); }
+        #[cfg(target_os = "linux")]
+        if linux::position_is_managed(&self.window)? {
+            self.window.unmaximize().map_err(|e| e.to_string())?;
+            let target = linux::managed_reset_bounds(&self.window)?;
+            apply(&self.window, target)?;
+            self.geometry = Some(target);
+            self.suspended = false;
+            self.error = None;
+            self.phase = "pending";
+            self.due = Some(Instant::now() + DEBOUNCE);
+            self.publish();
+            return Ok(());
+        }
         let monitor = match self.window.current_monitor().map_err(|e| e.to_string())? {
             Some(monitor) => monitor,
             None => self.window.primary_monitor().map_err(|e| e.to_string())?
@@ -263,8 +307,8 @@ impl Session {
             Err(error) => { self.fail(error.clone()); let _ = reply.send(Err(error)); }
         }
     }
-    fn run(mut self, requests: Receiver<Request>) {
-        if let Err(error) = self.initialize() {
+    fn run(mut self, requests: Receiver<Request>, startup: Result<(), String>) {
+        if let Err(error) = startup.and_then(|_| self.initialize()) {
             self.suspended = true;
             self.fail(error);
         }
@@ -323,11 +367,15 @@ pub fn start(app: &AppHandle) {
     let (sender, receiver) = mpsc::channel();
     app.manage(WindowGeometryOwner(sender));
     let Some(window) = app.get_webview_window("main") else { return; };
+    #[cfg(target_os = "linux")]
+    let startup = linux::configure(&window);
+    #[cfg(not(target_os = "linux"))]
+    let startup = Ok(());
     let session = Session {
         app: app.clone(), window, geometry: None, durable: None, phase: "loading", error: None,
         due: None, sample_due: None, frozen: false, sealed: false, suspended: true,
     };
-    std::thread::spawn(move || session.run(receiver));
+    std::thread::spawn(move || session.run(receiver, startup));
 }
 
 pub fn observe(app: &AppHandle) {

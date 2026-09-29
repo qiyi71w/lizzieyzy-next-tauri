@@ -1465,11 +1465,12 @@ export function App() {
 
   const windowGeometryDisabled = !nativeRuntime || !preferencesLoaded || workspace.frozen || windowGeometryActionPending;
   const windowGeometryFailure = windowGeometryError ?? windowGeometry.error;
+  const windowGeometrySystemManaged = windowGeometry.geometry?.x === null && windowGeometry.geometry.y === null;
   const windowGeometryStatusText = !nativeRuntime ? nativeWindowGeometryUnavailable
     : windowGeometryFailure ? `窗口位置未保存：${windowGeometryFailure}`
-    : windowGeometry.phase === "saved" ? "窗口位置已保存"
-    : windowGeometry.phase === "pending" ? "窗口位置待保存"
-    : windowGeometry.phase === "saving" ? "正在保存窗口位置…"
+    : windowGeometry.phase === "saved" ? windowGeometrySystemManaged ? "窗口尺寸已保存（位置由系统管理）" : "窗口位置已保存"
+    : windowGeometry.phase === "pending" ? windowGeometrySystemManaged ? "窗口尺寸待保存（位置由系统管理）" : "窗口位置待保存"
+    : windowGeometry.phase === "saving" ? windowGeometrySystemManaged ? "正在保存窗口尺寸（位置由系统管理）…" : "正在保存窗口位置…"
     : windowGeometry.phase === "unsaved" ? "窗口位置未保存"
     : "正在读取窗口位置…";
 

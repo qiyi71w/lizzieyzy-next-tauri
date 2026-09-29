@@ -6,17 +6,26 @@ pub enum WindowSample {
     Minimized,
 }
 
+fn valid_normal_geometry(geometry: &WindowGeometryDto) -> bool {
+    let valid_origin = match (geometry.x, geometry.y) {
+        (None, None) => true,
+        (Some(x), Some(y)) => x.is_finite() && y.is_finite()
+            && x != MINIMIZED_SENTINEL && y != MINIMIZED_SENTINEL,
+        _ => false,
+    };
+    valid_origin
+        && geometry.width.is_finite() && geometry.width > 0.0
+        && geometry.height.is_finite() && geometry.height > 0.0
+        && geometry.scale_factor.is_finite() && geometry.scale_factor > 0.0
+}
+
 /// Minimized/transition bounds never replace the last usable normal rectangle.
 pub fn record_sample(previous: Option<WindowGeometryDto>, sample: WindowSample) -> Option<WindowGeometryDto> {
     match sample {
         WindowSample::Minimized => previous,
         WindowSample::Maximized => previous.map(|geometry| WindowGeometryDto { maximized: true, ..geometry }),
         WindowSample::Normal(geometry) => {
-            if !geometry.x.is_finite() || !geometry.y.is_finite()
-                || geometry.x == MINIMIZED_SENTINEL || geometry.y == MINIMIZED_SENTINEL
-                || !geometry.width.is_finite() || geometry.width <= 0.0
-                || !geometry.height.is_finite() || geometry.height <= 0.0
-                || !geometry.scale_factor.is_finite() || geometry.scale_factor <= 0.0 {
+            if !valid_normal_geometry(&geometry) {
                 previous
             } else {
                 Some(WindowGeometryDto { maximized: false, ..geometry })
@@ -56,6 +65,12 @@ pub fn restore_geometry(
     Ok(RestoreGeometry { geometry: fit_default(&primary, frame), warning })
 }
 
+/// Restore dimensions and maximization without asking a compositor for an origin.
+pub fn restore_managed_geometry(saved: Option<WindowGeometryDto>, current: WindowGeometryDto) -> WindowGeometryDto {
+    let chosen = saved.filter(valid_normal_geometry).unwrap_or(current);
+    WindowGeometryDto { x: None, y: None, ..chosen }
+}
+
 #[cfg(test)]
 mod sampling_tests {
     use super::*;
@@ -72,7 +87,7 @@ mod sampling_tests {
     #[test]
     fn monitor_failure_is_not_an_invalid_record_recovery() {
         let frame = FrameInsets { width: 16.0, height: 39.0, title_left: 24.0, title_right: 148.0, title_top: 2.0, title_height: 28.0 };
-        let saved = WindowGeometryDto { x: 40.0, y: 50.0, width: 1100.0, height: 720.0, scale_factor: 1.0, maximized: true };
+        let saved = WindowGeometryDto { x: Some(40.0), y: Some(50.0), width: 1100.0, height: 720.0, scale_factor: 1.0, maximized: true };
         assert!(restore_geometry(Some(saved), Err("monitor query failed".into()), frame, || Err("primary query failed".into())).is_err());
         let small = WorkArea { x: 0.0, y: 0.0, width: 800.0, height: 600.0, scale_factor: 1.0 };
         let fallback = restore_geometry(Some(saved), Ok(&[]), frame, || Ok(small)).unwrap();
@@ -84,16 +99,90 @@ mod sampling_tests {
 
     #[test]
     fn normal_maximized_minimized_preserve_the_normal_rectangle() {
-        let normal = WindowGeometryDto { x: -1500.0, y: 40.0, width: 1100.0, height: 720.0, scale_factor: 1.25, maximized: false };
+        let normal = WindowGeometryDto { x: Some(-1500.0), y: Some(40.0), width: 1100.0, height: 720.0, scale_factor: 1.25, maximized: false };
         let initial = record_sample(None, WindowSample::Normal(normal));
         assert_eq!(initial, Some(normal));
         let maximized = record_sample(initial, WindowSample::Maximized);
         assert_eq!(maximized, Some(WindowGeometryDto { maximized: true, ..normal }));
         assert_eq!(record_sample(maximized, WindowSample::Minimized), maximized);
         assert_eq!(record_sample(maximized, WindowSample::Normal(normal)), initial);
-        for invalid in [WindowGeometryDto { x: -32000.0, ..normal }, WindowGeometryDto { width: 0.0, ..normal }, WindowGeometryDto { scale_factor: f64::NAN, ..normal }] {
+        for invalid in [WindowGeometryDto { x: Some(-32000.0), ..normal }, WindowGeometryDto { width: 0.0, ..normal }, WindowGeometryDto { scale_factor: f64::NAN, ..normal }] {
             assert_eq!(record_sample(maximized, WindowSample::Normal(invalid)), maximized);
         }
+    }
+
+    #[test]
+    fn managed_normal_maximized_minimized_preserve_dimensions_without_an_origin() {
+        let normal = WindowGeometryDto { x: None, y: None, width: 1200.0, height: 700.0, scale_factor: 1.5, maximized: true };
+        let sampled = record_sample(None, WindowSample::Normal(normal));
+        let normal = WindowGeometryDto { maximized: false, ..normal };
+        assert_eq!(sampled, Some(normal));
+        let maximized = record_sample(sampled, WindowSample::Maximized);
+        assert_eq!(maximized, Some(WindowGeometryDto { maximized: true, ..normal }));
+        assert_eq!(record_sample(maximized, WindowSample::Minimized), maximized);
+        assert_eq!(record_sample(maximized, WindowSample::Normal(normal)), sampled);
+    }
+
+    #[test]
+    fn mixed_or_invalid_known_origins_do_not_replace_last_normal_sample() {
+        let previous = WindowGeometryDto { x: None, y: None, width: 1100.0, height: 720.0, scale_factor: 1.0, maximized: true };
+        for invalid in [
+            WindowGeometryDto { x: Some(50.0), ..previous },
+            WindowGeometryDto { y: Some(50.0), ..previous },
+            WindowGeometryDto { x: Some(f64::INFINITY), y: Some(40.0), ..previous },
+            WindowGeometryDto { x: Some(MINIMIZED_SENTINEL), y: Some(40.0), ..previous },
+        ] {
+            assert_eq!(record_sample(Some(previous), WindowSample::Normal(invalid)), Some(previous));
+        }
+    }
+
+    #[test]
+    fn managed_restore_uses_valid_saved_dimensions_and_maximization_without_position() {
+        let current = WindowGeometryDto { x: Some(10.0), y: Some(20.0), width: 900.0, height: 600.0, scale_factor: 1.0, maximized: false };
+        let positioned = WindowGeometryDto { x: Some(-200.0), y: Some(30.0), width: 1200.0, height: 800.0, scale_factor: 1.5, maximized: true };
+        let expected = WindowGeometryDto { x: None, y: None, ..positioned };
+        assert_eq!(restore_managed_geometry(Some(positioned), current), expected);
+        assert_eq!(restore_managed_geometry(Some(expected), current), expected);
+        assert_eq!(restore_managed_geometry(None, current), WindowGeometryDto { x: None, y: None, ..current });
+    }
+
+    #[test]
+    fn managed_restore_invalid_dimensions_fall_back_to_current() {
+        let current = WindowGeometryDto { x: Some(10.0), y: Some(20.0), width: 900.0, height: 600.0, scale_factor: 1.0, maximized: false };
+        let saved = WindowGeometryDto { x: None, y: None, width: 1200.0, height: 800.0, scale_factor: 1.5, maximized: true };
+        for invalid in [
+            WindowGeometryDto { width: 0.0, ..saved },
+            WindowGeometryDto { width: f64::INFINITY, ..saved },
+            WindowGeometryDto { height: f64::NAN, ..saved },
+            WindowGeometryDto { scale_factor: -1.0, ..saved },
+        ] {
+            assert_eq!(restore_managed_geometry(Some(invalid), current), WindowGeometryDto { x: None, y: None, ..current });
+        }
+    }
+
+    #[test]
+    fn managed_restore_rejects_invalid_origin_pairs() {
+        let current = WindowGeometryDto { x: None, y: None, width: 900.0, height: 600.0, scale_factor: 1.0, maximized: false };
+        let saved = WindowGeometryDto { width: 1200.0, height: 800.0, maximized: true, ..current };
+        for (x, y) in [
+            (None, Some(50.0)),
+            (Some(50.0), None),
+            (Some(f64::INFINITY), Some(50.0)),
+            (Some(50.0), Some(MINIMIZED_SENTINEL)),
+        ] {
+            assert_eq!(restore_managed_geometry(Some(WindowGeometryDto { x, y, ..saved }), current), current);
+        }
+    }
+
+    #[test]
+    fn serialized_origins_accept_numeric_and_null_pairs() {
+        let positioned: WindowGeometryDto = serde_json::from_str(r#"{"x":-1200.0,"y":50.0,"width":1100.0,"height":720.0,"scaleFactor":1.25,"maximized":true}"#).unwrap();
+        assert_eq!((positioned.x, positioned.y), (Some(-1200.0), Some(50.0)));
+        let managed = WindowGeometryDto { x: None, y: None, ..positioned };
+        let serialized = serde_json::to_string(&managed).unwrap();
+        assert_eq!(serde_json::from_str::<WindowGeometryDto>(&serialized).unwrap(), managed);
+        assert!(serialized.contains("\"x\":null"));
+        assert!(serialized.contains("\"y\":null"));
     }
 }
 
@@ -157,10 +246,13 @@ fn usable(area: &WorkArea, frame: FrameInsets) -> bool {
 /// An empty work-area slice means no reachable geometry; monitor query failures
 /// must be handled by the caller, not represented by an empty slice.
 pub fn is_reachable(geometry: &WindowGeometryDto, areas: &[WorkArea], frame: FrameInsets) -> bool {
-    if !geometry.x.is_finite()
-        || !geometry.y.is_finite()
-        || geometry.x == MINIMIZED_SENTINEL
-        || geometry.y == MINIMIZED_SENTINEL
+    let Some((x, y)) = geometry.x.zip(geometry.y) else {
+        return false;
+    };
+    if !x.is_finite()
+        || !y.is_finite()
+        || x == MINIMIZED_SENTINEL
+        || y == MINIMIZED_SENTINEL
         || !geometry.width.is_finite()
         || !geometry.height.is_finite()
         || geometry.width <= 0.0
@@ -170,7 +262,6 @@ pub fn is_reachable(geometry: &WindowGeometryDto, areas: &[WorkArea], frame: Fra
     {
         return false;
     }
-
     areas.iter().any(|area| {
         if !usable(area, frame) {
             return false;
@@ -191,9 +282,9 @@ pub fn is_reachable(geometry: &WindowGeometryDto, areas: &[WorkArea], frame: Fra
             return false;
         }
 
-        let left = geometry.x + frame.title_left * area.scale_factor;
-        let right = geometry.x + outer_width - frame.title_right * area.scale_factor;
-        let top = geometry.y + frame.title_top * area.scale_factor;
+        let left = x + frame.title_left * area.scale_factor;
+        let right = x + outer_width - frame.title_right * area.scale_factor;
+        let top = y + frame.title_top * area.scale_factor;
         let bottom = top + frame.title_height * area.scale_factor;
         left.is_finite() && right.is_finite() && top.is_finite() && bottom.is_finite()
             && (right.min(area.x + area.width) - left.max(area.x)) >= title_width
@@ -213,8 +304,8 @@ pub fn fit_default(area: &WorkArea, frame: FrameInsets) -> WindowGeometryDto {
     let outer_width = (width + frame.width) * area.scale_factor;
     let outer_height = (height + frame.height) * area.scale_factor;
     WindowGeometryDto {
-        x: area.x + (area.width - outer_width) / 2.0,
-        y: area.y + (area.height - outer_height) / 2.0,
+        x: Some(area.x + (area.width - outer_width) / 2.0),
+        y: Some(area.y + (area.height - outer_height) / 2.0),
         width,
         height,
         scale_factor: area.scale_factor,
@@ -244,8 +335,8 @@ mod tests {
 
     fn geometry(x: f64, y: f64) -> WindowGeometryDto {
         WindowGeometryDto {
-            x,
-            y,
+            x: Some(x),
+            y: Some(y),
             width: 1100.0,
             height: 720.0,
             scale_factor: 1.0,
@@ -276,10 +367,11 @@ mod tests {
     fn rejects_invalid_coordinates_dimensions_and_scale_even_when_maximized() {
         let baseline = geometry(50.0, 50.0);
         for invalid in [
-            WindowGeometryDto { x: f64::NAN, ..baseline },
-            WindowGeometryDto { y: f64::INFINITY, ..baseline },
-            WindowGeometryDto { x: MINIMIZED_SENTINEL, ..baseline },
-            WindowGeometryDto { y: MINIMIZED_SENTINEL, ..baseline },
+            WindowGeometryDto { x: Some(f64::NAN), ..baseline },
+            WindowGeometryDto { y: Some(f64::INFINITY), ..baseline },
+            WindowGeometryDto { x: Some(MINIMIZED_SENTINEL), ..baseline },
+            WindowGeometryDto { y: Some(MINIMIZED_SENTINEL), ..baseline },
+            WindowGeometryDto { x: None, ..baseline },
             WindowGeometryDto { width: 0.0, ..baseline },
             WindowGeometryDto { height: -1.0, ..baseline },
             WindowGeometryDto { width: f64::INFINITY, ..baseline },
@@ -294,6 +386,10 @@ mod tests {
             &[PRIMARY],
             FRAME
         ));
+
+        let managed = WindowGeometryDto { x: None, y: None, ..baseline };
+        assert!(!is_reachable(&managed, &[PRIMARY], FRAME));
+        assert_eq!(restore_geometry(Some(managed), Ok(&[PRIMARY]), FRAME, || Ok(PRIMARY)).unwrap().geometry, fit_default(&PRIMARY, FRAME));
     }
 
     #[test]
@@ -315,8 +411,8 @@ mod tests {
             scale_factor: 2.0,
         };
         let saved = WindowGeometryDto {
-            x: 1950.0,
-            y: 30.0,
+            x: Some(1950.0),
+            y: Some(30.0),
             width: 1440.0,
             height: 800.0,
             scale_factor: 1.25,
@@ -334,7 +430,7 @@ mod tests {
         let title_only = WorkArea { width: 100.0, height: 32.0, ..PRIMARY };
         let right_edge = geometry(PRIMARY.width - 100.0 - FRAME.title_left, 0.0);
         assert!(is_reachable(&right_edge, &[PRIMARY], FRAME));
-        assert!(!is_reachable(&geometry(right_edge.x + 1.0, 0.0), &[PRIMARY], FRAME));
+        assert!(!is_reachable(&geometry(right_edge.x.unwrap() + 1.0, 0.0), &[PRIMARY], FRAME));
         assert!(is_reachable(&geometry(0.0, PRIMARY.height - 32.0 - FRAME.title_top), &[PRIMARY], FRAME));
         assert!(!is_reachable(&geometry(0.0, PRIMARY.height - 32.0), &[PRIMARY], FRAME));
         assert!(!is_reachable(&saved, &[title_only], FRAME));
@@ -347,11 +443,11 @@ mod tests {
             let short = FrameInsets { title_height: 28.0, ..FRAME };
             let bottom = geometry(40.0, area.height - (short.title_top + short.title_height) * scale);
             assert!(is_reachable(&bottom, &[area], short));
-            assert!(!is_reachable(&geometry(bottom.x, bottom.y + scale), &[area], short));
+            assert!(!is_reachable(&geometry(bottom.x.unwrap(), bottom.y.unwrap() + scale), &[area], short));
             let tall = FrameInsets { title_height: 40.0, ..FRAME };
             let clipped = geometry(40.0, -(tall.title_top + 8.0) * scale);
             assert!(is_reachable(&clipped, &[area], tall));
-            assert!(!is_reachable(&geometry(clipped.x, clipped.y - scale), &[area], tall));
+            assert!(!is_reachable(&geometry(clipped.x.unwrap(), clipped.y.unwrap() - scale), &[area], tall));
         }
     }
 
@@ -365,7 +461,7 @@ mod tests {
     #[test]
     fn fits_default_client_and_small_workarea_without_a_size_floor() {
         let fitted = fit_default(&PRIMARY, FRAME);
-        assert_eq!((fitted.x, fitted.y, fitted.width, fitted.height), (232.0, 50.0, 1440.0, 900.0));
+        assert_eq!((fitted.x, fitted.y, fitted.width, fitted.height), (Some(232.0), Some(50.0), 1440.0, 900.0));
         assert!(!fitted.maximized);
         assert!(is_reachable(&fitted, &[PRIMARY], FRAME));
 
@@ -377,7 +473,7 @@ mod tests {
             scale_factor: 1.25,
         };
         let fitted = fit_default(&small, FRAME);
-        assert_eq!((fitted.x, fitted.y, fitted.width, fitted.height), (-1000.0, 120.0, 624.0, 440.0));
+        assert_eq!((fitted.x, fitted.y, fitted.width, fitted.height), (Some(-1000.0), Some(120.0), 624.0, 440.0));
         assert_eq!(fitted.scale_factor, 1.25);
         assert!(is_reachable(&fitted, &[small], FRAME));
     }
