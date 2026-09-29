@@ -429,6 +429,10 @@ Run `cargo test -p app-preferences` for geometry, monitor-failure and window-sta
 
 On an exact committed Windows candidate, record outer physical origin, client size, DPI, process identity and preference JSON while moving/resizing, restarting maximized, unmaximizing, and restarting after minimization. Validate a reachable off-center record unchanged, an invalid record fitted to the work area, reset isolation, blocked preference writes and Retry, immediate close after a move, dirty-close cancellation, file activation/drop and recovery. Real monitor removal/DPI changes require native hardware/session evidence; deterministic fixtures and browser rendering are supplementary only.
 
+For caption boundaries, measure the actual native draggable region with `WM_NCHITTEST` (`HTCAPTION`), not just `TITLEBARINFOEX`: its rectangle can include resize borders and system-menu pixels. Verify a contiguous 100 logical pixel width and `min(32, native draggable caption height)` logical pixel height; exercise valid edge placement unchanged on restart and insufficient visible title area recovered into the work area.
+
+On 2026-09-29, Windows snapshot `85a5cc12f876186c95b9961451364a46cf0a0ad7` at 96 DPI exposed 28 logical pixels in `TITLEBARINFOEX`, but only 22 contiguous `HTCAPTION` rows. A 100-pixel-wide scan verified all 22 rows. A saved `400,1361,1100×720` client record retained its position on restart with the caption ending exactly at work-area bottom 1392; `400,1375,1100×720` recovered to `552,226,1440×900`. Evidence is in `D:\dev\weiqi\acceptance\r7-window04-85a5cc1-run3` and `-run4`. This proves the Windows title-height boundary, not ticket-wide acceptance. Non-Windows adapters still use an approximate 32-pixel title region and do not yet implement measured native caption bounds; monitor-query failure, real display-removal and OS file-drop gates remain separate.
+
 ## Documentation Acceptance
 
 When updating docs for this handoff package, keep these claims accurate:

@@ -50,7 +50,22 @@ fn work_area(monitor: &tauri::Monitor) -> WorkArea {
 }
 
 #[cfg(windows)]
-fn title_insets(window: &WebviewWindow, scale: f64) -> Result<(f64, f64, f64), String> {
+fn is_caption(hwnd: windows::Win32::Foundation::HWND, x: i32, y: i32) -> Result<bool, String> {
+    use windows::Win32::{Foundation::{LPARAM, WPARAM}, UI::WindowsAndMessaging::{
+        SendMessageTimeoutW, HTCAPTION, WM_NCHITTEST, SMTO_ABORTIFHUNG, SMTO_ERRORONEXIT,
+    }};
+    let point = ((y as u32 & 0xffff) << 16) | (x as u32 & 0xffff);
+    let mut hit = 0;
+    let result = unsafe { SendMessageTimeoutW(hwnd, WM_NCHITTEST, WPARAM(0), LPARAM(point as isize),
+        SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT, 1000, Some(&mut hit)) };
+    if result.0 == 0 {
+        return Err("Cannot hit-test native title bounds; saved geometry was retained.".into());
+    }
+    Ok(hit == HTCAPTION as usize)
+}
+
+#[cfg(windows)]
+fn title_insets(window: &WebviewWindow, scale: f64) -> Result<(f64, f64, f64, f64), String> {
     use windows::Win32::{Foundation::{HWND, LPARAM, WPARAM}, UI::WindowsAndMessaging::{
         SendMessageTimeoutW, TITLEBARINFOEX, WM_GETTITLEBARINFOEX, SMTO_ABORTIFHUNG, SMTO_ERRORONEXIT,
     }};
@@ -71,9 +86,27 @@ fn title_insets(window: &WebviewWindow, scale: f64) -> Result<(f64, f64, f64), S
             right = right.min(rect.left);
         }
     }
-    Ok((f64::from(info.rcTitleBar.left - origin.x).max(0.0) / scale,
+    // TITLEBARINFOEX includes resize pixels and can overlap the system menu.
+    // Trim those native hit-test boundaries rather than inventing a caption height.
+    let mut left = info.rcTitleBar.left;
+    let mut top = info.rcTitleBar.top;
+    let mut bottom = info.rcTitleBar.bottom;
+    let middle_x = left + (right - left) / 2;
+    while top < bottom && !is_caption(hwnd, middle_x, top)? { top += 1; }
+    while bottom > top && !is_caption(hwnd, middle_x, bottom - 1)? { bottom -= 1; }
+    if bottom <= top || right <= left {
+        return Err("Native title has no draggable region; saved geometry was retained.".into());
+    }
+    let middle_y = top + (bottom - top) / 2;
+    while left < right && !(is_caption(hwnd, left, top)? && is_caption(hwnd, left, middle_y)? && is_caption(hwnd, left, bottom - 1)?) { left += 1; }
+    while right > left && !(is_caption(hwnd, right - 1, top)? && is_caption(hwnd, right - 1, middle_y)? && is_caption(hwnd, right - 1, bottom - 1)?) { right -= 1; }
+    if right <= left {
+        return Err("Native title has no draggable width; saved geometry was retained.".into());
+    }
+    Ok((f64::from(left - origin.x).max(0.0) / scale,
         (f64::from(origin.x) + f64::from(outer.width) - f64::from(right)).max(0.0) / scale,
-        f64::from(info.rcTitleBar.top - origin.y).max(0.0) / scale))
+        f64::from(top - origin.y).max(0.0) / scale,
+        f64::from(bottom - top) / scale))
 }
 
 fn frame(window: &WebviewWindow) -> Result<FrameInsets, String> {
@@ -81,14 +114,14 @@ fn frame(window: &WebviewWindow) -> Result<FrameInsets, String> {
     let inner = window.inner_size().map_err(|e| e.to_string())?;
     let scale = window.scale_factor().map_err(|e| e.to_string())?;
     #[cfg(windows)]
-    let (title_left, title_right, title_top) = title_insets(window, scale)?;
+    let (title_left, title_right, title_top, title_height) = title_insets(window, scale)?;
     // Other window systems retain their existing outer-title approximation.
     #[cfg(not(windows))]
-    let (title_left, title_right, title_top) = (0.0, 0.0, 0.0);
+    let (title_left, title_right, title_top, title_height) = (0.0, 0.0, 0.0, 32.0);
     Ok(FrameInsets {
         width: f64::from(outer.width.saturating_sub(inner.width)) / scale,
         height: f64::from(outer.height.saturating_sub(inner.height)) / scale,
-        title_left, title_right, title_top,
+        title_left, title_right, title_top, title_height,
     })
 }
 

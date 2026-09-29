@@ -62,7 +62,7 @@ mod sampling_tests {
 
     #[test]
     fn monitor_failure_still_fits_a_known_primary() {
-        let frame = FrameInsets { width: 16.0, height: 39.0, title_left: 24.0, title_right: 148.0, title_top: 2.0 };
+        let frame = FrameInsets { width: 16.0, height: 39.0, title_left: 24.0, title_right: 148.0, title_top: 2.0, title_height: 28.0 };
         let small = WorkArea { x: 0.0, y: 0.0, width: 800.0, height: 600.0, scale_factor: 1.0 };
         let restored = restore_geometry(None, Err("monitor query failed".into()), frame, || Ok(small)).unwrap();
         assert_eq!(restored.geometry, fit_default(&small, frame));
@@ -71,7 +71,7 @@ mod sampling_tests {
 
     #[test]
     fn monitor_failure_is_not_an_invalid_record_recovery() {
-        let frame = FrameInsets { width: 16.0, height: 39.0, title_left: 24.0, title_right: 148.0, title_top: 2.0 };
+        let frame = FrameInsets { width: 16.0, height: 39.0, title_left: 24.0, title_right: 148.0, title_top: 2.0, title_height: 28.0 };
         let saved = WindowGeometryDto { x: 40.0, y: 50.0, width: 1100.0, height: 720.0, scale_factor: 1.0, maximized: true };
         assert!(restore_geometry(Some(saved), Err("monitor query failed".into()), frame, || Err("primary query failed".into())).is_err());
         let small = WorkArea { x: 0.0, y: 0.0, width: 800.0, height: 600.0, scale_factor: 1.0 };
@@ -115,6 +115,7 @@ pub struct FrameInsets {
     pub title_left: f64,
     pub title_right: f64,
     pub title_top: f64,
+    pub title_height: f64,
 }
 
 const DEFAULT_CLIENT_WIDTH: f64 = 1440.0;
@@ -139,6 +140,7 @@ fn usable(area: &WorkArea, frame: FrameInsets) -> bool {
         && frame.width >= 0.0
         && frame.height >= 0.0
         && [frame.title_left, frame.title_right, frame.title_top].iter().all(|v| v.is_finite() && *v >= 0.0)
+        && frame.title_height.is_finite() && frame.title_height > 0.0
         && area.width / area.scale_factor > frame.width
         && area.height / area.scale_factor > frame.height
 }
@@ -148,9 +150,9 @@ fn usable(area: &WorkArea, frame: FrameInsets) -> bool {
 /// The outer origin and work areas are physical pixels; client size and aggregate
 /// nonclient insets are logical pixels. A saved client's logical size does not change
 /// with its recorded scale: each candidate monitor's *current* scale converts it to
-/// physical outer size. Native caption insets exclude the system icon and caption
-/// buttons. Require a 100×32 logical grab target beginning at that caption origin,
-/// wholly on one work area, never combining fragments across monitors.
+/// physical outer size. Native caption bounds exclude the system icon, caption
+/// buttons and resize borders. Require 100 logical pixels of width and the lesser
+/// of 32 logical pixels or native draggable height on one work area.
 /// Maximization is independent of the saved normal bounds.
 /// An empty work-area slice means no reachable geometry; monitor query failures
 /// must be handled by the caller, not represented by an empty slice.
@@ -176,7 +178,7 @@ pub fn is_reachable(geometry: &WindowGeometryDto, areas: &[WorkArea], frame: Fra
         let outer_width = (geometry.width + frame.width) * area.scale_factor;
         let outer_height = (geometry.height + frame.height) * area.scale_factor;
         let title_width = TITLE_GRAB_WIDTH * area.scale_factor;
-        let title_height = TITLE_GRAB_HEIGHT * area.scale_factor;
+        let title_height = TITLE_GRAB_HEIGHT.min(frame.title_height) * area.scale_factor;
         if !outer_width.is_finite()
             || !outer_height.is_finite()
             || !title_width.is_finite()
@@ -192,7 +194,7 @@ pub fn is_reachable(geometry: &WindowGeometryDto, areas: &[WorkArea], frame: Fra
         let left = geometry.x + frame.title_left * area.scale_factor;
         let right = geometry.x + outer_width - frame.title_right * area.scale_factor;
         let top = geometry.y + frame.title_top * area.scale_factor;
-        let bottom = top + title_height;
+        let bottom = top + frame.title_height * area.scale_factor;
         left.is_finite() && right.is_finite() && top.is_finite() && bottom.is_finite()
             && (right.min(area.x + area.width) - left.max(area.x)) >= title_width
             && (bottom.min(area.y + area.height) - top.max(area.y)) >= title_height
@@ -230,6 +232,7 @@ mod tests {
         title_left: 24.0,
         title_right: 148.0,
         title_top: 2.0,
+        title_height: 32.0,
     };
     const PRIMARY: WorkArea = WorkArea {
         x: 0.0,
@@ -335,6 +338,28 @@ mod tests {
         assert!(is_reachable(&geometry(0.0, PRIMARY.height - 32.0 - FRAME.title_top), &[PRIMARY], FRAME));
         assert!(!is_reachable(&geometry(0.0, PRIMARY.height - 32.0), &[PRIMARY], FRAME));
         assert!(!is_reachable(&saved, &[title_only], FRAME));
+    }
+
+    #[test]
+    fn title_uses_native_height_and_actual_visible_intersection() {
+        for scale in [1.0, 1.5, 2.0] {
+            let area = WorkArea { width: PRIMARY.width * scale, height: PRIMARY.height * scale, scale_factor: scale, ..PRIMARY };
+            let short = FrameInsets { title_height: 28.0, ..FRAME };
+            let bottom = geometry(40.0, area.height - (short.title_top + short.title_height) * scale);
+            assert!(is_reachable(&bottom, &[area], short));
+            assert!(!is_reachable(&geometry(bottom.x, bottom.y + scale), &[area], short));
+            let tall = FrameInsets { title_height: 40.0, ..FRAME };
+            let clipped = geometry(40.0, -(tall.title_top + 8.0) * scale);
+            assert!(is_reachable(&clipped, &[area], tall));
+            assert!(!is_reachable(&geometry(clipped.x, clipped.y - scale), &[area], tall));
+        }
+    }
+
+    #[test]
+    fn title_height_must_describe_a_finite_positive_region() {
+        for title_height in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(!is_reachable(&geometry(40.0, 50.0), &[PRIMARY], FrameInsets { title_height, ..FRAME }));
+        }
     }
 
     #[test]
