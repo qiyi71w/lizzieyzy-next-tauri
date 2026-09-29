@@ -31,6 +31,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 mod continuous_analysis;
 use continuous_analysis::{foreground_engine_continuous_action, PreferencesState};
+mod main_window_pin;
+use main_window_pin::{main_window_pin_status, set_main_window_pin, MainWindowPin};
 mod current_game_state;
 mod document_departure;
 mod file_activation;
@@ -1258,6 +1260,7 @@ pub fn run() {
         .manage(FileActivationOwner::from_process())
         .manage(CurrentGameState::default())
         .manage(PreferencesState::default())
+        .manage(MainWindowPin::default())
         .setup(|app| {
             let recovery_path = session_recovery::recovery_file_path(app.handle())?;
             app.manage(Mutex::new(FileRecoveryStore::new(recovery_path)));
@@ -1294,11 +1297,19 @@ pub fn run() {
             });
             let _ = manager.apply_autoload();
             app.manage(manager);
+            let preferences = app.state::<PreferencesState>();
+            let path = app_preferences_path(app.handle())?;
+            preferences.load(&path, &app.state::<ForegroundEngineManager>())?;
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = app.state::<MainWindowPin>().apply(&window, &preferences, &path, None);
+            }
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            main_window_pin_status,
+            set_main_window_pin,
             health,
             parse_sgf_summary,
             provider_parse_yike_url,

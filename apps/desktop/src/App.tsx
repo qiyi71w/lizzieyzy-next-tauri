@@ -101,6 +101,7 @@ import {
   runFromSnapshot,
   shouldAcceptFailureEvent
 } from "./domain/foregroundEngine";
+import { useMainWindowPin } from "./hooks/useMainWindowPin";
 import { loadAppPreferences, saveAppPreferences, updateRecentGameHistory } from "./api/preferences";
 import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition } from "./domain/board";
 import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "./domain/preferences";
@@ -317,6 +318,8 @@ export function App() {
   const lastFiniteTerminalJobIdRef = useRef<string | null>(null);
   const latestSnapshotRevisionRef = useRef(0);
   const departurePendingRef = useRef(false);
+  const windowPin = useMainWindowPin(nativeRuntime, preferencesLoaded,
+    departurePending || Boolean(departurePrompt) || Boolean(teardownPrompt));
   const wholeGameJobRef = useRef<AnalysisJobStartedDto | null>(null);
   const wholeGameResultsRef = useRef<Map<string, AnalysisFrameDto>>(new Map());
   const handleSelectedNodeJobRef = useRef<(job: AnalysisJobEventDto) => void>(() => undefined);
@@ -3320,6 +3323,7 @@ export function App() {
   return <main className={`app-shell${preferences.boardTheme === "high-contrast" ? " theme-high-contrast" : ""}${nativeRuntime ? "" : " has-native-runtime-note"}`}>
     {!nativeRuntime ? <p className="native-runtime-note" role="status">{nativeCurrentGameUnavailable}</p> : null}
     <AppChrome
+      windowPin={windowPin}
       sheet={sheet}
       onToggleSheet={toggleSheet}
       busy={historyActionBlocked}
@@ -3647,6 +3651,7 @@ export function App() {
         />
       </div>
       {sheet === "prefs" ? <PreferencesPanel
+        windowPin={windowPin}
         preferences={preferences}
         status={preferencesStatus}
         disabled={!preferencesLoaded || continuousActionPending}

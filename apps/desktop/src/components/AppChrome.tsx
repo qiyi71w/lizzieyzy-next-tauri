@@ -1,3 +1,5 @@
+import { WindowPinControl } from "./WindowPinControl";
+import type { MainWindowPinControl } from "../hooks/useMainWindowPin";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toolbarIcons } from "../assets/toolbar";
 import type { AppPreferences } from "../domain/preferences";
@@ -45,6 +47,7 @@ export type ContinuousAnalysisAction = {
 
 
 type Props = {
+  windowPin?: MainWindowPinControl;
   sheet: "none" | SheetId;
   onToggleSheet: (sheet: SheetId) => void;
   busy: boolean;
@@ -233,6 +236,7 @@ export function AppChrome(props: Props) {
             <MenuItem label="退出" onClick={() => run(props.onExit)} />
           </ChromeMenu>
           <ChromeMenu label="显示" open={openMenu === "view"} onToggle={() => setOpenMenu(openMenu === "view" ? null : "view")}>
+            {props.windowPin ? <SubMenu label="窗口"><WindowPinControl control={props.windowPin} /></SubMenu> : null}
             <SubMenu label="面板">
               <MenuItem label="胜率图(Alt+W)" disabled title={later} />
               <MenuCheck

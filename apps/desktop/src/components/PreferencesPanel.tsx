@@ -1,8 +1,11 @@
+import { WindowPinControl } from "./WindowPinControl";
+import type { MainWindowPinControl } from "../hooks/useMainWindowPin";
 import { useState } from "react";
 import { continuousBudgetError, newGameDefaultsError, type AppPreferences, type BoardTheme, type GraphPerspective, type NextMoveReviewMarkerMode, type ReviewMode, type SubBoardContentMode } from "../domain/preferences";
 import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
 
 type Props = {
+  windowPin?: MainWindowPinControl;
   preferences: AppPreferences;
   status: string;
   disabled?: boolean;
@@ -10,7 +13,7 @@ type Props = {
   onChange: (preferences: AppPreferences) => void;
 };
 
-export function PreferencesPanel({ preferences, status, disabled = false, scoreLeadAvailable = true, onChange }: Props) {
+export function PreferencesPanel({ preferences, status, disabled = false, scoreLeadAvailable = true, onChange, windowPin }: Props) {
   function update(patch: Partial<AppPreferences>) {
     onChange({ ...preferences, ...patch });
   }
@@ -21,6 +24,10 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
         <h2>设置</h2>
         <span>{status}</span>
       </div>
+      {windowPin ? <fieldset className="preferences-grid">
+        <legend>窗口</legend>
+        <WindowPinControl control={windowPin} />
+      </fieldset> : null}
       <fieldset className="preferences-grid">
         <legend>分析呈现</legend>
         <Toggle label="候选" checked={preferences.showCandidates} disabled={disabled} onChange={(checked) => update({ showCandidates: checked })} />
