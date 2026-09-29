@@ -166,6 +166,8 @@ let root: Root | null = null;
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  vi.spyOn(HTMLCanvasElement.prototype, "clientWidth", "get").mockReturnValue(240);
+  vi.spyOn(HTMLCanvasElement.prototype, "clientHeight", "get").mockReturnValue(240);
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
     return canvasContext(this);
   });

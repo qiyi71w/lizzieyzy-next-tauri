@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Workspace, useWorkspace } from "./workspace/Workspace";
 import { acceptedMoveSound } from "./domain/acceptedMoveSound";
 import { playMoveSound } from "./domain/moveSound";
 import { BoardCanvas } from "./components/BoardCanvas";
@@ -268,6 +269,7 @@ export function App() {
   const [showBlackCandidates, setShowBlackCandidates] = useState(true);
   const [showWhiteCandidates, setShowWhiteCandidates] = useState(true);
   const [referenceRailCollapsed, setReferenceRailCollapsed] = useState(false);
+  const workspace = useWorkspace();
   const [replayProgress, setReplayProgress] = useState({ identity: "", prefix: 0 });
   const [overlayMode, setOverlayMode] = useState<OverlayMode>("candidates");
   const [autoPlaying, setAutoPlaying] = useState(false);
@@ -3423,7 +3425,8 @@ export function App() {
       message={recentHistoryError ? `${message} ${recentHistoryError}` : message}
       toPlay={currentPosition.to_play}
     />
-    <section className="spread">
+    <Workspace shares={workspace.shares} onSharesChange={workspace.setShares}
+      visibility={{ left: true, right: !referenceRailCollapsed }}>
       <aside className="rail">
         <div className="rail-block">
           <h2>
@@ -3535,7 +3538,7 @@ export function App() {
           pvPrefixLength={replayPrefix}
         />
       </aside>
-    </section>
+    </Workspace>
     <div className="analysis-task-area">
     {recoveryProtection.status === "unprotected" ? (
       <div className="recovery-unprotected">

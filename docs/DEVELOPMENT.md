@@ -417,6 +417,12 @@ Expected result: failure states are structured, recoverable where expected, and 
 | readboard protocol line sync | `readboard_sidecar_sync_snapshot` validates input and protocol-line parsing returns DTOs or typed protocol errors. | Sidecar sync reflects board size, stones, move state, and player-to-play from the real target board. |
 | image OCR unavailable | Image-only sync returns a structured unsupported/not-implemented error when OCR is unavailable. | Live OCR may only be marked PASS with an OCR-capable runtime and image fixture evidence; otherwise mark SKIPPED/UNSUPPORTED. |
 
+## Session Workspace Verification
+
+From `apps/desktop`, run `npm run test -- src/workspace src/components/BoardCanvas.test.tsx src/components/WinrateChart.test.tsx src/components/AnalysisPanel.test.tsx src/App.test.tsx src/SubBoardContentMode.test.tsx src/VariationReplay.test.tsx src/AnalysisPresentation.test.tsx`, then `npm run build`.
+
+Browser smoke: at 1100×720 and a larger viewport, drag both separators to their limits, release outside the handle, cancel capture, and use focused Left/Right (8px) and Shift+Left/Right (32px). Check all three canvas backing sizes against CSS content size × DPR after container-only resize, DPR changes and hide/show without new analysis. Check 19×19, 9×9 and 13×9 input geometry and scroll access to expanded controls. Preview remains non-authoritative; exact committed Windows candidate, PID, screenshots and native pointer/window behavior are a separate acceptance gate. Layout persistence and native geometry restoration are subsequent R7 slices.
+
 ## Documentation Acceptance
 
 When updating docs for this handoff package, keep these claims accurate:

@@ -100,6 +100,7 @@ button[aria-pressed="true"] {
   display: grid;
   grid-template-rows: 30px 38px 34px minmax(0, 1fr) auto 42px auto;
   height: 100vh;
+  min-height: 720px;
   background: var(--bg);
   color: var(--ink);
 }
@@ -442,12 +443,24 @@ button[aria-pressed="true"] {
 /* =========================================================
    3-COLUMN SPREAD (左栏 HUD + 中栏大棋盘 + 右栏候选/副棋盘)
    ========================================================= */
+.workspace-scroll { min-width: 0; min-height: 0; overflow: auto; }
+.workspace-dragging { user-select: none; cursor: col-resize; }
+.workspace-dragging canvas { pointer-events: none; }
+.workspace-separator { grid-row: 1; cursor: col-resize; touch-action: none; background: var(--line); }
+.workspace-separator:hover, .workspace-separator:focus-visible { background: var(--accent); }
+.workspace-separator-left { grid-column: 2; }
+.workspace-separator-right { grid-column: 4; }
+.spread > .rail { grid-column: 1; grid-row: 1; }
+.spread > .diagram { grid-column: 3; grid-row: 1; }
+.spread > .sheet-col { grid-column: 5; grid-row: 1; overflow: auto; }
+.spread > [hidden] { display: none; }
+
 .spread {
   display: grid;
-  grid-template-columns: 228px minmax(0, 1fr) 260px;
+  height: 100%;
+  min-height: 360px;
   gap: 0;
   padding: 0;
-  min-height: 0;
   min-width: 0;
   background: var(--bg);
 }
@@ -718,7 +731,8 @@ button[aria-pressed="true"] {
   grid-template-rows: auto minmax(0, 1fr);
   place-items: center;
   min-width: 0;
-  min-height: 0;
+  min-height: 360px;
+  overflow: auto;
   padding: 12px;
   background: var(--bg);
   container-type: size;
@@ -799,10 +813,9 @@ button[aria-pressed="true"] {
 
 
 .board-canvas {
-  width: min(100cqi, calc((100cqb - 55px) * var(--board-ratio, 1)));
-  height: min(calc(100cqb - 55px), calc(100cqi / var(--board-ratio, 1)));
+  width: min(100cqi, calc(max(242px, 100cqb - 55px) * var(--board-ratio, 1)));
+  height: min(max(242px, 100cqb - 55px), calc(100cqi / var(--board-ratio, 1)));
   max-width: 100%;
-  max-height: 100%;
   border: 1px solid #c9a35a;
   border-radius: 4px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.18);
@@ -1323,9 +1336,6 @@ textarea {
   --danger: #f87171;
 }
 
-@media (max-width: 1180px) {
-  .spread { grid-template-columns: 210px minmax(0, 1fr) 240px; }
-}
 
 .selected-node-facts {
   margin: 0 0 10px;

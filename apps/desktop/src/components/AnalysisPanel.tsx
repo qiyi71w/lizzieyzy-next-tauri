@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useElementSize } from "../workspace/useElementSize";
 import type { AnalysisFrameDto, CandidateMoveDto, NodePath, PositionDto, ProblemMarkerDto } from "../domain/types";
 import type { ChartPoint } from "../domain/winrateChart";
 import type { ReviewProblem } from "../domain/reviewNavigation";
@@ -308,15 +309,15 @@ function SubBoardCanvas({
   pvPrefixLength?: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const size = useElementSize(canvasRef);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const cssWidth = canvas.clientWidth || 240;
-    const cssHeight = canvas.clientHeight || 240;
+    const { width: cssWidth, height: cssHeight, dpr } = size;
+    if (cssWidth <= 0 || cssHeight <= 0) return;
     canvas.width = Math.floor(cssWidth * dpr);
     canvas.height = Math.floor(cssHeight * dpr);
     ctx.scale(dpr, dpr);
@@ -381,7 +382,7 @@ function SubBoardCanvas({
         ctx.fillText(String(index + 1), cx, cy);
       }
     }
-  }, [boardWidth, boardHeight, position, candidate, contentMode, pvPrefixLength]);
+  }, [size, boardWidth, boardHeight, position, candidate, contentMode, pvPrefixLength]);
 
   return (
     <canvas
