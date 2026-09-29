@@ -68,9 +68,10 @@ export function AnalysisPanel({
 }: Props) {
   const [leftTab, setLeftTab] = useState<"commentary" | "problems">("commentary");
   const [commentDraft, setCommentDraft] = useState(personalComment);
+  const commentNodeKey = selectedPath?.indices.join(",");
   useEffect(() => {
     setCommentDraft(personalComment);
-  }, [personalComment]);
+  }, [personalComment, commentNodeKey]);
   const hasOwnership = (frame?.ownership?.length ?? 0) >= boardWidth * boardHeight;
   const rootScore = frame?.score_mean_black;
 
@@ -221,18 +222,26 @@ export function AnalysisPanel({
                   {" · "}提子 黑 {currentPosition?.captures_black ?? 0} 白 {currentPosition?.captures_white ?? 0}
                 </p>
                 {commentEditorEnabled ? (
-                  <label className="personal-comment-editor-label">
-                    个人评论
-                    <textarea
-                      className="personal-comment-editor"
-                      value={commentDraft}
-                      onChange={(event) => setCommentDraft(event.target.value)}
-                      onBlur={() => onCommitPersonalComment?.(commentDraft)}
-                      spellCheck={false}
-                      aria-label="个人评论"
-                      placeholder="为当前选中节点写下个人评论"
-                    />
-                  </label>
+                  <>
+                    <label className="personal-comment-editor-label">
+                      个人评论
+                      <textarea
+                        className="personal-comment-editor"
+                        value={commentDraft}
+                        onChange={(event) => setCommentDraft(event.target.value)}
+                        spellCheck={false}
+                        aria-label="个人评论"
+                        placeholder="为当前选中节点写下个人评论"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="personal-comment-apply-button"
+                      onClick={() => onCommitPersonalComment?.(commentDraft)}
+                    >
+                      应用评论
+                    </button>
+                  </>
                 ) : personalComment ? (
                   <p className="personal-comment">{personalComment}</p>
                 ) : null}

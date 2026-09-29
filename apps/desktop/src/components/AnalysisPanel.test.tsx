@@ -128,6 +128,206 @@ describe("AnalysisPanel sub-board content mode", () => {
     expect(drawArc.mock.calls.some((call) => Number(call[0].toFixed(1)) === 170.4 && Number(call[1].toFixed(1)) === 145.2)).toBe(false);
   });
 });
+describe("AnalysisPanel personal comment draft", () => {
+  it("retains comment draft on blur without invoking onCommitPersonalComment and commits on explicit Apply", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const onCommit = vi.fn();
+
+    act(() => root?.render(
+      <AnalysisPanel
+        pane="commentary"
+        problems={[]}
+        boardWidth={9}
+        boardHeight={9}
+        currentMove={0}
+        currentPosition={position}
+        selectedCandidateIndex={null}
+        onSelectCandidate={() => undefined}
+        onSelectProblem={() => undefined}
+        commentEditorEnabled={true}
+        personalComment="initial comment"
+        onCommitPersonalComment={onCommit}
+      />
+    ));
+
+    const editor = host.querySelector('textarea[aria-label="个人评论"]') as HTMLTextAreaElement;
+    expect(editor.value).toBe("initial comment");
+
+    act(() => {
+      const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      valueSetter?.call(editor, "updated draft");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+      editor.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(editor.value).toBe("updated draft");
+
+    act(() => {
+      editor.dispatchEvent(new Event("blur", { bubbles: true }));
+    });
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(editor.value).toBe("updated draft");
+
+    const applyButton = Array.from(host.querySelectorAll("button")).find((btn) => btn.textContent === "应用评论") as HTMLButtonElement;
+    expect(applyButton).toBeInstanceOf(HTMLButtonElement);
+
+    act(() => {
+      applyButton.click();
+    });
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith("updated draft");
+  });
+
+  it("retains draft while container is hidden and preserves draft until explicit Apply", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const onCommit = vi.fn();
+
+    act(() => root?.render(
+      <AnalysisPanel
+        pane="commentary"
+        problems={[]}
+        boardWidth={9}
+        boardHeight={9}
+        currentMove={0}
+        currentPosition={position}
+        selectedCandidateIndex={null}
+        onSelectCandidate={() => undefined}
+        onSelectProblem={() => undefined}
+        commentEditorEnabled={true}
+        personalComment="persisted comment"
+        onCommitPersonalComment={onCommit}
+      />
+    ));
+
+    const editor = host.querySelector('textarea[aria-label="个人评论"]') as HTMLTextAreaElement;
+    act(() => {
+      const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      valueSetter?.call(editor, "rail03 un-applied draft");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+      editor.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    host.hidden = true;
+    act(() => {
+      editor.dispatchEvent(new Event("blur", { bubbles: true }));
+    });
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(editor.value).toBe("rail03 un-applied draft");
+
+    host.hidden = false;
+    expect(editor.value).toBe("rail03 un-applied draft");
+
+    const applyButton = Array.from(host.querySelectorAll("button")).find((btn) => btn.textContent === "应用评论") as HTMLButtonElement;
+    act(() => {
+      applyButton.click();
+    });
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith("rail03 un-applied draft");
+  });
+
+  it("resets comment draft when selected node personalComment changes", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+
+    act(() => root?.render(
+      <AnalysisPanel
+        pane="commentary"
+        problems={[]}
+        boardWidth={9}
+        boardHeight={9}
+        currentMove={0}
+        currentPosition={position}
+        selectedCandidateIndex={null}
+        onSelectCandidate={() => undefined}
+        onSelectProblem={() => undefined}
+        commentEditorEnabled={true}
+        personalComment="node 1 comment"
+      />
+    ));
+
+    const editor = host.querySelector('textarea[aria-label="个人评论"]') as HTMLTextAreaElement;
+    expect(editor.value).toBe("node 1 comment");
+
+    act(() => {
+      const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      valueSetter?.call(editor, "uncommitted change");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+      editor.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(editor.value).toBe("uncommitted change");
+
+    act(() => root?.render(
+      <AnalysisPanel
+        pane="commentary"
+        problems={[]}
+        boardWidth={9}
+        boardHeight={9}
+        currentMove={0}
+        currentPosition={position}
+        selectedCandidateIndex={null}
+        onSelectCandidate={() => undefined}
+        onSelectProblem={() => undefined}
+        commentEditorEnabled={true}
+        personalComment="node 2 comment"
+      />
+    ));
+    expect(editor.value).toBe("node 2 comment");
+  });
+
+  it("resets an unapplied draft when switching nodes with equal persisted comments", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const onCommit = vi.fn();
+    const renderNode = (index: number) => act(() => root?.render(
+      <AnalysisPanel problems={[]} boardWidth={9} boardHeight={9} currentMove={index}
+        selectedPath={{ indices: [index] }} selectedCandidateIndex={null}
+        onSelectCandidate={() => undefined} onSelectProblem={() => undefined}
+        commentEditorEnabled personalComment="" onCommitPersonalComment={onCommit} />
+    ));
+    renderNode(0);
+    const editor = host.querySelector('textarea[aria-label="个人评论"]') as HTMLTextAreaElement;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(editor, "node A draft");
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    renderNode(0);
+    expect(editor.value).toBe("node A draft");
+    renderNode(1);
+    expect(editor.value).toBe("");
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("preserves generated information isolation alongside personal comment editor", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+
+    act(() => root?.render(
+      <AnalysisPanel
+        pane="commentary"
+        problems={[]}
+        boardWidth={9}
+        boardHeight={9}
+        currentMove={0}
+        currentPosition={position}
+        selectedCandidateIndex={null}
+        onSelectCandidate={() => undefined}
+        onSelectProblem={() => undefined}
+        commentEditorEnabled={true}
+        personalComment="human note"
+        generatedInformation="KataGo generated analysis"
+      />
+    ));
+
+    const editor = host.querySelector('textarea[aria-label="个人评论"]') as HTMLTextAreaElement;
+    expect(editor.value).toBe("human note");
+    expect(host.querySelector(".generated-information")?.textContent).toBe("KataGo generated analysis");
+  });
+});
+
 
 function canvasContext(arc: Mock, text: Mock = vi.fn()): CanvasRenderingContext2D {
   return {

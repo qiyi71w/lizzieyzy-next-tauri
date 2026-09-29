@@ -1018,7 +1018,11 @@ export function App() {
     try {
       const workspaceVisibility = await updateWorkspaceVisibility({ [side]: visible });
       const rail = side === "left" ? leftRailRef.current : rightRailRef.current;
-      if (!visible && rail?.contains(document.activeElement)) railRestoreRef.current?.focus();
+      const active = document.activeElement;
+      const matchingSeparatorFocused = Boolean(
+        active && (active.classList?.contains(`workspace-separator-${side}`) || active.closest?.(`.workspace-separator-${side}`))
+      );
+      if (!visible && (rail?.contains(active) || matchingSeparatorFocused)) railRestoreRef.current?.focus();
       committedPreferencesRef.current = { ...committedPreferencesRef.current, workspaceVisibility };
       setPreferences((current) => ({ ...current, workspaceVisibility }));
     } catch (error) {
