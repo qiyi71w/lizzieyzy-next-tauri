@@ -32,6 +32,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 mod continuous_analysis;
 mod window_geometry;
 use continuous_analysis::{foreground_engine_continuous_action, PreferencesState};
+mod main_window_pin;
+use main_window_pin::{main_window_pin_status, set_main_window_pin, MainWindowPin};
 mod current_game_state;
 mod document_departure;
 mod file_activation;
@@ -1278,6 +1280,7 @@ pub fn run() {
         .manage(FileActivationOwner::from_process())
         .manage(CurrentGameState::default())
         .manage(PreferencesState::default())
+        .manage(MainWindowPin::default())
         .setup(|app| {
             let recovery_path = session_recovery::recovery_file_path(app.handle())?;
             app.manage(Mutex::new(FileRecoveryStore::new(recovery_path)));
@@ -1314,6 +1317,16 @@ pub fn run() {
             });
             let _ = manager.apply_autoload();
             app.manage(manager);
+            let preferences = app.state::<PreferencesState>();
+            // The frontend load command owns recovery/error reporting. A failed
+            // preference load must leave the window operable and pin uninitialized.
+            if let Ok(path) = app_preferences_path(app.handle()) {
+                if preferences.load(&path, &app.state::<ForegroundEngineManager>()).is_ok() {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = app.state::<MainWindowPin>().apply(&window, &preferences, &path, None);
+                    }
+                }
+            }
             window_geometry::start(app.handle());
             Ok(())
         })
@@ -1325,6 +1338,8 @@ pub fn run() {
             window_geometry::retry_window_geometry,
             window_geometry::flush_window_geometry,
             window_geometry::freeze_window_geometry,
+            main_window_pin_status,
+            set_main_window_pin,
             health,
             parse_sgf_summary,
             provider_parse_yike_url,

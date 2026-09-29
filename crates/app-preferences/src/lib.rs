@@ -21,6 +21,7 @@ pub struct AppPreferencesDto {
     #[serde(default, deserialize_with = "deserialize_window_geometry")]
     pub window_geometry: Option<app_model::WindowGeometryDto>,
     pub workspace_visibility: app_model::WorkspaceVisibilityDto,
+    pub main_window_always_on_top: bool,
     #[serde(default = "default_continuous_analysis_enabled")]
     pub continuous_analysis_enabled: bool,
     #[serde(flatten)]
@@ -123,6 +124,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         workspace_shares: None,
         window_geometry: None,
         workspace_visibility: app_model::WorkspaceVisibilityDto::default(),
+        main_window_always_on_top: false,
         continuous_analysis_enabled: default_continuous_analysis_enabled(),
         continuous_budget: ContinuousAnalysisBudgetDto::default(),
         show_coordinates: default_show_coordinates(),

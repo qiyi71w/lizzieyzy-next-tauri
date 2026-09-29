@@ -14,6 +14,11 @@ export type WindowGeometryStatusDto = {
   error: string | null;
 };
 export type WorkspaceVisibilityDto = { left: boolean; right: boolean };
+export type MainWindowPinStatusDto = {
+  durable: boolean;
+  actual: boolean | null;
+  error: string | null;
+};
 
 export type PlayerColor = "black" | "white";
 export type PointDto = { x: number; y: number };

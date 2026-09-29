@@ -40,6 +40,14 @@ impl Default for WorkspaceVisibilityDto {
     }
 }
 
+/// Durable intention and observed native state are deliberately separate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MainWindowPinStatusDto {
+    pub durable: bool,
+    pub actual: Option<bool>,
+    pub error: Option<String>,
+}
+
 pub type GameId = Uuid;
 pub type NodeId = Uuid;
 pub type AnalysisJobId = Uuid;

@@ -41,6 +41,7 @@ impl PreferencesState {
         preferences.workspace_shares = latest.workspace_shares;
         preferences.window_geometry = latest.window_geometry;
         preferences.workspace_visibility = latest.workspace_visibility;
+        preferences.main_window_always_on_top = latest.main_window_always_on_top;
         let saved = app_preferences::save_to_path(path, preferences)?;
         manager.set_continuous_preferences(saved.continuous_analysis_enabled, saved.continuous_budget)?;
         *committed = Some(AppPreferencesLoadResultDto {
@@ -111,6 +112,22 @@ impl PreferencesState {
         preferences.window_geometry = Some(geometry);
         let saved = app_preferences::save_to_path(path, preferences)?;
         committed.as_mut().unwrap().preferences = saved;
+        Ok(())
+    }
+
+    pub fn pin_intent(&self) -> Result<bool, String> {
+        let committed = self.0.lock().expect("preferences transaction");
+        Ok(committed.as_ref().ok_or("Preferences must finish loading before pinning.")?
+            .preferences.main_window_always_on_top)
+    }
+
+    pub fn save_pin(&self, path: &Path, value: bool) -> Result<(), String> {
+        let mut committed = self.0.lock().expect("preferences transaction");
+        let mut preferences = committed.as_ref()
+            .ok_or("Preferences must finish loading before pinning.")?.preferences.clone();
+        preferences.main_window_always_on_top = value;
+        let saved = app_preferences::save_to_path(path, preferences)?;
+        *committed = Some(AppPreferencesLoadResultDto { preferences: saved, recovery: None });
         Ok(())
     }
 
