@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
+import { useElementSize } from "../workspace/useElementSize";
 import type { AnalysisFrameDto, MoveDto, PointDto, PositionDto, ScoringSessionDto, SgfMarkupDto } from "../domain/types";
 import { isPoint } from "../domain/board";
 import type { NextMoveReviewMarker, NextMoveReviewMarkerMode } from "../domain/nextMoveReviewMarker";
@@ -64,6 +65,7 @@ export function BoardCanvas({
   replayCandidateIndex
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const size = useElementSize(canvasRef);
   const [keyboardPoint, setKeyboardPoint] = useState<PointDto | null>(null);
   const [overlayModeLocal, setOverlayModeLocal] = useState<OverlayMode>("candidates");
   const previewTimerRef = useRef<number | undefined>(undefined);
@@ -201,9 +203,8 @@ export function BoardCanvas({
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    const cssWidth = canvas.clientWidth || 720;
-    const cssHeight = canvas.clientHeight || 720;
+    const { width: cssWidth, height: cssHeight, dpr } = size;
+    if (cssWidth <= 0 || cssHeight <= 0) return;
     canvas.width = Math.floor(cssWidth * dpr);
     canvas.height = Math.floor(cssHeight * dpr);
     ctx.scale(dpr, dpr);
@@ -420,7 +421,7 @@ export function BoardCanvas({
       ctx.lineWidth = Math.max(1.5, grid * 0.06);
       ctx.stroke();
     }
-  }, [position, markup, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, stoneMoveNumbers, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers, pvPrefixLength, replayCandidateIndex, scoring]);
+  }, [size, position, markup, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, stoneMoveNumbers, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers, pvPrefixLength, replayCandidateIndex, scoring]);
 
   const layerHost = document.getElementById("board-layers");
   const overlays = (

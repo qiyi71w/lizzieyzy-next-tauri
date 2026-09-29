@@ -86,6 +86,7 @@ vi.mock("./api/backend", () => ({
 
 vi.mock("./api/preferences", () => ({
   loadAppPreferences: vi.fn(() => Promise.reject(new Error("preferences unavailable in test"))),
+  updateWorkspaceShares: vi.fn(async () => undefined),
   saveAppPreferences: vi.fn()
 }));
 

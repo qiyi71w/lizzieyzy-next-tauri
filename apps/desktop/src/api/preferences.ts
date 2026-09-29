@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { continuousBudgetError, defaultAppPreferences, newGameDefaultsError, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "../domain/preferences";
+import type { WorkspaceSharesDto } from "../domain/types";
+import { normalizeWorkspaceShares } from "../domain/preferences";
 
 declare global {
   interface Window {
@@ -43,10 +45,19 @@ export async function saveAppPreferences(preferences: AppPreferences): Promise<A
   if (error) throw new Error(error);
   const normalized = normalizeAppPreferences(preferences);
   if (!isTauriRuntime()) {
+    normalized.workspaceShares = loadBrowserPreferences().preferences.workspaceShares;
     saveBrowserPreferences(normalized);
     return normalized;
   }
   return normalizeAppPreferences(await invoke<AppPreferences>("save_app_preferences", { preferences: normalized }));
+}
+
+export async function updateWorkspaceShares(shares: WorkspaceSharesDto | null): Promise<WorkspaceSharesDto | null> {
+  if (shares !== null && normalizeWorkspaceShares(shares) === null) throw new Error("Invalid workspace shares.");
+  if (isTauriRuntime()) return invoke<WorkspaceSharesDto | null>("update_workspace_shares", { shares });
+  const preferences = loadBrowserPreferences().preferences;
+  saveBrowserPreferences({ ...preferences, workspaceShares: shares });
+  return shares;
 }
 
 export async function updateRecentGameHistory(openedPath: string | null): Promise<string[]> {

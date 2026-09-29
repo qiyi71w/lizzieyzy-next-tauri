@@ -1,4 +1,4 @@
-use app_model::{AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, ContinuousAnalysisBudgetDto};
+use app_model::{AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, ContinuousAnalysisBudgetDto, WorkspaceSharesDto};
 use serde::ser::Serialize as SerTrait;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 mod recent;
 pub use recent::recent_game_paths;
+pub mod window_geometry;
 
 pub const APP_PREFERENCES_FILE: &str = "lizzieyzy-next-app-preferences.json";
 pub const UNREADABLE_RECOVERY_MESSAGE: &str = "Unreadable preferences isolated; restored defaults.";
@@ -15,6 +16,10 @@ pub const UNREADABLE_RECOVERY_MESSAGE: &str = "Unreadable preferences isolated; 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppPreferencesDto {
+    #[serde(default)]
+    pub workspace_shares: Option<WorkspaceSharesDto>,
+    #[serde(default, deserialize_with = "deserialize_window_geometry")]
+    pub window_geometry: Option<app_model::WindowGeometryDto>,
     #[serde(default = "default_continuous_analysis_enabled")]
     pub continuous_analysis_enabled: bool,
     #[serde(flatten)]
@@ -104,8 +109,18 @@ fn default_show_coordinates() -> bool {
     true
 }
 
+// Malformed geometry belongs to the geometry recovery owner, not file quarantine.
+fn deserialize_window_geometry<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<app_model::WindowGeometryDto>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.map(|value| serde_json::from_value(value).unwrap_or_default()))
+}
+
 pub fn default_app_preferences() -> AppPreferencesDto {
     AppPreferencesDto {
+        workspace_shares: None,
+        window_geometry: None,
         continuous_analysis_enabled: default_continuous_analysis_enabled(),
         continuous_budget: ContinuousAnalysisBudgetDto::default(),
         show_coordinates: default_show_coordinates(),
@@ -144,6 +159,9 @@ pub fn default_app_preferences() -> AppPreferencesDto {
 }
 
 pub fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPreferencesDto {
+    if preferences.workspace_shares.is_some_and(|shares| shares.validate().is_err()) {
+        preferences.workspace_shares = None;
+    }
     preferences.candidate_limit = preferences.candidate_limit.clamp(1, 20);
     preferences.default_max_visits = preferences.default_max_visits.clamp(1, 1_000_000);
     preferences.variation_replay_interval_ms = preferences.variation_replay_interval_ms.clamp(100, 5000);
@@ -245,6 +263,9 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
 }
 
 pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPreferencesDto, String> {
+    if let Some(shares) = preferences.workspace_shares {
+        shares.validate()?;
+    }
     if !(2..=25).contains(&preferences.default_board_width) {
         return Err(format!(
             "Default board width must be between 2 and 25, got {}.",
@@ -542,6 +563,8 @@ mod tests {
 
     fn sample_preferences() -> AppPreferencesDto {
         AppPreferencesDto {
+            workspace_shares: None,
+            window_geometry: None,
             continuous_analysis_enabled: false,
             continuous_budget: ContinuousAnalysisBudgetDto {
                 continuous_time_limit_enabled: false,
@@ -1136,5 +1159,40 @@ mod tests {
         assert_eq!(reloaded_unrelated.preferences.candidate_limit, 7);
 
         let _ = fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_window_record_preserves_other_preferences() {
+        let preferences: AppPreferencesDto = serde_json::from_str(
+            r#"{"windowGeometry":{"x":"invalid"},"boardTheme":"high-contrast","soundEnabled":false,"recentGamePaths":["/games/test.sgf"]}"#,
+        ).unwrap();
+        assert_eq!(preferences.window_geometry, Some(app_model::WindowGeometryDto::default()));
+        assert_eq!(preferences.board_theme, "high-contrast");
+        assert!(!preferences.sound_enabled);
+        assert_eq!(preferences.recent_game_paths, ["/games/test.sgf"]);
+        let legacy: AppPreferencesDto = serde_json::from_str(r#"{"boardTheme":"high-contrast"}"#).unwrap();
+        assert_eq!(legacy.window_geometry, None);
+    }
+
+    #[test]
+    fn legacy_and_invalid_shares_preserve_unrelated_preferences() {
+        let legacy: AppPreferencesDto = serde_json::from_str(r#"{"boardTheme":"high-contrast","soundEnabled":false}"#).unwrap();
+        assert_eq!(legacy.workspace_shares, None);
+        let mut invalid = legacy.clone();
+        invalid.workspace_shares = Some(WorkspaceSharesDto { left: -0.1, right: 0.2 });
+        assert_eq!(normalize_app_preferences(invalid), normalize_app_preferences(legacy));
+    }
+
+    #[test]
+    fn share_bounds_reject_nonfinite_and_no_center_space() {
+        for (left, right) in [(f64::NAN, 0.2), (0.2, f64::INFINITY), (-0.1, 0.2), (0.7, 0.3)] {
+            assert!(WorkspaceSharesDto { left, right }.validate().is_err());
+        }
+        assert!(WorkspaceSharesDto { left: 0.0, right: 0.0 }.validate().is_ok());
     }
 }

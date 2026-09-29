@@ -1,5 +1,5 @@
 import type { NextMoveReviewMarkerMode } from "./nextMoveReviewMarker";
-import type { AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, ContinuousAnalysisBudgetDto } from "./types";
+import type { AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, ContinuousAnalysisBudgetDto, WindowGeometryDto, WorkspaceSharesDto } from "./types";
 
 export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
@@ -9,6 +9,8 @@ export type ScoringRule = "area" | "territory";
 export type { NextMoveReviewMarkerMode };
 
 export type AppPreferences = ContinuousAnalysisBudgetDto & {
+  workspaceShares: WorkspaceSharesDto | null;
+  windowGeometry: WindowGeometryDto | null;
   showCoordinates: boolean;
   showMoveNumbers: boolean;
   showOwnership: boolean;
@@ -45,6 +47,8 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
 };
 
 export const defaultAppPreferences: AppPreferences = {
+  workspaceShares: null,
+  windowGeometry: null,
   showCoordinates: true,
   showMoveNumbers: false,
   showOwnership: true,
@@ -113,11 +117,27 @@ type StoredAppPreferences = Partial<AppPreferences> & {
   taskConditions?: AnalysisStageConditionsDto;
 };
 
+export function normalizeWorkspaceShares(value: WorkspaceSharesDto | null | undefined): WorkspaceSharesDto | null {
+  if (!value || !Number.isFinite(value.left) || !Number.isFinite(value.right)
+    || value.left < 0 || value.right < 0 || value.left + value.right >= 1) return null;
+  return { left: value.left, right: value.right };
+}
+
+function normalizeWindowGeometry(value: WindowGeometryDto | null | undefined): WindowGeometryDto | null {
+  if (!value || !((value.x === null && value.y === null)
+    || (Number.isFinite(value.x) && Number.isFinite(value.y)))
+    || !Number.isFinite(value.width) || !Number.isFinite(value.height) || !Number.isFinite(value.scaleFactor)
+    || value.width <= 0 || value.height <= 0 || value.scaleFactor <= 0 || typeof value.maximized !== "boolean") return null;
+  return { x: value.x, y: value.y, width: value.width, height: value.height, scaleFactor: value.scaleFactor, maximized: value.maximized };
+}
+
 export function normalizeAppPreferences(value: StoredAppPreferences | null | undefined): AppPreferences {
   const winrateLine = booleanValue(value?.winrateLine, defaultAppPreferences.winrateLine);
   const scoreLeadLine = booleanValue(value?.scoreLeadLine, defaultAppPreferences.scoreLeadLine);
   const defaultMaxVisits = integerValue(value?.defaultMaxVisits, defaultAppPreferences.defaultMaxVisits, 1, 1_000_000);
   return {
+    workspaceShares: normalizeWorkspaceShares(value?.workspaceShares),
+    windowGeometry: normalizeWindowGeometry(value?.windowGeometry),
     showCoordinates: booleanValue(value?.showCoordinates, defaultAppPreferences.showCoordinates),
     showMoveNumbers: booleanValue(value?.showMoveNumbers, defaultAppPreferences.showMoveNumbers),
     showOwnership: booleanValue(value?.showOwnership, defaultAppPreferences.showOwnership),

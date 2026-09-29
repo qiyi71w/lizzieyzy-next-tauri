@@ -5,6 +5,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnalysisFrameDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureAdmissionDto, FileActivationDeliveryDto, FileActivationRejectionDto, GameDto, NodePath, RecoveryProtectionDto, RecoveryStartupDto } from "./domain/types";
 import type { AppPreferences } from "./domain/preferences";
+import type { WorkspaceSharesDto } from "./domain/types";
+import type { WindowGeometryStatusDto } from "./domain/types";
 
 const currentGameFixture = vi.hoisted(() => vi.fn());
 const backend = vi.hoisted(() => ({
@@ -96,9 +98,20 @@ vi.mock("./api/backend", () => ({
 
 const preferencesApi = vi.hoisted(() => ({
   loadAppPreferences: vi.fn<() => Promise<{ preferences: AppPreferences; recovery?: { message: string } }>>(() => Promise.reject(new Error("preferences unavailable in test"))),
+  updateWorkspaceShares: vi.fn<(shares: WorkspaceSharesDto | null) => Promise<unknown>>(async () => undefined),
   saveAppPreferences: vi.fn(async (preferences: unknown) => preferences),
   updateRecentGameHistory: vi.fn<(openedPath: string | null) => Promise<string[]>>(),
 }));
+
+const geometryApi = vi.hoisted(() => ({
+  windowGeometryStatus: vi.fn<() => Promise<WindowGeometryStatusDto>>(),
+  subscribeWindowGeometryStatus: vi.fn<(_onStatus: (status: WindowGeometryStatusDto) => void) => Promise<() => void>>(),
+  resetWindowGeometry: vi.fn<() => Promise<WindowGeometryStatusDto>>(),
+  retryWindowGeometry: vi.fn<() => Promise<WindowGeometryStatusDto>>(),
+  freezeWindowGeometry: vi.fn<(_frozen: boolean) => Promise<void>>(),
+  flushWindowGeometry: vi.fn<() => Promise<void>>()
+}));
+vi.mock("./api/windowGeometry", () => ({ ...geometryApi, nativeWindowGeometryUnavailable: "窗口位置仅在桌面版可用" }));
 
 vi.mock("./api/preferences", () => preferencesApi);
 
@@ -284,10 +297,19 @@ let root: Root | null = null;
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  vi.spyOn(HTMLCanvasElement.prototype, "clientWidth", "get").mockReturnValue(450);
+  vi.spyOn(HTMLCanvasElement.prototype, "clientHeight", "get").mockReturnValue(450);
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
     return canvasContext(this);
   });
+  const savedGeometry: WindowGeometryStatusDto = { phase: "saved", geometry: null, error: null };
+  geometryApi.windowGeometryStatus.mockReset().mockResolvedValue(savedGeometry);
+  geometryApi.subscribeWindowGeometryStatus.mockReset().mockImplementation(async () => () => undefined);
+  geometryApi.resetWindowGeometry.mockReset().mockResolvedValue({ phase: "pending", geometry: null, error: null });
+  geometryApi.retryWindowGeometry.mockReset().mockResolvedValue(savedGeometry);
+  geometryApi.freezeWindowGeometry.mockReset().mockResolvedValue(undefined);
+  geometryApi.flushWindowGeometry.mockReset().mockResolvedValue(undefined);
   currentGameFixture.mockResolvedValue(initialGame);
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
   backend.foregroundEngineContinuousAction.mockResolvedValue(defaultAppPreferences);
@@ -1904,6 +1926,85 @@ describe("App document replacement", () => {
 
 
 describe("App application exit", () => {
+  it("rejects file activation throughout layout flush and releases admission on Cancel close", async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: () => void;
+      preferencesApi.updateWorkspaceShares.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+      const host = await renderApp();
+      backend.readGameFile.mockClear();
+      backend.prepareDocumentReplacement.mockClear();
+      const deliver = async (request_id: number) => {
+        backend.takePendingFileActivation.mockResolvedValueOnce({ kind: "open", request_id, path: "/tmp/layout-exit.sgf" });
+        await act(async () => { listeners.onActivationAvailable?.(); });
+      };
+      act(() => requiredElement<HTMLElement>(host, '[aria-label="调整左栏宽度"]').dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+      await act(async () => { backend.subscribeApplicationExitRequested.mock.calls.at(-1)?.[0](); });
+      await deliver(91);
+      expect(backend.readGameFile).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(host.textContent).toContain("5 seconds");
+      await deliver(92);
+      expect(backend.readGameFile).not.toHaveBeenCalled();
+      expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+      expect(backend.prepareApplicationExit).not.toHaveBeenCalled();
+      expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+      await act(async () => { buttonNamed(host, "取消关闭").click(); finish(); });
+      await deliver(93);
+      expect(backend.readGameFile).toHaveBeenCalledWith("/tmp/layout-exit.sgf");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("blocks File Exit on failed layout save, retries the latest draft, and unfreezes after document Cancel", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+    backend.prepareApplicationExit.mockResolvedValueOnce({ status: "needs_decision", departure_id: 51 });
+    preferencesApi.updateWorkspaceShares.mockRejectedValueOnce(new Error("layout permission denied"));
+    const host = await renderApp();
+    const separator = requiredElement<HTMLElement>(host, '[aria-label="调整左栏宽度"]');
+    act(() => separator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    const draft = separator.getAttribute("aria-valuenow");
+    act(() => buttonNamed(host, "文件").click());
+    await act(async () => { buttonNamed(host, "退出").click(); });
+    expect(host.textContent).toContain("layout permission denied");
+    expect(backend.prepareApplicationExit).not.toHaveBeenCalled();
+    expect(backend.resolveApplicationExit).not.toHaveBeenCalled();
+    expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+    await act(async () => { buttonNamed(host, "重试").click(); });
+    expect(backend.prepareApplicationExit).toHaveBeenCalledTimes(1);
+    expect(separator.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => { buttonLabeled(host, "Cancel").click(); });
+    expect(separator.getAttribute("aria-disabled")).toBe("false");
+    expect(separator.getAttribute("aria-valuenow")).toBe(draft);
+    act(() => separator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    expect(separator.getAttribute("aria-valuenow")).not.toBe(draft);
+  });
+
+  it("times out a native close without admitting departure and Cancel close keeps the draft editable", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+      let finish!: () => void;
+      preferencesApi.updateWorkspaceShares.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+      const host = await renderApp();
+      const separator = requiredElement<HTMLElement>(host, '[aria-label="调整左栏宽度"]');
+      act(() => separator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+      await act(async () => { backend.subscribeApplicationExitRequested.mock.calls.at(-1)?.[0](); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(host.textContent).toContain("5 seconds");
+      expect(backend.prepareApplicationExit).not.toHaveBeenCalled();
+      expect(backend.resolveApplicationExit).not.toHaveBeenCalled();
+      expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+      await act(async () => { buttonNamed(host, "取消关闭").click(); });
+      expect(separator.getAttribute("aria-disabled")).toBe("false");
+      await act(async () => { finish(); });
+      expect(host.querySelector('[aria-label="面板尺寸保存状态"]')?.textContent).toContain("已保存");
+      expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("routes File Exit and window close through one clean-exit transaction", async () => {
     const host = await renderApp();
     backend.prepareApplicationExit.mockClear();
@@ -2094,6 +2195,70 @@ describe("App application exit", () => {
     expect(backend.confirmNativeExit).not.toHaveBeenCalled();
     expect(host.textContent).toContain("disk full");
   });
+  it("blocks departure on geometry flush failure, retries, and unfreezes after document Cancel", async () => {
+    backend.prepareApplicationExit.mockResolvedValue({ status: "needs_decision", departure_id: 73 });
+    geometryApi.flushWindowGeometry.mockRejectedValueOnce(new Error("window store denied"));
+    const host = await renderApp();
+    act(() => buttonNamed(host, "文件").click());
+    await act(async () => { buttonNamed(host, "退出").click(); });
+    expect(host.textContent).toContain("window store denied");
+    expect(backend.prepareApplicationExit).not.toHaveBeenCalled();
+    expect(geometryApi.freezeWindowGeometry).not.toHaveBeenCalled();
+    await act(async () => { buttonNamed(host, "重试").click(); });
+    expect(backend.prepareApplicationExit).toHaveBeenCalledTimes(1);
+    expect(geometryApi.freezeWindowGeometry).toHaveBeenCalledWith(true);
+    act(() => buttonNamed(host, "显示").click());
+    expect(buttonNamed(host, "恢复窗口位置和大小").disabled).toBe(true);
+    act(() => buttonNamed(host, "显示").click());
+    await act(async () => { buttonLabeled(host, "Cancel").click(); });
+    expect(geometryApi.freezeWindowGeometry).toHaveBeenLastCalledWith(false);
+    act(() => buttonNamed(host, "显示").click());
+    expect(buttonNamed(host, "恢复窗口位置和大小").disabled).toBe(false);
+    expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+  });
+
+  it("keeps the window open when the final geometry drain rejects, then retries the final fence", async () => {
+    backend.prepareApplicationExit.mockResolvedValue({ status: "ready", departure_id: 74 });
+    backend.resolveApplicationExit.mockResolvedValue({ committed: true, analysis_stopped: true, current: initialGame, message: "Exit completed.", disposition: "clean_completed", teardown: { status: "completed" } });
+    geometryApi.flushWindowGeometry.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("last window write failed"));
+    const host = await renderApp();
+    act(() => buttonNamed(host, "文件").click());
+    await act(async () => { buttonNamed(host, "退出").click(); });
+    expect(host.textContent).toContain("last window write failed");
+    expect(backend.prepareApplicationExit).toHaveBeenCalledTimes(1);
+    expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+    await act(async () => { buttonNamed(host, "重试退出保存").click(); });
+    expect(backend.prepareApplicationExit).toHaveBeenCalledTimes(1);
+    expect(geometryApi.flushWindowGeometry).toHaveBeenCalledTimes(3);
+    expect(backend.confirmNativeExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows native geometry events in the fixed toolbar and retries an unsaved sample", async () => {
+    let emit!: (status: WindowGeometryStatusDto) => void;
+    geometryApi.subscribeWindowGeometryStatus.mockImplementation(async (listener) => {
+      emit = listener;
+      return () => undefined;
+    });
+    const host = await renderApp();
+    const status = requiredElement<HTMLElement>(host, '[aria-label="窗口位置保存状态"]');
+    expect(status.textContent).toContain("已保存");
+    act(() => buttonNamed(host, "显示").click());
+    await act(async () => { buttonNamed(host, "恢复窗口位置和大小").click(); });
+    expect(geometryApi.resetWindowGeometry).toHaveBeenCalledTimes(1);
+    expect(status.textContent).toContain("待保存");
+    act(() => emit({ phase: "pending", geometry: null, error: null }));
+    expect(status.textContent).toContain("待保存");
+    act(() => emit({ phase: "saving", geometry: null, error: null }));
+    expect(status.textContent).toContain("正在保存");
+    act(() => emit({ phase: "unsaved", geometry: null, error: "window disk full" }));
+    expect(status.textContent).toContain("window disk full");
+    await act(async () => { buttonNamed(host, "重试保存窗口位置").click(); });
+    expect(geometryApi.retryWindowGeometry).toHaveBeenCalledTimes(1);
+    act(() => emit({ phase: "saved", geometry: null, error: null }));
+    expect(status.textContent).toContain("已保存");
+    expect(status.querySelector("button")).toBeNull();
+  });
+
 });
 
 

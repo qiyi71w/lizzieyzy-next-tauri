@@ -71,6 +71,13 @@ type Props = {
   onShowWhiteCandidates: (value: boolean) => void;
   referenceRailCollapsed: boolean;
   onReferenceRailCollapsed: (value: boolean) => void;
+  onRestoreWorkspace?: () => void;
+  workspaceDisabled?: boolean;
+  windowGeometryStatus: string;
+  windowGeometryCanRetry: boolean;
+  windowGeometryDisabled: boolean;
+  onResetWindowGeometry: () => void;
+  onRetryWindowGeometry: () => void;
   selectedNodeRunning: boolean;
   wholeGameRunning: boolean;
   autoPlaying: boolean;
@@ -242,6 +249,8 @@ export function AppChrome(props: Props) {
               />
               <MenuItem label="分支面板(Shift+G)" disabled title={later} />
             </SubMenu>
+            <MenuItem label="恢复面板尺寸" onClick={() => run(() => props.onRestoreWorkspace?.())} disabled={props.workspaceDisabled} />
+            <MenuItem label="恢复窗口位置和大小" onClick={() => run(props.onResetWindowGeometry)} disabled={props.windowGeometryDisabled} />
             <MenuCheck label="坐标(C)" checked={props.showCoordinates} onClick={() => run(() => props.onShowCoordinates(!props.showCoordinates))} />
             <MenuCheck label="手数(M)" checked={props.showMoveNumbers} onClick={() => run(() => props.onShowMoveNumbers(!props.showMoveNumbers))} />
             <MenuCheck label="候选" checked={props.preferences.showCandidates} onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, showCandidates: !props.preferences.showCandidates }))} />
@@ -491,6 +500,10 @@ export function AppChrome(props: Props) {
           <IconBtn src={toolbarIcons.newFile} label="新建" onClick={props.onNew} disabled={props.busy} />
           <IconBtn src={toolbarIcons.open} label="打开" onClick={props.onOpen} disabled={openDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
           <IconBtn src={toolbarIcons.save} label="保存" onClick={props.onSave} disabled={saveDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
+        </div>
+        <div className="window-geometry-status" role="status" aria-label="窗口位置保存状态">
+          <span title={props.windowGeometryStatus}>{props.windowGeometryStatus}</span>
+          {props.windowGeometryCanRetry ? <button type="button" onClick={props.onRetryWindowGeometry} disabled={props.windowGeometryDisabled}>重试保存窗口位置</button> : null}
         </div>
         <span className="tool-sep" />
         <div className="icon-group">

@@ -1,3 +1,19 @@
+export type WorkspaceSharesDto = { left: number; right: number };
+
+export type WindowGeometryDto = {
+  x: number | null;
+  y: number | null;
+  width: number;
+  height: number;
+  scaleFactor: number;
+  maximized: boolean;
+};
+export type WindowGeometryStatusDto = {
+  phase: "loading" | "saved" | "pending" | "saving" | "unsaved";
+  geometry: WindowGeometryDto | null;
+  error: string | null;
+};
+
 export type PlayerColor = "black" | "white";
 export type PointDto = { x: number; y: number };
 export type MoveVertex = { point: PointDto } | "pass";

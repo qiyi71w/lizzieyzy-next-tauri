@@ -30,6 +30,8 @@ const markerArc = vi.fn();
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  vi.spyOn(HTMLCanvasElement.prototype, "clientWidth", "get").mockReturnValue(240);
+  vi.spyOn(HTMLCanvasElement.prototype, "clientHeight", "get").mockReturnValue(90);
   markerArc.mockReset();
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
     setTransform: vi.fn(),
@@ -63,6 +65,7 @@ describe("WinrateChart exact node selection", () => {
 
     const canvas = host.querySelector("canvas");
     if (!canvas) throw new Error("chart canvas missing");
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 240, 90));
 
     for (const clientX of [0, 80, 160, 239]) {
       act(() => canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX })));

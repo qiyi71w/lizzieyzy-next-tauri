@@ -30,6 +30,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod continuous_analysis;
+mod window_geometry;
 use continuous_analysis::{foreground_engine_continuous_action, PreferencesState};
 mod current_game_state;
 mod document_departure;
@@ -747,6 +748,15 @@ fn update_recent_game_history(
 }
 
 #[tauri::command]
+fn update_workspace_shares(
+    app_handle: AppHandle,
+    state: State<PreferencesState>,
+    shares: Option<app_model::WorkspaceSharesDto>,
+) -> Result<Option<app_model::WorkspaceSharesDto>, String> {
+    state.update_workspace_shares(&app_preferences_path(&app_handle)?, shares)
+}
+
+#[tauri::command]
 fn load_engine_profile_settings(app_handle: AppHandle) -> Result<Option<EngineProfileSettingsDto>, String> {
     let settings = load_engine_profiles_settings(app_handle)?;
     let selected = selected_engine_profile_record(&settings)
@@ -1294,11 +1304,17 @@ pub fn run() {
             });
             let _ = manager.apply_autoload();
             app.manage(manager);
+            window_geometry::start(app.handle());
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            window_geometry::window_geometry_status,
+            window_geometry::reset_window_geometry,
+            window_geometry::retry_window_geometry,
+            window_geometry::flush_window_geometry,
+            window_geometry::freeze_window_geometry,
             health,
             parse_sgf_summary,
             provider_parse_yike_url,
@@ -1357,6 +1373,7 @@ pub fn run() {
             load_app_preferences,
             save_app_preferences,
             update_recent_game_history,
+            update_workspace_shares,
             load_engine_profile_settings,
             save_engine_profile_settings,
             load_engine_profiles_settings,
@@ -1385,6 +1402,13 @@ pub fn run() {
                 event: tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }),
                 ..
             } if label == "main" => handle_file_drop(app, paths),
+
+            tauri::RunEvent::WindowEvent { label, event, .. }
+                if label == "main" && matches!(event,
+                    tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)
+                    | tauri::WindowEvent::ScaleFactorChanged { .. }) => {
+                window_geometry::observe(app);
+            }
 
             tauri::RunEvent::WindowEvent {
                 label,
