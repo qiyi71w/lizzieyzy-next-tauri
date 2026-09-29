@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
+mod workspace;
+pub use workspace::WorkspaceSharesDto;
+
 mod analysis_task;
 pub use analysis_task::*;
 

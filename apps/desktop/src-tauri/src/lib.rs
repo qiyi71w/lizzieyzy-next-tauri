@@ -747,6 +747,15 @@ fn update_recent_game_history(
 }
 
 #[tauri::command]
+fn update_workspace_shares(
+    app_handle: AppHandle,
+    state: State<PreferencesState>,
+    shares: Option<app_model::WorkspaceSharesDto>,
+) -> Result<Option<app_model::WorkspaceSharesDto>, String> {
+    state.update_workspace_shares(&app_preferences_path(&app_handle)?, shares)
+}
+
+#[tauri::command]
 fn load_engine_profile_settings(app_handle: AppHandle) -> Result<Option<EngineProfileSettingsDto>, String> {
     let settings = load_engine_profiles_settings(app_handle)?;
     let selected = selected_engine_profile_record(&settings)
@@ -1357,6 +1366,7 @@ pub fn run() {
             load_app_preferences,
             save_app_preferences,
             update_recent_game_history,
+            update_workspace_shares,
             load_engine_profile_settings,
             save_engine_profile_settings,
             load_engine_profiles_settings,

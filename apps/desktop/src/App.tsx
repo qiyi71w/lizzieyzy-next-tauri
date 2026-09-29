@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Workspace, useWorkspace } from "./workspace/Workspace";
+import { Workspace } from "./workspace/Workspace";
+import { useWorkspace } from "./workspace/useWorkspace";
 import { acceptedMoveSound } from "./domain/acceptedMoveSound";
 import { playMoveSound } from "./domain/moveSound";
 import { BoardCanvas } from "./components/BoardCanvas";
@@ -270,6 +271,10 @@ export function App() {
   const [showWhiteCandidates, setShowWhiteCandidates] = useState(true);
   const [referenceRailCollapsed, setReferenceRailCollapsed] = useState(false);
   const workspace = useWorkspace();
+  const [layoutExitPrompt, setLayoutExitPrompt] = useState<{
+    message: string; choose: (retry: boolean) => void;
+  } | null>(null);
+  const [finalLayoutExitError, setFinalLayoutExitError] = useState<string | null>(null);
   const [replayProgress, setReplayProgress] = useState({ identity: "", prefix: 0 });
   const [overlayMode, setOverlayMode] = useState<OverlayMode>("candidates");
   const [autoPlaying, setAutoPlaying] = useState(false);
@@ -1008,6 +1013,7 @@ export function App() {
   function settleLoadedPreferences(loaded: AppPreferences, status: string) {
     preferencesLoadSettledRef.current = true;
     setPreferencesLoaded(true);
+    workspace.owner.load(loaded.workspaceShares);
     committedPreferencesRef.current = loaded;
     setPreferences(loaded);
     if (!analysisConditionsDraftEditedRef.current) {
@@ -1414,6 +1420,32 @@ export function App() {
       || (typeof message === "string" && message.includes("already in progress"));
   }
 
+  async function flushWorkspaceBeforeDeparture(): Promise<boolean> {
+    while (true) {
+      try {
+        await workspace.owner.flush();
+        return true;
+      } catch (error) {
+        const retry = await new Promise<boolean>((choose) => {
+          setLayoutExitPrompt({ message: errorMessage(error), choose });
+        });
+        setLayoutExitPrompt(null);
+        if (!retry) return false;
+      }
+    }
+  }
+
+  // Ticket 04 adds the native geometry drain at this final exit fence.
+  async function finishNativeExit(): Promise<void> {
+    try {
+      await workspace.owner.flush();
+      setFinalLayoutExitError(null);
+      await confirmNativeExit();
+    } catch (error) {
+      setFinalLayoutExitError(errorMessage(error));
+    }
+  }
+
   async function finishExitTeardown(departureId: number, outcome: ApplicationExitOutcomeDto): Promise<void> {
     let current = outcome;
     const selectedPath = currentGameRef.current?.selected_path ?? { indices: [] };
@@ -1441,7 +1473,7 @@ export function App() {
       setRecoveryProtection({ status: "unprotected", message: current.recovery_persist_error });
       return;
     }
-    await confirmNativeExit();
+    await finishNativeExit();
   }
 
   async function handleApplicationExit() {
@@ -1449,10 +1481,19 @@ export function App() {
       setMessage(nativeCurrentGameUnavailable);
       return;
     }
-    if (exitInFlightRef.current || departurePrompt || teardownPrompt) return;
-    await enterFileFlow();
+    if (exitInFlightRef.current || departurePrompt || teardownPrompt || workspace.frozen) return;
     exitInFlightRef.current = true;
+    let enteredFileFlow = false;
+    let committed = false;
     try {
+      if (!preferencesLoadSettledRef.current) {
+        setMessage("设置仍在载入，请稍后退出。");
+        return;
+      }
+      if (!await flushWorkspaceBeforeDeparture()) return;
+      workspace.owner.freeze(true);
+      await enterFileFlow();
+      enteredFileFlow = true;
       const admission = await prepareApplicationExit();
       const action: ApplicationExitActionDto = admission.status === "needs_decision"
         ? await requestDepartureDecision("当前棋谱尚未保存。保存后退出，放弃更改，还是取消退出？")
@@ -1475,6 +1516,7 @@ export function App() {
         if (outcome.analysis_stopped) void refreshAnalysisTaskSnapshot(true);
         return;
       }
+      committed = true;
       trialRef.current = null;
       setTrial(null);
       if (outcome.current) {
@@ -1490,7 +1532,8 @@ export function App() {
       exitInFlightRef.current = false;
       departurePendingRef.current = false;
       setDeparturePending(false);
-      await leaveFileFlow();
+      if (!committed) workspace.owner.freeze(false);
+      if (enteredFileFlow) await leaveFileFlow();
     }
   }
 
@@ -1687,7 +1730,7 @@ export function App() {
           return;
         }
         if (pendingRecoveryContinuationRef.current === "native_exit") {
-          await confirmNativeExit();
+          await finishNativeExit();
           pendingRecoveryContinuationRef.current = null;
           return;
         }
@@ -3374,6 +3417,8 @@ export function App() {
       onShowWhiteCandidates={setShowWhiteCandidates}
       referenceRailCollapsed={referenceRailCollapsed}
       onReferenceRailCollapsed={setReferenceRailCollapsed}
+      onRestoreWorkspace={workspace.restoreDefaults}
+      workspaceDisabled={workspace.disabled}
       selectedNodeRunning={selectedNodeRunning}
       wholeGameRunning={wholeGameRunning}
       autoPlaying={autoPlaying}
@@ -3425,7 +3470,7 @@ export function App() {
       message={recentHistoryError ? `${message} ${recentHistoryError}` : message}
       toPlay={currentPosition.to_play}
     />
-    <Workspace shares={workspace.shares} onSharesChange={workspace.setShares}
+    <Workspace shares={workspace.shares} onSharesChange={workspace.setShares} disabled={workspace.disabled}
       visibility={{ left: true, right: !referenceRailCollapsed }}>
       <aside className="rail">
         <div className="rail-block">
@@ -3562,6 +3607,10 @@ export function App() {
       onContinue={() => void handleContinueAnalysisTask()}
       onCancel={() => void handleCancelWholeGameAnalysis()}
     />
+    <div className="workspace-save-status" role="status" aria-label="面板尺寸保存状态">
+      {workspace.status === "saved" ? "面板尺寸已保存" : workspace.status === "pending" ? "面板尺寸待保存" : workspace.status === "saving" ? "正在保存面板尺寸…" : `面板尺寸未保存：${workspace.error}`}
+      {workspace.status === "unsaved" ? <button type="button" onClick={() => void workspace.owner.retry()}>重试保存面板尺寸</button> : null}
+    </div>
     </div>
     <BottomBar
       currentMove={reviewIndex}
@@ -3655,8 +3704,23 @@ export function App() {
         disabled={!preferencesLoaded || continuousActionPending}
         scoreLeadAvailable={chartModel.scoreAvailable}
         onChange={(nextPreferences) => void handlePreferencesChange(nextPreferences)}
+        onRestoreWorkspace={workspace.restoreDefaults}
+        workspaceDisabled={workspace.disabled}
       /> : null}
     </section>
+    {layoutExitPrompt ? <div className="shortcut-reference-backdrop" role="presentation">
+      <div className="root-conversion-dialog" role="dialog" aria-modal="true" aria-label="面板尺寸尚未保存">
+        <h2>面板尺寸尚未保存</h2><p>{layoutExitPrompt.message}</p>
+        <button type="button" onClick={() => layoutExitPrompt.choose(true)}>重试</button>
+        <button type="button" onClick={() => layoutExitPrompt.choose(false)}>取消关闭</button>
+      </div>
+    </div> : null}
+    {finalLayoutExitError ? <div className="shortcut-reference-backdrop" role="presentation">
+      <div className="root-conversion-dialog" role="dialog" aria-modal="true" aria-label="退出保存未完成">
+        <h2>退出保存未完成</h2><p>{finalLayoutExitError}</p>
+        <button type="button" onClick={() => void finishNativeExit()}>重试退出保存</button>
+      </div>
+    </div> : null}
     {newDocumentOpen ? (
       <NewDocumentDialog
         defaultBoardWidth={preferences.defaultBoardWidth}

@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { Workspace, useWorkspace } from "./Workspace";
+import { Workspace } from "./Workspace";
+import type { WorkspaceShares } from "./projection";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const cleanup: (() => void)[] = [];
@@ -18,8 +19,8 @@ it("resizes focused separators without navigating the game and leaves undo avail
   document.addEventListener("keydown", navigate);
   cleanup.push(() => document.removeEventListener("keydown", navigate));
   function Harness() {
-    const workspace = useWorkspace();
-    return <Workspace shares={workspace.shares} onSharesChange={workspace.setShares} visibility={{ left: true, right: true }}>
+    const [shares, setShares] = useState<WorkspaceShares | null>(null);
+    return <Workspace shares={shares} onSharesChange={setShares} visibility={{ left: true, right: true }}>
       <aside className="rail" /><div className="diagram" /><aside className="sheet-col" />
     </Workspace>;
   }

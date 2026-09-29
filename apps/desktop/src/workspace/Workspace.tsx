@@ -2,19 +2,15 @@ import { useRef, useState, type ReactNode, type PointerEvent, type KeyboardEvent
 import { projectWorkspace, resizeWorkspace, type ProjectedWorkspace, type WorkspaceShares, type WorkspaceVisibility } from "./projection";
 import { useElementSize } from "./useElementSize";
 
-export function useWorkspace() {
-  const [shares, setShares] = useState<WorkspaceShares | null>(null);
-  return { shares, setShares, restoreDefaults: () => setShares(null) };
-}
-
 type Props = {
   shares: WorkspaceShares | null;
   onSharesChange: (shares: WorkspaceShares) => void;
   visibility: WorkspaceVisibility;
   children: ReactNode;
+  disabled?: boolean;
 };
 
-export function Workspace({ shares, onSharesChange, visibility, children }: Props) {
+export function Workspace({ shares, onSharesChange, visibility, children, disabled = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(containerRef);
   const projected = projectWorkspace(size.width, shares, visibility);
@@ -39,7 +35,7 @@ export function Workspace({ shares, onSharesChange, visibility, children }: Prop
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.stopPropagation();
     event.preventDefault();
-    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (disabled || event.ctrlKey || event.metaKey || event.altKey) return;
     const direction = (event.key === "ArrowRight" ? 1 : -1) * (side === "left" ? 1 : -1);
     adjust(side, direction * (event.shiftKey ? 32 : 8));
   }
@@ -50,13 +46,13 @@ export function Workspace({ shares, onSharesChange, visibility, children }: Prop
     const maximumShares = resizeWorkspace(projected, side, projected.width, shares, visibility);
     const maximum = projectWorkspace(size.width, maximumShares, visibility)[side];
     return <div className={`workspace-separator workspace-separator-${side}`}
-      role="separator" tabIndex={0} aria-orientation="vertical"
+      role="separator" tabIndex={disabled ? -1 : 0} aria-disabled={disabled} aria-orientation="vertical"
       aria-label={side === "left" ? "调整左栏宽度" : "调整右栏宽度"}
       aria-valuemin={minimum} aria-valuemax={Math.round(maximum)}
       aria-valuenow={Math.round(projected[side])} aria-valuetext={`${Math.round(projected[side])} px`}
       onKeyDown={(event) => onKeyDown(event, side)}
       onPointerDown={(event) => {
-        if (event.button !== 0 || drag.current) return;
+        if (disabled || event.button !== 0 || drag.current) return;
         event.preventDefault();
         event.currentTarget.focus();
         event.currentTarget.setPointerCapture(event.pointerId);
@@ -66,7 +62,7 @@ export function Workspace({ shares, onSharesChange, visibility, children }: Prop
       }}
       onPointerMove={(event) => {
         const current = drag.current;
-        if (!current || current.pointerId !== event.pointerId) return;
+        if (disabled || !current || current.pointerId !== event.pointerId) return;
         const delta = (event.clientX - current.x) * (current.side === "left" ? 1 : -1);
         onSharesChange(resizeWorkspace(current.projected, current.side, delta, current.shares, current.visibility));
       }}

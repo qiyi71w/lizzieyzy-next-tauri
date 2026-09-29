@@ -1,7 +1,5 @@
-export type WorkspaceShares = {
-  left: number;
-  right: number;
-};
+import type { WorkspaceSharesDto } from "../domain/types";
+export type WorkspaceShares = WorkspaceSharesDto;
 
 export type WorkspaceVisibility = {
   left: boolean;

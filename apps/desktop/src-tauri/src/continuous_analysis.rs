@@ -1,4 +1,4 @@
-use app_model::{AnalysisJobModeDto, NodePath, SelectedNodeSnapshotDto};
+use app_model::{AnalysisJobModeDto, NodePath, SelectedNodeSnapshotDto, WorkspaceSharesDto};
 use app_preferences::{AppPreferencesDto, AppPreferencesLoadResultDto};
 use engine_manager::{ContinuousPrimaryAction, ForegroundEngineManager, SelectedNodeJobRequest};
 use katago_protocol::{analysis_query_from_position, AnalysisQueryOptions};
@@ -39,6 +39,7 @@ impl PreferencesState {
             .as_ref()
             .ok_or("Preferences must finish loading before saving.")?
             .preferences.recent_game_paths.clone();
+        preferences.workspace_shares = committed.as_ref().unwrap().preferences.workspace_shares;
         let saved = app_preferences::save_to_path(path, preferences)?;
         manager.set_continuous_preferences(saved.continuous_analysis_enabled, saved.continuous_budget)?;
         *committed = Some(AppPreferencesLoadResultDto {
@@ -61,6 +62,22 @@ impl PreferencesState {
         let paths = saved.recent_game_paths.clone();
         *committed = Some(AppPreferencesLoadResultDto { preferences: saved, recovery: None });
         Ok(paths)
+    }
+
+    pub fn update_workspace_shares(
+        &self,
+        path: &Path,
+        shares: Option<WorkspaceSharesDto>,
+    ) -> Result<Option<WorkspaceSharesDto>, String> {
+        let mut committed = self.0.lock().expect("preferences transaction");
+        let mut preferences = committed.as_ref()
+            .ok_or("Preferences must finish loading before updating workspace shares.")?
+            .preferences.clone();
+        preferences.workspace_shares = shares;
+        let saved = app_preferences::save_to_path(path, preferences)?;
+        let shares = saved.workspace_shares;
+        *committed = Some(AppPreferencesLoadResultDto { preferences: saved, recovery: None });
+        Ok(shares)
     }
 
     pub fn primary(
@@ -156,6 +173,38 @@ mod tests {
     use app_model::{ContinuousAnalysisPhaseDto, ForegroundEngineLifecycleDto};
     use engine_manager::{ForegroundEngineConfig, InMemoryEngineProfileCatalog};
     use std::sync::Arc;
+
+    #[test]
+    fn workspace_updates_merge_with_other_owners_and_fail_atomically() {
+        let directory = std::env::temp_dir().join(format!("workspace-prefs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("preferences.json");
+        let manager = ForegroundEngineManager::new(
+            Arc::new(InMemoryEngineProfileCatalog::new()), ForegroundEngineConfig::for_tests(),
+        );
+        let state = PreferencesState::default();
+        let mut stale = state.load(&path, &manager).unwrap().preferences;
+        let shares = Some(WorkspaceSharesDto { left: 0.2, right: 0.3 });
+        let before = manager.snapshot();
+        state.update_workspace_shares(&path, shares).unwrap();
+        assert_eq!(manager.snapshot(), before);
+        stale.board_theme = "high-contrast".into();
+        stale.continuous_budget.continuous_time_limit_seconds = 123;
+        let saved = state.save(&path, &manager, stale).unwrap();
+        assert_eq!(saved.workspace_shares, shares);
+        state.update_recent_history(&path, Some("/games/new.sgf")).unwrap();
+        let before_reset = state.load(&path, &manager).unwrap().preferences;
+        let durable = std::fs::read(&path).unwrap();
+        assert!(state.update_workspace_shares(&directory, None).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), durable);
+        assert_eq!(state.load(&path, &manager).unwrap().preferences, before_reset);
+        assert!(state.update_workspace_shares(&path, Some(WorkspaceSharesDto { left: 0.6, right: 0.4 })).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), durable);
+        state.update_workspace_shares(&path, None).unwrap();
+        let restarted = PreferencesState::default().load(&path, &manager).unwrap().preferences;
+        assert_eq!(restarted, AppPreferencesDto { workspace_shares: None, ..before_reset });
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn recent_history_failure_clear_restart_and_stale_preferences_are_atomic() {

@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnalysisFrameDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureAdmissionDto, FileActivationDeliveryDto, FileActivationRejectionDto, GameDto, NodePath, RecoveryProtectionDto, RecoveryStartupDto } from "./domain/types";
 import type { AppPreferences } from "./domain/preferences";
+import type { WorkspaceSharesDto } from "./domain/types";
 
 const currentGameFixture = vi.hoisted(() => vi.fn());
 const backend = vi.hoisted(() => ({
@@ -96,6 +97,7 @@ vi.mock("./api/backend", () => ({
 
 const preferencesApi = vi.hoisted(() => ({
   loadAppPreferences: vi.fn<() => Promise<{ preferences: AppPreferences; recovery?: { message: string } }>>(() => Promise.reject(new Error("preferences unavailable in test"))),
+  updateWorkspaceShares: vi.fn<(shares: WorkspaceSharesDto | null) => Promise<unknown>>(async () => undefined),
   saveAppPreferences: vi.fn(async (preferences: unknown) => preferences),
   updateRecentGameHistory: vi.fn<(openedPath: string | null) => Promise<string[]>>(),
 }));
@@ -1906,6 +1908,56 @@ describe("App document replacement", () => {
 
 
 describe("App application exit", () => {
+  it("blocks File Exit on failed layout save, retries the latest draft, and unfreezes after document Cancel", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+    backend.prepareApplicationExit.mockResolvedValueOnce({ status: "needs_decision", departure_id: 51 });
+    preferencesApi.updateWorkspaceShares.mockRejectedValueOnce(new Error("layout permission denied"));
+    const host = await renderApp();
+    const separator = requiredElement<HTMLElement>(host, '[aria-label="调整左栏宽度"]');
+    act(() => separator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    const draft = separator.getAttribute("aria-valuenow");
+    act(() => buttonNamed(host, "文件").click());
+    await act(async () => { buttonNamed(host, "退出").click(); });
+    expect(host.textContent).toContain("layout permission denied");
+    expect(backend.prepareApplicationExit).not.toHaveBeenCalled();
+    expect(backend.resolveApplicationExit).not.toHaveBeenCalled();
+    expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+    await act(async () => { buttonNamed(host, "重试").click(); });
+    expect(backend.prepareApplicationExit).toHaveBeenCalledTimes(1);
+    expect(separator.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => { buttonLabeled(host, "Cancel").click(); });
+    expect(separator.getAttribute("aria-disabled")).toBe("false");
+    expect(separator.getAttribute("aria-valuenow")).toBe(draft);
+    act(() => separator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    expect(separator.getAttribute("aria-valuenow")).not.toBe(draft);
+  });
+
+  it("times out a native close without admitting departure and Cancel close keeps the draft editable", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+      let finish!: () => void;
+      preferencesApi.updateWorkspaceShares.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+      const host = await renderApp();
+      const separator = requiredElement<HTMLElement>(host, '[aria-label="调整左栏宽度"]');
+      act(() => separator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+      await act(async () => { backend.subscribeApplicationExitRequested.mock.calls.at(-1)?.[0](); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(host.textContent).toContain("5 seconds");
+      expect(backend.prepareApplicationExit).not.toHaveBeenCalled();
+      expect(backend.resolveApplicationExit).not.toHaveBeenCalled();
+      expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+      await act(async () => { buttonNamed(host, "取消关闭").click(); });
+      expect(separator.getAttribute("aria-disabled")).toBe("false");
+      await act(async () => { finish(); });
+      expect(host.querySelector('[aria-label="面板尺寸保存状态"]')?.textContent).toContain("已保存");
+      expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("routes File Exit and window close through one clean-exit transaction", async () => {
     const host = await renderApp();
     backend.prepareApplicationExit.mockClear();

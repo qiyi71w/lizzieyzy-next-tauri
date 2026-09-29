@@ -71,6 +71,8 @@ type Props = {
   onShowWhiteCandidates: (value: boolean) => void;
   referenceRailCollapsed: boolean;
   onReferenceRailCollapsed: (value: boolean) => void;
+  onRestoreWorkspace?: () => void;
+  workspaceDisabled?: boolean;
   selectedNodeRunning: boolean;
   wholeGameRunning: boolean;
   autoPlaying: boolean;
@@ -242,6 +244,7 @@ export function AppChrome(props: Props) {
               />
               <MenuItem label="分支面板(Shift+G)" disabled title={later} />
             </SubMenu>
+            <MenuItem label="恢复面板尺寸" onClick={() => run(() => props.onRestoreWorkspace?.())} disabled={props.workspaceDisabled} />
             <MenuCheck label="坐标(C)" checked={props.showCoordinates} onClick={() => run(() => props.onShowCoordinates(!props.showCoordinates))} />
             <MenuCheck label="手数(M)" checked={props.showMoveNumbers} onClick={() => run(() => props.onShowMoveNumbers(!props.showMoveNumbers))} />
             <MenuCheck label="候选" checked={props.preferences.showCandidates} onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, showCandidates: !props.preferences.showCandidates }))} />

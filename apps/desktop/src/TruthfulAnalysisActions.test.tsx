@@ -19,6 +19,7 @@ const listeners: {
 const currentGameFixture = vi.hoisted(() => vi.fn());
 const preferencesApi = vi.hoisted(() => ({
   loadAppPreferences: vi.fn((): Promise<{ preferences: AppPreferences }> => Promise.reject(new Error("preferences unavailable in test"))),
+  updateWorkspaceShares: vi.fn(async () => undefined),
   saveAppPreferences: vi.fn(async (preferences: AppPreferences) => preferences)
 }));
 const taskRuntime = vi.hoisted(() => ({ snapshot: null as AnalysisTaskDto | null }));

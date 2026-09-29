@@ -81,6 +81,7 @@ const backend = vi.hoisted(() => ({
 
 const preferencesApi = vi.hoisted(() => ({
   loadAppPreferences: vi.fn(),
+  updateWorkspaceShares: vi.fn(async () => undefined),
   saveAppPreferences: vi.fn(async (preferences: unknown) => preferences)
 }));
 
