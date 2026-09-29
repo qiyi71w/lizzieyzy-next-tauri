@@ -142,6 +142,24 @@ button[aria-pressed="true"] {
   border-bottom: 1px solid var(--line);
 }
 
+.window-geometry-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  min-width: 0;
+  max-width: 290px;
+  font-size: 11px;
+}
+
+.window-geometry-status span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.window-geometry-status button { flex: none; }
+
 .param-strip {
   height: 34px;
   background: var(--toolbar-bg);

@@ -17,6 +17,7 @@
         "title": "LizzieYzy Next",
         "width": 1440,
         "height": 900,
+        "visible": false,
         "resizable": true,
         "fullscreen": false
       }

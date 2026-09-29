@@ -4,6 +4,8 @@ use uuid::Uuid;
 
 mod workspace;
 pub use workspace::WorkspaceSharesDto;
+mod window_geometry;
+pub use window_geometry::{WindowGeometryDto, WindowGeometryStatusDto};
 
 mod analysis_task;
 pub use analysis_task::*;

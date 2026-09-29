@@ -10,9 +10,12 @@ type Props = {
   onChange: (preferences: AppPreferences) => void;
   onRestoreWorkspace?: () => void;
   workspaceDisabled?: boolean;
+  windowGeometryStatus: string;
+  windowGeometryDisabled: boolean;
+  onResetWindowGeometry: () => void;
 };
 
-export function PreferencesPanel({ preferences, status, disabled = false, scoreLeadAvailable = true, onChange, onRestoreWorkspace, workspaceDisabled }: Props) {
+export function PreferencesPanel({ preferences, status, disabled = false, scoreLeadAvailable = true, onChange, onRestoreWorkspace, workspaceDisabled, windowGeometryStatus, windowGeometryDisabled, onResetWindowGeometry }: Props) {
   function update(patch: Partial<AppPreferences>) {
     onChange({ ...preferences, ...patch });
   }
@@ -26,6 +29,11 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
       <fieldset className="preferences-grid">
         <legend>工作区</legend>
         <button type="button" disabled={workspaceDisabled} onClick={onRestoreWorkspace}>恢复面板尺寸</button>
+      </fieldset>
+      <fieldset className="preferences-grid">
+        <legend>窗口</legend>
+        <span role="status">{windowGeometryStatus}</span>
+        <button type="button" disabled={windowGeometryDisabled} onClick={onResetWindowGeometry}>恢复窗口位置和大小</button>
       </fieldset>
       <fieldset className="preferences-grid">
         <legend>分析呈现</legend>

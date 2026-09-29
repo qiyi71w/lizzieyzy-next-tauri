@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 mod recent;
 pub use recent::recent_game_paths;
+pub mod window_geometry;
 
 pub const APP_PREFERENCES_FILE: &str = "lizzieyzy-next-app-preferences.json";
 pub const UNREADABLE_RECOVERY_MESSAGE: &str = "Unreadable preferences isolated; restored defaults.";
@@ -17,6 +18,8 @@ pub const UNREADABLE_RECOVERY_MESSAGE: &str = "Unreadable preferences isolated; 
 pub struct AppPreferencesDto {
     #[serde(default)]
     pub workspace_shares: Option<WorkspaceSharesDto>,
+    #[serde(default, deserialize_with = "deserialize_window_geometry")]
+    pub window_geometry: Option<app_model::WindowGeometryDto>,
     #[serde(default = "default_continuous_analysis_enabled")]
     pub continuous_analysis_enabled: bool,
     #[serde(flatten)]
@@ -106,9 +109,18 @@ fn default_show_coordinates() -> bool {
     true
 }
 
+// Malformed geometry belongs to the geometry recovery owner, not file quarantine.
+fn deserialize_window_geometry<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<app_model::WindowGeometryDto>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.map(|value| serde_json::from_value(value).unwrap_or_default()))
+}
+
 pub fn default_app_preferences() -> AppPreferencesDto {
     AppPreferencesDto {
         workspace_shares: None,
+        window_geometry: None,
         continuous_analysis_enabled: default_continuous_analysis_enabled(),
         continuous_budget: ContinuousAnalysisBudgetDto::default(),
         show_coordinates: default_show_coordinates(),
@@ -552,6 +564,7 @@ mod tests {
     fn sample_preferences() -> AppPreferencesDto {
         AppPreferencesDto {
             workspace_shares: None,
+            window_geometry: None,
             continuous_analysis_enabled: false,
             continuous_budget: ContinuousAnalysisBudgetDto {
                 continuous_time_limit_enabled: false,
@@ -1152,6 +1165,19 @@ mod tests {
 #[cfg(test)]
 mod workspace_tests {
     use super::*;
+
+    #[test]
+    fn invalid_window_record_preserves_other_preferences() {
+        let preferences: AppPreferencesDto = serde_json::from_str(
+            r#"{"windowGeometry":{"x":"invalid"},"boardTheme":"high-contrast","soundEnabled":false,"recentGamePaths":["/games/test.sgf"]}"#,
+        ).unwrap();
+        assert_eq!(preferences.window_geometry, Some(app_model::WindowGeometryDto::default()));
+        assert_eq!(preferences.board_theme, "high-contrast");
+        assert!(!preferences.sound_enabled);
+        assert_eq!(preferences.recent_game_paths, ["/games/test.sgf"]);
+        let legacy: AppPreferencesDto = serde_json::from_str(r#"{"boardTheme":"high-contrast"}"#).unwrap();
+        assert_eq!(legacy.window_geometry, None);
+    }
 
     #[test]
     fn legacy_and_invalid_shares_preserve_unrelated_preferences() {
