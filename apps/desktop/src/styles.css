@@ -738,20 +738,17 @@ button[aria-pressed="true"] {
   container-type: size;
   position: relative;
 }
-.diagram.setup-active {
-  padding-bottom: 76px;
-}
+.diagram.setup-active,
 .diagram.scoring-active {
-  padding-bottom: min(170px, 30vh);
+  grid-template-rows: max-content max-content max-content;
+  align-content: start;
+  gap: 8px;
 }
 .scoring-tools input[type="number"] { width: 4.5rem; }
 .scoring-tools strong { color: var(--accent); }
 
 .root-setup-tools {
-  position: absolute;
-  bottom: 8px;
-  left: 12px;
-  right: 12px;
+  width: 100%;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -761,7 +758,6 @@ button[aria-pressed="true"] {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
-  z-index: 2;
   font-size: 12px;
 }
 .scoring-tools {
