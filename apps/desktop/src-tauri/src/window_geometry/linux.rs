@@ -247,7 +247,9 @@ pub(super) fn frame(window: &WebviewWindow) -> Result<FrameInsets, String> {
 }
 
 pub(super) fn position_is_managed(window: &WebviewWindow) -> Result<bool, String> {
-    on_ui(window, |native| Ok(native.display().type_().name() == "GdkWaylandDisplay"))
+    on_ui(window, |native| {
+        Ok(native.display().type_().name() == "GdkWaylandDisplay")
+    })
 }
 
 pub(super) fn normal_bounds(window: &WebviewWindow) -> Result<app_model::WindowGeometryDto, String> {
@@ -279,7 +281,9 @@ pub(super) fn normal_bounds(window: &WebviewWindow) -> Result<app_model::WindowG
 pub(super) fn managed_reset_bounds(window: &WebviewWindow) -> Result<app_model::WindowGeometryDto, String> {
     on_ui(window, |native| {
         let gdk_window = native.window().ok_or("GTK native window has no GdkWindow")?;
-        let monitor = native.display().monitor_at_window(&gdk_window)
+        let monitor = native
+            .display()
+            .monitor_at_window(&gdk_window)
             .ok_or("Cannot query the current Wayland output for window reset.")?;
         let area = monitor.workarea();
         let outer = gdk_window.frame_extents();
@@ -290,10 +294,12 @@ pub(super) fn managed_reset_bounds(window: &WebviewWindow) -> Result<app_model::
             return Err("Current Wayland output has no usable client area.".into());
         }
         Ok(app_model::WindowGeometryDto {
-            x: None, y: None,
+            x: None,
+            y: None,
             width: f64::from(available_width).min(1440.0),
             height: f64::from(available_height).min(900.0),
-            scale_factor: f64::from(native.scale_factor()), maximized: false,
+            scale_factor: f64::from(native.scale_factor()),
+            maximized: false,
         })
     })
 }

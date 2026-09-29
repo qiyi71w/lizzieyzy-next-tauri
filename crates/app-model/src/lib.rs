@@ -36,7 +36,10 @@ pub struct WorkspaceVisibilityDto {
 
 impl Default for WorkspaceVisibilityDto {
     fn default() -> Self {
-        Self { left: true, right: true }
+        Self {
+            left: true,
+            right: true,
+        }
     }
 }
 

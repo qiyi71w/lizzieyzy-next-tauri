@@ -1,4 +1,6 @@
-use app_model::{AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, ContinuousAnalysisBudgetDto, WorkspaceSharesDto};
+use app_model::{
+    AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, ContinuousAnalysisBudgetDto, WorkspaceSharesDto,
+};
 use serde::ser::Serialize as SerTrait;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -20,7 +22,9 @@ pub struct AppPreferencesDto {
     pub workspace_shares: Option<WorkspaceSharesDto>,
     #[serde(default, deserialize_with = "deserialize_window_geometry")]
     pub window_geometry: Option<app_model::WindowGeometryDto>,
+    #[serde(default)]
     pub workspace_visibility: app_model::WorkspaceVisibilityDto,
+    #[serde(default)]
     pub main_window_always_on_top: bool,
     #[serde(default = "default_continuous_analysis_enabled")]
     pub continuous_analysis_enabled: bool,
@@ -163,7 +167,10 @@ pub fn default_app_preferences() -> AppPreferencesDto {
 }
 
 pub fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPreferencesDto {
-    if preferences.workspace_shares.is_some_and(|shares| shares.validate().is_err()) {
+    if preferences
+        .workspace_shares
+        .is_some_and(|shares| shares.validate().is_err())
+    {
         preferences.workspace_shares = None;
     }
     preferences.candidate_limit = preferences.candidate_limit.clamp(1, 20);
@@ -569,7 +576,11 @@ mod tests {
         AppPreferencesDto {
             workspace_shares: None,
             window_geometry: None,
-            workspace_visibility: app_model::WorkspaceVisibilityDto { left: false, right: true },
+            workspace_visibility: app_model::WorkspaceVisibilityDto {
+                left: false,
+                right: true,
+            },
+            main_window_always_on_top: false,
             continuous_analysis_enabled: false,
             continuous_budget: ContinuousAnalysisBudgetDto {
                 continuous_time_limit_enabled: false,
@@ -1176,7 +1187,10 @@ mod workspace_tests {
         let preferences: AppPreferencesDto = serde_json::from_str(
             r#"{"windowGeometry":{"x":"invalid"},"boardTheme":"high-contrast","soundEnabled":false,"recentGamePaths":["/games/test.sgf"]}"#,
         ).unwrap();
-        assert_eq!(preferences.window_geometry, Some(app_model::WindowGeometryDto::default()));
+        assert_eq!(
+            preferences.window_geometry,
+            Some(app_model::WindowGeometryDto::default())
+        );
         assert_eq!(preferences.board_theme, "high-contrast");
         assert!(!preferences.sound_enabled);
         assert_eq!(preferences.recent_game_paths, ["/games/test.sgf"]);
@@ -1186,11 +1200,18 @@ mod workspace_tests {
 
     #[test]
     fn legacy_and_invalid_shares_preserve_unrelated_preferences() {
-        let legacy: AppPreferencesDto = serde_json::from_str(r#"{"boardTheme":"high-contrast","soundEnabled":false}"#).unwrap();
+        let legacy: AppPreferencesDto =
+            serde_json::from_str(r#"{"boardTheme":"high-contrast","soundEnabled":false}"#).unwrap();
         assert_eq!(legacy.workspace_shares, None);
         let mut invalid = legacy.clone();
-        invalid.workspace_shares = Some(WorkspaceSharesDto { left: -0.1, right: 0.2 });
-        assert_eq!(normalize_app_preferences(invalid), normalize_app_preferences(legacy));
+        invalid.workspace_shares = Some(WorkspaceSharesDto {
+            left: -0.1,
+            right: 0.2,
+        });
+        assert_eq!(
+            normalize_app_preferences(invalid),
+            normalize_app_preferences(legacy)
+        );
     }
 
     #[test]
@@ -1198,6 +1219,11 @@ mod workspace_tests {
         for (left, right) in [(f64::NAN, 0.2), (0.2, f64::INFINITY), (-0.1, 0.2), (0.7, 0.3)] {
             assert!(WorkspaceSharesDto { left, right }.validate().is_err());
         }
-        assert!(WorkspaceSharesDto { left: 0.0, right: 0.0 }.validate().is_ok());
+        assert!(WorkspaceSharesDto {
+            left: 0.0,
+            right: 0.0
+        }
+        .validate()
+        .is_ok());
     }
 }

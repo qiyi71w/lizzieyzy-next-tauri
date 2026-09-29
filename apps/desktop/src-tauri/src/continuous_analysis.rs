@@ -35,8 +35,10 @@ impl PreferencesState {
         mut preferences: AppPreferencesDto,
     ) -> Result<AppPreferencesDto, String> {
         let mut committed = self.0.lock().expect("preferences transaction");
-        let latest = &committed.as_ref()
-            .ok_or("Preferences must finish loading before saving.")?.preferences;
+        let latest = &committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before saving.")?
+            .preferences;
         preferences.recent_game_paths = latest.recent_game_paths.clone();
         preferences.workspace_shares = latest.workspace_shares;
         preferences.window_geometry = latest.window_geometry;
@@ -58,29 +60,47 @@ impl PreferencesState {
         right: Option<bool>,
     ) -> Result<app_model::WorkspaceVisibilityDto, String> {
         let mut committed = self.0.lock().expect("preferences transaction");
-        let mut preferences = committed.as_ref()
+        let mut preferences = committed
+            .as_ref()
             .ok_or("Preferences must finish loading before changing rail visibility.")?
-            .preferences.clone();
-        if let Some(value) = left { preferences.workspace_visibility.left = value; }
-        if let Some(value) = right { preferences.workspace_visibility.right = value; }
+            .preferences
+            .clone();
+        if let Some(value) = left {
+            preferences.workspace_visibility.left = value;
+        }
+        if let Some(value) = right {
+            preferences.workspace_visibility.right = value;
+        }
         let saved = app_preferences::save_to_path(path, preferences)?;
         let visibility = saved.workspace_visibility;
-        *committed = Some(AppPreferencesLoadResultDto { preferences: saved, recovery: None });
+        *committed = Some(AppPreferencesLoadResultDto {
+            preferences: saved,
+            recovery: None,
+        });
         Ok(visibility)
     }
 
-    pub fn update_recent_history(&self, path: &Path, opened_path: Option<&str>) -> Result<Vec<String>, String> {
+    pub fn update_recent_history(
+        &self,
+        path: &Path,
+        opened_path: Option<&str>,
+    ) -> Result<Vec<String>, String> {
         let mut committed = self.0.lock().expect("preferences transaction");
-        let mut preferences = committed.as_ref()
+        let mut preferences = committed
+            .as_ref()
             .ok_or("Preferences must finish loading before updating recent history.")?
-            .preferences.clone();
+            .preferences
+            .clone();
         preferences.recent_game_paths = match opened_path {
             Some(opened) => app_preferences::recent_game_paths(&preferences.recent_game_paths, opened),
             None => Vec::new(),
         };
         let saved = app_preferences::save_to_path(path, preferences)?;
         let paths = saved.recent_game_paths.clone();
-        *committed = Some(AppPreferencesLoadResultDto { preferences: saved, recovery: None });
+        *committed = Some(AppPreferencesLoadResultDto {
+            preferences: saved,
+            recovery: None,
+        });
         Ok(paths)
     }
 
@@ -90,13 +110,18 @@ impl PreferencesState {
         shares: Option<WorkspaceSharesDto>,
     ) -> Result<Option<WorkspaceSharesDto>, String> {
         let mut committed = self.0.lock().expect("preferences transaction");
-        let mut preferences = committed.as_ref()
+        let mut preferences = committed
+            .as_ref()
             .ok_or("Preferences must finish loading before updating workspace shares.")?
-            .preferences.clone();
+            .preferences
+            .clone();
         preferences.workspace_shares = shares;
         let saved = app_preferences::save_to_path(path, preferences)?;
         let shares = saved.workspace_shares;
-        *committed = Some(AppPreferencesLoadResultDto { preferences: saved, recovery: None });
+        *committed = Some(AppPreferencesLoadResultDto {
+            preferences: saved,
+            recovery: None,
+        });
         Ok(shares)
     }
 
@@ -106,9 +131,11 @@ impl PreferencesState {
         geometry: app_model::WindowGeometryDto,
     ) -> Result<(), String> {
         let mut committed = self.0.lock().expect("preferences transaction");
-        let mut preferences = committed.as_ref()
+        let mut preferences = committed
+            .as_ref()
             .ok_or("Preferences must finish loading before updating window geometry.")?
-            .preferences.clone();
+            .preferences
+            .clone();
         preferences.window_geometry = Some(geometry);
         let saved = app_preferences::save_to_path(path, preferences)?;
         committed.as_mut().unwrap().preferences = saved;
@@ -117,17 +144,26 @@ impl PreferencesState {
 
     pub fn pin_intent(&self) -> Result<bool, String> {
         let committed = self.0.lock().expect("preferences transaction");
-        Ok(committed.as_ref().ok_or("Preferences must finish loading before pinning.")?
-            .preferences.main_window_always_on_top)
+        Ok(committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before pinning.")?
+            .preferences
+            .main_window_always_on_top)
     }
 
     pub fn save_pin(&self, path: &Path, value: bool) -> Result<(), String> {
         let mut committed = self.0.lock().expect("preferences transaction");
-        let mut preferences = committed.as_ref()
-            .ok_or("Preferences must finish loading before pinning.")?.preferences.clone();
+        let mut preferences = committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before pinning.")?
+            .preferences
+            .clone();
         preferences.main_window_always_on_top = value;
         let saved = app_preferences::save_to_path(path, preferences)?;
-        *committed = Some(AppPreferencesLoadResultDto { preferences: saved, recovery: None });
+        *committed = Some(AppPreferencesLoadResultDto {
+            preferences: saved,
+            recovery: None,
+        });
         Ok(())
     }
 
@@ -232,14 +268,25 @@ mod tests {
         let path = directory.join("preferences.json");
         std::fs::write(&path, b"not json").unwrap();
         let manager = ForegroundEngineManager::new(
-            Arc::new(InMemoryEngineProfileCatalog::new()), ForegroundEngineConfig::for_tests(),
+            Arc::new(InMemoryEngineProfileCatalog::new()),
+            ForegroundEngineConfig::for_tests(),
         );
         let state = PreferencesState::default();
         let initial = state.load(&path, &manager).unwrap();
         assert!(initial.recovery.is_some());
-        state.update_window_geometry(&path, app_model::WindowGeometryDto {
-            x: Some(40.0), y: Some(50.0), width: 1100.0, height: 720.0, scale_factor: 1.0, maximized: false,
-        }).unwrap();
+        state
+            .update_window_geometry(
+                &path,
+                app_model::WindowGeometryDto {
+                    x: Some(40.0),
+                    y: Some(50.0),
+                    width: 1100.0,
+                    height: 720.0,
+                    scale_factor: 1.0,
+                    maximized: false,
+                },
+            )
+            .unwrap();
         assert_eq!(state.load(&path, &manager).unwrap().recovery, initial.recovery);
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -250,16 +297,24 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("preferences.json");
         let manager = ForegroundEngineManager::new(
-            Arc::new(InMemoryEngineProfileCatalog::new()), ForegroundEngineConfig::for_tests(),
+            Arc::new(InMemoryEngineProfileCatalog::new()),
+            ForegroundEngineConfig::for_tests(),
         );
         let state = PreferencesState::default();
         let mut stale = state.load(&path, &manager).unwrap().preferences;
-        let shares = Some(WorkspaceSharesDto { left: 0.2, right: 0.3 });
+        let shares = Some(WorkspaceSharesDto {
+            left: 0.2,
+            right: 0.3,
+        });
         let before = manager.snapshot();
         state.update_workspace_shares(&path, shares).unwrap();
         let geometry = app_model::WindowGeometryDto {
-            x: Some(-1200.0), y: Some(50.0), width: 1100.0, height: 720.0,
-            scale_factor: 1.25, maximized: true,
+            x: Some(-1200.0),
+            y: Some(50.0),
+            width: 1100.0,
+            height: 720.0,
+            scale_factor: 1.25,
+            maximized: true,
         };
         state.update_window_geometry(&path, geometry).unwrap();
         assert_eq!(manager.snapshot(), before);
@@ -268,24 +323,56 @@ mod tests {
         let saved = state.save(&path, &manager, stale).unwrap();
         assert_eq!(saved.workspace_shares, shares);
         assert_eq!(saved.window_geometry, Some(geometry));
-        state.update_recent_history(&path, Some("/games/new.sgf")).unwrap();
+        state
+            .update_recent_history(&path, Some("/games/new.sgf"))
+            .unwrap();
         let before_reset = state.load(&path, &manager).unwrap().preferences;
         let durable = std::fs::read(&path).unwrap();
         assert!(state.update_workspace_shares(&directory, None).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), durable);
         assert_eq!(state.load(&path, &manager).unwrap().preferences, before_reset);
-        assert!(state.update_workspace_shares(&path, Some(WorkspaceSharesDto { left: 0.6, right: 0.4 })).is_err());
+        assert!(state
+            .update_workspace_shares(
+                &path,
+                Some(WorkspaceSharesDto {
+                    left: 0.6,
+                    right: 0.4
+                })
+            )
+            .is_err());
         assert_eq!(std::fs::read(&path).unwrap(), durable);
-        let changed = app_model::WindowGeometryDto { x: Some(40.0), maximized: false, ..geometry };
+        let changed = app_model::WindowGeometryDto {
+            x: Some(40.0),
+            maximized: false,
+            ..geometry
+        };
         assert!(state.update_window_geometry(&directory, changed).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), durable);
         assert_eq!(state.load(&path, &manager).unwrap().preferences, before_reset);
         state.update_workspace_shares(&path, None).unwrap();
-        let restarted = PreferencesState::default().load(&path, &manager).unwrap().preferences;
-        assert_eq!(restarted, AppPreferencesDto { workspace_shares: None, ..before_reset });
+        let restarted = PreferencesState::default()
+            .load(&path, &manager)
+            .unwrap()
+            .preferences;
+        assert_eq!(
+            restarted,
+            AppPreferencesDto {
+                workspace_shares: None,
+                ..before_reset
+            }
+        );
         state.update_window_geometry(&path, changed).unwrap();
-        let retried = PreferencesState::default().load(&path, &manager).unwrap().preferences;
-        assert_eq!(retried, AppPreferencesDto { window_geometry: Some(changed), ..restarted });
+        let retried = PreferencesState::default()
+            .load(&path, &manager)
+            .unwrap()
+            .preferences;
+        assert_eq!(
+            retried,
+            AppPreferencesDto {
+                window_geometry: Some(changed),
+                ..restarted
+            }
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -295,21 +382,39 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("preferences.json");
         let manager = ForegroundEngineManager::new(
-            Arc::new(InMemoryEngineProfileCatalog::new()), ForegroundEngineConfig::for_tests(),
+            Arc::new(InMemoryEngineProfileCatalog::new()),
+            ForegroundEngineConfig::for_tests(),
         );
         let state = PreferencesState::default();
         let mut stale = state.load(&path, &manager).unwrap().preferences;
-        state.update_workspace_visibility(&path, Some(false), None).unwrap();
+        state
+            .update_workspace_visibility(&path, Some(false), None)
+            .unwrap();
         stale.show_coordinates = false;
         state.save(&path, &manager, stale).unwrap();
-        state.update_recent_history(&path, Some("/games/test.sgf")).unwrap();
-        state.update_workspace_visibility(&path, None, Some(false)).unwrap();
-        assert!(state.update_workspace_visibility(&directory, Some(true), None).is_err());
+        state
+            .update_recent_history(&path, Some("/games/test.sgf"))
+            .unwrap();
+        state
+            .update_workspace_visibility(&path, None, Some(false))
+            .unwrap();
+        assert!(state
+            .update_workspace_visibility(&directory, Some(true), None)
+            .is_err());
         let loaded = state.load(&path, &manager).unwrap().preferences;
-        assert_eq!(loaded.workspace_visibility, app_model::WorkspaceVisibilityDto { left: false, right: false });
+        assert_eq!(
+            loaded.workspace_visibility,
+            app_model::WorkspaceVisibilityDto {
+                left: false,
+                right: false
+            }
+        );
         assert!(!loaded.show_coordinates);
         assert_eq!(loaded.recent_game_paths, ["/games/test.sgf"]);
-        let restarted = PreferencesState::default().load(&path, &manager).unwrap().preferences;
+        let restarted = PreferencesState::default()
+            .load(&path, &manager)
+            .unwrap()
+            .preferences;
         assert_eq!(restarted, loaded);
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -320,26 +425,45 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("preferences.json");
         let manager = ForegroundEngineManager::new(
-            Arc::new(InMemoryEngineProfileCatalog::new()), ForegroundEngineConfig::for_tests(),
+            Arc::new(InMemoryEngineProfileCatalog::new()),
+            ForegroundEngineConfig::for_tests(),
         );
         let state = PreferencesState::default();
         let mut before_open = state.load(&path, &manager).unwrap().preferences;
         before_open.restore_last_session = true;
         state.save(&path, &manager, before_open.clone()).unwrap();
-        state.update_recent_history(&path, Some("/games/old.sgf")).unwrap();
+        state
+            .update_recent_history(&path, Some("/games/old.sgf"))
+            .unwrap();
         let durable = std::fs::read(&path).unwrap();
-        assert!(state.update_recent_history(&directory, Some("/games/new.gib")).is_err());
+        assert!(state
+            .update_recent_history(&directory, Some("/games/new.gib"))
+            .is_err());
         assert!(state.update_recent_history(&directory, None).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), durable);
-        assert_eq!(state.load(&path, &manager).unwrap().preferences.recent_game_paths, ["/games/old.sgf"]);
+        assert_eq!(
+            state.load(&path, &manager).unwrap().preferences.recent_game_paths,
+            ["/games/old.sgf"]
+        );
         let saved = state.save(&path, &manager, before_open).unwrap();
         assert_eq!(saved.recent_game_paths, ["/games/old.sgf"]);
-        state.update_recent_history(&path, Some("/games/new.gib")).unwrap();
-        let reloaded = PreferencesState::default().load(&path, &manager).unwrap().preferences;
+        state
+            .update_recent_history(&path, Some("/games/new.gib"))
+            .unwrap();
+        let reloaded = PreferencesState::default()
+            .load(&path, &manager)
+            .unwrap()
+            .preferences;
         assert_eq!(reloaded.recent_game_paths, ["/games/new.gib", "/games/old.sgf"]);
         state.update_recent_history(&path, None).unwrap();
         let cleared = app_preferences::load_from_path(&path).unwrap().preferences;
-        assert_eq!(cleared, AppPreferencesDto { recent_game_paths: Vec::new(), ..reloaded });
+        assert_eq!(
+            cleared,
+            AppPreferencesDto {
+                recent_game_paths: Vec::new(),
+                ..reloaded
+            }
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 

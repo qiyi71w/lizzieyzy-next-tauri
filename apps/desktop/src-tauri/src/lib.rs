@@ -970,7 +970,13 @@ fn whole_game_work_items(
                     include_policy: Some(true),
                 },
             )
-            .map_err(|error| Box::new(job_failure(run_id, EngineFailureKind::Protocol, error.to_string())))?;
+            .map_err(|error| {
+                Box::new(job_failure(
+                    run_id,
+                    EngineFailureKind::Protocol,
+                    error.to_string(),
+                ))
+            })?;
             Ok(WholeGameWorkItem {
                 node_path: snapshot.path.clone(),
                 query,
@@ -1321,9 +1327,14 @@ pub fn run() {
             // The frontend load command owns recovery/error reporting. A failed
             // preference load must leave the window operable and pin uninitialized.
             if let Ok(path) = app_preferences_path(app.handle()) {
-                if preferences.load(&path, &app.state::<ForegroundEngineManager>()).is_ok() {
+                if preferences
+                    .load(&path, &app.state::<ForegroundEngineManager>())
+                    .is_ok()
+                {
                     if let Some(window) = app.get_webview_window("main") {
-                        let _ = app.state::<MainWindowPin>().apply(&window, &preferences, &path, None);
+                        let _ = app
+                            .state::<MainWindowPin>()
+                            .apply(&window, &preferences, &path, None);
                     }
                 }
             }
@@ -1430,9 +1441,14 @@ pub fn run() {
             } if label == "main" => handle_file_drop(app, paths),
 
             tauri::RunEvent::WindowEvent { label, event, .. }
-                if label == "main" && matches!(event,
-                    tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)
-                    | tauri::WindowEvent::ScaleFactorChanged { .. }) => {
+                if label == "main"
+                    && matches!(
+                        event,
+                        tauri::WindowEvent::Moved(_)
+                            | tauri::WindowEvent::Resized(_)
+                            | tauri::WindowEvent::ScaleFactorChanged { .. }
+                    ) =>
+            {
                 window_geometry::observe(app);
             }
 
