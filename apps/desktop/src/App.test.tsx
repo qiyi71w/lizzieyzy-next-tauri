@@ -1908,6 +1908,35 @@ describe("App document replacement", () => {
 
 
 describe("App application exit", () => {
+  it("rejects file activation throughout layout flush and releases admission on Cancel close", async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: () => void;
+      preferencesApi.updateWorkspaceShares.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+      const host = await renderApp();
+      backend.readGameFile.mockClear();
+      backend.prepareDocumentReplacement.mockClear();
+      const deliver = async (request_id: number) => {
+        backend.takePendingFileActivation.mockResolvedValueOnce({ kind: "open", request_id, path: "/tmp/layout-exit.sgf" });
+        await act(async () => { listeners.onActivationAvailable?.(); });
+      };
+      act(() => requiredElement<HTMLElement>(host, '[aria-label="调整左栏宽度"]').dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+      await act(async () => { backend.subscribeApplicationExitRequested.mock.calls.at(-1)?.[0](); });
+      await deliver(91);
+      expect(backend.readGameFile).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(host.textContent).toContain("5 seconds");
+      await deliver(92);
+      expect(backend.readGameFile).not.toHaveBeenCalled();
+      expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+      expect(backend.prepareApplicationExit).not.toHaveBeenCalled();
+      expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+      await act(async () => { buttonNamed(host, "取消关闭").click(); finish(); });
+      await deliver(93);
+      expect(backend.readGameFile).toHaveBeenCalledWith("/tmp/layout-exit.sgf");
+    } finally { vi.useRealTimers(); }
+  });
+
   it("blocks File Exit on failed layout save, retries the latest draft, and unfreezes after document Cancel", async () => {
     vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
     backend.prepareApplicationExit.mockResolvedValueOnce({ status: "needs_decision", departure_id: 51 });

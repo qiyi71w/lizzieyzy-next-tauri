@@ -1490,10 +1490,10 @@ export function App() {
         setMessage("设置仍在载入，请稍后退出。");
         return;
       }
-      if (!await flushWorkspaceBeforeDeparture()) return;
-      workspace.owner.freeze(true);
       await enterFileFlow();
       enteredFileFlow = true;
+      if (!await flushWorkspaceBeforeDeparture()) return;
+      workspace.owner.freeze(true);
       const admission = await prepareApplicationExit();
       const action: ApplicationExitActionDto = admission.status === "needs_decision"
         ? await requestDepartureDecision("当前棋谱尚未保存。保存后退出，放弃更改，还是取消退出？")
