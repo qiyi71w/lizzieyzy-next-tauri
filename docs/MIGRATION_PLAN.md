@@ -83,7 +83,7 @@ The existing Tauri implementation is the migration starting point and must be pr
 - R4 Analysis has exited with all ten owner items plus pulled-forward `PREF-01` and `APP-05` Accepted.
 - R5 has exited on integrated Windows candidate `48db2b2833f9deb45bd7dcd47181f5da77348a0c`. `SGF-08`, `APP-02`, `APP-03`, `APP-04`, and `ANA-15` are Accepted; the `APP-01` R5 semantic gate passed. Final `APP-01` acceptance remains an R11 / `REL-04` installer-association and Canonical Artifact Installed Live Evidence obligation.
 - R6 has exited on integrated Windows candidate `be6951bf57afa07c4a1ae6d57075573b308f5dfd`; all thirteen authoring/review owner items are Accepted. R7 remains the next numbered phase.
-- Layout rails are fixed at `228px` and `260px`; splitters, rail visibility, window-geometry reset, and narrow Restore Default are absent.
+- Layout rails still use fixed `228px` / `260px` widths (`210px` / `240px` at the narrow breakpoint). The transient right-rail menu flag does not release its CSS grid column or hide its rendered flex surface; independent durable rail visibility, splitters, window-geometry reset, and narrow Restore Default remain absent. The [R7 planning baseline](R7_PLAN.md#exercised-baseline-evidence) records the exercised browser path.
 - Main-window always-on-top remains absent (`WINDOW-02`); accepted R6 metadata and HUD player-name behavior retain their owner scopes.
 - Multi-backend profiles, Generic GTP, and Match Sessions are absent.
 - Provider/readboard repository plumbing exists, but live sessions remain unvalidated; Yike ongoing sync and Tencent kifu import are unclaimed; readboard snapshots are previewed rather than synchronized into the active game.
@@ -651,6 +651,8 @@ Accepted `SGF-01` through `SGF-06`, `RULE-01`, `UI-01`, `UI-03`, `UI-04`, and `U
 
 **Migration Phase Gate:** `PREF-01` accepted. `GUIDE-01` is Deferred (Ticket 21) and is not an R7 member or exit.
 
+**Planning detail:** [Approved R7 execution and acceptance plan](R7_PLAN.md), with a frozen specification and eight published local tickets. The user approved the specification and breakdown on 2026-09-26. These seven owners and their Matrix prerequisites are preserved; implementation has not started, and no R7 status is promoted.
+
 **Delivery Order:**
 
 1. `LAYOUT-01` draggable proportions.
@@ -870,6 +872,8 @@ These items are stable and unnumbered. Each has an owner and a Plan-owned Promot
 R5 has exited. Integrated candidate `48db2b2833f9deb45bd7dcd47181f5da77348a0c` completed the native activation/drop, graceful-shutdown, recovery-failure, and truthful-analysis evidence; exact unchanged-path reuse for the ten-second teardown cases was paired with affected final-candidate smoke.
 
 `APP-01` remains Missing only for its R11 / `REL-04` production association and Canonical Artifact Installed Live Evidence obligation. `ENG-09`/`ENG-10`, `UI-02` residuals, and other phase gates retain their own scope; R5 exit does not promote them.
+
+R6 has subsequently exited on `be6951bf57afa07c4a1ae6d57075573b308f5dfd`. The [approved R7 Adaptive Workspace batch](R7_PLAN.md) is based on remote `main` at `5d44760f172867c520adb9c57adcd86678f72c54`; its specification and eight local tickets are published. Tickets 01 and 05 have no ticket blockers; later tickets follow the recorded DAG. Later phases and Deferred items are not part of this batch.
 
 Slice R3-A (Foreground engine identity and lifecycle) is complete. The historical scope below is audit record, not the current batch.
 
