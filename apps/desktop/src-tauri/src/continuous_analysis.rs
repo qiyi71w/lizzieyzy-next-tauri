@@ -92,7 +92,7 @@ impl PreferencesState {
             .preferences.clone();
         preferences.window_geometry = Some(geometry);
         let saved = app_preferences::save_to_path(path, preferences)?;
-        *committed = Some(AppPreferencesLoadResultDto { preferences: saved, recovery: None });
+        committed.as_mut().unwrap().preferences = saved;
         Ok(())
     }
 
@@ -189,6 +189,25 @@ mod tests {
     use app_model::{ContinuousAnalysisPhaseDto, ForegroundEngineLifecycleDto};
     use engine_manager::{ForegroundEngineConfig, InMemoryEngineProfileCatalog};
     use std::sync::Arc;
+
+    #[test]
+    fn geometry_autosave_preserves_unconsumed_preference_recovery() {
+        let directory = std::env::temp_dir().join(format!("geometry-recovery-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("preferences.json");
+        std::fs::write(&path, b"not json").unwrap();
+        let manager = ForegroundEngineManager::new(
+            Arc::new(InMemoryEngineProfileCatalog::new()), ForegroundEngineConfig::for_tests(),
+        );
+        let state = PreferencesState::default();
+        let initial = state.load(&path, &manager).unwrap();
+        assert!(initial.recovery.is_some());
+        state.update_window_geometry(&path, app_model::WindowGeometryDto {
+            x: 40.0, y: 50.0, width: 1100.0, height: 720.0, scale_factor: 1.0, maximized: false,
+        }).unwrap();
+        assert_eq!(state.load(&path, &manager).unwrap().recovery, initial.recovery);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn workspace_updates_merge_with_other_owners_and_fail_atomically() {

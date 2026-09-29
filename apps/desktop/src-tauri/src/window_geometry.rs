@@ -49,13 +49,46 @@ fn work_area(monitor: &tauri::Monitor) -> WorkArea {
     }
 }
 
+#[cfg(windows)]
+fn title_insets(window: &WebviewWindow, scale: f64) -> Result<(f64, f64, f64), String> {
+    use windows::Win32::{Foundation::{HWND, LPARAM, WPARAM}, UI::WindowsAndMessaging::{
+        SendMessageTimeoutW, TITLEBARINFOEX, WM_GETTITLEBARINFOEX, SMTO_ABORTIFHUNG, SMTO_ERRORONEXIT,
+    }};
+    let origin = window.outer_position().map_err(|e| e.to_string())?;
+    let outer = window.outer_size().map_err(|e| e.to_string())?;
+    let hwnd = HWND(window.hwnd().map_err(|e| e.to_string())?.0);
+    let mut info = TITLEBARINFOEX { cbSize: std::mem::size_of::<TITLEBARINFOEX>() as u32, ..Default::default() };
+    // No preference mutex is held while the UI thread handles this native query.
+    let result = unsafe { SendMessageTimeoutW(hwnd, WM_GETTITLEBARINFOEX, WPARAM(0),
+        LPARAM((&mut info as *mut TITLEBARINFOEX) as isize), SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT, 1000, None) };
+    if result.0 == 0 || info.rcTitleBar.right <= info.rcTitleBar.left {
+        return Err("Cannot query native draggable title bounds; saved geometry was retained.".into());
+    }
+    let mut right = info.rcTitleBar.right;
+    for index in [2, 3, 4, 5] {
+        let rect = info.rgrect[index];
+        if info.rgstate[index] & 0x8000 == 0 && rect.right > rect.left {
+            right = right.min(rect.left);
+        }
+    }
+    Ok((f64::from(info.rcTitleBar.left - origin.x).max(0.0) / scale,
+        (f64::from(origin.x) + f64::from(outer.width) - f64::from(right)).max(0.0) / scale,
+        f64::from(info.rcTitleBar.top - origin.y).max(0.0) / scale))
+}
+
 fn frame(window: &WebviewWindow) -> Result<FrameInsets, String> {
     let outer = window.outer_size().map_err(|e| e.to_string())?;
     let inner = window.inner_size().map_err(|e| e.to_string())?;
     let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    let (title_left, title_right, title_top) = title_insets(window, scale)?;
+    // Other window systems retain their existing outer-title approximation.
+    #[cfg(not(windows))]
+    let (title_left, title_right, title_top) = (0.0, 0.0, 0.0);
     Ok(FrameInsets {
         width: f64::from(outer.width.saturating_sub(inner.width)) / scale,
         height: f64::from(outer.height.saturating_sub(inner.height)) / scale,
+        title_left, title_right, title_top,
     })
 }
 
@@ -126,8 +159,12 @@ impl Session {
                 .map(|monitor| work_area(&monitor))
                 .ok_or_else(|| "Cannot query primary monitor; saved geometry was retained.".into())
         })?;
-        if current != Some(target) { apply(&self.window, target)?; }
-        self.geometry = Some(target);
+        if current != Some(target.geometry) { apply(&self.window, target.geometry)?; }
+        self.geometry = Some(target.geometry);
+        if let Some(warning) = target.warning {
+            self.suspended = true;
+            return Err(warning);
+        }
         self.suspended = false;
         self.error = None;
         self.phase = if self.geometry == self.durable { "saved" } else { "pending" };
@@ -152,6 +189,7 @@ impl Session {
         if self.geometry == self.durable {
             self.phase = "saved";
             self.error = None;
+            self.publish();
             return Ok(());
         }
         let geometry = self.geometry.ok_or("No valid normal window bounds available.")?;

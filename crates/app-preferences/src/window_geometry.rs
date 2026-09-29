@@ -25,25 +25,35 @@ pub fn record_sample(previous: Option<WindowGeometryDto>, sample: WindowSample) 
     }
 }
 
-/// Query failure is not an invalid saved rectangle: leave recovery to an explicit retry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RestoreGeometry {
+    pub geometry: WindowGeometryDto,
+    /// An unverified fallback must be shown but never replace durable geometry.
+    pub warning: Option<String>,
+}
+
+/// Enumeration failure may use the independently queried primary for display only.
 pub fn restore_geometry(
     saved: Option<WindowGeometryDto>,
     areas: Result<&[WorkArea], String>,
     frame: FrameInsets,
     primary: impl FnOnce() -> Result<WorkArea, String>,
-) -> Result<WindowGeometryDto, String> {
-    let areas = areas?;
-    if !areas.iter().any(|area| usable(area, frame)) {
-        return Err("Cannot enumerate usable monitor work areas; saved geometry was retained.".into());
-    }
-    if let Some(saved) = saved.filter(|saved| is_reachable(saved, areas, frame)) {
-        return Ok(saved);
-    }
+) -> Result<RestoreGeometry, String> {
+    let warning = match areas {
+        Ok(areas) if areas.iter().any(|area| usable(area, frame)) => {
+            if let Some(saved) = saved.filter(|saved| is_reachable(saved, areas, frame)) {
+                return Ok(RestoreGeometry { geometry: saved, warning: None });
+            }
+            None
+        }
+        Ok(_) => Some("Cannot enumerate usable monitor work areas; saved geometry was retained.".into()),
+        Err(error) => Some(error),
+    };
     let primary = primary()?;
     if !usable(&primary, frame) {
         return Err("Primary work area is unusable; saved geometry was retained.".into());
     }
-    Ok(fit_default(&primary, frame))
+    Ok(RestoreGeometry { geometry: fit_default(&primary, frame), warning })
 }
 
 #[cfg(test)]
@@ -51,13 +61,25 @@ mod sampling_tests {
     use super::*;
 
     #[test]
+    fn monitor_failure_still_fits_a_known_primary() {
+        let frame = FrameInsets { width: 16.0, height: 39.0, title_left: 24.0, title_right: 148.0, title_top: 2.0 };
+        let small = WorkArea { x: 0.0, y: 0.0, width: 800.0, height: 600.0, scale_factor: 1.0 };
+        let restored = restore_geometry(None, Err("monitor query failed".into()), frame, || Ok(small)).unwrap();
+        assert_eq!(restored.geometry, fit_default(&small, frame));
+        assert_eq!(restored.warning.as_deref(), Some("monitor query failed"));
+    }
+
+    #[test]
     fn monitor_failure_is_not_an_invalid_record_recovery() {
-        let frame = FrameInsets { width: 16.0, height: 39.0 };
+        let frame = FrameInsets { width: 16.0, height: 39.0, title_left: 24.0, title_right: 148.0, title_top: 2.0 };
         let saved = WindowGeometryDto { x: 40.0, y: 50.0, width: 1100.0, height: 720.0, scale_factor: 1.0, maximized: true };
-        assert_eq!(restore_geometry(Some(saved), Err("monitor query failed".into()), frame, || panic!("must not reset")), Err("monitor query failed".into()));
-        assert!(restore_geometry(Some(saved), Ok(&[]), frame, || panic!("must not reset")).is_err());
+        assert!(restore_geometry(Some(saved), Err("monitor query failed".into()), frame, || Err("primary query failed".into())).is_err());
+        let small = WorkArea { x: 0.0, y: 0.0, width: 800.0, height: 600.0, scale_factor: 1.0 };
+        let fallback = restore_geometry(Some(saved), Ok(&[]), frame, || Ok(small)).unwrap();
+        assert!(fallback.warning.is_some());
+        assert_eq!(fallback.geometry, fit_default(&small, frame));
         let area = WorkArea { x: 0.0, y: 0.0, width: 1920.0, height: 1040.0, scale_factor: 1.0 };
-        assert_eq!(restore_geometry(Some(saved), Ok(&[area]), frame, || panic!("valid secondary record needs no primary query")), Ok(saved));
+        assert_eq!(restore_geometry(Some(saved), Ok(&[area]), frame, || panic!("valid secondary record needs no primary query")), Ok(RestoreGeometry { geometry: saved, warning: None }));
     }
 
     #[test]
@@ -85,11 +107,14 @@ pub struct WorkArea {
     pub scale_factor: f64,
 }
 
-/// Aggregate nonclient width and height in logical pixels, supplied by the native adapter.
+/// Native nonclient size and draggable caption insets, all in logical pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FrameInsets {
     pub width: f64,
     pub height: f64,
+    pub title_left: f64,
+    pub title_right: f64,
+    pub title_top: f64,
 }
 
 const DEFAULT_CLIENT_WIDTH: f64 = 1440.0;
@@ -113,6 +138,7 @@ fn usable(area: &WorkArea, frame: FrameInsets) -> bool {
         && frame.height.is_finite()
         && frame.width >= 0.0
         && frame.height >= 0.0
+        && [frame.title_left, frame.title_right, frame.title_top].iter().all(|v| v.is_finite() && *v >= 0.0)
         && area.width / area.scale_factor > frame.width
         && area.height / area.scale_factor > frame.height
 }
@@ -122,10 +148,10 @@ fn usable(area: &WorkArea, frame: FrameInsets) -> bool {
 /// The outer origin and work areas are physical pixels; client size and aggregate
 /// nonclient insets are logical pixels. A saved client's logical size does not change
 /// with its recorded scale: each candidate monitor's *current* scale converts it to
-/// physical outer size. Since aggregate insets do not identify the top/left border,
-/// the title grab is approximated as a 100×32 logical rectangle starting at the
-/// outer origin. This conservative approximation never combines title fragments
-/// across monitors. Maximization is independent of the saved normal bounds.
+/// physical outer size. Native caption insets exclude the system icon and caption
+/// buttons. Require a 100×32 logical grab target beginning at that caption origin,
+/// wholly on one work area, never combining fragments across monitors.
+/// Maximization is independent of the saved normal bounds.
 /// An empty work-area slice means no reachable geometry; monitor query failures
 /// must be handled by the caller, not represented by an empty slice.
 pub fn is_reachable(geometry: &WindowGeometryDto, areas: &[WorkArea], frame: FrameInsets) -> bool {
@@ -163,12 +189,13 @@ pub fn is_reachable(geometry: &WindowGeometryDto, areas: &[WorkArea], frame: Fra
             return false;
         }
 
-        let right = geometry.x + outer_width;
-        let bottom = geometry.y + title_height;
-        right.is_finite()
-            && bottom.is_finite()
-            && (right.min(area.x + area.width) - geometry.x.max(area.x)) >= title_width
-            && (bottom.min(area.y + area.height) - geometry.y.max(area.y)) >= title_height
+        let left = geometry.x + frame.title_left * area.scale_factor;
+        let right = geometry.x + outer_width - frame.title_right * area.scale_factor;
+        let top = geometry.y + frame.title_top * area.scale_factor;
+        let bottom = top + title_height;
+        left.is_finite() && right.is_finite() && top.is_finite() && bottom.is_finite()
+            && (right.min(area.x + area.width) - left.max(area.x)) >= title_width
+            && (bottom.min(area.y + area.height) - top.max(area.y)) >= title_height
     })
 }
 
@@ -200,6 +227,9 @@ mod tests {
     const FRAME: FrameInsets = FrameInsets {
         width: 16.0,
         height: 40.0,
+        title_left: 24.0,
+        title_right: 148.0,
+        title_top: 2.0,
     };
     const PRIMARY: WorkArea = WorkArea {
         x: 0.0,
@@ -233,6 +263,11 @@ mod tests {
         assert!(is_reachable(&geometry(-2520.0, -80.0), &[PRIMARY, secondary], FRAME));
         assert!(!is_reachable(&geometry(-2520.0, -80.0), &[PRIMARY], FRAME));
     }
+    #[test]
+    fn visible_caption_buttons_are_not_a_draggable_title() {
+        assert!(!is_reachable(&geometry(-1016.0, 100.0), &[PRIMARY], FRAME));
+    }
+
 
     #[test]
     fn rejects_invalid_coordinates_dimensions_and_scale_even_when_maximized() {
@@ -294,11 +329,11 @@ mod tests {
     fn title_requires_one_monitor_intersection_of_100_by_32_logical() {
         let saved = geometry(0.0, 0.0);
         let title_only = WorkArea { width: 100.0, height: 32.0, ..PRIMARY };
-        let right_edge = geometry(PRIMARY.width - 100.0, 0.0);
+        let right_edge = geometry(PRIMARY.width - 100.0 - FRAME.title_left, 0.0);
         assert!(is_reachable(&right_edge, &[PRIMARY], FRAME));
-        assert!(!is_reachable(&geometry(PRIMARY.width - 99.0, 0.0), &[PRIMARY], FRAME));
-        assert!(is_reachable(&geometry(0.0, PRIMARY.height - 32.0), &[PRIMARY], FRAME));
-        assert!(!is_reachable(&geometry(0.0, PRIMARY.height - 31.0), &[PRIMARY], FRAME));
+        assert!(!is_reachable(&geometry(right_edge.x + 1.0, 0.0), &[PRIMARY], FRAME));
+        assert!(is_reachable(&geometry(0.0, PRIMARY.height - 32.0 - FRAME.title_top), &[PRIMARY], FRAME));
+        assert!(!is_reachable(&geometry(0.0, PRIMARY.height - 32.0), &[PRIMARY], FRAME));
         assert!(!is_reachable(&saved, &[title_only], FRAME));
     }
 
