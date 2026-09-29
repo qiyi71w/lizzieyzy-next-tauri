@@ -6,18 +6,21 @@ export function useMainWindowPin(native: boolean, ready: boolean, frozen: boolea
   const [status, setStatus] = useState<MainWindowPinStatusDto | null>(null);
   const [pending, setPending] = useState(false);
   const inFlight = useRef(false);
+  const revision = useRef(0);
   const [failure, setFailure] = useState<string | null>(null);
   useEffect(() => {
     if (!native || !ready) return;
     let active = true;
-    loadMainWindowPin().then((value) => { if (active) setStatus(value); })
-      .catch((error: unknown) => { if (active) setFailure(String(error)); });
+    const initialRevision = revision.current;
+    loadMainWindowPin().then((value) => { if (active && revision.current === initialRevision) setStatus(value); })
+      .catch((error: unknown) => { if (active && revision.current === initialRevision) setFailure(String(error)); });
     return () => { active = false; };
   }, [native, ready]);
 
   async function apply(value: boolean | null) {
     if (!native || !ready || frozen || inFlight.current) return;
     inFlight.current = true;
+    revision.current += 1;
     setPending(true);
     setFailure(null);
     try {

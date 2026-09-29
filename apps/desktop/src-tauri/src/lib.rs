@@ -1298,10 +1298,14 @@ pub fn run() {
             let _ = manager.apply_autoload();
             app.manage(manager);
             let preferences = app.state::<PreferencesState>();
-            let path = app_preferences_path(app.handle())?;
-            preferences.load(&path, &app.state::<ForegroundEngineManager>())?;
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = app.state::<MainWindowPin>().apply(&window, &preferences, &path, None);
+            // The frontend load command owns recovery/error reporting. A failed
+            // preference load must leave the window operable and pin uninitialized.
+            if let Ok(path) = app_preferences_path(app.handle()) {
+                if preferences.load(&path, &app.state::<ForegroundEngineManager>()).is_ok() {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = app.state::<MainWindowPin>().apply(&window, &preferences, &path, None);
+                    }
+                }
             }
             Ok(())
         })
