@@ -5,6 +5,7 @@
 ### English
 
 - Integrated draggable workspace proportions, independently persistent rails, native window geometry/reset, atomic window pinning, and the Classic/High Contrast appearance controls. Restored legacy preference defaults after combining the visibility and pin DTO changes; integration acceptance remains distinct from inherited feature evidence.
+- Fixed the integrated exit fence to wait for theme, rail visibility and window pin writes as well as layout and geometry, and keep all R7 controls frozen through dirty confirmation and final-save failures.
 - Added rectangular 2–25-axis boards across SGF, rules, main/sub-board rendering and KataGo analysis, plus shared New/Clear/Set Board Size parameters and durable new-document dimension/komi defaults.
 - Added complete SGF tree navigation and exact-path links from variations, charts and problem lists. Move jumps count pass while skipping setup/comment nodes; selected SGF labels and marks follow the cursor, and stale-document navigation is rejected.
 - Added five-entry durable native SGF/GIB history with safe reopen, full-path tooltips, narrow Clear, and explicit persistence-failure Retry. Successful opens remain installed when history persistence fails.
@@ -29,6 +30,7 @@
 ### 中文
 
 - 集成可拖动工作区比例、两侧栏独立持久显隐、原生窗口几何与独立重置、原子置顶及 Classic／High Contrast 外观；修复显隐与置顶 DTO 合并时遗漏的旧配置默认值。集成验收与前置票据历史证据分别记录。
+- 修复集成退出门禁：除布局和窗口几何外，还等待主题、侧栏显隐和置顶写入；脏棋谱确认及最终保存失败期间，所有 R7 控件保持冻结。
 - 新增宽高各 2–25 的矩形棋盘，贯通 SGF、规则、主副棋盘与 KataGo 分析；新建／清空／设置棋盘大小共用参数表单，并持久化新建宽高与贴目默认值。
 - 新增完整 SGF 树及变化、图表、问题列表的精确路径导航；跳手计入 pass、跳过 setup/注释节点，标签与标记随选点同步，过期文档请求不会改变选择。
 - 新增最近五个原生 SGF/GIB 的持久历史，支持安全重开、完整路径提示、单独清空和写失败显式重试；历史写入失败不撤销已打开的棋谱。

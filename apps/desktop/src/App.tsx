@@ -273,6 +273,7 @@ export function App() {
   const [showWhiteCandidates, setShowWhiteCandidates] = useState(true);
   const [railVisibilityBusy, setRailVisibilityBusy] = useState(false);
   const railVisibilityBusyRef = useRef(false);
+  const r7WritesRef = useRef(new Set<Promise<unknown>>());
   const [railVisibilityError, setRailVisibilityError] = useState<string | null>(null);
   const leftRailRef = useRef<HTMLElement>(null);
   const rightRailRef = useRef<HTMLElement>(null);
@@ -337,7 +338,7 @@ export function App() {
   const latestSnapshotRevisionRef = useRef(0);
   const departurePendingRef = useRef(false);
   const windowPin = useMainWindowPin(nativeRuntime, preferencesLoaded,
-    departurePending || Boolean(departurePrompt) || Boolean(teardownPrompt));
+    departurePending || Boolean(departurePrompt) || Boolean(teardownPrompt) || workspace.frozen);
   const wholeGameJobRef = useRef<AnalysisJobStartedDto | null>(null);
   const wholeGameResultsRef = useRef<Map<string, AnalysisFrameDto>>(new Map());
   const handleSelectedNodeJobRef = useRef<(job: AnalysisJobEventDto) => void>(() => undefined);
@@ -1039,6 +1040,7 @@ export function App() {
 
 
   function handlePreferencesChange(nextPreferences: AppPreferences) {
+    if (workspace.owner.snapshot.frozen) return;
     if (continuousActionInFlightRef.current) return;
     if (!preferencesLoadSettledRef.current) return;
     const budgetError = continuousBudgetError(nextPreferences);
@@ -1061,12 +1063,12 @@ export function App() {
   }
 
   async function handleRailVisibility(side: "left" | "right", visible: boolean) {
-    if (!preferencesLoadSettledRef.current || railVisibilityBusyRef.current || departurePendingRef.current || departurePrompt) return;
+    if (workspace.owner.snapshot.frozen || !preferencesLoadSettledRef.current || railVisibilityBusyRef.current || departurePendingRef.current || departurePrompt) return;
     railVisibilityBusyRef.current = true;
     setRailVisibilityBusy(true);
     setRailVisibilityError(null);
     try {
-      const workspaceVisibility = await updateWorkspaceVisibility({ [side]: visible });
+      const workspaceVisibility = await trackR7Write(updateWorkspaceVisibility({ [side]: visible }));
       const rail = side === "left" ? leftRailRef.current : rightRailRef.current;
       const active = document.activeElement;
       const matchingSeparatorFocused = Boolean(
@@ -1121,6 +1123,15 @@ export function App() {
     setPreferencesStatus(status);
   }
 
+  function trackR7Write<T>(write: Promise<T>): Promise<T> {
+    r7WritesRef.current.add(write);
+    void write.then(
+      () => { r7WritesRef.current.delete(write); },
+      () => { r7WritesRef.current.delete(write); }
+    );
+    return write;
+  }
+
   function queuePreferencesSave(base: AppPreferences, ...patches: Array<Partial<AppPreferences>>) {
     const patch = Object.assign({}, pendingPreferencesSaveRef.current?.patch, ...patches);
     pendingPreferencesSaveRef.current = {
@@ -1141,7 +1152,7 @@ export function App() {
       while (pendingPreferencesSaveRef.current && !continuousActionInFlightRef.current) {
         const pending = pendingPreferencesSaveRef.current;
         try {
-          const saved = { ...await saveAppPreferences(pending.preferences), recentGamePaths: committedPreferencesRef.current.recentGamePaths, windowGeometry: committedPreferencesRef.current.windowGeometry, workspaceVisibility: committedPreferencesRef.current.workspaceVisibility };
+          const saved = { ...await trackR7Write(saveAppPreferences(pending.preferences)), recentGamePaths: committedPreferencesRef.current.recentGamePaths, windowGeometry: committedPreferencesRef.current.windowGeometry, workspaceVisibility: committedPreferencesRef.current.workspaceVisibility };
           committedPreferencesRef.current = saved;
           setPreferences(saved);
           pending.onSaved?.(saved);
@@ -1510,7 +1521,7 @@ export function App() {
     const eventSequence = windowGeometryEventSequenceRef.current;
     setWindowGeometryActionPending(true);
     try {
-      const status = await action();
+      const status = await trackR7Write(action());
       if (windowGeometryEventSequenceRef.current === eventSequence) {
         setWindowGeometry(status);
         setWindowGeometryError(null);
@@ -1522,10 +1533,32 @@ export function App() {
     }
   }
 
+  async function flushR7Writes(): Promise<void> {
+    const drain = async () => {
+      do {
+        await Promise.all([
+          workspace.owner.flush(), flushWindowGeometry(), windowPin.flush(),
+          ...r7WritesRef.current
+        ]);
+      } while (r7WritesRef.current.size > 0);
+    };
+    let timer: number | undefined;
+    try {
+      await Promise.race([
+        drain(),
+        new Promise<never>((_, reject) => {
+          timer = window.setTimeout(() => reject(new Error("R7 preference saves timed out after 5 seconds.")), 5000);
+        })
+      ]);
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
   async function flushWorkspaceBeforeDeparture(): Promise<boolean> {
     while (true) {
       try {
-        await Promise.all([workspace.owner.flush(), flushWindowGeometry()]);
+        await flushR7Writes();
         return true;
       } catch (error) {
         const retry = await new Promise<boolean>((choose) => {
@@ -1539,8 +1572,7 @@ export function App() {
 
   async function finishNativeExit(): Promise<void> {
     try {
-      await workspace.owner.flush();
-      await flushWindowGeometry();
+      await flushR7Writes();
       setFinalLayoutExitError(null);
       await confirmNativeExit();
     } catch (error) {
@@ -3534,7 +3566,7 @@ export function App() {
       windowGeometryDisabled={windowGeometryDisabled}
       onResetWindowGeometry={() => void performWindowGeometryAction(resetWindowGeometry)}
       onRetryWindowGeometry={() => void performWindowGeometryAction(retryWindowGeometry)}
-      railVisibilityDisabled={!preferencesLoaded || railVisibilityBusy || departurePending || Boolean(departurePrompt)}
+      railVisibilityDisabled={!preferencesLoaded || railVisibilityBusy || departurePending || Boolean(departurePrompt) || workspace.frozen}
       onRailVisibility={(side, visible) => void handleRailVisibility(side, visible)}
       selectedNodeRunning={selectedNodeRunning}
       wholeGameRunning={wholeGameRunning}
@@ -3589,10 +3621,10 @@ export function App() {
     />
     <div className="workspace-visibility-controls" role="toolbar" aria-label="侧栏显隐">
       <button ref={railRestoreRef} type="button" aria-pressed={preferences.workspaceVisibility.left}
-        disabled={!preferencesLoaded || departurePending || Boolean(departurePrompt)}
+        disabled={!preferencesLoaded || departurePending || Boolean(departurePrompt) || workspace.frozen}
         onClick={() => void handleRailVisibility("left", !preferences.workspaceVisibility.left)}>左侧栏</button>
       <button type="button" aria-pressed={preferences.workspaceVisibility.right}
-        disabled={!preferencesLoaded || departurePending || Boolean(departurePrompt)}
+        disabled={!preferencesLoaded || departurePending || Boolean(departurePrompt) || workspace.frozen}
         onClick={() => void handleRailVisibility("right", !preferences.workspaceVisibility.right)}>右侧栏</button>
       {railVisibilityBusy ? <span role="status">正在保存侧栏…</span> : null}
       {railVisibilityError ? <span role="alert">{railVisibilityError}</span> : null}
@@ -3829,7 +3861,7 @@ export function App() {
         windowPin={windowPin}
         preferences={preferences}
         status={preferencesStatus}
-        disabled={!preferencesLoaded || continuousActionPending}
+        disabled={!preferencesLoaded || continuousActionPending || workspace.frozen}
         scoreLeadAvailable={chartModel.scoreAvailable}
         onChange={(nextPreferences) => void handlePreferencesChange(nextPreferences)}
         onRestoreWorkspace={workspace.restoreDefaults}
@@ -3837,7 +3869,7 @@ export function App() {
         windowGeometryStatus={windowGeometryStatusText}
         windowGeometryDisabled={windowGeometryDisabled}
         onResetWindowGeometry={() => void performWindowGeometryAction(resetWindowGeometry)}
-        railVisibilityDisabled={!preferencesLoaded || railVisibilityBusy || departurePending || Boolean(departurePrompt)}
+        railVisibilityDisabled={!preferencesLoaded || railVisibilityBusy || departurePending || Boolean(departurePrompt) || workspace.frozen}
         onRailVisibility={(side, visible) => void handleRailVisibility(side, visible)}
       /> : null}
     </section>

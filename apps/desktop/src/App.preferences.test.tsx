@@ -96,6 +96,19 @@ vi.mock("./api/preferences", async (importOriginal) => {
   };
 });
 
+vi.mock("./api/windowGeometry", () => ({
+  nativeWindowGeometryUnavailable: "窗口位置仅在桌面版可用",
+  windowGeometryStatus: vi.fn(async () => ({ phase: "saved", geometry: null, error: null })),
+  subscribeWindowGeometryStatus: vi.fn(async () => () => undefined),
+  resetWindowGeometry: vi.fn(async () => ({ phase: "saved", geometry: null, error: null })),
+  retryWindowGeometry: vi.fn(async () => ({ phase: "saved", geometry: null, error: null })),
+  freezeWindowGeometry: vi.fn(async () => undefined),
+  flushWindowGeometry: vi.fn(async () => undefined)
+}));
+
+const pinApi = vi.hoisted(() => ({ loadMainWindowPin: vi.fn(), setMainWindowPin: vi.fn() }));
+vi.mock("./api/mainWindowPin", () => pinApi);
+
 vi.mock("./components/EngineSetupPanel", () => ({ EngineSetupPanel: () => null }));
 vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
 vi.mock("./components/WinrateChart", () => ({
@@ -145,6 +158,8 @@ beforeEach(() => {
   preferencesApi.loadAppPreferences.mockResolvedValue({ preferences: defaultAppPreferences });
   preferencesApi.saveAppPreferences.mockImplementation(async (preferences: AppPreferences) => preferences);
   preferencesApi.updateWorkspaceVisibility.mockImplementation(async (patch) => ({ left: true, right: true, ...patch }));
+  pinApi.loadMainWindowPin.mockResolvedValue({ actual: false, durable: false, error: null });
+  pinApi.setMainWindowPin.mockImplementation(async (value) => ({ actual: value, durable: value, error: null }));
 });
 
 afterEach(() => {
@@ -172,6 +187,77 @@ describe("durable preferences surface", () => {
     backend.setCurrentGamePersonalComment.mockResolvedValueOnce({ ...initialGame, dirty: true, snapshot: { ...initialGame.snapshot, personal_comment: "retained rail draft" } });
     await act(async () => buttonNamed(host, "应用评论").click());
     expect(backend.setCurrentGamePersonalComment).toHaveBeenCalledWith(initialGame.selected_path, "retained rail draft");
+  });
+
+  it("keeps the exit decision behind an in-flight rail visibility save", async () => {
+    const host = await renderApp();
+    let finish!: (value: { left: boolean; right: boolean }) => void;
+    const pending = new Promise<{ left: boolean; right: boolean }>((resolve) => { finish = resolve; });
+    preferencesApi.updateWorkspaceVisibility.mockReturnValueOnce(pending);
+    backend.prepareApplicationExit.mockResolvedValueOnce({ status: "needs_decision", departure_id: 61 });
+    act(() => buttonNamed(host, "左侧栏").click());
+    act(() => buttonNamed(host, "文件").click());
+    await act(async () => buttonNamed(host, "退出").click());
+    try {
+      expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).toBeNull();
+      expect(backend.resolveApplicationExit).not.toHaveBeenCalled();
+      expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => { finish({ left: false, right: true }); await pending; });
+    }
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).not.toBeNull();
+  });
+
+  it.each(["theme", "pin"] as const)("keeps document departure behind an in-flight %s write", async (owner) => {
+    const host = await renderApp();
+    let finish!: () => void;
+    const held = new Promise<void>((resolve) => { finish = resolve; });
+    if (owner === "theme") {
+      preferencesApi.saveAppPreferences.mockImplementationOnce(async (preferences) => { await held; return preferences; });
+      act(() => buttonNamed(host, "参数").click());
+      const theme = requiredElement<HTMLSelectElement>(host, 'select:has(option[value="high-contrast"])');
+      act(() => { theme.value = "high-contrast"; theme.dispatchEvent(new Event("change", { bubbles: true })); });
+    } else {
+      pinApi.setMainWindowPin.mockImplementationOnce(async () => { await held; return { actual: true, durable: true, error: null }; });
+      act(() => buttonNamed(host, "参数").click());
+      act(() => requiredElement<HTMLButtonElement>(host, '.window-pin-control button[role="checkbox"]').click());
+    }
+    backend.prepareApplicationExit.mockResolvedValueOnce({ status: "needs_decision", departure_id: 62 });
+    act(() => buttonNamed(host, "文件").click());
+    await act(async () => buttonNamed(host, "退出").click());
+    try {
+      expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).toBeNull();
+      expect(backend.resolveApplicationExit).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => { finish(); await held; });
+    }
+    expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).not.toBeNull();
+    await act(async () => requiredElement<HTMLButtonElement>(host, '[role="dialog"] [aria-label="Cancel"]').click());
+    expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+  });
+
+  it("offers cancel before document departure when a native pin write exceeds the exit deadline", async () => {
+    const host = await renderApp();
+    let finish!: () => void;
+    const held = new Promise<void>((resolve) => { finish = resolve; });
+    pinApi.setMainWindowPin.mockImplementationOnce(async () => { await held; return { actual: true, durable: true, error: null }; });
+    act(() => buttonNamed(host, "参数").click());
+    act(() => requiredElement<HTMLButtonElement>(host, '.window-pin-control button[role="checkbox"]').click());
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      act(() => buttonNamed(host, "文件").click());
+      await act(async () => buttonNamed(host, "退出").click());
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(host.querySelector('[role="dialog"][aria-label="工作区或窗口尚未保存"]')).not.toBeNull();
+      expect(backend.prepareApplicationExit).not.toHaveBeenCalled();
+      expect(backend.resolveApplicationExit).not.toHaveBeenCalled();
+      expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+      await act(async () => buttonNamed(host, "取消关闭").click());
+      expect(buttonNamed(host, "左侧栏").disabled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      await act(async () => { finish(); await held; });
+    }
   });
 
   it("returns focus from a separator removed by a pending visibility commit", async () => {

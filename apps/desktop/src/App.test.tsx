@@ -3,7 +3,7 @@
 import { StrictMode, act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AnalysisFrameDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureAdmissionDto, FileActivationDeliveryDto, FileActivationRejectionDto, GameDto, NodePath, RecoveryProtectionDto, RecoveryStartupDto } from "./domain/types";
+import type { AnalysisFrameDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureAdmissionDto, FileActivationDeliveryDto, FileActivationRejectionDto, GameDto, MainWindowPinStatusDto, NodePath, RecoveryProtectionDto, RecoveryStartupDto } from "./domain/types";
 import type { AppPreferences } from "./domain/preferences";
 import type { WorkspaceSharesDto } from "./domain/types";
 import type { WindowGeometryStatusDto } from "./domain/types";
@@ -112,6 +112,12 @@ const geometryApi = vi.hoisted(() => ({
   flushWindowGeometry: vi.fn<() => Promise<void>>()
 }));
 vi.mock("./api/windowGeometry", () => ({ ...geometryApi, nativeWindowGeometryUnavailable: "窗口位置仅在桌面版可用" }));
+const mainWindowPinApi = vi.hoisted(() => ({
+  loadMainWindowPin: vi.fn<() => Promise<MainWindowPinStatusDto>>(async () => ({ actual: true, durable: true, error: null })),
+  setMainWindowPin: vi.fn<(_value: boolean | null) => Promise<MainWindowPinStatusDto>>(async (value: boolean | null) => ({ actual: value ?? true, durable: value ?? true, error: null }))
+}));
+vi.mock("./api/mainWindowPin", () => mainWindowPinApi);
+
 
 vi.mock("./api/preferences", () => preferencesApi);
 
@@ -309,6 +315,8 @@ beforeEach(() => {
   geometryApi.retryWindowGeometry.mockReset().mockResolvedValue(savedGeometry);
   geometryApi.freezeWindowGeometry.mockReset().mockResolvedValue(undefined);
   geometryApi.flushWindowGeometry.mockReset().mockResolvedValue(undefined);
+  mainWindowPinApi.loadMainWindowPin.mockReset().mockResolvedValue({ actual: true, durable: true, error: null });
+  mainWindowPinApi.setMainWindowPin.mockReset().mockResolvedValue({ actual: true, durable: true, error: null });
   currentGameFixture.mockResolvedValue(initialGame);
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
   backend.foregroundEngineContinuousAction.mockResolvedValue(defaultAppPreferences);
@@ -2232,6 +2240,73 @@ describe("App application exit", () => {
     expect(backend.confirmNativeExit).toHaveBeenCalledTimes(1);
   });
 
+  it("disables theme, rails, and pin during dirty exit decision and committed final flush error, recovering on cancel", async () => {
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: defaultAppPreferences });
+    backend.prepareApplicationExit.mockResolvedValue({ status: "needs_decision", departure_id: 88 });
+    const host = await renderApp();
+
+    openPreferences(host);
+    const themeSelect = labeledSelect(host, "棋盘对比");
+    const leftRailButton = buttonNamed(host, "左侧栏");
+    const rightRailButton = buttonNamed(host, "右侧栏");
+    const pinButton = requiredElement<HTMLButtonElement>(host, '.window-pin-control button[role="checkbox"]');
+
+    expect(themeSelect.disabled).toBe(false);
+    expect(leftRailButton.disabled).toBe(false);
+    expect(rightRailButton.disabled).toBe(false);
+    expect(pinButton.disabled).toBe(false);
+
+    act(() => buttonNamed(host, "文件").click());
+    await act(async () => { buttonNamed(host, "退出").click(); });
+
+    expect(themeSelect.disabled).toBe(true);
+    expect(leftRailButton.disabled).toBe(true);
+    expect(rightRailButton.disabled).toBe(true);
+    expect(pinButton.disabled).toBe(true);
+
+    preferencesApi.saveAppPreferences.mockClear();
+    act(() => {
+      themeSelect.value = "high-contrast";
+      themeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+
+    await act(async () => { buttonLabeled(host, "Cancel").click(); });
+
+    expect(themeSelect.disabled).toBe(false);
+    expect(leftRailButton.disabled).toBe(false);
+    expect(rightRailButton.disabled).toBe(false);
+    expect(pinButton.disabled).toBe(false);
+
+    backend.prepareApplicationExit.mockResolvedValueOnce({ status: "ready", departure_id: 89 });
+    backend.resolveApplicationExit.mockResolvedValueOnce({
+      committed: true,
+      analysis_stopped: true,
+      current: initialGame,
+      message: "Exit completed.",
+      disposition: "clean_completed",
+      teardown: { status: "completed" }
+    });
+    geometryApi.flushWindowGeometry.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("committed final flush failed"));
+
+    act(() => buttonNamed(host, "文件").click());
+    await act(async () => { buttonNamed(host, "退出").click(); });
+
+    expect(host.textContent).toContain("committed final flush failed");
+
+    expect(themeSelect.disabled).toBe(true);
+    expect(leftRailButton.disabled).toBe(true);
+    expect(rightRailButton.disabled).toBe(true);
+    expect(pinButton.disabled).toBe(true);
+
+    preferencesApi.saveAppPreferences.mockClear();
+    act(() => {
+      themeSelect.value = "high-contrast";
+      themeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  });
+
   it("shows native geometry events in the fixed toolbar and retries an unsaved sample", async () => {
     let emit!: (status: WindowGeometryStatusDto) => void;
     geometryApi.subscribeWindowGeometryStatus.mockImplementation(async (listener) => {
@@ -3022,6 +3097,7 @@ async function renderApp(): Promise<HTMLElement> {
   act(() => root?.render(<App />));
   await act(async () => {
     await preferencesApi.loadAppPreferences.mock.results.at(-1)?.value.catch(() => undefined);
+    await mainWindowPinApi.loadMainWindowPin.mock.results.at(-1)?.value.catch(() => undefined);
     await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
     await currentGameFixture.mock.results.at(-1)?.value;
     await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
