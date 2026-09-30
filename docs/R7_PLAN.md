@@ -1,6 +1,6 @@
 # R7 — Adaptive Workspace Execution Plan
 
-Status: approved and published. The user approved the specification and ticket breakdown on 2026-09-26 (“可以”); tickets 01–08 are ready-for-agent subject to their blockers. No R7 implementation or acceptance is claimed.
+Status: implementation integrated; final native acceptance blocked. The user approved the specification and ticket breakdown on 2026-09-26. Tickets01–06 are integrated on native source candidate `baa9747d11ee9e2130904ff057adbe7cfd968153`; ticket07 records current evidence and unmet gates. R7 has not exited; Closeout08 remains blocked.
 
 ## Baseline and authority
 
@@ -88,7 +88,7 @@ Execution follows the DAG: after 01, tickets 02/03/06 may proceed; 04 waits for 
 
 ## Acceptance plan
 
-All cases below are planned, currently NOT RUN against an R7 implementation. Record expected/actual, PASS/FAIL/BLOCKED/NOT RUN, source SHA, artifact, OS, monitor topology, scale factors, profile path, PID and evidence paths. A screenshot alone does not prove persistence or OS z-order.
+The approved cases below retain their original requirements. Ticket07 now records each result against final Windows candidate `baa9747d11ee9e2130904ff057adbe7cfd968153`: 14 PASS and 4 BLOCKED. Each record distinguishes expected/actual, fixture scope, inherited evidence, source SHA, artifact, OS, monitor topology, scale, profile, PID and evidence paths. A screenshot alone does not prove persistence or OS z-order.
 
 | Case | Scenario and observable result | Owning ticket | Required surface |
 | --- | --- | --- | --- |
@@ -131,4 +131,17 @@ Run one supervised candidate at a time. Restart scenarios reuse the same isolate
 - Post-publication documentation check: all eight issues are `ready-for-agent`; their approved bodies and the specification's behavioral sections are unchanged. All 42 relative links across 11 planning Markdown files resolve, line endings are LF, and no obsolete draft links remain. Parsed blockers match the tracker; the DAG is acyclic, 07 transitively covers 01–06 and 08 consumes all 01–07 records. The eligible frontier is 01/05. Both validators above passed again after publication.
 - Independent ticket-readiness cold read: 01–08 individually PASS; one scheduling sentence needed clarification so 03/06 do not falsely wait for 02. The sentence now follows the existing DAG without changing any edge.
 - Independent scope-preservation cold read: all seven owners, Matrix prerequisites, narrow resets and exclusions preserved. One failure-reporting clarification required native pin readback (or an explicit unknown state) after a setter error; spec D7, ticket 05 and A13 now cover it.
-- These are planning checks and baseline browser observations only. No R7 implementation, native restart, system-DPI, multi-monitor or real-KataGo acceptance was run by this planning session.
+- The preceding entries are historical planning checks. Implementation and native integration results are recorded separately below; planning readiness is not acceptance.
+
+## Integrated verification record
+
+- Source candidate: `baa9747d11ee9e2130904ff057adbe7cfd968153`; isolated Windows build `D:\dev\weiqi\worktrees\lizzieyzy-next-tauri\r7-integrated-baa9747\candidate.json`, identifier `org.lizzieyzy.next.acceptance.r61dc6694855c4defab9face18ecc83f0`. Runs intentionally reuse only that private profile. No release packaging or installed-artifact claim.
+- Six predecessor worktrees were merged into the planning branch. Integration repaired omitted legacy DTO defaults, all-owner exit drain/freeze, and Windows pin cache-based false success. The latter now applies checked Win32 state and reads the actual flag before persistence.
+- Repository checks: scaffold 10/10 and release assets 4/4; Rust workspace 592 passed / 2 ignored on the integrated legacy repair; Linux workspace clippy passed. Frontend build and full suite 368/368 passed after exit repair. Subsequent Windows-only pin changes passed Linux pin tests 3/3 and desktop-lib clippy; final Windows candidate built and pin tests passed 4/4. These are attributable runs, not a claimed full rerun on each SHA.
+- Required `cargo fmt --all --check` fails on four unchanged current-game/trial/SGF files. Supplemental strict Windows lib/tests clippy fails on unchanged `save_as/mod.rs:3`, unused `classify_save_as_session`. Both are PRE_EXISTING fix candidates with full handoff envelopes in ticket07; neither was silently suppressed or broadened into this change.
+- Final source review: Standards and Spec SUCCESS / CLEAN on tree `37dd0f64aa1a0b9a67f7662884ca65d2ae84bb15`, exact object `baa9747…`; all four admitted R7 findings resolved, no open IN_SCOPE findings, two DEFERRED baseline fix candidates. Review success and acceptance completion remain separate gates.
+- Final native results: A01–A09, A12–A13 and A15–A17 PASS. A10/A11 BLOCKED for final real display-topology/small-work-area/DPI coverage despite passing invalid-record, partial-caption and monitor-query-fault subcases. A14 BLOCKED for final second actual system scale/dynamic change despite passing both themes, restart and real write failure. A18 BLOCKED only for successful native drag delivery; cold/warm activation, dirty Cancel and abnormal recovery passed.
+- Evidence root: `D:\dev\weiqi\acceptance\r7-integrated-baa9747-run1` through `-run7`, plus `r7-integrated-baa9747-monitor-enum` and `-monitor-both`. Run1 contains pointer/canvas/reset/real-engine/concurrency/exit evidence; runs2–3 normal/max/min restart; run4 recovery and post-Discard final-flush denial/Retry; run5 legacy invalid geometry; run6 partial-caption restart and native theme screenshots; run7 both hidden rails retained after normal restart. Monitor-both proves same-PID recovery after removing both process-local native hooks. Enumeration-only controller termination is not live-Retry or normal-close proof.
+- Ticket04's Linux/X11/Wayland, actual negative monitor/removal and ticket06's actual 100% → 150% → 100% retain their original SHAs/PIDs. Changed integrated chrome prevents relabeling ticket06 as final whole-UI DPI proof. macOS AppKit LTR/RTL remains unavailable under owners04/07.
+- Full case results, review target, resolved findings, complete follow-up ledger and remaining native actions: [ticket07 completion record](../.scratch/adaptive-workspace-r7/issues/07-integrated-native-acceptance.md). None of the blocked gates is an approval to close 07 or exit R7.
+
