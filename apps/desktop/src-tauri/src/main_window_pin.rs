@@ -3,6 +3,9 @@ use app_model::MainWindowPinStatusDto;
 use std::{path::Path, sync::Mutex};
 use tauri::{AppHandle, Manager};
 
+#[cfg(windows)]
+mod windows;
+
 pub trait PinWindow {
     fn set_pin(&self, value: bool) -> Result<(), String>;
     fn read_pin(&self) -> Result<bool, String>;
@@ -10,10 +13,24 @@ pub trait PinWindow {
 
 impl PinWindow for tauri::WebviewWindow {
     fn set_pin(&self, value: bool) -> Result<(), String> {
-        self.set_always_on_top(value).map_err(|error| error.to_string())
+        #[cfg(windows)]
+        {
+            windows::set_pin(self, value)
+        }
+        #[cfg(not(windows))]
+        {
+            self.set_always_on_top(value).map_err(|error| error.to_string())
+        }
     }
     fn read_pin(&self) -> Result<bool, String> {
-        self.is_always_on_top().map_err(|error| error.to_string())
+        #[cfg(windows)]
+        {
+            windows::read_pin(self)
+        }
+        #[cfg(not(windows))]
+        {
+            self.is_always_on_top().map_err(|error| error.to_string())
+        }
     }
 }
 

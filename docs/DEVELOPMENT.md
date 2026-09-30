@@ -425,6 +425,8 @@ Browser smoke: at 1100×720 and a larger viewport, drag both separators to their
 
 For exit integration, run `npm test -- src/App.preferences.test.tsx src/App.test.tsx src/hooks/useMainWindowPin.test.tsx` and `npm run build`. Hold each theme, rail and pin transaction at the API seam and confirm document departure waits; confirm a dirty exit decision and a committed final-drain error reject new theme/rail/pin changes, while Cancel restores them. Repeat the affected native Close/File Exit, genuine preference replacement denial, Retry/Cancel and rapid-write/restart cases on the exact candidate. Fixtures prove the ordering boundary, not native disk, z-order or exit acceptance.
 
+Windows pin acceptance must compare the command's `actual` result with Win32 `WS_EX_TOPMOST`. In an isolated, identity-checked candidate, deliberately clear that native flag without changing durable intent, then Retry the saved intent and verify the flag is restored. This controlled native-state drift is not a naturally occurring setter failure. Run the Windows-native `main_window_pin` tests as well: zero extended styles with a stale last-error value mean a valid unpinned window, while a destroyed HWND must report unreadable. A native Z-order witness must be non-topmost at measurement time; preparatory focus operations are not proof.
+
 ## Native Window Geometry Verification
 
 Run `cargo test -p app-preferences` for geometry, monitor-failure and window-state fixtures, and `cargo test -p lizzieyzy-next-desktop continuous_analysis::tests::workspace_updates_merge_with_other_owners_and_fail_atomically` for narrow-save isolation and failure/retry. From `apps/desktop`, run `npm test -- src/App.test.tsx` and `npm run build` for lifecycle integration.
