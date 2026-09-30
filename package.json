@@ -5,6 +5,8 @@
   "scripts": {
     "desktop:dev": "npm --prefix apps/desktop run tauri:dev",
     "desktop:build": "npm --prefix apps/desktop run build",
+    "desktop:test": "npm --prefix apps/desktop test --",
+    "desktop:smoke:windows": "node scripts/windows_native_smoke.mjs",
     "desktop:tauri-build": "npm --prefix apps/desktop run tauri:build",
     "validate": "python3 scripts/validate_scaffold.py"
   }

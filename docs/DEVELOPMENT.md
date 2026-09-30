@@ -14,41 +14,64 @@ Use this guide when changing:
 
 Do not treat a passing Next smoke run as full legacy parity. Provider/readboard work in this batch may provide offline contracts and runtime path plumbing, but live Fox/Yike network behavior, live readboard sidecar operation, and Tauri production release packaging still require environment-specific validation.
 
-## Required Local Baseline
+## Affected-Surface Development Gate
 
-From the repository root, always run:
+Local development validation is strictly scoped to the **affected surface** of each change. Running the full workspace test suite, workspace-wide clippy, or release-asset validation is not required—and should not be run unconditionally—on every local edit. Full workspace validation belongs to shared cross-cutting contracts, CI, and release qualification.
 
-```bash
-python3 scripts/validate_scaffold.py --verbose
-python3 scripts/validate_release_assets.py --verbose
-```
+### Ownership and Acceptance Mini-Contract
 
-For code changes, also run the relevant checks:
+- **Parent Executor Ownership**: The explicit parent executor owns validation execution, integration runs, and evidence collection. Subagents focus on scoped implementation and contract compliance, skipping project-wide builds, formatting, and linting mid-flight.
+- **Acceptance Mini-Contract**: Before executing any acceptance operation, record an acceptance mini-contract capturing:
+  1. *Affected behavior*: the exact functional delta or invariant being changed.
+  2. *Assertion*: the concrete verification condition or test check.
+  3. *Surface*: the touched layer (frontend unit/hook, Rust crate boundary, IPC command, or native desktop shell).
+  4. *Inherited evidence*: provenance and technical equivalence of previously verified artifacts that remain valid.
+  5. *Native gap*: what cannot be proven without native OS/hardware runtime and remains pending.
+- **Evidence Reuse & Ticket Dimensions**: Preserve exact frozen ticket dimensions. Evidence reuse must record provenance and equivalence so that already-verified, unchanged contracts are not re-run redundantly, and final affected smoke does not duplicate existing proofs.
 
-```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-```
+### Per-Surface Validation Gates
 
-For frontend or Tauri UI changes:
+- **Frontend / Tauri UI changes (`apps/desktop`)**:
+  - Run focused unit and integration tests using `npm test` (or `npx vitest run <target-files>`) covering touched components, hooks, or domain modules.
+  - Run `npm run build` only when relevant to the change (e.g. bundling configuration, TypeScript compilation/type-checking boundaries, packaging updates, or exported UI contract changes). Localized unit or styling fixes verified by Vitest do not require an unconditional UI build.
+- **Rust crate changes (`crates/*`, `src-tauri`)**:
+  - Run focused checks targeting the owning package and contract:
+    ```bash
+    cargo test -p <owning-crate> <test-filter> [--offline]
+    cargo clippy -p <owning-crate> --all-targets -- -D warnings
+    ```
+  - Full workspace checks (`cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all --check`) are reserved for changes with shared cross-crate impact, CI pipelines, or pre-release candidate qualification.
+- **Structural and Release Validators**:
+  - Structural scaffold validation (`python3 scripts/validate_scaffold.py --verbose`) and release asset validation (`python3 scripts/validate_release_assets.py --verbose`) are run locally only when their corresponding contracts have changed (e.g. workspace structure, release asset manifests, or release packaging scripts). CI continues to run full validation; local documentation or component edits do not trigger release asset checks unless release contracts are modified.
 
-```bash
-cd apps/desktop
-npm ci
-npm run build
-```
+### Human Interaction Rules
 
-For documentation-only changes, scaffold validation is still required because it is the shared acceptance gate for the current handoff package.
+- **Human Involvement Gate**: Involve humans only for unavoidable authorization (e.g. OS permissions, credential prompts), physical hardware actions (e.g. physical monitor disconnects, hardware display changes), or subjective evaluation.
+- **No Pixel Measurement Tasks**: Never assign pixel measurement tasks (such as measuring element bounding boxes, pixel heights, or drag margins) to humans. Use programmatic assertions or native OS inspection APIs (such as Win32 `WM_NCHITTEST` / `TITLEBARINFOEX` or X11/GTK geometry queries) instead.
+- **Batching & Sequence**:
+  - Batch independent actions and queries into a single response.
+  - Group state-dependent actions into a single scenario.
+  - Always preserve explicit sequential user requests.
 
-Provider/readboard acceptance entry points:
+### Runtime and Isolation Environment Rules
 
-- Provider contract tests: run the Rust workspace tests that own the provider contract modules and record the exact package or filter. `cargo test --workspace` is the baseline; a focused filter only counts if it runs non-zero provider tests.
-- Provider runtime path checks: verify `provider_fetch_yike` and `provider_fetch_fox` return structured success/error results through the intended Rust/TypeScript boundary. This is still offline/local evidence unless real provider services are contacted.
-- Readboard domain tests: run the Rust workspace tests that own readboard parsing/command behavior and record the exact package or filter.
-- Readboard sidecar path checks: verify `readboard_sidecar_probe` and `readboard_sidecar_sync_snapshot` return structured ready/not-ready/sync results through the intended boundary. Live sidecar checks require a real readboard environment and should be listed separately.
-- UI path checks: ProviderPanel is the expected UI surface for provider fetch, readboard probe, and readboard sync controls. If a batch only exposes payload import or URL preview, record fetch/probe/sync UI as pending rather than implying live support.
-- Release dry-run: run `python3 scripts/validate_release_assets.py --verbose` locally and use `.github/workflows/release-dry-run.yml` for the cross-platform compile-only dry-run.
+- **Browser Preview Is Not Native**: Running `npm run dev` in a browser is strictly for rapid layout prototyping and browser fallback checks. It does not provide real KataGo process management, native file dialogs, SQLite storage, app preferences persistence, or native window geometry. Native desktop behavior requires the native Tauri runtime (`npm run tauri:dev` or built desktop binaries).
+- **Headless & Isolated Execution**:
+  - **Linux**: Prefer `Xvfb` and private displays (isolated X11 display or headless Wayland compositor like Weston).
+  - **Windows**: Prefer isolated desktop sessions (e.g. using `bin/windows-desktop-session.ps1` or separate desktop objects).
+  - **No Claims of Windows Support Proven Yet**: Do not claim Windows native support is generally proven beyond the specific isolated candidate runs recorded with explicit evidence.
+  - **No Desktop Hijacking**: Never switch the user's active foreground desktop or fall back to the interactive desktop without explicit user authorization.
+
+### Provider and Readboard Acceptance Entry Points
+
+When provider or readboard contracts are modified, validate through the owning surface:
+
+- Provider contract tests: run Rust tests owning the provider contract modules using a focused package or filter (`cargo test -p <crate> <filter>`), ensuring non-zero tests are executed.
+- Provider runtime path checks: verify `provider_fetch_yike` and `provider_fetch_fox` return structured success/error results through the Rust/TypeScript boundary. Record offline contract status vs live external network verification separately.
+- Readboard domain tests: run Rust tests owning readboard parsing and command handling via focused filters.
+- Readboard sidecar path checks: verify `readboard_sidecar_probe` and `readboard_sidecar_sync_snapshot` return structured status results. Live sidecar checks require an active sidecar process and must be documented separately.
+- UI path checks: ProviderPanel is the expected UI surface for provider fetch, readboard probe, and readboard sync controls. If controls are absent or preview-only, mark live UI support as pending.
+- Release dry-run: run `python3 scripts/validate_release_assets.py --verbose` and `.github/workflows/release-dry-run.yml` only during release-readiness qualification.
 
 ## Running The Next App
 
@@ -68,6 +91,20 @@ npm run dev
 
 The browser preview is useful for layout and fallback checks. Real KataGo execution, native file dialogs, app-data engine profile persistence, asset inspection, and SGF analysis persistence require `npm run tauri:dev`.
 
+### Repeatable Windows Native Smoke
+
+From the repository root, `npm run desktop:test -- <affected-test-files>` forwards to the existing frontend test suite. Without a filter it runs the frontend suite, as CI does before the TypeScript build.
+
+For the native document path, first let the executor prepare an exact committed candidate in a **new dedicated smoke destination** with `/home/dev/dev/weiqi/bin/prepare-windows-candidate`; uncommitted product changes are excluded. Preparation also deploys the matching Windows helpers. The runner reserves the candidate's isolated app-data identity for smoke reuse and refuses pre-existing data owned by another acceptance session; it never automatically discards a recovery prompt. Then run from this checkout (Windows or WSL, Node 22+):
+
+```bash
+npm run desktop:smoke:windows -- --candidate <candidate.json> --run-directory <fresh-directory>
+```
+
+The finite runner uses the real EXE/WebView2 on a private Win32 desktop. It verifies process identity, native Open cancellation, a 5×4 SGF with five moves including Pass, navigation to the last move, native Save As, reopening identical SGF content and clean exit. It creates its own fixtures and screenshots, records each case in `smoke.json`, and stops only its own recorded candidate. An occupied candidate is refused; use a separate prepared candidate rather than stopping another session. It neither sends global keys nor touches the clipboard. No foreground fallback is attempted.
+
+Read `smoke.json`, inspect the screenshots and report uncovered boundaries separately. The fixed document smoke is not evidence for engine lifecycle, OS drag/drop, clipboard permissions, physical DPI/monitor changes, GPU/audio output or release installers. Those remain affected-surface scenarios, not an automatic request for the user to replay the complete release checklist.
+
 ## Repository Structure
 
 - `apps/desktop`: React + TypeScript frontend.
@@ -86,7 +123,9 @@ The browser preview is useful for layout and fallback checks. Real KataGo execut
 
 ## Local Smoke Flow
 
-Use the desktop runtime for this flow:
+This catalog provides desktop smoke scenarios for validating specific subsystems. Under the affected-surface development gate, **do not run this entire flow unconditionally for every change**. Instead, execute only the specific scenario(s) covering the affected surface of the change, recording the acceptance mini-contract and native gap. The complete smoke matrix is reserved for release candidates and milestone verification in [Release Checklist](RELEASE_CHECKLIST.md).
+
+When an affected scenario requires the native desktop runtime:
 
 Use the `分析` menu for the analysis start/cancel steps below. With a Ready run, `分析当前节点` starts finite selected-node analysis and `分析第一子主线` starts whole-game analysis. Space and the visible continuous action share contextual Start/Stop/Resume. Continuous intent defaults on and is durable; it follows accepted navigation and edits on an independently Ready engine. `分析 → 连续分析预算…` opens the categorized Preferences controls: independent enabled time/visits limits, retained numeric values and empty-board stop. Apply a 1-second or small visits limit to check normal limited status, retained results, same-node inhibition and explicit Resume. Time counts actual engine search, not queue wait; either enabled limit suffices. Failed/cancelled departure Save requires explicit Resume. Preferences writes must succeed before changing intent or replacing continuous work; checkbox/budget changes do not release safety/error holds. Finite and whole-game requests keep their own budgets.
 
@@ -466,8 +505,8 @@ When updating docs for this handoff package, keep these claims accurate:
 - Do not claim full Java/Swing parity.
 - Do not claim Fox/Yike/readboard live migration is complete without external-network or sidecar evidence.
 - Distinguish browser preview behavior from native Tauri desktop behavior.
-- Report the exact validation command and result in the handoff.
-
+- Distinguish per-change focused validation from the full release matrix; do not make obsolete unconditional claims requiring full-workspace or full-smoke runs on every edit.
+- Report the exact validation command, affected surface, evidence provenance, and result in the handoff.
 ## Suggested Reading
 
 - [Next architecture](ARCHITECTURE_NEXT.md)
