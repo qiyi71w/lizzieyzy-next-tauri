@@ -157,15 +157,19 @@ Expected result: the status message reports a loaded/opened game and the board c
 
 - Open Engine Settings (`引擎设置`). Settings only edit the catalog; they do not Start or Switch a run.
 - Set a profile name.
-- Pick or type the KataGo engine binary path.
-- Pick or type the model path.
-- Pick or type the analysis config path.
+- Select `KataGoAnalysis` or `GenericGtp`, then pick or type the executable program path.
+- Enter additional argv as separate items. Empty items, spaces and non-ASCII text must remain single arguments, not shell text.
+- For KataGo, pick or type the model and analysis config paths and set a positive finite max visits value. Do not add adapter-owned mode/model/config arguments to argv.
+- GenericGtp exposes no KataGo settings. Its runtime is not available in this configuration cutover.
 - Optionally set a working directory.
-- Set a positive max visits value.
 - Save the profile.
 - Add a second profile if Autoload or Switch coverage is part of the change.
 
 Expected result: profiles reload after app restart. Saving Autoload Default or Settings selection does not change the current Foreground Engine Run.
+
+For migration coverage, seed an isolated app-data directory with an old unversioned collection or single-profile file. Loading must preserve values without rewriting the bytes. Explicit Save writes version 1. An unknown version or malformed settings must report an error without replacing the stored file. A denied write must retain the prior catalog and Run.
+
+While KataGo is Ready, save changed argv or finite visits. The live snapshot and process remain unchanged and the profile is pending; Restart must create a new Run from the saved values. Attempting GenericGtp Start/Switch must return unsupported without creating a child or disturbing that KataGo Run.
 
 ### 3. Start From The Engine Switcher
 

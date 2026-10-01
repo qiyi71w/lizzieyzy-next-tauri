@@ -103,11 +103,14 @@ for line in sys.stdin:
             profile_id: "test".into(),
             profile: app_model::EngineProfileDto {
                 name: "test".into(),
-                engine_path: executable.to_string_lossy().into(),
-                model_path: Some("model".into()),
-                config_path: Some("config".into()),
+                program: executable.to_string_lossy().into(),
+                argv: vec![],
                 working_dir: Some(directory.to_string_lossy().into()),
-                backend: app_model::EngineBackend::KataGoAnalysis,
+                adapter: app_model::EngineAdapterSettings::KataGoAnalysis(app_model::KataGoSettings {
+                    model_path: Some("model".into()),
+                    config_path: Some("config".into()),
+                    max_visits: 800,
+                }),
             },
         });
         let manager = ForegroundEngineManager::new(catalog.clone(), ForegroundEngineConfig::for_tests());
@@ -245,11 +248,16 @@ fn run_invalidation_rejects_already_queued_task_progress() {
                     profile_id: "replacement".into(),
                     profile: app_model::EngineProfileDto {
                         name: "replacement".into(),
-                        engine_path: engine.directory.join("engine").to_string_lossy().into(),
-                        model_path: Some("model".into()),
-                        config_path: Some("config".into()),
+                        program: engine.directory.join("engine").to_string_lossy().into(),
+                        argv: vec![],
                         working_dir: Some(engine.directory.to_string_lossy().into()),
-                        backend: app_model::EngineBackend::KataGoAnalysis,
+                        adapter: app_model::EngineAdapterSettings::KataGoAnalysis(
+                            app_model::KataGoSettings {
+                                model_path: Some("model".into()),
+                                config_path: Some("config".into()),
+                                max_visits: 800,
+                            },
+                        ),
                     },
                 });
                 engine.manager.switch_to("replacement").unwrap();
@@ -785,10 +793,12 @@ fn swing_selected_missing_required_score_fails_without_fake_deep_search() {
         .manager
         .set_capability_snapshot_for_tests(EngineCapabilitySnapshotDto {
             adapter_kind: EngineBackend::KataGoAnalysis,
-            selected_node_analysis: true,
-            whole_game_analysis: true,
-            root_score: false,
-            protocol_cancel: true,
+            analysis: Some(app_model::EngineAnalysisCapabilitiesDto {
+                selected_node_analysis: true,
+                whole_game_analysis: true,
+                root_score: false,
+                protocol_cancel: true,
+            }),
         });
     let unsupported = state
         .start_swing_analysis_task(
@@ -804,10 +814,12 @@ fn swing_selected_missing_required_score_fails_without_fake_deep_search() {
         .manager
         .set_capability_snapshot_for_tests(EngineCapabilitySnapshotDto {
             adapter_kind: EngineBackend::KataGoAnalysis,
-            selected_node_analysis: true,
-            whole_game_analysis: true,
-            root_score: true,
-            protocol_cancel: true,
+            analysis: Some(app_model::EngineAnalysisCapabilitiesDto {
+                selected_node_analysis: true,
+                whole_game_analysis: true,
+                root_score: true,
+                protocol_cancel: true,
+            }),
         });
     let started = state
         .start_swing_analysis_task(
@@ -1050,7 +1062,12 @@ fn whole_game_comment_save_controllable_engine_smoke() {
         if let app_model::ForegroundEngineLifecycleDto::Ready { run } = engine.manager.snapshot().lifecycle {
             break run.run_id;
         }
-        assert!(std::time::Instant::now() < deadline);
+        assert!(
+            std::time::Instant::now() < deadline,
+            "readiness snapshot: {:?}; queries: {:?}",
+            engine.manager.snapshot(),
+            std::fs::read_to_string(engine.directory.join("queries.jsonl"))
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
     let admission = state.admit_whole_game(opened.generation).unwrap();

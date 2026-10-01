@@ -163,11 +163,19 @@ export type ApplicationExitOutcomeDto = {
 export type CandidateMoveDto = { vertex: MoveVertex; visits: number; winrate_black: number; score_mean_black: number; policy_prior?: number | null; pv: MoveVertex[] };
 export type AnalysisFrameDto = { job_id: string; game_id?: string | null; node_id?: string | null; turn: number; visits: number; winrate_black: number; score_mean_black?: number | null; score_stdev?: number | null; candidates: CandidateMoveDto[]; ownership?: number[] | null; policy?: number[] | null };
 export type ProblemMarkerDto = { turn: number; severity: "info" | "inaccuracy" | "mistake" | "blunder"; winrate_loss: number; score_loss?: number | null; label: string };
-export type EngineBackendDto = "kata_go_analysis";
-export type EngineProfileDto = { name: string; engine_path: string; model_path?: string | null; config_path?: string | null; working_dir?: string | null; backend: EngineBackendDto };
-export type EngineProfileSettingsDto = { profile: EngineProfileDto; max_visits: number };
-export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto; max_visits: number };
-export type EngineProfilesSettingsDto = { selected_profile_id: string; autoload_profile_id?: string | null; profiles: EngineProfileRecordDto[] };
+export type EngineBackendDto = "kata_go_analysis" | "generic_gtp";
+export type KataGoSettingsDto = { model_path: string | null; config_path: string | null; max_visits: number };
+export type EngineProfileDto = {
+  name: string;
+  program: string;
+  argv: string[];
+  working_dir: string | null;
+} & (
+  | { adapter_kind: "kata_go_analysis"; settings: KataGoSettingsDto }
+  | { adapter_kind: "generic_gtp"; settings: Record<string, never> }
+);
+export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto };
+export type EngineProfilesSettingsDto = { version: number; selected_profile_id: string; autoload_profile_id: string | null; profiles: EngineProfileRecordDto[] };
 export type AssetCheckDto = { path: string; exists: boolean; required: boolean; label: string };
 export type AppHealthDto = { app: string; architecture: string; rust_backend_ready: boolean; notes: string[] };
 
@@ -206,6 +214,9 @@ export type EngineFailureDto = {
 };
 export type EngineCapabilitySnapshotDto = {
   adapter_kind: EngineBackendDto;
+  analysis?: EngineAnalysisCapabilitiesDto | null;
+};
+export type EngineAnalysisCapabilitiesDto = {
   selected_node_analysis: boolean;
   whole_game_analysis: boolean;
   root_score: boolean;

@@ -1,0 +1,145 @@
+// @vitest-environment jsdom
+
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { EngineSetupPanel } from "./EngineSetupPanel";
+import { loadEngineProfilesSettings, saveEngineProfilesSettings } from "../api/backend";
+import type { ForegroundEngineSnapshotDto } from "../domain/types";
+
+let root: Root | null = null;
+let host: HTMLDivElement;
+
+beforeEach(() => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  delete window.__TAURI_INTERNALS__;
+  localStorage.clear();
+  host = document.createElement("div");
+  document.body.append(host);
+});
+afterEach(async () => {
+  await act(async () => { root?.unmount(); });
+  root = null;
+  host.remove();
+  localStorage.clear();
+});
+
+function field(label: string): HTMLInputElement | HTMLSelectElement {
+  const wrapper = Array.from(host.querySelectorAll("label")).find((element) => element.querySelector("span")?.textContent === label);
+  const input = wrapper?.querySelector("input, select");
+  if (!input) throw new Error(`Missing field ${label}`);
+  return input as HTMLInputElement | HTMLSelectElement;
+}
+
+async function change(input: HTMLInputElement | HTMLSelectElement, value: string) {
+  await act(async () => {
+    if (input instanceof HTMLSelectElement) {
+      input.value = value;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    } else {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  });
+}
+
+async function click(label: string) {
+  const button = Array.from(host.querySelectorAll("button")).find((element) => element.textContent === label);
+  if (!button) throw new Error(`Missing button ${label}`);
+  await act(async () => { button.click(); });
+}
+
+async function render(snapshot: ForegroundEngineSnapshotDto | null = null) {
+  root = createRoot(host);
+  await act(async () => { root!.render(<EngineSetupPanel engineSnapshot={snapshot} />); });
+}
+
+describe("engine profile configuration editor", () => {
+  it("creates, edits, saves and reloads both adapters with verbatim per-item argv", async () => {
+    await render();
+    await change(field("名称"), "中文 KataGo");
+    await change(field("引擎"), "/path with spaces/katago");
+    await change(field("模型"), "/模型/model.bin");
+    await change(field("配置文件"), "/配置/analysis.cfg");
+    await change(field("工作目录"), "/中文 工作目录");
+    await change(field("最大计算量"), "1234");
+    for (const argument of ["two words", "中文 参数", ""]) {
+      await click("新增参数");
+      const inputs = host.querySelectorAll<HTMLInputElement>('input[aria-label^="参数 "]');
+      await change(inputs[inputs.length - 1], argument);
+    }
+    await click("保存配置");
+    const kata = (await loadEngineProfilesSettings()).profiles[0];
+    expect(kata.profile).toEqual({ name: "中文 KataGo", program: "/path with spaces/katago", argv: ["two words", "中文 参数", ""], working_dir: "/中文 工作目录", adapter_kind: "kata_go_analysis", settings: { model_path: "/模型/model.bin", config_path: "/配置/analysis.cfg", max_visits: 1234 } });
+
+    await click("新增");
+    const gtpId = (await loadEngineProfilesSettings()).selected_profile_id;
+    expect(gtpId).not.toBe(kata.id);
+    await change(field("适配器"), "generic_gtp");
+    expect(host.textContent).not.toContain("最大计算量");
+    expect(host.querySelector('input[placeholder="/path/to/model.bin.gz"]')).toBeNull();
+    expect(host.textContent).toContain("运行时尚不可用");
+    await change(field("名称"), "GNU Go 中文");
+    await change(field("引擎"), "/gnu go/gnugo");
+    await click("保存配置");
+    const saved = await loadEngineProfilesSettings();
+    expect(saved.profiles).toEqual([kata, { id: gtpId, profile: { name: "GNU Go 中文", program: "/gnu go/gnugo", argv: ["two words", "中文 参数", ""], working_dir: "/中文 工作目录", adapter_kind: "generic_gtp", settings: {} } }]);
+    await change(field("名称"), "unsaved edit");
+    await change(field("参数 1"), "not saved");
+    await click("重新加载配置");
+    expect(field("名称").value).toBe("GNU Go 中文");
+    expect(field("参数 1").value).toBe("two words");
+    expect(field("参数 3").value).toBe("");
+    await change(field("配置"), kata.id);
+    expect(field("适配器").value).toBe("kata_go_analysis");
+    expect(field("模型").value).toBe("/模型/model.bin");
+    expect(field("最大计算量").value).toBe("1234");
+  });
+
+  it("keeps the live run and capability immutable while adapter, argv and settings edits are pending", async () => {
+    const settings = await loadEngineProfilesSettings();
+    settings.profiles[0].profile.program = "/katago";
+    await saveEngineProfilesSettings(settings);
+    const run = { run_id: "run-1", profile_id: "default", adapter_kind: "kata_go_analysis" as const, profile_snapshot: structuredClone(settings.profiles[0].profile), capability_snapshot: { adapter_kind: "kata_go_analysis" as const, analysis: { selected_node_analysis: true, whole_game_analysis: true, root_score: true, protocol_cancel: true } } };
+    const snapshot: ForegroundEngineSnapshotDto = { revision: 1, lifecycle: { state: "ready", run }, continuous: { enabled: true, phase: "waiting" } };
+    const original = structuredClone(snapshot);
+    await render(snapshot);
+    expect(host.textContent).not.toContain("存在待应用更改");
+    await change(field("最大计算量"), "2000");
+    expect(host.textContent).toContain("存在待应用更改");
+    await click("保存配置");
+    expect(host.textContent).toContain("存在待应用更改");
+    await click("新增参数");
+    await change(field("参数 1"), "中文 with spaces");
+    await change(field("适配器"), "generic_gtp");
+    await click("保存配置");
+    expect(host.textContent).toContain("存在待应用更改");
+    expect(snapshot).toEqual(original);
+    const saved = await loadEngineProfilesSettings();
+    expect(saved.profiles[0].profile.adapter_kind).toBe("generic_gtp");
+    expect(saved.profiles[0].profile.argv).toEqual(["中文 with spaces"]);
+    await change(field("适配器"), "kata_go_analysis");
+    await click("保存配置");
+    const restartProfile = (await loadEngineProfilesSettings()).profiles[0].profile;
+    const restarted: ForegroundEngineSnapshotDto = { ...snapshot, revision: 2, lifecycle: { state: "ready", run: { ...run, run_id: "run-2", profile_snapshot: restartProfile } } };
+    await act(async () => { root!.render(<EngineSetupPanel engineSnapshot={restarted} />); });
+    expect(host.textContent).not.toContain("存在待应用更改");
+  });
+
+  it("shows malformed storage and save errors instead of silently replacing the catalog", async () => {
+    const key = "lizzieyzy-next-engine-profile";
+    localStorage.setItem(key, "{broken");
+    await render();
+    expect(host.textContent).toContain("Load failed:");
+    const save = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "保存配置")!;
+    expect(save.disabled).toBe(true);
+    expect(localStorage.getItem(key)).toBe("{broken");
+    localStorage.removeItem(key);
+    await click("重新加载配置");
+    await click("新增参数");
+    await change(field("参数 1"), "--model=override");
+    await click("保存配置");
+    expect(host.textContent).toContain("Save failed:");
+    expect(localStorage.getItem(key)).toBeNull();
+  });
+});

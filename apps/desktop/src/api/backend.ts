@@ -24,7 +24,6 @@ import type {
   EngineProfileRecordDto,
   EngineProfileDto,
   EngineProfilesSettingsDto,
-  EngineProfileSettingsDto,
   EngineFailureDto,
   ForegroundEngineSnapshotDto,
   FileActivationDeliveryDto,
@@ -496,18 +495,6 @@ export async function cancelKataGoAnalysis(runId: string, jobId: string): Promis
 }
 
 
-export async function loadEngineProfileSettings(): Promise<EngineProfileSettingsDto | null> {
-  if (!isTauriRuntime()) return loadBrowserEngineProfileSettings();
-  return await invoke<EngineProfileSettingsDto | null>("load_engine_profile_settings");
-}
-
-export async function saveEngineProfileSettings(settings: EngineProfileSettingsDto): Promise<EngineProfileSettingsDto> {
-  if (!isTauriRuntime()) {
-    saveBrowserEngineProfileSettings(settings);
-    return settings;
-  }
-  return await invoke<EngineProfileSettingsDto>("save_engine_profile_settings", { settings });
-}
 
 export async function loadEngineProfilesSettings(): Promise<EngineProfilesSettingsDto> {
   if (!isTauriRuntime()) return loadBrowserEngineProfilesSettings();
@@ -516,7 +503,7 @@ export async function loadEngineProfilesSettings(): Promise<EngineProfilesSettin
 
 export async function saveEngineProfilesSettings(settings: EngineProfilesSettingsDto): Promise<EngineProfilesSettingsDto> {
   if (!isTauriRuntime()) {
-    const normalized = normalizeBrowserEngineProfilesSettings(settings);
+    const normalized = decodeEngineProfilesSettings(settings, false);
     saveBrowserEngineProfilesSettings(normalized);
     return normalized;
   }
@@ -662,84 +649,131 @@ function browserHealth(note: string): AppHealthDto {
 const browserEngineProfileKey = "lizzieyzy-next-engine-profile";
 const defaultEngineProfileId = "default";
 
-function loadBrowserEngineProfileSettings(): EngineProfileSettingsDto | null {
-  if (typeof window === "undefined") return null;
-  const raw = window.localStorage.getItem(browserEngineProfileKey);
-  if (!raw) return null;
-  try {
-    const settings = normalizeBrowserEngineProfilesSettings(JSON.parse(raw) as EngineProfilesSettingsDto | EngineProfileSettingsDto);
-    const selected = settings.profiles.find((profile) => profile.id === settings.selected_profile_id) ?? settings.profiles[0];
-    return selected ? { profile: selected.profile, max_visits: selected.max_visits } : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveBrowserEngineProfileSettings(settings: EngineProfileSettingsDto) {
-  if (typeof window === "undefined") return;
-  saveBrowserEngineProfilesSettings({
-    selected_profile_id: defaultEngineProfileId,
-    autoload_profile_id: null,
-    profiles: [{ id: defaultEngineProfileId, profile: settings.profile, max_visits: settings.max_visits }]
-  });
-}
-
 function loadBrowserEngineProfilesSettings(): EngineProfilesSettingsDto {
   if (typeof window === "undefined") return defaultBrowserEngineProfilesSettings();
   const raw = window.localStorage.getItem(browserEngineProfileKey);
-  if (!raw) return defaultBrowserEngineProfilesSettings();
-  try {
-    return normalizeBrowserEngineProfilesSettings(JSON.parse(raw) as EngineProfilesSettingsDto | EngineProfileSettingsDto);
-  } catch {
-    return defaultBrowserEngineProfilesSettings();
-  }
+  if (raw === null) return defaultBrowserEngineProfilesSettings();
+  return decodeEngineProfilesSettings(JSON.parse(raw), true);
 }
 
 function saveBrowserEngineProfilesSettings(settings: EngineProfilesSettingsDto) {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined") throw new Error("Profile storage requires a browser window.");
   window.localStorage.setItem(browserEngineProfileKey, JSON.stringify(settings));
 }
 
-function normalizeBrowserEngineProfilesSettings(settings: EngineProfilesSettingsDto | EngineProfileSettingsDto): EngineProfilesSettingsDto {
-  if (isEngineProfilesSettings(settings)) {
-    const profiles = settings.profiles.length > 0 ? settings.profiles : [defaultBrowserEngineProfileRecord()];
-    const hasDefault = profiles.some((profile) => profile.id === defaultEngineProfileId);
-    const normalizedProfiles = hasDefault ? profiles : [defaultBrowserEngineProfileRecord(), ...profiles];
-    const selected = normalizedProfiles.some((profile) => profile.id === settings.selected_profile_id)
-      ? settings.selected_profile_id
-      : defaultEngineProfileId;
-    const autoload = typeof settings.autoload_profile_id === "string" && normalizedProfiles.some((profile) => profile.id === settings.autoload_profile_id)
-      ? settings.autoload_profile_id
-      : null;
-    return { selected_profile_id: selected, autoload_profile_id: autoload, profiles: normalizedProfiles };
+function profileObject(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object.`);
+  return value as Record<string, unknown>;
+}
+
+function profileString(value: unknown, label: string, nonempty = false): string {
+  if (typeof value !== "string" || value.includes("\0") || (nonempty && !value.trim())) {
+    throw new Error(`${label} must be ${nonempty ? "a non-empty" : "a"} NUL-free string.`);
+  }
+  return value;
+}
+
+function profileOptionalPath(value: unknown, label: string): string | null {
+  return value == null ? null : profileString(value, label);
+}
+
+function profileVisits(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 0xffffffff) {
+    throw new Error("KataGo max_visits must be a positive 32-bit integer.");
+  }
+  return value;
+}
+
+function decodeEngineProfile(value: unknown): EngineProfileDto {
+  const profile = profileObject(value, "Profile");
+  if ("engine_path" in profile || "backend" in profile || "model_path" in profile || "config_path" in profile) {
+    throw new Error("Version 1 profiles require program, argv and adapter settings.");
+  }
+  const common = {
+    name: profileString(profile.name, "Profile name", true),
+    program: profileString(profile.program, "Program"),
+    argv: Array.isArray(profile.argv)
+      ? profile.argv.map((argument) => profileString(argument, "Argument"))
+      : (() => { throw new Error("Profile argv must be an array."); })(),
+    working_dir: profileOptionalPath(profile.working_dir, "Working directory")
+  };
+  const settings = profileObject(profile.settings, "Adapter settings");
+  if (profile.adapter_kind === "generic_gtp") {
+    if (Object.keys(settings).length) throw new Error("GenericGtp settings must be empty.");
+    return { ...common, adapter_kind: "generic_gtp", settings: {} };
+  }
+  if (profile.adapter_kind !== "kata_go_analysis") throw new Error("Unknown engine adapter.");
+  if (Object.keys(settings).some((key) => !["model_path", "config_path", "max_visits"].includes(key))) {
+    throw new Error("Unknown KataGo setting.");
+  }
+  const reservedModes: Record<string, true> = {
+    analysis: true, gtp: true, benchmark: true, tuner: true, contribute: true, match: true,
+    gatekeeper: true, runtests: true, evalsgf: true, genconfig: true, version: true, help: true,
+    selfplay: true, startposes: true, demoplay: true, clockinfo: true,
+    "-model": true, "--model": true, "-config": true, "--config": true
+  };
+  if (common.argv.some((argument) => Object.hasOwn(reservedModes, argument.split("=", 1)[0]))) {
+    throw new Error("KataGo argv conflicts with adapter-owned analysis/model/config arguments.");
   }
   return {
-    selected_profile_id: defaultEngineProfileId,
-    autoload_profile_id: null,
-    profiles: [{ id: defaultEngineProfileId, profile: settings.profile, max_visits: settings.max_visits }]
+    ...common,
+    adapter_kind: "kata_go_analysis",
+    settings: {
+      model_path: profileOptionalPath(settings.model_path, "Model path"),
+      config_path: profileOptionalPath(settings.config_path, "Config path"),
+      max_visits: profileVisits(settings.max_visits)
+    }
   };
 }
 
-function isEngineProfilesSettings(settings: EngineProfilesSettingsDto | EngineProfileSettingsDto): settings is EngineProfilesSettingsDto {
-  return "profiles" in settings && Array.isArray(settings.profiles);
+function decodeLegacyEngineProfile(value: unknown, maxVisits: unknown): EngineProfileDto {
+  const profile = profileObject(value, "Legacy profile");
+  if (profile.backend !== "kata_go_analysis") throw new Error("Unsupported legacy engine backend.");
+  return decodeEngineProfile({
+    name: profile.name,
+    program: profile.engine_path,
+    argv: [],
+    working_dir: profile.working_dir,
+    adapter_kind: "kata_go_analysis",
+    settings: { model_path: profile.model_path, config_path: profile.config_path, max_visits: maxVisits }
+  });
+}
+
+function decodeEngineProfilesSettings(value: unknown, allowLegacy: boolean): EngineProfilesSettingsDto {
+  const input = profileObject(value, "Profile catalog");
+  const legacy = !("version" in input);
+  if ((!legacy && input.version !== 1) || (legacy && !allowLegacy)) throw new Error("Unsupported profile catalog version.");
+  const single = legacy && !("profiles" in input);
+  const records = single ? [{ id: defaultEngineProfileId, profile: input.profile, max_visits: input.max_visits }] : input.profiles;
+  if (!Array.isArray(records) || records.length === 0) throw new Error("Profile catalog must contain at least one profile.");
+  const profiles: EngineProfileRecordDto[] = records.map((value) => {
+    const record = profileObject(value, "Profile record");
+    if (!legacy && "max_visits" in record) throw new Error("Version 1 max_visits belongs in KataGo settings.");
+    return {
+      id: profileString(record.id, "Profile ID", true),
+      profile: legacy ? decodeLegacyEngineProfile(record.profile, record.max_visits) : decodeEngineProfile(record.profile)
+    };
+  });
+  const ids = new Set(profiles.map((record) => record.id));
+  if (ids.size !== profiles.length) throw new Error("Duplicate profile ID.");
+  const selected = single ? defaultEngineProfileId : profileString(input.selected_profile_id, "Selected profile ID", true);
+  const autoload = single ? null : profileOptionalPath(input.autoload_profile_id, "Autoload profile ID");
+  if (!ids.has(selected) || (autoload !== null && !ids.has(autoload))) throw new Error("Selected/Autoload profile ID is not in the catalog.");
+  return { version: 1, selected_profile_id: selected, autoload_profile_id: autoload, profiles };
 }
 
 function defaultBrowserEngineProfilesSettings(): EngineProfilesSettingsDto {
-  return { selected_profile_id: defaultEngineProfileId, autoload_profile_id: null, profiles: [defaultBrowserEngineProfileRecord()] };
-}
-
-function defaultBrowserEngineProfileRecord(): EngineProfileRecordDto {
   return {
-    id: defaultEngineProfileId,
-    profile: {
-      name: "Local KataGo",
-      engine_path: "",
-      model_path: null,
-      config_path: null,
-      working_dir: null,
-      backend: "kata_go_analysis"
-    },
-    max_visits: 800
+    version: 1,
+    selected_profile_id: defaultEngineProfileId,
+    autoload_profile_id: null,
+    profiles: [{
+      id: defaultEngineProfileId,
+      profile: {
+        name: "Local KataGo", program: "", argv: [], working_dir: null,
+        adapter_kind: "kata_go_analysis", settings: { model_path: null, config_path: null, max_visits: 800 }
+      }
+    }]
   };
 }
 

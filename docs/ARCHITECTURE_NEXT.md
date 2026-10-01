@@ -145,6 +145,14 @@ Analysis-derived helpers such as candidate sorting and problem marker classifica
 
 Engine profile catalog, Autoload Default, asset checks, and the manager-owned Foreground Engine Run: lifecycle snapshot, Start/Stop/Restart/Switch, selected-node and whole-game Analysis Jobs, process execution, cancellation, and typed failure.
 
+Profiles separate the common launch fields (`name`, `program`, ordered `argv`, optional `working_dir`) from discriminated `adapter_kind` / `settings`. `kata_go_analysis` owns model/config paths and finite `max_visits`; `generic_gtp` has an empty settings object. Each argv item is one process argument, including empty strings and whitespace; no shell parsing is involved. KataGo owns the analysis subcommand and model/config flags; conflicting user arguments are rejected rather than rewritten.
+
+Catalog version 1 keeps stable record IDs, order, settings selection and optional Autoload Default. Legacy unversioned collection and single-profile files are decoded only at the persistence boundary. Reads never rewrite the file or start a process. Unknown versions, malformed adapter settings and save failures remain observable and preserve the previous catalog and runtime. Explicit saves validate structure and atomically replace storage; executable/model/config existence is checked at Start, not Save. An unconfigured default profile is not a Ready Run.
+
+Saved configuration, the adapter's static capability ceiling and handshake-verified Run capabilities are separate facts. Only `KataGoAnalysis` and `GenericGtp` are exposed; analysis capabilities are an optional nested group, never inferred from a saved profile. This cutover permits GenericGtp configuration but rejects its Start/Switch before process I/O or changes to the current Run. Generic execution and game-move capability are not implemented by this slice.
+
+The Run owns an immutable launch snapshot. Saving, selecting or changing Autoload cannot mutate it; pending changes compare every profile field, including argv, adapter settings and finite visits. Explicit Restart or a successful Switch adopts the latest saved profile. Active/candidate deletion protection and single-choice Autoload without fallback remain in force.
+
 `start_swing_analysis_task` receives one Rust-only `SwingAnalysisTaskRequest` containing the captured whole-game job, scope, requested/supporting paths, swing comparisons and criteria, and overview/deep conditions. The current-game owner still revalidates the preview before admission; this request grouping does not change command payloads or event identities.
 
 ### `crates/app-preferences`

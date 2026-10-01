@@ -1,4 +1,4 @@
-use app_model::{EngineBackend, EngineProfileDto};
+use app_model::{EngineAdapterSettings, EngineProfileDto};
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ pub use catalog::{
     default_engine_profile_record, default_engine_profiles_settings, load_engine_profiles,
     normalize_engine_profiles, parse_engine_profiles, replace_json_file, save_engine_profiles,
     EngineProfileCatalog, EngineProfileRecord, EngineProfilesSettings, InMemoryEngineProfileCatalog,
-    SavedEngineProfile, DEFAULT_ENGINE_PROFILE_ID,
+    SavedEngineProfile, DEFAULT_ENGINE_PROFILE_ID, ENGINE_PROFILES_VERSION,
 };
 pub use lifecycle::{
     AnalysisJobCancel, AnalysisJobEventDto, AnalysisJobLane, ContinuousPrimaryAction, ForegroundEngineConfig,
@@ -94,6 +94,8 @@ impl<'a> AnalysisBatchRunOptions<'a> {
 }
 #[derive(Debug, Error)]
 pub enum EngineManagerError {
+    #[error("invalid engine profile: {0}")]
+    InvalidProfile(String),
     #[error("engine path is required")]
     MissingEnginePath,
     #[error("model path is required for KataGo analysis")]
@@ -360,8 +362,72 @@ pub fn run_katago_analysis_batch_with_options(
     })
 }
 
+pub fn validate_engine_profile(profile: &EngineProfileDto) -> Result<(), String> {
+    if profile.name.trim().is_empty() {
+        return Err("engine profile name is required".to_string());
+    }
+    for (label, value) in std::iter::once(("program", profile.program.as_str()))
+        .chain(profile.argv.iter().map(|arg| ("argv", arg.as_str())))
+        .chain(
+            profile
+                .working_dir
+                .as_deref()
+                .map(|path| ("working directory", path)),
+        )
+    {
+        if value.contains('\0') {
+            return Err(format!("engine {label} must not contain NUL"));
+        }
+    }
+    if let EngineAdapterSettings::KataGoAnalysis(settings) = &profile.adapter {
+        if settings.max_visits == 0 {
+            return Err("max_visits must be greater than 0".to_string());
+        }
+        for path in [settings.model_path.as_deref(), settings.config_path.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            if path.contains('\0') {
+                return Err("engine model/config path must not contain NUL".to_string());
+            }
+        }
+        for arg in &profile.argv {
+            let token = arg.split_once('=').map_or(arg.as_str(), |(flag, _)| flag);
+            if matches!(
+                token,
+                "analysis"
+                    | "gtp"
+                    | "benchmark"
+                    | "tuner"
+                    | "contribute"
+                    | "match"
+                    | "gatekeeper"
+                    | "runtests"
+                    | "evalsgf"
+                    | "genconfig"
+                    | "version"
+                    | "help"
+                    | "selfplay"
+                    | "startposes"
+                    | "demoplay"
+                    | "clockinfo"
+                    | "-model"
+                    | "--model"
+                    | "-config"
+                    | "--config"
+            ) {
+                return Err(format!(
+                    "KataGo argument conflicts with adapter-owned launch arguments: {arg}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn build_command_spec(profile: &EngineProfileDto) -> Result<CommandSpec, EngineManagerError> {
-    if profile.engine_path.trim().is_empty() {
+    validate_engine_profile(profile).map_err(EngineManagerError::InvalidProfile)?;
+    if profile.program.trim().is_empty() {
         return Err(EngineManagerError::MissingEnginePath);
     }
     let working_dir = normalized_optional_path(profile.working_dir.as_deref());
@@ -372,15 +438,15 @@ pub fn build_command_spec(profile: &EngineProfileDto) -> Result<CommandSpec, Eng
             });
         }
     }
-    let program = resolve_program_path(&profile.engine_path, working_dir.as_deref());
-    match profile.backend {
-        EngineBackend::KataGoAnalysis => {
-            let model = profile
+    let program = resolve_program_path(&profile.program, working_dir.as_deref());
+    match &profile.adapter {
+        EngineAdapterSettings::KataGoAnalysis(settings) => {
+            let model = settings
                 .model_path
                 .as_ref()
                 .filter(|v| !v.trim().is_empty())
                 .ok_or(EngineManagerError::MissingModelPath)?;
-            let config = profile
+            let config = settings
                 .config_path
                 .as_ref()
                 .filter(|v| !v.trim().is_empty())
@@ -393,28 +459,24 @@ pub fn build_command_spec(profile: &EngineProfileDto) -> Result<CommandSpec, Eng
             if !asset_exists(&config) {
                 return Err(EngineManagerError::ConfigPathNotFound { path: config });
             }
+            let mut args = vec![
+                "analysis".into(),
+                "-config".into(),
+                config,
+                "-model".into(),
+                model,
+            ];
+            args.extend(profile.argv.iter().cloned());
             Ok(CommandSpec {
                 program,
-                args: vec![
-                    "analysis".into(),
-                    "-config".into(),
-                    config,
-                    "-model".into(),
-                    model,
-                ],
+                args,
                 working_dir,
                 env: vec![],
             })
         }
-        EngineBackend::KataGoGtp => Ok(CommandSpec {
+        EngineAdapterSettings::GenericGtp(_) => Ok(CommandSpec {
             program,
-            args: vec!["gtp".into()],
-            working_dir,
-            env: vec![],
-        }),
-        EngineBackend::GenericGtp | EngineBackend::ReadboardSidecar => Ok(CommandSpec {
-            program,
-            args: vec![],
+            args: profile.argv.clone(),
             working_dir,
             env: vec![],
         }),
@@ -422,9 +484,8 @@ pub fn build_command_spec(profile: &EngineProfileDto) -> Result<CommandSpec, Eng
 }
 
 pub fn check_assets(profile: &EngineProfileDto) -> Vec<AssetCheck> {
-    let requires_analysis_assets = matches!(profile.backend, EngineBackend::KataGoAnalysis);
     let working_dir = normalized_optional_path(profile.working_dir.as_deref());
-    let engine_path = resolve_program_path(&profile.engine_path, working_dir.as_deref());
+    let engine_path = resolve_program_path(&profile.program, working_dir.as_deref());
     let mut checks = vec![AssetCheck {
         path: engine_path.clone(),
         exists: program_exists(&engine_path),
@@ -439,23 +500,21 @@ pub fn check_assets(profile: &EngineProfileDto) -> Vec<AssetCheck> {
             label: "working directory".into(),
         });
     }
-    if requires_analysis_assets || profile.model_path.is_some() {
-        let model = profile.model_path.as_deref().unwrap_or("");
+    if let EngineAdapterSettings::KataGoAnalysis(settings) = &profile.adapter {
+        let model = settings.model_path.as_deref().unwrap_or("");
         let resolved_model = resolve_asset_path(model, working_dir.as_deref());
         checks.push(AssetCheck {
             path: resolved_model.clone(),
             exists: asset_exists(&resolved_model),
-            required: requires_analysis_assets,
+            required: true,
             label: "model".into(),
         });
-    }
-    if requires_analysis_assets || profile.config_path.is_some() {
-        let config = profile.config_path.as_deref().unwrap_or("");
+        let config = settings.config_path.as_deref().unwrap_or("");
         let resolved_config = resolve_asset_path(config, working_dir.as_deref());
         checks.push(AssetCheck {
             path: resolved_config.clone(),
             exists: asset_exists(&resolved_config),
-            required: requires_analysis_assets,
+            required: true,
             label: "config".into(),
         });
     }
@@ -470,25 +529,21 @@ fn asset_exists(path: &str) -> bool {
 }
 
 fn normalized_optional_path(path: Option<&str>) -> Option<String> {
-    path.map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+    path.filter(|value| !value.is_empty()).map(ToOwned::to_owned)
 }
 
 fn resolve_program_path(program: &str, working_dir: Option<&str>) -> String {
-    let trimmed = program.trim();
-    if trimmed.is_empty() || !should_preflight_program_path(trimmed) {
-        return trimmed.to_string();
+    if program.trim().is_empty() || !should_preflight_program_path(program) {
+        return program.to_string();
     }
-    resolve_path(trimmed, working_dir)
+    resolve_path(program, working_dir)
 }
 
 fn resolve_asset_path(path: &str, working_dir: Option<&str>) -> String {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return trimmed.to_string();
+    if path.trim().is_empty() {
+        return String::new();
     }
-    resolve_path(trimmed, working_dir)
+    resolve_path(path, working_dir)
 }
 
 fn resolve_path(path: &str, working_dir: Option<&str>) -> String {
@@ -1043,11 +1098,14 @@ mod tests {
 
         let profile = EngineProfileDto {
             name: "test profile".into(),
-            engine_path: engine_path.clone(),
-            model_path: Some("models/model.bin".into()),
-            config_path: Some("configs/analysis.cfg".into()),
+            program: engine_path.clone(),
+            argv: vec![],
             working_dir: Some(working_dir.to_string_lossy().into_owned()),
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(app_model::KataGoSettings {
+                model_path: Some("models/model.bin".into()),
+                config_path: Some("configs/analysis.cfg".into()),
+                max_visits: 800,
+            }),
         };
 
         let checks = check_assets(&profile);
@@ -1078,11 +1136,14 @@ mod tests {
 
         let profile = EngineProfileDto {
             name: "test profile".into(),
-            engine_path: "katago".into(),
-            model_path: Some("".into()),
-            config_path: Some("   ".into()),
+            program: "katago".into(),
+            argv: vec![],
             working_dir: Some(working_dir.to_string_lossy().into_owned()),
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(app_model::KataGoSettings {
+                model_path: Some("".into()),
+                config_path: Some("   ".into()),
+                max_visits: 800,
+            }),
         };
 
         let checks = check_assets(&profile);
@@ -1104,11 +1165,14 @@ mod tests {
 
         let profile = EngineProfileDto {
             name: "test profile".into(),
-            engine_path: engine_path.to_string_lossy().into_owned(),
-            model_path: None,
-            config_path: None,
+            program: engine_path.to_string_lossy().into_owned(),
+            argv: vec![],
             working_dir: Some(working_dir.to_string_lossy().into_owned()),
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(app_model::KataGoSettings {
+                model_path: None,
+                config_path: None,
+                max_visits: 800,
+            }),
         };
 
         let checks = check_assets(&profile);
@@ -1143,11 +1207,14 @@ mod tests {
 
         let profile = EngineProfileDto {
             name: "test profile".into(),
-            engine_path: "bin/katago".into(),
-            model_path: Some("models/model.bin".into()),
-            config_path: Some("configs/analysis.cfg".into()),
+            program: "bin/katago".into(),
+            argv: vec![],
             working_dir: Some(working_dir.to_string_lossy().into_owned()),
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(app_model::KataGoSettings {
+                model_path: Some("models/model.bin".into()),
+                config_path: Some("configs/analysis.cfg".into()),
+                max_visits: 800,
+            }),
         };
 
         let spec = build_command_spec(&profile).unwrap();
@@ -1179,11 +1246,14 @@ mod tests {
 
         let profile = EngineProfileDto {
             name: "test profile".into(),
-            engine_path: "katago".into(),
-            model_path: Some("missing.bin".into()),
-            config_path: Some("analysis.cfg".into()),
+            program: "katago".into(),
+            argv: vec![],
             working_dir: Some(working_dir.to_string_lossy().into_owned()),
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(app_model::KataGoSettings {
+                model_path: Some("missing.bin".into()),
+                config_path: Some("analysis.cfg".into()),
+                max_visits: 800,
+            }),
         };
 
         let err = build_command_spec(&profile).unwrap_err();

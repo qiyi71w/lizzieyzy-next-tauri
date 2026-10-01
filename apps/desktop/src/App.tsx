@@ -1017,8 +1017,7 @@ export function App() {
     if (scoringRef.current || scoringPendingRef.current || (trialRef.current && kind === "game")) return;
     const run = runFromSnapshot(engineSnapshot);
     if (!run || !engineReady) return;
-    const record = engineProfiles.find((profile) => profile.id === run.profile_id);
-    const maxVisits = record?.max_visits ?? 800;
+    const maxVisits = run.profile_snapshot.adapter_kind === "kata_go_analysis" ? run.profile_snapshot.settings.max_visits : 800;
     if (kind === "once") void handleRunKataGo(run.profile_snapshot, maxVisits);
     else void handleAnalyzeKataGoGame(run.run_id, maxVisits);
   }

@@ -1,9 +1,10 @@
 use app_model::{
     admits_analysis_publication, AnalysisJobEventDto, AnalysisJobOutcomeDto, AnalysisPositionIntervalDto,
     AnalysisPublicationScopeDto, AnalysisScopeDto, AnalysisScopeModeDto, AnalysisStageConditionsDto,
-    AnalysisTaskLimitDto, AnalysisTaskStageDto, AnalysisTaskStateDto, AnalysisTaskStrategyDto, EngineBackend,
-    EngineCapabilitySnapshotDto, EngineFailureKind, EngineOperationDto, EngineProfileDto,
-    ForegroundEngineEventDto, ForegroundEngineLifecycleDto, MoveVertex, NodePath, PointDto,
+    AnalysisTaskLimitDto, AnalysisTaskStageDto, AnalysisTaskStateDto, AnalysisTaskStrategyDto,
+    EngineAdapterSettings, EngineAnalysisCapabilitiesDto, EngineBackend, EngineCapabilitySnapshotDto,
+    EngineFailureKind, EngineOperationDto, EngineProfileDto, ForegroundEngineEventDto,
+    ForegroundEngineLifecycleDto, GenericGtpSettings, KataGoSettings, MoveVertex, NodePath, PointDto,
 };
 use engine_manager::{
     AnalysisCancelToken, AnalysisJobCancel, AnalysisJobLane, EngineProfileCatalog, ForegroundEngineConfig,
@@ -450,11 +451,14 @@ fn setup_profile(temp: &TestTempDir, script: &str) -> EngineProfileDto {
     std::fs::write(&config_path, "").unwrap();
     EngineProfileDto {
         name: "Fixture KataGo".into(),
-        engine_path: engine_path.to_string_lossy().into_owned(),
-        model_path: Some(model_path.to_string_lossy().into_owned()),
-        config_path: Some(config_path.to_string_lossy().into_owned()),
+        program: engine_path.to_string_lossy().into_owned(),
+        argv: vec![],
         working_dir: Some(temp.path().to_string_lossy().into_owned()),
-        backend: EngineBackend::KataGoAnalysis,
+        adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+            model_path: Some(model_path.to_string_lossy().into_owned()),
+            config_path: Some(config_path.to_string_lossy().into_owned()),
+            max_visits: 800,
+        }),
     }
 }
 
@@ -519,11 +523,14 @@ fn start_failure_without_assets_stays_no_engine_with_typed_failure() {
         profile_id: "missing".into(),
         profile: EngineProfileDto {
             name: "Missing".into(),
-            engine_path: "/definitely/missing/katago".into(),
-            model_path: Some("/definitely/missing/model.bin".into()),
-            config_path: Some("/definitely/missing/analysis.cfg".into()),
+            program: "/definitely/missing/katago".into(),
+            argv: vec![],
             working_dir: None,
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: Some("/definitely/missing/model.bin".into()),
+                config_path: Some("/definitely/missing/analysis.cfg".into()),
+                max_visits: 800,
+            }),
         },
     });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
@@ -1176,10 +1183,12 @@ fn selected_node_unsupported_capability_does_not_write_protocol() {
     let before = std::fs::read_to_string(&log).unwrap_or_default();
     manager.set_capability_snapshot_for_tests(EngineCapabilitySnapshotDto {
         adapter_kind: EngineBackend::KataGoAnalysis,
-        selected_node_analysis: false,
-        whole_game_analysis: true,
-        root_score: true,
-        protocol_cancel: true,
+        analysis: Some(EngineAnalysisCapabilitiesDto {
+            selected_node_analysis: false,
+            whole_game_analysis: true,
+            root_score: true,
+            protocol_cancel: true,
+        }),
     });
     let error = manager
         .start_selected_node_job(selected_request(&run_id, 1, vec![]))
@@ -2203,7 +2212,7 @@ fn analysis_task_paused_progress_obeys_semantic_run_and_departure_fences() {
         catalog.upsert(SavedEngineProfile {
             profile_id: "broken".into(),
             profile: EngineProfileDto {
-                engine_path: "/missing/task-engine".into(),
+                program: "/missing/task-engine".into(),
                 ..catalog.get("profile-1").unwrap().profile
             },
         });
@@ -2955,6 +2964,9 @@ fn unsupported_whole_game_capability_is_rejected_before_protocol_io() {
             .capability_snapshot
             .as_ref()
             .unwrap()
+            .analysis
+            .as_ref()
+            .unwrap()
             .whole_game_analysis
     );
     let logged_before = std::fs::read_to_string(&log).unwrap();
@@ -3446,11 +3458,14 @@ fn mismatched_job_identity_does_not_complete_the_other_lane() {
 fn missing_assets_profile(name: &str, temp: &TestTempDir) -> EngineProfileDto {
     EngineProfileDto {
         name: name.into(),
-        engine_path: format!("/definitely/missing/{name}-katago"),
-        model_path: Some(format!("/definitely/missing/{name}-model.bin")),
-        config_path: Some(format!("/definitely/missing/{name}.cfg")),
+        program: format!("/definitely/missing/{name}-katago"),
+        argv: vec![],
         working_dir: Some(temp.path().to_string_lossy().into_owned()),
-        backend: EngineBackend::KataGoAnalysis,
+        adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+            model_path: Some(format!("/definitely/missing/{name}-model.bin")),
+            config_path: Some(format!("/definitely/missing/{name}.cfg")),
+            max_visits: 800,
+        }),
     }
 }
 
@@ -3464,11 +3479,14 @@ fn spawn_fail_profile(temp: &TestTempDir, stem: &str) -> EngineProfileDto {
     std::fs::write(&config_path, "").unwrap();
     EngineProfileDto {
         name: stem.into(),
-        engine_path: not_binary.to_string_lossy().into_owned(),
-        model_path: Some(model_path.to_string_lossy().into_owned()),
-        config_path: Some(config_path.to_string_lossy().into_owned()),
+        program: not_binary.to_string_lossy().into_owned(),
+        argv: vec![],
         working_dir: Some(temp.path().to_string_lossy().into_owned()),
-        backend: EngineBackend::KataGoAnalysis,
+        adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+            model_path: Some(model_path.to_string_lossy().into_owned()),
+            config_path: Some(config_path.to_string_lossy().into_owned()),
+            max_visits: 800,
+        }),
     }
 }
 
@@ -3522,11 +3540,14 @@ fn setup_named_profile(temp: &TestTempDir, stem: &str, script: &str) -> EnginePr
     std::fs::write(&config_path, "").unwrap();
     EngineProfileDto {
         name: stem.into(),
-        engine_path: engine_path.to_string_lossy().into_owned(),
-        model_path: Some(model_path.to_string_lossy().into_owned()),
-        config_path: Some(config_path.to_string_lossy().into_owned()),
+        program: engine_path.to_string_lossy().into_owned(),
+        argv: vec![],
         working_dir: Some(temp.path().to_string_lossy().into_owned()),
-        backend: EngineBackend::KataGoAnalysis,
+        adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+            model_path: Some(model_path.to_string_lossy().into_owned()),
+            config_path: Some(config_path.to_string_lossy().into_owned()),
+            max_visits: 800,
+        }),
     }
 }
 
@@ -3612,11 +3633,14 @@ fn apply_autoload_without_mark_stays_no_engine() {
         profile_id: "profile-1".into(),
         profile: EngineProfileDto {
             name: "Unused".into(),
-            engine_path: "/bin/unused".into(),
-            model_path: None,
-            config_path: None,
+            program: "/bin/unused".into(),
+            argv: vec![],
             working_dir: None,
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: None,
+                config_path: None,
+                max_visits: 800,
+            }),
         },
     });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
@@ -3665,11 +3689,14 @@ fn autoload_asset_failure_stays_no_engine_without_falling_back() {
         profile_id: "bad".into(),
         profile: EngineProfileDto {
             name: "Broken".into(),
-            engine_path: "/definitely/missing/katago".into(),
-            model_path: Some("/definitely/missing/model.bin".into()),
-            config_path: Some("/definitely/missing/analysis.cfg".into()),
+            program: "/definitely/missing/katago".into(),
+            argv: vec![],
             working_dir: None,
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: Some("/definitely/missing/model.bin".into()),
+                config_path: Some("/definitely/missing/analysis.cfg".into()),
+                max_visits: 800,
+            }),
         },
     });
     catalog.set_autoload_profile_id(Some("bad".into()));
@@ -3710,11 +3737,14 @@ fn successful_start_after_autoload_miss_then_stop_does_not_revive_failure() {
         profile_id: "bad".into(),
         profile: EngineProfileDto {
             name: "Broken".into(),
-            engine_path: "/definitely/missing/katago".into(),
-            model_path: Some("/definitely/missing/model.bin".into()),
-            config_path: Some("/definitely/missing/analysis.cfg".into()),
+            program: "/definitely/missing/katago".into(),
+            argv: vec![],
             working_dir: None,
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: Some("/definitely/missing/model.bin".into()),
+                config_path: Some("/definitely/missing/analysis.cfg".into()),
+                max_visits: 800,
+            }),
         },
     });
     catalog.set_autoload_profile_id(Some("bad".into()));
@@ -3744,22 +3774,28 @@ fn later_start_miss_replaces_autoload_snapshot_failure() {
         profile_id: "bad-autoload".into(),
         profile: EngineProfileDto {
             name: "Broken Autoload".into(),
-            engine_path: "/definitely/missing/katago".into(),
-            model_path: Some("/definitely/missing/model.bin".into()),
-            config_path: Some("/definitely/missing/analysis.cfg".into()),
+            program: "/definitely/missing/katago".into(),
+            argv: vec![],
             working_dir: None,
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: Some("/definitely/missing/model.bin".into()),
+                config_path: Some("/definitely/missing/analysis.cfg".into()),
+                max_visits: 800,
+            }),
         },
     });
     catalog.upsert(SavedEngineProfile {
         profile_id: "bad-start".into(),
         profile: EngineProfileDto {
             name: "Broken Start".into(),
-            engine_path: "/definitely/missing/katago-2".into(),
-            model_path: Some("/definitely/missing/model-2.bin".into()),
-            config_path: Some("/definitely/missing/analysis-2.cfg".into()),
+            program: "/definitely/missing/katago-2".into(),
+            argv: vec![],
             working_dir: None,
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: Some("/definitely/missing/model-2.bin".into()),
+                config_path: Some("/definitely/missing/analysis-2.cfg".into()),
+                max_visits: 800,
+            }),
         },
     });
     catalog.set_autoload_profile_id(Some("bad-autoload".into()));
@@ -3778,30 +3814,24 @@ fn later_start_miss_replaces_autoload_snapshot_failure() {
 }
 
 #[test]
-fn start_unsupported_from_no_engine_publishes_snapshot_failure() {
+fn start_generic_from_no_engine_preserves_snapshot() {
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     catalog.upsert(SavedEngineProfile {
         profile_id: "gtp".into(),
         profile: EngineProfileDto {
             name: "GTP".into(),
-            engine_path: "/bin/gtp".into(),
-            model_path: None,
-            config_path: None,
+            program: "/bin/gtp".into(),
+            argv: vec![],
             working_dir: None,
-            backend: EngineBackend::KataGoGtp,
+            adapter: EngineAdapterSettings::GenericGtp(GenericGtpSettings {}),
         },
     });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    let before = manager.snapshot();
     let failure = manager.start("gtp").unwrap_err();
     assert_eq!(failure.kind, EngineFailureKind::UnsupportedCapability);
     assert_eq!(failure.operation, EngineOperationDto::Start);
-    let snapshot = manager.snapshot();
-    let published =
-        no_engine_failure(&snapshot.lifecycle).expect("sync start miss must publish snapshot failure");
-    assert_eq!(published.kind, EngineFailureKind::UnsupportedCapability);
-    assert_eq!(published.operation, EngineOperationDto::Start);
-    assert_eq!(published.profile_id.as_deref(), Some("gtp"));
-    assert_eq!(published.message, failure.message);
+    assert_eq!(manager.snapshot(), before);
 }
 
 #[cfg(unix)]
@@ -4006,11 +4036,14 @@ fn switch_asset_failure_keeps_ready_a_and_publishes_switch_scoped_failure() {
         profile_id: "profile-b".into(),
         profile: EngineProfileDto {
             name: "Broken B".into(),
-            engine_path: "/definitely/missing/katago-b".into(),
-            model_path: Some("/definitely/missing/model-b.bin".into()),
-            config_path: Some("/definitely/missing/b.cfg".into()),
+            program: "/definitely/missing/katago-b".into(),
+            argv: vec![],
             working_dir: Some(temp.path().to_string_lossy().into_owned()),
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: Some("/definitely/missing/model-b.bin".into()),
+                config_path: Some("/definitely/missing/b.cfg".into()),
+                max_visits: 800,
+            }),
         },
     });
     let before = manager.snapshot();
@@ -4423,28 +4456,33 @@ impl AnalysisJobCancel for FileCancel {
 
 #[cfg(unix)]
 #[test]
-fn unsupported_backend_stays_no_engine_with_typed_failure() {
-    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+fn generic_start_and_switch_are_rejected_before_io_without_disturbing_ready_run() {
+    let temp = TestTempDir::new("generic-no-io");
+    let (manager, catalog, _, _) = ready_manager(&temp, &resident_echo_script());
+    let before = manager.snapshot();
+    let marker = temp.path().join("generic-spawned");
+    let executable = temp.path().join("gtp.sh");
+    write_executable(&executable, &format!("touch '{}'\n", marker.display()));
     catalog.upsert(SavedEngineProfile {
         profile_id: "gtp".into(),
         profile: EngineProfileDto {
             name: "GTP".into(),
-            engine_path: "/bin/katago".into(),
-            model_path: None,
-            config_path: None,
-            working_dir: None,
-            backend: EngineBackend::KataGoGtp,
+            program: executable.to_string_lossy().into_owned(),
+            argv: vec!["gtp".into()],
+            working_dir: Some("/missing/gtp-cwd".into()),
+            adapter: EngineAdapterSettings::GenericGtp(GenericGtpSettings {}),
         },
     });
-    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
-    let failure = manager.start("gtp").unwrap_err();
-    assert_eq!(failure.kind, EngineFailureKind::UnsupportedCapability);
-    assert_eq!(failure.operation, EngineOperationDto::Start);
-    assert_eq!(failure.profile_id.as_deref(), Some("gtp"));
-    assert!(matches!(
-        manager.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine { .. }
-    ));
+    let start = manager.start("gtp").unwrap_err();
+    assert_eq!(start.kind, EngineFailureKind::UnsupportedCapability);
+    assert_eq!(start.operation, EngineOperationDto::Start);
+    assert_eq!(manager.snapshot(), before);
+    let switch = manager.switch_to("gtp").unwrap_err();
+    assert_eq!(switch.kind, EngineFailureKind::UnsupportedCapability);
+    assert_eq!(switch.operation, EngineOperationDto::Switch);
+    assert_eq!(manager.snapshot(), before);
+    assert!(!marker.exists());
+    manager.teardown().unwrap();
 }
 
 #[cfg(unix)]
@@ -4455,7 +4493,7 @@ fn spawn_failure_stays_no_engine_with_start_kind() {
     let mut profile = setup_profile(&temp, &resident_echo_script());
     let not_binary = temp.path().join("not-a-binary");
     std::fs::create_dir_all(&not_binary).unwrap();
-    profile.engine_path = not_binary.to_string_lossy().into_owned();
+    profile.program = not_binary.to_string_lossy().into_owned();
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-1".into(),
         profile,
@@ -4628,9 +4666,11 @@ exit 9
         profile: setup_profile(&temp, &resident_echo_script()),
     });
     let mut broken = catalog.get("profile-1").unwrap();
-    broken.profile.engine_path = "/definitely/missing/katago".into();
-    broken.profile.model_path = Some("/definitely/missing/model.bin".into());
-    broken.profile.config_path = Some("/definitely/missing/analysis.cfg".into());
+    broken.profile.program = "/definitely/missing/katago".into();
+    if let EngineAdapterSettings::KataGoAnalysis(settings) = &mut broken.profile.adapter {
+        settings.model_path = Some("/definitely/missing/model.bin".into());
+        settings.config_path = Some("/definitely/missing/analysis.cfg".into());
+    }
     catalog.upsert(broken);
     manager.restart().unwrap();
     wait_snapshot(&events, Duration::from_secs(4), |lifecycle| {
@@ -5821,5 +5861,127 @@ fn continuous_budget_updates_leave_finite_and_whole_game_requests_unchanged() {
     });
     assert_eq!(continuous.frame.unwrap().visits, 24);
     assert_ne!(continuous.job_id, finite.job_id);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn actual_child_receives_exact_argv_paths_spaces_chinese_and_empty_argument() {
+    let temp = TestTempDir::new("argv-exact");
+    let cwd = temp.path().join("工作 目录");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let log = cwd.join("argv.log");
+    let executable = cwd.join("引擎 executable.sh");
+    let model = cwd.join("模型 data.bin");
+    let config = cwd.join("配置 analysis.cfg");
+    std::fs::write(&model, "").unwrap();
+    std::fs::write(&config, "").unwrap();
+    write_executable(
+        &executable,
+        &format!(
+            "printf '<%s>\\n' \"$@\" > '{}'\npwd > cwd.log\n{}",
+            log.display(),
+            resident_echo_script()
+        ),
+    );
+    let profile = EngineProfileDto {
+        name: "exact argv".into(),
+        program: executable.to_string_lossy().into_owned(),
+        argv: vec![
+            "--custom".into(),
+            "space value 中文".into(),
+            "".into(),
+            "  padded  ".into(),
+        ],
+        working_dir: Some(cwd.to_string_lossy().into_owned()),
+        adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+            model_path: Some("模型 data.bin".into()),
+            config_path: Some("配置 analysis.cfg".into()),
+            max_visits: 123,
+        }),
+    };
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "argv".into(),
+        profile: profile.clone(),
+    });
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    let events = manager.subscribe();
+    manager.start("argv").unwrap();
+    let ready = wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    assert_eq!(run_from_ready(&ready.lifecycle).profile_snapshot, profile);
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        format!(
+            "<analysis>\n<-config>\n<{}>\n<-model>\n<{}>\n<--custom>\n<space value 中文>\n<>\n<  padded  >\n",
+            config.display(),
+            model.display()
+        )
+    );
+    assert_eq!(
+        std::fs::read_to_string(cwd.join("cwd.log")).unwrap(),
+        format!("{}\n", cwd.display())
+    );
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn saving_every_profile_field_and_autoload_keeps_live_run_immutable_until_restart() {
+    let temp = TestTempDir::new("immutable-profile");
+    let (manager, catalog, events, old_id) = ready_manager(&temp, &resident_echo_script());
+    let before = manager.snapshot();
+    let before_run = run_from_ready(&before.lifecycle).clone();
+    let mut edited = setup_named_profile(&temp, "new 引擎", &resident_echo_script());
+    edited.name = "edited name".into();
+    edited.argv = vec!["--custom=value".into(), "".into()];
+    let cwd = temp.path().join("new cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    edited.working_dir = Some(cwd.to_string_lossy().into_owned());
+    if let EngineAdapterSettings::KataGoAnalysis(settings) = &mut edited.adapter {
+        settings.max_visits = 321;
+    }
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-1".into(),
+        profile: edited.clone(),
+    });
+    catalog.set_autoload_profile_id(Some("profile-1".into()));
+    assert_eq!(manager.snapshot(), before);
+    assert_eq!(
+        run_from_ready(&manager.snapshot().lifecycle).profile_snapshot,
+        before_run.profile_snapshot
+    );
+    assert_eq!(
+        run_from_ready(&manager.snapshot().lifecycle).capability_snapshot,
+        before_run.capability_snapshot
+    );
+    let mut generic = edited.clone();
+    generic.adapter = EngineAdapterSettings::GenericGtp(GenericGtpSettings {});
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-1".into(),
+        profile: generic,
+    });
+    assert_eq!(manager.snapshot(), before);
+    let rejected = manager.restart().unwrap_err();
+    assert_eq!(rejected.kind, EngineFailureKind::UnsupportedCapability);
+    assert_eq!(rejected.operation, EngineOperationDto::Restart);
+    assert_eq!(manager.snapshot(), before);
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-1".into(),
+        profile: edited.clone(),
+    });
+    manager.restart().unwrap();
+    let after = wait_snapshot(
+        &events,
+        Duration::from_secs(4),
+        |lifecycle| matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { run } if run.run_id != old_id),
+    );
+    assert_eq!(run_from_ready(&after.lifecycle).profile_snapshot, edited);
+    assert_eq!(
+        run_from_ready(&after.lifecycle).capability_snapshot,
+        before_run.capability_snapshot
+    );
     manager.teardown().unwrap();
 }

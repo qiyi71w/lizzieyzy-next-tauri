@@ -143,23 +143,23 @@ const initialProjection: GameDto = {
 
 const savedProfile = {
   id: "profile-1",
-  max_visits: 800,
   profile: {
     name: "Local KataGo",
-    engine_path: "/bin/katago",
-    model_path: "/models/model.bin",
-    config_path: "/configs/analysis.cfg",
+    program: "/bin/katago", argv: [],
+    settings: { model_path: "/models/model.bin", config_path: "/configs/analysis.cfg", max_visits: 800 },
     working_dir: "/tmp",
-    backend: "kata_go_analysis" as const
+    adapter_kind: "kata_go_analysis" as const
   }
 };
 
 const capability = {
   adapter_kind: "kata_go_analysis" as const,
-  selected_node_analysis: true,
-  whole_game_analysis: true,
-  root_score: true,
-  protocol_cancel: true
+  analysis: {
+    selected_node_analysis: true,
+    whole_game_analysis: true,
+    root_score: true,
+    protocol_cancel: true
+  }
 };
 
 let root: Root | null = null;
@@ -185,6 +185,7 @@ beforeEach(() => {
   preferencesApi.loadAppPreferences.mockResolvedValue({ preferences: defaultAppPreferences });
   preferencesApi.saveAppPreferences.mockImplementation(async (preferences: AppPreferences) => preferences);
   backend.loadEngineProfilesSettings.mockResolvedValue({
+    version: 1,
     selected_profile_id: "profile-1",
     autoload_profile_id: null,
     profiles: [savedProfile]

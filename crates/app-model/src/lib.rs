@@ -377,20 +377,46 @@ pub enum ProblemSeverity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineProfileDto {
     pub name: String,
-    pub engine_path: String,
-    pub model_path: Option<String>,
-    pub config_path: Option<String>,
+    pub program: String,
+    pub argv: Vec<String>,
     pub working_dir: Option<String>,
-    pub backend: EngineBackend,
+    #[serde(flatten)]
+    pub adapter: EngineAdapterSettings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EngineBackend {
     KataGoAnalysis,
-    KataGoGtp,
     GenericGtp,
-    ReadboardSidecar,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "adapter_kind", content = "settings", rename_all = "snake_case")]
+pub enum EngineAdapterSettings {
+    KataGoAnalysis(KataGoSettings),
+    GenericGtp(GenericGtpSettings),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KataGoSettings {
+    pub model_path: Option<String>,
+    pub config_path: Option<String>,
+    pub max_visits: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenericGtpSettings {}
+
+impl EngineProfileDto {
+    pub fn adapter_kind(&self) -> EngineBackend {
+        match self.adapter {
+            EngineAdapterSettings::KataGoAnalysis(_) => EngineBackend::KataGoAnalysis,
+            EngineAdapterSettings::GenericGtp(_) => EngineBackend::GenericGtp,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -452,6 +478,11 @@ impl std::error::Error for EngineFailureDto {}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineCapabilitySnapshotDto {
     pub adapter_kind: EngineBackend,
+    pub analysis: Option<EngineAnalysisCapabilitiesDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineAnalysisCapabilitiesDto {
     pub selected_node_analysis: bool,
     pub whole_game_analysis: bool,
     pub root_score: bool,
@@ -1020,11 +1051,14 @@ mod foreground_engine_wire {
     fn sample_profile() -> EngineProfileDto {
         EngineProfileDto {
             name: "Local KataGo".into(),
-            engine_path: "/bin/katago".into(),
-            model_path: Some("/models/model.bin".into()),
-            config_path: Some("/configs/analysis.cfg".into()),
+            program: "/bin/katago".into(),
+            argv: vec![],
             working_dir: Some("/tmp/engine".into()),
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: Some("/models/model.bin".into()),
+                config_path: Some("/configs/analysis.cfg".into()),
+                max_visits: 800,
+            }),
         }
     }
 
@@ -1041,10 +1075,12 @@ mod foreground_engine_wire {
                     profile_snapshot: sample_profile(),
                     capability_snapshot: Some(EngineCapabilitySnapshotDto {
                         adapter_kind: EngineBackend::KataGoAnalysis,
-                        selected_node_analysis: true,
-                        whole_game_analysis: true,
-                        root_score: true,
-                        protocol_cancel: true,
+                        analysis: Some(EngineAnalysisCapabilitiesDto {
+                            selected_node_analysis: true,
+                            whole_game_analysis: true,
+                            root_score: true,
+                            protocol_cancel: true,
+                        }),
                     }),
                 },
             },
@@ -1098,11 +1134,11 @@ mod foreground_engine_wire {
             "kata_go_analysis"
         );
         assert_eq!(
-            snapshot_json["lifecycle"]["run"]["profile_snapshot"]["backend"],
+            snapshot_json["lifecycle"]["run"]["profile_snapshot"]["adapter_kind"],
             "kata_go_analysis"
         );
         assert_eq!(
-            snapshot_json["lifecycle"]["run"]["capability_snapshot"]["protocol_cancel"],
+            snapshot_json["lifecycle"]["run"]["capability_snapshot"]["analysis"]["protocol_cancel"],
             true
         );
         assert_eq!(failure_json["operation"], "start");

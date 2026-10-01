@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { checkEngineAssets, loadEngineProfilesSettings, saveEngineProfilesSettings } from "../api/backend";
-import type { AssetCheckDto, EngineProfileDto, EngineProfileRecordDto, ForegroundEngineSnapshotDto } from "../domain/types";
+import type { AssetCheckDto, EngineBackendDto, EngineProfileDto, EngineProfileRecordDto, ForegroundEngineSnapshotDto } from "../domain/types";
 import { profileHasPendingChanges, runFromSnapshot } from "../domain/foregroundEngine";
 
 type Props = {
@@ -14,6 +14,8 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
   const [selectedProfileId, setSelectedProfileId] = useState("default");
   const [profileName, setProfileName] = useState("Local KataGo");
   const [enginePath, setEnginePath] = useState("");
+  const [adapterKind, setAdapterKind] = useState<EngineBackendDto>("kata_go_analysis");
+  const [argv, setArgv] = useState<string[]>([]);
   const [modelPath, setModelPath] = useState("");
   const [configPath, setConfigPath] = useState("");
   const [workingDir, setWorkingDir] = useState("");
@@ -23,15 +25,19 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
   const [autoloadProfileId, setAutoloadProfileId] = useState<string | null>(null);
 
   const visits = Number(maxVisits);
-  const canSave = profileName.trim().length > 0 && Number.isFinite(visits) && visits > 0;
-  const canDeleteProfile = selectedProfileId !== "default" && profiles.length > 1;
+  const canSave = profiles.length > 0 && profileName.trim().length > 0
+    && (adapterKind === "generic_gtp" || (Number.isInteger(visits) && visits > 0 && visits <= 0xffffffff));
+  const candidateId = engineSnapshot?.lifecycle.state === "switching" ? engineSnapshot.lifecycle.candidate.profile_id : null;
+  const activeId = runFromSnapshot(engineSnapshot)?.profile_id;
+  const canDeleteProfile = selectedProfileId !== "default" && profiles.length > 1
+    && selectedProfileId !== activeId && selectedProfileId !== candidateId;
   const snapshot = engineSnapshot ?? {
     revision: 0,
     lifecycle: { state: "no_engine" as const },
     continuous: { enabled: null, phase: "loading" as const }
   };
   const run = runFromSnapshot(snapshot);
-  const savedRecord = profiles.find((profile) => profile.id === run?.profile_id)?.profile;
+  const savedRecord = run?.profile_id === selectedProfileId ? buildProfile() : profiles.find((profile) => profile.id === run?.profile_id)?.profile;
   const pendingChanges = Boolean(savedRecord && run && profileHasPendingChanges(savedRecord, snapshot));
 
   useEffect(() => {
@@ -44,7 +50,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
         setSelectedProfileId(selected?.id ?? "default");
         setAutoloadProfileId(settings.autoload_profile_id ?? null);
         if (!selected) {
-          setProfileStatus("Default profile ready.");
+          setProfileStatus("No configured profile.");
           return;
         }
         applyProfileRecord(selected);
@@ -60,30 +66,35 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
 
   function applyProfileRecord(record: EngineProfileRecordDto) {
     setProfileName(record.profile.name);
-    setEnginePath(record.profile.engine_path);
-    setModelPath(record.profile.model_path ?? "");
-    setConfigPath(record.profile.config_path ?? "");
+    setEnginePath(record.profile.program);
+    setAdapterKind(record.profile.adapter_kind);
+    setArgv([...record.profile.argv]);
+    setModelPath(record.profile.adapter_kind === "kata_go_analysis" ? record.profile.settings.model_path ?? "" : "");
+    setConfigPath(record.profile.adapter_kind === "kata_go_analysis" ? record.profile.settings.config_path ?? "" : "");
     setWorkingDir(record.profile.working_dir ?? "");
-    setMaxVisits(String(record.max_visits));
+    setMaxVisits(record.profile.adapter_kind === "kata_go_analysis" ? String(record.profile.settings.max_visits) : "800");
     setAssetChecks([]);
   }
 
   function buildProfile(): EngineProfileDto {
-    return {
-      name: profileName.trim() || "Local KataGo",
-      engine_path: enginePath.trim(),
-      model_path: optionalPath(modelPath),
-      config_path: optionalPath(configPath),
-      working_dir: optionalPath(workingDir),
-      backend: "kata_go_analysis"
-    };
+    const previous = profiles.find((record) => record.id === selectedProfileId)?.profile;
+    const common = { name: profileName, program: enginePath, argv: [...argv], working_dir: optionalPath(workingDir, previous?.working_dir) };
+    return adapterKind === "generic_gtp"
+      ? { ...common, adapter_kind: "generic_gtp", settings: {} }
+      : {
+        ...common, adapter_kind: "kata_go_analysis",
+        settings: {
+          model_path: optionalPath(modelPath, previous?.adapter_kind === "kata_go_analysis" ? previous.settings.model_path : null),
+          config_path: optionalPath(configPath, previous?.adapter_kind === "kata_go_analysis" ? previous.settings.config_path : null),
+          max_visits: visits
+        }
+      };
   }
 
   function buildProfileRecord(id = selectedProfileId): EngineProfileRecordDto {
     return {
       id,
-      profile: buildProfile(),
-      max_visits: Math.floor(visits)
+      profile: buildProfile()
     };
   }
 
@@ -104,6 +115,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
     successMessage: string
   ) {
     const saved = await saveEngineProfilesSettings({
+      version: 1,
       selected_profile_id: selectedId,
       autoload_profile_id: autoloadId,
       profiles: nextProfiles
@@ -119,17 +131,10 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
   async function handleSelectProfile(profileId: string) {
     const profile = profiles.find((item) => item.id === profileId);
     if (!profile) return;
-    setSelectedProfileId(profileId);
-    applyProfileRecord(profile);
-    setProfileStatus(`Selected ${profile.profile.name}.`);
     try {
-      await saveEngineProfilesSettings({
-        selected_profile_id: profileId,
-        autoload_profile_id: autoloadProfileId,
-        profiles
-      });
+      await persistProfiles(profiles, profileId, autoloadProfileId, `Selected ${profile.profile.name}.`);
     } catch (error) {
-      setProfileStatus(`Select saved locally but persistence failed: ${errorMessage(error)}`);
+      setProfileStatus(`Select failed: ${errorMessage(error)}`);
     }
   }
 
@@ -222,6 +227,20 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
     }
   }
 
+  async function handleReloadProfiles() {
+    try {
+      const settings = await loadEngineProfilesSettings();
+      const selected = settings.profiles.find((profile) => profile.id === settings.selected_profile_id);
+      setProfiles(settings.profiles);
+      setSelectedProfileId(settings.selected_profile_id);
+      setAutoloadProfileId(settings.autoload_profile_id);
+      if (selected) applyProfileRecord(selected);
+      setProfileStatus("Profiles reloaded.");
+    } catch (error) {
+      setProfileStatus(`Reload failed: ${errorMessage(error)}`);
+    }
+  }
+
   return (
     <section className="engine-setup-panel" aria-label="引擎设置">
       <div className="engine-run-row">
@@ -252,12 +271,20 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
       </div>
       <div className="engine-grid">
         <label>
+          <span>适配器</span>
+          <select value={adapterKind} onChange={(event) => { setAdapterKind(event.target.value as EngineBackendDto); setAssetChecks([]); }}>
+            <option value="kata_go_analysis">KataGoAnalysis</option>
+            <option value="generic_gtp">GenericGtp</option>
+          </select>
+        </label>
+        <label>
           <span>引擎</span>
           <div className="path-input-row">
             <input value={enginePath} onChange={(event) => updatePath(setEnginePath, event.target.value)} placeholder="/path/to/katago" aria-invalid={isKnownMissing(assetChecks, "engine binary")} title={pathCheckTitle(assetChecks, "engine binary")} />
             <button type="button" className="path-picker-button" onClick={() => void handlePickPath("引擎", enginePath, false, setEnginePath)}>浏览</button>
           </div>
         </label>
+        {adapterKind === "kata_go_analysis" ? <>
         <label>
           <span>模型</span>
           <div className="path-input-row">
@@ -272,6 +299,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
             <button type="button" className="path-picker-button" onClick={() => void handlePickPath("配置文件", configPath, false, setConfigPath)}>浏览</button>
           </div>
         </label>
+        </> : null}
         <label>
           <span>工作目录</span>
           <div className="path-input-row">
@@ -280,12 +308,29 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
           </div>
         </label>
       </div>
+      <div className="engine-grid" aria-label="启动参数">
+        {argv.map((argument, index) => (
+          <label key={index}>
+            <span>参数 {index + 1}</span>
+            <div className="path-input-row">
+              <input aria-label={`参数 ${index + 1}`} value={argument} onChange={(event) => setArgv((current) => current.map((value, item) => item === index ? event.target.value : value))} />
+              <button type="button" className="path-picker-button" aria-label={`删除参数 ${index + 1}`} onClick={() => setArgv((current) => current.filter((_, item) => item !== index))}>删除</button>
+            </div>
+          </label>
+        ))}
+        <button type="button" onClick={() => setArgv((current) => [...current, ""])}>新增参数</button>
+      </div>
+      <p className="message">每项是一个原样传递的参数；空值、空格和中文不会拆分或经 shell 解释。</p>
+      {adapterKind === "generic_gtp" ? <p className="message" role="status">GenericGtp 配置可保存；运行时尚不可用，不能 Start 或切换，也未验证分析或取步能力。</p> : null}
       <div className="engine-run-row">
+        {adapterKind === "kata_go_analysis" ?
         <label>
           <span>最大计算量</span>
           <input type="number" min={1} step={1} value={maxVisits} onChange={(event) => setMaxVisits(event.target.value)} />
         </label>
+        : null}
         <button onClick={() => void handleSaveProfile()} disabled={!canSave}>保存配置</button>
+        <button type="button" onClick={() => void handleReloadProfiles()}>重新加载配置</button>
         <button onClick={() => void handleCheckAssets()} disabled={disabled}>检查资源</button>
       </div>
       {pendingChanges ? <p className="message" role="status">存在待应用更改。只有显式 Restart 才会替换当前 Foreground Engine Run。</p> : null}
@@ -299,9 +344,8 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
   );
 }
 
-function optionalPath(value: string): string | null {
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
+function optionalPath(value: string, previous: string | null | undefined): string | null {
+  return value.length > 0 || previous === "" ? value : null;
 }
 
 function assetStatus(checks: AssetCheckDto[]): string {

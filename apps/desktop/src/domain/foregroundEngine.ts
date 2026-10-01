@@ -1,4 +1,4 @@
-import type { EngineFailureDto, EngineRunDto, ForegroundEngineSnapshotDto } from "./types";
+import type { EngineFailureDto, EngineProfileDto, EngineRunDto, ForegroundEngineSnapshotDto } from "./types";
 
 export const emptyForegroundEngineSnapshot = (): ForegroundEngineSnapshotDto => ({
   revision: 0,
@@ -48,7 +48,8 @@ export function isForegroundEngineReady(snapshot: ForegroundEngineSnapshotDto): 
 }
 
 export function admitsForegroundEngineJobs(snapshot: ForegroundEngineSnapshotDto): boolean {
-  return snapshot.lifecycle.state === "ready" || snapshot.lifecycle.state === "switching";
+  return (snapshot.lifecycle.state === "ready" || snapshot.lifecycle.state === "switching")
+    && runFromSnapshot(snapshot)?.capability_snapshot?.analysis?.selected_node_analysis === true;
 }
 
 export function canStopForegroundEngine(snapshot: ForegroundEngineSnapshotDto): boolean {
@@ -63,17 +64,22 @@ export function canRestartForegroundEngine(snapshot: ForegroundEngineSnapshotDto
 }
 
 export function profileHasPendingChanges(
-  saved: { name: string; engine_path: string; model_path?: string | null; config_path?: string | null; working_dir?: string | null },
+  saved: EngineProfileDto,
   snapshot: ForegroundEngineSnapshotDto
 ): boolean {
   const run = runFromSnapshot(snapshot);
   if (!run) return false;
   const current = run.profile_snapshot;
-  return current.name !== saved.name
-    || current.engine_path !== saved.engine_path
-    || (current.model_path ?? "") !== (saved.model_path ?? "")
-    || (current.config_path ?? "") !== (saved.config_path ?? "")
-    || (current.working_dir ?? "") !== (saved.working_dir ?? "");
+  if (current.name !== saved.name || current.program !== saved.program
+    || current.working_dir !== saved.working_dir || current.adapter_kind !== saved.adapter_kind
+    || current.argv.length !== saved.argv.length
+    || current.argv.some((argument, index) => argument !== saved.argv[index])) return true;
+  if (current.adapter_kind === "kata_go_analysis" && saved.adapter_kind === "kata_go_analysis") {
+    return current.settings.model_path !== saved.settings.model_path
+      || current.settings.config_path !== saved.settings.config_path
+      || current.settings.max_visits !== saved.settings.max_visits;
+  }
+  return false;
 }
 
 export function shouldAcceptFailureEvent(

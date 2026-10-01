@@ -19,18 +19,19 @@ const run: EngineRunDto = {
   adapter_kind: "kata_go_analysis",
   profile_snapshot: {
     name: "Local KataGo",
-    engine_path: "/bin/katago",
-    model_path: "/models/model.bin",
-    config_path: "/configs/analysis.cfg",
+    program: "/bin/katago", argv: [],
+    settings: { model_path: "/models/model.bin", config_path: "/configs/analysis.cfg", max_visits: 800 },
     working_dir: "/tmp",
-    backend: "kata_go_analysis"
+    adapter_kind: "kata_go_analysis"
   },
   capability_snapshot: {
     adapter_kind: "kata_go_analysis",
-    selected_node_analysis: true,
-    whole_game_analysis: true,
-    root_score: true,
-    protocol_cancel: true
+    analysis: {
+      selected_node_analysis: true,
+      whole_game_analysis: true,
+      root_score: true,
+      protocol_cancel: true
+    }
   }
 };
 
@@ -64,7 +65,41 @@ describe("foreground engine snapshot merge", () => {
   it("reports pending changes against the immutable run snapshot", () => {
     const ready = snapshot(1, { state: "ready", run });
     expect(profileHasPendingChanges(run.profile_snapshot, ready)).toBe(false);
-    expect(profileHasPendingChanges({ ...run.profile_snapshot, engine_path: "/other/katago" }, ready)).toBe(true);
+    expect(profileHasPendingChanges({ ...run.profile_snapshot, program: "/other/katago" }, ready)).toBe(true);
+  });
+
+  it("compares every saved field without mutating the live run or verified capability", () => {
+    const ready = snapshot(1, { state: "ready", run });
+    const original = structuredClone(ready);
+    if (run.profile_snapshot.adapter_kind !== "kata_go_analysis") throw new Error("Expected KataGo fixture");
+    const profile = run.profile_snapshot;
+    const edits = [
+      { ...profile, name: "新名称" },
+      { ...profile, program: "/path with spaces/katago" },
+      { ...profile, working_dir: "/other directory" },
+      { ...profile, argv: ["two words", "中文", ""] },
+      { ...profile, settings: { ...profile.settings, model_path: "/other/model" } },
+      { ...profile, settings: { ...profile.settings, config_path: "/other/config" } },
+      { ...profile, settings: { ...profile.settings, max_visits: 1200 } },
+      { ...profile, adapter_kind: "generic_gtp" as const, settings: {} }
+    ];
+    for (const edited of edits) expect(profileHasPendingChanges(edited, ready)).toBe(true);
+    expect(ready).toEqual(original);
+    const updated = edits[3];
+    const promoted = snapshot(2, { state: "ready", run: { ...run, run_id: "run-2", profile_snapshot: updated } });
+    expect(profileHasPendingChanges(updated, promoted)).toBe(false);
+    const reordered = { ...updated, argv: ["中文", "two words", ""] };
+    expect(profileHasPendingChanges(reordered, promoted)).toBe(true);
+    expect(profileHasPendingChanges({ ...updated, argv: ["two words", "中文"] }, promoted)).toBe(true);
+  });
+
+  it("does not infer analysis capability from an adapter or a Ready state", () => {
+    const unverified = { ...run, capability_snapshot: null };
+    expect(admitsForegroundEngineJobs(snapshot(1, { state: "ready", run: unverified }))).toBe(false);
+    const generic = { ...run, adapter_kind: "generic_gtp" as const, capability_snapshot: { adapter_kind: "generic_gtp" as const, analysis: null } };
+    expect(admitsForegroundEngineJobs(snapshot(2, { state: "ready", run: generic }))).toBe(false);
+    const refused = { ...run, capability_snapshot: { adapter_kind: "kata_go_analysis" as const, analysis: { selected_node_analysis: false, whole_game_analysis: true, root_score: true, protocol_cancel: true } } };
+    expect(admitsForegroundEngineJobs(snapshot(3, { state: "ready", run: refused }))).toBe(false);
   });
 });
 

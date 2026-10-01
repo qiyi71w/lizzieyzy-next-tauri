@@ -130,14 +130,12 @@ const initialProjection: GameDto = {
 
 const savedProfile = {
   id: "profile-1",
-  max_visits: 800,
   profile: {
     name: "Local KataGo",
-    engine_path: "/bin/katago",
-    model_path: "/models/model.bin",
-    config_path: "/configs/analysis.cfg",
+    program: "/bin/katago", argv: [],
+    settings: { model_path: "/models/model.bin", config_path: "/configs/analysis.cfg", max_visits: 800 },
     working_dir: "/tmp",
-    backend: "kata_go_analysis" as const
+    adapter_kind: "kata_go_analysis" as const
   }
 };
 
@@ -160,6 +158,7 @@ beforeEach(() => {
   backend.parseSgfSummary.mockResolvedValue(previewGame);
   backend.replaySgfPositions.mockResolvedValue([emptyPosition]);
   backend.loadEngineProfilesSettings.mockResolvedValue({
+    version: 1,
     selected_profile_id: "profile-1",
     autoload_profile_id: null,
     profiles: [savedProfile]
@@ -317,10 +316,12 @@ async function readyEngine(host: HTMLElement) {
           profile_snapshot: savedProfile.profile,
           capability_snapshot: {
             adapter_kind: "kata_go_analysis",
-            selected_node_analysis: true,
-            whole_game_analysis: true,
-            root_score: true,
-            protocol_cancel: true
+            analysis: {
+              selected_node_analysis: true,
+              whole_game_analysis: true,
+              root_score: true,
+              protocol_cancel: true
+            }
           }
         }
       }
@@ -847,7 +848,11 @@ describe("truthful native analysis actions", () => {
             run_id: "run-1",
             profile_id: "profile-1",
             adapter_kind: "kata_go_analysis",
-            profile_snapshot: savedProfile.profile
+            profile_snapshot: savedProfile.profile,
+            capability_snapshot: {
+              adapter_kind: "kata_go_analysis",
+              analysis: { selected_node_analysis: true, whole_game_analysis: true, root_score: true, protocol_cancel: true }
+            }
           }
         }
       });

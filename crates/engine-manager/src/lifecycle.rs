@@ -9,10 +9,10 @@ use app_model::{
     AnalysisJobStateDto, AnalysisScopeDto, AnalysisScopeModeDto, AnalysisStageConditionsDto,
     AnalysisSwingComparisonDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, AnalysisTaskLimitDto,
     AnalysisTaskOverviewDto, AnalysisTaskStageDto, AnalysisTaskStateDto, AnalysisTaskStrategyDto,
-    ContinuousAnalysisBudgetDto, ContinuousAnalysisPhaseDto, ContinuousAnalysisSnapshotDto, EngineBackend,
-    EngineCapabilitySnapshotDto, EngineFailureDto, EngineFailureKind, EngineOperationDto, EngineRunDto,
-    ForegroundEngineEventDto, ForegroundEngineLifecycleDto, ForegroundEngineSnapshotDto, NodePath,
-    PlayerColor,
+    ContinuousAnalysisBudgetDto, ContinuousAnalysisPhaseDto, ContinuousAnalysisSnapshotDto,
+    EngineAnalysisCapabilitiesDto, EngineBackend, EngineCapabilitySnapshotDto, EngineFailureDto,
+    EngineFailureKind, EngineOperationDto, EngineRunDto, ForegroundEngineEventDto,
+    ForegroundEngineLifecycleDto, ForegroundEngineSnapshotDto, NodePath, PlayerColor,
 };
 use katago_protocol::{normalize_response, parse_response_line, AnalysisQuery, ProtocolError};
 use std::io;
@@ -441,6 +441,7 @@ impl ForegroundEngineManager {
                 || !current_admitting_run(&state.phase).is_some_and(|run| {
                     run.capability_snapshot
                         .as_ref()
+                        .and_then(|snapshot| snapshot.analysis.as_ref())
                         .is_some_and(|capability| capability.selected_node_analysis)
                 })
                 || current_selected_job(&state).is_some_and(|job| !job.state.is_limited())
@@ -521,16 +522,15 @@ impl ForegroundEngineManager {
                 return Err(published);
             }
         };
-        if saved.profile.backend != EngineBackend::KataGoAnalysis {
+        if saved.profile.adapter_kind() != EngineBackend::KataGoAnalysis {
             let published = failure(
                 operation_kind,
                 EngineFailureKind::UnsupportedCapability,
-                "R3 Foreground Engine Run only proves KataGoAnalysis".into(),
+                "GenericGtp runtime is not available".into(),
                 None,
                 Some(saved.profile_id.as_str()),
                 None,
             );
-            self.inner.record_no_engine_failure(published.clone());
             return Err(published);
         }
 
@@ -596,6 +596,26 @@ impl ForegroundEngineManager {
                     ));
                 }
             };
+            let saved = self.inner.catalog.get(&run.profile_id).ok_or_else(|| {
+                failure(
+                    EngineOperationDto::Restart,
+                    EngineFailureKind::ProfileNotFound,
+                    format!("saved engine profile was not found: {}", run.profile_id),
+                    Some(&run.run_id),
+                    Some(&run.profile_id),
+                    None,
+                )
+            })?;
+            if saved.profile.adapter_kind() != EngineBackend::KataGoAnalysis {
+                return Err(failure(
+                    EngineOperationDto::Restart,
+                    EngineFailureKind::UnsupportedCapability,
+                    "GenericGtp runtime is not available".into(),
+                    Some(&run.run_id),
+                    Some(&run.profile_id),
+                    None,
+                ));
+            }
             state.operation += 1;
             let profile_id = run.profile_id.clone();
             state.phase = Phase::Stopping(run);
@@ -635,11 +655,11 @@ impl ForegroundEngineManager {
                 None,
             )
         })?;
-        if saved.profile.backend != EngineBackend::KataGoAnalysis {
+        if saved.profile.adapter_kind() != EngineBackend::KataGoAnalysis {
             return Err(failure(
                 EngineOperationDto::Switch,
                 EngineFailureKind::UnsupportedCapability,
-                "R3 Foreground Engine Run only proves KataGoAnalysis".into(),
+                "GenericGtp runtime is not available".into(),
                 None,
                 Some(saved.profile_id.as_str()),
                 None,
@@ -1045,6 +1065,7 @@ impl ForegroundEngineManager {
             let supported = run
                 .capability_snapshot
                 .as_ref()
+                .and_then(|snapshot| snapshot.analysis.as_ref())
                 .is_some_and(|snapshot| snapshot.whole_game_analysis);
             if !supported {
                 return Err(failure(
@@ -1064,6 +1085,7 @@ impl ForegroundEngineManager {
                 && !run
                     .capability_snapshot
                     .as_ref()
+                    .and_then(|snapshot| snapshot.analysis.as_ref())
                     .is_some_and(|snapshot| snapshot.root_score)
             {
                 return Err(failure(
@@ -1752,6 +1774,7 @@ impl ForegroundEngineManager {
                 if !run
                     .capability_snapshot
                     .as_ref()
+                    .and_then(|snapshot| snapshot.analysis.as_ref())
                     .is_some_and(|capability| capability.selected_node_analysis)
                 {
                     return;
@@ -2153,10 +2176,12 @@ impl Inner {
         let mut ready = run.clone();
         ready.capability_snapshot = Some(EngineCapabilitySnapshotDto {
             adapter_kind: EngineBackend::KataGoAnalysis,
-            selected_node_analysis: true,
-            whole_game_analysis: self.config.admit_whole_game_analysis,
-            root_score: true,
-            protocol_cancel: true,
+            analysis: Some(EngineAnalysisCapabilitiesDto {
+                selected_node_analysis: true,
+                whole_game_analysis: self.config.admit_whole_game_analysis,
+                root_score: true,
+                protocol_cancel: true,
+            }),
         });
         invalidate_analysis_task_locked(
             &mut state,
@@ -2202,10 +2227,12 @@ impl Inner {
             let mut ready = run.clone();
             ready.capability_snapshot = Some(EngineCapabilitySnapshotDto {
                 adapter_kind: EngineBackend::KataGoAnalysis,
-                selected_node_analysis: true,
-                whole_game_analysis: self.config.admit_whole_game_analysis,
-                root_score: true,
-                protocol_cancel: true,
+                analysis: Some(EngineAnalysisCapabilitiesDto {
+                    selected_node_analysis: true,
+                    whole_game_analysis: self.config.admit_whole_game_analysis,
+                    root_score: true,
+                    protocol_cancel: true,
+                }),
             });
             invalidate_analysis_task_locked(
                 &mut state,
@@ -3794,6 +3821,7 @@ fn validate_selected_admission(
     if !run
         .capability_snapshot
         .as_ref()
+        .and_then(|snapshot| snapshot.analysis.as_ref())
         .is_some_and(|snapshot| snapshot.selected_node_analysis)
     {
         return Err(failure(
@@ -3896,6 +3924,7 @@ fn continuous_snapshot(state: &ManagerState) -> ContinuousAnalysisSnapshotDto {
                 if !run
                     .capability_snapshot
                     .as_ref()
+                    .and_then(|snapshot| snapshot.analysis.as_ref())
                     .is_some_and(|capability| capability.selected_node_analysis)
                 {
                     ContinuousAnalysisPhaseDto::Unavailable
@@ -4037,7 +4066,7 @@ fn starting_run(saved: &SavedEngineProfile) -> EngineRunDto {
     EngineRunDto {
         run_id: Uuid::new_v4().to_string(),
         profile_id: saved.profile_id.clone(),
-        adapter_kind: saved.profile.backend,
+        adapter_kind: saved.profile.adapter_kind(),
         profile_snapshot: saved.profile.clone(),
         capability_snapshot: None,
     }
