@@ -20,9 +20,9 @@ mod current_game_save_write;
 #[cfg(test)]
 mod current_game_session_recovery;
 mod departure;
-mod trial;
-mod scoring;
 pub(crate) mod recovery;
+mod scoring;
+mod trial;
 
 #[derive(Debug, Clone)]
 pub struct WholeGameAdmission {
@@ -290,12 +290,13 @@ impl CurrentGameState {
                 crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, error.message)
             })?;
         let work_items = crate::whole_game_work_items(&admitted, max_visits, &run_id)?;
-        manager.start_whole_game_analysis(engine_manager::WholeGameJobRequest {
-            run_id,
-            generation,
-            work_items,
-        })
-        .map_err(Box::new)
+        manager
+            .start_whole_game_analysis(engine_manager::WholeGameJobRequest {
+                run_id,
+                generation,
+                work_items,
+            })
+            .map_err(Box::new)
     }
 
     pub fn preview_analysis_scope(
@@ -317,7 +318,11 @@ impl CurrentGameState {
         conditions: app_model::AnalysisStageConditionsDto,
     ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
         let invalid = |message| {
-            Box::new(crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message))
+            Box::new(crate::job_failure(
+                &run_id,
+                app_model::EngineFailureKind::InvalidState,
+                message,
+            ))
         };
         conditions.validate_single_stage().map_err(&invalid)?;
         // Keep semantic revalidation and manager admission under the same owner lock.
@@ -331,16 +336,17 @@ impl CurrentGameState {
             ));
         }
         let work_items = crate::whole_game_work_items(&admitted, conditions.total_visits.value, &run_id)?;
-        manager.start_analysis_task(
-            engine_manager::WholeGameJobRequest {
-                run_id,
-                generation: admitted.generation,
-                work_items,
-            },
-            preview.scope,
-            conditions,
-        )
-        .map_err(Box::new)
+        manager
+            .start_analysis_task(
+                engine_manager::WholeGameJobRequest {
+                    run_id,
+                    generation: admitted.generation,
+                    work_items,
+                },
+                preview.scope,
+                conditions,
+            )
+            .map_err(Box::new)
     }
 
     pub fn start_all_positions_analysis_task(
@@ -352,7 +358,11 @@ impl CurrentGameState {
         deep_conditions: app_model::AnalysisStageConditionsDto,
     ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
         let invalid = |message| {
-            Box::new(crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message))
+            Box::new(crate::job_failure(
+                &run_id,
+                app_model::EngineFailureKind::InvalidState,
+                message,
+            ))
         };
         app_model::AnalysisStageConditionsDto::validate_all_positions_two_stage(
             &overview_conditions,
@@ -370,17 +380,18 @@ impl CurrentGameState {
         }
         let work_items =
             crate::whole_game_work_items(&admitted, deep_conditions.total_visits.value, &run_id)?;
-        manager.start_all_positions_analysis_task(
-            engine_manager::WholeGameJobRequest {
-                run_id,
-                generation: admitted.generation,
-                work_items,
-            },
-            preview.scope,
-            overview_conditions,
-            deep_conditions,
-        )
-        .map_err(Box::new)
+        manager
+            .start_all_positions_analysis_task(
+                engine_manager::WholeGameJobRequest {
+                    run_id,
+                    generation: admitted.generation,
+                    work_items,
+                },
+                preview.scope,
+                overview_conditions,
+                deep_conditions,
+            )
+            .map_err(Box::new)
     }
 
     pub fn start_swing_analysis_task(
@@ -392,7 +403,11 @@ impl CurrentGameState {
         deep_conditions: app_model::AnalysisStageConditionsDto,
     ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
         let invalid = |message| {
-            Box::new(crate::job_failure(&run_id, app_model::EngineFailureKind::InvalidState, message))
+            Box::new(crate::job_failure(
+                &run_id,
+                app_model::EngineFailureKind::InvalidState,
+                message,
+            ))
         };
         overview_conditions.validate_single_stage().map_err(&invalid)?;
         deep_conditions.validate_single_stage().map_err(&invalid)?;
@@ -412,21 +427,22 @@ impl CurrentGameState {
         }
         let work_items =
             crate::whole_game_work_items(&admitted, deep_conditions.total_visits.value, &run_id)?;
-        manager.start_swing_analysis_task(engine_manager::SwingAnalysisTaskRequest {
-            job: engine_manager::WholeGameJobRequest {
-                run_id,
-                generation: admitted.generation,
-                work_items,
-            },
-            scope: preview.scope,
-            requested: admitted.requested,
-            supporting: admitted.supporting,
-            swing_comparisons: admitted.swing_comparisons,
-            swing_criteria: criteria,
-            overview_conditions,
-            deep_conditions,
-        })
-        .map_err(Box::new)
+        manager
+            .start_swing_analysis_task(engine_manager::SwingAnalysisTaskRequest {
+                job: engine_manager::WholeGameJobRequest {
+                    run_id,
+                    generation: admitted.generation,
+                    work_items,
+                },
+                scope: preview.scope,
+                requested: admitted.requested,
+                supporting: admitted.supporting,
+                swing_comparisons: admitted.swing_comparisons,
+                swing_criteria: criteria,
+                overview_conditions,
+                deep_conditions,
+            })
+            .map_err(Box::new)
     }
 
     pub fn pause_analysis_task(
@@ -454,7 +470,8 @@ impl CurrentGameState {
         holder.ensure_editable().map_err(|error| {
             crate::job_failure(run_id, app_model::EngineFailureKind::InvalidState, error.message)
         })?;
-        manager.continue_analysis_task(run_id, task_id, holder.generation)
+        manager
+            .continue_analysis_task(run_id, task_id, holder.generation)
             .map_err(Box::new)
     }
 
@@ -938,7 +955,10 @@ impl CurrentGameHolder {
 
     fn promote_to_main(&mut self, path: NodePath) -> Result<CurrentGameResultDto, CurrentGameError> {
         self.ensure_editable()?;
-        let outcome = self.document.as_mut().ok_or_else(no_current_game)?
+        let outcome = self
+            .document
+            .as_mut()
+            .ok_or_else(no_current_game)?
             .promote_to_main_with_history(&self.selected_path, &path)?;
         if let Some(edit) = outcome.edit {
             self.commit_edit(edit);
@@ -1635,7 +1655,10 @@ mod current_game_remove_variation {
 #[cfg(test)]
 impl CurrentGameState {
     pub(crate) fn force_dirty(&self) {
-        self.holder.lock().expect("current game state").mark_nonhistory_change();
+        self.holder
+            .lock()
+            .expect("current game state")
+            .mark_nonhistory_change();
     }
 
     fn save_to_path_after_hook(

@@ -78,6 +78,8 @@ def finish_cancel(control):
 
 def search(query):
     identity = query["id"]
+    if ":" in identity:
+        (root / "search-started").touch()
     # One-thread fixtures keep the finite task in the engine queue.
     while (root / "one-thread").exists() and any(x != identity for x in active):
         if identity not in active:

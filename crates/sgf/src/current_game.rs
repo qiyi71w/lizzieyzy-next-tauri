@@ -1621,11 +1621,7 @@ fn validate_result(result: &str) -> Result<(), CurrentGameError> {
 }
 
 fn take_analysis(root: &mut SgfNode) -> SavedAnalysisProperties {
-    fn visit(
-        node: &mut SgfNode,
-        path: &mut Vec<u32>,
-        removed: &mut SavedAnalysisProperties,
-    ) {
+    fn visit(node: &mut SgfNode, path: &mut Vec<u32>, removed: &mut SavedAnalysisProperties) {
         let properties: Vec<_> = node
             .properties
             .iter()
