@@ -1362,6 +1362,26 @@ describe("foreground engine lifecycle UI", () => {
     });
   });
 
+  it.each(["start", "switch", "restart"] as const)("shows typed unsupported %s failures without changing the live engine", async (operation) => {
+    const host = await renderApp();
+    if (operation !== "start") await readyEngine(host);
+    const label = host.querySelector(".engine-chip-label")?.textContent;
+    const failure = { kind: "unsupported_capability", operation, message: "GenericGtp runtime is not available" };
+    if (operation === "start") backend.startForegroundEngine.mockRejectedValueOnce(failure);
+    else if (operation === "switch") backend.switchForegroundEngine.mockRejectedValueOnce(failure);
+    else backend.restartForegroundEngine.mockRejectedValueOnce(failure);
+    await act(async () => {
+      if (operation === "restart") buttonNamed(host, "重启").click();
+      else {
+        const switcher = host.querySelector('select[aria-label="Foreground Engine Profile"]') as HTMLSelectElement;
+        switcher.value = "profile-2";
+        switcher.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    });
+    expect(host.textContent).toContain(failure.message);
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe(label);
+  });
+
   it("publishes only saved catalog changes to the live Engine Switcher", async () => {
     const host = await renderApp();
     const panel = await openEngineSettings(host);

@@ -1027,7 +1027,7 @@ export function App() {
       if (state === "no_engine") await startForegroundEngine(profileId);
       else await switchForegroundEngine(profileId);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(errorMessage(error));
     }
   }
 
@@ -3532,7 +3532,7 @@ export function App() {
         },
         onRestart: () => {
           void restartForegroundEngine().catch((error) => {
-            setMessage(error instanceof Error ? error.message : String(error));
+            setMessage(errorMessage(error));
           });
         }
       }}
