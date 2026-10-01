@@ -1816,7 +1816,15 @@ impl ForegroundEngineManager {
         let state = self.lock();
         let blocked = match &state.phase {
             Phase::Starting(run) | Phase::Ready(run) | Phase::Stopping(run) => Some(run),
-            Phase::Switching { primary, .. } => Some(primary),
+            Phase::Switching {
+                primary, candidate, ..
+            } => {
+                if primary.profile_id == profile_id {
+                    Some(primary)
+                } else {
+                    Some(candidate)
+                }
+            }
             Phase::Error { run, .. } => Some(run),
             Phase::NoEngine { .. } => None,
         };
@@ -1825,7 +1833,7 @@ impl ForegroundEngineManager {
                 return Err(failure(
                     EngineOperationDto::DeleteProfile,
                     EngineFailureKind::ProfileInUse,
-                    "an active Foreground Engine Run still holds this profile identity".into(),
+                    "an active or candidate Foreground Engine Run still holds this profile identity".into(),
                     Some(run.run_id.as_str()),
                     Some(profile_id),
                     None,

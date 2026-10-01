@@ -7,9 +7,10 @@ import { profileHasPendingChanges, runFromSnapshot } from "../domain/foregroundE
 type Props = {
   disabled?: boolean;
   engineSnapshot?: ForegroundEngineSnapshotDto | null;
+  onProfilesChange?: (profiles: EngineProfileRecordDto[]) => void;
 };
 
-export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Props) {
+export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onProfilesChange }: Props) {
   const [profiles, setProfiles] = useState<EngineProfileRecordDto[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState("default");
   const [profileName, setProfileName] = useState("Local KataGo");
@@ -47,6 +48,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
         if (!isMounted) return;
         const selected = settings.profiles.find((profile) => profile.id === settings.selected_profile_id) ?? settings.profiles[0];
         setProfiles(settings.profiles);
+        onProfilesChange?.(settings.profiles);
         setSelectedProfileId(selected?.id ?? "default");
         setAutoloadProfileId(settings.autoload_profile_id ?? null);
         if (!selected) {
@@ -62,7 +64,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [onProfilesChange]);
 
   function applyProfileRecord(record: EngineProfileRecordDto) {
     setProfileName(record.profile.name);
@@ -122,6 +124,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
     });
     const selected = saved.profiles.find((profile) => profile.id === saved.selected_profile_id) ?? saved.profiles[0];
     setProfiles(saved.profiles);
+    onProfilesChange?.(saved.profiles);
     setSelectedProfileId(saved.selected_profile_id);
     setAutoloadProfileId(saved.autoload_profile_id ?? null);
     if (selected) applyProfileRecord(selected);
@@ -232,6 +235,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null }: Pr
       const settings = await loadEngineProfilesSettings();
       const selected = settings.profiles.find((profile) => profile.id === settings.selected_profile_id);
       setProfiles(settings.profiles);
+      onProfilesChange?.(settings.profiles);
       setSelectedProfileId(settings.selected_profile_id);
       setAutoloadProfileId(settings.autoload_profile_id);
       if (selected) applyProfileRecord(selected);

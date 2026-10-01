@@ -1362,6 +1362,34 @@ describe("foreground engine lifecycle UI", () => {
     });
   });
 
+  it("publishes only saved catalog changes to the live Engine Switcher", async () => {
+    const host = await renderApp();
+    const panel = await openEngineSettings(host);
+    const switcher = host.querySelector('select[aria-label="Foreground Engine Profile"]') as HTMLSelectElement;
+    const settingsSelect = panel.querySelector("select") as HTMLSelectElement;
+    const panelButton = (name: string) => Array.from(panel.querySelectorAll("button")).find((button) => button.textContent === name)!;
+    await act(async () => { panelButton("新增").click(); });
+    const addedId = settingsSelect.value;
+    expect(Array.from(switcher.options).map((option) => option.value)).toContain(addedId);
+    const originalName = switcher.querySelector(`option[value="${addedId}"]`)!.textContent;
+    const name = panel.querySelector('input[placeholder="本地 KataGo"]') as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "Saved renamed engine");
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    backend.saveEngineProfilesSettings.mockRejectedValueOnce(new Error("disk denied"));
+    await act(async () => { panelButton("保存配置").click(); });
+    expect(panel.textContent).toContain("disk denied");
+    expect(switcher.querySelector(`option[value="${addedId}"]`)!.textContent).toBe(originalName);
+    await act(async () => { panelButton("保存配置").click(); });
+    expect(switcher.querySelector(`option[value="${addedId}"]`)!.textContent).toBe("Saved renamed engine");
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("未加载引擎");
+    expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+    expect(backend.switchForegroundEngine).not.toHaveBeenCalled();
+    await act(async () => { panelButton("删除").click(); });
+    expect(Array.from(switcher.options).map((option) => option.value)).not.toContain(addedId);
+  });
+
   it("keeps saved default visits pending until Restart installs a new run snapshot", async () => {
     const host = await renderApp();
     await readyEngine(host);

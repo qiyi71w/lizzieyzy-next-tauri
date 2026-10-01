@@ -165,11 +165,13 @@ Expected result: the status message reports a loaded/opened game and the board c
 - Save the profile.
 - Add a second profile if Autoload or Switch coverage is part of the change.
 
-Expected result: profiles reload after app restart. Saving Autoload Default or Settings selection does not change the current Foreground Engine Run.
+Expected result: successfully saved additions, renames and deletions immediately update the Engine Switcher; failed saves leave its prior catalog intact. Profiles also reload after app restart. Saving Autoload Default or Settings selection does not change the current Foreground Engine Run.
 
 For migration coverage, seed an isolated app-data directory with an old unversioned collection or single-profile file. Loading must preserve values without rewriting the bytes. Explicit Save writes version 1. An unknown version or malformed settings must report an error without replacing the stored file. A denied write must retain the prior catalog and Run.
 
 While KataGo is Ready, save changed argv or finite visits. The live snapshot and process remain unchanged and the profile is pending; Restart must create a new Run from the saved values. Attempting GenericGtp Start/Switch must return unsupported without creating a child or disturbing that KataGo Run.
+
+During A-to-B switching, deleting either A or candidate B must fail at the backend, preserving the catalog and switching state. After B promotes, inactive A can be deleted and active B remains protected.
 
 ### 3. Start From The Engine Switcher
 

@@ -91,7 +91,6 @@ import {
   stopForegroundEngine,
   restartForegroundEngine,
   switchForegroundEngine,
-  loadEngineProfilesSettings
 } from "./api/backend";
 import {
   admitsForegroundEngineJobs,
@@ -929,11 +928,6 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
-    void loadEngineProfilesSettings()
-      .then((settings) => {
-        if (!cancelled) setEngineProfiles(settings.profiles);
-      })
-      .catch(() => undefined);
     const unlistenPromise = subscribeForegroundEngine(
       (snapshot) => {
         if (cancelled || snapshot.revision < latestSnapshotRevisionRef.current) return;
@@ -3854,6 +3848,7 @@ export function App() {
         <EngineSetupPanel
           disabled={false}
           engineSnapshot={engineSnapshot}
+          onProfilesChange={setEngineProfiles}
         />
       </div>
       {sheet === "prefs" ? <PreferencesPanel

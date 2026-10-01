@@ -3867,7 +3867,15 @@ fn switch_keeps_primary_a_until_ready_b_promotes() {
     assert!(candidate.capability_snapshot.is_none());
     assert!(!switch_id.is_empty());
     manager.assert_profile_deletable("profile-a").unwrap_err();
-    manager.assert_profile_deletable("profile-b").unwrap();
+    let before_delete = manager.snapshot();
+    let candidate_delete = manager.assert_profile_deletable("profile-b").unwrap_err();
+    assert_eq!(candidate_delete.kind, EngineFailureKind::ProfileInUse);
+    assert_eq!(
+        candidate_delete.run_id.as_deref(),
+        Some(candidate.run_id.as_str())
+    );
+    assert_eq!(manager.snapshot(), before_delete);
+    manager.assert_profile_deletable("unrelated-profile").unwrap();
 
     let rejected_b = manager
         .start_selected_node_job(selected_request(&candidate.run_id, 9, vec![]))
