@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Workspace } from "./workspace/Workspace";
+import { useWorkspace } from "./workspace/useWorkspace";
 import { acceptedMoveSound } from "./domain/acceptedMoveSound";
 import { playMoveSound } from "./domain/moveSound";
 import { BoardCanvas } from "./components/BoardCanvas";
@@ -101,7 +103,9 @@ import {
   runFromSnapshot,
   shouldAcceptFailureEvent
 } from "./domain/foregroundEngine";
-import { loadAppPreferences, saveAppPreferences, updateRecentGameHistory } from "./api/preferences";
+import { loadAppPreferences, saveAppPreferences, updateRecentGameHistory, updateWorkspaceVisibility } from "./api/preferences";
+import { flushWindowGeometry, freezeWindowGeometry, nativeWindowGeometryUnavailable, resetWindowGeometry, retryWindowGeometry, subscribeWindowGeometryStatus, windowGeometryStatus } from "./api/windowGeometry";
+import { useMainWindowPin } from "./hooks/useMainWindowPin";
 import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition } from "./domain/board";
 import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "./domain/preferences";
 import { buildNextMoveReviewMarkers, cycleNextMoveReviewMarker } from "./domain/nextMoveReviewMarker";
@@ -125,7 +129,7 @@ import {
   variationReplayPointSteps
 } from "./domain/variationReplay";
 import { newDocumentSgf, type NewDocumentParameters } from "./domain/newDocument";
-import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, AnalysisTaskStrategyDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, FileActivationDeliveryDto, ForegroundEngineSnapshotDto, GameDto, GameFileImportDto, MoveVertex, NodePath, PlayerColor, PointDto, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, ScoringActionDto, ScoringSessionDto, SelectedNodeSnapshotDto, SgfMarkupActionDto, SgfMarkupToolDto, SgfTreeNodeDto, StoneDto, TrialSessionDto } from "./domain/types";
+import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, AnalysisTaskStrategyDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, FileActivationDeliveryDto, ForegroundEngineSnapshotDto, GameDto, GameFileImportDto, MoveVertex, NodePath, PlayerColor, PointDto, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, ScoringActionDto, ScoringSessionDto, SelectedNodeSnapshotDto, SgfMarkupActionDto, SgfMarkupToolDto, SgfTreeNodeDto, StoneDto, TrialSessionDto, WindowGeometryStatusDto } from "./domain/types";
 
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const demoGame = createDemoGame();
@@ -267,7 +271,23 @@ export function App() {
   const { showCoordinates, showMoveNumbers } = preferences;
   const [showBlackCandidates, setShowBlackCandidates] = useState(true);
   const [showWhiteCandidates, setShowWhiteCandidates] = useState(true);
-  const [referenceRailCollapsed, setReferenceRailCollapsed] = useState(false);
+  const [railVisibilityBusy, setRailVisibilityBusy] = useState(false);
+  const railVisibilityBusyRef = useRef(false);
+  const r7WritesRef = useRef(new Set<Promise<unknown>>());
+  const [railVisibilityError, setRailVisibilityError] = useState<string | null>(null);
+  const leftRailRef = useRef<HTMLElement>(null);
+  const rightRailRef = useRef<HTMLElement>(null);
+  const railRestoreRef = useRef<HTMLButtonElement>(null);
+  const workspace = useWorkspace();
+  const [windowGeometry, setWindowGeometry] = useState<WindowGeometryStatusDto>({ phase: "loading", geometry: null, error: null });
+  const [windowGeometryActionPending, setWindowGeometryActionPending] = useState(false);
+  const [windowGeometryError, setWindowGeometryError] = useState<string | null>(null);
+  const windowGeometrySavedRef = useRef<WindowGeometryStatusDto["geometry"] | undefined>(undefined);
+  const windowGeometryEventSequenceRef = useRef(0);
+  const [layoutExitPrompt, setLayoutExitPrompt] = useState<{
+    message: string; choose: (retry: boolean) => void;
+  } | null>(null);
+  const [finalLayoutExitError, setFinalLayoutExitError] = useState<string | null>(null);
   const [replayProgress, setReplayProgress] = useState({ identity: "", prefix: 0 });
   const [overlayMode, setOverlayMode] = useState<OverlayMode>("candidates");
   const [autoPlaying, setAutoPlaying] = useState(false);
@@ -317,6 +337,8 @@ export function App() {
   const lastFiniteTerminalJobIdRef = useRef<string | null>(null);
   const latestSnapshotRevisionRef = useRef(0);
   const departurePendingRef = useRef(false);
+  const windowPin = useMainWindowPin(nativeRuntime, preferencesLoaded,
+    departurePending || Boolean(departurePrompt) || Boolean(teardownPrompt) || workspace.frozen);
   const wholeGameJobRef = useRef<AnalysisJobStartedDto | null>(null);
   const wholeGameResultsRef = useRef<Map<string, AnalysisFrameDto>>(new Map());
   const handleSelectedNodeJobRef = useRef<(job: AnalysisJobEventDto) => void>(() => undefined);
@@ -327,6 +349,42 @@ export function App() {
   const analysisTaskActionInFlightRef = useRef(false);
   const analysisTaskPauseFenceRef = useRef<{ taskId: string; jobId: string; continued: boolean } | null>(null);
   const analysisConditionsDraftEditedRef = useRef(false);
+
+  useEffect(() => {
+    if (!nativeRuntime) return;
+    let disposed = false;
+    let receivedEvent = false;
+    let unlisten: (() => void) | null = null;
+    const adoptStatus = (status: WindowGeometryStatusDto) => {
+      if (disposed) return;
+      setWindowGeometry(status);
+      setWindowGeometryError(null);
+      if (status.phase === "saved") {
+        windowGeometrySavedRef.current = status.geometry;
+        if (preferencesLoadSettledRef.current) {
+          committedPreferencesRef.current = { ...committedPreferencesRef.current, windowGeometry: status.geometry };
+          setPreferences((current) => ({ ...current, windowGeometry: status.geometry }));
+        }
+      }
+    };
+    void subscribeWindowGeometryStatus((status) => {
+      receivedEvent = true;
+      windowGeometryEventSequenceRef.current += 1;
+      adoptStatus(status);
+    }).then(async (stop) => {
+      if (disposed) { stop(); return; }
+      unlisten = stop;
+      try {
+        const status = await windowGeometryStatus();
+        if (!disposed && !receivedEvent) adoptStatus(status);
+      } catch (error) {
+        if (!disposed) setWindowGeometryError(errorMessage(error));
+      }
+    }).catch((error: unknown) => {
+      if (!disposed) setWindowGeometryError(errorMessage(error));
+    });
+    return () => { disposed = true; unlisten?.(); };
+  }, [nativeRuntime]);
 
   useEffect(() => {
     getHealth()
@@ -518,7 +576,7 @@ export function App() {
   const replayArmed = preferences.variationReplayEnabled && replaySteps.length > 0;
   const replayEligible = replayArmed && (
     (preferences.showCandidates && overlayMode === "candidates" && !hideCandidates)
-    || (preferences.showCandidates && preferences.subBoardContentMode === "variation" && !referenceRailCollapsed)
+    || (preferences.showCandidates && preferences.subBoardContentMode === "variation" && preferences.workspaceVisibility.right)
   );
   const replayPrefix = replayArmed
     ? (replayProgress.identity !== replayIdentityKeyValue ? 1 : Math.max(replayProgress.prefix, 1))
@@ -982,6 +1040,7 @@ export function App() {
 
 
   function handlePreferencesChange(nextPreferences: AppPreferences) {
+    if (workspace.owner.snapshot.frozen) return;
     if (continuousActionInFlightRef.current) return;
     if (!preferencesLoadSettledRef.current) return;
     const budgetError = continuousBudgetError(nextPreferences);
@@ -1003,11 +1062,36 @@ export function App() {
     queuePreferencesSave(pendingPreferencesSaveRef.current?.preferences ?? committedPreferencesRef.current, patch);
   }
 
+  async function handleRailVisibility(side: "left" | "right", visible: boolean) {
+    if (workspace.owner.snapshot.frozen || !preferencesLoadSettledRef.current || railVisibilityBusyRef.current || departurePendingRef.current || departurePrompt) return;
+    railVisibilityBusyRef.current = true;
+    setRailVisibilityBusy(true);
+    setRailVisibilityError(null);
+    try {
+      const workspaceVisibility = await trackR7Write(updateWorkspaceVisibility({ [side]: visible }));
+      const rail = side === "left" ? leftRailRef.current : rightRailRef.current;
+      const active = document.activeElement;
+      const matchingSeparatorFocused = Boolean(
+        active && (active.classList?.contains(`workspace-separator-${side}`) || active.closest?.(`.workspace-separator-${side}`))
+      );
+      if (!visible && (rail?.contains(active) || matchingSeparatorFocused)) railRestoreRef.current?.focus();
+      committedPreferencesRef.current = { ...committedPreferencesRef.current, workspaceVisibility };
+      setPreferences((current) => ({ ...current, workspaceVisibility }));
+    } catch (error) {
+      setRailVisibilityError(`侧栏保存失败：${errorMessage(error)}；请再次操作重试。`);
+    } finally {
+      railVisibilityBusyRef.current = false;
+      setRailVisibilityBusy(false);
+    }
+  }
+
   function settleLoadedPreferences(loaded: AppPreferences, status: string) {
     preferencesLoadSettledRef.current = true;
     setPreferencesLoaded(true);
-    committedPreferencesRef.current = loaded;
-    setPreferences(loaded);
+    workspace.owner.load(loaded.workspaceShares);
+    const current = windowGeometrySavedRef.current === undefined ? loaded : { ...loaded, windowGeometry: windowGeometrySavedRef.current };
+    committedPreferencesRef.current = current;
+    setPreferences(current);
     if (!analysisConditionsDraftEditedRef.current) {
       setAnalysisScopeDraft((current) => ({
         ...current,
@@ -1039,6 +1123,15 @@ export function App() {
     setPreferencesStatus(status);
   }
 
+  function trackR7Write<T>(write: Promise<T>): Promise<T> {
+    r7WritesRef.current.add(write);
+    void write.then(
+      () => { r7WritesRef.current.delete(write); },
+      () => { r7WritesRef.current.delete(write); }
+    );
+    return write;
+  }
+
   function queuePreferencesSave(base: AppPreferences, ...patches: Array<Partial<AppPreferences>>) {
     const patch = Object.assign({}, pendingPreferencesSaveRef.current?.patch, ...patches);
     pendingPreferencesSaveRef.current = {
@@ -1059,7 +1152,7 @@ export function App() {
       while (pendingPreferencesSaveRef.current && !continuousActionInFlightRef.current) {
         const pending = pendingPreferencesSaveRef.current;
         try {
-          const saved = { ...await saveAppPreferences(pending.preferences), recentGamePaths: committedPreferencesRef.current.recentGamePaths };
+          const saved = { ...await trackR7Write(saveAppPreferences(pending.preferences)), recentGamePaths: committedPreferencesRef.current.recentGamePaths, windowGeometry: committedPreferencesRef.current.windowGeometry, workspaceVisibility: committedPreferencesRef.current.workspaceVisibility };
           committedPreferencesRef.current = saved;
           setPreferences(saved);
           pending.onSaved?.(saved);
@@ -1412,6 +1505,81 @@ export function App() {
       || (typeof message === "string" && message.includes("already in progress"));
   }
 
+  const windowGeometryDisabled = !nativeRuntime || !preferencesLoaded || workspace.frozen || windowGeometryActionPending;
+  const windowGeometryFailure = windowGeometryError ?? windowGeometry.error;
+  const windowGeometrySystemManaged = windowGeometry.geometry?.x === null && windowGeometry.geometry.y === null;
+  const windowGeometryStatusText = !nativeRuntime ? nativeWindowGeometryUnavailable
+    : windowGeometryFailure ? `窗口位置未保存：${windowGeometryFailure}`
+    : windowGeometry.phase === "saved" ? windowGeometrySystemManaged ? "窗口尺寸已保存（位置由系统管理）" : "窗口位置已保存"
+    : windowGeometry.phase === "pending" ? windowGeometrySystemManaged ? "窗口尺寸待保存（位置由系统管理）" : "窗口位置待保存"
+    : windowGeometry.phase === "saving" ? windowGeometrySystemManaged ? "正在保存窗口尺寸（位置由系统管理）…" : "正在保存窗口位置…"
+    : windowGeometry.phase === "unsaved" ? "窗口位置未保存"
+    : "正在读取窗口位置…";
+
+  async function performWindowGeometryAction(action: () => Promise<WindowGeometryStatusDto>) {
+    if (windowGeometryDisabled) return;
+    const eventSequence = windowGeometryEventSequenceRef.current;
+    setWindowGeometryActionPending(true);
+    try {
+      const status = await trackR7Write(action());
+      if (windowGeometryEventSequenceRef.current === eventSequence) {
+        setWindowGeometry(status);
+        setWindowGeometryError(null);
+      }
+    } catch (error) {
+      if (windowGeometryEventSequenceRef.current === eventSequence) setWindowGeometryError(errorMessage(error));
+    } finally {
+      setWindowGeometryActionPending(false);
+    }
+  }
+
+  async function flushR7Writes(): Promise<void> {
+    const drain = async () => {
+      do {
+        await Promise.all([
+          workspace.owner.flush(), flushWindowGeometry(), windowPin.flush(),
+          ...r7WritesRef.current
+        ]);
+      } while (r7WritesRef.current.size > 0);
+    };
+    let timer: number | undefined;
+    try {
+      await Promise.race([
+        drain(),
+        new Promise<never>((_, reject) => {
+          timer = window.setTimeout(() => reject(new Error("R7 preference saves timed out after 5 seconds.")), 5000);
+        })
+      ]);
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
+  async function flushWorkspaceBeforeDeparture(): Promise<boolean> {
+    while (true) {
+      try {
+        await flushR7Writes();
+        return true;
+      } catch (error) {
+        const retry = await new Promise<boolean>((choose) => {
+          setLayoutExitPrompt({ message: errorMessage(error), choose });
+        });
+        setLayoutExitPrompt(null);
+        if (!retry) return false;
+      }
+    }
+  }
+
+  async function finishNativeExit(): Promise<void> {
+    try {
+      await flushR7Writes();
+      setFinalLayoutExitError(null);
+      await confirmNativeExit();
+    } catch (error) {
+      setFinalLayoutExitError(errorMessage(error));
+    }
+  }
+
   async function finishExitTeardown(departureId: number, outcome: ApplicationExitOutcomeDto): Promise<void> {
     let current = outcome;
     const selectedPath = currentGameRef.current?.selected_path ?? { indices: [] };
@@ -1439,7 +1607,7 @@ export function App() {
       setRecoveryProtection({ status: "unprotected", message: current.recovery_persist_error });
       return;
     }
-    await confirmNativeExit();
+    await finishNativeExit();
   }
 
   async function handleApplicationExit() {
@@ -1447,10 +1615,22 @@ export function App() {
       setMessage(nativeCurrentGameUnavailable);
       return;
     }
-    if (exitInFlightRef.current || departurePrompt || teardownPrompt) return;
-    await enterFileFlow();
+    if (exitInFlightRef.current || departurePrompt || teardownPrompt || workspace.frozen) return;
     exitInFlightRef.current = true;
+    let enteredFileFlow = false;
+    let committed = false;
+    let windowFreezeAttempted = false;
     try {
+      if (!preferencesLoadSettledRef.current) {
+        setMessage("设置仍在载入，请稍后退出。");
+        return;
+      }
+      await enterFileFlow();
+      enteredFileFlow = true;
+      if (!await flushWorkspaceBeforeDeparture()) return;
+      workspace.owner.freeze(true);
+      windowFreezeAttempted = true;
+      await freezeWindowGeometry(true);
       const admission = await prepareApplicationExit();
       const action: ApplicationExitActionDto = admission.status === "needs_decision"
         ? await requestDepartureDecision("当前棋谱尚未保存。保存后退出，放弃更改，还是取消退出？")
@@ -1473,6 +1653,7 @@ export function App() {
         if (outcome.analysis_stopped) void refreshAnalysisTaskSnapshot(true);
         return;
       }
+      committed = true;
       trialRef.current = null;
       setTrial(null);
       if (outcome.current) {
@@ -1488,7 +1669,14 @@ export function App() {
       exitInFlightRef.current = false;
       departurePendingRef.current = false;
       setDeparturePending(false);
-      await leaveFileFlow();
+      if (!committed) {
+        if (windowFreezeAttempted) {
+          try { await freezeWindowGeometry(false); }
+          catch (error) { setMessage(`恢复窗口保存失败: ${errorMessage(error)}`); }
+        }
+        workspace.owner.freeze(false);
+      }
+      if (enteredFileFlow) await leaveFileFlow();
     }
   }
 
@@ -1685,7 +1873,7 @@ export function App() {
           return;
         }
         if (pendingRecoveryContinuationRef.current === "native_exit") {
-          await confirmNativeExit();
+          await finishNativeExit();
           pendingRecoveryContinuationRef.current = null;
           return;
         }
@@ -2167,7 +2355,7 @@ export function App() {
     continuousActionInFlightRef.current = true;
     setContinuousActionPending(true);
     try {
-      const saved = { ...await foregroundEngineContinuousAction(), recentGamePaths: committedPreferencesRef.current.recentGamePaths };
+      const saved = { ...await foregroundEngineContinuousAction(), recentGamePaths: committedPreferencesRef.current.recentGamePaths, windowGeometry: committedPreferencesRef.current.windowGeometry, workspaceVisibility: committedPreferencesRef.current.workspaceVisibility };
       committedPreferencesRef.current = saved;
       setPreferences(saved);
       setPreferencesStatus("Preferences saved.");
@@ -3320,6 +3508,7 @@ export function App() {
   return <main className={`app-shell${preferences.boardTheme === "high-contrast" ? " theme-high-contrast" : ""}${nativeRuntime ? "" : " has-native-runtime-note"}`}>
     {!nativeRuntime ? <p className="native-runtime-note" role="status">{nativeCurrentGameUnavailable}</p> : null}
     <AppChrome
+      windowPin={windowPin}
       sheet={sheet}
       onToggleSheet={toggleSheet}
       busy={historyActionBlocked}
@@ -3370,8 +3559,15 @@ export function App() {
       showWhiteCandidates={showWhiteCandidates}
       onShowBlackCandidates={setShowBlackCandidates}
       onShowWhiteCandidates={setShowWhiteCandidates}
-      referenceRailCollapsed={referenceRailCollapsed}
-      onReferenceRailCollapsed={setReferenceRailCollapsed}
+      onRestoreWorkspace={workspace.restoreDefaults}
+      workspaceDisabled={workspace.disabled}
+      windowGeometryStatus={windowGeometryStatusText}
+      windowGeometryCanRetry={Boolean(windowGeometryFailure) || windowGeometry.phase === "unsaved"}
+      windowGeometryDisabled={windowGeometryDisabled}
+      onResetWindowGeometry={() => void performWindowGeometryAction(resetWindowGeometry)}
+      onRetryWindowGeometry={() => void performWindowGeometryAction(retryWindowGeometry)}
+      railVisibilityDisabled={!preferencesLoaded || railVisibilityBusy || departurePending || Boolean(departurePrompt) || workspace.frozen}
+      onRailVisibility={(side, visible) => void handleRailVisibility(side, visible)}
       selectedNodeRunning={selectedNodeRunning}
       wholeGameRunning={wholeGameRunning}
       autoPlaying={autoPlaying}
@@ -3423,8 +3619,19 @@ export function App() {
       message={recentHistoryError ? `${message} ${recentHistoryError}` : message}
       toPlay={currentPosition.to_play}
     />
-    <section className="spread">
-      <aside className="rail">
+    <div className="workspace-visibility-controls" role="toolbar" aria-label="侧栏显隐">
+      <button ref={railRestoreRef} type="button" aria-pressed={preferences.workspaceVisibility.left}
+        disabled={!preferencesLoaded || departurePending || Boolean(departurePrompt) || workspace.frozen}
+        onClick={() => void handleRailVisibility("left", !preferences.workspaceVisibility.left)}>左侧栏</button>
+      <button type="button" aria-pressed={preferences.workspaceVisibility.right}
+        disabled={!preferencesLoaded || departurePending || Boolean(departurePrompt) || workspace.frozen}
+        onClick={() => void handleRailVisibility("right", !preferences.workspaceVisibility.right)}>右侧栏</button>
+      {railVisibilityBusy ? <span role="status">正在保存侧栏…</span> : null}
+      {railVisibilityError ? <span role="alert">{railVisibilityError}</span> : null}
+    </div>
+    <Workspace shares={workspace.shares} onSharesChange={workspace.setShares} disabled={workspace.disabled}
+      visibility={preferences.workspaceVisibility}>
+      <aside ref={leftRailRef} className="rail" hidden={!preferences.workspaceVisibility.left}>
         <div className="rail-block">
           <h2>
             <span>胜率走势 ({chartTitleSide})</span>
@@ -3432,7 +3639,7 @@ export function App() {
               {`${((chartWinrate ?? 0.5) * 100).toFixed(1)}%`}
             </span>
           </h2>
-          <WinrateChart model={chartModel} onSelectNode={handleReviewNodeSelect} />
+          <WinrateChart model={preferences.workspaceVisibility.left ? chartModel : { ...chartModel, hoverEnabled: false }} onSelectNode={(path) => { if (preferences.workspaceVisibility.left) handleReviewNodeSelect(path); }} />
           <div id="board-layers" />
         </div>
         <AnalysisPanel
@@ -3450,8 +3657,8 @@ export function App() {
           commentEditorEnabled={nativeRuntime && Boolean(currentGame) && !documentFlowBusy && !trial && !trialPending && !scoring && !scoringPending}
           onCommitPersonalComment={(comment) => void handleCommitPersonalComment(comment)}
           selectedCandidateIndex={selectedCandidateIndex}
-          onSelectCandidate={selectCandidate}
-          onSelectProblem={handleProblemSelect}
+          onSelectCandidate={(index) => { if (preferences.workspaceVisibility.left) selectCandidate(index); }}
+          onSelectProblem={(problem) => { if (preferences.workspaceVisibility.left) handleProblemSelect(problem); }}
           selectedPath={selectedPath}
         />
       </aside>
@@ -3506,14 +3713,14 @@ export function App() {
           <p className="board-intent-status" role="status" aria-live="polite">{boardIntentFeedback}</p>
         ) : null}
       </div>
-      <aside className="sheet-col" hidden={referenceRailCollapsed}>
+      <aside ref={rightRailRef} className="sheet-col" hidden={!preferences.workspaceVisibility.right}>
         {reviewGame ? <ReviewTree
           key={trial ? `trial-${trial.session_id}` : reviewGame.generation}
           root={reviewGame.tree}
           selectedPath={selectedPath}
           generation={reviewGame.generation}
           onSelectNode={(path, generation) => {
-            if (!referenceRailCollapsed) void selectNode(path, generation);
+            if (preferences.workspaceVisibility.right) void selectNode(path, generation);
           }}
         /> : null}
         <AnalysisPanel
@@ -3526,16 +3733,16 @@ export function App() {
           currentPosition={currentPosition}
           selectedCandidateIndex={selectedCandidateIndex}
           previewCandidateIndex={previewCandidateIndex}
-          onSelectCandidate={selectCandidate}
-          onSelectProblem={handleProblemSelect}
+          onSelectCandidate={(index) => { if (preferences.workspaceVisibility.right) selectCandidate(index); }}
+          onSelectProblem={(problem) => { if (preferences.workspaceVisibility.right) handleProblemSelect(problem); }}
           selectedPath={selectedPath}
           reviewLine={reviewGame ? chartModel.points : undefined}
-          onSelectNode={handleReviewNodeSelect}
+          onSelectNode={(path) => { if (preferences.workspaceVisibility.right) handleReviewNodeSelect(path); }}
           contentMode={preferences.subBoardContentMode}
           pvPrefixLength={replayPrefix}
         />
       </aside>
-    </section>
+    </Workspace>
     <div className="analysis-task-area">
     {recoveryProtection.status === "unprotected" ? (
       <div className="recovery-unprotected">
@@ -3559,6 +3766,10 @@ export function App() {
       onContinue={() => void handleContinueAnalysisTask()}
       onCancel={() => void handleCancelWholeGameAnalysis()}
     />
+    <div className="workspace-save-status" role="status" aria-label="面板尺寸保存状态">
+      {workspace.status === "saved" ? "面板尺寸已保存" : workspace.status === "pending" ? "面板尺寸待保存" : workspace.status === "saving" ? "正在保存面板尺寸…" : `面板尺寸未保存：${workspace.error}`}
+      {workspace.status === "unsaved" ? <button type="button" onClick={() => void workspace.owner.retry()}>重试保存面板尺寸</button> : null}
+    </div>
     </div>
     <BottomBar
       currentMove={reviewIndex}
@@ -3647,13 +3858,34 @@ export function App() {
         />
       </div>
       {sheet === "prefs" ? <PreferencesPanel
+        windowPin={windowPin}
         preferences={preferences}
         status={preferencesStatus}
-        disabled={!preferencesLoaded || continuousActionPending}
+        disabled={!preferencesLoaded || continuousActionPending || workspace.frozen}
         scoreLeadAvailable={chartModel.scoreAvailable}
         onChange={(nextPreferences) => void handlePreferencesChange(nextPreferences)}
+        onRestoreWorkspace={workspace.restoreDefaults}
+        workspaceDisabled={workspace.disabled}
+        windowGeometryStatus={windowGeometryStatusText}
+        windowGeometryDisabled={windowGeometryDisabled}
+        onResetWindowGeometry={() => void performWindowGeometryAction(resetWindowGeometry)}
+        railVisibilityDisabled={!preferencesLoaded || railVisibilityBusy || departurePending || Boolean(departurePrompt) || workspace.frozen}
+        onRailVisibility={(side, visible) => void handleRailVisibility(side, visible)}
       /> : null}
     </section>
+    {layoutExitPrompt ? <div className="shortcut-reference-backdrop" role="presentation">
+      <div className="root-conversion-dialog" role="dialog" aria-modal="true" aria-label="工作区或窗口尚未保存">
+        <h2>工作区或窗口尚未保存</h2><p>{layoutExitPrompt.message}</p>
+        <button type="button" onClick={() => layoutExitPrompt.choose(true)}>重试</button>
+        <button type="button" onClick={() => layoutExitPrompt.choose(false)}>取消关闭</button>
+      </div>
+    </div> : null}
+    {finalLayoutExitError ? <div className="shortcut-reference-backdrop" role="presentation">
+      <div className="root-conversion-dialog" role="dialog" aria-modal="true" aria-label="退出保存未完成">
+        <h2>退出保存未完成</h2><p>{finalLayoutExitError}</p>
+        <button type="button" onClick={() => void finishNativeExit()}>重试退出保存</button>
+      </div>
+    </div> : null}
     {newDocumentOpen ? (
       <NewDocumentDialog
         defaultBoardWidth={preferences.defaultBoardWidth}
@@ -3768,6 +4000,7 @@ function continuousPhaseStatus(phase: ContinuousAnalysisPhaseDto): string {
 function preferencePatch(from: AppPreferences, to: AppPreferences): Partial<AppPreferences> {
   const patch: Partial<AppPreferences> = {};
   (Object.keys(to) as Array<keyof AppPreferences>).forEach((key) => {
+    if (key === "windowGeometry") return;
     const unchanged = key === "taskOverviewConditions" || key === "taskDeepConditions"
       ? JSON.stringify(from[key]) === JSON.stringify(to[key])
       : from[key] === to[key];

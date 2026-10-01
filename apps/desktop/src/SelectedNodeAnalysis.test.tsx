@@ -86,6 +86,7 @@ vi.mock("./api/backend", () => ({
 
 vi.mock("./api/preferences", () => ({
   loadAppPreferences: vi.fn(() => Promise.reject(new Error("preferences unavailable in test"))),
+  updateWorkspaceShares: vi.fn(async () => undefined),
   saveAppPreferences: vi.fn()
 }));
 
@@ -558,7 +559,7 @@ describe("authoritative continuous selected-node analysis", () => {
       editor.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => {
-      editor.blur();
+      buttonNamed(host, "应用评论").click();
       await backend.setCurrentGamePersonalComment.mock.results.at(-1)?.value;
     });
     backend.saveCurrentGame.mockResolvedValue({ ...commented, snapshot_seq: 14, dirty: false, native_path: "/tmp/comment.sgf" });

@@ -2,6 +2,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
+mod workspace;
+pub use workspace::WorkspaceSharesDto;
+mod window_geometry;
+pub use window_geometry::{WindowGeometryDto, WindowGeometryStatusDto};
+
 mod analysis_task;
 pub use analysis_task::*;
 
@@ -21,6 +26,30 @@ mod current_game_recovery;
 pub use current_game_recovery::{
     RecoveryEnvelopeDto, RecoveryProtectionDto, RecoveryStartupDto, RECOVERY_UNREADABLE_MESSAGE,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WorkspaceVisibilityDto {
+    pub left: bool,
+    pub right: bool,
+}
+
+impl Default for WorkspaceVisibilityDto {
+    fn default() -> Self {
+        Self {
+            left: true,
+            right: true,
+        }
+    }
+}
+
+/// Durable intention and observed native state are deliberately separate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MainWindowPinStatusDto {
+    pub durable: bool,
+    pub actual: Option<bool>,
+    pub error: Option<String>,
+}
 
 pub type GameId = Uuid;
 pub type NodeId = Uuid;

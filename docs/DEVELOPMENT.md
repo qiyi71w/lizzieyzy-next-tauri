@@ -14,41 +14,64 @@ Use this guide when changing:
 
 Do not treat a passing Next smoke run as full legacy parity. Provider/readboard work in this batch may provide offline contracts and runtime path plumbing, but live Fox/Yike network behavior, live readboard sidecar operation, and Tauri production release packaging still require environment-specific validation.
 
-## Required Local Baseline
+## Affected-Surface Development Gate
 
-From the repository root, always run:
+Local development validation is strictly scoped to the **affected surface** of each change. Running the full workspace test suite, workspace-wide clippy, or release-asset validation is not required—and should not be run unconditionally—on every local edit. Full workspace validation belongs to shared cross-cutting contracts, CI, and release qualification.
 
-```bash
-python3 scripts/validate_scaffold.py --verbose
-python3 scripts/validate_release_assets.py --verbose
-```
+### Ownership and Acceptance Mini-Contract
 
-For code changes, also run the relevant checks:
+- **Parent Executor Ownership**: The explicit parent executor owns validation execution, integration runs, and evidence collection. Subagents focus on scoped implementation and contract compliance, skipping project-wide builds, formatting, and linting mid-flight.
+- **Acceptance Mini-Contract**: Before executing any acceptance operation, record an acceptance mini-contract capturing:
+  1. *Affected behavior*: the exact functional delta or invariant being changed.
+  2. *Assertion*: the concrete verification condition or test check.
+  3. *Surface*: the touched layer (frontend unit/hook, Rust crate boundary, IPC command, or native desktop shell).
+  4. *Inherited evidence*: provenance and technical equivalence of previously verified artifacts that remain valid.
+  5. *Native gap*: what cannot be proven without native OS/hardware runtime and remains pending.
+- **Evidence Reuse & Ticket Dimensions**: Preserve exact frozen ticket dimensions. Evidence reuse must record provenance and equivalence so that already-verified, unchanged contracts are not re-run redundantly, and final affected smoke does not duplicate existing proofs.
 
-```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-```
+### Per-Surface Validation Gates
 
-For frontend or Tauri UI changes:
+- **Frontend / Tauri UI changes (`apps/desktop`)**:
+  - Run focused unit and integration tests using `npm test` (or `npx vitest run <target-files>`) covering touched components, hooks, or domain modules.
+  - Run `npm run build` only when relevant to the change (e.g. bundling configuration, TypeScript compilation/type-checking boundaries, packaging updates, or exported UI contract changes). Localized unit or styling fixes verified by Vitest do not require an unconditional UI build.
+- **Rust crate changes (`crates/*`, `src-tauri`)**:
+  - Run focused checks targeting the owning package and contract:
+    ```bash
+    cargo test -p <owning-crate> <test-filter> [--offline]
+    cargo clippy -p <owning-crate> --all-targets -- -D warnings
+    ```
+  - Full workspace checks (`cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all --check`) are reserved for changes with shared cross-crate impact, CI pipelines, or pre-release candidate qualification.
+- **Structural and Release Validators**:
+  - Structural scaffold validation (`python3 scripts/validate_scaffold.py --verbose`) and release asset validation (`python3 scripts/validate_release_assets.py --verbose`) are run locally only when their corresponding contracts have changed (e.g. workspace structure, release asset manifests, or release packaging scripts). CI continues to run full validation; local documentation or component edits do not trigger release asset checks unless release contracts are modified.
 
-```bash
-cd apps/desktop
-npm ci
-npm run build
-```
+### Human Interaction Rules
 
-For documentation-only changes, scaffold validation is still required because it is the shared acceptance gate for the current handoff package.
+- **Human Involvement Gate**: Involve humans only for unavoidable authorization (e.g. OS permissions, credential prompts), physical hardware actions (e.g. physical monitor disconnects, hardware display changes), or subjective evaluation.
+- **No Pixel Measurement Tasks**: Never assign pixel measurement tasks (such as measuring element bounding boxes, pixel heights, or drag margins) to humans. Use programmatic assertions or native OS inspection APIs (such as Win32 `WM_NCHITTEST` / `TITLEBARINFOEX` or X11/GTK geometry queries) instead.
+- **Batching & Sequence**:
+  - Batch independent actions and queries into a single response.
+  - Group state-dependent actions into a single scenario.
+  - Always preserve explicit sequential user requests.
 
-Provider/readboard acceptance entry points:
+### Runtime and Isolation Environment Rules
 
-- Provider contract tests: run the Rust workspace tests that own the provider contract modules and record the exact package or filter. `cargo test --workspace` is the baseline; a focused filter only counts if it runs non-zero provider tests.
-- Provider runtime path checks: verify `provider_fetch_yike` and `provider_fetch_fox` return structured success/error results through the intended Rust/TypeScript boundary. This is still offline/local evidence unless real provider services are contacted.
-- Readboard domain tests: run the Rust workspace tests that own readboard parsing/command behavior and record the exact package or filter.
-- Readboard sidecar path checks: verify `readboard_sidecar_probe` and `readboard_sidecar_sync_snapshot` return structured ready/not-ready/sync results through the intended boundary. Live sidecar checks require a real readboard environment and should be listed separately.
-- UI path checks: ProviderPanel is the expected UI surface for provider fetch, readboard probe, and readboard sync controls. If a batch only exposes payload import or URL preview, record fetch/probe/sync UI as pending rather than implying live support.
-- Release dry-run: run `python3 scripts/validate_release_assets.py --verbose` locally and use `.github/workflows/release-dry-run.yml` for the cross-platform compile-only dry-run.
+- **Browser Preview Is Not Native**: Running `npm run dev` in a browser is strictly for rapid layout prototyping and browser fallback checks. It does not provide real KataGo process management, native file dialogs, SQLite storage, app preferences persistence, or native window geometry. Native desktop behavior requires the native Tauri runtime (`npm run tauri:dev` or built desktop binaries).
+- **Headless & Isolated Execution**:
+  - **Linux**: Prefer `Xvfb` and private displays (isolated X11 display or headless Wayland compositor like Weston).
+  - **Windows**: Prefer isolated desktop sessions (e.g. using `bin/windows-desktop-session.ps1` or separate desktop objects).
+  - **No Claims of Windows Support Proven Yet**: Do not claim Windows native support is generally proven beyond the specific isolated candidate runs recorded with explicit evidence.
+  - **No Desktop Hijacking**: Never switch the user's active foreground desktop or fall back to the interactive desktop without explicit user authorization.
+
+### Provider and Readboard Acceptance Entry Points
+
+When provider or readboard contracts are modified, validate through the owning surface:
+
+- Provider contract tests: run Rust tests owning the provider contract modules using a focused package or filter (`cargo test -p <crate> <filter>`), ensuring non-zero tests are executed.
+- Provider runtime path checks: verify `provider_fetch_yike` and `provider_fetch_fox` return structured success/error results through the Rust/TypeScript boundary. Record offline contract status vs live external network verification separately.
+- Readboard domain tests: run Rust tests owning readboard parsing and command handling via focused filters.
+- Readboard sidecar path checks: verify `readboard_sidecar_probe` and `readboard_sidecar_sync_snapshot` return structured status results. Live sidecar checks require an active sidecar process and must be documented separately.
+- UI path checks: ProviderPanel is the expected UI surface for provider fetch, readboard probe, and readboard sync controls. If controls are absent or preview-only, mark live UI support as pending.
+- Release dry-run: run `python3 scripts/validate_release_assets.py --verbose` and `.github/workflows/release-dry-run.yml` only during release-readiness qualification.
 
 ## Running The Next App
 
@@ -68,6 +91,20 @@ npm run dev
 
 The browser preview is useful for layout and fallback checks. Real KataGo execution, native file dialogs, app-data engine profile persistence, asset inspection, and SGF analysis persistence require `npm run tauri:dev`.
 
+### Repeatable Windows Native Smoke
+
+From the repository root, `npm run desktop:test -- <affected-test-files>` forwards to the existing frontend test suite. Without a filter it runs the frontend suite, as CI does before the TypeScript build.
+
+For the native document path, first let the executor prepare an exact committed candidate in a **new dedicated smoke destination** with `/home/dev/dev/weiqi/bin/prepare-windows-candidate`; uncommitted product changes are excluded. Preparation also deploys the matching Windows helpers. The runner reserves the candidate's isolated app-data identity for smoke reuse and refuses pre-existing data owned by another acceptance session; it never automatically discards a recovery prompt. Then run from this checkout (Windows or WSL, Node 22+):
+
+```bash
+npm run desktop:smoke:windows -- --candidate <candidate.json> --run-directory <fresh-directory>
+```
+
+The finite runner uses the real EXE/WebView2 on a private Win32 desktop. It verifies process identity, native Open cancellation, a 5×4 SGF with five moves including Pass, navigation to the last move, native Save As, reopening identical SGF content and clean exit. It creates its own fixtures and screenshots, records each case in `smoke.json`, and stops only its own recorded candidate. An occupied candidate is refused; use a separate prepared candidate rather than stopping another session. It neither sends global keys nor touches the clipboard. No foreground fallback is attempted.
+
+Read `smoke.json`, inspect the screenshots and report uncovered boundaries separately. The fixed document smoke is not evidence for engine lifecycle, OS drag/drop, clipboard permissions, physical DPI/monitor changes, GPU/audio output or release installers. Those remain affected-surface scenarios, not an automatic request for the user to replay the complete release checklist.
+
 ## Repository Structure
 
 - `apps/desktop`: React + TypeScript frontend.
@@ -86,7 +123,9 @@ The browser preview is useful for layout and fallback checks. Real KataGo execut
 
 ## Local Smoke Flow
 
-Use the desktop runtime for this flow:
+This catalog provides desktop smoke scenarios for validating specific subsystems. Under the affected-surface development gate, **do not run this entire flow unconditionally for every change**. Instead, execute only the specific scenario(s) covering the affected surface of the change, recording the acceptance mini-contract and native gap. The complete smoke matrix is reserved for release candidates and milestone verification in [Release Checklist](RELEASE_CHECKLIST.md).
+
+When an affected scenario requires the native desktop runtime:
 
 Use the `分析` menu for the analysis start/cancel steps below. With a Ready run, `分析当前节点` starts finite selected-node analysis and `分析第一子主线` starts whole-game analysis. Space and the visible continuous action share contextual Start/Stop/Resume. Continuous intent defaults on and is durable; it follows accepted navigation and edits on an independently Ready engine. `分析 → 连续分析预算…` opens the categorized Preferences controls: independent enabled time/visits limits, retained numeric values and empty-board stop. Apply a 1-second or small visits limit to check normal limited status, retained results, same-node inhibition and explicit Resume. Time counts actual engine search, not queue wait; either enabled limit suffices. Failed/cancelled departure Save requires explicit Resume. Preferences writes must succeed before changing intent or replacing continuous work; checkbox/budget changes do not release safety/error holds. Finite and whole-game requests keep their own budgets.
 
@@ -417,6 +456,49 @@ Expected result: failure states are structured, recoverable where expected, and 
 | readboard protocol line sync | `readboard_sidecar_sync_snapshot` validates input and protocol-line parsing returns DTOs or typed protocol errors. | Sidecar sync reflects board size, stones, move state, and player-to-play from the real target board. |
 | image OCR unavailable | Image-only sync returns a structured unsupported/not-implemented error when OCR is unavailable. | Live OCR may only be marked PASS with an OCR-capable runtime and image fixture evidence; otherwise mark SKIPPED/UNSUPPORTED. |
 
+## Session Workspace Verification
+
+From `apps/desktop`, run `npm run test -- src/workspace src/components/BoardCanvas.test.tsx src/components/WinrateChart.test.tsx src/components/AnalysisPanel.test.tsx src/App.test.tsx src/SubBoardContentMode.test.tsx src/VariationReplay.test.tsx src/AnalysisPresentation.test.tsx`, then `npm run build`.
+
+Browser smoke: at 1100×720 and a larger viewport, drag both separators to their limits, release outside the handle, cancel capture, and use focused Left/Right (8px) and Shift+Left/Right (32px). Check all three canvas backing sizes against CSS content size × DPR after container-only resize, DPR changes and hide/show without new analysis. Check 19×19, 9×9 and 13×9 input geometry and scroll access to expanded controls. Preview remains non-authoritative; exact committed Windows candidate, PID, screenshots and native pointer/window behavior are a separate acceptance gate. Durable proportions, visibility, native geometry/reset and pinning are integrated; remaining item-level native evidence is tracked separately in R7.
+
+For exit integration, run `npm test -- src/App.preferences.test.tsx src/App.test.tsx src/hooks/useMainWindowPin.test.tsx` and `npm run build`. Hold each theme, rail and pin transaction at the API seam and confirm document departure waits; confirm a dirty exit decision and a committed final-drain error reject new theme/rail/pin changes, while Cancel restores them. Repeat the affected native Close/File Exit, genuine preference replacement denial, Retry/Cancel and rapid-write/restart cases on the exact candidate. Fixtures prove the ordering boundary, not native disk, z-order or exit acceptance.
+
+Windows pin acceptance must compare the command's `actual` result with Win32 `WS_EX_TOPMOST`. In an isolated, identity-checked candidate, deliberately clear that native flag without changing durable intent, then Retry the saved intent and verify the flag is restored. This controlled native-state drift is not a naturally occurring setter failure. Run the Windows-native `main_window_pin` tests as well: zero extended styles with a stale last-error value mean a valid unpinned window, while a destroyed HWND must report unreadable. A native Z-order witness must be non-topmost at measurement time; preparatory focus operations are not proof.
+
+Final R7 source candidate `baa9747d11ee9e2130904ff057adbe7cfd968153` was built and exercised in isolated Windows runs `D:\dev\weiqi\acceptance\r7-integrated-baa9747-run1` through `-run7` and process-local monitor-fault runs. Evidence includes trusted native splitter cancellation, 9×9/13×9 input, no-frame canvas resize, both whole-preference reset comparisons, hidden-rail restart, real KataGo continuous/task identities, no-engine Save/reopen, genuine replacement denial, and both pre-departure and post-Discard final exit Retry. Final run7/PID13212/HWND264354 completes actual system DPI96→144→96, both themes, visible keyboard focus, native K10 hit and preserved21-move SGF/Classic. Two actual Explorer drops verify dirty replacement admission, exact SGF retention on Cancel, exact 9×9/two-variation import on Discard, and the same single main window. Actual DISPLAY2 negative-coordinate movement and restart retain `-2210,64 / 1145.3333333333333×722.6666666666666 @1.5`; Windows “PC screen only” removes the secondary output and recovery restores `552,226 / 1440×900 @1`, changing only the geometry owner. Both topology runs exit normally. `A10-continuation-native-final-verdict.json` and `A18-continuation-native-final-verdict.json` link measured records and inspected screenshots. Supplemental125%/200% initialized CDP layouts are separately scoped, not native system-DPI proof. The normal non-topmost witness establishes relative Z-order; witness foreground was not obtained. See [R7 integration record](R7_PLAN.md#integrated-verification-record) for source/check attribution and ticket07 for every case result.
+
+Authorized automatic A11 acceptance used `ChangeDisplaySettingsExW` flags0 after `CDS_TEST`, with an independent timeout-restore process armed before switching. Actual mode was `1280×720 @180Hz`, work area `1280×672`, DPI96; both native runs fitted outer `0,0,1280×672` / client `1264×633`. Trusted scrolling reached page/workspace/left-rail controls, SGF and both visible rails stayed unchanged, and restart retained the complete preference document. Both runs exited0. Explicit restoration read back `2560×1440 @180Hz` and unchanged registry settings. `D:\dev\weiqi\acceptance\r7-integrated-baa9747-small-auto\A11-continuation-native-final-verdict.json` links16 measured records/screenshots. The timeout fallback was armed, not exercised; no browser emulation or persistent display update was used.
+
+All18 Windows A01–A18 cases pass on exact native source `baa9747d11ee9e2130904ff057adbe7cfd968153`. This R7 run's macOS AppKit LTR/RTL native acceptance is SKIPPED by explicit user approval on 2026-09-30. Authorized follow-up `f4e478ea15781b7a84ee1ec27a0f74683e909e2e` passes formatting, affected-owner Linux clippy, strict Windows lib/tests clippy, SGF94, Recent4 and five actual native Open/Save As/reopen/exit cases. Its two complete historical handoff envelopes are retained as resolved in ticket07. Subsequent controlled-fixture repairs pass desktop-lib146/146 in default-parallel and serial runs, shared analysis-task fixture checks20/20 (107 filtered), formatting and strict Linux lib/tests clippy. Final bounded Standards/Spec reviews are CLEAN on exact object `406250408043e68fe67f6082c583429600768c0c`; all seven owners Accepted, ticket07 CLOSED/ACCEPTED and R7 exited. Earlier native/test counts keep their original source attribution; no Mac PASS, support change or additional release claim is made. Ticket08 is unblocked and remains unexecuted.
+
+
+## Native Window Geometry Verification
+
+Run `cargo test -p app-preferences` for geometry, monitor-failure and window-state fixtures, and `cargo test -p lizzieyzy-next-desktop continuous_analysis::tests::workspace_updates_merge_with_other_owners_and_fail_atomically` for narrow-save isolation and failure/retry. From `apps/desktop`, run `npm test -- src/App.test.tsx` and `npm run build` for lifecycle integration.
+
+On an exact committed Windows candidate, record outer physical origin, client size, DPI, process identity and preference JSON while moving/resizing, restarting maximized, unmaximizing, and restarting after minimization. Validate a reachable off-center record unchanged, an invalid record fitted to the work area, reset isolation, blocked preference writes and Retry, immediate close after a move, dirty-close cancellation, file activation/drop and recovery. Real monitor removal/DPI changes require native hardware/session evidence; deterministic fixtures and browser rendering are supplementary only.
+
+For caption boundaries, measure the actual native draggable region with `WM_NCHITTEST` (`HTCAPTION`), not just `TITLEBARINFOEX`: its rectangle can include resize borders and system-menu pixels. Verify a contiguous 100 logical pixel width and `min(32, native draggable caption height)` logical pixel height; exercise valid edge placement unchanged on restart and insufficient visible title area recovered into the work area.
+
+On 2026-09-29, Windows snapshot `85a5cc12f876186c95b9961451364a46cf0a0ad7` at 96 DPI exposed 28 logical pixels in `TITLEBARINFOEX`, but only 22 contiguous `HTCAPTION` rows. A 100-pixel-wide scan verified all 22 rows. A saved `400,1361,1100×720` client record retained its position on restart with the caption ending exactly at work-area bottom 1392; `400,1375,1100×720` recovered to `552,226,1440×900`. Evidence is in `D:\dev\weiqi\acceptance\r7-window04-85a5cc1-run3` and `-run4`. This proves the Windows title-height boundary, not ticket-wide acceptance. Real display-removal and OS file-drop gates remain separate.
+
+The same exact snapshot passed process-local native monitor-query fault probes at 96 DPI on a 2560×1392 work area. Reversible Frida 17.19.0 hooks, armed after main-window creation, made `EnumDisplayMonitors` fail; a second case also made `MonitorFromPoint` return null. With primary readable, the window fitted to `552,226,1440×900`; with both queries unavailable, the visible OS-default window remained at `260,260,1440×900`. Both cases showed an unsaved error and toolbar Retry while preserving the entire preference document, including durable `310,170,1100×720`. Close during the double fault showed Retry/Cancel, and Cancel retained the live window. Removing the hooks and clicking toolbar Retry restored the durable bounds and saved status in both cases; an uninstrumented restart after the enumeration-only case retained the same bounds. All three processes exited normally, and the isolated profile was restored. Evidence: `D:\dev\weiqi\acceptance\r7-window04-monitor-enum1`, `r7-window04-monitor-enum-restart`, and `r7-window04-monitor-both1` (`run.json`, native rectangles, status JSON, fault logs and screenshots). These are injected failures of the real native API path, not physical monitor removal or proof of double-failure reachability on every screen topology.
+
+The non-Windows caption delta was exercised with the real Linux GTK/WebKit application, Xvfb and Openbox on an isolated 1600×1000 X11 display at scale 1. A compact `400,963,800×200` record retained a 32-pixel-high visible caption; native pointer drags at both corners of a 100×32 caption rectangle moved the window horizontally without changing its vertical position or client size. `400,964,800×200`, leaving only 31 pixels, recovered to `75,22,1440×900`. Native maximize retained the normal rectangle, minimize retained the maximized flag, restore recovered normal bounds, and GTK titlebar buttons and dragging both worked after the event surface was placed below its controls. A fresh isolated profile persisted the actual native `75,22` outer origin with a `1440×900` client. Evidence is under `/tmp/window04-linux-native`, including PID-bound `integrated-valid-caption.json`, `integrated-invalid-caption.json`, native-control records and screenshots. Openbox can constrain larger partially off-screen windows even when the policy accepts them; use compact fixtures to separate title visibility from compositor placement policy. This is native Linux X11 evidence, not physical multi-monitor or Wayland acceptance.
+
+The AppKit adapter type-checks against `objc2-app-kit` for `aarch64-apple-darwin` in an isolated API harness. No macOS GUI session or Apple SDK is available here, so this is neither a full macOS application build nor native caption acceptance. Review identified an unverified RTL-control exclusion candidate in that adapter. On 2026-09-30 the user explicitly skipped this R7 run's macOS LTR/RTL native acceptance: SKIPPED, not PASS. The candidate and original review attribution remain unverified; macOS implementation/support and other phases' platform gates are unchanged.
+
+Native Wayland uses the approved compositor-managed-position exception: persisted `x` and `y` are both null, while client size and maximization remain durable. This replaces the observed `Cannot query primary monitor; saved geometry was retained.` startup/Retry failure; GDK permits no primary monitor and GTK does not expose global Wayland coordinates ([GDK](https://docs.gtk.org/gdk3/method.Display.get_primary_monitor.html), [GTK](https://docs.gtk.org/gtk3/method.Window.get_position.html)). A real GTK/WebKit run on isolated Weston 14.0.2 restored a null-origin `1100×720` record, maximized through its native button without changing normal dimensions, closed normally, restarted maximized, and restored normal size. Display-menu reset saved `1440×876` after compositor constraints with both origins still null; all other preference fields were identical. Native Close and File Exit both exited 0 without a geometry-error prompt. Tao's Wayland event surface is placed below native controls so they receive clicks. Evidence screenshots are under `/tmp/window04-wayland-native/managed-*.png`. An earlier Alt+F4 closed the nested compositor instead of the application; that disconnected run is excluded from exit evidence. These nested-compositor results do not substitute for macOS or physical display-removal validation.
+
+Wayland review found that mixed-null saved origins bypassed startup validation. The native before-repair fixture `{x:null,y:50,width:1000,height:650,scaleFactor:1,maximized:true}` incorrectly restored maximized and was rewritten as a valid null/null record. Shared sampling/restore validation now rejects that record: the identical native fixture restored normal `1440×900`, null/null origins, with all other preference fields unchanged. Policy regressions cover both mixed orientations and non-finite/sentinel numeric origins; 19 geometry tests passed. Before/after JSON and screenshots are in `/tmp/window04-wayland-native/mixed-origin-*`.
+
+User-assisted Windows acceptance on exact snapshot `85a5cc12f876186c95b9961451364a46cf0a0ad7` imported `r7-window04-drop.sgf` from Explorer: the UI showed the matching filename, players `window04-drop` / `native`, 9×9 board, and one black move E5. Real DISPLAY2 at `-2560,-156` used 150% DPI; moving to `-2100,80` saved logical client `1101.3333333333333×722@1.5`. A normal exit/restart preserved that exact geometry and native physical client `1652×1083`. The user then selected Windows “PC screen only”; real enumeration removed DISPLAY2, and restart recovered to primary `552,226,1440×900@1`, saved and usable. This is a real OS topology removal, not a physical cable-unplug test or an API mock. All three processes exited 0. Evidence: `D:\dev\weiqi\acceptance\r7-window04-manual-drop1`, `r7-window04-negative-restart`, and `r7-window04-display-removed`. This snapshot predates the Linux/Wayland adapter delta; its Windows evidence does not establish macOS acceptance.
+
+Linux and Wayland screenshots and geometry JSON have durable copies under `D:\dev\weiqi\acceptance\r7-window04-platform-evidence\linux` and `\wayland`. The Wayland repair passed independent Standards and Spec verification against the frozen repair delta; `SPEC-WAYLAND-1` and its duplicate `STD-WAYLAND-1` are resolved. This scoped result supplies no AppKit evidence; this R7 run's AppKit native acceptance is separately SKIPPED by user approval on 2026-09-30, with its unverified candidate and original review attribution retained.
+
+The platform-adapter commit `f9b1dd82d66eb77c45b36d47206de66bada5862d` also built successfully as an isolated Windows candidate. Its `r7-window04-f9b1dd8-run2` restored numeric `310,170,1100×720@1`, showed saved status with no geometry error, rendered the native application, and exited 0. Native rectangles, status JSON and screenshot are retained in that run directory. Run1 used an invalid workspace-share fixture and exercised preference quarantine/default startup; it is excluded from numeric-restore evidence.
+
 ## Documentation Acceptance
 
 When updating docs for this handoff package, keep these claims accurate:
@@ -425,8 +507,8 @@ When updating docs for this handoff package, keep these claims accurate:
 - Do not claim full Java/Swing parity.
 - Do not claim Fox/Yike/readboard live migration is complete without external-network or sidecar evidence.
 - Distinguish browser preview behavior from native Tauri desktop behavior.
-- Report the exact validation command and result in the handoff.
-
+- Distinguish per-change focused validation from the full release matrix; do not make obsolete unconditional claims requiring full-workspace or full-smoke runs on every edit.
+- Report the exact validation command, affected surface, evidence provenance, and result in the handoff.
 ## Suggested Reading
 
 - [Next architecture](ARCHITECTURE_NEXT.md)

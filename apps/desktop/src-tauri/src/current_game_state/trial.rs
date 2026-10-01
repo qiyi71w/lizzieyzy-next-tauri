@@ -263,7 +263,13 @@ impl CurrentGameState {
         visits: u32,
     ) -> crate::EngineCommandResult<AnalysisJobStartedDto> {
         let mut holder = self.holder.lock().expect("current game state");
-        let invalid = |message| Box::new(crate::job_failure(&run_id, EngineFailureKind::InvalidState, message));
+        let invalid = |message| {
+            Box::new(crate::job_failure(
+                &run_id,
+                EngineFailureKind::InvalidState,
+                message,
+            ))
+        };
         if holder.departure.is_some() || holder.edits_blocked {
             return Err(invalid("Document departure is pending.".into()));
         }

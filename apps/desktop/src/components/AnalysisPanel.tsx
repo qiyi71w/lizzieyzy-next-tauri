@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useElementSize } from "../workspace/useElementSize";
 import type { AnalysisFrameDto, CandidateMoveDto, NodePath, PositionDto, ProblemMarkerDto } from "../domain/types";
 import type { ChartPoint } from "../domain/winrateChart";
 import type { ReviewProblem } from "../domain/reviewNavigation";
@@ -67,9 +68,10 @@ export function AnalysisPanel({
 }: Props) {
   const [leftTab, setLeftTab] = useState<"commentary" | "problems">("commentary");
   const [commentDraft, setCommentDraft] = useState(personalComment);
+  const commentNodeKey = selectedPath?.indices.join(",");
   useEffect(() => {
     setCommentDraft(personalComment);
-  }, [personalComment]);
+  }, [personalComment, commentNodeKey]);
   const hasOwnership = (frame?.ownership?.length ?? 0) >= boardWidth * boardHeight;
   const rootScore = frame?.score_mean_black;
 
@@ -142,7 +144,7 @@ export function AnalysisPanel({
               </table>
             </div>
           ) : (
-            <p className="muted commentary" style={{ padding: "12px 10px", margin: 0, color: "#8b919c" }}>
+            <p className="muted commentary" style={{ padding: "12px 10px", margin: 0 }}>
               暂无候选点。点击“分析当前节点”或“分析第一子主线”。
             </p>
           )}
@@ -220,18 +222,26 @@ export function AnalysisPanel({
                   {" · "}提子 黑 {currentPosition?.captures_black ?? 0} 白 {currentPosition?.captures_white ?? 0}
                 </p>
                 {commentEditorEnabled ? (
-                  <label className="personal-comment-editor-label">
-                    个人评论
-                    <textarea
-                      className="personal-comment-editor"
-                      value={commentDraft}
-                      onChange={(event) => setCommentDraft(event.target.value)}
-                      onBlur={() => onCommitPersonalComment?.(commentDraft)}
-                      spellCheck={false}
-                      aria-label="个人评论"
-                      placeholder="为当前选中节点写下个人评论"
-                    />
-                  </label>
+                  <>
+                    <label className="personal-comment-editor-label">
+                      个人评论
+                      <textarea
+                        className="personal-comment-editor"
+                        value={commentDraft}
+                        onChange={(event) => setCommentDraft(event.target.value)}
+                        spellCheck={false}
+                        aria-label="个人评论"
+                        placeholder="为当前选中节点写下个人评论"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="personal-comment-apply-button"
+                      onClick={() => onCommitPersonalComment?.(commentDraft)}
+                    >
+                      应用评论
+                    </button>
+                  </>
                 ) : personalComment ? (
                   <p className="personal-comment">{personalComment}</p>
                 ) : null}
@@ -308,15 +318,15 @@ function SubBoardCanvas({
   pvPrefixLength?: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const size = useElementSize(canvasRef);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const cssWidth = canvas.clientWidth || 240;
-    const cssHeight = canvas.clientHeight || 240;
+    const { width: cssWidth, height: cssHeight, dpr } = size;
+    if (cssWidth <= 0 || cssHeight <= 0) return;
     canvas.width = Math.floor(cssWidth * dpr);
     canvas.height = Math.floor(cssHeight * dpr);
     ctx.scale(dpr, dpr);
@@ -381,7 +391,7 @@ function SubBoardCanvas({
         ctx.fillText(String(index + 1), cx, cy);
       }
     }
-  }, [boardWidth, boardHeight, position, candidate, contentMode, pvPrefixLength]);
+  }, [size, boardWidth, boardHeight, position, candidate, contentMode, pvPrefixLength]);
 
   return (
     <canvas

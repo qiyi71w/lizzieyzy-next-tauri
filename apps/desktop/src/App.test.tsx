@@ -3,8 +3,10 @@
 import { StrictMode, act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AnalysisFrameDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureAdmissionDto, FileActivationDeliveryDto, FileActivationRejectionDto, GameDto, NodePath, RecoveryProtectionDto, RecoveryStartupDto } from "./domain/types";
+import type { AnalysisFrameDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureAdmissionDto, FileActivationDeliveryDto, FileActivationRejectionDto, GameDto, MainWindowPinStatusDto, NodePath, RecoveryProtectionDto, RecoveryStartupDto } from "./domain/types";
 import type { AppPreferences } from "./domain/preferences";
+import type { WorkspaceSharesDto } from "./domain/types";
+import type { WindowGeometryStatusDto } from "./domain/types";
 
 const currentGameFixture = vi.hoisted(() => vi.fn());
 const backend = vi.hoisted(() => ({
@@ -96,14 +98,30 @@ vi.mock("./api/backend", () => ({
 
 const preferencesApi = vi.hoisted(() => ({
   loadAppPreferences: vi.fn<() => Promise<{ preferences: AppPreferences; recovery?: { message: string } }>>(() => Promise.reject(new Error("preferences unavailable in test"))),
+  updateWorkspaceShares: vi.fn<(shares: WorkspaceSharesDto | null) => Promise<unknown>>(async () => undefined),
   saveAppPreferences: vi.fn(async (preferences: unknown) => preferences),
   updateRecentGameHistory: vi.fn<(openedPath: string | null) => Promise<string[]>>(),
 }));
 
+const geometryApi = vi.hoisted(() => ({
+  windowGeometryStatus: vi.fn<() => Promise<WindowGeometryStatusDto>>(),
+  subscribeWindowGeometryStatus: vi.fn<(_onStatus: (status: WindowGeometryStatusDto) => void) => Promise<() => void>>(),
+  resetWindowGeometry: vi.fn<() => Promise<WindowGeometryStatusDto>>(),
+  retryWindowGeometry: vi.fn<() => Promise<WindowGeometryStatusDto>>(),
+  freezeWindowGeometry: vi.fn<(_frozen: boolean) => Promise<void>>(),
+  flushWindowGeometry: vi.fn<() => Promise<void>>()
+}));
+vi.mock("./api/windowGeometry", () => ({ ...geometryApi, nativeWindowGeometryUnavailable: "窗口位置仅在桌面版可用" }));
+const mainWindowPinApi = vi.hoisted(() => ({
+  loadMainWindowPin: vi.fn<() => Promise<MainWindowPinStatusDto>>(async () => ({ actual: true, durable: true, error: null })),
+  setMainWindowPin: vi.fn<(_value: boolean | null) => Promise<MainWindowPinStatusDto>>(async (value: boolean | null) => ({ actual: value ?? true, durable: value ?? true, error: null }))
+}));
+vi.mock("./api/mainWindowPin", () => mainWindowPinApi);
+
+
 vi.mock("./api/preferences", () => preferencesApi);
 
 vi.mock("./components/EngineSetupPanel", () => ({ EngineSetupPanel: () => null }));
-vi.mock("./components/PreferencesPanel", () => ({ PreferencesPanel: () => null }));
 vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
 vi.mock("./components/WinrateChart", () => ({
   WinrateChart: () => <canvas aria-label="胜率走势" />
@@ -284,10 +302,21 @@ let root: Root | null = null;
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  vi.spyOn(HTMLCanvasElement.prototype, "clientWidth", "get").mockReturnValue(450);
+  vi.spyOn(HTMLCanvasElement.prototype, "clientHeight", "get").mockReturnValue(450);
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
     return canvasContext(this);
   });
+  const savedGeometry: WindowGeometryStatusDto = { phase: "saved", geometry: null, error: null };
+  geometryApi.windowGeometryStatus.mockReset().mockResolvedValue(savedGeometry);
+  geometryApi.subscribeWindowGeometryStatus.mockReset().mockImplementation(async () => () => undefined);
+  geometryApi.resetWindowGeometry.mockReset().mockResolvedValue({ phase: "pending", geometry: null, error: null });
+  geometryApi.retryWindowGeometry.mockReset().mockResolvedValue(savedGeometry);
+  geometryApi.freezeWindowGeometry.mockReset().mockResolvedValue(undefined);
+  geometryApi.flushWindowGeometry.mockReset().mockResolvedValue(undefined);
+  mainWindowPinApi.loadMainWindowPin.mockReset().mockResolvedValue({ actual: true, durable: true, error: null });
+  mainWindowPinApi.setMainWindowPin.mockReset().mockResolvedValue({ actual: true, durable: true, error: null });
   currentGameFixture.mockResolvedValue(initialGame);
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
   backend.foregroundEngineContinuousAction.mockResolvedValue(defaultAppPreferences);
@@ -1511,7 +1540,7 @@ describe("App focus-safe review controls", () => {
       valueSetter?.call(editor, "reviewer note");
       editor.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    act(() => editor.blur());
+    act(() => buttonNamed(host, "应用评论").click());
     await flushLast(backend.setCurrentGamePersonalComment);
     expect(backend.setCurrentGamePersonalComment).toHaveBeenLastCalledWith({ indices: [0, 1] }, "reviewer note");
   });
@@ -1904,6 +1933,85 @@ describe("App document replacement", () => {
 
 
 describe("App application exit", () => {
+  it("rejects file activation throughout layout flush and releases admission on Cancel close", async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: () => void;
+      preferencesApi.updateWorkspaceShares.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+      const host = await renderApp();
+      backend.readGameFile.mockClear();
+      backend.prepareDocumentReplacement.mockClear();
+      const deliver = async (request_id: number) => {
+        backend.takePendingFileActivation.mockResolvedValueOnce({ kind: "open", request_id, path: "/tmp/layout-exit.sgf" });
+        await act(async () => { listeners.onActivationAvailable?.(); });
+      };
+      act(() => requiredElement<HTMLElement>(host, '[aria-label="调整左栏宽度"]').dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+      await act(async () => { backend.subscribeApplicationExitRequested.mock.calls.at(-1)?.[0](); });
+      await deliver(91);
+      expect(backend.readGameFile).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(host.textContent).toContain("5 seconds");
+      await deliver(92);
+      expect(backend.readGameFile).not.toHaveBeenCalled();
+      expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+      expect(backend.prepareApplicationExit).not.toHaveBeenCalled();
+      expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+      await act(async () => { buttonNamed(host, "取消关闭").click(); finish(); });
+      await deliver(93);
+      expect(backend.readGameFile).toHaveBeenCalledWith("/tmp/layout-exit.sgf");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("blocks File Exit on failed layout save, retries the latest draft, and unfreezes after document Cancel", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+    backend.prepareApplicationExit.mockResolvedValueOnce({ status: "needs_decision", departure_id: 51 });
+    preferencesApi.updateWorkspaceShares.mockRejectedValueOnce(new Error("layout permission denied"));
+    const host = await renderApp();
+    const separator = requiredElement<HTMLElement>(host, '[aria-label="调整左栏宽度"]');
+    act(() => separator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    const draft = separator.getAttribute("aria-valuenow");
+    act(() => buttonNamed(host, "文件").click());
+    await act(async () => { buttonNamed(host, "退出").click(); });
+    expect(host.textContent).toContain("layout permission denied");
+    expect(backend.prepareApplicationExit).not.toHaveBeenCalled();
+    expect(backend.resolveApplicationExit).not.toHaveBeenCalled();
+    expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+    await act(async () => { buttonNamed(host, "重试").click(); });
+    expect(backend.prepareApplicationExit).toHaveBeenCalledTimes(1);
+    expect(separator.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => { buttonLabeled(host, "Cancel").click(); });
+    expect(separator.getAttribute("aria-disabled")).toBe("false");
+    expect(separator.getAttribute("aria-valuenow")).toBe(draft);
+    act(() => separator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    expect(separator.getAttribute("aria-valuenow")).not.toBe(draft);
+  });
+
+  it("times out a native close without admitting departure and Cancel close keeps the draft editable", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+      let finish!: () => void;
+      preferencesApi.updateWorkspaceShares.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+      const host = await renderApp();
+      const separator = requiredElement<HTMLElement>(host, '[aria-label="调整左栏宽度"]');
+      act(() => separator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+      await act(async () => { backend.subscribeApplicationExitRequested.mock.calls.at(-1)?.[0](); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(host.textContent).toContain("5 seconds");
+      expect(backend.prepareApplicationExit).not.toHaveBeenCalled();
+      expect(backend.resolveApplicationExit).not.toHaveBeenCalled();
+      expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+      await act(async () => { buttonNamed(host, "取消关闭").click(); });
+      expect(separator.getAttribute("aria-disabled")).toBe("false");
+      await act(async () => { finish(); });
+      expect(host.querySelector('[aria-label="面板尺寸保存状态"]')?.textContent).toContain("已保存");
+      expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("routes File Exit and window close through one clean-exit transaction", async () => {
     const host = await renderApp();
     backend.prepareApplicationExit.mockClear();
@@ -2094,6 +2202,137 @@ describe("App application exit", () => {
     expect(backend.confirmNativeExit).not.toHaveBeenCalled();
     expect(host.textContent).toContain("disk full");
   });
+  it("blocks departure on geometry flush failure, retries, and unfreezes after document Cancel", async () => {
+    backend.prepareApplicationExit.mockResolvedValue({ status: "needs_decision", departure_id: 73 });
+    geometryApi.flushWindowGeometry.mockRejectedValueOnce(new Error("window store denied"));
+    const host = await renderApp();
+    act(() => buttonNamed(host, "文件").click());
+    await act(async () => { buttonNamed(host, "退出").click(); });
+    expect(host.textContent).toContain("window store denied");
+    expect(backend.prepareApplicationExit).not.toHaveBeenCalled();
+    expect(geometryApi.freezeWindowGeometry).not.toHaveBeenCalled();
+    await act(async () => { buttonNamed(host, "重试").click(); });
+    expect(backend.prepareApplicationExit).toHaveBeenCalledTimes(1);
+    expect(geometryApi.freezeWindowGeometry).toHaveBeenCalledWith(true);
+    act(() => buttonNamed(host, "显示").click());
+    expect(buttonNamed(host, "恢复窗口位置和大小").disabled).toBe(true);
+    act(() => buttonNamed(host, "显示").click());
+    await act(async () => { buttonLabeled(host, "Cancel").click(); });
+    expect(geometryApi.freezeWindowGeometry).toHaveBeenLastCalledWith(false);
+    act(() => buttonNamed(host, "显示").click());
+    expect(buttonNamed(host, "恢复窗口位置和大小").disabled).toBe(false);
+    expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+  });
+
+  it("keeps the window open when the final geometry drain rejects, then retries the final fence", async () => {
+    backend.prepareApplicationExit.mockResolvedValue({ status: "ready", departure_id: 74 });
+    backend.resolveApplicationExit.mockResolvedValue({ committed: true, analysis_stopped: true, current: initialGame, message: "Exit completed.", disposition: "clean_completed", teardown: { status: "completed" } });
+    geometryApi.flushWindowGeometry.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("last window write failed"));
+    const host = await renderApp();
+    act(() => buttonNamed(host, "文件").click());
+    await act(async () => { buttonNamed(host, "退出").click(); });
+    expect(host.textContent).toContain("last window write failed");
+    expect(backend.prepareApplicationExit).toHaveBeenCalledTimes(1);
+    expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+    await act(async () => { buttonNamed(host, "重试退出保存").click(); });
+    expect(backend.prepareApplicationExit).toHaveBeenCalledTimes(1);
+    expect(geometryApi.flushWindowGeometry).toHaveBeenCalledTimes(3);
+    expect(backend.confirmNativeExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables theme, rails, and pin during dirty exit decision and committed final flush error, recovering on cancel", async () => {
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: defaultAppPreferences });
+    backend.prepareApplicationExit.mockResolvedValue({ status: "needs_decision", departure_id: 88 });
+    const host = await renderApp();
+
+    openPreferences(host);
+    const themeSelect = labeledSelect(host, "棋盘对比");
+    const leftRailButton = buttonNamed(host, "左侧栏");
+    const rightRailButton = buttonNamed(host, "右侧栏");
+    const pinButton = requiredElement<HTMLButtonElement>(host, '.window-pin-control button[role="checkbox"]');
+
+    expect(themeSelect.disabled).toBe(false);
+    expect(leftRailButton.disabled).toBe(false);
+    expect(rightRailButton.disabled).toBe(false);
+    expect(pinButton.disabled).toBe(false);
+
+    act(() => buttonNamed(host, "文件").click());
+    await act(async () => { buttonNamed(host, "退出").click(); });
+
+    expect(themeSelect.disabled).toBe(true);
+    expect(leftRailButton.disabled).toBe(true);
+    expect(rightRailButton.disabled).toBe(true);
+    expect(pinButton.disabled).toBe(true);
+
+    preferencesApi.saveAppPreferences.mockClear();
+    act(() => {
+      themeSelect.value = "high-contrast";
+      themeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+
+    await act(async () => { buttonLabeled(host, "Cancel").click(); });
+
+    expect(themeSelect.disabled).toBe(false);
+    expect(leftRailButton.disabled).toBe(false);
+    expect(rightRailButton.disabled).toBe(false);
+    expect(pinButton.disabled).toBe(false);
+
+    backend.prepareApplicationExit.mockResolvedValueOnce({ status: "ready", departure_id: 89 });
+    backend.resolveApplicationExit.mockResolvedValueOnce({
+      committed: true,
+      analysis_stopped: true,
+      current: initialGame,
+      message: "Exit completed.",
+      disposition: "clean_completed",
+      teardown: { status: "completed" }
+    });
+    geometryApi.flushWindowGeometry.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("committed final flush failed"));
+
+    act(() => buttonNamed(host, "文件").click());
+    await act(async () => { buttonNamed(host, "退出").click(); });
+
+    expect(host.textContent).toContain("committed final flush failed");
+
+    expect(themeSelect.disabled).toBe(true);
+    expect(leftRailButton.disabled).toBe(true);
+    expect(rightRailButton.disabled).toBe(true);
+    expect(pinButton.disabled).toBe(true);
+
+    preferencesApi.saveAppPreferences.mockClear();
+    act(() => {
+      themeSelect.value = "high-contrast";
+      themeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  });
+
+  it("shows native geometry events in the fixed toolbar and retries an unsaved sample", async () => {
+    let emit!: (status: WindowGeometryStatusDto) => void;
+    geometryApi.subscribeWindowGeometryStatus.mockImplementation(async (listener) => {
+      emit = listener;
+      return () => undefined;
+    });
+    const host = await renderApp();
+    const status = requiredElement<HTMLElement>(host, '[aria-label="窗口位置保存状态"]');
+    expect(status.textContent).toContain("已保存");
+    act(() => buttonNamed(host, "显示").click());
+    await act(async () => { buttonNamed(host, "恢复窗口位置和大小").click(); });
+    expect(geometryApi.resetWindowGeometry).toHaveBeenCalledTimes(1);
+    expect(status.textContent).toContain("待保存");
+    act(() => emit({ phase: "pending", geometry: null, error: null }));
+    expect(status.textContent).toContain("待保存");
+    act(() => emit({ phase: "saving", geometry: null, error: null }));
+    expect(status.textContent).toContain("正在保存");
+    act(() => emit({ phase: "unsaved", geometry: null, error: "window disk full" }));
+    expect(status.textContent).toContain("window disk full");
+    await act(async () => { buttonNamed(host, "重试保存窗口位置").click(); });
+    expect(geometryApi.retryWindowGeometry).toHaveBeenCalledTimes(1);
+    act(() => emit({ phase: "saved", geometry: null, error: null }));
+    expect(status.textContent).toContain("已保存");
+    expect(status.querySelector("button")).toBeNull();
+  });
+
 });
 
 
@@ -2858,6 +3097,7 @@ async function renderApp(): Promise<HTMLElement> {
   act(() => root?.render(<App />));
   await act(async () => {
     await preferencesApi.loadAppPreferences.mock.results.at(-1)?.value.catch(() => undefined);
+    await mainWindowPinApi.loadMainWindowPin.mock.results.at(-1)?.value.catch(() => undefined);
     await backend.inspectCurrentGameRecovery.mock.results.at(-1)?.value;
     await currentGameFixture.mock.results.at(-1)?.value;
     await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
@@ -2996,7 +3236,7 @@ describe("accepted navigation coalescing", () => {
       editor.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => {
-      editor.blur();
+      buttonNamed(host, "应用评论").click();
       await backend.setCurrentGamePersonalComment.mock.results.at(-1)?.value;
     });
     if (save) {
@@ -3051,6 +3291,192 @@ describe("accepted navigation coalescing", () => {
     expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
   });
 });
+
+describe("App appearance theme persistence and layout stability", () => {
+  it("commits boardTheme only on successful save, avoids optimistic flash and failure adoption, and commits on retry", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: defaultAppPreferences });
+
+    const host = await renderApp();
+    const appShell = requiredElement(host, ".app-shell");
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(false);
+
+    openPreferences(host);
+    const themeSelect = labeledSelect(host, "棋盘对比");
+    expect(themeSelect.value).toBe("classic");
+
+    let rejectSave!: (error: Error) => void;
+    const deferredSave = new Promise<AppPreferences>((_, reject) => {
+      rejectSave = reject;
+    });
+    preferencesApi.saveAppPreferences.mockImplementationOnce(() => deferredSave);
+
+    act(() => {
+      themeSelect.value = "high-contrast";
+      themeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(false);
+    expect(themeSelect.value).toBe("classic");
+    expect(preferencesStatus(host)).toBe("Saving preferences...");
+
+    await act(async () => {
+      rejectSave(new Error("disk write error"));
+      await preferencesApi.saveAppPreferences.mock.results.at(-1)?.value.catch(() => undefined);
+    });
+
+    expect(preferencesStatus(host)).toContain("Save failed: disk write error");
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(false);
+    expect(themeSelect.value).toBe("classic");
+
+    let resolveRetry!: (prefs: AppPreferences) => void;
+    const retryPromise = new Promise<AppPreferences>((resolve) => {
+      resolveRetry = resolve;
+    });
+    preferencesApi.saveAppPreferences.mockImplementationOnce(() => retryPromise);
+
+    act(() => {
+      themeSelect.value = "high-contrast";
+      themeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    await act(async () => {
+      resolveRetry({ ...defaultAppPreferences, boardTheme: "high-contrast" });
+      await retryPromise;
+    });
+
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(true);
+    expect(themeSelect.value).toBe("high-contrast");
+    expect(preferencesStatus(host)).toBe("Preferences saved.");
+
+    const leftSeparator = requiredElement(host, '.workspace-separator[aria-label="调整左栏宽度"]');
+    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("228");
+
+    let resolveUnrelated!: (prefs: AppPreferences) => void;
+    const unrelatedPromise = new Promise<AppPreferences>((resolve) => {
+      resolveUnrelated = resolve;
+    });
+    preferencesApi.saveAppPreferences.mockImplementationOnce(() => unrelatedPromise);
+
+    const soundCheckbox = labeledCheckbox(host, "落子声音");
+    act(() => {
+      soundCheckbox.click();
+    });
+
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(true);
+    expect(preferencesStatus(host)).toBe("Saving preferences...");
+
+    act(() => {
+      leftSeparator.focus();
+      leftSeparator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
+    });
+    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("236");
+
+    act(() => {
+      leftSeparator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", shiftKey: true, bubbles: true, cancelable: true }));
+    });
+    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("268");
+
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("268");
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(true);
+
+    await act(async () => {
+      resolveUnrelated({
+        ...defaultAppPreferences,
+        boardTheme: "high-contrast",
+        soundEnabled: false
+      });
+      await unrelatedPromise;
+    });
+
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(true);
+    expect(themeSelect.value).toBe("high-contrast");
+    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("268");
+    expect(preferencesStatus(host)).toBe("Preferences saved.");
+  });
+
+  it("preserves committed high-contrast theme and adjusted geometry when a concurrent unrelated save rejects", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1200);
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({
+      preferences: { ...defaultAppPreferences, boardTheme: "high-contrast" }
+    });
+
+    const host = await renderApp();
+    const appShell = requiredElement(host, ".app-shell");
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(true);
+
+    openPreferences(host);
+    const themeSelect = labeledSelect(host, "棋盘对比");
+    expect(themeSelect.value).toBe("high-contrast");
+
+    const leftSeparator = requiredElement(host, '.workspace-separator[aria-label="调整左栏宽度"]');
+    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("228");
+
+    let rejectUnrelated!: (error: Error) => void;
+    const unrelatedPromise = new Promise<AppPreferences>((_, reject) => {
+      rejectUnrelated = reject;
+    });
+    preferencesApi.saveAppPreferences.mockImplementationOnce(() => unrelatedPromise);
+
+    const soundCheckbox = labeledCheckbox(host, "落子声音");
+    act(() => {
+      soundCheckbox.click();
+    });
+
+    act(() => {
+      leftSeparator.focus();
+      leftSeparator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", shiftKey: true, bubbles: true, cancelable: true }));
+    });
+    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("260");
+
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("260");
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(true);
+
+    await act(async () => {
+      rejectUnrelated(new Error("unrelated disk error"));
+      await preferencesApi.saveAppPreferences.mock.results.at(-1)?.value.catch(() => undefined);
+    });
+
+    expect(preferencesStatus(host)).toContain("Save failed: unrelated disk error");
+    expect(appShell.classList.contains("theme-high-contrast")).toBe(true);
+    expect(themeSelect.value).toBe("high-contrast");
+    expect(leftSeparator.getAttribute("aria-valuenow")).toBe("260");
+  });
+
+});
+
+function openPreferences(host: HTMLElement) {
+  act(() => buttonNamed(host, "参数").click());
+}
+
+function preferencesStatus(host: HTMLElement): string {
+  return requiredElement(host, ".preferences-header span").textContent ?? "";
+}
+
+function labeledSelect(host: HTMLElement, name: string): HTMLSelectElement {
+  const label = [...host.querySelectorAll(".preferences-panel label")].find((candidate) => (
+    candidate.querySelector("span")?.textContent === name
+  ));
+  const control = label?.querySelector("select");
+  if (!control) throw new Error(`Missing preference select: ${name}`);
+  return control as HTMLSelectElement;
+}
+
+function labeledCheckbox(host: HTMLElement, name: string): HTMLInputElement {
+  const label = [...host.querySelectorAll(".preferences-panel label")].find((candidate) => (
+    candidate.querySelector("span")?.textContent === name
+  ));
+  const control = label?.querySelector("input");
+  if (!control) throw new Error(`Missing preference checkbox: ${name}`);
+  return control as HTMLInputElement;
+}
+
 
 function pressKey(target: EventTarget, key: string, init: KeyboardEventInit = {}) {
   act(() => {

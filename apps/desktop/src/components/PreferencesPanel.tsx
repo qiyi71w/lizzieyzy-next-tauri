@@ -1,16 +1,26 @@
+import { WindowPinControl } from "./WindowPinControl";
+import type { MainWindowPinControl } from "../hooks/useMainWindowPin";
 import { useState } from "react";
 import { continuousBudgetError, newGameDefaultsError, type AppPreferences, type BoardTheme, type GraphPerspective, type NextMoveReviewMarkerMode, type ReviewMode, type SubBoardContentMode } from "../domain/preferences";
 import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
 
 type Props = {
+  windowPin?: MainWindowPinControl;
   preferences: AppPreferences;
   status: string;
   disabled?: boolean;
   scoreLeadAvailable?: boolean;
   onChange: (preferences: AppPreferences) => void;
+  onRestoreWorkspace?: () => void;
+  workspaceDisabled?: boolean;
+  windowGeometryStatus: string;
+  windowGeometryDisabled: boolean;
+  onResetWindowGeometry: () => void;
+  railVisibilityDisabled?: boolean;
+  onRailVisibility: (side: "left" | "right", visible: boolean) => void;
 };
 
-export function PreferencesPanel({ preferences, status, disabled = false, scoreLeadAvailable = true, onChange }: Props) {
+export function PreferencesPanel({ preferences, status, disabled = false, scoreLeadAvailable = true, onChange, onRestoreWorkspace, workspaceDisabled, windowGeometryStatus, windowGeometryDisabled, onResetWindowGeometry, railVisibilityDisabled = false, onRailVisibility, windowPin }: Props) {
   function update(patch: Partial<AppPreferences>) {
     onChange({ ...preferences, ...patch });
   }
@@ -21,6 +31,24 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
         <h2>设置</h2>
         <span>{status}</span>
       </div>
+      {windowPin ? <fieldset className="preferences-grid">
+        <legend>窗口</legend>
+        <WindowPinControl control={windowPin} />
+      </fieldset> : null}
+      <fieldset className="preferences-grid">
+        <legend>工作区</legend>
+        <button type="button" disabled={workspaceDisabled} onClick={onRestoreWorkspace}>恢复面板尺寸</button>
+      </fieldset>
+      <fieldset className="preferences-grid">
+        <legend>窗口</legend>
+        <span role="status">{windowGeometryStatus}</span>
+        <button type="button" disabled={windowGeometryDisabled} onClick={onResetWindowGeometry}>恢复窗口位置和大小</button>
+      </fieldset>
+      <fieldset className="preferences-grid">
+        <legend>侧栏</legend>
+        <Toggle label="左侧栏" checked={preferences.workspaceVisibility.left} disabled={railVisibilityDisabled} onChange={(visible) => onRailVisibility("left", visible)} />
+        <Toggle label="右侧栏" checked={preferences.workspaceVisibility.right} disabled={railVisibilityDisabled} onChange={(visible) => onRailVisibility("right", visible)} />
+      </fieldset>
       <fieldset className="preferences-grid">
         <legend>分析呈现</legend>
         <Toggle label="候选" checked={preferences.showCandidates} disabled={disabled} onChange={(checked) => update({ showCandidates: checked })} />

@@ -30,7 +30,10 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod continuous_analysis;
+mod window_geometry;
 use continuous_analysis::{foreground_engine_continuous_action, PreferencesState};
+mod main_window_pin;
+use main_window_pin::{main_window_pin_status, set_main_window_pin, MainWindowPin};
 mod current_game_state;
 mod document_departure;
 mod file_activation;
@@ -738,12 +741,31 @@ fn save_app_preferences(
 }
 
 #[tauri::command]
+fn update_workspace_visibility(
+    app_handle: AppHandle,
+    state: State<PreferencesState>,
+    left: Option<bool>,
+    right: Option<bool>,
+) -> Result<app_model::WorkspaceVisibilityDto, String> {
+    state.update_workspace_visibility(&app_preferences_path(&app_handle)?, left, right)
+}
+
+#[tauri::command]
 fn update_recent_game_history(
     app_handle: AppHandle,
     state: State<PreferencesState>,
     opened_path: Option<String>,
 ) -> Result<Vec<String>, String> {
     state.update_recent_history(&app_preferences_path(&app_handle)?, opened_path.as_deref())
+}
+
+#[tauri::command]
+fn update_workspace_shares(
+    app_handle: AppHandle,
+    state: State<PreferencesState>,
+    shares: Option<app_model::WorkspaceSharesDto>,
+) -> Result<Option<app_model::WorkspaceSharesDto>, String> {
+    state.update_workspace_shares(&app_preferences_path(&app_handle)?, shares)
 }
 
 #[tauri::command]
@@ -948,7 +970,13 @@ fn whole_game_work_items(
                     include_policy: Some(true),
                 },
             )
-            .map_err(|error| Box::new(job_failure(run_id, EngineFailureKind::Protocol, error.to_string())))?;
+            .map_err(|error| {
+                Box::new(job_failure(
+                    run_id,
+                    EngineFailureKind::Protocol,
+                    error.to_string(),
+                ))
+            })?;
             Ok(WholeGameWorkItem {
                 node_path: snapshot.path.clone(),
                 query,
@@ -1258,6 +1286,7 @@ pub fn run() {
         .manage(FileActivationOwner::from_process())
         .manage(CurrentGameState::default())
         .manage(PreferencesState::default())
+        .manage(MainWindowPin::default())
         .setup(|app| {
             let recovery_path = session_recovery::recovery_file_path(app.handle())?;
             app.manage(Mutex::new(FileRecoveryStore::new(recovery_path)));
@@ -1294,11 +1323,34 @@ pub fn run() {
             });
             let _ = manager.apply_autoload();
             app.manage(manager);
+            let preferences = app.state::<PreferencesState>();
+            // The frontend load command owns recovery/error reporting. A failed
+            // preference load must leave the window operable and pin uninitialized.
+            if let Ok(path) = app_preferences_path(app.handle()) {
+                if preferences
+                    .load(&path, &app.state::<ForegroundEngineManager>())
+                    .is_ok()
+                {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = app
+                            .state::<MainWindowPin>()
+                            .apply(&window, &preferences, &path, None);
+                    }
+                }
+            }
+            window_geometry::start(app.handle());
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            window_geometry::window_geometry_status,
+            window_geometry::reset_window_geometry,
+            window_geometry::retry_window_geometry,
+            window_geometry::flush_window_geometry,
+            window_geometry::freeze_window_geometry,
+            main_window_pin_status,
+            set_main_window_pin,
             health,
             parse_sgf_summary,
             provider_parse_yike_url,
@@ -1356,7 +1408,9 @@ pub fn run() {
             engine_asset_checks,
             load_app_preferences,
             save_app_preferences,
+            update_workspace_visibility,
             update_recent_game_history,
+            update_workspace_shares,
             load_engine_profile_settings,
             save_engine_profile_settings,
             load_engine_profiles_settings,
@@ -1385,6 +1439,18 @@ pub fn run() {
                 event: tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }),
                 ..
             } if label == "main" => handle_file_drop(app, paths),
+
+            tauri::RunEvent::WindowEvent { label, event, .. }
+                if label == "main"
+                    && matches!(
+                        event,
+                        tauri::WindowEvent::Moved(_)
+                            | tauri::WindowEvent::Resized(_)
+                            | tauri::WindowEvent::ScaleFactorChanged { .. }
+                    ) =>
+            {
+                window_geometry::observe(app);
+            }
 
             tauri::RunEvent::WindowEvent {
                 label,

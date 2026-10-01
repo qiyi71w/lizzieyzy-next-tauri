@@ -1,6 +1,6 @@
 use crate::current_game_state::CurrentGameState;
 use app_model::{CurrentGameResultDto, NodePath};
-use save_as_dialog::{classify_save_as_session, persist_save_as, SaveAsDialogOutcome};
+use save_as_dialog::{persist_save_as, SaveAsDialogOutcome};
 use tauri::{AppHandle, Runtime};
 
 #[cfg(windows)]
@@ -34,6 +34,7 @@ fn pick_save_as_outcome_dialog<R: Runtime>(
     app: &AppHandle<R>,
     default_file_name: &str,
 ) -> Result<SaveAsDialogOutcome, String> {
+    use save_as_dialog::classify_save_as_session;
     use tauri_plugin_dialog::DialogExt;
 
     let returned = app

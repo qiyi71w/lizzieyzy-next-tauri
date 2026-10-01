@@ -82,9 +82,10 @@ The existing Tauri implementation is the migration starting point and must be pr
 - `UI-02` remains Partial: there is still no evidence that engine events are delivered while a board mutation promise is pending. That residual does not reopen R4.
 - R4 Analysis has exited with all ten owner items plus pulled-forward `PREF-01` and `APP-05` Accepted.
 - R5 has exited on integrated Windows candidate `48db2b2833f9deb45bd7dcd47181f5da77348a0c`. `SGF-08`, `APP-02`, `APP-03`, `APP-04`, and `ANA-15` are Accepted; the `APP-01` R5 semantic gate passed. Final `APP-01` acceptance remains an R11 / `REL-04` installer-association and Canonical Artifact Installed Live Evidence obligation.
-- R6 has exited on integrated Windows candidate `be6951bf57afa07c4a1ae6d57075573b308f5dfd`; all thirteen authoring/review owner items are Accepted. R7 remains the next numbered phase.
-- Layout rails are fixed at `228px` and `260px`; splitters, rail visibility, window-geometry reset, and narrow Restore Default are absent.
-- Main-window always-on-top remains absent (`WINDOW-02`); accepted R6 metadata and HUD player-name behavior retain their owner scopes.
+- R6 has exited on integrated Windows candidate `be6951bf57afa07c4a1ae6d57075573b308f5dfd`; all thirteen authoring/review owner items are Accepted. R7 has also exited within its approved acceptance scope; R8 remains the next numbered feature phase and has not started here.
+- `LAYOUT-01` session splitters and size/DPR-aware redraw remain Accepted on Windows candidate `7340e00896dfa059f3e054cd46b041c14e931383`. Default rails are `228px`/`260px` above 1180px workspace width and `210px`/`240px` otherwise; visible minima preserve scroll-accessible controls. `LAYOUT-02`/`LAYOUT-03` are now Accepted on the integrated R7 evidence: ratio-only atomic persistence, latest-draft Retry, all-owner exit flush and both reset entries; native whole-preference comparison changes only shares. Earlier `5b52ad8…` / `125e43e…` feature evidence retains its source attribution.
+- `WINDOW-01` is Accepted within the approved R7 scope: serialized physical-origin/logical-client restoration, caption/work-area validation, normal/max/min restart, isolated reset, visible failure/Retry and both exit fences. Exact `baa9747d11ee9e2130904ff057adbe7cfd968153` proves actual negative-monitor restart/removal, system DPI, Explorer replacement and small-work-area recovery. macOS native is user-approved SKIPPED; its unverified AppKit candidate and historical review attribution remain unchanged.
+- All six feature worktrees are integrated and all seven R7 owner items are Accepted. Windows A01–A18 pass18/18 on `baa9747…`; `f4e478e…` resolves the formatting/lint envelopes and passes five affected native document cases. Subsequent test-fixture repairs pass desktop-lib146/146 in default-parallel and serial runs,20 shared-fixture checks, formatting and strict Linux lib/tests lint. Final bounded Standards/Spec reviews are CLEAN on `406250408043e68fe67f6082c583429600768c0c`; ticket07 is CLOSED/ACCEPTED and R7 exited. macOS remains approved SKIPPED (2026-09-30), without changing support or other platform gates. Ticket08 is unblocked but unexecuted; R6 metadata/HUD scopes are unchanged.
 - Multi-backend profiles, Generic GTP, and Match Sessions are absent.
 - Provider/readboard repository plumbing exists, but live sessions remain unvalidated; Yike ongoing sync and Tencent kifu import are unclaimed; readboard snapshots are previewed rather than synchronized into the active game.
 - Signing, notarization, production updater apply/handoff/rollback, bundled installed-runtime resolution, and Canonical Artifact Installed Live Evidence remain incomplete.
@@ -651,6 +652,8 @@ Accepted `SGF-01` through `SGF-06`, `RULE-01`, `UI-01`, `UI-03`, `UI-04`, and `U
 
 **Migration Phase Gate:** `PREF-01` accepted. `GUIDE-01` is Deferred (Ticket 21) and is not an R7 member or exit.
 
+**Implementation and acceptance:** Exited within the approved R7 scope; all seven owners Accepted, ticket07 CLOSED/ACCEPTED. [R7 execution and acceptance plan](R7_PLAN.md) and ticket07 preserve exact source/run attribution: `baa9747d11ee9e2130904ff057adbe7cfd968153` integrates all six worktrees and legacy-default/exit/pin repairs, with Windows A01–A18 pass18/18. Historical Rust592/2 ignored, frontend368/build, Linux workspace clippy and Windows pin4/4 retain their original runs. `f4e478e…` resolves both complete historical handoffs, with formatting, both-platform strict lint, SGF94, Recent4 and five actual native document cases passing. Subsequent fixture repairs pass desktop-lib146/146 in parallel and serial runs,20 shared-fixture checks, formatting and Linux strict lib/tests clippy; final bounded Standards/Spec reviews are CLEAN on `406250408043e68fe67f6082c583429600768c0c`. macOS is user-approved SKIPPED, not PASS or a support change; zero open IN_SCOPE/DEFERRED and zero new follow-ups. Ticket08 is unblocked, not executed.
+
 **Delivery Order:**
 
 1. `LAYOUT-01` draggable proportions.
@@ -870,6 +873,8 @@ These items are stable and unnumbered. Each has an owner and a Plan-owned Promot
 R5 has exited. Integrated candidate `48db2b2833f9deb45bd7dcd47181f5da77348a0c` completed the native activation/drop, graceful-shutdown, recovery-failure, and truthful-analysis evidence; exact unchanged-path reuse for the ten-second teardown cases was paired with affected final-candidate smoke.
 
 `APP-01` remains Missing only for its R11 / `REL-04` production association and Canonical Artifact Installed Live Evidence obligation. `ENG-09`/`ENG-10`, `UI-02` residuals, and other phase gates retain their own scope; R5 exit does not promote them.
+
+R6 has subsequently exited on `be6951bf57afa07c4a1ae6d57075573b308f5dfd`. The [approved R7 Adaptive Workspace batch](R7_PLAN.md) is based on remote `main` at `5d44760f172867c520adb9c57adcd86678f72c54`; its specification and eight local tickets are published. Tickets 01 and 05 have no ticket blockers; later tickets follow the recorded DAG. Later phases and Deferred items are not part of this batch.
 
 Slice R3-A (Foreground engine identity and lifecycle) is complete. The historical scope below is audit record, not the current batch.
 

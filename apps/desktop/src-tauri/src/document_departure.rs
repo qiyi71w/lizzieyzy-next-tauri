@@ -569,8 +569,10 @@ pub fn confirm_application_exit_anyway(
 }
 
 #[tauri::command]
-pub fn confirm_native_exit(app: AppHandle) {
+pub async fn confirm_native_exit(app: AppHandle) -> Result<(), String> {
+    crate::window_geometry::seal_for_exit(app.clone()).await?;
     app.exit(0);
+    Ok(())
 }
 
 #[cfg(test)]

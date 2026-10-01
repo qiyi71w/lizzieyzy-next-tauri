@@ -924,6 +924,11 @@ fn task_pause_cleanup_failure_aborts_departure_and_retains_game() {
         let opened = state.replace("(;SZ[9];B[dd])", None).unwrap();
         let task = start_live_task(&engine, &state, opened.generation);
         state.attach_from_job_event(&engine.progress(None)).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+        while !engine.directory.join("search-started").exists() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         wait_live_task(&engine, app_model::AnalysisTaskStateDto::Searching);
         if delivery_failure {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);

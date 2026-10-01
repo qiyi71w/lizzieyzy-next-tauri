@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent } from "react";
+import { useElementSize } from "../workspace/useElementSize";
 import {
   displayedScore,
   displayedWinrate,
@@ -20,6 +21,7 @@ const BAR_COLORS = {
 
 export function WinrateChart({ model, onSelectNode }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const size = useElementSize(canvasRef);
   const [hover, setHover] = useState<string | null>(null);
 
   useEffect(() => {
@@ -31,9 +33,8 @@ export function WinrateChart({ model, onSelectNode }: Props) {
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const width = canvas.clientWidth || 240;
-    const height = canvas.clientHeight || 90;
+    const { width, height, dpr } = size;
+    if (width <= 0 || height <= 0) return;
     canvas.width = Math.floor(width * dpr);
     canvas.height = Math.floor(height * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -105,12 +106,13 @@ export function WinrateChart({ model, onSelectNode }: Props) {
       ctx.arc(markerX, markerY, 3.5, 0, Math.PI * 2);
       ctx.fill();
     }
-  }, [model]);
+  }, [model, size]);
 
   function pointAt(clientX: number): ChartPoint | null {
     const canvas = canvasRef.current;
     if (!canvas || model.points.length === 0) return null;
-    const width = canvas.clientWidth || 240;
+    const width = canvas.getBoundingClientRect().width;
+    if (width <= 0) return null;
     const ratio = Math.min(1, Math.max(0, clientX / width));
     const nodeIndex = Math.round(ratio * Math.max(model.points.length - 1, 0));
     return model.points[nodeIndex] ?? null;

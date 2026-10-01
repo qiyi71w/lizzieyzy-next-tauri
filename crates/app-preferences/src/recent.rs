@@ -45,9 +45,7 @@ mod tests {
                 std::process::id(),
                 SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
             );
-            let path = std::env::temp_dir()
-                .join("lizzieyzy-recent-test")
-                .join(unique);
+            let path = std::env::temp_dir().join("lizzieyzy-recent-test").join(unique);
             fs::create_dir_all(&path).expect("failed to create temp dir");
             Self { path }
         }

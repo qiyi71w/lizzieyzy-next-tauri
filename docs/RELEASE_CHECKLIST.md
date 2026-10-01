@@ -2,8 +2,9 @@
 
 This checklist tracks release readiness for the LizzieYzy Next Tauri 2 + Rust + TypeScript workspace. It is not a statement that a public Tauri release has already shipped.
 
-The existing Java/Swing maintenance line may have its own release process. For the Next workspace, do not publish or describe a release as ready until the checks below pass on the intended platform and the artifact set exists.
+This checklist governs full release candidate qualification, distribution packaging, and milestone readiness. It is **not** a per-ticket manual gate for day-to-day development or localized changes. Per-change development validation follows the affected-surface development gate in [Development Guide](DEVELOPMENT.md). Refer to that policy for focused validation, parent-executor ownership, acceptance mini-contracts, and runtime isolation rules rather than duplicating them here.
 
+The existing Java/Swing maintenance line may have its own release process. For the Next workspace, do not publish or describe a release as ready until the checks below pass on the intended platform and the artifact set exists.
 ## Release Readiness Rules
 
 - Do not claim full legacy parity unless Fox/Yike/readboard, legacy settings, and advanced review workflows have explicit acceptance evidence.
@@ -24,11 +25,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Frontend build:
+Frontend automated checks and build:
 
 ```bash
 cd apps/desktop
 npm ci
+npm test
 npm run build
 ```
 
@@ -59,7 +61,11 @@ Provider/readboard acceptance:
 - ProviderPanel is the expected UI surface for provider fetch, readboard probe, and readboard sync controls. If the controls are absent in a candidate, mark that UI path as pending.
 - Offline provider/readboard contracts and runtime path checks are not the same as live Fox/Yike external-network or readboard sidecar validation.
 
-## Manual Desktop Smoke
+## Native Desktop Scenarios
+
+These native desktop scenarios follow an automation-first approach (using headless/isolated runners, controlled engine harnesses, or automated integration probes where available). Only unavoidable physical hardware checks (such as physical display removal or physical device state changes) and OS authorization/permission prompts remain manual checks.
+
+Per-change development executes only the specific scenarios covering the affected surface as defined in [DEVELOPMENT.md](DEVELOPMENT.md); execute the full matrix below only for release candidates.
 
 Run under the native desktop runtime:
 
@@ -69,7 +75,6 @@ npm run tauri:dev
 ```
 
 Record the OS, CPU architecture, KataGo version, model path, config path, and whether the engine is bundled or local.
-
 ### SGF Open
 
 - Open an SGF through native file open.
@@ -219,7 +224,7 @@ Release notes for the Next workspace should state:
 - The exact release candidate or tag.
 - The platform artifacts included.
 - The validation commands run and their results.
-- The manual smoke result, including OS and KataGo details.
+- The native desktop scenarios result, including OS and KataGo details.
 - Known limitations.
 
 Release notes should not state:
@@ -257,10 +262,11 @@ Automated checks:
 - readboard protocol line sync: PASS/FAIL/SKIPPED, offline/live:
 - image OCR unavailable structured error: PASS/FAIL/SKIPPED:
 - npm ci: PASS/FAIL/SKIPPED
+- npm test: PASS/FAIL/SKIPPED
 - npm run build: PASS/FAIL/SKIPPED
 - npm run tauri:build: PASS/FAIL/SKIPPED
 
-Manual smoke:
+Native desktop scenarios:
 - SGF open: PASS/FAIL
 - Engine profile persistence: PASS/FAIL
 - Asset check: PASS/FAIL
