@@ -175,6 +175,8 @@ The hard deadline starts at admission and covers all synchronization, writes, re
 
 GTP fully resynchronizes before every request. Visits budgets are unsupported. When both `time_settings` and `time_left` are verified, it sends `time_settings 0 <seconds> 1` and `time_left <color> <seconds> 1`, flooring the remaining deadline independently; otherwise `engine_time_mapped=false`. Less than one second remaining prevents `genmove`. A generated move is already on the engine board and is never replayed as a second `play`. Cancellation kills and confirms the owned process, then publishes NoEngine; protocol/timeout failure publishes Error. Failed cleanup retains occupancy; recovery requires explicit Restart.
 
+R8's integrated Windows runtime candidate is `42cd91a657d2710b826cc1b94f21f168de64a0fa`. [The final acceptance matrix and R9 handoff](DEVELOPMENT.md#24-r8-integrated-acceptance-and-r9-handoff-ticket-05) distinguish inherited exact-move transcripts from final native switch/admission/hold/restart/exit observations. `ENG-09` retains its ticket-02 acceptance; `ENG-10` covers the qualified GNU Go 3.8 path, not arbitrary GTP rule/setup compatibility. R9 consumes the read-only move API and owns Match Session/Reservation and SGF commit; R8 recovers only durable profiles/defaults, never live runs or jobs.
+
 
 ### `crates/app-preferences`
 
