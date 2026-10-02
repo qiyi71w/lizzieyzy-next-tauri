@@ -209,6 +209,15 @@ Repository checks: `cargo test -p app-model -p engine-manager` (189 passed, 2 re
 
 Real-engine qualification uses [Ben Lambrechts' Cygwin Windows GNU Go 3.8 build](https://gnugo.baduk.org/gnugo2/gnugo-3.8.zip), with argv `--mode gtp --chinese-rules --positional-superko --forbid-suicide --level 1 --seed 1`. `D:\dev\weiqi\acceptance\r8-gtp-assets\qualification.json` records the full 42-command transcript: GTP v2, GNU Go/3.8, 138 commands, board sizes 1/2/5/9/13/19 accepted and 20 rejected, komi round-trip, forbidden suicide, immediate ko and repetition after two passes rejected, play/pass, `time_settings 0 1 1`, `time_left b 1 1`, `genmove b` → `C4`, and clean `quit`. Separate scoring probes distinguish Chinese area (`B+25.0`) from Japanese territory (`B+23.0`) on the same one-stone 5×5 board. This qualifies the configured engine, not a manager game/clock API or all rule/history combinations. Ticket 04 owns exact-position/budget operations; ticket 05 owns final Windows N02/N04 integration. `ENG-10` remains Missing.
 
+Native ticket-03 smoke passed on exact source candidate `ea89a48960e0e529508516e08d9cd12f52015ce2`, Windows private desktop / Tauri WebView2 (`http://tauri.localhost/`), isolated application identifier `org.lizzieyzy.next.acceptance.r1e5c305f57be41ee85645734f2e6a3f2`. Evidence: `D:\dev\weiqi\acceptance\r8-gtp-ea89a48-run1\native-evidence.json`, `gtp-ready.png`, `failed-switch.png`, `process-*.json`; fresh-launch evidence is in sibling `r8-gtp-ea89a48-run2`.
+
+- The UI saved the qualified GNU Go profile, started it, displayed verified GTP v2 / GNU Go 3.8 / 138 commands without analysis admission, and stopped it; owned PID64416 was reaped.
+- GNU Go with `--version` as a bad GTP candidate produced a visible framing failure; KataGo run `1ff43ab8-ed48-4a0b-93f9-5d31a48918f2` and continuous job `7b6f4eb8-7052-4724-8cf7-fc4d8ae4e1bb` remained searching. A subsequent valid GTP switch promoted a new run and reaped KataGo PID80468.
+- Explicit GTP Restart replaced PID26724 with PID31688 and a new run ID. Normal app exit (Discard of isolated analysis changes) reaped the owned engine; a fresh app launch retained all three profiles but restored no live run. Both isolated sessions exited normally.
+- The same candidate passed `real_katago_ready_job_stop_restart_and_switch` (1 passed, 1 filtered, 53.09s), using the ENG-09 CPU/model/config assets above. Full log: `D:\dev\weiqi\acceptance\r8-gtp-assets\real-katago.log`.
+
+These are ticket-03 native lifecycle observations, not ticket-04 exact-position/game-move/time-budget implementation or the final ticket-05 N02/N04 combination matrix. `ENG-10` remains Missing; provider, release and physical-display acceptance are unchanged.
+
 
 
 ### 3. Start From The Engine Switcher
