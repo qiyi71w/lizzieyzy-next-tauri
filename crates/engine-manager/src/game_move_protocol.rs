@@ -51,13 +51,19 @@ pub(crate) fn katago_query(position: &ExactPositionDto, query_id: &str, max_visi
     })
 }
 
+pub(crate) enum KataGoMoveResponse {
+    Searching,
+    Complete(GameMoveDto),
+    Rejected(String),
+}
+
 pub(crate) fn katago_result(
     line: &str,
     query_id: &str,
     turn: usize,
     width: u8,
     height: u8,
-) -> Result<Option<GameMoveDto>, String> {
+) -> Result<KataGoMoveResponse, String> {
     let response: Value =
         serde_json::from_str(line).map_err(|error| format!("Invalid KataGo game-move JSON: {error}"))?;
     let response = response
@@ -66,9 +72,16 @@ pub(crate) fn katago_result(
     if response.get("id").and_then(Value::as_str) != Some(query_id) {
         return Err("KataGo game-move response has a missing or mismatched query id".to_owned());
     }
+    for field in ["error", "errors"] {
+        if let Some(detail) = response.get(field) {
+            return Ok(KataGoMoveResponse::Rejected(format!(
+                "KataGo game-move {field}: {detail}"
+            )));
+        }
+    }
     // Warning responses have no turnNumber. Even when followed by a successful
     // result, they may describe a rules downgrade and cannot be ignored.
-    for field in ["error", "errors", "warning", "warnings"] {
+    for field in ["warning", "warnings"] {
         if let Some(detail) = response.get(field) {
             return Err(format!("KataGo game-move {field}: {detail}"));
         }
@@ -77,7 +90,7 @@ pub(crate) fn katago_result(
         return Err("KataGo game-move response has a missing or mismatched turn".to_owned());
     }
     match response.get("isDuringSearch").and_then(Value::as_bool) {
-        Some(true) => return Ok(None),
+        Some(true) => return Ok(KataGoMoveResponse::Searching),
         Some(false) => {}
         None => return Err("KataGo game-move response lacks an explicit completion state".to_owned()),
     }
@@ -98,7 +111,7 @@ pub(crate) fn katago_result(
         .get("move")
         .and_then(Value::as_str)
         .ok_or_else(|| "KataGo order=0 move is not a string".to_owned())?;
-    parse_gtp_move(raw, width, height, false).map(Some)
+    parse_gtp_move(raw, width, height, false).map(KataGoMoveResponse::Complete)
 }
 
 pub(crate) fn parse_gtp_move(

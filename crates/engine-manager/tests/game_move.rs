@@ -303,7 +303,45 @@ fn typed_results_and_invalid_completed_candidates_are_not_guessed() {
                 EngineFailureKind::Protocol,
                 "{kata} {mode}"
             );
+            if kata && *mode == "warning" {
+                rig.wait_for("terminateId");
+                assert!(matches!(rig.manager.snapshot().lifecycle,
+                    ForegroundEngineLifecycleDto::Ready { run } if run.run_id == rig.run));
+            }
         }
+    }
+}
+
+#[test]
+fn rejected_katago_query_keeps_the_same_run_available_for_the_next_move() {
+    for mode in ["error", "errors"] {
+        let rig = Rig::new(true, mode);
+        let failure = rig
+            .manager
+            .start_game_move(rig.request(3000))
+            .unwrap()
+            .wait()
+            .unwrap_err();
+        assert_eq!(failure.kind, EngineFailureKind::Protocol);
+        assert!(
+            matches!(rig.manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::Ready { run } if run.run_id == rig.run),
+            "{mode}"
+        );
+        assert!(!rig.trace().contains("terminateId"));
+        let result = rig
+            .manager
+            .start_game_move(rig.request(3000))
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert_eq!(result.run_id, rig.run);
+        assert_eq!(
+            result.result,
+            GameMoveDto::Move {
+                vertex: MoveVertex::Point(PointDto { x: 3, y: 1 }),
+            }
+        );
     }
 }
 

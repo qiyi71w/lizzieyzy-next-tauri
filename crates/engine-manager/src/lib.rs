@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 mod catalog;
-mod gtp;
 mod game_move_protocol;
+mod gtp;
 mod lifecycle;
 
 pub use catalog::{
@@ -531,7 +531,8 @@ fn asset_exists(path: &str) -> bool {
 }
 
 fn normalized_optional_path(path: Option<&str>) -> Option<String> {
-    path.filter(|value| !value.is_empty()).map(ToOwned::to_owned)
+    path.filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn resolve_program_path(program: &str, working_dir: Option<&str>) -> String {
@@ -1238,6 +1239,38 @@ mod tests {
             std::fs::canonicalize(&spec.args[4]).unwrap(),
             std::fs::canonicalize(working_dir.join("models").join("model.bin")).unwrap()
         );
+    }
+
+    #[test]
+    fn optional_working_directory_ignores_blank_but_preserves_nonblank_paths() {
+        let temp = TestTempDir::new("optional-working-dir");
+        let directory = temp.path().join("working directory ");
+        std::fs::create_dir(&directory).unwrap();
+        let mut profile = EngineProfileDto {
+            name: "GTP".into(),
+            program: "engine".into(),
+            argv: vec![],
+            working_dir: Some(" \t ".into()),
+            adapter: EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings {}),
+        };
+        assert_eq!(build_command_spec(&profile).unwrap().working_dir, None);
+        assert!(!check_assets(&profile)
+            .iter()
+            .any(|check| check.label == "working directory"));
+
+        let directory = directory.to_str().unwrap();
+        profile.working_dir = Some(directory.into());
+        assert_eq!(
+            build_command_spec(&profile).unwrap().working_dir.as_deref(),
+            Some(directory)
+        );
+        let checks = check_assets(&profile);
+        let check = checks
+            .iter()
+            .find(|check| check.label == "working directory")
+            .unwrap();
+        assert_eq!(check.path, directory);
+        assert!(check.exists);
     }
 
     #[test]

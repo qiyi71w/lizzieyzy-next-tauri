@@ -156,9 +156,13 @@ fn durable_primary_write_failure_preserves_intent_and_restart_choice() {
     engine.manager.start("test").unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
     loop {
-        let event = engine.events.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).unwrap();
+        let event = engine
+            .events
+            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .unwrap();
         if matches!(event, app_model::ForegroundEngineEventDto::Snapshot { snapshot }
-            if matches!(snapshot.lifecycle, app_model::ForegroundEngineLifecycleDto::Ready { .. })) {
+            if matches!(snapshot.lifecycle, app_model::ForegroundEngineLifecycleDto::Ready { .. }))
+        {
             break;
         }
     }
@@ -172,7 +176,12 @@ fn durable_primary_write_failure_preserves_intent_and_restart_choice() {
     assert!(preferences.primary(&engine.directory, &engine.manager).is_err());
     assert_eq!(engine.manager.snapshot(), before);
     assert_eq!(std::fs::read(&path).unwrap(), durable);
-    assert!(!preferences.primary(&path, &engine.manager).unwrap().continuous_analysis_enabled);
+    assert!(
+        !preferences
+            .primary(&path, &engine.manager)
+            .unwrap()
+            .continuous_analysis_enabled
+    );
     assert!(preferences.primary(&engine.directory, &engine.manager).is_err());
     assert_eq!(engine.manager.snapshot().continuous.enabled, Some(false));
 
@@ -180,10 +189,20 @@ fn durable_primary_write_failure_preserves_intent_and_restart_choice() {
         Arc::new(InMemoryEngineProfileCatalog::new()),
         ForegroundEngineConfig::for_tests(),
     );
-    let reloaded = crate::continuous_analysis::PreferencesState::default().load(&path, &restarted).unwrap();
+    let reloaded = crate::continuous_analysis::PreferencesState::default()
+        .load(&path, &restarted)
+        .unwrap();
     assert!(!reloaded.preferences.continuous_analysis_enabled);
-    assert!(matches!(restarted.snapshot().lifecycle, app_model::ForegroundEngineLifecycleDto::NoEngine { .. }));
-    assert!(preferences.primary(&path, &engine.manager).unwrap().continuous_analysis_enabled);
+    assert!(matches!(
+        restarted.snapshot().lifecycle,
+        app_model::ForegroundEngineLifecycleDto::NoEngine { .. }
+    ));
+    assert!(
+        preferences
+            .primary(&path, &engine.manager)
+            .unwrap()
+            .continuous_analysis_enabled
+    );
     assert_eq!(engine.manager.snapshot().lifecycle, before.lifecycle);
     assert!(engine.manager.snapshot().selected_node_job.is_none());
 }

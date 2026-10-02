@@ -326,7 +326,7 @@ impl CurrentGameState {
                 message,
             ))
         };
-        conditions.validate_single_stage().map_err(&invalid)?;
+        conditions.validate_single_stage().map_err(invalid)?;
         // Keep semantic revalidation and manager admission under the same owner lock.
         let holder = self.holder.lock().expect("current game state");
         let admitted = holder
@@ -370,7 +370,7 @@ impl CurrentGameState {
             &overview_conditions,
             &deep_conditions,
         )
-        .map_err(&invalid)?;
+        .map_err(invalid)?;
         let holder = self.holder.lock().expect("current game state");
         let admitted = holder
             .analysis_scope_admission(preview.generation, &preview.scope, None)
@@ -411,13 +411,13 @@ impl CurrentGameState {
                 message,
             ))
         };
-        overview_conditions.validate_single_stage().map_err(&invalid)?;
-        deep_conditions.validate_single_stage().map_err(&invalid)?;
+        overview_conditions.validate_single_stage().map_err(invalid)?;
+        deep_conditions.validate_single_stage().map_err(invalid)?;
         let criteria = preview
             .swing_criteria
             .clone()
             .ok_or_else(|| invalid("Swing-selected analysis requires swing criteria.".into()))?;
-        criteria.validate().map_err(&invalid)?;
+        criteria.validate().map_err(invalid)?;
         let holder = self.holder.lock().expect("current game state");
         let admitted = holder
             .analysis_scope_admission(preview.generation, &preview.scope, Some(&criteria))

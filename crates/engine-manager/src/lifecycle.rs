@@ -2044,8 +2044,10 @@ impl Inner {
         };
         let capabilities = EngineCapabilitySnapshotDto {
             adapter_kind: run.adapter_kind,
-            game_move: !generic || gtp.as_ref().is_some_and(|facts|
-                crate::game_move_protocol::qualified_gtp_launch(&run.profile_snapshot, facts)),
+            game_move: !generic
+                || gtp.as_ref().is_some_and(|facts| {
+                    crate::game_move_protocol::qualified_gtp_launch(&run.profile_snapshot, facts)
+                }),
             analysis: (!generic).then_some(EngineAnalysisCapabilitiesDto {
                 selected_node_analysis: true,
                 continuous_analysis: true,
@@ -2762,7 +2764,10 @@ impl Inner {
                     if self.route_game_move_line(&run_id, &line) {
                         continue;
                     }
-                    (EngineFailureKind::Protocol, "unsolicited GTP stdout after handshake".into())
+                    (
+                        EngineFailureKind::Protocol,
+                        "unsolicited GTP stdout after handshake".into(),
+                    )
                 }
                 Ok(Err(error)) => (EngineFailureKind::Protocol, format!("GTP stdout failed: {error}")),
                 Ok(Ok(None)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -4141,10 +4146,13 @@ fn validate_query_capabilities(
     if query.include_policy == Some(true) {
         require_capability(run, capabilities.policy, "policy analysis")?;
     }
-    if check_visits && (query.max_visits.is_some() || query.override_settings.as_ref().is_some_and(|settings| {
-        settings.max_visits != katago_protocol::UNBOUNDED_MAX_VISITS
-            || settings.max_playouts != katago_protocol::UNBOUNDED_MAX_VISITS
-    })) {
+    if check_visits
+        && (query.max_visits.is_some()
+            || query.override_settings.as_ref().is_some_and(|settings| {
+                settings.max_visits != katago_protocol::UNBOUNDED_MAX_VISITS
+                    || settings.max_playouts != katago_protocol::UNBOUNDED_MAX_VISITS
+            }))
+    {
         require_capability(run, capabilities.visits_limit, "visits limits")?;
     }
     Ok(())
@@ -4245,8 +4253,16 @@ fn validate_selected_admission(
     let continuous = request.mode == AnalysisJobModeDto::Continuous;
     require_capability(
         &run,
-        if continuous { capabilities.continuous_analysis } else { capabilities.selected_node_analysis },
-        if continuous { "continuous analysis" } else { "selected-node analysis" },
+        if continuous {
+            capabilities.continuous_analysis
+        } else {
+            capabilities.selected_node_analysis
+        },
+        if continuous {
+            "continuous analysis"
+        } else {
+            "selected-node analysis"
+        },
     )?;
     validate_query_capabilities(&run, &request.query, !continuous)?;
     if continuous && state.continuous_budget.continuous_visits_limit_enabled {

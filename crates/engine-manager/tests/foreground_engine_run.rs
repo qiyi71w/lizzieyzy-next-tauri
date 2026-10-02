@@ -1226,10 +1226,14 @@ fn admission_missing_analysis_preserves_active_lanes_and_protocol() {
         let before_log = loop {
             let logged = std::fs::read_to_string(&log).unwrap();
             if count_job_queries(&logged, &selected.job_id) == 1
-                && count_job_queries(&logged, &whole.job_id) == 1 {
+                && count_job_queries(&logged, &whole.job_id) == 1
+            {
                 break logged;
             }
-            assert!(Instant::now() < deadline, "both admitted jobs must reach the engine");
+            assert!(
+                Instant::now() < deadline,
+                "both admitted jobs must reach the engine"
+            );
             std::thread::sleep(Duration::from_millis(10));
         };
         manager.set_capability_snapshot_for_tests(missing);
@@ -1245,14 +1249,29 @@ fn admission_missing_analysis_preserves_active_lanes_and_protocol() {
             );
         }
         for lane in [AnalysisJobLane::SelectedNode, AnalysisJobLane::WholeGame] {
-            assert_eq!(manager.register_job(&run_id, lane, Arc::new(AnalysisCancelToken::new()))
-                .unwrap_err().kind, EngineFailureKind::UnsupportedCapability);
+            assert_eq!(
+                manager
+                    .register_job(&run_id, lane, Arc::new(AnalysisCancelToken::new()))
+                    .unwrap_err()
+                    .kind,
+                EngineFailureKind::UnsupportedCapability
+            );
         }
-        assert_eq!(manager.start_analysis_task(whole_game_request(&run_id, 42, 1),
-            analysis_scope(), task_conditions(32)).unwrap_err().kind,
-            EngineFailureKind::UnsupportedCapability);
-        assert_eq!(manager.check_analysis_task_admission(None).unwrap_err().kind,
-            EngineFailureKind::UnsupportedCapability);
+        assert_eq!(
+            manager
+                .start_analysis_task(
+                    whole_game_request(&run_id, 42, 1),
+                    analysis_scope(),
+                    task_conditions(32)
+                )
+                .unwrap_err()
+                .kind,
+            EngineFailureKind::UnsupportedCapability
+        );
+        assert_eq!(
+            manager.check_analysis_task_admission(None).unwrap_err().kind,
+            EngineFailureKind::UnsupportedCapability
+        );
         assert_eq!(manager.snapshot(), before);
         assert_eq!(manager.analysis_task_snapshot(), task_before);
         std::thread::sleep(Duration::from_millis(100));
@@ -1298,14 +1317,24 @@ fn admission_continue_rechecks_capabilities_without_replacing_paused_task() {
     ] {
         manager.set_capability_snapshot_for_tests(missing);
         let before = manager.snapshot();
-        assert_eq!(manager.continue_analysis_task(&run_id, &task.task_id, 42).unwrap_err().kind,
-            EngineFailureKind::UnsupportedCapability);
+        assert_eq!(
+            manager
+                .continue_analysis_task(&run_id, &task.task_id, 42)
+                .unwrap_err()
+                .kind,
+            EngineFailureKind::UnsupportedCapability
+        );
         assert_eq!(manager.snapshot(), before);
         assert_eq!(manager.analysis_task_snapshot().unwrap(), paused);
-        assert_eq!(std::fs::read_to_string(temp.path().join("queries.jsonl")).unwrap(), before_log);
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("queries.jsonl")).unwrap(),
+            before_log
+        );
     }
     manager.set_capability_snapshot_for_tests(verified);
-    let continued = manager.continue_analysis_task(&run_id, &task.task_id, 42).unwrap();
+    let continued = manager
+        .continue_analysis_task(&run_id, &task.task_id, 42)
+        .unwrap();
     assert_eq!(continued.task_id, paused.task_id);
     assert_ne!(continued.job_id, paused.job_id);
     assert_eq!(continued.completed, paused.completed);
@@ -1318,35 +1347,63 @@ fn admission_finite_continuous_and_whole_game_are_independent() {
     for admitted in ["finite", "continuous", "whole"] {
         let temp = TestTempDir::new("admission-independent");
         let (manager, events, run_id, log) = hold_both_lanes_manager(&temp);
-        let mut verified = lifecycle_run(&manager.snapshot().lifecycle).unwrap()
-            .capability_snapshot.clone().unwrap();
+        let mut verified = lifecycle_run(&manager.snapshot().lifecycle)
+            .unwrap()
+            .capability_snapshot
+            .clone()
+            .unwrap();
         let analysis = verified.analysis.as_mut().unwrap();
         analysis.selected_node_analysis = admitted == "finite";
         analysis.continuous_analysis = admitted == "continuous";
         analysis.whole_game_analysis = admitted == "whole";
         manager.set_capability_snapshot_for_tests(Some(verified));
-        manager.set_continuous_preferences(false, app_model::ContinuousAnalysisBudgetDto::default()).unwrap();
+        manager
+            .set_continuous_preferences(false, app_model::ContinuousAnalysisBudgetDto::default())
+            .unwrap();
         for requested in ["finite", "continuous", "whole"] {
-            if requested == admitted { continue; }
+            if requested == admitted {
+                continue;
+            }
             let before = manager.snapshot();
             let error = match requested {
-                "finite" => manager.start_selected_node_job(selected_request(&run_id, 42, vec![0])).unwrap_err(),
-                "continuous" => manager.start_selected_node_job(continuous_request(&run_id, 42, vec![0])).unwrap_err(),
-                _ => manager.start_whole_game_analysis(whole_game_request(&run_id, 42, 1)).unwrap_err(),
+                "finite" => manager
+                    .start_selected_node_job(selected_request(&run_id, 42, vec![0]))
+                    .unwrap_err(),
+                "continuous" => manager
+                    .start_selected_node_job(continuous_request(&run_id, 42, vec![0]))
+                    .unwrap_err(),
+                _ => manager
+                    .start_whole_game_analysis(whole_game_request(&run_id, 42, 1))
+                    .unwrap_err(),
             };
-            assert_eq!(error.kind, EngineFailureKind::UnsupportedCapability, "{admitted}/{requested}");
+            assert_eq!(
+                error.kind,
+                EngineFailureKind::UnsupportedCapability,
+                "{admitted}/{requested}"
+            );
             assert_eq!(manager.snapshot(), before);
         }
         let job = match admitted {
-            "finite" => manager.start_selected_node_job(selected_request(&run_id, 42, vec![0])).unwrap(),
-            "continuous" => manager.start_selected_node_job(continuous_request(&run_id, 42, vec![0])).unwrap(),
-            _ => manager.start_whole_game_analysis(whole_game_request(&run_id, 42, 1)).unwrap(),
+            "finite" => manager
+                .start_selected_node_job(selected_request(&run_id, 42, vec![0]))
+                .unwrap(),
+            "continuous" => manager
+                .start_selected_node_job(continuous_request(&run_id, 42, vec![0]))
+                .unwrap(),
+            _ => manager
+                .start_whole_game_analysis(whole_game_request(&run_id, 42, 1))
+                .unwrap(),
         };
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             let logged = std::fs::read_to_string(&log).unwrap();
-            if count_job_queries(&logged, &job.job_id) == 1 { break; }
-            assert!(Instant::now() < deadline, "{admitted} query must reach the engine");
+            if count_job_queries(&logged, &job.job_id) == 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{admitted} query must reach the engine"
+            );
             std::thread::sleep(Duration::from_millis(10));
         }
         manager.cancel_job(&run_id, &job.job_id).unwrap();
@@ -1363,16 +1420,23 @@ fn admission_query_features_reject_before_selected_takeover_or_task_creation() {
     for feature in ["ownership", "policy", "visits"] {
         let temp = TestTempDir::new("admission-query-features");
         let (manager, _, run_id, log) = hold_both_lanes_manager(&temp);
-        let active = manager.start_selected_node_job(selected_request(&run_id, 42, vec![0])).unwrap();
+        let active = manager
+            .start_selected_node_job(selected_request(&run_id, 42, vec![0]))
+            .unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         let before_log = loop {
             let logged = std::fs::read_to_string(&log).unwrap();
-            if count_job_queries(&logged, &active.job_id) == 1 { break logged; }
+            if count_job_queries(&logged, &active.job_id) == 1 {
+                break logged;
+            }
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(10));
         };
-        let mut verified = lifecycle_run(&manager.snapshot().lifecycle).unwrap()
-            .capability_snapshot.clone().unwrap();
+        let mut verified = lifecycle_run(&manager.snapshot().lifecycle)
+            .unwrap()
+            .capability_snapshot
+            .clone()
+            .unwrap();
         let caps = verified.analysis.as_mut().unwrap();
         match feature {
             "ownership" => caps.ownership = false,
@@ -1386,10 +1450,17 @@ fn admission_query_features_reject_before_selected_takeover_or_task_creation() {
         let mut whole = whole_game_request(&run_id, 42, 1);
         whole.work_items[0].query = request.query.clone();
         let before = manager.snapshot();
-        assert_eq!(manager.start_selected_node_job(request).unwrap_err().kind,
-            EngineFailureKind::UnsupportedCapability);
-        assert_eq!(manager.start_analysis_task(whole, analysis_scope(), task_conditions(32))
-            .unwrap_err().kind, EngineFailureKind::UnsupportedCapability);
+        assert_eq!(
+            manager.start_selected_node_job(request).unwrap_err().kind,
+            EngineFailureKind::UnsupportedCapability
+        );
+        assert_eq!(
+            manager
+                .start_analysis_task(whole, analysis_scope(), task_conditions(32))
+                .unwrap_err()
+                .kind,
+            EngineFailureKind::UnsupportedCapability
+        );
         assert_eq!(manager.snapshot(), before);
         assert!(manager.analysis_task_snapshot().is_none());
         std::thread::sleep(Duration::from_millis(100));
@@ -1403,8 +1474,11 @@ fn admission_query_features_reject_before_selected_takeover_or_task_creation() {
 fn admission_continuous_unavailable_preserves_intent_and_safety_hold() {
     let temp = TestTempDir::new("admission-continuous-hold");
     let (manager, _, run_id, log) = hold_both_lanes_manager(&temp);
-    let mut verified = lifecycle_run(&manager.snapshot().lifecycle).unwrap()
-        .capability_snapshot.clone().unwrap();
+    let mut verified = lifecycle_run(&manager.snapshot().lifecycle)
+        .unwrap()
+        .capability_snapshot
+        .clone()
+        .unwrap();
     verified.analysis.as_mut().unwrap().selected_node_analysis = false;
     let mut unavailable = verified.clone();
     unavailable.analysis.as_mut().unwrap().continuous_analysis = false;
@@ -1416,35 +1490,55 @@ fn admission_continuous_unavailable_preserves_intent_and_safety_hold() {
     manager.follow_continuous_position(target.clone());
     let unavailable = manager.snapshot();
     assert_eq!(unavailable.continuous.enabled, Some(true));
-    assert_eq!(unavailable.continuous.phase, app_model::ContinuousAnalysisPhaseDto::Unavailable);
+    assert_eq!(
+        unavailable.continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::Unavailable
+    );
     let before_log = std::fs::read_to_string(&log).unwrap();
-    assert_eq!(manager.continuous_primary_action().unwrap_err().kind,
-        EngineFailureKind::UnsupportedCapability);
-    assert_eq!(manager.resume_continuous().unwrap_err().kind,
-        EngineFailureKind::UnsupportedCapability);
+    assert_eq!(
+        manager.continuous_primary_action().unwrap_err().kind,
+        EngineFailureKind::UnsupportedCapability
+    );
+    assert_eq!(
+        manager.resume_continuous().unwrap_err().kind,
+        EngineFailureKind::UnsupportedCapability
+    );
     manager.authorize_continuous_start();
     assert_eq!(manager.snapshot(), unavailable);
     manager.begin_continuous_departure();
     manager.finish_continuous_departure(false);
     let held = manager.snapshot();
-    assert_eq!(held.continuous.phase, app_model::ContinuousAnalysisPhaseDto::SafetyHold);
-    assert_eq!(manager.resume_continuous().unwrap_err().kind,
-        EngineFailureKind::UnsupportedCapability);
+    assert_eq!(
+        held.continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::SafetyHold
+    );
+    assert_eq!(
+        manager.resume_continuous().unwrap_err().kind,
+        EngineFailureKind::UnsupportedCapability
+    );
     manager.authorize_continuous_start();
     manager.follow_continuous_position(target);
     assert_eq!(manager.snapshot(), held);
     assert_eq!(std::fs::read_to_string(&log).unwrap(), before_log);
     manager.set_capability_snapshot_for_tests(Some(verified));
     manager.set_continuous_preferences(true, budget).unwrap();
-    assert_eq!(manager.snapshot().continuous.phase, app_model::ContinuousAnalysisPhaseDto::SafetyHold);
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::SafetyHold
+    );
     assert!(manager.snapshot().selected_node_job.is_none());
     manager.resume_continuous().unwrap();
     let admitted = manager.snapshot().selected_node_job.unwrap();
     assert_eq!(admitted.mode, app_model::AnalysisJobModeDto::Continuous);
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        if count_job_queries(&std::fs::read_to_string(&log).unwrap(), &admitted.job_id) == 1 { break; }
-        assert!(Instant::now() < deadline, "continuous resume must submit with finite disabled");
+        if count_job_queries(&std::fs::read_to_string(&log).unwrap(), &admitted.job_id) == 1 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "continuous resume must submit with finite disabled"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
     manager.teardown().unwrap();
@@ -1456,31 +1550,48 @@ fn admission_swing_preview_and_start_require_requested_metrics() {
     for metric in ["score", "winrate"] {
         let temp = TestTempDir::new("admission-swing-metrics");
         let (manager, _, run_id, log) = hold_both_lanes_manager(&temp);
-        let mut verified = lifecycle_run(&manager.snapshot().lifecycle).unwrap()
-            .capability_snapshot.clone().unwrap();
+        let mut verified = lifecycle_run(&manager.snapshot().lifecycle)
+            .unwrap()
+            .capability_snapshot
+            .clone()
+            .unwrap();
         verified.analysis.as_mut().unwrap().root_score = metric != "score";
         verified.analysis.as_mut().unwrap().winrate = metric != "winrate";
         manager.set_capability_snapshot_for_tests(Some(verified));
         let criteria = app_model::AnalysisSwingCriteriaDto {
             move_actors: app_model::AnalysisMoveActorFilterDto::Both,
             score_change_points: app_model::AnalysisSwingThresholdDto {
-                enabled: metric == "score", value: 3.0,
+                enabled: metric == "score",
+                value: 3.0,
             },
             winrate_change_percentage_points: app_model::AnalysisSwingThresholdDto {
-                enabled: metric == "winrate", value: 10.0,
+                enabled: metric == "winrate",
+                value: 10.0,
             },
         };
         let before = manager.snapshot();
         let before_log = std::fs::read_to_string(&log).unwrap();
-        assert_eq!(manager.check_analysis_task_admission(Some(&criteria)).unwrap_err().kind,
-            EngineFailureKind::UnsupportedCapability);
+        assert_eq!(
+            manager
+                .check_analysis_task_admission(Some(&criteria))
+                .unwrap_err()
+                .kind,
+            EngineFailureKind::UnsupportedCapability
+        );
         let job = whole_game_request(&run_id, 42, 2);
         let requested = job.work_items.iter().map(|item| item.node_path.clone()).collect();
-        let error = manager.start_swing_analysis_task(engine_manager::SwingAnalysisTaskRequest {
-            job, scope: analysis_scope(), requested, supporting: Vec::new(),
-            swing_comparisons: Vec::new(), swing_criteria: criteria,
-            overview_conditions: task_conditions(8), deep_conditions: task_conditions(32),
-        }).unwrap_err();
+        let error = manager
+            .start_swing_analysis_task(engine_manager::SwingAnalysisTaskRequest {
+                job,
+                scope: analysis_scope(),
+                requested,
+                supporting: Vec::new(),
+                swing_comparisons: Vec::new(),
+                swing_criteria: criteria,
+                overview_conditions: task_conditions(8),
+                deep_conditions: task_conditions(32),
+            })
+            .unwrap_err();
         assert_eq!(error.kind, EngineFailureKind::UnsupportedCapability);
         assert_eq!(manager.snapshot(), before);
         assert!(manager.analysis_task_snapshot().is_none());

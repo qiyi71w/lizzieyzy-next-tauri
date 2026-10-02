@@ -19,7 +19,6 @@ use provider_core::{
     invalid_payload, invalid_request, invalid_url, timeout, transport_failed, ProviderResult,
     ProviderTransport,
 };
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
@@ -796,7 +795,7 @@ fn save_engine_profiles_at_path(
                 .map_err(map_engine_failure)?;
         }
     }
-    persist_engine_profiles(&path, settings)
+    persist_engine_profiles(path, settings)
 }
 
 fn bind_selected_node_job(
@@ -877,19 +876,28 @@ async fn foreground_engine_game_move(
 ) -> EngineCommandResult<app_model::GameMoveResultDto> {
     let handle = current_game.start_game_move(&manager, request)?;
     let identity = handle.identity.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || handle.wait()).await
-        .map_err(|error| Box::new(EngineFailureDto {
-            operation: EngineOperationDto::Job,
-            run_id: Some(identity.run_id), job_id: Some(identity.job_id),
-            switch_id: None, profile_id: None, kind: EngineFailureKind::Protocol,
-            message: format!("move worker failed: {error}"), diagnostic_summary: None,
-        }))?.map_err(Box::new)?;
+    let result = tauri::async_runtime::spawn_blocking(move || handle.wait().map_err(Box::new))
+        .await
+        .map_err(|error| {
+            Box::new(EngineFailureDto {
+                operation: EngineOperationDto::Job,
+                run_id: Some(identity.run_id),
+                job_id: Some(identity.job_id),
+                switch_id: None,
+                profile_id: None,
+                kind: EngineFailureKind::Protocol,
+                message: format!("move worker failed: {error}"),
+                diagnostic_summary: None,
+            })
+        })??;
     current_game.publish_game_move(&manager, result)
 }
 
 #[tauri::command]
 fn foreground_engine_cancel_game_move(
-    manager: State<'_, ForegroundEngineManager>, run_id: String, job_id: String,
+    manager: State<'_, ForegroundEngineManager>,
+    run_id: String,
+    job_id: String,
 ) -> EngineCommandResult<()> {
     manager.cancel_game_move(&run_id, &job_id).map_err(Box::new)
 }
@@ -997,16 +1005,18 @@ fn preview_analysis_scope(
         .map_err(Box::new)?;
     current_game
         .preview_analysis_scope(generation, scope, swing_criteria)
-        .map_err(|error| Box::new(EngineFailureDto {
-            operation: EngineOperationDto::Job,
-            run_id: None,
-            switch_id: None,
-            job_id: None,
-            profile_id: None,
-            kind: EngineFailureKind::InvalidState,
-            message: error.message,
-            diagnostic_summary: None,
-        }))
+        .map_err(|error| {
+            Box::new(EngineFailureDto {
+                operation: EngineOperationDto::Job,
+                run_id: None,
+                switch_id: None,
+                job_id: None,
+                profile_id: None,
+                kind: EngineFailureKind::InvalidState,
+                message: error.message,
+                diagnostic_summary: None,
+            })
+        })
 }
 
 #[tauri::command]
@@ -1092,8 +1102,8 @@ fn parse_engine_profiles_settings(contents: &str, path: &Path) -> Result<EngineP
 }
 
 fn load_legacy_engine_profile_settings(legacy_path: &Path) -> Result<EngineProfilesSettingsDto, String> {
-    match fs::read_to_string(&legacy_path) {
-        Ok(contents) => parse_engine_profiles_settings(&contents, &legacy_path),
+    match fs::read_to_string(legacy_path) {
+        Ok(contents) => parse_engine_profiles_settings(&contents, legacy_path),
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(default_engine_profiles_settings()),
         Err(err) => Err(format!("failed to read {}: {err}", legacy_path.display())),
     }

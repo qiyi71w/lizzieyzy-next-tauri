@@ -1,5 +1,7 @@
 use super::*;
-use crate::game_move_protocol::{color_text, gtp_sync_plan, katago_query, katago_result, parse_gtp_move};
+use crate::game_move_protocol::{
+    color_text, gtp_sync_plan, katago_query, katago_result, parse_gtp_move, KataGoMoveResponse,
+};
 use app_model::{GameMoveDto, GameMoveJobDto, GameMoveRequestDto, GameMoveResultDto};
 use std::sync::mpsc::SyncSender;
 
@@ -51,6 +53,7 @@ struct MoveWorker {
     events: Receiver<MoveInput>,
     writes: Sender<String>,
     submitted: bool,
+    query_rejected: bool,
 }
 
 fn move_failure(identity: &GameMoveJobDto, kind: EngineFailureKind, message: &str) -> EngineFailureDto {
@@ -247,6 +250,7 @@ impl ForegroundEngineManager {
                 events,
                 writes,
                 submitted: false,
+                query_rejected: false,
             };
             let result = worker.compute(plan);
             let result = worker.finish(result);
@@ -551,7 +555,7 @@ impl MoveWorker {
                         }
                         MoveInput::Line(line) => {
                             let position = self.request.position.dto();
-                            if let Some(result) = katago_result(
+                            match katago_result(
                                 &line,
                                 &self.identity.job_id,
                                 position.moves.len(),
@@ -560,7 +564,12 @@ impl MoveWorker {
                             )
                             .map_err(|message| self.error(EngineFailureKind::Protocol, &message))?
                             {
-                                break result;
+                                KataGoMoveResponse::Searching => {}
+                                KataGoMoveResponse::Complete(result) => break result,
+                                KataGoMoveResponse::Rejected(message) => {
+                                    self.query_rejected = true;
+                                    return Err(self.error(EngineFailureKind::Protocol, &message));
+                                }
                             }
                         }
                     }
@@ -682,7 +691,7 @@ impl MoveWorker {
             }
         }
         let clean_katago = self.run.adapter_kind == EngineBackend::KataGoAnalysis
-            && (!self.submitted || self.drain_katago());
+            && (!self.submitted || self.query_rejected || self.drain_katago());
         let mut state = self.manager.lock();
         // Only this run can be retired. Stop/restart may already have reaped it and started another.
         if !clean_katago

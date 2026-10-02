@@ -9,6 +9,7 @@ mode = Path('mode').read_text()
 Path('pid').write_text(str(os.getpid()))
 active = {}
 first = True
+rejected = False
 for raw in sys.stdin:
     with open('trace', 'a') as trace:
         trace.write(raw)
@@ -18,8 +19,8 @@ for raw in sys.stdin:
         if request.get('action') == 'terminate':
             target = request['terminateId']
             time.sleep(0.08)
-            if mode != 'unclean':
-                print(json.dumps({'id': target, 'turnNumber': active.get(target, 0),
+            if mode != 'unclean' and target in active:
+                print(json.dumps({'id': target, 'turnNumber': active.pop(target),
                                   'isDuringSearch': False, 'noResults': True}), flush=True)
             continue
         turn = len(request.get('moves', []))
@@ -27,6 +28,11 @@ for raw in sys.stdin:
         if first:
             first = False
             print(json.dumps({'id': ident, 'turnNumber': 0}), flush=True)
+            continue
+        if mode in ('error', 'errors') and not rejected:
+            rejected = True
+            active.pop(ident)
+            print(json.dumps({'id': ident, mode: 'query rejected'}), flush=True)
             continue
         if mode in ('hold', 'unclean'):
             continue

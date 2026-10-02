@@ -486,18 +486,30 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), durable);
 
         // Explicit preferences can still change durable intent without a Run.
-        preferences.save(&path, &manager, AppPreferencesDto {
-            continuous_analysis_enabled: false,
-            ..loaded
-        }).unwrap();
+        preferences
+            .save(
+                &path,
+                &manager,
+                AppPreferencesDto {
+                    continuous_analysis_enabled: false,
+                    ..loaded
+                },
+            )
+            .unwrap();
         let restarted = ForegroundEngineManager::new(
             Arc::new(InMemoryEngineProfileCatalog::new()),
             ForegroundEngineConfig::for_tests(),
         );
         let reloaded = PreferencesState::default().load(&path, &restarted).unwrap();
         assert!(!reloaded.preferences.continuous_analysis_enabled);
-        assert_eq!(restarted.snapshot().continuous.phase, ContinuousAnalysisPhaseDto::Off);
-        assert!(matches!(restarted.snapshot().lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. }));
+        assert_eq!(
+            restarted.snapshot().continuous.phase,
+            ContinuousAnalysisPhaseDto::Off
+        );
+        assert!(matches!(
+            restarted.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::NoEngine { .. }
+        ));
         std::fs::remove_dir_all(directory).unwrap();
     }
 }
