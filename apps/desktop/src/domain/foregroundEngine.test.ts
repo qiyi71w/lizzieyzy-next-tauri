@@ -28,6 +28,13 @@ const run: EngineRunDto = {
     adapter_kind: "kata_go_analysis",
     analysis: {
       selected_node_analysis: true,
+      continuous_analysis: true,
+      candidates: true,
+      pv: true,
+      winrate: true,
+      ownership: true,
+      policy: true,
+      visits_limit: true,
       whole_game_analysis: true,
       root_score: true,
       protocol_cancel: true
@@ -98,7 +105,7 @@ describe("foreground engine snapshot merge", () => {
     expect(admitsForegroundEngineJobs(snapshot(1, { state: "ready", run: unverified }))).toBe(false);
     const generic = { ...run, adapter_kind: "generic_gtp" as const, capability_snapshot: { adapter_kind: "generic_gtp" as const, analysis: null } };
     expect(admitsForegroundEngineJobs(snapshot(2, { state: "ready", run: generic }))).toBe(false);
-    const refused = { ...run, capability_snapshot: { adapter_kind: "kata_go_analysis" as const, analysis: { selected_node_analysis: false, whole_game_analysis: true, root_score: true, protocol_cancel: true } } };
+    const refused = { ...run, capability_snapshot: { adapter_kind: "kata_go_analysis" as const, analysis: { selected_node_analysis: false, continuous_analysis: true, whole_game_analysis: true, candidates: true, pv: true, winrate: true, root_score: true, ownership: true, policy: true, visits_limit: true, protocol_cancel: true } } };
     expect(admitsForegroundEngineJobs(snapshot(3, { state: "ready", run: refused }))).toBe(false);
   });
 });

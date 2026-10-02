@@ -218,8 +218,15 @@ export type EngineCapabilitySnapshotDto = {
 };
 export type EngineAnalysisCapabilitiesDto = {
   selected_node_analysis: boolean;
+  continuous_analysis: boolean;
   whole_game_analysis: boolean;
+  candidates: boolean;
+  pv: boolean;
+  winrate: boolean;
   root_score: boolean;
+  ownership: boolean;
+  policy: boolean;
+  visits_limit: boolean;
   protocol_cancel: boolean;
 };
 export type EngineRunDto = {

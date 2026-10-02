@@ -380,6 +380,17 @@ impl ForegroundEngineManager {
         }
     }
 
+    pub fn check_analysis_task_admission(
+        &self,
+        swing_criteria: Option<&AnalysisSwingCriteriaDto>,
+    ) -> Result<(), EngineFailureDto> {
+        let state = self.lock();
+        let run = current_admitting_run(&state.phase).ok_or_else(|| {
+            continuous_invalid_state(&state, "Analysis task requires a Ready Foreground Engine Run")
+        })?;
+        validate_whole_game_capabilities(&run, swing_criteria)
+    }
+
     pub fn continuous_primary_action(&self) -> Result<ContinuousPrimaryAction, EngineFailureDto> {
         let state = self.lock();
         if state.continuous_departing
@@ -398,6 +409,13 @@ impl ForegroundEngineManager {
         let enabled = state.continuous_intent.ok_or_else(|| {
             continuous_invalid_state(&state, "continuous analysis preference is still loading")
         })?;
+        let stopping_owned_continuous = enabled
+            && current_selected_job(&state).is_some_and(|job| {
+                job.mode == AnalysisJobModeDto::Continuous && !job.state.is_limited()
+            });
+        if !stopping_owned_continuous {
+            validate_continuous_capabilities(&state)?;
+        }
         if current_selected_job(&state).is_some_and(|job| job.mode == AnalysisJobModeDto::Finite) {
             return Ok(if enabled {
                 ContinuousPrimaryAction::Stop
@@ -424,6 +442,7 @@ impl ForegroundEngineManager {
             if state.continuous_departing
                 || state.finite_admission_pending
                 || current_selected_job(&state).is_some_and(|job| job.state == AnalysisJobStateDto::Stopping)
+                || validate_continuous_capabilities(&state).is_err()
             {
                 return;
             }
@@ -436,14 +455,9 @@ impl ForegroundEngineManager {
     pub fn resume_continuous(&self) -> Result<(), EngineFailureDto> {
         {
             let mut state = self.lock();
+            validate_continuous_capabilities(&state)?;
             if state.continuous_intent != Some(true)
                 || state.continuous_departing
-                || !current_admitting_run(&state.phase).is_some_and(|run| {
-                    run.capability_snapshot
-                        .as_ref()
-                        .and_then(|snapshot| snapshot.analysis.as_ref())
-                        .is_some_and(|capability| capability.selected_node_analysis)
-                })
                 || current_selected_job(&state).is_some_and(|job| !job.state.is_limited())
                 || state.continuous_target.is_none()
                 || continuous_empty_board(&state)
@@ -713,17 +727,13 @@ impl ForegroundEngineManager {
         cancel: Arc<dyn AnalysisJobCancel>,
     ) -> Result<String, EngineFailureDto> {
         let mut state = self.lock();
-        let admitted =
-            admitting_run(&state.phase, run_id).is_some_and(|run| run.capability_snapshot.is_some());
-        if !admitted {
-            return Err(failure(
-                EngineOperationDto::Job,
-                EngineFailureKind::InvalidState,
-                "Analysis Job admission requires a Ready Foreground Engine Run".into(),
-                Some(run_id),
-                None,
-                None,
-            ));
+        let run = admitting_run(&state.phase, run_id).ok_or_else(|| {
+            continuous_invalid_state(&state, "Analysis Job admission requires a Ready Foreground Engine Run")
+        })?;
+        let capabilities = analysis_capabilities(&run)?;
+        match lane {
+            AnalysisJobLane::SelectedNode => require_capability(&run, capabilities.selected_node_analysis, "selected-node analysis")?,
+            AnalysisJobLane::WholeGame => require_capability(&run, capabilities.whole_game_analysis, "whole-game analysis")?,
         }
         let job_id = Uuid::new_v4().to_string();
         state.jobs.push(RegisteredJob {
@@ -1062,40 +1072,13 @@ impl ForegroundEngineManager {
                     ));
                 }
             };
-            let supported = run
-                .capability_snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot.analysis.as_ref())
-                .is_some_and(|snapshot| snapshot.whole_game_analysis);
-            if !supported {
-                return Err(failure(
-                    EngineOperationDto::Job,
-                    EngineFailureKind::UnsupportedCapability,
-                    "current Ready Run does not admit whole-game analysis".into(),
-                    Some(request.run_id.as_str()),
-                    Some(run.profile_id.as_str()),
-                    None,
-                ));
+            validate_whole_game_capabilities(&run, targets.swing_criteria.as_ref())?;
+            validate_task_conditions_capabilities(&run, &conditions)?;
+            if let Some(overview) = overview_conditions.as_ref() {
+                validate_task_conditions_capabilities(&run, overview)?;
             }
-            let requires_root_score = targets
-                .swing_criteria
-                .as_ref()
-                .is_some_and(|criteria| criteria.score_change_points.enabled);
-            if requires_root_score
-                && !run
-                    .capability_snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.analysis.as_ref())
-                    .is_some_and(|snapshot| snapshot.root_score)
-            {
-                return Err(failure(
-                    EngineOperationDto::Job,
-                    EngineFailureKind::UnsupportedCapability,
-                    "current Ready Run does not admit root-score comparisons".into(),
-                    Some(request.run_id.as_str()),
-                    Some(run.profile_id.as_str()),
-                    None,
-                ));
+            for item in &request.work_items {
+                validate_query_capabilities(&run, &item.query, false)?;
             }
             if state.analysis_task.as_ref().is_some_and(|task| {
                 matches!(
@@ -1285,12 +1268,21 @@ impl ForegroundEngineManager {
                     "Continue is blocked by Run or departure state.",
                 ));
             }
+            let run = admitting_run(&state.phase, run_id).expect("Ready Run checked above");
+            validate_whole_game_capabilities(&run, task.swing_criteria.as_ref())?;
+            validate_task_conditions_capabilities(&run, &task.conditions)?;
+            if let Some(overview) = task.overview_conditions.as_ref() {
+                validate_task_conditions_capabilities(&run, overview)?;
+            }
             let old_job_id = task.job_id.clone();
             let index = state
                 .jobs
                 .iter()
                 .position(|job| job.job_id == old_job_id && job.run_id == run_id && job.terminal)
                 .ok_or_else(|| continuous_invalid_state(&state, "Paused task cleanup has not finished."))?;
+            for item in &state.jobs[index].work_items[state.jobs[index].current_index..] {
+                validate_query_capabilities(&run, &item.query, false)?;
+            }
             let job_id = Uuid::new_v4().to_string();
             let query_id = target_query_id(&job_id);
             let job = &mut state.jobs[index];
@@ -1590,10 +1582,10 @@ impl ForegroundEngineManager {
         Ok(())
     }
 
-    pub fn set_capability_snapshot_for_tests(&self, snapshot: EngineCapabilitySnapshotDto) {
+    pub fn set_capability_snapshot_for_tests(&self, snapshot: Option<EngineCapabilitySnapshotDto>) {
         let mut state = self.lock();
         if let Phase::Ready(run) = &mut state.phase {
-            run.capability_snapshot = Some(snapshot);
+            run.capability_snapshot = snapshot;
         }
     }
 
@@ -1737,6 +1729,9 @@ impl ForegroundEngineManager {
                 }
                 ContinuousReconcileWork::Cancel(active)
             } else {
+                if validate_continuous_capabilities(&state).is_err() {
+                    return;
+                }
                 let current_run_id = current_admitting_run(&state.phase).map(|run| run.run_id);
                 let limited_matches = state.continuous_limited.as_ref().is_some_and(|(hold, _)| {
                     hold.matches_target(current_run_id.as_deref(), state.continuous_target.as_ref())
@@ -1771,14 +1766,6 @@ impl ForegroundEngineManager {
                 let Some(run) = current_admitting_run(&state.phase) else {
                     return;
                 };
-                if !run
-                    .capability_snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.analysis.as_ref())
-                    .is_some_and(|capability| capability.selected_node_analysis)
-                {
-                    return;
-                }
                 target.run_id = run.run_id;
                 match self.register_selected_locked(&mut state, target) {
                     Ok(submission) => ContinuousReconcileWork::Submit(submission),
@@ -2186,6 +2173,13 @@ impl Inner {
             adapter_kind: EngineBackend::KataGoAnalysis,
             analysis: Some(EngineAnalysisCapabilitiesDto {
                 selected_node_analysis: true,
+                continuous_analysis: true,
+                candidates: true,
+                pv: true,
+                winrate: true,
+                ownership: true,
+                policy: true,
+                visits_limit: true,
                 whole_game_analysis: self.config.admit_whole_game_analysis,
                 root_score: true,
                 protocol_cancel: true,
@@ -2237,6 +2231,13 @@ impl Inner {
                 adapter_kind: EngineBackend::KataGoAnalysis,
                 analysis: Some(EngineAnalysisCapabilitiesDto {
                     selected_node_analysis: true,
+                    continuous_analysis: true,
+                    candidates: true,
+                    pv: true,
+                    winrate: true,
+                    ownership: true,
+                    policy: true,
+                    visits_limit: true,
                     whole_game_analysis: self.config.admit_whole_game_analysis,
                     root_score: true,
                     protocol_cancel: true,
@@ -3792,6 +3793,113 @@ fn current_admitting_run(phase: &Phase) -> Option<EngineRunDto> {
     }
 }
 
+fn require_capability(
+    run: &EngineRunDto,
+    supported: bool,
+    capability: &str,
+) -> Result<(), EngineFailureDto> {
+    if supported {
+        Ok(())
+    } else {
+        Err(failure(
+            EngineOperationDto::Job,
+            EngineFailureKind::UnsupportedCapability,
+            format!("current Ready Run does not admit {capability}"),
+            Some(&run.run_id),
+            Some(&run.profile_id),
+            None,
+        ))
+    }
+}
+
+fn analysis_capabilities(run: &EngineRunDto) -> Result<&EngineAnalysisCapabilitiesDto, EngineFailureDto> {
+    run.capability_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.analysis.as_ref())
+        .ok_or_else(|| failure(
+            EngineOperationDto::Job,
+            EngineFailureKind::UnsupportedCapability,
+            "current Ready Run has no verified analysis capabilities".into(),
+            Some(&run.run_id),
+            Some(&run.profile_id),
+            None,
+        ))
+}
+
+fn validate_query_capabilities(
+    run: &EngineRunDto,
+    query: &AnalysisQuery,
+    check_visits: bool,
+) -> Result<(), EngineFailureDto> {
+    let capabilities = analysis_capabilities(run)?;
+    if query.include_ownership == Some(true) {
+        require_capability(run, capabilities.ownership, "ownership analysis")?;
+    }
+    if query.include_policy == Some(true) {
+        require_capability(run, capabilities.policy, "policy analysis")?;
+    }
+    if check_visits && (query.max_visits.is_some() || query.override_settings.as_ref().is_some_and(|settings| {
+        settings.max_visits != katago_protocol::UNBOUNDED_MAX_VISITS
+            || settings.max_playouts != katago_protocol::UNBOUNDED_MAX_VISITS
+    })) {
+        require_capability(run, capabilities.visits_limit, "visits limits")?;
+    }
+    Ok(())
+}
+
+fn validate_whole_game_capabilities(
+    run: &EngineRunDto,
+    swing_criteria: Option<&AnalysisSwingCriteriaDto>,
+) -> Result<(), EngineFailureDto> {
+    let capabilities = analysis_capabilities(run)?;
+    require_capability(run, capabilities.whole_game_analysis, "whole-game analysis")?;
+    if let Some(criteria) = swing_criteria {
+        if criteria.score_change_points.enabled {
+            require_capability(run, capabilities.root_score, "root-score comparisons")?;
+        }
+        if criteria.winrate_change_percentage_points.enabled {
+            require_capability(run, capabilities.winrate, "winrate comparisons")?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_task_conditions_capabilities(
+    run: &EngineRunDto,
+    conditions: &AnalysisStageConditionsDto,
+) -> Result<(), EngineFailureDto> {
+    let capabilities = analysis_capabilities(run)?;
+    if conditions.total_visits.enabled || conditions.leading_candidate_visits.enabled {
+        require_capability(run, capabilities.visits_limit, "visits limits")?;
+    }
+    if conditions.leading_candidate_visits.enabled {
+        require_capability(run, capabilities.candidates, "candidate visits")?;
+    }
+    Ok(())
+}
+
+fn validate_continuous_run_capabilities(
+    state: &ManagerState,
+    run: &EngineRunDto,
+) -> Result<(), EngineFailureDto> {
+    let capabilities = analysis_capabilities(run)?;
+    require_capability(run, capabilities.continuous_analysis, "continuous analysis")?;
+    if state.continuous_budget.continuous_visits_limit_enabled {
+        require_capability(run, capabilities.visits_limit, "visits limits")?;
+    }
+    if let Some(target) = state.continuous_target.as_ref() {
+        validate_query_capabilities(run, &target.query, false)?;
+    }
+    Ok(())
+}
+
+fn validate_continuous_capabilities(state: &ManagerState) -> Result<(), EngineFailureDto> {
+    let run = current_admitting_run(&state.phase).ok_or_else(|| {
+        continuous_invalid_state(state, "continuous analysis requires a Ready Foreground Engine Run")
+    })?;
+    validate_continuous_run_capabilities(state, &run)
+}
+
 fn validate_selected_admission(
     state: &ManagerState,
     request: &SelectedNodeJobRequest,
@@ -3826,20 +3934,16 @@ fn validate_selected_admission(
             None,
         )
     })?;
-    if !run
-        .capability_snapshot
-        .as_ref()
-        .and_then(|snapshot| snapshot.analysis.as_ref())
-        .is_some_and(|snapshot| snapshot.selected_node_analysis)
-    {
-        return Err(failure(
-            EngineOperationDto::Job,
-            EngineFailureKind::UnsupportedCapability,
-            "current Foreground Engine Run does not advertise selected-node analysis".into(),
-            Some(run_id),
-            Some(&run.profile_id),
-            None,
-        ));
+    let capabilities = analysis_capabilities(&run)?;
+    let continuous = request.mode == AnalysisJobModeDto::Continuous;
+    require_capability(
+        &run,
+        if continuous { capabilities.continuous_analysis } else { capabilities.selected_node_analysis },
+        if continuous { "continuous analysis" } else { "selected-node analysis" },
+    )?;
+    validate_query_capabilities(&run, &request.query, !continuous)?;
+    if continuous && state.continuous_budget.continuous_visits_limit_enabled {
+        require_capability(&run, capabilities.visits_limit, "visits limits")?;
     }
     Ok(run)
 }
@@ -3929,12 +4033,7 @@ fn continuous_snapshot(state: &ManagerState) -> ContinuousAnalysisSnapshotDto {
     } else {
         match &state.phase {
             Phase::Ready(run) | Phase::Switching { primary: run, .. } => {
-                if !run
-                    .capability_snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.analysis.as_ref())
-                    .is_some_and(|capability| capability.selected_node_analysis)
-                {
+                if validate_continuous_run_capabilities(state, run).is_err() {
                     ContinuousAnalysisPhaseDto::Unavailable
                 } else {
                     ContinuousAnalysisPhaseDto::Waiting

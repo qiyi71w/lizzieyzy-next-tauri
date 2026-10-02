@@ -961,12 +961,27 @@ fn katago_start_analyze_game(
 
 #[tauri::command]
 fn preview_analysis_scope(
+    manager: State<'_, ForegroundEngineManager>,
     current_game: State<'_, CurrentGameState>,
     generation: u64,
     scope: app_model::AnalysisScopeDto,
     swing_criteria: Option<app_model::AnalysisSwingCriteriaDto>,
-) -> Result<app_model::AnalysisScopePreviewDto, app_model::CurrentGameError> {
-    current_game.preview_analysis_scope(generation, scope, swing_criteria)
+) -> EngineCommandResult<app_model::AnalysisScopePreviewDto> {
+    manager
+        .check_analysis_task_admission(swing_criteria.as_ref())
+        .map_err(Box::new)?;
+    current_game
+        .preview_analysis_scope(generation, scope, swing_criteria)
+        .map_err(|error| Box::new(EngineFailureDto {
+            operation: EngineOperationDto::Job,
+            run_id: None,
+            switch_id: None,
+            job_id: None,
+            profile_id: None,
+            kind: EngineFailureKind::InvalidState,
+            message: error.message,
+            diagnostic_summary: None,
+        }))
 }
 
 #[tauri::command]

@@ -468,7 +468,7 @@ mod tests {
     }
 
     #[test]
-    fn durable_primary_write_failure_preserves_intent_and_restart_choice() {
+    fn no_engine_primary_refusal_preserves_durable_intent() {
         let directory = std::env::temp_dir().join(format!("continuous-prefs-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("preferences.json");
@@ -477,58 +477,27 @@ mod tests {
             ForegroundEngineConfig::for_tests(),
         );
         let preferences = PreferencesState::default();
-        assert_eq!(manager.snapshot().continuous.enabled, None);
-        assert!(
-            preferences
-                .load(&path, &manager)
-                .unwrap()
-                .preferences
-                .continuous_analysis_enabled
-        );
-        assert_eq!(
-            manager.snapshot().continuous.phase,
-            ContinuousAnalysisPhaseDto::Waiting
-        );
-        // Replacing a directory as a file is a deterministic persistence failure.
-        assert!(preferences.primary(&directory, &manager).is_err());
-        assert_eq!(manager.snapshot().continuous.enabled, Some(true));
-        assert!(
-            !preferences
-                .primary(&path, &manager)
-                .unwrap()
-                .continuous_analysis_enabled
-        );
-        assert_eq!(
-            manager.snapshot().continuous.phase,
-            ContinuousAnalysisPhaseDto::Off
-        );
-        assert!(preferences.primary(&directory, &manager).is_err());
-        assert_eq!(manager.snapshot().continuous.enabled, Some(false));
+        let loaded = preferences.load(&path, &manager).unwrap().preferences;
+        preferences.save(&path, &manager, loaded.clone()).unwrap();
+        let durable = std::fs::read(&path).unwrap();
+        let before = manager.snapshot();
+        assert!(preferences.primary(&path, &manager).is_err());
+        assert_eq!(manager.snapshot(), before);
+        assert_eq!(std::fs::read(&path).unwrap(), durable);
 
+        // Explicit preferences can still change durable intent without a Run.
+        preferences.save(&path, &manager, AppPreferencesDto {
+            continuous_analysis_enabled: false,
+            ..loaded
+        }).unwrap();
         let restarted = ForegroundEngineManager::new(
             Arc::new(InMemoryEngineProfileCatalog::new()),
             ForegroundEngineConfig::for_tests(),
         );
         let reloaded = PreferencesState::default().load(&path, &restarted).unwrap();
         assert!(!reloaded.preferences.continuous_analysis_enabled);
-        assert_eq!(
-            restarted.snapshot().continuous.phase,
-            ContinuousAnalysisPhaseDto::Off
-        );
-        assert!(matches!(
-            restarted.snapshot().lifecycle,
-            ForegroundEngineLifecycleDto::NoEngine { .. }
-        ));
-        assert!(
-            preferences
-                .primary(&path, &manager)
-                .unwrap()
-                .continuous_analysis_enabled
-        );
-        assert!(matches!(
-            manager.snapshot().lifecycle,
-            ForegroundEngineLifecycleDto::NoEngine { .. }
-        ));
+        assert_eq!(restarted.snapshot().continuous.phase, ContinuousAnalysisPhaseDto::Off);
+        assert!(matches!(restarted.snapshot().lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. }));
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

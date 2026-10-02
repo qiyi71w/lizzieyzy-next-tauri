@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { checkEngineAssets, loadEngineProfilesSettings, saveEngineProfilesSettings } from "../api/backend";
 import type { AssetCheckDto, EngineBackendDto, EngineProfileDto, EngineProfileRecordDto, ForegroundEngineSnapshotDto } from "../domain/types";
-import { profileHasPendingChanges, runFromSnapshot } from "../domain/foregroundEngine";
+import { profileHasPendingChanges, runFromSnapshot, verifiedEngineCapabilitiesLabel } from "../domain/foregroundEngine";
 
 type Props = {
   disabled?: boolean;
@@ -38,7 +38,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
     continuous: { enabled: null, phase: "loading" as const }
   };
   const run = runFromSnapshot(snapshot);
-  const savedRecord = run?.profile_id === selectedProfileId ? buildProfile() : profiles.find((profile) => profile.id === run?.profile_id)?.profile;
+  const savedRecord = profiles.find((profile) => profile.id === run?.profile_id)?.profile;
   const pendingChanges = Boolean(savedRecord && run && profileHasPendingChanges(savedRecord, snapshot));
 
   useEffect(() => {
@@ -325,7 +325,12 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
         <button type="button" onClick={() => setArgv((current) => [...current, ""])}>新增参数</button>
       </div>
       <p className="message">每项是一个原样传递的参数；空值、空格和中文不会拆分或经 shell 解释。</p>
+      <p className="message">已保存配置与当前草稿的能力均待 run 验证。保存只更新目录；不会改变当前 run 的已验证能力。</p>
+      <p className="message">{adapterKind === "generic_gtp"
+        ? "静态 adapter 上限：GenericGtp 不提供 rich-analysis；运行支持尚未提供。"
+        : "静态 adapter 上限：KataGoAnalysis 可提供单点、连续、整谱/task、候选/PV、胜率/分数、ownership/policy、visits 限制与协议取消；实际能力以当前 run 验证结果为准。"}</p>
       {adapterKind === "generic_gtp" ? <p className="message" role="status">GenericGtp 配置可保存；运行时尚不可用，不能 Start 或切换，也未验证分析或取步能力。</p> : null}
+      <p className="message" aria-label="当前 run 能力">{verifiedEngineCapabilitiesLabel(snapshot)}</p>
       <div className="engine-run-row">
         {adapterKind === "kata_go_analysis" ?
         <label>

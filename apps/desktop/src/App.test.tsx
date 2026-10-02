@@ -3539,6 +3539,13 @@ async function readyEngine(host: HTMLElement) {
             adapter_kind: "kata_go_analysis",
             analysis: {
               selected_node_analysis: true,
+              continuous_analysis: true,
+              candidates: true,
+              pv: true,
+              winrate: true,
+              ownership: true,
+              policy: true,
+              visits_limit: true,
               whole_game_analysis: true,
               root_score: true,
               protocol_cancel: true

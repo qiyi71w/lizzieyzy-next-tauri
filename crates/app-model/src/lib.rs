@@ -484,8 +484,15 @@ pub struct EngineCapabilitySnapshotDto {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineAnalysisCapabilitiesDto {
     pub selected_node_analysis: bool,
+    pub continuous_analysis: bool,
     pub whole_game_analysis: bool,
+    pub candidates: bool,
+    pub pv: bool,
+    pub winrate: bool,
     pub root_score: bool,
+    pub ownership: bool,
+    pub policy: bool,
+    pub visits_limit: bool,
     pub protocol_cancel: bool,
 }
 
@@ -1077,8 +1084,15 @@ mod foreground_engine_wire {
                         adapter_kind: EngineBackend::KataGoAnalysis,
                         analysis: Some(EngineAnalysisCapabilitiesDto {
                             selected_node_analysis: true,
+                            continuous_analysis: true,
                             whole_game_analysis: true,
+                            candidates: true,
+                            pv: true,
+                            winrate: true,
                             root_score: true,
+                            ownership: true,
+                            policy: true,
+                            visits_limit: true,
                             protocol_cancel: true,
                         }),
                     }),

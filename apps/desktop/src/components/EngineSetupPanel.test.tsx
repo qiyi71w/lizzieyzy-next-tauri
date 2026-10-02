@@ -100,13 +100,13 @@ describe("engine profile configuration editor", () => {
     const settings = await loadEngineProfilesSettings();
     settings.profiles[0].profile.program = "/katago";
     await saveEngineProfilesSettings(settings);
-    const run = { run_id: "run-1", profile_id: "default", adapter_kind: "kata_go_analysis" as const, profile_snapshot: structuredClone(settings.profiles[0].profile), capability_snapshot: { adapter_kind: "kata_go_analysis" as const, analysis: { selected_node_analysis: true, whole_game_analysis: true, root_score: true, protocol_cancel: true } } };
+    const run = { run_id: "run-1", profile_id: "default", adapter_kind: "kata_go_analysis" as const, profile_snapshot: structuredClone(settings.profiles[0].profile), capability_snapshot: { adapter_kind: "kata_go_analysis" as const, analysis: { selected_node_analysis: true, continuous_analysis: true, whole_game_analysis: true, candidates: true, pv: true, winrate: true, root_score: true, ownership: true, policy: true, visits_limit: true, protocol_cancel: true } } };
     const snapshot: ForegroundEngineSnapshotDto = { revision: 1, lifecycle: { state: "ready", run }, continuous: { enabled: true, phase: "waiting" } };
     const original = structuredClone(snapshot);
     await render(snapshot);
     expect(host.textContent).not.toContain("存在待应用更改");
     await change(field("最大计算量"), "2000");
-    expect(host.textContent).toContain("存在待应用更改");
+    expect((await loadEngineProfilesSettings()).profiles[0].profile).toEqual(run.profile_snapshot);
     await click("保存配置");
     expect(host.textContent).toContain("存在待应用更改");
     await click("新增参数");

@@ -189,6 +189,13 @@ const capability = {
   adapter_kind: "kata_go_analysis" as const,
   analysis: {
     selected_node_analysis: true,
+    continuous_analysis: true,
+    candidates: true,
+    pv: true,
+    winrate: true,
+    ownership: true,
+    policy: true,
+    visits_limit: true,
     whole_game_analysis: true,
     root_score: true,
     protocol_cancel: true
@@ -330,6 +337,13 @@ async function readyEngine(host: HTMLElement) {
             adapter_kind: "kata_go_analysis",
             analysis: {
               selected_node_analysis: true,
+              continuous_analysis: true,
+              candidates: true,
+              pv: true,
+              winrate: true,
+              ownership: true,
+              policy: true,
+              visits_limit: true,
               whole_game_analysis: true,
               root_score: true,
               protocol_cancel: true
@@ -356,6 +370,61 @@ async function openEngineSettings(host: HTMLElement) {
 }
 
 describe("foreground engine lifecycle UI", () => {
+  it.each([false, true])("refuses a saved GenericGtp selection before IPC with an existing run: %s", async (withPrimary) => {
+    const generic = { id: "generic", profile: {
+      name: "Saved generic", program: "/bin/gtp", argv: [], working_dir: null, adapter_kind: "generic_gtp" as const, settings: {}
+    } };
+    const catalog = { version: 1, selected_profile_id: "profile-1", autoload_profile_id: null, profiles: [savedProfile, generic] };
+    backend.loadEngineProfilesSettings.mockResolvedValue(catalog);
+    const host = await renderApp();
+    if (withPrimary) await readyEngine(host);
+    const beforeLabel = host.querySelector(".engine-chip-label")?.textContent;
+    const beforeGame = host.querySelector(".doc-name")?.textContent;
+    backend.startForegroundEngine.mockClear();
+    backend.saveEngineProfilesSettings.mockClear();
+    const switcher = host.querySelector('select[aria-label="Foreground Engine Profile"]') as HTMLSelectElement;
+    await act(async () => {
+      switcher.value = "generic";
+      switcher.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(host.textContent).toContain("运行支持尚未提供");
+    expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+    expect(backend.switchForegroundEngine).not.toHaveBeenCalled();
+    expect(backend.saveEngineProfilesSettings).not.toHaveBeenCalled();
+    expect(switcher.value).toBe(withPrimary ? "profile-1" : "");
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe(beforeLabel);
+    expect(host.querySelector(".doc-name")?.textContent).toBe(beforeGame);
+    expect(catalog.profiles[1]).toEqual(generic);
+    if (withPrimary) {
+      await act(async () => { buttonNamed(host, "分析当前节点").click(); });
+      expect(buttonNamed(host, "取消此手").disabled).toBe(false);
+    }
+  });
+
+  it("keeps saved GenericGtp changes pending and refuses Restart without changing verified A", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    const panel = await openEngineSettings(host);
+    const adapter = Array.from(panel.querySelectorAll("select")).find((select) => Array.from(select.options).some((option) => option.value === "generic_gtp"))!;
+    await act(async () => {
+      adapter.value = "generic_gtp";
+      adapter.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => { buttonNamed(panel, "保存配置").click(); });
+    expect(panel.textContent).toContain("存在待应用更改");
+    expect(backend.saveEngineProfilesSettings.mock.calls.at(-1)?.[0].profiles[0].profile.adapter_kind).toBe("generic_gtp");
+    expect(panel.querySelector('[aria-label="当前 run 能力"]')?.textContent).toContain("单点 支持");
+    backend.saveEngineProfilesSettings.mockClear();
+    await act(async () => { buttonNamed(host, "重启").click(); });
+    expect(backend.restartForegroundEngine).not.toHaveBeenCalled();
+    expect(backend.saveEngineProfilesSettings).not.toHaveBeenCalled();
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("Local KataGo");
+    expect(host.textContent).toContain("运行支持尚未提供");
+    await act(async () => { buttonNamed(host, "分析当前节点").click(); });
+    expect(buttonNamed(host, "取消此手").disabled).toBe(false);
+    expect(backend.startSelectedNodeAnalysis.mock.calls.at(-1)?.[0].runId).toBe("run-1");
+  });
+
   it("shows authoritative no-engine status and does not start from Engine Settings selection", async () => {
     const host = await renderApp();
     expect(host.querySelector(".engine-chip-label")?.textContent).toBe("未加载引擎");
@@ -398,6 +467,13 @@ describe("foreground engine lifecycle UI", () => {
               adapter_kind: "kata_go_analysis",
               analysis: {
                 selected_node_analysis: true,
+                continuous_analysis: true,
+                candidates: true,
+                pv: true,
+                winrate: true,
+                ownership: true,
+                policy: true,
+                visits_limit: true,
                 whole_game_analysis: true,
                 root_score: true,
                 protocol_cancel: true
@@ -441,6 +517,13 @@ describe("foreground engine lifecycle UI", () => {
               adapter_kind: "kata_go_analysis",
               analysis: {
                 selected_node_analysis: true,
+                continuous_analysis: true,
+                candidates: true,
+                pv: true,
+                winrate: true,
+                ownership: true,
+                policy: true,
+                visits_limit: true,
                 whole_game_analysis: true,
                 root_score: true,
                 protocol_cancel: true
@@ -483,6 +566,13 @@ describe("foreground engine lifecycle UI", () => {
               adapter_kind: "kata_go_analysis",
               analysis: {
                 selected_node_analysis: true,
+                continuous_analysis: true,
+                candidates: true,
+                pv: true,
+                winrate: true,
+                ownership: true,
+                policy: true,
+                visits_limit: true,
                 whole_game_analysis: true,
                 root_score: true,
                 protocol_cancel: true
@@ -592,6 +682,13 @@ describe("foreground engine lifecycle UI", () => {
               adapter_kind: "kata_go_analysis",
               analysis: {
                 selected_node_analysis: true,
+                continuous_analysis: true,
+                candidates: true,
+                pv: true,
+                winrate: true,
+                ownership: true,
+                policy: true,
+                visits_limit: true,
                 whole_game_analysis: true,
                 root_score: true,
                 protocol_cancel: true

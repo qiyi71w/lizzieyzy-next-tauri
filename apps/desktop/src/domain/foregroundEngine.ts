@@ -1,4 +1,4 @@
-import type { EngineFailureDto, EngineProfileDto, EngineRunDto, ForegroundEngineSnapshotDto } from "./types";
+import type { EngineAnalysisCapabilitiesDto, EngineFailureDto, EngineProfileDto, EngineRunDto, ForegroundEngineSnapshotDto } from "./types";
 
 export const emptyForegroundEngineSnapshot = (): ForegroundEngineSnapshotDto => ({
   revision: 0,
@@ -47,9 +47,40 @@ export function isForegroundEngineReady(snapshot: ForegroundEngineSnapshotDto): 
   return snapshot.lifecycle.state === "ready";
 }
 
-export function admitsForegroundEngineJobs(snapshot: ForegroundEngineSnapshotDto): boolean {
+export function admitsForegroundEngineJobs(
+  snapshot: ForegroundEngineSnapshotDto,
+  capability: keyof EngineAnalysisCapabilitiesDto = "selected_node_analysis"
+): boolean {
   return (snapshot.lifecycle.state === "ready" || snapshot.lifecycle.state === "switching")
-    && runFromSnapshot(snapshot)?.capability_snapshot?.analysis?.selected_node_analysis === true;
+    && runFromSnapshot(snapshot)?.capability_snapshot?.analysis?.[capability] === true;
+}
+
+export function admitsForegroundEngineQuery(
+  snapshot: ForegroundEngineSnapshotDto,
+  capability: "selected_node_analysis" | "continuous_analysis" | "whole_game_analysis" = "selected_node_analysis"
+): boolean {
+  const analysis = runFromSnapshot(snapshot)?.capability_snapshot?.analysis;
+  // The current gateway queries always request ownership and policy together.
+  return admitsForegroundEngineJobs(snapshot, capability) && analysis?.ownership === true && analysis.policy === true;
+}
+
+export function verifiedEngineCapabilitiesLabel(snapshot: ForegroundEngineSnapshotDto): string {
+  const run = runFromSnapshot(snapshot);
+  if (!run) return "当前没有运行引擎";
+  const capabilities = run.capability_snapshot;
+  if (!capabilities) return "当前 run：能力待验证";
+  if (!capabilities.analysis) return "当前 run 已验证：不支持分析";
+  const labels: [keyof EngineAnalysisCapabilitiesDto, string][] = [
+    ["selected_node_analysis", "单点"], ["continuous_analysis", "连续"],
+    ["whole_game_analysis", "整谱/task"], ["candidates", "候选"], ["pv", "PV"],
+    ["winrate", "胜率"], ["root_score", "分数"], ["ownership", "ownership"],
+    ["policy", "policy"], ["visits_limit", "visits 限制"], ["protocol_cancel", "协议取消"]
+  ];
+  return `当前 run 已验证：${labels.map(([key, label]) => `${label} ${capabilities.analysis![key] ? "支持" : "不支持"}`).join(" · ")}`;
+}
+
+export function engineRuntimeUnavailableReason(profile: EngineProfileDto): string | null {
+  return profile.adapter_kind === "generic_gtp" ? "GenericGtp 适配器运行支持尚未提供；配置可保存，但不能 Start、切换或 Restart。" : null;
 }
 
 export function canStopForegroundEngine(snapshot: ForegroundEngineSnapshotDto): boolean {

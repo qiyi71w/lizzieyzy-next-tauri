@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CurrentGameResultDto, GameDto } from "./domain/types";
+import type { CurrentGameResultDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
 import { defaultAppPreferences, type AppPreferences } from "./domain/preferences";
 import { UNREADABLE_PREFERENCES_RECOVERY_MESSAGE } from "./api/preferences";
 
@@ -436,7 +436,22 @@ describe("durable preferences surface", () => {
 
   it("blocks a contextual Start while an older whole-preferences save is pending", async () => {
     backend.subscribeForegroundEngine.mockImplementationOnce(async (onSnapshot?: (snapshot: unknown) => void) => {
-      onSnapshot?.({ revision: 1, lifecycle: { state: "no_engine" }, continuous: { enabled: false, phase: "off" } });
+      onSnapshot?.({
+        revision: 1,
+        lifecycle: { state: "ready", run: {
+          run_id: "preferences-run",
+          profile_id: "preferences-profile",
+          adapter_kind: "kata_go_analysis",
+          profile_snapshot: { name: "Preferences engine", program: "/katago", argv: [], working_dir: null,
+            adapter_kind: "kata_go_analysis", settings: { model_path: "/model", config_path: "/config", max_visits: 16 } },
+          capability_snapshot: { adapter_kind: "kata_go_analysis", analysis: {
+            selected_node_analysis: true, continuous_analysis: true, whole_game_analysis: true,
+            candidates: true, pv: true, winrate: true, root_score: true, ownership: true, policy: true,
+            visits_limit: true, protocol_cancel: true
+          } }
+        } },
+        continuous: { enabled: false, phase: "off" }
+      } satisfies ForegroundEngineSnapshotDto);
       return () => undefined;
     });
     let resolveOlderSave!: (value: AppPreferences) => void;
@@ -444,6 +459,7 @@ describe("durable preferences surface", () => {
     preferencesApi.saveAppPreferences.mockReturnValueOnce(olderSave);
     const host = await renderApp();
     openPreferences(host);
+    expect(buttonNamed(host, "开始连续分析").disabled).toBe(false);
     act(() => labeledCheckbox(host, "候选").click());
     const start = buttonNamed(host, "开始连续分析");
     expect(start.disabled).toBe(true);
