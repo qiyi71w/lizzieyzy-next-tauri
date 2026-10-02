@@ -240,8 +240,14 @@ cargo test -p engine-manager --lib real_exact_move_smoke -- --ignored --nocaptur
 
 This opt-in harness uses the production manager for both actual processes, records exact projection, full move wire transcript, typed results, version/launch snapshot and owned-process cleanup in `move-transcript.json`. It covers move/pass history and root PL, plus KataGo setup, hard timeout and targeted cancellation. Real-engine and native evidence must identify their exact candidate; fixture passes alone do not accept N05/N06 or ENG-10.
 
+Ticket-04 acceptance passed on committed source `62841b149361603a5701170fd84179a25f306d73` (Windows x64, private desktop, isolated app-data, actual Tauri WebView2):
 
+- Production-manager smoke: **1 passed**, GNU Go **3.8** and KataGo **1.12.3 Eigen CPU AVX2/FMA**, using the qualified GNU argv above and the ENG-09 model/config assets. `D:\dev\weiqi\acceptance\r8-move-62841b1-manager\move-transcript.json` contains 81 records: 22 stdin, 37 stdout, 7 exact positions, 5 typed results, both version/run/PID records, timeout/cancel target-final confirmations and both exits. GNU mapped time for both history and root-PL requests; KataGo also handled true root handicap and returned Ready after timeout/cancel.
+- Native gateway smoke: `D:\dev\weiqi\acceptance\r8-move-62841b1-native\gateway-evidence.json` records both real adapters through `foreground_engine_game_move`, typed budget refusal, explicit cancellation, and path round-trip cancellation. SGF bytes/comments, selected path, semantic generation, dirty/source and durable preferences/profiles were unchanged by move/refusal. This exercises the native IPC boundary, not a new game UI.
+- Cleanup: manager PIDs 55324/4972 reaped; native app PID 84504 exited with code 0. `process-stopped.json` and `process-final.json` in the native evidence directory show no engine child and then no surviving tracked process. The IPC harness changed backend selection without updating the React view; its final window-close request therefore used a stale path. After verified engine Stop, `confirm_native_exit` closed this isolated fixture. This is not additional native close-UI acceptance; ticket-03 lifecycle evidence retains its original attribution.
+- Final repair checks: desktop library **152 passed**, manager move **11 passed**, foreground lifecycle **138 passed**. A completed-result A→B→A publication regression failed before repair and passed afterward. Standards and Spec review both passed; no follow-up candidates. Earlier candidate `193f63cb70bf094671b2480185352b84b51abb28` evidence remains historical; final native evidence above was rerun after the publication repair.
 
+Ticket 05 owns combined N02/N04/N05/N06 acceptance and ENG-10; this evidence does not close those broader gates or provider/release/display-matrix acceptance.
 
 ### 3. Start From The Engine Switcher
 
