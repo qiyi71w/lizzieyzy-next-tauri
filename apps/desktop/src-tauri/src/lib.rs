@@ -869,6 +869,31 @@ fn foreground_engine_start_selected_node(
         .map_err(Box::new)
 }
 
+#[tauri::command]
+async fn foreground_engine_game_move(
+    manager: State<'_, ForegroundEngineManager>,
+    current_game: State<'_, CurrentGameState>,
+    request: app_model::GameMoveRequestDto,
+) -> EngineCommandResult<app_model::GameMoveResultDto> {
+    let handle = current_game.start_game_move(&manager, request)?;
+    let identity = handle.identity.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || handle.wait()).await
+        .map_err(|error| Box::new(EngineFailureDto {
+            operation: EngineOperationDto::Job,
+            run_id: Some(identity.run_id), job_id: Some(identity.job_id),
+            switch_id: None, profile_id: None, kind: EngineFailureKind::Protocol,
+            message: format!("move worker failed: {error}"), diagnostic_summary: None,
+        }))?.map_err(Box::new)?;
+    current_game.publish_game_move(&manager, result)
+}
+
+#[tauri::command]
+fn foreground_engine_cancel_game_move(
+    manager: State<'_, ForegroundEngineManager>, run_id: String, job_id: String,
+) -> EngineCommandResult<()> {
+    manager.cancel_game_move(&run_id, &job_id).map_err(Box::new)
+}
+
 fn cancel_document_analysis_job(
     current_game: &CurrentGameState,
     manager: &ForegroundEngineManager,
@@ -1360,6 +1385,8 @@ pub fn run() {
             foreground_engine_restart,
             foreground_engine_switch,
             foreground_engine_start_selected_node,
+            foreground_engine_game_move,
+            foreground_engine_cancel_game_move,
             foreground_engine_continuous_action,
             foreground_engine_cancel_job
         ])

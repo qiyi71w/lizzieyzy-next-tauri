@@ -9,6 +9,8 @@ pub use window_geometry::{WindowGeometryDto, WindowGeometryStatusDto};
 
 mod analysis_task;
 pub use analysis_task::*;
+mod game_move;
+pub use game_move::*;
 
 mod analysis_job;
 pub use analysis_job::{
@@ -481,6 +483,9 @@ impl std::error::Error for EngineFailureDto {}
 pub struct EngineCapabilitySnapshotDto {
     pub adapter_kind: EngineBackend,
     pub analysis: Option<EngineAnalysisCapabilitiesDto>,
+    /// Adapter implementation is available; each request still requires exact admission.
+    #[serde(default)]
+    pub game_move: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gtp: Option<EngineGtpFactsDto>,
 }
@@ -587,6 +592,8 @@ pub struct ForegroundEngineSnapshotDto {
     pub selected_node_job: Option<AnalysisJobStartedDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub whole_game_job: Option<AnalysisJobStartedDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_move_job: Option<GameMoveJobDto>,
 }
 
 impl ForegroundEngineSnapshotDto {
@@ -597,6 +604,7 @@ impl ForegroundEngineSnapshotDto {
             continuous: ContinuousAnalysisSnapshotDto::default(),
             selected_node_job: None,
             whole_game_job: None,
+            game_move_job: None,
         }
     }
 }
@@ -1087,6 +1095,7 @@ mod foreground_engine_wire {
         let snapshot = ForegroundEngineSnapshotDto {
             revision: 4,
             continuous: ContinuousAnalysisSnapshotDto::default(),
+            game_move_job: None,
             lifecycle: ForegroundEngineLifecycleDto::Ready {
                 run: EngineRunDto {
                     run_id: "run-1".into(),
@@ -1095,6 +1104,7 @@ mod foreground_engine_wire {
                     profile_snapshot: sample_profile(),
                     capability_snapshot: Some(EngineCapabilitySnapshotDto {
                         adapter_kind: EngineBackend::KataGoAnalysis,
+                        game_move: true,
                         gtp: None,
                         analysis: Some(EngineAnalysisCapabilitiesDto {
                             selected_node_analysis: true,
@@ -1196,6 +1206,7 @@ mod foreground_engine_wire {
         let snapshot = ForegroundEngineSnapshotDto {
             revision: 1,
             continuous: ContinuousAnalysisSnapshotDto::default(),
+            game_move_job: None,
             lifecycle: ForegroundEngineLifecycleDto::Switching {
                 primary: run.clone(),
                 candidate: EngineRunDto {
@@ -1221,6 +1232,7 @@ mod foreground_engine_wire {
         let clean = ForegroundEngineSnapshotDto {
             revision: 1,
             continuous: ContinuousAnalysisSnapshotDto::default(),
+            game_move_job: None,
             lifecycle: ForegroundEngineLifecycleDto::NoEngine { failure: None },
             selected_node_job: None,
             whole_game_job: None,
@@ -1247,6 +1259,7 @@ mod foreground_engine_wire {
         let failed = ForegroundEngineSnapshotDto {
             revision: 3,
             continuous: ContinuousAnalysisSnapshotDto::default(),
+            game_move_job: None,
             lifecycle: ForegroundEngineLifecycleDto::NoEngine {
                 failure: Some(failure.clone()),
             },

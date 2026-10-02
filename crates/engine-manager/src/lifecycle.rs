@@ -27,6 +27,9 @@ use uuid::Uuid;
 pub use app_model::AnalysisJobEventDto;
 pub use app_model::AnalysisJobLaneDto as AnalysisJobLane;
 
+mod game_move;
+pub use game_move::{GameMoveHandle, GameMoveRequest};
+
 pub trait AnalysisJobCancel: Send + Sync {
     fn cancel(&self);
 }
@@ -232,6 +235,8 @@ struct ManagerState {
     continuous_safety_hold: bool,
     continuous_departing: bool,
     finite_admission_pending: bool,
+    game_move: Option<game_move::MoveSlot>,
+    gtp_command_seq: u32,
 }
 
 struct Inner {
@@ -272,6 +277,8 @@ impl ForegroundEngineManager {
                     continuous_safety_hold: false,
                     continuous_departing: false,
                     finite_admission_pending: false,
+                    game_move: None,
+                    gtp_command_seq: 100,
                 }),
             }),
         }
@@ -478,6 +485,9 @@ impl ForegroundEngineManager {
         let mut state = self.lock();
         if !state.continuous_departing {
             state.continuous_departing = true;
+            if let Some(identity) = state.game_move.as_ref().map(|slot| slot.identity.clone()) {
+                game_move::seal_move_for_run(&mut state, &identity.run_id);
+            }
             if let Some(job_id) = state.analysis_task.as_ref().map(|task| task.job_id.clone()) {
                 cancel_analysis_task_locked(&mut state, &job_id);
                 state.jobs.retain(|job| !(job.job_id == job_id && job.terminal));
@@ -648,8 +658,12 @@ impl ForegroundEngineManager {
                 None,
             )
         })?;
+        if self.finish_move_before_switch()? {
+            return self.start(profile_id);
+        }
         let (operation, candidate, switch_id) = {
             let mut state = self.lock();
+            game_move::require_idle_move(&state)?;
             let primary = match &state.phase {
                 Phase::Ready(run) => run.clone(),
                 Phase::Switching { primary, .. } => primary.clone(),
@@ -696,6 +710,7 @@ impl ForegroundEngineManager {
         cancel: Arc<dyn AnalysisJobCancel>,
     ) -> Result<String, EngineFailureDto> {
         let mut state = self.lock();
+        game_move::require_idle_move(&state)?;
         let run = admitting_run(&state.phase, run_id).ok_or_else(|| {
             continuous_invalid_state(
                 &state,
@@ -1037,6 +1052,7 @@ impl ForegroundEngineManager {
         let cancel = AnalysisCancelToken::new();
         let (task, bound_query) = {
             let mut state = self.lock();
+            game_move::require_idle_move(&state)?;
             let run = match admitting_run(&state.phase, &request.run_id) {
                 Some(run) => run,
                 None => {
@@ -1688,6 +1704,7 @@ impl ForegroundEngineManager {
             let mut state = self.lock();
             if state.continuous_departing
                 || state.finite_admission_pending
+                || state.game_move.is_some()
                 || state.continuous_target.is_none()
             {
                 return;
@@ -2024,6 +2041,8 @@ impl Inner {
         };
         let capabilities = EngineCapabilitySnapshotDto {
             adapter_kind: run.adapter_kind,
+            game_move: !generic || gtp.as_ref().is_some_and(|facts|
+                crate::game_move_protocol::qualified_gtp_launch(&run.profile_snapshot, facts)),
             analysis: (!generic).then_some(EngineAnalysisCapabilitiesDto {
                 selected_node_analysis: true,
                 continuous_analysis: true,
@@ -2619,6 +2638,7 @@ impl Inner {
             return;
         }
         state.jobs.clear();
+        state.game_move = None;
         state.phase = Phase::NoEngine { failure: None };
         publish_snapshot(&mut state);
     }
@@ -2697,11 +2717,6 @@ impl Inner {
     }
 
     fn enter_primary_error(&self, state: &mut ManagerState, run: EngineRunDto, exit_code: Option<i32>) {
-        fail_analysis_task_locked(state, None, "The Foreground Engine Run exited unexpectedly.");
-        cancel_jobs_for_current(state);
-        if let Some(mut live) = state.live.take() {
-            let _ = live.child.wait();
-        }
         let published = failure(
             EngineOperationDto::UnexpectedExit,
             if run.adapter_kind == EngineBackend::GenericGtp {
@@ -2714,6 +2729,12 @@ impl Inner {
             Some(run.profile_id.as_str()),
             None,
         );
+        game_move::fail_move_for_run(state, &published);
+        fail_analysis_task_locked(state, None, "The Foreground Engine Run exited unexpectedly.");
+        cancel_jobs_for_current(state);
+        if let Some(mut live) = state.live.take() {
+            let _ = live.child.wait();
+        }
         state.phase = Phase::Error {
             run,
             failure: published.clone(),
@@ -2733,10 +2754,12 @@ impl Inner {
             }
             let (kind, message) = match stdout_rx.recv_timeout(Duration::from_millis(50)) {
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                Ok(Ok(Some(_))) => (
-                    EngineFailureKind::Protocol,
-                    "unsolicited GTP stdout after handshake".into(),
-                ),
+                Ok(Ok(Some(line))) => {
+                    if self.route_game_move_line(&run_id, &line) {
+                        continue;
+                    }
+                    (EngineFailureKind::Protocol, "unsolicited GTP stdout after handshake".into())
+                }
                 Ok(Err(error)) => (EngineFailureKind::Protocol, format!("GTP stdout failed: {error}")),
                 Ok(Ok(None)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                     (EngineFailureKind::ProcessExit, "GTP stdout closed".into())
@@ -2756,6 +2779,7 @@ impl Inner {
                 Some(&run.profile_id),
                 None,
             );
+            game_move::fail_move_for_run(&mut state, &published);
             let deadline = Instant::now() + self.config.stop_drain_timeout;
             let ManagerState { live, candidate, .. } = &mut *state;
             for slot in [live, candidate] {
@@ -2797,6 +2821,9 @@ impl Inner {
             }
             match stdout_rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(Ok(Some(line))) => {
+                    if self.route_game_move_line(&run_id, &line) {
+                        continue;
+                    }
                     if let Some(pending) = self.route_stdout_line(&run_id, line) {
                         self.advance_whole_game(pending);
                     }
@@ -3469,6 +3496,7 @@ fn snapshot_from(state: &ManagerState) -> ForegroundEngineSnapshotDto {
     snapshot.continuous = continuous_snapshot(state);
     snapshot.selected_node_job = current_non_terminal_job(state, AnalysisJobLane::SelectedNode);
     snapshot.whole_game_job = current_non_terminal_job(state, AnalysisJobLane::WholeGame);
+    snapshot.game_move_job = state.game_move.as_ref().map(|slot| slot.identity.clone());
     snapshot
 }
 
@@ -3492,6 +3520,7 @@ fn cancel_jobs_for_current(state: &mut ManagerState) {
 }
 
 fn cancel_jobs_for_run(state: &mut ManagerState, run_id: &str) {
+    game_move::seal_move_for_run(state, run_id);
     let query_ids: Vec<String> = state
         .jobs
         .iter()
@@ -4177,6 +4206,7 @@ fn validate_selected_admission(
     state: &ManagerState,
     request: &SelectedNodeJobRequest,
 ) -> Result<EngineRunDto, EngineFailureDto> {
+    game_move::require_idle_move(state)?;
     let run_id = request.run_id.as_str();
     if state.continuous_departing {
         return Err(continuous_invalid_state(
@@ -4273,6 +4303,8 @@ fn continuous_snapshot(state: &ManagerState) -> ContinuousAnalysisSnapshotDto {
         ContinuousAnalysisPhaseDto::Departing
     } else if matches!(state.phase, Phase::Error { .. }) || state.continuous_error {
         ContinuousAnalysisPhaseDto::Error
+    } else if state.game_move.is_some() {
+        ContinuousAnalysisPhaseDto::Waiting
     } else if current_selected_job(state).is_some_and(|job| job.state == AnalysisJobStateDto::Stopping) {
         ContinuousAnalysisPhaseDto::Stopping
     } else if current_selected_job(state)

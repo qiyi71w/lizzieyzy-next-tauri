@@ -30,6 +30,8 @@ import type {
   FileActivationRejectionDto,
   GameFileImportDto,
   GameDto,
+  GameMoveRequestDto,
+  GameMoveResultDto,
   MoveDto,
   MoveVertex,
   PlayerColor,
@@ -531,6 +533,18 @@ export async function startSelectedNodeAnalysis(input: {
     nodePath: input.nodePath,
     maxVisits: input.maxVisits
   });
+}
+
+export async function computeGameMove(request: GameMoveRequestDto): Promise<GameMoveResultDto> {
+  if (!isTauriRuntime()) {
+    throw new Error("Exact game moves require a Ready Foreground Engine Run on the Tauri desktop backend.");
+  }
+  return invoke<GameMoveResultDto>("foreground_engine_game_move", { request });
+}
+
+export async function cancelGameMove(input: { runId: string; jobId: string }): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await invoke<void>("foreground_engine_cancel_game_move", input);
 }
 
 

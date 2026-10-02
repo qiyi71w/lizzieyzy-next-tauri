@@ -179,7 +179,7 @@ Windows native evidence: exact application source `966e282b986c4e42a3f7bcdf73b1a
 
 ### 2.1 Verified Capability Admission (ENG-09)
 
-Engine Settings distinguishes the saved/draft profile and static adapter ceiling from `当前 run 已验证`; `当前 run 能力` in the workspace always describes primary A, including during A→B switching. Saving adapter/argv/settings leaves A immutable and pending. Missing verification or an absent analysis group cannot authorize work. GenericGtp Start/Switch/Restart now enters the shared lifecycle; its verified protocol facts do not admit analysis or game operations.
+Engine Settings distinguishes the saved/draft profile and static adapter ceiling from `当前 run 已验证`; `当前 run 能力` in the workspace always describes primary A, including during A→B switching. Saving adapter/argv/settings leaves A immutable and pending. Missing verification or an absent analysis group cannot authorize analysis. GenericGtp Start/Switch/Restart enters the shared lifecycle; game-move admission additionally requires the qualified launch and exact-position checks below.
 
 Finite, continuous and whole-game/task admission are independent. Current query commands additionally request ownership/policy; visits limits, leading-candidate conditions and swing score/winrate filters require the respective capabilities. Preview submits no engine query. Start/Continue recheck after asynchronous work and before saving task presets/submitting work. Rust independently refuses before I/O, takeover or task mutation. Unsupported runs preserve historical SGF analysis and durable continuous intent, including existing holds; cancellation of owned work remains available.
 
@@ -217,6 +217,29 @@ Native ticket-03 smoke passed on exact source candidate `ea89a48960e0e529508516e
 - The same candidate passed `real_katago_ready_job_stop_restart_and_switch` (1 passed, 1 filtered, 53.09s), using the ENG-09 CPU/model/config assets above. Full log: `D:\dev\weiqi\acceptance\r8-gtp-assets\real-katago.log`.
 
 These are ticket-03 native lifecycle observations, not ticket-04 exact-position/game-move/time-budget implementation or the final ticket-05 N02/N04 combination matrix. `ENG-10` remains Missing; provider, release and physical-display acceptance are unchanged.
+
+### 2.3 Exact-position budgeted moves (R8 ticket 04)
+
+`computeGameMove` and `cancelGameMove` wrap native `foreground_engine_game_move` and `foreground_engine_cancel_game_move`; no game UI or SGF commit is introduced. Supply the current Ready run, semantic generation, selected NodePath and `ComputeBudgetDto { deadline_ms, max_visits }`. KataGo requires positive visits and a deadline; GTP requires a deadline and rejects visits. Watch `game_move_job` for the cancellation identity. A successful result reports whether both GTP time commands were mapped. The current game and durable preferences remain unchanged.
+
+Exact admission supports square boards 2–19, explicit `RU[Chinese]` or `RU[Chinese-KGS]`, half-integer komi, empty root, root PL, alternating move/pass history and black root handicap for KataGo. Chinese-KGS uses positional superko; both rule dictionaries include AREA scoring, no suicide/tax/button, white handicap bonus N and friendly passes, following [KataGo's rule definitions](https://github.com/lightvector/KataGo/blob/v1.12.3/docs/GTP_Extensions.md). It rejects malformed replay, white/mixed/intermediate setup, unrepresentable PL, unknown rules and rectangles rather than flattening or inventing passes.
+
+GenericGtp game-move qualification is GNU Go 3.8 / GTP v2 with exactly `--mode gtp --chinese-rules --positional-superko --forbid-suicide --level 1 --seed 1`, board size 2/5/9/13/19, Chinese-KGS and finite half-integer komi [-1000,1000]. Root setup is refused because handicap compensation has not been qualified. Other verified GTP engines remain lifecycle-only. Every admitted request sends a fresh board/komi/history synchronization. Time mapping requires both commands; manager deadlines apply in either case. Cancellation reaps GTP and leaves NoEngine; failure leaves Error; restart is explicit.
+
+Reproducible real-process acceptance entrypoint (run on the intended platform with explicit asset paths):
+
+```text
+LIZZIEYZY_REAL_GAME_MOVE=1
+LIZZIEYZY_MOVE_EVIDENCE=<fresh isolated directory>
+LIZZIEYZY_GNUGO_PROGRAM=<qualified GNU Go 3.8 executable>
+LIZZIEYZY_KATAGO_PROGRAM=<KataGo executable>
+LIZZIEYZY_KATAGO_MODEL=<model>
+LIZZIEYZY_KATAGO_CONFIG=<analysis config>
+cargo test -p engine-manager --lib real_exact_move_smoke -- --ignored --nocapture
+```
+
+This opt-in harness uses the production manager for both actual processes, records exact projection, full move wire transcript, typed results, version/launch snapshot and owned-process cleanup in `move-transcript.json`. It covers move/pass history and root PL, plus KataGo setup, hard timeout and targeted cancellation. Real-engine and native evidence must identify their exact candidate; fixture passes alone do not accept N05/N06 or ENG-10.
+
 
 
 

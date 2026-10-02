@@ -383,6 +383,11 @@ impl CurrentSgfDocument {
         Ok(())
     }
 
+    pub fn exact_position(&self, path: &NodePath) -> Result<crate::ExactPosition, String> {
+        let nodes = self.nodes_on_path(path).map_err(|error| error.to_string())?;
+        crate::ExactPosition::from_nodes(&nodes)
+    }
+
     pub fn default_selected_path(&self) -> NodePath {
         let mut indices = Vec::new();
         let Ok(mut node) = self.root() else {

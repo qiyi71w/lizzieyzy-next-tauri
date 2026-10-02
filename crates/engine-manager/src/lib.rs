@@ -14,6 +14,7 @@ use thiserror::Error;
 
 mod catalog;
 mod gtp;
+mod game_move_protocol;
 mod lifecycle;
 
 pub use catalog::{
@@ -24,8 +25,8 @@ pub use catalog::{
 };
 pub use lifecycle::{
     AnalysisJobCancel, AnalysisJobEventDto, AnalysisJobLane, ContinuousPrimaryAction, ForegroundEngineConfig,
-    ForegroundEngineManager, SelectedNodeJobRequest, SwingAnalysisTaskRequest, WholeGameJobRequest,
-    WholeGameWorkItem,
+    ForegroundEngineManager, GameMoveHandle, GameMoveRequest, SelectedNodeJobRequest,
+    SwingAnalysisTaskRequest, WholeGameJobRequest, WholeGameWorkItem,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

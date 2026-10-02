@@ -223,6 +223,7 @@ export type EngineGtpFactsDto = {
 export type EngineCapabilitySnapshotDto = {
   adapter_kind: EngineBackendDto;
   analysis?: EngineAnalysisCapabilitiesDto | null;
+  game_move?: boolean;
   gtp?: EngineGtpFactsDto | null;
 };
 export type EngineAnalysisCapabilitiesDto = {
@@ -244,6 +245,35 @@ export type EngineRunDto = {
   adapter_kind: EngineBackendDto;
   profile_snapshot: EngineProfileDto;
   capability_snapshot?: EngineCapabilitySnapshotDto | null;
+};
+export type ExactRulesDto = "chinese" | "chinese_kgs";
+export type ExactPositionDto = {
+  board_width: number;
+  board_height: number;
+  komi: number;
+  rules: ExactRulesDto;
+  initial_player: PlayerColor;
+  to_play: PlayerColor;
+  initial_stones: StoneDto[];
+  moves: MoveDto[];
+};
+export type ComputeBudgetDto = { deadline_ms: number; max_visits: number | null };
+export type GameMoveRequestDto = {
+  run_id: string;
+  generation: number;
+  node_path: NodePath;
+  budget: ComputeBudgetDto;
+};
+export type GameMoveJobDto = {
+  run_id: string;
+  job_id: string;
+  generation: number;
+  node_path: NodePath;
+};
+export type GameMoveDto = { kind: "move"; vertex: MoveVertex } | { kind: "resign" };
+export type GameMoveResultDto = GameMoveJobDto & {
+  result: GameMoveDto;
+  engine_time_mapped: boolean;
 };
 export type ForegroundEngineLifecycleDto =
   | { state: "no_engine"; failure?: EngineFailureDto }
@@ -285,6 +315,7 @@ export type ForegroundEngineSnapshotDto = {
   continuous: ContinuousAnalysisSnapshotDto;
   selected_node_job?: AnalysisJobStartedDto | null;
   whole_game_job?: AnalysisJobStartedDto | null;
+  game_move_job?: GameMoveJobDto | null;
 };
 export type AnalysisJobLaneDto = "selected_node" | "whole_game";
 export type AnalysisJobModeDto = "finite" | "continuous";
