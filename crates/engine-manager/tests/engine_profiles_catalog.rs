@@ -1,7 +1,7 @@
-use app_model::{EngineBackend, EngineProfileDto};
+use app_model::{EngineAdapterSettings, EngineProfileDto, GenericGtpSettings, KataGoSettings};
 use engine_manager::{
     default_engine_profiles_settings, load_engine_profiles, parse_engine_profiles, save_engine_profiles,
-    EngineProfileRecord, EngineProfilesSettings, DEFAULT_ENGINE_PROFILE_ID,
+    EngineProfileRecord, EngineProfilesSettings, DEFAULT_ENGINE_PROFILE_ID, ENGINE_PROFILES_VERSION,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,13 +46,15 @@ fn profile(id: &str, name: &str) -> EngineProfileRecord {
         id: id.to_string(),
         profile: EngineProfileDto {
             name: name.to_string(),
-            engine_path: format!("/bin/{id}"),
-            model_path: None,
-            config_path: None,
+            program: format!("/bin/{id}"),
+            argv: vec![],
             working_dir: None,
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: None,
+                config_path: None,
+                max_visits: 800,
+            }),
         },
-        max_visits: 800,
     }
 }
 
@@ -62,6 +64,7 @@ fn settings(
     profiles: Vec<EngineProfileRecord>,
 ) -> EngineProfilesSettings {
     EngineProfilesSettings {
+        version: ENGINE_PROFILES_VERSION,
         selected_profile_id: selected.to_string(),
         autoload_profile_id: autoload.map(str::to_string),
         profiles,
@@ -193,62 +196,30 @@ fn set_replace_clear_and_reload_keep_a_single_autoload_mark() {
 }
 
 #[test]
-fn normalize_enforces_zero_or_one_autoload_and_drops_dangling_marks() {
-    let parsed = parse_engine_profiles(
-        r#"{
-            "selected_profile_id": "alpha",
-            "autoload_profile_id": "missing",
-            "profiles": [
-                {
-                    "id": "default",
-                    "profile": {
-                        "name": "Local KataGo",
-                        "engine_path": "",
-                        "model_path": null,
-                        "config_path": null,
-                        "working_dir": null,
-                        "backend": "kata_go_analysis"
-                    },
-                    "max_visits": 800
-                },
-                {
-                    "id": "alpha",
-                    "profile": {
-                        "name": "Alpha",
-                        "engine_path": "/bin/a",
-                        "model_path": null,
-                        "config_path": null,
-                        "working_dir": null,
-                        "backend": "kata_go_analysis"
-                    },
-                    "max_visits": 800
-                }
-            ]
-        }"#,
-    )
-    .unwrap();
-    assert_eq!(parsed.autoload_profile_id, None);
-
-    let blank = parse_engine_profiles(
-        r#"{
-            "selected_profile_id": "default",
-            "autoload_profile_id": "   ",
-            "profiles": [{
-                "id": "default",
-                "profile": {
-                    "name": "Local KataGo",
-                    "engine_path": "",
-                    "model_path": null,
-                    "config_path": null,
-                    "working_dir": null,
-                    "backend": "kata_go_analysis"
-                },
-                "max_visits": 800
-            }]
-        }"#,
-    )
-    .unwrap();
-    assert_eq!(blank.autoload_profile_id, None);
+fn dangling_selection_and_autoload_are_rejected_without_replacing_storage() {
+    let temp = TestTempDir::new("dangling-identities");
+    let path = temp.catalog_path();
+    let valid = settings("alpha", Some("alpha"), vec![profile("alpha", "Alpha")]);
+    save_engine_profiles(&path, valid.clone()).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    for candidate in [
+        EngineProfilesSettings {
+            selected_profile_id: "missing".into(),
+            ..valid.clone()
+        },
+        EngineProfilesSettings {
+            autoload_profile_id: Some("missing".into()),
+            ..valid.clone()
+        },
+        EngineProfilesSettings {
+            autoload_profile_id: Some("   ".into()),
+            ..valid.clone()
+        },
+    ] {
+        assert!(save_engine_profiles(&path, candidate).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(load_engine_profiles(&path).unwrap(), valid);
+    }
 }
 
 #[test]
@@ -267,7 +238,7 @@ fn deleting_inactive_marked_profile_clears_mark_in_the_same_document() {
 
     let after_delete = save_engine_profiles(
         &path,
-        settings("default", Some("alpha"), vec![profile("default", "Local KataGo")]),
+        settings("default", None, vec![profile("default", "Local KataGo")]),
     )
     .unwrap();
     assert_eq!(after_delete.autoload_profile_id, None);
@@ -279,20 +250,185 @@ fn deleting_inactive_marked_profile_clears_mark_in_the_same_document() {
 }
 
 #[test]
-fn catalog_wire_keeps_snake_case_autoload_identity() {
-    let saved = save_engine_profiles(
-        &TestTempDir::new("wire").catalog_path(),
-        settings(
-            "default",
-            Some("alpha"),
-            vec![profile("default", "Local KataGo"), profile("alpha", "Alpha")],
+fn legacy_read_preserves_every_value_and_never_rewrites_until_explicit_save() {
+    let temp = TestTempDir::new("legacy-preservation");
+    let path = temp.catalog_path();
+    let legacy = serde_json::json!({
+        "selected_profile_id": "second", "autoload_profile_id": "first",
+        "profiles": [
+            {"id":"first", "max_visits":123, "profile": {
+                "name":"  引擎 一  ", "engine_path":"  D:\\围棋 引擎\\katago.exe  ",
+                "model_path":"模型 空格.bin", "config_path":" config spaced.cfg ",
+                "working_dir":" D:\\工作 目录 ", "backend":"kata_go_analysis"
+            }},
+            {"id":"second", "max_visits":456, "profile": {
+                "name":"Second", "engine_path":"relative engine", "model_path":null,
+                "config_path":null, "working_dir":null, "backend":"kata_go_analysis"
+            }}
+        ]
+    });
+    let original = serde_json::to_string_pretty(&legacy).unwrap();
+    std::fs::write(&path, &original).unwrap();
+    let loaded = load_engine_profiles(&path).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    assert_eq!(loaded.version, 1);
+    assert_eq!(loaded.selected_profile_id, "second");
+    assert_eq!(loaded.autoload_profile_id.as_deref(), Some("first"));
+    assert_eq!(
+        loaded
+            .profiles
+            .iter()
+            .map(|record| record.id.as_str())
+            .collect::<Vec<_>>(),
+        ["first", "second"]
+    );
+    assert_eq!(
+        loaded.profiles[0].profile,
+        EngineProfileDto {
+            name: "  引擎 一  ".into(),
+            program: "  D:\\围棋 引擎\\katago.exe  ".into(),
+            argv: vec![],
+            working_dir: Some(" D:\\工作 目录 ".into()),
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: Some("模型 空格.bin".into()),
+                config_path: Some(" config spaced.cfg ".into()),
+                max_visits: 123,
+            }),
+        }
+    );
+    assert_eq!(
+        loaded.profiles[1].profile.adapter,
+        EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+            model_path: None,
+            config_path: None,
+            max_visits: 456,
+        })
+    );
+    save_engine_profiles(&path, loaded.clone()).unwrap();
+    let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(persisted["version"], 1);
+    assert_eq!(persisted["profiles"][0]["profile"]["settings"]["max_visits"], 123);
+    assert!(persisted["profiles"][0].get("max_visits").is_none());
+    assert!(persisted["profiles"][0]["profile"].get("engine_path").is_none());
+    assert_eq!(load_engine_profiles(&path).unwrap(), loaded);
+
+    let single = serde_json::json!({"profile": legacy["profiles"][0]["profile"], "max_visits": 123});
+    std::fs::write(&path, single.to_string()).unwrap();
+    let migrated = load_engine_profiles(&path).unwrap();
+    assert_eq!(migrated.profiles[0].profile, loaded.profiles[0].profile);
+    assert_eq!(migrated.profiles[0].id, DEFAULT_ENGINE_PROFILE_ID);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), single.to_string());
+}
+
+#[test]
+fn malformed_version_adapter_and_settings_remain_observable_without_storage_changes() {
+    let temp = TestTempDir::new("invalid-documents");
+    let path = temp.catalog_path();
+    let base = serde_json::to_value(settings("alpha", None, vec![profile("alpha", "Alpha")])).unwrap();
+    let mut cases = Vec::new();
+    for version in [
+        serde_json::json!(2),
+        serde_json::Value::Null,
+        serde_json::json!("1"),
+        serde_json::json!(1.5),
+    ] {
+        let mut value = base.clone();
+        value["version"] = version;
+        cases.push(value);
+    }
+    for (field, invalid) in [
+        ("settings", serde_json::Value::Null),
+        (
+            "settings",
+            serde_json::json!({"model_path":null,"config_path":null,"max_visits":0}),
         ),
-    )
-    .unwrap();
-    let json = serde_json::to_string(&saved).unwrap();
-    assert!(json.contains("autoload_profile_id"));
-    assert!(json.contains("selected_profile_id"));
-    assert!(!json.contains("autoloadProfileId"));
-    let parsed: EngineProfilesSettings = serde_json::from_str(&json).unwrap();
-    assert_eq!(parsed.autoload_profile_id.as_deref(), Some("alpha"));
+        (
+            "settings",
+            serde_json::json!({"model_path":null,"config_path":null,"max_visits":800,"command":"gtp"}),
+        ),
+        ("adapter_kind", serde_json::json!("unknown")),
+        ("adapter_kind", serde_json::json!("generic_gtp")),
+    ] {
+        let mut value = base.clone();
+        value["profiles"][0]["profile"][field] = invalid;
+        cases.push(value);
+    }
+    let mut absent = base.clone();
+    absent["profiles"][0]["profile"]
+        .as_object_mut()
+        .unwrap()
+        .remove("settings");
+    cases.push(absent);
+    cases.push(serde_json::json!({"version":1,"profile":{"name":"old","engine_path":"/bin/old","backend":"kata_go_analysis"},"max_visits":800}));
+    cases.push(serde_json::json!({"profile":{"name":"old","engine_path":"/bin/old","backend":"leela_zero_gtp"},"max_visits":800}));
+    for value in cases {
+        let text = value.to_string();
+        std::fs::write(&path, &text).unwrap();
+        assert!(load_engine_profiles(&path).is_err(), "accepted {text}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    }
+}
+
+#[test]
+fn invalid_save_preserves_effective_catalog_and_previous_bytes() {
+    let temp = TestTempDir::new("invalid-save");
+    let path = temp.catalog_path();
+    let valid = settings("alpha", Some("alpha"), vec![profile("alpha", "Alpha")]);
+    save_engine_profiles(&path, valid.clone()).unwrap();
+    let previous = std::fs::read(&path).unwrap();
+    let mut invalid_profiles = Vec::new();
+    for field in 0..6 {
+        let mut record = profile("alpha", "Alpha");
+        match field {
+            0 => record.profile.program = "bad\0program".into(),
+            1 => record.profile.argv = vec!["bad\0argument".into()],
+            2 => record.profile.working_dir = Some("bad\0cwd".into()),
+            3 => record.profile.name = "  ".into(),
+            4 | 5 => {
+                if let EngineAdapterSettings::KataGoAnalysis(settings) = &mut record.profile.adapter {
+                    if field == 4 {
+                        settings.model_path = Some("bad\0model".into());
+                    } else {
+                        settings.config_path = Some("bad\0config".into());
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+        invalid_profiles.push(record);
+    }
+    for token in [
+        "analysis",
+        "gtp",
+        "benchmark",
+        "selfplay",
+        "-model",
+        "--model=other",
+        "-config=other",
+        "--config",
+    ] {
+        let mut record = profile("alpha", "Alpha");
+        record.profile.argv.push(token.into());
+        invalid_profiles.push(record);
+    }
+    for record in invalid_profiles {
+        assert!(save_engine_profiles(&path, settings("alpha", Some("alpha"), vec![record])).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), previous);
+        assert_eq!(load_engine_profiles(&path).unwrap(), valid);
+    }
+    let mut duplicate = valid.clone();
+    duplicate.profiles.push(duplicate.profiles[0].clone());
+    assert!(save_engine_profiles(&path, duplicate).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), previous);
+}
+
+#[test]
+fn generic_settings_roundtrip_preserves_unrestricted_argv() {
+    let temp = TestTempDir::new("generic-roundtrip");
+    let mut record = profile("generic", "通用 引擎");
+    record.profile.argv = vec!["gtp".into(), "--model=x y".into(), "".into(), "中文".into()];
+    record.profile.adapter = EngineAdapterSettings::GenericGtp(GenericGtpSettings {});
+    let catalog = settings("generic", Some("generic"), vec![record]);
+    save_engine_profiles(&temp.catalog_path(), catalog.clone()).unwrap();
+    assert_eq!(load_engine_profiles(&temp.catalog_path()).unwrap(), catalog);
 }

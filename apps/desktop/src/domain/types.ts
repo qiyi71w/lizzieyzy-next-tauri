@@ -163,11 +163,19 @@ export type ApplicationExitOutcomeDto = {
 export type CandidateMoveDto = { vertex: MoveVertex; visits: number; winrate_black: number; score_mean_black: number; policy_prior?: number | null; pv: MoveVertex[] };
 export type AnalysisFrameDto = { job_id: string; game_id?: string | null; node_id?: string | null; turn: number; visits: number; winrate_black: number; score_mean_black?: number | null; score_stdev?: number | null; candidates: CandidateMoveDto[]; ownership?: number[] | null; policy?: number[] | null };
 export type ProblemMarkerDto = { turn: number; severity: "info" | "inaccuracy" | "mistake" | "blunder"; winrate_loss: number; score_loss?: number | null; label: string };
-export type EngineBackendDto = "kata_go_analysis";
-export type EngineProfileDto = { name: string; engine_path: string; model_path?: string | null; config_path?: string | null; working_dir?: string | null; backend: EngineBackendDto };
-export type EngineProfileSettingsDto = { profile: EngineProfileDto; max_visits: number };
-export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto; max_visits: number };
-export type EngineProfilesSettingsDto = { selected_profile_id: string; autoload_profile_id?: string | null; profiles: EngineProfileRecordDto[] };
+export type EngineBackendDto = "kata_go_analysis" | "generic_gtp";
+export type KataGoSettingsDto = { model_path: string | null; config_path: string | null; max_visits: number };
+export type EngineProfileDto = {
+  name: string;
+  program: string;
+  argv: string[];
+  working_dir: string | null;
+} & (
+  | { adapter_kind: "kata_go_analysis"; settings: KataGoSettingsDto }
+  | { adapter_kind: "generic_gtp"; settings: Record<string, never> }
+);
+export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto };
+export type EngineProfilesSettingsDto = { version: number; selected_profile_id: string; autoload_profile_id: string | null; profiles: EngineProfileRecordDto[] };
 export type AssetCheckDto = { path: string; exists: boolean; required: boolean; label: string };
 export type AppHealthDto = { app: string; architecture: string; rust_backend_ready: boolean; notes: string[] };
 
@@ -186,6 +194,8 @@ export type EngineFailureKind =
   | "asset"
   | "readiness"
   | "protocol"
+  | "command"
+  | "process_exit"
   | "nonzero_exit"
   | "timeout"
   | "cancellation"
@@ -204,11 +214,29 @@ export type EngineFailureDto = {
   message: string;
   diagnostic_summary?: string | null;
 };
+export type EngineGtpFactsDto = {
+  protocol_version: number;
+  name: string;
+  version: string;
+  commands: string[];
+};
 export type EngineCapabilitySnapshotDto = {
   adapter_kind: EngineBackendDto;
+  analysis?: EngineAnalysisCapabilitiesDto | null;
+  game_move?: boolean;
+  gtp?: EngineGtpFactsDto | null;
+};
+export type EngineAnalysisCapabilitiesDto = {
   selected_node_analysis: boolean;
+  continuous_analysis: boolean;
   whole_game_analysis: boolean;
+  candidates: boolean;
+  pv: boolean;
+  winrate: boolean;
   root_score: boolean;
+  ownership: boolean;
+  policy: boolean;
+  visits_limit: boolean;
   protocol_cancel: boolean;
 };
 export type EngineRunDto = {
@@ -217,6 +245,35 @@ export type EngineRunDto = {
   adapter_kind: EngineBackendDto;
   profile_snapshot: EngineProfileDto;
   capability_snapshot?: EngineCapabilitySnapshotDto | null;
+};
+export type ExactRulesDto = "chinese" | "chinese_kgs";
+export type ExactPositionDto = {
+  board_width: number;
+  board_height: number;
+  komi: number;
+  rules: ExactRulesDto;
+  initial_player: PlayerColor;
+  to_play: PlayerColor;
+  initial_stones: StoneDto[];
+  moves: MoveDto[];
+};
+export type ComputeBudgetDto = { deadline_ms: number; max_visits: number | null };
+export type GameMoveRequestDto = {
+  run_id: string;
+  generation: number;
+  node_path: NodePath;
+  budget: ComputeBudgetDto;
+};
+export type GameMoveJobDto = {
+  run_id: string;
+  job_id: string;
+  generation: number;
+  node_path: NodePath;
+};
+export type GameMoveDto = { kind: "move"; vertex: MoveVertex } | { kind: "resign" };
+export type GameMoveResultDto = GameMoveJobDto & {
+  result: GameMoveDto;
+  engine_time_mapped: boolean;
 };
 export type ForegroundEngineLifecycleDto =
   | { state: "no_engine"; failure?: EngineFailureDto }
@@ -258,6 +315,7 @@ export type ForegroundEngineSnapshotDto = {
   continuous: ContinuousAnalysisSnapshotDto;
   selected_node_job?: AnalysisJobStartedDto | null;
   whole_game_job?: AnalysisJobStartedDto | null;
+  game_move_job?: GameMoveJobDto | null;
 };
 export type AnalysisJobLaneDto = "selected_node" | "whole_game";
 export type AnalysisJobModeDto = "finite" | "continuous";

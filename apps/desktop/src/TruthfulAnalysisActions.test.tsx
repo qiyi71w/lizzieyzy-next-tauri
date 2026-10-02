@@ -130,14 +130,12 @@ const initialProjection: GameDto = {
 
 const savedProfile = {
   id: "profile-1",
-  max_visits: 800,
   profile: {
     name: "Local KataGo",
-    engine_path: "/bin/katago",
-    model_path: "/models/model.bin",
-    config_path: "/configs/analysis.cfg",
+    program: "/bin/katago", argv: [],
+    settings: { model_path: "/models/model.bin", config_path: "/configs/analysis.cfg", max_visits: 800 },
     working_dir: "/tmp",
-    backend: "kata_go_analysis" as const
+    adapter_kind: "kata_go_analysis" as const
   }
 };
 
@@ -160,6 +158,7 @@ beforeEach(() => {
   backend.parseSgfSummary.mockResolvedValue(previewGame);
   backend.replaySgfPositions.mockResolvedValue([emptyPosition]);
   backend.loadEngineProfilesSettings.mockResolvedValue({
+    version: 1,
     selected_profile_id: "profile-1",
     autoload_profile_id: null,
     profiles: [savedProfile]
@@ -304,8 +303,7 @@ async function readyEngine(host: HTMLElement) {
     switcher.dispatchEvent(new Event("change", { bubbles: true }));
     await backend.startForegroundEngine.mock.results[0]?.value;
   });
-  await act(async () => {
-    listeners.onSnapshot?.({
+  const snapshot: ForegroundEngineSnapshotDto = {
       revision: 2,
       continuous: { enabled: true, phase: "waiting" },
       lifecycle: {
@@ -317,15 +315,25 @@ async function readyEngine(host: HTMLElement) {
           profile_snapshot: savedProfile.profile,
           capability_snapshot: {
             adapter_kind: "kata_go_analysis",
-            selected_node_analysis: true,
-            whole_game_analysis: true,
-            root_score: true,
-            protocol_cancel: true
+            analysis: {
+              selected_node_analysis: true,
+              continuous_analysis: true,
+              candidates: true,
+              pv: true,
+              winrate: true,
+              ownership: true,
+              policy: true,
+              visits_limit: true,
+              whole_game_analysis: true,
+              root_score: true,
+              protocol_cancel: true
+            }
           }
         }
       }
-    });
-  });
+  };
+  await act(async () => { listeners.onSnapshot?.(snapshot); });
+  return snapshot;
 }
 
 function buttonNamed(host: HTMLElement, label: string) {
@@ -367,6 +375,205 @@ function canvasContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
 }
 
 describe("truthful native analysis actions", () => {
+  it("refuses queries missing requested ownership before jobs or durable task changes", async () => {
+    const host = await renderApp();
+    const ready = await readyEngine(host);
+    if (ready.lifecycle.state !== "ready") throw new Error("Expected ready fixture");
+    const run = ready.lifecycle.run;
+    await act(async () => { listeners.onSnapshot?.({ ...ready, revision: 3, lifecycle: { state: "ready", run: {
+      ...run, capability_snapshot: { ...run.capability_snapshot!, analysis: { ...run.capability_snapshot!.analysis!, ownership: false } }
+    } } }); });
+    await changeNumber(inputNamed(host, "Total visits"), "500");
+    preferencesApi.saveAppPreferences.mockClear();
+    await act(async () => { buttonNamed(host, "分析当前节点").click(); });
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true })); });
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(backend.foregroundEngineContinuousAction).not.toHaveBeenCalled();
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+    expect(taskRuntime.snapshot).toBeNull();
+    expect(host.querySelector('[data-analysis-task-state="searching"]')).toBeNull();
+  });
+
+  it("rejects leading-candidate task conditions independently before saving the preset", async () => {
+    const host = await renderApp();
+    const ready = await readyEngine(host);
+    if (ready.lifecycle.state !== "ready") throw new Error("Expected ready fixture");
+    const run = ready.lifecycle.run;
+    await act(async () => { listeners.onSnapshot?.({ ...ready, revision: 3, lifecycle: { state: "ready", run: {
+      ...run, capability_snapshot: { ...run.capability_snapshot!, analysis: { ...run.capability_snapshot!.analysis!, candidates: false } }
+    } } }); });
+    await act(async () => { inputNamed(host, "Enable leading candidate visits").click(); });
+    preferencesApi.saveAppPreferences.mockClear();
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+    expect(taskRuntime.snapshot).toBeNull();
+    expect(host.querySelector('[data-analysis-task-state="searching"]')).toBeNull();
+  });
+
+  it("starts continuous without finite/task support and still permits stopping owned work after capability loss", async () => {
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, continuousAnalysisEnabled: false } });
+    const host = await renderApp();
+    const ready = await readyEngine(host);
+    if (ready.lifecycle.state !== "ready") throw new Error("Expected ready fixture");
+    const continuousOnly = { ...ready.lifecycle.run, capability_snapshot: {
+      ...ready.lifecycle.run.capability_snapshot!, analysis: {
+        ...ready.lifecycle.run.capability_snapshot!.analysis!, selected_node_analysis: false, whole_game_analysis: false
+      }
+    } };
+    const job = { run_id: continuousOnly.run_id, job_id: "continuous-job", lane: "selected_node" as const,
+      mode: "continuous" as const, state: "searching" as const, generation: 1, node_path: { indices: [] } };
+    await act(async () => { listeners.onSnapshot?.({ ...ready, revision: 3, continuous: { enabled: false, phase: "off" }, lifecycle: { state: "ready", run: continuousOnly } }); });
+    expect(buttonNamed(host, "分析当前节点").disabled).toBe(true);
+    expect(buttonNamed(host, "Preview scope").disabled).toBe(true);
+    backend.foregroundEngineContinuousAction.mockImplementationOnce(async () => {
+      listeners.onSnapshot?.({ ...ready, revision: 4, continuous: { enabled: true, phase: "searching" }, selected_node_job: job, lifecycle: { state: "ready", run: continuousOnly } });
+      return { ...defaultAppPreferences, continuousAnalysisEnabled: true };
+    });
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true })); });
+    expect(host.textContent).toContain("停止连续分析");
+    expect(backend.foregroundEngineContinuousAction).toHaveBeenCalledTimes(1);
+    await act(async () => { listeners.onSnapshot?.({ ...ready, revision: 5, continuous: { enabled: true, phase: "searching" }, selected_node_job: job,
+      lifecycle: { state: "ready", run: { ...continuousOnly, capability_snapshot: null } } }); });
+    expect(buttonNamed(host, "停止连续分析").disabled).toBe(false);
+    backend.foregroundEngineContinuousAction.mockImplementationOnce(async () => {
+      listeners.onSnapshot?.({ ...ready, revision: 6, continuous: { enabled: false, phase: "off" }, lifecycle: { state: "ready", run: { ...continuousOnly, capability_snapshot: null } } });
+      return { ...defaultAppPreferences, continuousAnalysisEnabled: false };
+    });
+    await act(async () => { buttonNamed(host, "停止连续分析").click(); });
+    expect(backend.foregroundEngineContinuousAction).toHaveBeenCalledTimes(2);
+    expect(buttonNamed(host, "开始连续分析").disabled).toBe(true);
+    expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  });
+
+  it("refuses every analysis entry on a nonanalysis run without losing SGF history or continuous intent", async () => {
+    const durable = { ...defaultAppPreferences, continuousAnalysisEnabled: true };
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: durable });
+    const history = {
+      job_id: "sgf-history", turn: 0, visits: 123, winrate_black: 0.63, score_mean_black: 2.5,
+      candidates: [{ vertex: "pass" as const, visits: 123, winrate_black: 0.63, score_mean_black: 2.5, pv: [] }]
+    };
+    const game = { ...initialGame, snapshot: { ...initialGame.snapshot, primary_analysis: history } };
+    currentGameFixture.mockResolvedValue(game);
+    const host = await renderApp();
+    const ready = await readyEngine(host);
+    if (ready.lifecycle.state !== "ready") throw new Error("Expected ready fixture");
+    const verifiedRun = ready.lifecycle.run;
+    const historyText = host.querySelector(".cand-row")?.textContent;
+    expect(host.querySelectorAll(".cand-row")).toHaveLength(1);
+    preferencesApi.saveAppPreferences.mockClear();
+    await act(async () => {
+      listeners.onSnapshot?.({ ...ready, revision: 3, lifecycle: { state: "ready", run: {
+        ...verifiedRun, run_id: "nonanalysis-run", adapter_kind: "generic_gtp",
+        capability_snapshot: { adapter_kind: "generic_gtp", analysis: null }
+      } } });
+    });
+    openAnalyzeMenu(host);
+    for (const label of ["分析当前节点", "分析第一子主线", "闪电分析", "试复盘 / 闪电分析(Ctrl+B)", "Preview scope", "Start task", "Continue task"]) {
+      expect(buttonNamed(host, label).disabled).toBe(true);
+      act(() => buttonNamed(host, label).click());
+    }
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true }));
+    });
+    expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(backend.startKataGoGameAnalysis).not.toHaveBeenCalled();
+    expect(backend.previewAnalysisScope).not.toHaveBeenCalled();
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+    expect(backend.continueAnalysisTask).not.toHaveBeenCalled();
+    expect(backend.foregroundEngineContinuousAction).not.toHaveBeenCalled();
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+    expect(durable.continuousAnalysisEnabled).toBe(true);
+    expect(game.snapshot.primary_analysis).toEqual(history);
+    expect(host.querySelector(".cand-row")?.textContent).toBe(historyText);
+    expect(host.querySelector('[aria-label="当前 run 能力"]')?.textContent).toContain("不支持分析");
+  });
+
+  it("uses task capability independently and preserves paused work when admission disappears", async () => {
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, continuousAnalysisEnabled: true } });
+    const host = await renderApp();
+    const ready = await readyEngine(host);
+    if (ready.lifecycle.state !== "ready") throw new Error("Expected ready fixture");
+    const taskOnly = { ...ready.lifecycle.run, capability_snapshot: {
+      ...ready.lifecycle.run.capability_snapshot!, analysis: {
+        ...ready.lifecycle.run.capability_snapshot!.analysis!, selected_node_analysis: false, continuous_analysis: false
+      }
+    } };
+    await act(async () => { listeners.onSnapshot?.({ ...ready, revision: 3, lifecycle: { state: "ready", run: taskOnly } }); });
+    expect(buttonNamed(host, "分析当前节点").disabled).toBe(true);
+    expect(buttonNamed(host, "Preview scope").disabled).toBe(false);
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    expect(host.querySelector('[data-analysis-task-state="searching"]')).not.toBeNull();
+    const task = taskRuntime.snapshot!;
+    const noAnalysis = { ...taskOnly, capability_snapshot: { adapter_kind: "kata_go_analysis" as const, analysis: null } };
+    await act(async () => { listeners.onSnapshot?.({ ...ready, revision: 4, lifecycle: { state: "ready", run: noAnalysis } }); });
+    expect(buttonNamed(host, "Pause task").disabled).toBe(false);
+    await act(async () => { buttonNamed(host, "Pause task").click(); });
+    taskRuntime.snapshot = { ...task, state: "paused" };
+    await act(async () => { listeners.onSnapshot?.({ ...ready, revision: 5, lifecycle: { state: "ready", run: noAnalysis } }); });
+    preferencesApi.saveAppPreferences.mockClear();
+    expect(host.querySelector('[data-analysis-task-state="paused"]')).not.toBeNull();
+    expect(buttonNamed(host, "Continue task").disabled).toBe(true);
+    await act(async () => { buttonNamed(host, "Continue task").click(); });
+    expect(backend.continueAnalysisTask).not.toHaveBeenCalled();
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+    expect(taskRuntime.snapshot).toEqual({ ...task, state: "paused" });
+    await act(async () => { listeners.onSnapshot?.({ ...ready, revision: 6, lifecycle: { state: "ready", run: taskOnly } }); });
+    await act(async () => { buttonNamed(host, "Continue task").click(); });
+    expect(host.querySelector('[data-analysis-task-state="searching"]')).not.toBeNull();
+    expect(taskRuntime.snapshot?.job_id).toBe("job-task-2");
+  });
+
+  it("retains A admission while a nonanalysis candidate is switching and after candidate failure", async () => {
+    const host = await renderApp();
+    const ready = await readyEngine(host);
+    if (ready.lifecycle.state !== "ready") throw new Error("Expected ready fixture");
+    const primary = ready.lifecycle.run;
+    const candidate = { ...primary, run_id: "candidate-B", capability_snapshot: null };
+    await act(async () => { listeners.onSnapshot?.({ ...ready, revision: 3, lifecycle: { state: "switching", primary, candidate, switch_id: "switch-B" } }); });
+    expect(buttonNamed(host, "分析当前节点").disabled).toBe(false);
+    expect(host.querySelector('[aria-label="当前 run 能力"]')?.textContent).toContain("单点 支持");
+    await act(async () => { buttonNamed(host, "分析当前节点").click(); });
+    expect(buttonNamed(host, "取消此手").disabled).toBe(false);
+    expect(backend.startSelectedNodeAnalysis.mock.calls.at(-1)?.[0].runId).toBe(primary.run_id);
+    await act(async () => { listeners.onSnapshot?.({ ...ready, revision: 4 }); });
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    expect(host.querySelector('[data-analysis-task-state="searching"]')).not.toBeNull();
+    expect(taskRuntime.snapshot?.run_id).toBe(primary.run_id);
+  });
+
+  it("rechecks task admission after preview before submitting quick analysis", async () => {
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: defaultAppPreferences });
+    const host = await renderApp();
+    const ready = await readyEngine(host);
+    if (ready.lifecycle.state !== "ready") throw new Error("Expected ready fixture");
+    const run = ready.lifecycle.run;
+    const preview = backend.previewAnalysisScope.getMockImplementation()!;
+    let release!: () => void;
+    backend.previewAnalysisScope.mockImplementationOnce(async (input) => {
+      await new Promise<void>((resolve) => { release = resolve; });
+      return preview(input);
+    });
+    await act(async () => { buttonNamed(host, "闪电分析").click(); });
+    await act(async () => {
+      listeners.onSnapshot?.({ ...ready, revision: 3, lifecycle: { state: "ready", run: { ...run, capability_snapshot: null } } });
+      release();
+    });
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+    expect(taskRuntime.snapshot).toBeNull();
+    expect(buttonNamed(host, "Start task").disabled).toBe(true);
+  });
+
   it("keeps unimplemented analysis names visible-disabled and does not call fakeAnalyze", async () => {
     const host = await renderApp();
     expect(buttonNamed(host, "分析当前节点").disabled).toBe(true);
@@ -847,7 +1054,11 @@ describe("truthful native analysis actions", () => {
             run_id: "run-1",
             profile_id: "profile-1",
             adapter_kind: "kata_go_analysis",
-            profile_snapshot: savedProfile.profile
+            profile_snapshot: savedProfile.profile,
+            capability_snapshot: {
+              adapter_kind: "kata_go_analysis",
+              analysis: { selected_node_analysis: true, continuous_analysis: true, whole_game_analysis: true, candidates: true, pv: true, winrate: true, root_score: true, ownership: true, policy: true, visits_limit: true, protocol_cancel: true }
+            }
           }
         }
       });

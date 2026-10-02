@@ -1,6 +1,6 @@
 use app_model::{
-    EngineBackend, EngineFailureDto, EngineFailureKind, EngineOperationDto, EngineProfileDto,
-    ForegroundEngineEventDto, ForegroundEngineLifecycleDto,
+    EngineAdapterSettings, EngineBackend, EngineFailureDto, EngineFailureKind, EngineOperationDto,
+    EngineProfileDto, ForegroundEngineEventDto, ForegroundEngineLifecycleDto, KataGoSettings,
 };
 use engine_manager::{
     EngineProfileCatalog, ForegroundEngineConfig, ForegroundEngineManager, InMemoryEngineProfileCatalog,
@@ -171,17 +171,22 @@ fn real_profile(name: &str) -> EngineProfileDto {
     }
     EngineProfileDto {
         name: name.into(),
-        engine_path: engine,
-        model_path: Some(model),
-        config_path: Some(config),
+        program: engine,
+        argv: vec![],
         working_dir: Some(working_dir),
-        backend: EngineBackend::KataGoAnalysis,
+        adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+            model_path: Some(model),
+            config_path: Some(config),
+            max_visits: 800,
+        }),
     }
 }
 
 fn missing_model_profile(name: &str) -> EngineProfileDto {
     let mut profile = real_profile(name);
-    profile.model_path = Some(r"D:\dev\weiqi\tmp\r3-ticket-09-missing-model.bin.gz".into());
+    if let EngineAdapterSettings::KataGoAnalysis(settings) = &mut profile.adapter {
+        settings.model_path = Some(r"D:\dev\weiqi\tmp\r3-ticket-09-missing-model.bin.gz".into());
+    }
     profile
 }
 

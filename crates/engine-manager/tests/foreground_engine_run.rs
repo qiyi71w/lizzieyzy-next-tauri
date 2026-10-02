@@ -1,9 +1,10 @@
 use app_model::{
     admits_analysis_publication, AnalysisJobEventDto, AnalysisJobOutcomeDto, AnalysisPositionIntervalDto,
     AnalysisPublicationScopeDto, AnalysisScopeDto, AnalysisScopeModeDto, AnalysisStageConditionsDto,
-    AnalysisTaskLimitDto, AnalysisTaskStageDto, AnalysisTaskStateDto, AnalysisTaskStrategyDto, EngineBackend,
-    EngineCapabilitySnapshotDto, EngineFailureKind, EngineOperationDto, EngineProfileDto,
-    ForegroundEngineEventDto, ForegroundEngineLifecycleDto, MoveVertex, NodePath, PointDto,
+    AnalysisTaskLimitDto, AnalysisTaskStageDto, AnalysisTaskStateDto, AnalysisTaskStrategyDto,
+    EngineAdapterSettings, EngineAnalysisCapabilitiesDto, EngineBackend, EngineCapabilitySnapshotDto,
+    EngineFailureKind, EngineOperationDto, EngineProfileDto, ForegroundEngineEventDto,
+    ForegroundEngineLifecycleDto, GenericGtpSettings, KataGoSettings, MoveVertex, NodePath, PointDto,
 };
 use engine_manager::{
     AnalysisCancelToken, AnalysisJobCancel, AnalysisJobLane, EngineProfileCatalog, ForegroundEngineConfig,
@@ -450,11 +451,14 @@ fn setup_profile(temp: &TestTempDir, script: &str) -> EngineProfileDto {
     std::fs::write(&config_path, "").unwrap();
     EngineProfileDto {
         name: "Fixture KataGo".into(),
-        engine_path: engine_path.to_string_lossy().into_owned(),
-        model_path: Some(model_path.to_string_lossy().into_owned()),
-        config_path: Some(config_path.to_string_lossy().into_owned()),
+        program: engine_path.to_string_lossy().into_owned(),
+        argv: vec![],
         working_dir: Some(temp.path().to_string_lossy().into_owned()),
-        backend: EngineBackend::KataGoAnalysis,
+        adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+            model_path: Some(model_path.to_string_lossy().into_owned()),
+            config_path: Some(config_path.to_string_lossy().into_owned()),
+            max_visits: 800,
+        }),
     }
 }
 
@@ -519,11 +523,14 @@ fn start_failure_without_assets_stays_no_engine_with_typed_failure() {
         profile_id: "missing".into(),
         profile: EngineProfileDto {
             name: "Missing".into(),
-            engine_path: "/definitely/missing/katago".into(),
-            model_path: Some("/definitely/missing/model.bin".into()),
-            config_path: Some("/definitely/missing/analysis.cfg".into()),
+            program: "/definitely/missing/katago".into(),
+            argv: vec![],
             working_dir: None,
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: Some("/definitely/missing/model.bin".into()),
+                config_path: Some("/definitely/missing/analysis.cfg".into()),
+                max_visits: 800,
+            }),
         },
     });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
@@ -1174,19 +1181,424 @@ fn selected_node_unsupported_capability_does_not_write_protocol() {
     script.push_str(&resident_echo_script());
     let (manager, _, _, run_id) = ready_manager(&temp, &script);
     let before = std::fs::read_to_string(&log).unwrap_or_default();
-    manager.set_capability_snapshot_for_tests(EngineCapabilitySnapshotDto {
+    manager.set_capability_snapshot_for_tests(Some(EngineCapabilitySnapshotDto {
         adapter_kind: EngineBackend::KataGoAnalysis,
-        selected_node_analysis: false,
-        whole_game_analysis: true,
-        root_score: true,
-        protocol_cancel: true,
-    });
+        game_move: true,
+        gtp: None,
+        analysis: Some(EngineAnalysisCapabilitiesDto {
+            selected_node_analysis: false,
+            continuous_analysis: true,
+            candidates: true,
+            pv: true,
+            winrate: true,
+            ownership: true,
+            policy: true,
+            visits_limit: true,
+            whole_game_analysis: true,
+            root_score: true,
+            protocol_cancel: true,
+        }),
+    }));
     let error = manager
         .start_selected_node_job(selected_request(&run_id, 1, vec![]))
         .unwrap_err();
     assert_eq!(error.kind, EngineFailureKind::UnsupportedCapability);
     let after = std::fs::read_to_string(&log).unwrap_or_default();
     assert_eq!(before, after);
+}
+
+#[cfg(unix)]
+#[test]
+fn admission_missing_analysis_preserves_active_lanes_and_protocol() {
+    for missing in [
+        None,
+        Some(EngineCapabilitySnapshotDto {
+            adapter_kind: EngineBackend::GenericGtp,
+            game_move: false,
+            gtp: None,
+            analysis: None,
+        }),
+    ] {
+        let temp = TestTempDir::new("admission-missing-analysis");
+        let (manager, _, run_id, log) = hold_both_lanes_manager(&temp);
+        let (selected, whole) = start_both_lanes(&manager, &run_id, 42);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let before_log = loop {
+            let logged = std::fs::read_to_string(&log).unwrap();
+            if count_job_queries(&logged, &selected.job_id) == 1
+                && count_job_queries(&logged, &whole.job_id) == 1
+            {
+                break logged;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "both admitted jobs must reach the engine"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        manager.set_capability_snapshot_for_tests(missing);
+        let before = manager.snapshot();
+        let task_before = manager.analysis_task_snapshot();
+        for request in [
+            selected_request(&run_id, 42, vec![1]),
+            continuous_request(&run_id, 42, vec![1]),
+        ] {
+            assert_eq!(
+                manager.start_selected_node_job(request).unwrap_err().kind,
+                EngineFailureKind::UnsupportedCapability
+            );
+        }
+        for lane in [AnalysisJobLane::SelectedNode, AnalysisJobLane::WholeGame] {
+            assert_eq!(
+                manager
+                    .register_job(&run_id, lane, Arc::new(AnalysisCancelToken::new()))
+                    .unwrap_err()
+                    .kind,
+                EngineFailureKind::UnsupportedCapability
+            );
+        }
+        assert_eq!(
+            manager
+                .start_analysis_task(
+                    whole_game_request(&run_id, 42, 1),
+                    analysis_scope(),
+                    task_conditions(32)
+                )
+                .unwrap_err()
+                .kind,
+            EngineFailureKind::UnsupportedCapability
+        );
+        assert_eq!(
+            manager.check_analysis_task_admission(None).unwrap_err().kind,
+            EngineFailureKind::UnsupportedCapability
+        );
+        assert_eq!(manager.snapshot(), before);
+        assert_eq!(manager.analysis_task_snapshot(), task_before);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), before_log);
+        manager.teardown().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn admission_continue_rechecks_capabilities_without_replacing_paused_task() {
+    let temp = TestTempDir::new("admission-paused-task");
+    std::fs::write(temp.path().join("cancel-final"), "").unwrap();
+    let (manager, _, events, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
+    let verified = lifecycle_run(&manager.snapshot().lifecycle)
+        .unwrap()
+        .capability_snapshot
+        .clone();
+    let task = manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 42, 2),
+            analysis_scope(),
+            task_conditions(32),
+        )
+        .unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::Progress
+    });
+    manager.pause_analysis_task(&run_id, &task.task_id).unwrap();
+    let paused = wait_task(&manager, AnalysisTaskStateDto::Paused);
+    let before_log = std::fs::read_to_string(temp.path().join("queries.jsonl")).unwrap();
+    let mut whole_disabled = verified.clone().unwrap();
+    whole_disabled.analysis.as_mut().unwrap().whole_game_analysis = false;
+    for missing in [
+        None,
+        Some(EngineCapabilitySnapshotDto {
+            adapter_kind: EngineBackend::GenericGtp,
+            game_move: false,
+            analysis: None,
+            gtp: None,
+        }),
+        Some(whole_disabled),
+    ] {
+        manager.set_capability_snapshot_for_tests(missing);
+        let before = manager.snapshot();
+        assert_eq!(
+            manager
+                .continue_analysis_task(&run_id, &task.task_id, 42)
+                .unwrap_err()
+                .kind,
+            EngineFailureKind::UnsupportedCapability
+        );
+        assert_eq!(manager.snapshot(), before);
+        assert_eq!(manager.analysis_task_snapshot().unwrap(), paused);
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("queries.jsonl")).unwrap(),
+            before_log
+        );
+    }
+    manager.set_capability_snapshot_for_tests(verified);
+    let continued = manager
+        .continue_analysis_task(&run_id, &task.task_id, 42)
+        .unwrap();
+    assert_eq!(continued.task_id, paused.task_id);
+    assert_ne!(continued.job_id, paused.job_id);
+    assert_eq!(continued.completed, paused.completed);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn admission_finite_continuous_and_whole_game_are_independent() {
+    for admitted in ["finite", "continuous", "whole"] {
+        let temp = TestTempDir::new("admission-independent");
+        let (manager, events, run_id, log) = hold_both_lanes_manager(&temp);
+        let mut verified = lifecycle_run(&manager.snapshot().lifecycle)
+            .unwrap()
+            .capability_snapshot
+            .clone()
+            .unwrap();
+        let analysis = verified.analysis.as_mut().unwrap();
+        analysis.selected_node_analysis = admitted == "finite";
+        analysis.continuous_analysis = admitted == "continuous";
+        analysis.whole_game_analysis = admitted == "whole";
+        manager.set_capability_snapshot_for_tests(Some(verified));
+        manager
+            .set_continuous_preferences(false, app_model::ContinuousAnalysisBudgetDto::default())
+            .unwrap();
+        for requested in ["finite", "continuous", "whole"] {
+            if requested == admitted {
+                continue;
+            }
+            let before = manager.snapshot();
+            let error = match requested {
+                "finite" => manager
+                    .start_selected_node_job(selected_request(&run_id, 42, vec![0]))
+                    .unwrap_err(),
+                "continuous" => manager
+                    .start_selected_node_job(continuous_request(&run_id, 42, vec![0]))
+                    .unwrap_err(),
+                _ => manager
+                    .start_whole_game_analysis(whole_game_request(&run_id, 42, 1))
+                    .unwrap_err(),
+            };
+            assert_eq!(
+                error.kind,
+                EngineFailureKind::UnsupportedCapability,
+                "{admitted}/{requested}"
+            );
+            assert_eq!(manager.snapshot(), before);
+        }
+        let job = match admitted {
+            "finite" => manager
+                .start_selected_node_job(selected_request(&run_id, 42, vec![0]))
+                .unwrap(),
+            "continuous" => manager
+                .start_selected_node_job(continuous_request(&run_id, 42, vec![0]))
+                .unwrap(),
+            _ => manager
+                .start_whole_game_analysis(whole_game_request(&run_id, 42, 1))
+                .unwrap(),
+        };
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let logged = std::fs::read_to_string(&log).unwrap();
+            if count_job_queries(&logged, &job.job_id) == 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{admitted} query must reach the engine"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        manager.cancel_job(&run_id, &job.job_id).unwrap();
+        wait_job(&events, Duration::from_secs(2), |event| {
+            event.job_id == job.job_id && event.outcome == AnalysisJobOutcomeDto::Cancelled
+        });
+        manager.teardown().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn admission_query_features_reject_before_selected_takeover_or_task_creation() {
+    for feature in ["ownership", "policy", "visits"] {
+        let temp = TestTempDir::new("admission-query-features");
+        let (manager, _, run_id, log) = hold_both_lanes_manager(&temp);
+        let active = manager
+            .start_selected_node_job(selected_request(&run_id, 42, vec![0]))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let before_log = loop {
+            let logged = std::fs::read_to_string(&log).unwrap();
+            if count_job_queries(&logged, &active.job_id) == 1 {
+                break logged;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let mut verified = lifecycle_run(&manager.snapshot().lifecycle)
+            .unwrap()
+            .capability_snapshot
+            .clone()
+            .unwrap();
+        let caps = verified.analysis.as_mut().unwrap();
+        match feature {
+            "ownership" => caps.ownership = false,
+            "policy" => caps.policy = false,
+            _ => caps.visits_limit = false,
+        }
+        manager.set_capability_snapshot_for_tests(Some(verified));
+        let mut request = selected_request(&run_id, 42, vec![1]);
+        request.query.include_ownership = Some(feature == "ownership");
+        request.query.include_policy = Some(feature == "policy");
+        let mut whole = whole_game_request(&run_id, 42, 1);
+        whole.work_items[0].query = request.query.clone();
+        let before = manager.snapshot();
+        assert_eq!(
+            manager.start_selected_node_job(request).unwrap_err().kind,
+            EngineFailureKind::UnsupportedCapability
+        );
+        assert_eq!(
+            manager
+                .start_analysis_task(whole, analysis_scope(), task_conditions(32))
+                .unwrap_err()
+                .kind,
+            EngineFailureKind::UnsupportedCapability
+        );
+        assert_eq!(manager.snapshot(), before);
+        assert!(manager.analysis_task_snapshot().is_none());
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), before_log);
+        manager.teardown().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn admission_continuous_unavailable_preserves_intent_and_safety_hold() {
+    let temp = TestTempDir::new("admission-continuous-hold");
+    let (manager, _, run_id, log) = hold_both_lanes_manager(&temp);
+    let mut verified = lifecycle_run(&manager.snapshot().lifecycle)
+        .unwrap()
+        .capability_snapshot
+        .clone()
+        .unwrap();
+    verified.analysis.as_mut().unwrap().selected_node_analysis = false;
+    let mut unavailable = verified.clone();
+    unavailable.analysis.as_mut().unwrap().continuous_analysis = false;
+    manager.set_capability_snapshot_for_tests(Some(unavailable));
+    let budget = app_model::ContinuousAnalysisBudgetDto::default();
+    manager.set_continuous_preferences(true, budget).unwrap();
+    let mut target = continuous_request(&run_id, 42, vec![0]);
+    target.position_empty = false;
+    manager.follow_continuous_position(target.clone());
+    let unavailable = manager.snapshot();
+    assert_eq!(unavailable.continuous.enabled, Some(true));
+    assert_eq!(
+        unavailable.continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::Unavailable
+    );
+    let before_log = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(
+        manager.continuous_primary_action().unwrap_err().kind,
+        EngineFailureKind::UnsupportedCapability
+    );
+    assert_eq!(
+        manager.resume_continuous().unwrap_err().kind,
+        EngineFailureKind::UnsupportedCapability
+    );
+    manager.authorize_continuous_start();
+    assert_eq!(manager.snapshot(), unavailable);
+    manager.begin_continuous_departure();
+    manager.finish_continuous_departure(false);
+    let held = manager.snapshot();
+    assert_eq!(
+        held.continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::SafetyHold
+    );
+    assert_eq!(
+        manager.resume_continuous().unwrap_err().kind,
+        EngineFailureKind::UnsupportedCapability
+    );
+    manager.authorize_continuous_start();
+    manager.follow_continuous_position(target);
+    assert_eq!(manager.snapshot(), held);
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), before_log);
+    manager.set_capability_snapshot_for_tests(Some(verified));
+    manager.set_continuous_preferences(true, budget).unwrap();
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::SafetyHold
+    );
+    assert!(manager.snapshot().selected_node_job.is_none());
+    manager.resume_continuous().unwrap();
+    let admitted = manager.snapshot().selected_node_job.unwrap();
+    assert_eq!(admitted.mode, app_model::AnalysisJobModeDto::Continuous);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if count_job_queries(&std::fs::read_to_string(&log).unwrap(), &admitted.job_id) == 1 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "continuous resume must submit with finite disabled"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn admission_swing_preview_and_start_require_requested_metrics() {
+    for metric in ["score", "winrate"] {
+        let temp = TestTempDir::new("admission-swing-metrics");
+        let (manager, _, run_id, log) = hold_both_lanes_manager(&temp);
+        let mut verified = lifecycle_run(&manager.snapshot().lifecycle)
+            .unwrap()
+            .capability_snapshot
+            .clone()
+            .unwrap();
+        verified.analysis.as_mut().unwrap().root_score = metric != "score";
+        verified.analysis.as_mut().unwrap().winrate = metric != "winrate";
+        manager.set_capability_snapshot_for_tests(Some(verified));
+        let criteria = app_model::AnalysisSwingCriteriaDto {
+            move_actors: app_model::AnalysisMoveActorFilterDto::Both,
+            score_change_points: app_model::AnalysisSwingThresholdDto {
+                enabled: metric == "score",
+                value: 3.0,
+            },
+            winrate_change_percentage_points: app_model::AnalysisSwingThresholdDto {
+                enabled: metric == "winrate",
+                value: 10.0,
+            },
+        };
+        let before = manager.snapshot();
+        let before_log = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            manager
+                .check_analysis_task_admission(Some(&criteria))
+                .unwrap_err()
+                .kind,
+            EngineFailureKind::UnsupportedCapability
+        );
+        let job = whole_game_request(&run_id, 42, 2);
+        let requested = job.work_items.iter().map(|item| item.node_path.clone()).collect();
+        let error = manager
+            .start_swing_analysis_task(engine_manager::SwingAnalysisTaskRequest {
+                job,
+                scope: analysis_scope(),
+                requested,
+                supporting: Vec::new(),
+                swing_comparisons: Vec::new(),
+                swing_criteria: criteria,
+                overview_conditions: task_conditions(8),
+                deep_conditions: task_conditions(32),
+            })
+            .unwrap_err();
+        assert_eq!(error.kind, EngineFailureKind::UnsupportedCapability);
+        assert_eq!(manager.snapshot(), before);
+        assert!(manager.analysis_task_snapshot().is_none());
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), before_log);
+        manager.check_analysis_task_admission(None).unwrap();
+        manager.teardown().unwrap();
+    }
 }
 
 #[cfg(unix)]
@@ -2203,7 +2615,7 @@ fn analysis_task_paused_progress_obeys_semantic_run_and_departure_fences() {
         catalog.upsert(SavedEngineProfile {
             profile_id: "broken".into(),
             profile: EngineProfileDto {
-                engine_path: "/missing/task-engine".into(),
+                program: "/missing/task-engine".into(),
                 ..catalog.get("profile-1").unwrap().profile
             },
         });
@@ -2955,6 +3367,9 @@ fn unsupported_whole_game_capability_is_rejected_before_protocol_io() {
             .capability_snapshot
             .as_ref()
             .unwrap()
+            .analysis
+            .as_ref()
+            .unwrap()
             .whole_game_analysis
     );
     let logged_before = std::fs::read_to_string(&log).unwrap();
@@ -3446,11 +3861,14 @@ fn mismatched_job_identity_does_not_complete_the_other_lane() {
 fn missing_assets_profile(name: &str, temp: &TestTempDir) -> EngineProfileDto {
     EngineProfileDto {
         name: name.into(),
-        engine_path: format!("/definitely/missing/{name}-katago"),
-        model_path: Some(format!("/definitely/missing/{name}-model.bin")),
-        config_path: Some(format!("/definitely/missing/{name}.cfg")),
+        program: format!("/definitely/missing/{name}-katago"),
+        argv: vec![],
         working_dir: Some(temp.path().to_string_lossy().into_owned()),
-        backend: EngineBackend::KataGoAnalysis,
+        adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+            model_path: Some(format!("/definitely/missing/{name}-model.bin")),
+            config_path: Some(format!("/definitely/missing/{name}.cfg")),
+            max_visits: 800,
+        }),
     }
 }
 
@@ -3464,11 +3882,14 @@ fn spawn_fail_profile(temp: &TestTempDir, stem: &str) -> EngineProfileDto {
     std::fs::write(&config_path, "").unwrap();
     EngineProfileDto {
         name: stem.into(),
-        engine_path: not_binary.to_string_lossy().into_owned(),
-        model_path: Some(model_path.to_string_lossy().into_owned()),
-        config_path: Some(config_path.to_string_lossy().into_owned()),
+        program: not_binary.to_string_lossy().into_owned(),
+        argv: vec![],
         working_dir: Some(temp.path().to_string_lossy().into_owned()),
-        backend: EngineBackend::KataGoAnalysis,
+        adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+            model_path: Some(model_path.to_string_lossy().into_owned()),
+            config_path: Some(config_path.to_string_lossy().into_owned()),
+            max_visits: 800,
+        }),
     }
 }
 
@@ -3522,11 +3943,14 @@ fn setup_named_profile(temp: &TestTempDir, stem: &str, script: &str) -> EnginePr
     std::fs::write(&config_path, "").unwrap();
     EngineProfileDto {
         name: stem.into(),
-        engine_path: engine_path.to_string_lossy().into_owned(),
-        model_path: Some(model_path.to_string_lossy().into_owned()),
-        config_path: Some(config_path.to_string_lossy().into_owned()),
+        program: engine_path.to_string_lossy().into_owned(),
+        argv: vec![],
         working_dir: Some(temp.path().to_string_lossy().into_owned()),
-        backend: EngineBackend::KataGoAnalysis,
+        adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+            model_path: Some(model_path.to_string_lossy().into_owned()),
+            config_path: Some(config_path.to_string_lossy().into_owned()),
+            max_visits: 800,
+        }),
     }
 }
 
@@ -3612,11 +4036,14 @@ fn apply_autoload_without_mark_stays_no_engine() {
         profile_id: "profile-1".into(),
         profile: EngineProfileDto {
             name: "Unused".into(),
-            engine_path: "/bin/unused".into(),
-            model_path: None,
-            config_path: None,
+            program: "/bin/unused".into(),
+            argv: vec![],
             working_dir: None,
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: None,
+                config_path: None,
+                max_visits: 800,
+            }),
         },
     });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
@@ -3665,11 +4092,14 @@ fn autoload_asset_failure_stays_no_engine_without_falling_back() {
         profile_id: "bad".into(),
         profile: EngineProfileDto {
             name: "Broken".into(),
-            engine_path: "/definitely/missing/katago".into(),
-            model_path: Some("/definitely/missing/model.bin".into()),
-            config_path: Some("/definitely/missing/analysis.cfg".into()),
+            program: "/definitely/missing/katago".into(),
+            argv: vec![],
             working_dir: None,
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: Some("/definitely/missing/model.bin".into()),
+                config_path: Some("/definitely/missing/analysis.cfg".into()),
+                max_visits: 800,
+            }),
         },
     });
     catalog.set_autoload_profile_id(Some("bad".into()));
@@ -3710,11 +4140,14 @@ fn successful_start_after_autoload_miss_then_stop_does_not_revive_failure() {
         profile_id: "bad".into(),
         profile: EngineProfileDto {
             name: "Broken".into(),
-            engine_path: "/definitely/missing/katago".into(),
-            model_path: Some("/definitely/missing/model.bin".into()),
-            config_path: Some("/definitely/missing/analysis.cfg".into()),
+            program: "/definitely/missing/katago".into(),
+            argv: vec![],
             working_dir: None,
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: Some("/definitely/missing/model.bin".into()),
+                config_path: Some("/definitely/missing/analysis.cfg".into()),
+                max_visits: 800,
+            }),
         },
     });
     catalog.set_autoload_profile_id(Some("bad".into()));
@@ -3744,22 +4177,28 @@ fn later_start_miss_replaces_autoload_snapshot_failure() {
         profile_id: "bad-autoload".into(),
         profile: EngineProfileDto {
             name: "Broken Autoload".into(),
-            engine_path: "/definitely/missing/katago".into(),
-            model_path: Some("/definitely/missing/model.bin".into()),
-            config_path: Some("/definitely/missing/analysis.cfg".into()),
+            program: "/definitely/missing/katago".into(),
+            argv: vec![],
             working_dir: None,
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: Some("/definitely/missing/model.bin".into()),
+                config_path: Some("/definitely/missing/analysis.cfg".into()),
+                max_visits: 800,
+            }),
         },
     });
     catalog.upsert(SavedEngineProfile {
         profile_id: "bad-start".into(),
         profile: EngineProfileDto {
             name: "Broken Start".into(),
-            engine_path: "/definitely/missing/katago-2".into(),
-            model_path: Some("/definitely/missing/model-2.bin".into()),
-            config_path: Some("/definitely/missing/analysis-2.cfg".into()),
+            program: "/definitely/missing/katago-2".into(),
+            argv: vec![],
             working_dir: None,
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: Some("/definitely/missing/model-2.bin".into()),
+                config_path: Some("/definitely/missing/analysis-2.cfg".into()),
+                max_visits: 800,
+            }),
         },
     });
     catalog.set_autoload_profile_id(Some("bad-autoload".into()));
@@ -3775,33 +4214,6 @@ fn later_start_miss_replaces_autoload_snapshot_failure() {
     let failure = no_engine_failure(&snapshot.lifecycle).unwrap();
     assert_eq!(failure.kind, EngineFailureKind::Asset);
     assert_eq!(failure.profile_id.as_deref(), Some("bad-start"));
-}
-
-#[test]
-fn start_unsupported_from_no_engine_publishes_snapshot_failure() {
-    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-    catalog.upsert(SavedEngineProfile {
-        profile_id: "gtp".into(),
-        profile: EngineProfileDto {
-            name: "GTP".into(),
-            engine_path: "/bin/gtp".into(),
-            model_path: None,
-            config_path: None,
-            working_dir: None,
-            backend: EngineBackend::KataGoGtp,
-        },
-    });
-    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
-    let failure = manager.start("gtp").unwrap_err();
-    assert_eq!(failure.kind, EngineFailureKind::UnsupportedCapability);
-    assert_eq!(failure.operation, EngineOperationDto::Start);
-    let snapshot = manager.snapshot();
-    let published =
-        no_engine_failure(&snapshot.lifecycle).expect("sync start miss must publish snapshot failure");
-    assert_eq!(published.kind, EngineFailureKind::UnsupportedCapability);
-    assert_eq!(published.operation, EngineOperationDto::Start);
-    assert_eq!(published.profile_id.as_deref(), Some("gtp"));
-    assert_eq!(published.message, failure.message);
 }
 
 #[cfg(unix)]
@@ -3837,7 +4249,15 @@ fn switch_keeps_primary_a_until_ready_b_promotes() {
     assert!(candidate.capability_snapshot.is_none());
     assert!(!switch_id.is_empty());
     manager.assert_profile_deletable("profile-a").unwrap_err();
-    manager.assert_profile_deletable("profile-b").unwrap();
+    let before_delete = manager.snapshot();
+    let candidate_delete = manager.assert_profile_deletable("profile-b").unwrap_err();
+    assert_eq!(candidate_delete.kind, EngineFailureKind::ProfileInUse);
+    assert_eq!(
+        candidate_delete.run_id.as_deref(),
+        Some(candidate.run_id.as_str())
+    );
+    assert_eq!(manager.snapshot(), before_delete);
+    manager.assert_profile_deletable("unrelated-profile").unwrap();
 
     let rejected_b = manager
         .start_selected_node_job(selected_request(&candidate.run_id, 9, vec![]))
@@ -4006,11 +4426,14 @@ fn switch_asset_failure_keeps_ready_a_and_publishes_switch_scoped_failure() {
         profile_id: "profile-b".into(),
         profile: EngineProfileDto {
             name: "Broken B".into(),
-            engine_path: "/definitely/missing/katago-b".into(),
-            model_path: Some("/definitely/missing/model-b.bin".into()),
-            config_path: Some("/definitely/missing/b.cfg".into()),
+            program: "/definitely/missing/katago-b".into(),
+            argv: vec![],
             working_dir: Some(temp.path().to_string_lossy().into_owned()),
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: Some("/definitely/missing/model-b.bin".into()),
+                config_path: Some("/definitely/missing/b.cfg".into()),
+                max_visits: 800,
+            }),
         },
     });
     let before = manager.snapshot();
@@ -4423,39 +4846,13 @@ impl AnalysisJobCancel for FileCancel {
 
 #[cfg(unix)]
 #[test]
-fn unsupported_backend_stays_no_engine_with_typed_failure() {
-    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-    catalog.upsert(SavedEngineProfile {
-        profile_id: "gtp".into(),
-        profile: EngineProfileDto {
-            name: "GTP".into(),
-            engine_path: "/bin/katago".into(),
-            model_path: None,
-            config_path: None,
-            working_dir: None,
-            backend: EngineBackend::KataGoGtp,
-        },
-    });
-    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
-    let failure = manager.start("gtp").unwrap_err();
-    assert_eq!(failure.kind, EngineFailureKind::UnsupportedCapability);
-    assert_eq!(failure.operation, EngineOperationDto::Start);
-    assert_eq!(failure.profile_id.as_deref(), Some("gtp"));
-    assert!(matches!(
-        manager.snapshot().lifecycle,
-        ForegroundEngineLifecycleDto::NoEngine { .. }
-    ));
-}
-
-#[cfg(unix)]
-#[test]
 fn spawn_failure_stays_no_engine_with_start_kind() {
     let temp = TestTempDir::new("spawn-start");
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     let mut profile = setup_profile(&temp, &resident_echo_script());
     let not_binary = temp.path().join("not-a-binary");
     std::fs::create_dir_all(&not_binary).unwrap();
-    profile.engine_path = not_binary.to_string_lossy().into_owned();
+    profile.program = not_binary.to_string_lossy().into_owned();
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-1".into(),
         profile,
@@ -4628,9 +5025,11 @@ exit 9
         profile: setup_profile(&temp, &resident_echo_script()),
     });
     let mut broken = catalog.get("profile-1").unwrap();
-    broken.profile.engine_path = "/definitely/missing/katago".into();
-    broken.profile.model_path = Some("/definitely/missing/model.bin".into());
-    broken.profile.config_path = Some("/definitely/missing/analysis.cfg".into());
+    broken.profile.program = "/definitely/missing/katago".into();
+    if let EngineAdapterSettings::KataGoAnalysis(settings) = &mut broken.profile.adapter {
+        settings.model_path = Some("/definitely/missing/model.bin".into());
+        settings.config_path = Some("/definitely/missing/analysis.cfg".into());
+    }
     catalog.upsert(broken);
     manager.restart().unwrap();
     wait_snapshot(&events, Duration::from_secs(4), |lifecycle| {
@@ -5822,4 +6221,360 @@ fn continuous_budget_updates_leave_finite_and_whole_game_requests_unchanged() {
     assert_eq!(continuous.frame.unwrap().visits, 24);
     assert_ne!(continuous.job_id, finite.job_id);
     manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn actual_child_receives_exact_argv_paths_spaces_chinese_and_empty_argument() {
+    let temp = TestTempDir::new("argv-exact");
+    let cwd = temp.path().join("工作 目录");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let log = cwd.join("argv.log");
+    let executable = cwd.join("引擎 executable.sh");
+    let model = cwd.join("模型 data.bin");
+    let config = cwd.join("配置 analysis.cfg");
+    std::fs::write(&model, "").unwrap();
+    std::fs::write(&config, "").unwrap();
+    write_executable(
+        &executable,
+        &format!(
+            "printf '<%s>\\n' \"$@\" > '{}'\npwd > cwd.log\n{}",
+            log.display(),
+            resident_echo_script()
+        ),
+    );
+    let profile = EngineProfileDto {
+        name: "exact argv".into(),
+        program: executable.to_string_lossy().into_owned(),
+        argv: vec![
+            "--custom".into(),
+            "space value 中文".into(),
+            "".into(),
+            "  padded  ".into(),
+        ],
+        working_dir: Some(cwd.to_string_lossy().into_owned()),
+        adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+            model_path: Some("模型 data.bin".into()),
+            config_path: Some("配置 analysis.cfg".into()),
+            max_visits: 123,
+        }),
+    };
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "argv".into(),
+        profile: profile.clone(),
+    });
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    let events = manager.subscribe();
+    manager.start("argv").unwrap();
+    let ready = wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
+        matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    assert_eq!(run_from_ready(&ready.lifecycle).profile_snapshot, profile);
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        format!(
+            "<analysis>\n<-config>\n<{}>\n<-model>\n<{}>\n<--custom>\n<space value 中文>\n<>\n<  padded  >\n",
+            config.display(),
+            model.display()
+        )
+    );
+    assert_eq!(
+        std::fs::read_to_string(cwd.join("cwd.log")).unwrap(),
+        format!("{}\n", cwd.display())
+    );
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn saving_every_profile_field_and_autoload_keeps_live_run_immutable_until_restart() {
+    let temp = TestTempDir::new("immutable-profile");
+    let (manager, catalog, events, old_id) = ready_manager(&temp, &resident_echo_script());
+    let before = manager.snapshot();
+    let before_run = run_from_ready(&before.lifecycle).clone();
+    let mut edited = setup_named_profile(&temp, "new 引擎", &resident_echo_script());
+    edited.name = "edited name".into();
+    edited.argv = vec!["--custom=value".into(), "".into()];
+    let cwd = temp.path().join("new cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    edited.working_dir = Some(cwd.to_string_lossy().into_owned());
+    if let EngineAdapterSettings::KataGoAnalysis(settings) = &mut edited.adapter {
+        settings.max_visits = 321;
+    }
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-1".into(),
+        profile: edited.clone(),
+    });
+    catalog.set_autoload_profile_id(Some("profile-1".into()));
+    assert_eq!(manager.snapshot(), before);
+    assert_eq!(
+        run_from_ready(&manager.snapshot().lifecycle).profile_snapshot,
+        before_run.profile_snapshot
+    );
+    assert_eq!(
+        run_from_ready(&manager.snapshot().lifecycle).capability_snapshot,
+        before_run.capability_snapshot
+    );
+    let mut generic = edited.clone();
+    generic.adapter = EngineAdapterSettings::GenericGtp(GenericGtpSettings {});
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-1".into(),
+        profile: generic,
+    });
+    assert_eq!(manager.snapshot(), before);
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "profile-1".into(),
+        profile: edited.clone(),
+    });
+    manager.restart().unwrap();
+    let after = wait_snapshot(
+        &events,
+        Duration::from_secs(4),
+        |lifecycle| matches!(lifecycle, ForegroundEngineLifecycleDto::Ready { run } if run.run_id != old_id),
+    );
+    assert_eq!(run_from_ready(&after.lifecycle).profile_snapshot, edited);
+    assert_eq!(
+        run_from_ready(&after.lifecycle).capability_snapshot,
+        before_run.capability_snapshot
+    );
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+fn gtp_profile(temp: &TestTempDir, mode: &str) -> EngineProfileDto {
+    EngineProfileDto {
+        name: format!("GTP {mode}"),
+        program: "/usr/bin/python3".into(),
+        adapter: EngineAdapterSettings::GenericGtp(GenericGtpSettings {}),
+        argv: vec![
+            format!("{}/tests/fixtures/gtp_process.py", env!("CARGO_MANIFEST_DIR")),
+            mode.into(),
+            temp.path().join(mode).to_string_lossy().into(),
+        ],
+        ..engine_manager::default_engine_profile_record().profile
+    }
+}
+
+#[cfg(unix)]
+fn gtp_manager(
+    temp: &TestTempDir,
+    mode: &str,
+) -> (ForegroundEngineManager, Arc<InMemoryEngineProfileCatalog>) {
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "gtp".into(),
+        profile: gtp_profile(temp, mode),
+    });
+    let manager = ForegroundEngineManager::new(
+        catalog.clone(),
+        ForegroundEngineConfig {
+            readiness_timeout: Duration::from_millis(500),
+            stop_drain_timeout: Duration::from_millis(100),
+            ..ForegroundEngineConfig::for_tests()
+        },
+    );
+    (manager, catalog)
+}
+
+#[cfg(unix)]
+fn assert_gtp_reaped(temp: &TestTempDir, mode: &str) {
+    let pid = std::fs::read_to_string(temp.path().join(format!("{mode}.pid"))).unwrap();
+    assert!(
+        !Path::new(&format!("/proc/{pid}")).exists(),
+        "GTP child {pid} was not reaped"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn gtp_fragmented_crlf_multiline_and_stderr_publish_only_verified_facts() {
+    for mode in ["fragment", "stderr"] {
+        let temp = TestTempDir::new(mode);
+        let (manager, _) = gtp_manager(&temp, mode);
+        manager.start("gtp").unwrap();
+        let snapshot = wait_lifecycle(&manager, Duration::from_secs(2), |s| {
+            matches!(s, ForegroundEngineLifecycleDto::Ready { .. })
+        });
+        let run = run_from_ready(&snapshot.lifecycle);
+        let caps = run.capability_snapshot.as_ref().unwrap();
+        assert_eq!(caps.adapter_kind, EngineBackend::GenericGtp);
+        assert!(caps.analysis.is_none());
+        let facts = caps.gtp.as_ref().unwrap();
+        assert_eq!(
+            (&*facts.name, &*facts.version, facts.protocol_version),
+            ("Fixture GTP", "0.1", 2)
+        );
+        assert_eq!(
+            facts.commands,
+            [
+                "boardsize",
+                "clear_board",
+                "komi",
+                "play",
+                "genmove",
+                "quit",
+                "time_settings",
+                "time_left"
+            ]
+        );
+        let before = std::fs::read_to_string(temp.path().join(mode)).unwrap();
+        assert_eq!(
+            manager
+                .start_selected_node_job(selected_request(&run.run_id, 1, vec![]))
+                .unwrap_err()
+                .kind,
+            EngineFailureKind::UnsupportedCapability
+        );
+        assert_eq!(std::fs::read_to_string(temp.path().join(mode)).unwrap(), before);
+        assert_eq!(before, "1 protocol_version\n2 name\n3 version\n4 list_commands\n");
+        manager.teardown().unwrap();
+        assert_gtp_reaped(&temp, mode);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn gtp_typed_failures_have_total_deadline_and_reap_children() {
+    for (mode, expected) in [
+        ("badid", EngineFailureKind::Protocol),
+        ("badframe", EngineFailureKind::Protocol),
+        ("missing", EngineFailureKind::UnsupportedCapability),
+        ("v1", EngineFailureKind::UnsupportedCapability),
+        ("error", EngineFailureKind::Command),
+        ("exit", EngineFailureKind::ProcessExit),
+        ("hang", EngineFailureKind::Timeout),
+        ("dribble", EngineFailureKind::Timeout),
+        ("flood", EngineFailureKind::Protocol),
+        ("oversize", EngineFailureKind::Protocol),
+    ] {
+        let temp = TestTempDir::new(mode);
+        let (manager, _) = gtp_manager(&temp, mode);
+        let events = manager.subscribe();
+        let start = Instant::now();
+        manager.start("gtp").unwrap();
+        let failure = wait_failure(&events, Duration::from_secs(2), |_| true);
+        assert_eq!(failure.kind, expected, "{mode}: {failure:?}");
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(
+            matches!(
+                manager.snapshot().lifecycle,
+                ForegroundEngineLifecycleDto::Error { .. }
+            ),
+            "{mode} must require explicit recovery"
+        );
+        assert_gtp_reaped(&temp, mode);
+        manager.teardown().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn gtp_idle_eof_or_unsolicited_response_seals_run_until_manual_restart() {
+    for (mode, expected) in [
+        ("eof", EngineFailureKind::ProcessExit),
+        ("unsolicited", EngineFailureKind::Protocol),
+    ] {
+        let temp = TestTempDir::new(mode);
+        let (manager, catalog) = gtp_manager(&temp, mode);
+        manager.start("gtp").unwrap();
+        let ready = wait_lifecycle(&manager, Duration::from_secs(2), |s| {
+            matches!(s, ForegroundEngineLifecycleDto::Ready { .. })
+        });
+        let old_id = run_from_ready(&ready.lifecycle).run_id.clone();
+        let error = wait_lifecycle(&manager, Duration::from_secs(2), |s| {
+            matches!(s, ForegroundEngineLifecycleDto::Error { .. })
+        });
+        let ForegroundEngineLifecycleDto::Error { failure, .. } = error.lifecycle else {
+            unreachable!()
+        };
+        assert_eq!(failure.kind, expected);
+        assert_gtp_reaped(&temp, mode);
+        catalog.upsert(SavedEngineProfile {
+            profile_id: "gtp".into(),
+            profile: gtp_profile(&temp, "good"),
+        });
+        assert_eq!(
+            manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::Error {
+                run: lifecycle_run(&manager.snapshot().lifecycle).unwrap().clone(),
+                failure
+            }
+        );
+        manager.restart().unwrap();
+        let ready = wait_lifecycle(&manager, Duration::from_secs(2), |s| {
+            matches!(s, ForegroundEngineLifecycleDto::Ready { .. })
+        });
+        assert_ne!(run_from_ready(&ready.lifecycle).run_id, old_id);
+        manager.teardown().unwrap();
+        assert_gtp_reaped(&temp, "good");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn gtp_cross_protocol_switch_preserves_primary_work_and_latest_intent() {
+    let temp = TestTempDir::new("gtp-switch");
+    let (manager, catalog, events, primary) = ready_manager(&temp, &hold_then_echo_script());
+    let job = manager
+        .start_selected_node_job(selected_request(&primary, 1, vec![]))
+        .unwrap();
+    for mode in ["badid", "slow", "good"] {
+        catalog.upsert(SavedEngineProfile {
+            profile_id: mode.into(),
+            profile: gtp_profile(&temp, mode),
+        });
+    }
+    manager.switch_to("badid").unwrap();
+    let failure = wait_failure(&events, Duration::from_secs(2), |f| f.switch_id.is_some());
+    assert_eq!(failure.kind, EngineFailureKind::Protocol);
+    let snapshot = manager.snapshot();
+    assert_eq!(run_from_ready(&snapshot.lifecycle).run_id, primary);
+    assert_eq!(snapshot.selected_node_job.unwrap().job_id, job.job_id);
+    manager.switch_to("slow").unwrap();
+    manager.switch_to("good").unwrap();
+    let ready = wait_lifecycle(
+        &manager,
+        Duration::from_secs(3),
+        |s| matches!(s, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "good"),
+    );
+    assert_eq!(
+        run_from_ready(&ready.lifecycle).adapter_kind,
+        EngineBackend::GenericGtp
+    );
+    manager.switch_to("profile-1").unwrap();
+    let ready = wait_lifecycle(
+        &manager,
+        Duration::from_secs(3),
+        |s| matches!(s, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "profile-1"),
+    );
+    assert!(run_from_ready(&ready.lifecycle)
+        .capability_snapshot
+        .as_ref()
+        .unwrap()
+        .gtp
+        .is_none());
+    manager.teardown().unwrap();
+    assert_gtp_reaped(&temp, "good");
+}
+
+#[cfg(unix)]
+#[test]
+fn gtp_stop_during_handshake_cannot_publish_late_ready() {
+    let temp = TestTempDir::new("gtp-stop");
+    let (manager, _) = gtp_manager(&temp, "slow");
+    let events = manager.subscribe();
+    manager.start("gtp").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !temp.path().join("slow.pid").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    manager.stop().unwrap();
+    wait_lifecycle(&manager, Duration::from_secs(2), |s| {
+        matches!(s, ForegroundEngineLifecycleDto::NoEngine { .. })
+    });
+    assert_gtp_reaped(&temp, "slow");
+    std::thread::sleep(Duration::from_millis(850));
+    assert!(events.try_iter().all(|e| !matches!(e, ForegroundEngineEventDto::Snapshot { snapshot } if matches!(snapshot.lifecycle, ForegroundEngineLifecycleDto::Ready { .. }))));
 }

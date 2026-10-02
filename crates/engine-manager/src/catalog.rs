@@ -1,4 +1,4 @@
-use app_model::{EngineBackend, EngineProfileDto};
+use app_model::{EngineAdapterSettings, EngineProfileDto, KataGoSettings};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 pub const DEFAULT_ENGINE_PROFILE_ID: &str = "default";
+pub const ENGINE_PROFILES_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SavedEngineProfile {
@@ -15,14 +16,16 @@ pub struct SavedEngineProfile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EngineProfileRecord {
     pub id: String,
     pub profile: EngineProfileDto,
-    pub max_visits: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EngineProfilesSettings {
+    pub version: u32,
     pub selected_profile_id: String,
     #[serde(default)]
     pub autoload_profile_id: Option<String>,
@@ -30,9 +33,57 @@ pub struct EngineProfilesSettings {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyEngineProfile {
+    name: String,
+    engine_path: String,
+    model_path: Option<String>,
+    config_path: Option<String>,
+    working_dir: Option<String>,
+    backend: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LegacyEngineProfileSettings {
-    profile: EngineProfileDto,
+    profile: LegacyEngineProfile,
     max_visits: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyEngineProfileRecord {
+    id: String,
+    profile: LegacyEngineProfile,
+    max_visits: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyEngineProfilesSettings {
+    selected_profile_id: String,
+    #[serde(default)]
+    autoload_profile_id: Option<String>,
+    profiles: Vec<LegacyEngineProfileRecord>,
+}
+
+impl LegacyEngineProfile {
+    fn migrate(self, max_visits: u32) -> Result<EngineProfileDto, String> {
+        if self.backend != "kata_go_analysis" {
+            return Err(format!("unsupported legacy engine backend: {}", self.backend));
+        }
+        Ok(EngineProfileDto {
+            name: self.name,
+            program: self.engine_path,
+            argv: Vec::new(),
+            working_dir: self.working_dir,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: self.model_path,
+                config_path: self.config_path,
+                max_visits,
+            }),
+        })
+    }
 }
 
 pub trait EngineProfileCatalog: Send + Sync {
@@ -87,6 +138,7 @@ impl EngineProfileCatalog for InMemoryEngineProfileCatalog {
 
 pub fn default_engine_profiles_settings() -> EngineProfilesSettings {
     EngineProfilesSettings {
+        version: ENGINE_PROFILES_VERSION,
         selected_profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
         autoload_profile_id: None,
         profiles: vec![default_engine_profile_record()],
@@ -98,13 +150,15 @@ pub fn default_engine_profile_record() -> EngineProfileRecord {
         id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
         profile: EngineProfileDto {
             name: "Local KataGo".to_string(),
-            engine_path: String::new(),
-            model_path: None,
-            config_path: None,
+            program: String::new(),
+            argv: Vec::new(),
             working_dir: None,
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: None,
+                config_path: None,
+                max_visits: 800,
+            }),
         },
-        max_visits: 800,
     }
 }
 
@@ -118,22 +172,44 @@ pub fn load_engine_profiles(path: &Path) -> Result<EngineProfilesSettings, Strin
 }
 
 pub fn parse_engine_profiles(contents: &str) -> Result<EngineProfilesSettings, String> {
-    serde_json::from_str::<EngineProfilesSettings>(contents)
-        .or_else(|_| {
-            serde_json::from_str::<LegacyEngineProfileSettings>(contents).map(|settings| {
-                EngineProfilesSettings {
-                    selected_profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
-                    autoload_profile_id: None,
-                    profiles: vec![EngineProfileRecord {
-                        id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
-                        profile: settings.profile,
-                        max_visits: settings.max_visits,
-                    }],
-                }
-            })
-        })
-        .map_err(|err| err.to_string())
-        .and_then(normalize_engine_profiles)
+    let value: serde_json::Value = serde_json::from_str(contents).map_err(|err| err.to_string())?;
+    let settings = if let Some(version) = value.get("version") {
+        if version.as_u64() != Some(u64::from(ENGINE_PROFILES_VERSION)) {
+            return Err(format!("unsupported engine profiles version: {version}"));
+        }
+        serde_json::from_value::<EngineProfilesSettings>(value).map_err(|err| err.to_string())?
+    } else if value.get("profiles").is_some() {
+        let legacy =
+            serde_json::from_value::<LegacyEngineProfilesSettings>(value).map_err(|err| err.to_string())?;
+        EngineProfilesSettings {
+            version: ENGINE_PROFILES_VERSION,
+            selected_profile_id: legacy.selected_profile_id,
+            autoload_profile_id: legacy.autoload_profile_id,
+            profiles: legacy
+                .profiles
+                .into_iter()
+                .map(|record| {
+                    Ok(EngineProfileRecord {
+                        id: record.id,
+                        profile: record.profile.migrate(record.max_visits)?,
+                    })
+                })
+                .collect::<Result<_, String>>()?,
+        }
+    } else {
+        let legacy =
+            serde_json::from_value::<LegacyEngineProfileSettings>(value).map_err(|err| err.to_string())?;
+        EngineProfilesSettings {
+            version: ENGINE_PROFILES_VERSION,
+            selected_profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
+            autoload_profile_id: None,
+            profiles: vec![EngineProfileRecord {
+                id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
+                profile: legacy.profile.migrate(legacy.max_visits)?,
+            }],
+        }
+    };
+    normalize_engine_profiles(settings)
 }
 
 pub fn save_engine_profiles(
@@ -145,51 +221,36 @@ pub fn save_engine_profiles(
     Ok(settings)
 }
 
-pub fn normalize_engine_profiles(
-    mut settings: EngineProfilesSettings,
-) -> Result<EngineProfilesSettings, String> {
-    if settings.profiles.is_empty() {
-        settings.profiles.push(default_engine_profile_record());
+pub fn normalize_engine_profiles(settings: EngineProfilesSettings) -> Result<EngineProfilesSettings, String> {
+    if settings.version != ENGINE_PROFILES_VERSION {
+        return Err(format!(
+            "unsupported engine profiles version: {}",
+            settings.version
+        ));
     }
-
+    if settings.profiles.is_empty() {
+        return Err("engine profiles must contain at least one record".to_string());
+    }
     let mut seen_ids = HashSet::new();
-    let mut normalized_profiles = Vec::new();
-    for mut record in settings.profiles {
-        record.id = record.id.trim().to_string();
-        if record.id.is_empty() {
-            return Err("engine profile id is required".to_string());
+    for record in &settings.profiles {
+        if record.id.trim().is_empty() || record.id.contains('\0') {
+            return Err("engine profile id is required and must not contain NUL".to_string());
         }
-        if !seen_ids.insert(record.id.clone()) {
+        if !seen_ids.insert(record.id.as_str()) {
             return Err(format!("duplicate engine profile id: {}", record.id));
         }
-        if record.max_visits == 0 {
-            return Err("max_visits must be greater than 0".to_string());
-        }
-        if record.profile.name.trim().is_empty() {
-            return Err("engine profile name is required".to_string());
-        }
-        normalized_profiles.push(record);
+        crate::validate_engine_profile(&record.profile)?;
     }
-
-    if !seen_ids.contains(DEFAULT_ENGINE_PROFILE_ID) {
-        normalized_profiles.insert(0, default_engine_profile_record());
-        seen_ids.insert(DEFAULT_ENGINE_PROFILE_ID.to_string());
+    if !seen_ids.contains(settings.selected_profile_id.as_str()) {
+        return Err("selected engine profile does not exist".to_string());
     }
-
-    settings.selected_profile_id = settings.selected_profile_id.trim().to_string();
-    if !seen_ids.contains(&settings.selected_profile_id) {
-        settings.selected_profile_id = DEFAULT_ENGINE_PROFILE_ID.to_string();
+    if settings
+        .autoload_profile_id
+        .as_deref()
+        .is_some_and(|id| !seen_ids.contains(id))
+    {
+        return Err("autoload engine profile does not exist".to_string());
     }
-
-    settings.autoload_profile_id = settings.autoload_profile_id.and_then(|profile_id| {
-        let profile_id = profile_id.trim().to_string();
-        if profile_id.is_empty() || !seen_ids.contains(&profile_id) {
-            None
-        } else {
-            Some(profile_id)
-        }
-    });
-    settings.profiles = normalized_profiles;
     Ok(settings)
 }
 
@@ -257,6 +318,7 @@ mod persist_failure_tests {
 
     fn sample_settings() -> EngineProfilesSettings {
         EngineProfilesSettings {
+            version: ENGINE_PROFILES_VERSION,
             selected_profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
             autoload_profile_id: Some(DEFAULT_ENGINE_PROFILE_ID.to_string()),
             profiles: vec![default_engine_profile_record()],

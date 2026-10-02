@@ -20,6 +20,7 @@ mod current_game_save_write;
 #[cfg(test)]
 mod current_game_session_recovery;
 mod departure;
+mod game_move;
 pub(crate) mod recovery;
 mod scoring;
 mod trial;
@@ -90,12 +91,13 @@ impl CurrentGameState {
 
     // Called with the holder locked: accepted cursor/edit order is also target order.
     fn follow_continuous_position(&self, holder: &mut CurrentGameHolder) {
-        if !matches!(holder.trial_mode, trial::TrialMode::Review) {
-            return;
-        }
         let Some(manager) = self.analysis_manager.get() else {
             return;
         };
+        manager.invalidate_game_move_position(holder.generation, &holder.selected_path);
+        if !matches!(holder.trial_mode, trial::TrialMode::Review) {
+            return;
+        }
         manager.invalidate_analysis_task(holder.generation);
         if holder.analysis_target.as_ref().is_some_and(|(generation, path)| {
             *generation == holder.generation && *path == holder.selected_path
@@ -324,7 +326,7 @@ impl CurrentGameState {
                 message,
             ))
         };
-        conditions.validate_single_stage().map_err(&invalid)?;
+        conditions.validate_single_stage().map_err(invalid)?;
         // Keep semantic revalidation and manager admission under the same owner lock.
         let holder = self.holder.lock().expect("current game state");
         let admitted = holder
@@ -368,7 +370,7 @@ impl CurrentGameState {
             &overview_conditions,
             &deep_conditions,
         )
-        .map_err(&invalid)?;
+        .map_err(invalid)?;
         let holder = self.holder.lock().expect("current game state");
         let admitted = holder
             .analysis_scope_admission(preview.generation, &preview.scope, None)
@@ -409,13 +411,13 @@ impl CurrentGameState {
                 message,
             ))
         };
-        overview_conditions.validate_single_stage().map_err(&invalid)?;
-        deep_conditions.validate_single_stage().map_err(&invalid)?;
+        overview_conditions.validate_single_stage().map_err(invalid)?;
+        deep_conditions.validate_single_stage().map_err(invalid)?;
         let criteria = preview
             .swing_criteria
             .clone()
             .ok_or_else(|| invalid("Swing-selected analysis requires swing criteria.".into()))?;
-        criteria.validate().map_err(&invalid)?;
+        criteria.validate().map_err(invalid)?;
         let holder = self.holder.lock().expect("current game state");
         let admitted = holder
             .analysis_scope_admission(preview.generation, &preview.scope, Some(&criteria))

@@ -941,6 +941,7 @@ dependencies = [
  "katago-protocol",
  "serde",
  "serde_json",
+ "sgf",
  "thiserror 1.0.69",
  "uuid",
 ]

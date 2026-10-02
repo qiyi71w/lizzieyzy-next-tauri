@@ -154,49 +154,52 @@ function snapshotAt(path: NodePath): CurrentGameResultDto {
 
 const savedProfile = {
   id: "profile-1",
-  max_visits: 800,
   profile: {
     name: "Local KataGo",
-    engine_path: "/bin/katago",
-    model_path: "/models/model.bin",
-    config_path: "/configs/analysis.cfg",
+    program: "/bin/katago", argv: [],
+    settings: { model_path: "/models/model.bin", config_path: "/configs/analysis.cfg", max_visits: 800 },
     working_dir: "/tmp",
-    backend: "kata_go_analysis" as const
+    adapter_kind: "kata_go_analysis" as const
   }
 };
 
 const savedProfileB = {
   id: "profile-2",
-  max_visits: 400,
   profile: {
     name: "Other KataGo",
-    engine_path: "/bin/katago-b",
-    model_path: "/models/b.bin",
-    config_path: "/configs/b.cfg",
+    program: "/bin/katago-b", argv: [],
+    settings: { model_path: "/models/b.bin", config_path: "/configs/b.cfg", max_visits: 400 },
     working_dir: "/tmp",
-    backend: "kata_go_analysis" as const
+    adapter_kind: "kata_go_analysis" as const
   }
 };
 
 const savedProfileC = {
   id: "profile-3",
-  max_visits: 200,
   profile: {
     name: "Third KataGo",
-    engine_path: "/bin/katago-c",
-    model_path: "/models/c.bin",
-    config_path: "/configs/c.cfg",
+    program: "/bin/katago-c", argv: [],
+    settings: { model_path: "/models/c.bin", config_path: "/configs/c.cfg", max_visits: 200 },
     working_dir: "/tmp",
-    backend: "kata_go_analysis" as const
+    adapter_kind: "kata_go_analysis" as const
   }
 };
 
 const capability = {
   adapter_kind: "kata_go_analysis" as const,
-  selected_node_analysis: true,
-  whole_game_analysis: true,
-  root_score: true,
-  protocol_cancel: true
+  analysis: {
+    selected_node_analysis: true,
+    continuous_analysis: true,
+    candidates: true,
+    pv: true,
+    winrate: true,
+    ownership: true,
+    policy: true,
+    visits_limit: true,
+    whole_game_analysis: true,
+    root_score: true,
+    protocol_cancel: true
+  }
 };
 
 const crashFailure: EngineFailureDto = {
@@ -253,6 +256,7 @@ beforeEach(() => {
   currentGameFixture.mockResolvedValue(initialGame);
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
   backend.loadEngineProfilesSettings.mockResolvedValue({
+    version: 1,
     selected_profile_id: "profile-1",
     autoload_profile_id: null,
     profiles: [savedProfile, savedProfileB]
@@ -331,10 +335,19 @@ async function readyEngine(host: HTMLElement) {
           profile_snapshot: savedProfile.profile,
           capability_snapshot: {
             adapter_kind: "kata_go_analysis",
-            selected_node_analysis: true,
-            whole_game_analysis: true,
-            root_score: true,
-            protocol_cancel: true
+            analysis: {
+              selected_node_analysis: true,
+              continuous_analysis: true,
+              candidates: true,
+              pv: true,
+              winrate: true,
+              ownership: true,
+              policy: true,
+              visits_limit: true,
+              whole_game_analysis: true,
+              root_score: true,
+              protocol_cancel: true
+            }
           }
         }
       }
@@ -357,6 +370,95 @@ async function openEngineSettings(host: HTMLElement) {
 }
 
 describe("foreground engine lifecycle UI", () => {
+  it.each([false, true])("starts GenericGtp with an existing authoritative run: %s", async (withPrimary) => {
+    const generic = { id: "generic", profile: {
+      name: "Saved generic", program: "/bin/gtp", argv: [], working_dir: null, adapter_kind: "generic_gtp" as const, settings: {}
+    } };
+    const catalog = { version: 1, selected_profile_id: "profile-1", autoload_profile_id: null, profiles: [savedProfile, generic] };
+    backend.loadEngineProfilesSettings.mockResolvedValue(catalog);
+    const host = await renderApp();
+    if (withPrimary) await readyEngine(host);
+    const beforeLabel = host.querySelector(".engine-chip-label")?.textContent;
+    const beforeGame = host.querySelector(".doc-name")?.textContent;
+    backend.startForegroundEngine.mockClear();
+    backend.saveEngineProfilesSettings.mockClear();
+    const switcher = host.querySelector('select[aria-label="Foreground Engine Profile"]') as HTMLSelectElement;
+    await act(async () => {
+      switcher.value = "generic";
+      switcher.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    if (withPrimary) {
+      expect(backend.switchForegroundEngine).toHaveBeenCalledWith("generic");
+      expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+    } else {
+      expect(backend.startForegroundEngine).toHaveBeenCalledWith("generic");
+      expect(backend.switchForegroundEngine).not.toHaveBeenCalled();
+    }
+    expect(backend.saveEngineProfilesSettings).not.toHaveBeenCalled();
+    expect(switcher.value).toBe(withPrimary ? "profile-1" : "");
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe(beforeLabel);
+    expect(host.querySelector(".doc-name")?.textContent).toBe(beforeGame);
+    expect(catalog.profiles[1]).toEqual(generic);
+    const genericRun = {
+      run_id: "generic-run", profile_id: generic.id, adapter_kind: "generic_gtp" as const,
+      profile_snapshot: generic.profile,
+      capability_snapshot: {
+        adapter_kind: "generic_gtp" as const,
+        gtp: { protocol_version: 2, name: "Verified pipe engine", version: "3.8", commands: ["boardsize", "clear_board", "komi", "play", "genmove", "quit", "time_settings", "time_left", "set_free_handicap", "custom_rules"] }
+      }
+    };
+    if (withPrimary) {
+      await act(async () => {
+        listeners.onSnapshot?.({ revision: 3, continuous: { enabled: true, phase: "waiting" }, lifecycle: {
+          state: "switching", primary: readyRun("run-1", savedProfile),
+          candidate: { ...genericRun, capability_snapshot: null }, switch_id: "switch-gtp"
+        } });
+      });
+      expect(buttonNamed(host, "重启").disabled).toBe(true);
+      await act(async () => { buttonNamed(host, "分析当前节点").click(); });
+      expect(backend.startSelectedNodeAnalysis.mock.calls.at(-1)?.[0].runId).toBe("run-1");
+      expect(host.querySelector('[aria-label="当前 run 能力"]')?.textContent).not.toContain("Verified pipe engine");
+    }
+    await act(async () => {
+      listeners.onSnapshot?.({ revision: 4, continuous: { enabled: true, phase: "unavailable" }, lifecycle: { state: "ready", run: genericRun } });
+    });
+    expect(switcher.value).toBe("generic");
+    expect(buttonNamed(host, "分析当前节点").disabled).toBe(true);
+    expect(buttonNamed(host, "重启").disabled).toBe(false);
+    expect(buttonNamed(host, "停止").disabled).toBe(false);
+    const facts = host.querySelector('[aria-label="当前 run 能力"]')?.textContent;
+    expect(facts).toContain(genericRun.capability_snapshot.gtp.name);
+    expect(facts).toContain(genericRun.capability_snapshot.gtp.version);
+    for (const command of genericRun.capability_snapshot.gtp.commands) expect(facts).toContain(command);
+    await act(async () => { buttonNamed(host, "重启").click(); });
+    expect(backend.restartForegroundEngine).toHaveBeenCalledOnce();
+    await act(async () => { buttonNamed(host, "停止").click(); });
+    expect(backend.stopForegroundEngine).toHaveBeenCalledOnce();
+  });
+
+  it("keeps saved GenericGtp changes pending until explicit Restart without changing verified A", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    const panel = await openEngineSettings(host);
+    const adapter = Array.from(panel.querySelectorAll("select")).find((select) => Array.from(select.options).some((option) => option.value === "generic_gtp"))!;
+    await act(async () => {
+      adapter.value = "generic_gtp";
+      adapter.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => { buttonNamed(panel, "保存配置").click(); });
+    expect(panel.textContent).toContain("存在待应用更改");
+    expect(backend.saveEngineProfilesSettings.mock.calls.at(-1)?.[0].profiles[0].profile.adapter_kind).toBe("generic_gtp");
+    expect(panel.querySelector('[aria-label="当前 run 能力"]')?.textContent).toContain("单点 支持");
+    backend.saveEngineProfilesSettings.mockClear();
+    await act(async () => { buttonNamed(host, "分析当前节点").click(); });
+    expect(buttonNamed(host, "取消此手").disabled).toBe(false);
+    expect(backend.startSelectedNodeAnalysis.mock.calls.at(-1)?.[0].runId).toBe("run-1");
+    await act(async () => { buttonNamed(host, "重启").click(); });
+    expect(backend.restartForegroundEngine).toHaveBeenCalledOnce();
+    expect(backend.saveEngineProfilesSettings).not.toHaveBeenCalled();
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("Local KataGo");
+  });
+
   it("shows authoritative no-engine status and does not start from Engine Settings selection", async () => {
     const host = await renderApp();
     expect(host.querySelector(".engine-chip-label")?.textContent).toBe("未加载引擎");
@@ -397,10 +499,19 @@ describe("foreground engine lifecycle UI", () => {
             profile_snapshot: savedProfile.profile,
             capability_snapshot: {
               adapter_kind: "kata_go_analysis",
-              selected_node_analysis: true,
-              whole_game_analysis: true,
-              root_score: true,
-              protocol_cancel: true
+              analysis: {
+                selected_node_analysis: true,
+                continuous_analysis: true,
+                candidates: true,
+                pv: true,
+                winrate: true,
+                ownership: true,
+                policy: true,
+                visits_limit: true,
+                whole_game_analysis: true,
+                root_score: true,
+                protocol_cancel: true
+              }
             }
           }
         }
@@ -438,10 +549,19 @@ describe("foreground engine lifecycle UI", () => {
             profile_snapshot: savedProfile.profile,
             capability_snapshot: {
               adapter_kind: "kata_go_analysis",
-              selected_node_analysis: true,
-              whole_game_analysis: true,
-              root_score: true,
-              protocol_cancel: true
+              analysis: {
+                selected_node_analysis: true,
+                continuous_analysis: true,
+                candidates: true,
+                pv: true,
+                winrate: true,
+                ownership: true,
+                policy: true,
+                visits_limit: true,
+                whole_game_analysis: true,
+                root_score: true,
+                protocol_cancel: true
+              }
             }
           }
         }
@@ -478,10 +598,19 @@ describe("foreground engine lifecycle UI", () => {
             profile_snapshot: savedProfile.profile,
             capability_snapshot: {
               adapter_kind: "kata_go_analysis",
-              selected_node_analysis: true,
-              whole_game_analysis: true,
-              root_score: true,
-              protocol_cancel: true
+              analysis: {
+                selected_node_analysis: true,
+                continuous_analysis: true,
+                candidates: true,
+                pv: true,
+                winrate: true,
+                ownership: true,
+                policy: true,
+                visits_limit: true,
+                whole_game_analysis: true,
+                root_score: true,
+                protocol_cancel: true
+              }
             }
           }
         }
@@ -585,10 +714,19 @@ describe("foreground engine lifecycle UI", () => {
             profile_snapshot: savedProfile.profile,
             capability_snapshot: {
               adapter_kind: "kata_go_analysis",
-              selected_node_analysis: true,
-              whole_game_analysis: true,
-              root_score: true,
-              protocol_cancel: true
+              analysis: {
+                selected_node_analysis: true,
+                continuous_analysis: true,
+                candidates: true,
+                pv: true,
+                winrate: true,
+                ownership: true,
+                policy: true,
+                visits_limit: true,
+                whole_game_analysis: true,
+                root_score: true,
+                protocol_cancel: true
+              }
             }
           }
         }
@@ -1355,6 +1493,84 @@ describe("foreground engine lifecycle UI", () => {
     });
   });
 
+  it.each([
+    ["start", "unsupported_capability", "GTP engine is missing required command genmove"],
+    ["switch", "command", "GTP version command failed"],
+    ["restart", "process_exit", "GTP engine exited before readiness"]
+  ] as const)("shows typed %s failures without changing the live engine", async (operation, kind, message) => {
+    const host = await renderApp();
+    if (operation !== "start") await readyEngine(host);
+    const label = host.querySelector(".engine-chip-label")?.textContent;
+    const failure = { kind, operation, message };
+    if (operation === "start") backend.startForegroundEngine.mockRejectedValueOnce(failure);
+    else if (operation === "switch") backend.switchForegroundEngine.mockRejectedValueOnce(failure);
+    else backend.restartForegroundEngine.mockRejectedValueOnce(failure);
+    await act(async () => {
+      if (operation === "restart") buttonNamed(host, "重启").click();
+      else {
+        const switcher = host.querySelector('select[aria-label="Foreground Engine Profile"]') as HTMLSelectElement;
+        switcher.value = "profile-2";
+        switcher.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    });
+    expect(host.textContent).toContain(failure.message);
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe(label);
+  });
+
+  it("publishes only saved catalog changes to the live Engine Switcher", async () => {
+    const host = await renderApp();
+    const panel = await openEngineSettings(host);
+    const switcher = host.querySelector('select[aria-label="Foreground Engine Profile"]') as HTMLSelectElement;
+    const settingsSelect = panel.querySelector("select") as HTMLSelectElement;
+    const panelButton = (name: string) => Array.from(panel.querySelectorAll("button")).find((button) => button.textContent === name)!;
+    await act(async () => { panelButton("新增").click(); });
+    const addedId = settingsSelect.value;
+    expect(Array.from(switcher.options).map((option) => option.value)).toContain(addedId);
+    const originalName = switcher.querySelector(`option[value="${addedId}"]`)!.textContent;
+    const name = panel.querySelector('input[placeholder="本地 KataGo"]') as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "Saved renamed engine");
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    backend.saveEngineProfilesSettings.mockRejectedValueOnce(new Error("disk denied"));
+    await act(async () => { panelButton("保存配置").click(); });
+    expect(panel.textContent).toContain("disk denied");
+    expect(switcher.querySelector(`option[value="${addedId}"]`)!.textContent).toBe(originalName);
+    await act(async () => { panelButton("保存配置").click(); });
+    expect(switcher.querySelector(`option[value="${addedId}"]`)!.textContent).toBe("Saved renamed engine");
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("未加载引擎");
+    expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+    expect(backend.switchForegroundEngine).not.toHaveBeenCalled();
+    await act(async () => { panelButton("删除").click(); });
+    expect(Array.from(switcher.options).map((option) => option.value)).not.toContain(addedId);
+  });
+
+  it("keeps saved default visits pending until Restart installs a new run snapshot", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    const panel = await openEngineSettings(host);
+    const visits = panel.querySelector('input[type="number"]') as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(visits, "1600");
+      visits.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      Array.from(panel.querySelectorAll("button")).find((button) => button.textContent === "保存配置")!.click();
+    });
+    expect(panel.textContent).toContain("存在待应用更改");
+    backend.startSelectedNodeAnalysis.mockClear();
+    await act(async () => { buttonNamed(host, "分析当前节点").click(); });
+    expect(backend.startSelectedNodeAnalysis).toHaveBeenLastCalledWith({ runId: "run-1", generation: 1, nodePath: { indices: [] }, maxVisits: 800 });
+    const restartedProfile = { ...savedProfile, profile: { ...savedProfile.profile, settings: { ...savedProfile.profile.settings, max_visits: 1600 } } };
+    await act(async () => {
+      listeners.onSnapshot?.({ revision: 5, lifecycle: { state: "ready", run: readyRun("run-2", restartedProfile) }, continuous: { enabled: true, phase: "waiting" } });
+    });
+    expect(panel.textContent).not.toContain("存在待应用更改");
+    backend.startSelectedNodeAnalysis.mockClear();
+    await act(async () => { buttonNamed(host, "分析当前节点").click(); });
+    expect(backend.startSelectedNodeAnalysis).toHaveBeenLastCalledWith({ runId: "run-2", generation: 1, nodePath: { indices: [] }, maxVisits: 1600 });
+  });
+
   it("rebinds operations to B after promotion without changing Settings selection or unsaved form", async () => {
     const host = await renderApp();
     await readyEngine(host);
@@ -1408,28 +1624,16 @@ describe("foreground engine lifecycle UI", () => {
     });
     expect(buttonNamed(host, "停止").disabled).toBe(false);
 
-    const activeProfileId = "profile-2";
-    backend.saveEngineProfilesSettings.mockImplementation(async (settings) => {
-      const removed = [savedProfile.id, savedProfileB.id].filter(
-        (id) => !settings.profiles.some((profile: { id: string }) => profile.id === id)
-      );
-      if (removed.includes(activeProfileId)) {
-        throw new Error("an active Foreground Engine Run still holds this profile identity");
-      }
-      return settings;
-    });
     const deleteProfile = () => Array.from(host.querySelectorAll(".engine-setup-panel button")).find((button) => button.textContent === "删除") as HTMLButtonElement;
     await act(async () => {
       settingsSelect.value = "profile-2";
       settingsSelect.dispatchEvent(new Event("change", { bubbles: true }));
       await backend.saveEngineProfilesSettings.mock.results.at(-1)?.value;
     });
-    await act(async () => {
-      deleteProfile().click();
-      await backend.saveEngineProfilesSettings.mock.results.at(-1)?.value.catch(() => undefined);
-    });
-    expect(host.textContent).toContain("Delete failed");
-    expect(host.textContent).toContain("an active Foreground Engine Run still holds this profile identity");
+    expect(deleteProfile().disabled).toBe(true);
+    backend.saveEngineProfilesSettings.mockClear();
+    await act(async () => { deleteProfile().click(); });
+    expect(backend.saveEngineProfilesSettings).not.toHaveBeenCalled();
     expect(Array.from(settingsSelect.options).map((option) => option.value)).toEqual(["profile-1", "profile-2"]);
     await act(async () => {
       settingsSelect.value = "profile-1";
@@ -1524,6 +1728,7 @@ describe("foreground engine lifecycle UI", () => {
 
   it("lets a later switch win and ignores a superseded B failure", async () => {
     backend.loadEngineProfilesSettings.mockResolvedValue({
+      version: 1,
       selected_profile_id: "profile-1",
       autoload_profile_id: null,
       profiles: [savedProfile, savedProfileB, savedProfileC]
@@ -1912,6 +2117,7 @@ describe("foreground engine lifecycle UI", () => {
 
   it("rejects deleting the Error profile until Stop", async () => {
     backend.loadEngineProfilesSettings.mockResolvedValue({
+      version: 1,
       selected_profile_id: "profile-1",
       autoload_profile_id: null,
       profiles: [savedProfile, savedProfileB]
@@ -1932,11 +2138,13 @@ describe("foreground engine lifecycle UI", () => {
     });
     const panel = await openEngineSettings(host);
     const deleteButton = Array.from(panel.querySelectorAll("button")).find((button) => button.textContent === "删除") as HTMLButtonElement;
-    expect(deleteButton.disabled).toBe(false);
+    expect(deleteButton.disabled).toBe(true);
+    backend.saveEngineProfilesSettings.mockClear();
+    await act(async () => { deleteButton.click(); });
+    expect(backend.saveEngineProfilesSettings).not.toHaveBeenCalled();
     await act(async () => {
-      deleteButton.click();
-      await backend.saveEngineProfilesSettings.mock.results.at(-1)?.value.catch(() => undefined);
+      listeners.onSnapshot?.({ revision: 4, lifecycle: { state: "no_engine" }, continuous: { enabled: true, phase: "waiting" } });
     });
-    expect(panel.querySelector(".message")?.textContent).toContain("Delete failed");
+    expect(deleteButton.disabled).toBe(false);
   });
 });

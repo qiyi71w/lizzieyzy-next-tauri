@@ -157,15 +157,146 @@ Expected result: the status message reports a loaded/opened game and the board c
 
 - Open Engine Settings (`引擎设置`). Settings only edit the catalog; they do not Start or Switch a run.
 - Set a profile name.
-- Pick or type the KataGo engine binary path.
-- Pick or type the model path.
-- Pick or type the analysis config path.
+- Select `KataGoAnalysis` or `GenericGtp`, then pick or type the executable program path.
+- Enter additional argv as separate items. Empty items, spaces and non-ASCII text must remain single arguments, not shell text.
+- For KataGo, pick or type the model and analysis config paths and set a positive finite max visits value. Do not add adapter-owned mode/model/config arguments to argv.
+- GenericGtp exposes no KataGo settings. Supply the engine's GTP argv explicitly (for GNU Go, `--mode`, `gtp`); Start verifies its protocol before publishing Ready.
 - Optionally set a working directory.
-- Set a positive max visits value.
 - Save the profile.
 - Add a second profile if Autoload or Switch coverage is part of the change.
 
-Expected result: profiles reload after app restart. Saving Autoload Default or Settings selection does not change the current Foreground Engine Run.
+Expected result: successfully saved additions, renames and deletions immediately update the Engine Switcher; failed saves leave its prior catalog intact. Profiles also reload after app restart. Saving Autoload Default or Settings selection does not change the current Foreground Engine Run.
+
+For migration coverage, seed an isolated app-data directory with an old unversioned collection or single-profile file. Loading must preserve values without rewriting the bytes. Explicit Save writes version 1. An unknown version or malformed settings must report an error without replacing the stored file. A denied write must retain the prior catalog and Run.
+
+While KataGo is Ready, save changed argv or finite visits. The live snapshot and process remain unchanged and the profile is pending; Restart must create a new Run from the saved values. A GenericGtp candidate cannot replace that run until its complete handshake succeeds; a failed candidate leaves the original run and work intact.
+
+During A-to-B switching, deleting either A or candidate B must fail at the backend, preserving the catalog and switching state. After B promotes, inactive A can be deleted and active B remains protected.
+
+R8 ticket 01 repository evidence: app-model 20 tests; engine-manager 22 unit, 9 catalog and 129 lifecycle tests; desktop gateway 148 tests; 13 affected frontend files with 284 passing cases, followed by the final 38-case lifecycle rerun (three added typed-refusal cases). TypeScript/Vite build passed. The actual-child argv case uses an isolated executable, Chinese/spaced paths and an empty argument; fixture lifecycle coverage includes finite/continuous/task/target-final, dual lanes and departure holds. These checks are not native acceptance.
+
+Windows native evidence: exact application source `966e282b986c4e42a3f7bcdf73b1a21158ebfe33`, candidate `D:\dev\weiqi\worktrees\lizzieyzy-next-tauri\r8-profile-966e282\candidate.json`, private-desktop runs `D:\dev\weiqi\acceptance\r8-profile-966e282-run1` and `-run2`, isolated identifier `org.lizzieyzy.next.acceptance.r493403fda45f467d9c8fc5287caa80a7`. KataGo v1.12.3 Eigen CPU AVX2 passed legacy-read/no-rewrite, explicit version-1 save, Generic profile argv save/reload and readable Start/Switch refusal, immutable pending profile/capabilities, Restart adopting `-override-config numSearchThreads=2` and visits 12, real selected-node completion (13 reported visits), native read-only-file replacement denial preserving bytes/catalog/Run, and fresh Autoload without restored Jobs. Both runs exited 0; owned-child inspection after Stop found no KataGo. The real lifecycle smoke separately passed Start/finite/cancel/Stop/Restart/Switch on `aa9a6fa72470f296511307d0312572647dfcd389` (`D:\dev\weiqi\acceptance\r8-profile-aa9a6fa-real\real-lifecycle.log`); the subsequent application delta only formats typed UI errors. This is N01/N04's ticket-01 slice, not release packaging or GenericGtp runtime acceptance. ENG-01 historical evidence remains attributed to its original run; ENG-09/ENG-10 are not accepted by this ticket.
+
+### 2.1 Verified Capability Admission (ENG-09)
+
+Engine Settings distinguishes the saved/draft profile and static adapter ceiling from `当前 run 已验证`; `当前 run 能力` in the workspace always describes primary A, including during A→B switching. Saving adapter/argv/settings leaves A immutable and pending. Missing verification or an absent analysis group cannot authorize analysis. GenericGtp Start/Switch/Restart enters the shared lifecycle; game-move admission additionally requires the qualified launch and exact-position checks below.
+
+Finite, continuous and whole-game/task admission are independent. Current query commands additionally request ownership/policy; visits limits, leading-candidate conditions and swing score/winrate filters require the respective capabilities. Preview submits no engine query. Start/Continue recheck after asynchronous work and before saving task presets/submitting work. Rust independently refuses before I/O, takeover or task mutation. Unsupported runs preserve historical SGF analysis and durable continuous intent, including existing holds; cancellation of owned work remains available.
+
+Repository regression commands:
+
+```bash
+cargo test -p app-model
+cargo test -p engine-manager -p lizzieyzy-next-desktop --lib --tests
+cd apps/desktop
+npx vitest run src/TruthfulAnalysisActions.test.tsx src/EngineLifecycle.test.tsx src/SelectedNodeAnalysis.test.tsx src/AnalysisPresentation.test.tsx src/SubBoardContentMode.test.tsx src/VariationReplay.test.tsx src/components/EngineSetupPanel.test.tsx src/domain/foregroundEngine.test.ts src/App.test.tsx src/App.preferences.test.tsx
+npm run build
+```
+
+On application source `b23f3eb16c16ad63bf4570d7ecc9bf22c274ea05`, model20, manager22 unit+9 catalog+135 lifecycle and gateway151 checks passed. The affected frontend run passed249/250; its old NoEngine preference-race fixture was corrected to use a verified Ready run, then all24 preference tests and TypeScript/Vite build passed. All250 affected cases therefore passed across these runs. The new request-feature regressions first failed with unsupported selected-node IPC and a saved task preset, then passed with ownership/policy and candidate admission. Six new manager admission cases retain independent protocol-log/state evidence. Repository-controlled capability states are not native GenericGtp runs.
+
+Windows M01–M03 passed on exact committed debug candidate `D:\dev\weiqi\worktrees\lizzieyzy-next-tauri\r8-capability-b23f3eb\candidate.json`, source SHA above. Evidence: `D:\dev\weiqi\acceptance\r8-capability-b23f3eb-run1\capability-evidence.json`, screenshots and process snapshots in the same directory. Private desktop PID71284/HWND47846250 used isolated app ID `org.lizzieyzy.next.acceptance.r1b73404ef1cc4b4882626d20e605390a`; the native WebView URL was `http://tauri.localhost/`. KataGo v1.12.3 Eigen CPU AVX2/FMA, model `D:\katago\yzy\weights\kata1-b20c256x2-s5303129600-d1228401921.bin.gz`, and config/workdir `D:\dev\weiqi\acceptance\r8-profile-01-assets` supplied the real runtime.
+
+- M01: both adapters saved/reloaded through the same page; Generic argv `['', 'two words', '中文参数']` retained item boundaries. Native invalid visits refused without changes. A real read-only catalog caused `os error 5` while disk bytes, published catalog, run, game and preferences stayed unchanged; attributes were restored afterward.
+- M02: real Ready run `6d0d2070-be5a-46bc-9f73-72127e6e73bd` published all11 verified flags through IPC/UI. Unsaved/saved adapter changes and saved argv remained pending without changing that run. Explicit Restart created `77a99cc5-aa62-4b93-b54a-af2189b4dedd`, adopting `-override-config numSearchThreads=2` and visits12; owned PID71276's command line confirmed the argv. Catalog selection did not start GTP.
+- M03: Generic selection from NoEngine and from Ready A, plus Restart after saving A as Generic, explained refusal before lifecycle IPC. A CDP function-call breakpoint recorded two successful snapshot positive controls and no Start/Switch/Restart calls per refused action; full catalog/game/preferences/run snapshots were unchanged. Real continuous analysis reached its visits limit, finite analysis completed with17 visits, and a current-node task completed1/1. Stop reaped KataGo while SGF `LZ` history and durable intent remained readable; the desktop exited normally with code0.
+
+The exact candidate also passed `real_katago_ready_job_stop_restart_and_switch` (1 passed,1 filtered,52.55s), with `LIZZIEYZY_REAL_KATAGO=1` and explicit engine/model/config/workdir environment paths. Log: `D:\dev\weiqi\acceptance\r8-capability-checks\real-katago.log`; repository transcripts are in that directory. Earlier profile-cutover evidence above retains its original candidate attribution for unchanged legacy migration/autoload paths. No Generic GTP readiness, game-move, cross-protocol N02/N03/N05/N06, provider or release-package claim follows from these checks; `ENG-10` remains Missing.
+
+### 2.2 Generic GTP lifecycle (R8 ticket 03)
+
+Repository checks: `cargo test -p app-model -p engine-manager` (189 passed, 2 real-KataGo tests ignored); `cargo test -p lizzieyzy-next-desktop --lib` (149 passed); the four affected capability/lifecycle frontend files (87 passed); `npm run build`. The five `gtp_` real-pipe scenarios cover split CRLF/multiline frames, stderr isolation, wrong IDs, malformed/oversized/flooded output, missing commands/v1, command rejection, exit/EOF, never-ending/trickle timeout, explicit recovery, cross-protocol promotion/rollback/latest intent and Stop during handshake. These fixture results are not native acceptance.
+
+Real-engine qualification uses [Ben Lambrechts' Cygwin Windows GNU Go 3.8 build](https://gnugo.baduk.org/gnugo2/gnugo-3.8.zip), with argv `--mode gtp --chinese-rules --positional-superko --forbid-suicide --level 1 --seed 1`. `D:\dev\weiqi\acceptance\r8-gtp-assets\qualification.json` records the full 42-command transcript: GTP v2, GNU Go/3.8, 138 commands, board sizes 1/2/5/9/13/19 accepted and 20 rejected, komi round-trip, forbidden suicide, immediate ko and repetition after two passes rejected, play/pass, `time_settings 0 1 1`, `time_left b 1 1`, `genmove b` → `C4`, and clean `quit`. Separate scoring probes distinguish Chinese area (`B+25.0`) from Japanese territory (`B+23.0`) on the same one-stone 5×5 board. This qualifies the configured engine, not a manager game/clock API or all rule/history combinations. Ticket 04 owns exact-position/budget operations; ticket 05 owns final Windows N02/N04 integration. `ENG-10` remains Missing.
+
+Native ticket-03 smoke passed on exact source candidate `ea89a48960e0e529508516e08d9cd12f52015ce2`, Windows private desktop / Tauri WebView2 (`http://tauri.localhost/`), isolated application identifier `org.lizzieyzy.next.acceptance.r1e5c305f57be41ee85645734f2e6a3f2`. Evidence: `D:\dev\weiqi\acceptance\r8-gtp-ea89a48-run1\native-evidence.json`, `gtp-ready.png`, `failed-switch.png`, `process-*.json`; fresh-launch evidence is in sibling `r8-gtp-ea89a48-run2`.
+
+- The UI saved the qualified GNU Go profile, started it, displayed verified GTP v2 / GNU Go 3.8 / 138 commands without analysis admission, and stopped it; owned PID64416 was reaped.
+- GNU Go with `--version` as a bad GTP candidate produced a visible framing failure; KataGo run `1ff43ab8-ed48-4a0b-93f9-5d31a48918f2` and continuous job `7b6f4eb8-7052-4724-8cf7-fc4d8ae4e1bb` remained searching. A subsequent valid GTP switch promoted a new run and reaped KataGo PID80468.
+- Explicit GTP Restart replaced PID26724 with PID31688 and a new run ID. Normal app exit (Discard of isolated analysis changes) reaped the owned engine; a fresh app launch retained all three profiles but restored no live run. Both isolated sessions exited normally.
+- The same candidate passed `real_katago_ready_job_stop_restart_and_switch` (1 passed, 1 filtered, 53.09s), using the ENG-09 CPU/model/config assets above. Full log: `D:\dev\weiqi\acceptance\r8-gtp-assets\real-katago.log`.
+
+These are ticket-03 native lifecycle observations, not ticket-04 exact-position/game-move/time-budget implementation or the final ticket-05 combination matrix. `ENG-10` was Missing at that checkpoint; final acceptance is recorded in §2.4 below. Provider, release and physical-display acceptance are unchanged.
+
+### 2.3 Exact-position budgeted moves (R8 ticket 04)
+
+`computeGameMove` and `cancelGameMove` wrap native `foreground_engine_game_move` and `foreground_engine_cancel_game_move`; no game UI or SGF commit is introduced. Supply the current Ready run, semantic generation, selected NodePath and `ComputeBudgetDto { deadline_ms, max_visits }`. KataGo requires positive visits and a deadline; GTP requires a deadline and rejects visits. Watch `game_move_job` for the cancellation identity. A successful result reports whether both GTP time commands were mapped. The current game and durable preferences remain unchanged.
+
+Exact admission supports square boards 2–19, explicit `RU[Chinese]` or `RU[Chinese-KGS]`, half-integer komi, empty root, root PL, alternating move/pass history and black root handicap for KataGo. Chinese-KGS uses positional superko; both rule dictionaries include AREA scoring, no suicide/tax/button, white handicap bonus N and friendly passes, following [KataGo's rule definitions](https://github.com/lightvector/KataGo/blob/v1.12.3/docs/GTP_Extensions.md). It rejects malformed replay, white/mixed/intermediate setup, unrepresentable PL, unknown rules and rectangles rather than flattening or inventing passes.
+
+GenericGtp game-move qualification is GNU Go 3.8 / GTP v2 with exactly `--mode gtp --chinese-rules --positional-superko --forbid-suicide --level 1 --seed 1`, board size 2/5/9/13/19, Chinese-KGS and finite half-integer komi [-1000,1000]. Root setup is refused because handicap compensation has not been qualified. Other verified GTP engines remain lifecycle-only. Every admitted request sends a fresh board/komi/history synchronization. Time mapping requires both commands; manager deadlines apply in either case. Cancellation reaps GTP and leaves NoEngine; failure leaves Error; restart is explicit.
+
+Reproducible real-process acceptance entrypoint (run on the intended platform with explicit asset paths):
+
+```text
+LIZZIEYZY_REAL_GAME_MOVE=1
+LIZZIEYZY_MOVE_EVIDENCE=<fresh isolated directory>
+LIZZIEYZY_GNUGO_PROGRAM=<qualified GNU Go 3.8 executable>
+LIZZIEYZY_KATAGO_PROGRAM=<KataGo executable>
+LIZZIEYZY_KATAGO_MODEL=<model>
+LIZZIEYZY_KATAGO_CONFIG=<analysis config>
+cargo test -p engine-manager --lib real_exact_move_smoke -- --ignored --nocapture
+```
+
+This opt-in harness uses the production manager for both actual processes, records exact projection, full move wire transcript, typed results, version/launch snapshot and owned-process cleanup in `move-transcript.json`. It covers move/pass history and root PL, plus KataGo setup, hard timeout and targeted cancellation. Real-engine and native evidence must identify their exact candidate; fixture passes alone do not accept N05/N06 or ENG-10.
+
+Ticket-04 acceptance passed on committed source `62841b149361603a5701170fd84179a25f306d73` (Windows x64, private desktop, isolated app-data, actual Tauri WebView2):
+
+- Production-manager smoke: **1 passed**, GNU Go **3.8** and KataGo **1.12.3 Eigen CPU AVX2/FMA**, using the qualified GNU argv above and the ENG-09 model/config assets. `D:\dev\weiqi\acceptance\r8-move-62841b1-manager\move-transcript.json` contains 81 records: 22 stdin, 37 stdout, 7 exact positions, 5 typed results, both version/run/PID records, timeout/cancel target-final confirmations and both exits. GNU mapped time for both history and root-PL requests; KataGo also handled true root handicap and returned Ready after timeout/cancel.
+- Native gateway smoke: `D:\dev\weiqi\acceptance\r8-move-62841b1-native\gateway-evidence.json` records both real adapters through `foreground_engine_game_move`, typed budget refusal, explicit cancellation, and path round-trip cancellation. SGF bytes/comments, selected path, semantic generation, dirty/source and durable preferences/profiles were unchanged by move/refusal. This exercises the native IPC boundary, not a new game UI.
+- Cleanup: manager PIDs 55324/4972 reaped; native app PID 84504 exited with code 0. `process-stopped.json` and `process-final.json` in the native evidence directory show no engine child and then no surviving tracked process. The IPC harness changed backend selection without updating the React view; its final window-close request therefore used a stale path. After verified engine Stop, `confirm_native_exit` closed this isolated fixture. This is not additional native close-UI acceptance; ticket-03 lifecycle evidence retains its original attribution.
+- Final repair checks: desktop library **152 passed**, manager move **11 passed**, foreground lifecycle **138 passed**. A completed-result A→B→A publication regression failed before repair and passed afterward. Standards and Spec review both passed; no follow-up candidates. Earlier candidate `193f63cb70bf094671b2480185352b84b51abb28` evidence remains historical; final native evidence above was rerun after the publication repair.
+
+Ticket 04 supplies the move evidence inherited by ticket 05 below; it did not independently close the broader integration or provider/release/display-matrix gates.
+
+### 2.4 R8 integrated acceptance and R9 handoff (ticket 05)
+
+R8 runtime acceptance passed on **2026-10-02**, exact source **`42cd91a657d2710b826cc1b94f21f168de64a0fa`**, repository `qiyi71w/lizzieyzy-next-tauri`, branch `feat/r8-profile-catalog-01`, WSL worktree `/home/dev/dev/weiqi/worktrees/lizzieyzy-next-tauri/r8-profile-01-20261001`. The investigation baseline remains `a0c8ed370f620341c863a3bb8fd4936710d82e72`; ticket 04's final HEAD is this integration start. Tickets 01–04 are already in its ancestry. No integration merge or new main baseline was needed, and ticket 05 changes documentation only.
+
+**Evidence inheritance:** catalog migration and atomic save retain ticket 01's `966e282b986c4e42a3f7bcdf73b1a21158ebfe33` and ticket 02's `b23f3eb16c16ad63bf4570d7ecc9bf22c274ea05` attribution (§2/§2.1). The catalog writer is unchanged; current catalog/UI regressions and final reload/Autoload cover the subsequently changed consumers. Ticket 03's lifecycle evidence remains at `ea89a48960e0e529508516e08d9cd12f52015ce2` (§2.2); current manager tests and the final native switches cover later dispatch changes. Ticket 04's real manager and gateway evidence remains at `62841b149361603a5701170fd84179a25f306d73` (§2.3): its only delta to the integration source is six DEVELOPMENT lines, so source, lockfile, build inputs and move behavior are equivalent. Its retained GNU/KataGo assets and launch contracts are reused. None of these earlier runs is relabelled as a new ticket-05 run.
+
+**Final repository checks** (Linux; actual command results, not native substitutes):
+
+```bash
+unset DISPLAY && cargo test -p app-model -p sgf -p engine-manager -p lizzieyzy-next-desktop --lib --tests
+# apps/desktop working directory:
+unset DISPLAY && npm test -- src/EngineLifecycle.test.tsx src/SelectedNodeAnalysis.test.tsx src/TruthfulAnalysisActions.test.tsx src/domain/foregroundEngine.test.ts src/api/backend.engineProfiles.test.ts src/components/EngineSetupPanel.test.tsx
+```
+
+Rust: **457 passed, 0 failed, 3 ignored**, 18 executables; app-model20, manager22/catalog9/lifecycle138/move11, gateway152 plus cache-cutover2, SGF103. The three opt-in real-engine tests were not run by this Linux command; their Windows evidence is attributed separately. Frontend: **135 passed**, six files. Logs are `rust-tests.log` and `frontend-tests.log` in the run1 directory below. The exact Windows candidate preparation also completed the frontend and native debug build. No release packaging was run.
+
+| Repository gate | Current result and evidence |
+| --- | --- |
+| P01 | PASS: unchanged catalog migration/atomic writer; current catalog9 and manager unit checks, inherited native legacy/no-rewrite and denied-save evidence in §2/§2.1. |
+| P02 | PASS: actual argv/cwd pipe coverage in current manager tests; inherited spaced/Chinese/empty argv native save/reload. Final native GNU command lines match saved argv. |
+| P03 | PASS: current lifecycle/UI immutable snapshots; run1 `confirmed-gtp-pending-seed2` keeps seed1 until explicit Restart, run2 Autoload edits keep the same live run. |
+| P04 | PASS: current lifecycle138 includes bounded GTP framing, IDs, missing commands, command errors, EOF, timeout/trickle/flood and recovery; ticket-03 pipe evidence retained. |
+| P05 | PASS: current lifecycle cross-protocol promotion/rollback/stale/Stop regressions; final bad-GTP native rollback preserves KataGo. |
+| P06 | PASS: current SGF103, manager move11 and gateway152; inherited exact transcripts and immutable-game observations for both actual engines. |
+| P07 | PASS: move11 covers paired time commands, visits refusal and operation-wide deadline; inherited GNU real time mapping and KataGo budget/timeout. |
+| P08 | PASS: move11 and manager unit checks cover typed/legal results, unique completed `order=0`, invalid candidates and no duplicate play; inherited real move results. |
+| P09 | PASS: current lifecycle/move/gateway occupancy, identity and single-use publication regressions; inherited actual cancellation and process cleanup. |
+| P10 | PASS: current rendered-UI tests plus final Ready-GTP native actions with verified zero-submission tracing, preserved SGF analysis and intent. |
+| P11 | PASS: current lifecycle138/gateway152 and affected frontend tests; actual switch-back finite/continuous analysis, strong departure hold and normal window exit below. |
+
+**Final native setup:** Windows x64, real Tauri/WebView2 **154.0.4258.48**, debug application; isolated identifier `org.lizzieyzy.next.acceptance.re06afb11e4794adf9734e823ef679e0f`, private Win32 desktop per session. Candidate: `D:\dev\weiqi\worktrees\lizzieyzy-next-tauri\r8-integrated-42cd91a\candidate.json`. GNU Go **3.8** uses the qualified executable/argv from §2.3; KataGo **1.12.3 Eigen CPU AVX2/FMA** uses `D:\katago\yzy\katago_cpu_avx2\katago.exe`, the `kata1-b20c256x2-s5303129600-d1228401921.bin.gz` model and `D:\dev\weiqi\acceptance\r8-profile-01-assets\analysis.cfg`. No network service or credential was required.
+
+Evidence roots are `D:\dev\weiqi\acceptance\r8-integrated-42cd91a-run1`, `-run2`, and `-run3`. Each retains `run.json` and `process-final.json`; run1 also contains `native-evidence.json`, `gtp-history-surface.png`, `cancel-departure-save.json`, and intermediate process snapshots. Run2 contains `autoload-evidence.json`; run3 contains `cold-start-evidence.json` and `process-no-engine.json`.
+
+| Native gate | Result, actual observation and attribution |
+| --- | --- |
+| N01 | PASS: inherit legacy migration and denied-save from 01/02, not rerun. Final GUI saves adapter-specific profiles/argv and reloads three profiles across fresh app processes; single GNU Autoload is saved, used, then cleared durably. M01 remains ticket 02's native catalog proof. |
+| N02 | PASS on final candidate: real KataGo Ready → GNU Go Ready → KataGo Ready; verified analysis belongs to the primary run. GNU `--version` fails framing and preserves the original KataGo run/SGF/continuous state. GTP process snapshot contains only the owned GNU child, not a hidden KataGo. |
+| N03 | PASS on final candidate: disabled analysis menu/continuous/task controls explain unavailable capability; actual disabled-menu clicks, board Space and task Start produce **zero IPC submissions**. A passive CDP function-call breakpoint on the immutable Tauri invoke function was positive-controlled with `foreground_engine_snapshot`; the earlier ineffective assignment observer is excluded. Before/after SGF, preferences and snapshot are equal; historical candidates/chart/comment remain visible. A cancelled native Save As leaves `safety_hold`, preserved across GTP/Space and return to KataGo; only explicit eligible Space releases it. This is Ready-GTP evidence, not ticket 02's runtime-unavailable M03. |
+| N04 | PASS on final candidate: saved GNU seed2 is pending while the live run remains seed1; explicit Restart creates a new run and PID with seed2. Seed2 is deliberately outside game-move qualification (`game_move=false`), not an N05 claim. Stop removes the engine. Normal window close with actual dirty-game Discard reaps KataGo. Run2 creates a fresh GNU run from Autoload, no recovered jobs; clearing Autoload does not stop that run. After normal GNU exit, run3 is `no_engine` with no jobs or engine process and continuous intent retained. M02 remains attributed to ticket 02. |
+| N05 | PASS by equivalent-source inheritance from ticket 04: production manager → real GNU Go3.8 → exact history/root-PL sync → paired time mapping → legal genmove → Stop; complete 81-record combined transcript and PIDs55324/4972 cleanup in §2.3. Final native lifecycle integration supplements, but does not replace, that protocol proof. |
+| N06 | PASS: ticket-04 exact KataGo JSONL/order0/budget/cancel and immutable-game proof inherited under the same equivalence. Final candidate additionally completes actual continuous and finite selected-node analysis after cross-protocol return, preserves the strong hold, and closes through normal UI without the ticket-04 stale-React IPC harness workaround. |
+
+Run1 app PID72104 stopped GNU PID81912 explicitly, then normally closed with KataGo PID83980. Run2 app PID63028 normally closed with GNU PID54424. Run3 app PID82436 started no engine. All three application exit codes are **0**, and all three final process lists are empty. Only these owned sessions were stopped. Temporary acceptance scripts stayed outside the repository; no test adapter, product scaffold or R9 game UI was added.
+
+M01–M03 retain their original ENG-09 scope and candidate; N02/N03/N04/N06 add the final combination proof. ENG-01 and historical R3/R4/R6/R7 evidence are unchanged. **macOS and Linux GUI: NOT RUN**; no cross-platform GUI, installer, signing, provider/readboard or physical-display acceptance is claimed. The ticket-05 completion record owns the separate final Standards/Spec verdict and committed documentation HEAD.
+
+**R9 contract:** use the version-1 catalog and read-only legacy migration; saved profiles and Autoload are durable, runs/jobs/capabilities/budgets are not recovered. Read verified primary-run capabilities, not adapter ceilings or the selected draft. `computeGameMove` takes Ready run identity, current generation/NodePath and a positive `ComputeBudgetDto`; cancellation uses the active `game_move_job` identity. Results are typed move/pass/resign with identities and `engine_time_mapped`; admission, occupancy, unsupported budget/position, command/protocol, timeout, process-exit and stale/cancel paths remain typed failures. Exact-position and qualified GNU restrictions are in §2.3 and Architecture; unknown semantics are rejected before I/O or mutation. KataGo needs positive visits plus deadline and target-final cleanup; GTP rejects visits and cancellation terminates its run, requiring explicit recovery. Every GTP request fully resynchronizes; `genmove` already changes the internal board, so never replay its result as another `play`. The read API never commits SGF. R9 alone owns global Match Session/Reservation, game commit, turn/terminal ownership and user-facing game modes.
 
 ### 3. Start From The Engine Switcher
 

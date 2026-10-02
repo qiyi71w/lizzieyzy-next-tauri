@@ -9,6 +9,8 @@ pub use window_geometry::{WindowGeometryDto, WindowGeometryStatusDto};
 
 mod analysis_task;
 pub use analysis_task::*;
+mod game_move;
+pub use game_move::*;
 
 mod analysis_job;
 pub use analysis_job::{
@@ -377,20 +379,46 @@ pub enum ProblemSeverity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineProfileDto {
     pub name: String,
-    pub engine_path: String,
-    pub model_path: Option<String>,
-    pub config_path: Option<String>,
+    pub program: String,
+    pub argv: Vec<String>,
     pub working_dir: Option<String>,
-    pub backend: EngineBackend,
+    #[serde(flatten)]
+    pub adapter: EngineAdapterSettings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EngineBackend {
     KataGoAnalysis,
-    KataGoGtp,
     GenericGtp,
-    ReadboardSidecar,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "adapter_kind", content = "settings", rename_all = "snake_case")]
+pub enum EngineAdapterSettings {
+    KataGoAnalysis(KataGoSettings),
+    GenericGtp(GenericGtpSettings),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KataGoSettings {
+    pub model_path: Option<String>,
+    pub config_path: Option<String>,
+    pub max_visits: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenericGtpSettings {}
+
+impl EngineProfileDto {
+    pub fn adapter_kind(&self) -> EngineBackend {
+        match self.adapter {
+            EngineAdapterSettings::KataGoAnalysis(_) => EngineBackend::KataGoAnalysis,
+            EngineAdapterSettings::GenericGtp(_) => EngineBackend::GenericGtp,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -414,6 +442,8 @@ pub enum EngineFailureKind {
     Asset,
     Readiness,
     Protocol,
+    Command,
+    ProcessExit,
     NonzeroExit,
     Timeout,
     Cancellation,
@@ -452,9 +482,35 @@ impl std::error::Error for EngineFailureDto {}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineCapabilitySnapshotDto {
     pub adapter_kind: EngineBackend,
+    pub analysis: Option<EngineAnalysisCapabilitiesDto>,
+    /// Adapter implementation is available; each request still requires exact admission.
+    #[serde(default)]
+    pub game_move: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gtp: Option<EngineGtpFactsDto>,
+}
+
+/// Observed protocol facts only; command discovery does not admit game operations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineGtpFactsDto {
+    pub protocol_version: u8,
+    pub name: String,
+    pub version: String,
+    pub commands: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineAnalysisCapabilitiesDto {
     pub selected_node_analysis: bool,
+    pub continuous_analysis: bool,
     pub whole_game_analysis: bool,
+    pub candidates: bool,
+    pub pv: bool,
+    pub winrate: bool,
     pub root_score: bool,
+    pub ownership: bool,
+    pub policy: bool,
+    pub visits_limit: bool,
     pub protocol_cancel: bool,
 }
 
@@ -536,6 +592,8 @@ pub struct ForegroundEngineSnapshotDto {
     pub selected_node_job: Option<AnalysisJobStartedDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub whole_game_job: Option<AnalysisJobStartedDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_move_job: Option<GameMoveJobDto>,
 }
 
 impl ForegroundEngineSnapshotDto {
@@ -546,6 +604,7 @@ impl ForegroundEngineSnapshotDto {
             continuous: ContinuousAnalysisSnapshotDto::default(),
             selected_node_job: None,
             whole_game_job: None,
+            game_move_job: None,
         }
     }
 }
@@ -1020,11 +1079,14 @@ mod foreground_engine_wire {
     fn sample_profile() -> EngineProfileDto {
         EngineProfileDto {
             name: "Local KataGo".into(),
-            engine_path: "/bin/katago".into(),
-            model_path: Some("/models/model.bin".into()),
-            config_path: Some("/configs/analysis.cfg".into()),
+            program: "/bin/katago".into(),
+            argv: vec![],
             working_dir: Some("/tmp/engine".into()),
-            backend: EngineBackend::KataGoAnalysis,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: Some("/models/model.bin".into()),
+                config_path: Some("/configs/analysis.cfg".into()),
+                max_visits: 800,
+            }),
         }
     }
 
@@ -1033,6 +1095,7 @@ mod foreground_engine_wire {
         let snapshot = ForegroundEngineSnapshotDto {
             revision: 4,
             continuous: ContinuousAnalysisSnapshotDto::default(),
+            game_move_job: None,
             lifecycle: ForegroundEngineLifecycleDto::Ready {
                 run: EngineRunDto {
                     run_id: "run-1".into(),
@@ -1041,10 +1104,21 @@ mod foreground_engine_wire {
                     profile_snapshot: sample_profile(),
                     capability_snapshot: Some(EngineCapabilitySnapshotDto {
                         adapter_kind: EngineBackend::KataGoAnalysis,
-                        selected_node_analysis: true,
-                        whole_game_analysis: true,
-                        root_score: true,
-                        protocol_cancel: true,
+                        game_move: true,
+                        gtp: None,
+                        analysis: Some(EngineAnalysisCapabilitiesDto {
+                            selected_node_analysis: true,
+                            continuous_analysis: true,
+                            whole_game_analysis: true,
+                            candidates: true,
+                            pv: true,
+                            winrate: true,
+                            root_score: true,
+                            ownership: true,
+                            policy: true,
+                            visits_limit: true,
+                            protocol_cancel: true,
+                        }),
                     }),
                 },
             },
@@ -1098,11 +1172,11 @@ mod foreground_engine_wire {
             "kata_go_analysis"
         );
         assert_eq!(
-            snapshot_json["lifecycle"]["run"]["profile_snapshot"]["backend"],
+            snapshot_json["lifecycle"]["run"]["profile_snapshot"]["adapter_kind"],
             "kata_go_analysis"
         );
         assert_eq!(
-            snapshot_json["lifecycle"]["run"]["capability_snapshot"]["protocol_cancel"],
+            snapshot_json["lifecycle"]["run"]["capability_snapshot"]["analysis"]["protocol_cancel"],
             true
         );
         assert_eq!(failure_json["operation"], "start");
@@ -1132,6 +1206,7 @@ mod foreground_engine_wire {
         let snapshot = ForegroundEngineSnapshotDto {
             revision: 1,
             continuous: ContinuousAnalysisSnapshotDto::default(),
+            game_move_job: None,
             lifecycle: ForegroundEngineLifecycleDto::Switching {
                 primary: run.clone(),
                 candidate: EngineRunDto {
@@ -1157,6 +1232,7 @@ mod foreground_engine_wire {
         let clean = ForegroundEngineSnapshotDto {
             revision: 1,
             continuous: ContinuousAnalysisSnapshotDto::default(),
+            game_move_job: None,
             lifecycle: ForegroundEngineLifecycleDto::NoEngine { failure: None },
             selected_node_job: None,
             whole_game_job: None,
@@ -1183,6 +1259,7 @@ mod foreground_engine_wire {
         let failed = ForegroundEngineSnapshotDto {
             revision: 3,
             continuous: ContinuousAnalysisSnapshotDto::default(),
+            game_move_job: None,
             lifecycle: ForegroundEngineLifecycleDto::NoEngine {
                 failure: Some(failure.clone()),
             },

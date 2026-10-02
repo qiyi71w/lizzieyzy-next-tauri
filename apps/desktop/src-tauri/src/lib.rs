@@ -1,19 +1,17 @@
 use app_model::{
     AnalysisFrameDto, AnalysisJobModeDto, AnalysisJobStartedDto, AppHealthDto, CurrentGameError,
-    CurrentGameResultDto, EngineBackend, EngineFailureDto, EngineFailureKind, EngineOperationDto,
-    EngineProfileDto, ForegroundEngineEventDto, ForegroundEngineSnapshotDto, GameFileFormatDto,
-    GameFileImportDto, MoveVertex, NodePath, PlayerColor, PositionDto, ProviderError, ProviderErrorKind,
-    ProviderFetchMethod, ProviderFetchRequest, ProviderFetchResult, ProviderGameMetadata,
-    ProviderImportRequest, ProviderImportResult, ProviderKind, ReadboardSidecarProbeRequest,
-    ReadboardSidecarProbeResult, ReadboardSidecarSyncSnapshotRequest, ReadboardSidecarSyncSnapshotResult,
-    StoneDto,
+    CurrentGameResultDto, EngineFailureDto, EngineFailureKind, EngineOperationDto, EngineProfileDto,
+    ForegroundEngineEventDto, ForegroundEngineSnapshotDto, GameFileFormatDto, GameFileImportDto, MoveVertex,
+    NodePath, PlayerColor, PositionDto, ProviderError, ProviderErrorKind, ProviderFetchMethod,
+    ProviderFetchRequest, ProviderFetchResult, ProviderGameMetadata, ProviderImportRequest,
+    ProviderImportResult, ProviderKind, ReadboardSidecarProbeRequest, ReadboardSidecarProbeResult,
+    ReadboardSidecarSyncSnapshotRequest, ReadboardSidecarSyncSnapshotResult, StoneDto,
 };
 use engine_manager::{
     build_command_spec, check_assets, default_engine_profiles_settings, normalize_engine_profiles,
     parse_engine_profiles, save_engine_profiles as persist_engine_profiles, AssetCheck, CommandSpec,
-    EngineProfileCatalog, EngineProfileRecord as EngineProfileRecordDto,
-    EngineProfilesSettings as EngineProfilesSettingsDto, ForegroundEngineConfig, ForegroundEngineManager,
-    SavedEngineProfile, SelectedNodeJobRequest, WholeGameWorkItem, DEFAULT_ENGINE_PROFILE_ID,
+    EngineProfileCatalog, EngineProfilesSettings as EngineProfilesSettingsDto, ForegroundEngineConfig,
+    ForegroundEngineManager, SavedEngineProfile, SelectedNodeJobRequest, WholeGameWorkItem,
 };
 use go_core::ReadBoardLocalContext;
 use katago_protocol::{analysis_query_from_position, AnalysisQueryOptions};
@@ -21,7 +19,6 @@ use provider_core::{
     invalid_payload, invalid_request, invalid_url, timeout, transport_failed, ProviderResult,
     ProviderTransport,
 };
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
@@ -271,12 +268,6 @@ impl EngineProfileCatalog for DiskEngineCatalog {
 
 fn map_engine_failure(failure: EngineFailureDto) -> String {
     failure.message
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct EngineProfileSettingsDto {
-    profile: EngineProfileDto,
-    max_visits: u32,
 }
 
 #[tauri::command]
@@ -712,12 +703,7 @@ fn katago_launch_plan(profile: EngineProfileDto) -> Result<CommandSpec, String> 
 
 #[tauri::command]
 fn engine_asset_checks(profile: EngineProfileDto) -> Vec<AssetCheck> {
-    let mut checks = check_assets(&profile);
-    if matches!(profile.backend, EngineBackend::KataGoAnalysis) {
-        ensure_asset_check(&mut checks, &profile.model_path, "model");
-        ensure_asset_check(&mut checks, &profile.config_path, "config");
-    }
-    checks
+    check_assets(&profile)
 }
 
 #[tauri::command]
@@ -769,44 +755,6 @@ fn update_workspace_shares(
 }
 
 #[tauri::command]
-fn load_engine_profile_settings(app_handle: AppHandle) -> Result<Option<EngineProfileSettingsDto>, String> {
-    let settings = load_engine_profiles_settings(app_handle)?;
-    let selected = selected_engine_profile_record(&settings)
-        .or_else(|| settings.profiles.first())
-        .cloned();
-    Ok(selected.map(|record| EngineProfileSettingsDto {
-        profile: record.profile,
-        max_visits: record.max_visits,
-    }))
-}
-
-#[tauri::command]
-fn save_engine_profile_settings(
-    app_handle: AppHandle,
-    manager: State<'_, ForegroundEngineManager>,
-    settings: EngineProfileSettingsDto,
-) -> Result<EngineProfileSettingsDto, String> {
-    validate_engine_profile_settings(&settings)?;
-    let current = load_engine_profiles_from_disk(&app_handle).ok();
-    let collection = EngineProfilesSettingsDto {
-        selected_profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
-        autoload_profile_id: current.and_then(|settings| settings.autoload_profile_id),
-        profiles: vec![EngineProfileRecordDto {
-            id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
-            profile: settings.profile.clone(),
-            max_visits: settings.max_visits,
-        }],
-    };
-    let saved = save_engine_profiles_settings(app_handle, manager, collection)?;
-    let selected = selected_engine_profile_record(&saved)
-        .ok_or_else(|| "saved engine profile collection did not include the selected profile".to_string())?;
-    Ok(EngineProfileSettingsDto {
-        profile: selected.profile.clone(),
-        max_visits: selected.max_visits,
-    })
-}
-
-#[tauri::command]
 fn load_engine_profiles_settings(app_handle: AppHandle) -> Result<EngineProfilesSettingsDto, String> {
     load_engine_profiles_from_disk(&app_handle)
 }
@@ -815,7 +763,9 @@ fn load_engine_profiles_from_disk(app_handle: &AppHandle) -> Result<EngineProfil
     let path = engine_profile_path(app_handle)?;
     match fs::read_to_string(&path) {
         Ok(contents) => parse_engine_profiles_settings(&contents, &path),
-        Err(err) if err.kind() == ErrorKind::NotFound => load_legacy_engine_profile_settings(app_handle),
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            load_legacy_engine_profile_settings(&legacy_engine_profile_path()?)
+        }
         Err(err) => Err(format!("failed to read {}: {err}", path.display())),
     }
 }
@@ -827,6 +777,16 @@ fn save_engine_profiles_settings(
     settings: EngineProfilesSettingsDto,
 ) -> Result<EngineProfilesSettingsDto, String> {
     let current = load_engine_profiles_from_disk(&app_handle)?;
+    let path = engine_profile_path(&app_handle)?;
+    save_engine_profiles_at_path(&path, &manager, &current, settings)
+}
+
+fn save_engine_profiles_at_path(
+    path: &Path,
+    manager: &ForegroundEngineManager,
+    current: &EngineProfilesSettingsDto,
+    settings: EngineProfilesSettingsDto,
+) -> Result<EngineProfilesSettingsDto, String> {
     let settings = normalize_engine_profiles(settings)?;
     for record in &current.profiles {
         if !settings.profiles.iter().any(|next| next.id == record.id) {
@@ -835,8 +795,7 @@ fn save_engine_profiles_settings(
                 .map_err(map_engine_failure)?;
         }
     }
-    let path = engine_profile_path(&app_handle)?;
-    persist_engine_profiles(&path, settings)
+    persist_engine_profiles(path, settings)
 }
 
 fn bind_selected_node_job(
@@ -907,6 +866,40 @@ fn foreground_engine_start_selected_node(
             Some(max_visits),
         )?)
         .map_err(Box::new)
+}
+
+#[tauri::command]
+async fn foreground_engine_game_move(
+    manager: State<'_, ForegroundEngineManager>,
+    current_game: State<'_, CurrentGameState>,
+    request: app_model::GameMoveRequestDto,
+) -> EngineCommandResult<app_model::GameMoveResultDto> {
+    let handle = current_game.start_game_move(&manager, request)?;
+    let identity = handle.identity.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || handle.wait().map_err(Box::new))
+        .await
+        .map_err(|error| {
+            Box::new(EngineFailureDto {
+                operation: EngineOperationDto::Job,
+                run_id: Some(identity.run_id),
+                job_id: Some(identity.job_id),
+                switch_id: None,
+                profile_id: None,
+                kind: EngineFailureKind::Protocol,
+                message: format!("move worker failed: {error}"),
+                diagnostic_summary: None,
+            })
+        })??;
+    current_game.publish_game_move(&manager, result)
+}
+
+#[tauri::command]
+fn foreground_engine_cancel_game_move(
+    manager: State<'_, ForegroundEngineManager>,
+    run_id: String,
+    job_id: String,
+) -> EngineCommandResult<()> {
+    manager.cancel_game_move(&run_id, &job_id).map_err(Box::new)
 }
 
 fn cancel_document_analysis_job(
@@ -1001,12 +994,29 @@ fn katago_start_analyze_game(
 
 #[tauri::command]
 fn preview_analysis_scope(
+    manager: State<'_, ForegroundEngineManager>,
     current_game: State<'_, CurrentGameState>,
     generation: u64,
     scope: app_model::AnalysisScopeDto,
     swing_criteria: Option<app_model::AnalysisSwingCriteriaDto>,
-) -> Result<app_model::AnalysisScopePreviewDto, app_model::CurrentGameError> {
-    current_game.preview_analysis_scope(generation, scope, swing_criteria)
+) -> EngineCommandResult<app_model::AnalysisScopePreviewDto> {
+    manager
+        .check_analysis_task_admission(swing_criteria.as_ref())
+        .map_err(Box::new)?;
+    current_game
+        .preview_analysis_scope(generation, scope, swing_criteria)
+        .map_err(|error| {
+            Box::new(EngineFailureDto {
+                operation: EngineOperationDto::Job,
+                run_id: None,
+                switch_id: None,
+                job_id: None,
+                profile_id: None,
+                kind: EngineFailureKind::InvalidState,
+                message: error.message,
+                diagnostic_summary: None,
+            })
+        })
 }
 
 #[tauri::command]
@@ -1087,57 +1097,16 @@ fn katago_cancel_analysis(
     cancel_document_analysis_job(&current_game, &manager, &run_id, &job_id)
 }
 
-fn ensure_asset_check(checks: &mut Vec<AssetCheck>, path: &Option<String>, label: &str) {
-    if checks.iter().any(|check| check.label == label) {
-        return;
-    }
-    checks.push(AssetCheck {
-        path: path.clone().unwrap_or_default(),
-        exists: false,
-        required: true,
-        label: label.to_string(),
-    });
-}
-
-fn selected_engine_profile_record(settings: &EngineProfilesSettingsDto) -> Option<&EngineProfileRecordDto> {
-    settings
-        .profiles
-        .iter()
-        .find(|profile| profile.id == settings.selected_profile_id)
-}
-
 fn parse_engine_profiles_settings(contents: &str, path: &Path) -> Result<EngineProfilesSettingsDto, String> {
     parse_engine_profiles(contents).map_err(|err| format!("failed to parse {}: {err}", path.display()))
 }
 
-fn load_legacy_engine_profile_settings(app_handle: &AppHandle) -> Result<EngineProfilesSettingsDto, String> {
-    let legacy_path = legacy_engine_profile_path()?;
-    match fs::read_to_string(&legacy_path) {
-        Ok(contents) => {
-            let settings = parse_engine_profiles_settings(&contents, &legacy_path)?;
-            let path = engine_profile_path(app_handle)?;
-            persist_engine_profiles(&path, settings.clone()).map_err(|err| {
-                format!(
-                    "failed to migrate engine profiles from {} to {}: {err}",
-                    legacy_path.display(),
-                    path.display()
-                )
-            })?;
-            Ok(settings)
-        }
+fn load_legacy_engine_profile_settings(legacy_path: &Path) -> Result<EngineProfilesSettingsDto, String> {
+    match fs::read_to_string(legacy_path) {
+        Ok(contents) => parse_engine_profiles_settings(&contents, legacy_path),
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(default_engine_profiles_settings()),
         Err(err) => Err(format!("failed to read {}: {err}", legacy_path.display())),
     }
-}
-
-fn validate_engine_profile_settings(settings: &EngineProfileSettingsDto) -> Result<(), String> {
-    if settings.max_visits == 0 {
-        return Err("max_visits must be greater than 0".to_string());
-    }
-    if settings.profile.name.trim().is_empty() {
-        return Err("engine profile name is required".to_string());
-    }
-    Ok(())
 }
 
 fn engine_profile_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
@@ -1411,8 +1380,6 @@ pub fn run() {
             update_workspace_visibility,
             update_recent_game_history,
             update_workspace_shares,
-            load_engine_profile_settings,
-            save_engine_profile_settings,
             load_engine_profiles_settings,
             save_engine_profiles_settings,
             katago_start_analyze_game,
@@ -1428,6 +1395,8 @@ pub fn run() {
             foreground_engine_restart,
             foreground_engine_switch,
             foreground_engine_start_selected_node,
+            foreground_engine_game_move,
+            foreground_engine_cancel_game_move,
             foreground_engine_continuous_action,
             foreground_engine_cancel_job
         ])
@@ -1475,6 +1444,51 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn legacy_gateway_read_preserves_file_and_surfaces_corruption() {
+        let directory = std::env::temp_dir().join(format!("legacy-profile-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("legacy.json");
+        let original = r#"{"profile":{"name":"围棋 引擎","engine_path":" D:\\引擎 空格\\katago.exe ","model_path":"模型.bin","config_path":"配置.cfg","working_dir":null,"backend":"kata_go_analysis"},"max_visits":123}"#;
+        std::fs::write(&path, original).unwrap();
+        let loaded = load_legacy_engine_profile_settings(&path).unwrap();
+        assert_eq!(loaded.profiles[0].profile.program, " D:\\引擎 空格\\katago.exe ");
+        assert_eq!(loaded.profiles[0].profile.name, "围棋 引擎");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        std::fs::write(&path, "{broken").unwrap();
+        let failure = load_legacy_engine_profile_settings(&path).unwrap_err();
+        assert!(failure.contains(&path.display().to_string()));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{broken");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn gateway_save_validation_and_write_errors_preserve_catalog_and_runtime() {
+        let directory = std::env::temp_dir().join(format!("profile-save-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("catalog.json");
+        let current = default_engine_profiles_settings();
+        persist_engine_profiles(&path, current.clone()).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let catalog = std::sync::Arc::new(engine_manager::InMemoryEngineProfileCatalog::new());
+        let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+        let run_before = manager.snapshot();
+        let mut invalid = current.clone();
+        invalid.profiles[0].profile.argv = vec!["-model=other".into()];
+        assert!(save_engine_profiles_at_path(&path, &manager, &current, invalid).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(engine_manager::load_engine_profiles(&path).unwrap(), current);
+        assert_eq!(manager.snapshot(), run_before);
+        let mut next = current.clone();
+        next.profiles[0].profile.name = "edited name".into();
+        std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
+        assert!(save_engine_profiles_at_path(&path, &manager, &current, next).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(engine_manager::load_engine_profiles(&path).unwrap(), current);
+        assert_eq!(manager.snapshot(), run_before);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn rejected_edit_keeps_continuous_job_admitted() {
@@ -1508,11 +1522,14 @@ for line in sys.stdin:
             profile_id: "test".into(),
             profile: EngineProfileDto {
                 name: "test".into(),
-                engine_path: executable.to_string_lossy().into(),
-                model_path: Some("model".into()),
-                config_path: Some("config".into()),
+                program: executable.to_string_lossy().into(),
+                argv: vec![],
                 working_dir: Some(directory.to_string_lossy().into()),
-                backend: EngineBackend::KataGoAnalysis,
+                adapter: app_model::EngineAdapterSettings::KataGoAnalysis(app_model::KataGoSettings {
+                    model_path: Some("model".into()),
+                    config_path: Some("config".into()),
+                    max_visits: 800,
+                }),
             },
         });
         let manager =

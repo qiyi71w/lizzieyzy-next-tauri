@@ -91,10 +91,11 @@ import {
   stopForegroundEngine,
   restartForegroundEngine,
   switchForegroundEngine,
-  loadEngineProfilesSettings
 } from "./api/backend";
 import {
   admitsForegroundEngineJobs,
+  admitsForegroundEngineQuery,
+  verifiedEngineCapabilitiesLabel,
   canRestartForegroundEngine,
   canStopForegroundEngine,
   displayedEngineFailure,
@@ -267,7 +268,10 @@ export function App() {
     lastSwitchIdRef.current
   );
   const engineLabel = engineStatusLabel(engineSnapshot);
-  const engineReady = admitsForegroundEngineJobs(engineSnapshot);
+  const engineReady = admitsForegroundEngineQuery(engineSnapshot) && admitsForegroundEngineJobs(engineSnapshot, "visits_limit");
+  const taskEngineReady = admitsForegroundEngineJobs(engineSnapshot, "whole_game_analysis");
+  const continuousEngineReady = admitsForegroundEngineQuery(engineSnapshot, "continuous_analysis")
+    && (!preferences.continuousVisitsLimitEnabled || admitsForegroundEngineJobs(engineSnapshot, "visits_limit"));
   const { showCoordinates, showMoveNumbers } = preferences;
   const [showBlackCandidates, setShowBlackCandidates] = useState(true);
   const [showWhiteCandidates, setShowWhiteCandidates] = useState(true);
@@ -677,11 +681,15 @@ export function App() {
     if (engineSnapshot.lifecycle.state === "error") {
       return { label: CONTINUOUS_ANALYSIS_RESUME_LABEL, disabled: true, title: "前台引擎运行失败；请先显式重启引擎。", status: "连续分析：引擎失败" };
     }
+    const ownsContinuousJob = engineSnapshot.selected_node_job?.mode === "continuous";
+    if (nativeRuntime && !continuousEngineReady && !ownsContinuousJob) {
+      return { label: CONTINUOUS_ANALYSIS_START_LABEL, disabled: true, title: "当前 run 未验证连续分析能力；已保存的连续分析意图保持不变。", status: "连续分析：当前引擎不可用" };
+    }
     if (!continuousEnabled) {
       return { label: CONTINUOUS_ANALYSIS_START_LABEL, disabled: continuousActionPending, status: continuousPhaseStatus(continuousPhase) };
     }
     if (continuousPhase === "time_limited" || continuousPhase === "visits_limited" || continuousPhase === "paused" || continuousPhase === "error" || continuousPhase === "safety_hold") {
-      const resumable = nativeRuntime && engineReady && Boolean(currentGame);
+      const resumable = nativeRuntime && continuousEngineReady && Boolean(currentGame);
       return {
         label: CONTINUOUS_ANALYSIS_RESUME_LABEL,
         disabled: continuousActionPending || !resumable,
@@ -896,6 +904,8 @@ export function App() {
     continuousActionPending,
     departurePending,
     engineReady,
+    continuousEngineReady,
+    taskEngineReady,
     engineSnapshot.lifecycle.state,
   ]);
 
@@ -929,11 +939,6 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
-    void loadEngineProfilesSettings()
-      .then((settings) => {
-        if (!cancelled) setEngineProfiles(settings.profiles);
-      })
-      .catch(() => undefined);
     const unlistenPromise = subscribeForegroundEngine(
       (snapshot) => {
         if (cancelled || snapshot.revision < latestSnapshotRevisionRef.current) return;
@@ -1015,10 +1020,13 @@ export function App() {
 
   function handleEngineCommand(kind: "once" | "game") {
     if (scoringRef.current || scoringPendingRef.current || (trialRef.current && kind === "game")) return;
-    const run = runFromSnapshot(engineSnapshot);
-    if (!run || !engineReady) return;
-    const record = engineProfiles.find((profile) => profile.id === run.profile_id);
-    const maxVisits = record?.max_visits ?? 800;
+    const snapshot = engineSnapshotRef.current;
+    const run = runFromSnapshot(snapshot);
+    if (!run || !admitsForegroundEngineJobs(snapshot, kind === "once" ? "selected_node_analysis" : "whole_game_analysis")) {
+      setMessage("当前 run 未验证所需的分析能力。历史分析仍可查看。");
+      return;
+    }
+    const maxVisits = run.profile_snapshot.adapter_kind === "kata_go_analysis" ? run.profile_snapshot.settings.max_visits : 800;
     if (kind === "once") void handleRunKataGo(run.profile_snapshot, maxVisits);
     else void handleAnalyzeKataGoGame(run.run_id, maxVisits);
   }
@@ -1029,12 +1037,14 @@ export function App() {
     if (run?.profile_id === profileId) return;
     const state = engineSnapshot.lifecycle.state;
     if (state !== "no_engine" && state !== "ready" && state !== "switching") return;
+    const profile = engineProfiles.find((record) => record.id === profileId)?.profile;
+    if (!profile) return;
     setEngineFailure(null);
     try {
       if (state === "no_engine") await startForegroundEngine(profileId);
       else await switchForegroundEngine(profileId);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(errorMessage(error));
     }
   }
 
@@ -2278,7 +2288,12 @@ export function App() {
   };
 
   async function handleRunKataGo(_profile: EngineProfileDto, maxVisits: number) {
-    const run = runFromSnapshot(engineSnapshot);
+    const snapshot = engineSnapshotRef.current;
+    const run = runFromSnapshot(snapshot);
+    if (!admitsForegroundEngineQuery(snapshot) || !admitsForegroundEngineJobs(snapshot, "visits_limit")) {
+      setMessage("当前 run 不支持单点分析所请求的 ownership、policy 或 visits 限制。");
+      return;
+    }
     const active = trialRef.current;
     if (active) {
       const run = runFromSnapshot(engineSnapshotRef.current);
@@ -2346,8 +2361,14 @@ export function App() {
       setMessage("浏览器预览只保存连续分析偏好，不会启动分析任务。");
       return;
     }
+    const continuousAdmitted = admitsForegroundEngineQuery(snapshot, "continuous_analysis")
+      && (!committedPreferencesRef.current.continuousVisitsLimitEnabled || admitsForegroundEngineJobs(snapshot, "visits_limit"));
+    if (!continuousAdmitted && snapshot.selected_node_job?.mode !== "continuous") {
+      setMessage("当前 run 未验证连续分析或所请求的 ownership、policy、visits 限制能力；已保存的连续分析意图保持不变。");
+      return;
+    }
     if ((phase === "time_limited" || phase === "visits_limited" || phase === "paused" || phase === "error" || phase === "safety_hold")
-      && (!admitsForegroundEngineJobs(snapshot) || !currentGameRef.current)) {
+      && (!continuousAdmitted || !currentGameRef.current)) {
       setMessage("继续连续分析需要可用的前台引擎和当前棋谱。");
       return;
     }
@@ -2458,6 +2479,10 @@ export function App() {
       setAnalysisTaskError(nativeRuntime ? "Analysis preview requires a current game." : nativeCurrentGameUnavailable);
       return;
     }
+    if (!admitsForegroundEngineJobs(engineSnapshotRef.current, "whole_game_analysis")) {
+      setAnalysisTaskError("当前 run 未验证整谱/task 分析能力。");
+      return;
+    }
     const request = ++analysisScopePreviewRequestRef.current;
     const draft = analysisScopeDraft;
     setAnalysisTaskRequestPending(true);
@@ -2468,12 +2493,14 @@ export function App() {
         : null;
       const criteriaError = swingCriteria ? swingCriteriaError(swingCriteria) : null;
       if (criteriaError) throw new Error(criteriaError);
+      assertTaskCapabilities(undefined, swingCriteria);
       const preview = await previewAnalysisScope({
         generation: game.generation,
         scope: analysisScopeFromDraft(draft),
         swingCriteria
       });
-      if (request === analysisScopePreviewRequestRef.current) setAnalysisScopePreview(preview);
+      if (request === analysisScopePreviewRequestRef.current
+        && admitsForegroundEngineJobs(engineSnapshotRef.current, "whole_game_analysis")) setAnalysisScopePreview(preview);
     } catch (error) {
       if (request === analysisScopePreviewRequestRef.current) setAnalysisTaskError(errorMessage(error));
     } finally {
@@ -2531,6 +2558,27 @@ export function App() {
     }
   }
 
+  function assertTaskCapabilities(runId?: string, swingCriteria?: AnalysisSwingCriteriaDto | null, stages: AnalysisStageConditionsDto[] = []) {
+    const snapshot = engineSnapshotRef.current;
+    if (!admitsForegroundEngineJobs(snapshot, "whole_game_analysis")
+      || (runId !== undefined && runFromSnapshot(snapshot)?.run_id !== runId)) {
+      throw new Error("当前 run 未验证整谱/task 分析能力，或当前 run 已变化。");
+    }
+    if (stages.length > 0 && !admitsForegroundEngineQuery(snapshot, "whole_game_analysis")) {
+      throw new Error("当前 run 不支持 task 请求的 ownership 或 policy。");
+    }
+    if (stages.some((stage) => stage.leading_candidate_visits.enabled)
+      && !admitsForegroundEngineJobs(snapshot, "candidates")) throw new Error("当前 run 不支持候选 visits 条件。");
+    if (stages.some((stage) => stage.total_visits.enabled || stage.leading_candidate_visits.enabled)
+      && !admitsForegroundEngineJobs(snapshot, "visits_limit")) throw new Error("当前 run 不支持 visits 限制。");
+    if (swingCriteria?.winrate_change_percentage_points.enabled && !admitsForegroundEngineJobs(snapshot, "winrate")) {
+      throw new Error("当前 run 不支持胜率筛选。");
+    }
+    if (swingCriteria?.score_change_points.enabled && !admitsForegroundEngineJobs(snapshot, "root_score")) {
+      throw new Error("当前 run 不支持分数筛选。");
+    }
+  }
+
   async function runAnalysisTask(input: {
     runId: string;
     scope: AnalysisScopeDto;
@@ -2543,6 +2591,8 @@ export function App() {
   }) {
     const game = currentGameRef.current;
     if (!nativeRuntime || !game) throw new Error("Analysis task requires a current game.");
+    const stages = input.overviewConditions ? [input.conditions, input.overviewConditions] : [input.conditions];
+    assertTaskCapabilities(input.runId, input.swingCriteria, stages);
     if (isAnalysisTaskReserved(analysisTaskRef.current)) {
       throw new Error("An analysis task is already active.");
     }
@@ -2570,6 +2620,7 @@ export function App() {
       || JSON.stringify(preview.swing_criteria ?? null) !== JSON.stringify(input.swingCriteria ?? null)) {
       throw new Error("The scope preview is no longer current. Preview again before starting.");
     }
+    assertTaskCapabilities(input.runId, input.swingCriteria, stages);
     if (input.persistConditions) {
       const changed = input.strategy === "all_positions_two_stage"
         ? JSON.stringify(input.overviewConditions) !== JSON.stringify(committedPreferencesRef.current.taskOverviewConditions)
@@ -2602,6 +2653,7 @@ export function App() {
         });
       }
     }
+    assertTaskCapabilities(input.runId, input.swingCriteria, stages);
     const started = await startAnalysisTask({
       runId: input.runId,
       preview,
@@ -2657,7 +2709,7 @@ export function App() {
     if (trialRef.current || trialTransitionRef.current || scoringRef.current || scoringPendingRef.current) return;
     const run = runFromSnapshot(engineSnapshotRef.current);
     const game = currentGameRef.current;
-    if (!run || !game || !admitsForegroundEngineJobs(engineSnapshotRef.current) || departurePendingRef.current || isAnalysisTaskReserved(analysisTaskRef.current)) return;
+    if (!run || !game || !admitsForegroundEngineJobs(engineSnapshotRef.current, "whole_game_analysis") || departurePendingRef.current || isAnalysisTaskReserved(analysisTaskRef.current)) return;
     setAnalysisTaskRequestPending(true);
     setAnalysisTaskError(null);
     try {
@@ -2684,7 +2736,7 @@ export function App() {
     if (trialRef.current || trialTransitionRef.current || scoringRef.current || scoringPendingRef.current) return;
     const run = runFromSnapshot(engineSnapshotRef.current);
     const game = currentGameRef.current;
-    if (!run || !game || !admitsForegroundEngineJobs(engineSnapshotRef.current) || departurePendingRef.current || isAnalysisTaskReserved(analysisTaskRef.current)) return;
+    if (!run || !game || !admitsForegroundEngineJobs(engineSnapshotRef.current, "whole_game_analysis") || departurePendingRef.current || isAnalysisTaskReserved(analysisTaskRef.current)) return;
     setAnalysisTaskRequestPending(true);
     setAnalysisTaskError(null);
     try {
@@ -2712,7 +2764,6 @@ export function App() {
       || (task.state !== "queued" && task.state !== "searching")
       || !run
       || run.run_id !== task.run_id
-      || !admitsForegroundEngineJobs(engineSnapshotRef.current)
       || departurePendingRef.current
       || departurePrompt) return;
     analysisTaskActionInFlightRef.current = true;
@@ -2746,7 +2797,7 @@ export function App() {
       || task?.state !== "paused"
       || !run
       || run.run_id !== task.run_id
-      || !admitsForegroundEngineJobs(engineSnapshotRef.current)
+      || !admitsForegroundEngineJobs(engineSnapshotRef.current, "whole_game_analysis")
       || departurePendingRef.current
       || departurePrompt) return;
     analysisTaskActionInFlightRef.current = true;
@@ -2754,6 +2805,7 @@ export function App() {
     setAnalysisTaskError(null);
     ++analysisTaskSnapshotRequestRef.current;
     try {
+      assertTaskCapabilities(task.run_id, task.swing_criteria, task.overview_conditions ? [task.conditions, task.overview_conditions] : [task.conditions]);
       const continued = await continueAnalysisTask({ runId: task.run_id, taskId: task.task_id });
       adoptAnalysisTask(continued);
       setMessage(`Analysis task ${continued.state}: ${analysisTaskProgress(continued)} completed.`);
@@ -2799,6 +2851,12 @@ export function App() {
 
   async function handleAnalyzeKataGoGame(runId: string, maxVisits: number) {
     const game = currentGameRef.current;
+    if (!admitsForegroundEngineQuery(engineSnapshotRef.current, "whole_game_analysis")
+      || !admitsForegroundEngineJobs(engineSnapshotRef.current, "visits_limit")
+      || runFromSnapshot(engineSnapshotRef.current)?.run_id !== runId) {
+      setMessage("当前 run 不支持整谱分析所请求的 ownership、policy 或 visits 限制。");
+      return;
+    }
     if (isAnalysisTaskReserved(analysisTaskRef.current)) return;
     if (!nativeRuntime || !game) {
       setMessage(nativeRuntime ? "整局分析需要当前游戏。" : nativeCurrentGameUnavailable);
@@ -3522,6 +3580,8 @@ export function App() {
       documentName={documentName}
       engineLabel={engineLabel}
       engineReady={engineReady}
+      taskEngineReady={taskEngineReady}
+      engineCapabilities={verifiedEngineCapabilitiesLabel(engineSnapshot)}
       engineSwitcher={{
         profiles: engineProfiles.map((profile) => ({ id: profile.id, name: profile.profile.name })),
         selectedProfileId: runFromSnapshot(engineSnapshot)?.profile_id
@@ -3539,7 +3599,7 @@ export function App() {
         },
         onRestart: () => {
           void restartForegroundEngine().catch((error) => {
-            setMessage(error instanceof Error ? error.message : String(error));
+            setMessage(errorMessage(error));
           });
         }
       }}
@@ -3626,6 +3686,7 @@ export function App() {
       <button type="button" aria-pressed={preferences.workspaceVisibility.right}
         disabled={!preferencesLoaded || departurePending || Boolean(departurePrompt) || workspace.frozen}
         onClick={() => void handleRailVisibility("right", !preferences.workspaceVisibility.right)}>右侧栏</button>
+      <details aria-label="当前 run 能力"><summary>当前 run 能力</summary><p>{verifiedEngineCapabilitiesLabel(engineSnapshot)}</p></details>
       {railVisibilityBusy ? <span role="status">正在保存侧栏…</span> : null}
       {railVisibilityError ? <span role="alert">{railVisibilityError}</span> : null}
     </div>
@@ -3756,7 +3817,7 @@ export function App() {
       draft={analysisScopeDraft}
       preview={analysisScopePreview}
       task={analysisTask}
-      canRun={nativeRuntime && engineReady && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending && !departurePending && !departurePrompt}
+      canRun={nativeRuntime && taskEngineReady && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending && !departurePending && !departurePrompt}
       busy={analysisTaskRequestPending}
       error={analysisTaskError}
       onDraftChange={handleAnalysisScopeDraftChange}
@@ -3788,6 +3849,7 @@ export function App() {
       onNextSibling={handleNextSibling}
       onRemoveVariation={() => void handleRemoveVariation()}
       engineReady={engineReady}
+      taskEngineReady={taskEngineReady}
       selectedNodeRunning={selectedNodeRunning}
       selectedNodeMode={selectedNodeJobRef.current?.mode}
       wholeGameRunning={wholeGameRunning}
@@ -3855,6 +3917,7 @@ export function App() {
         <EngineSetupPanel
           disabled={false}
           engineSnapshot={engineSnapshot}
+          onProfilesChange={setEngineProfiles}
         />
       </div>
       {sheet === "prefs" ? <PreferencesPanel

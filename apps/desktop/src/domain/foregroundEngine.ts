@@ -1,4 +1,4 @@
-import type { EngineFailureDto, EngineRunDto, ForegroundEngineSnapshotDto } from "./types";
+import type { EngineAnalysisCapabilitiesDto, EngineFailureDto, EngineProfileDto, EngineRunDto, ForegroundEngineSnapshotDto } from "./types";
 
 export const emptyForegroundEngineSnapshot = (): ForegroundEngineSnapshotDto => ({
   revision: 0,
@@ -47,8 +47,42 @@ export function isForegroundEngineReady(snapshot: ForegroundEngineSnapshotDto): 
   return snapshot.lifecycle.state === "ready";
 }
 
-export function admitsForegroundEngineJobs(snapshot: ForegroundEngineSnapshotDto): boolean {
-  return snapshot.lifecycle.state === "ready" || snapshot.lifecycle.state === "switching";
+export function admitsForegroundEngineJobs(
+  snapshot: ForegroundEngineSnapshotDto,
+  capability: keyof EngineAnalysisCapabilitiesDto = "selected_node_analysis"
+): boolean {
+  return (snapshot.lifecycle.state === "ready" || snapshot.lifecycle.state === "switching")
+    && runFromSnapshot(snapshot)?.capability_snapshot?.analysis?.[capability] === true;
+}
+
+export function admitsForegroundEngineQuery(
+  snapshot: ForegroundEngineSnapshotDto,
+  capability: "selected_node_analysis" | "continuous_analysis" | "whole_game_analysis" = "selected_node_analysis"
+): boolean {
+  const analysis = runFromSnapshot(snapshot)?.capability_snapshot?.analysis;
+  // The current gateway queries always request ownership and policy together.
+  return admitsForegroundEngineJobs(snapshot, capability) && analysis?.ownership === true && analysis.policy === true;
+}
+
+export function verifiedEngineCapabilitiesLabel(snapshot: ForegroundEngineSnapshotDto): string {
+  const run = runFromSnapshot(snapshot);
+  if (!run) return "当前没有运行引擎";
+  const capabilities = run.capability_snapshot;
+  if (!capabilities) return "当前 run：能力待验证";
+  if (capabilities.gtp) {
+    const facts = capabilities.gtp;
+    const clocks = ["time_settings", "time_left"]
+      .map((command) => `${command} ${facts.commands.includes(command) ? "已发现" : "未发现"}`).join(" · ");
+    return `当前 run 已验证：${facts.name} ${facts.version} · GTP v${facts.protocol_version}；${clocks}；已发现命令：${facts.commands.join(", ")}。时钟、setup、rules 命令的存在不代表已支持时间映射、准确规则或任意局面；不提供 rich-analysis，公共取步操作尚未实现。`;
+  }
+  if (!capabilities.analysis) return "当前 run 已验证：不支持分析";
+  const labels: [keyof EngineAnalysisCapabilitiesDto, string][] = [
+    ["selected_node_analysis", "单点"], ["continuous_analysis", "连续"],
+    ["whole_game_analysis", "整谱/task"], ["candidates", "候选"], ["pv", "PV"],
+    ["winrate", "胜率"], ["root_score", "分数"], ["ownership", "ownership"],
+    ["policy", "policy"], ["visits_limit", "visits 限制"], ["protocol_cancel", "协议取消"]
+  ];
+  return `当前 run 已验证：${labels.map(([key, label]) => `${label} ${capabilities.analysis![key] ? "支持" : "不支持"}`).join(" · ")}`;
 }
 
 export function canStopForegroundEngine(snapshot: ForegroundEngineSnapshotDto): boolean {
@@ -63,17 +97,22 @@ export function canRestartForegroundEngine(snapshot: ForegroundEngineSnapshotDto
 }
 
 export function profileHasPendingChanges(
-  saved: { name: string; engine_path: string; model_path?: string | null; config_path?: string | null; working_dir?: string | null },
+  saved: EngineProfileDto,
   snapshot: ForegroundEngineSnapshotDto
 ): boolean {
   const run = runFromSnapshot(snapshot);
   if (!run) return false;
   const current = run.profile_snapshot;
-  return current.name !== saved.name
-    || current.engine_path !== saved.engine_path
-    || (current.model_path ?? "") !== (saved.model_path ?? "")
-    || (current.config_path ?? "") !== (saved.config_path ?? "")
-    || (current.working_dir ?? "") !== (saved.working_dir ?? "");
+  if (current.name !== saved.name || current.program !== saved.program
+    || current.working_dir !== saved.working_dir || current.adapter_kind !== saved.adapter_kind
+    || current.argv.length !== saved.argv.length
+    || current.argv.some((argument, index) => argument !== saved.argv[index])) return true;
+  if (current.adapter_kind === "kata_go_analysis" && saved.adapter_kind === "kata_go_analysis") {
+    return current.settings.model_path !== saved.settings.model_path
+      || current.settings.config_path !== saved.settings.config_path
+      || current.settings.max_visits !== saved.settings.max_visits;
+  }
+  return false;
 }
 
 export function shouldAcceptFailureEvent(
