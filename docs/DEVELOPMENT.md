@@ -177,6 +177,33 @@ R8 ticket 01 repository evidence: app-model 20 tests; engine-manager 22 unit, 9 
 
 Windows native evidence: exact application source `966e282b986c4e42a3f7bcdf73b1a21158ebfe33`, candidate `D:\dev\weiqi\worktrees\lizzieyzy-next-tauri\r8-profile-966e282\candidate.json`, private-desktop runs `D:\dev\weiqi\acceptance\r8-profile-966e282-run1` and `-run2`, isolated identifier `org.lizzieyzy.next.acceptance.r493403fda45f467d9c8fc5287caa80a7`. KataGo v1.12.3 Eigen CPU AVX2 passed legacy-read/no-rewrite, explicit version-1 save, Generic profile argv save/reload and readable Start/Switch refusal, immutable pending profile/capabilities, Restart adopting `-override-config numSearchThreads=2` and visits 12, real selected-node completion (13 reported visits), native read-only-file replacement denial preserving bytes/catalog/Run, and fresh Autoload without restored Jobs. Both runs exited 0; owned-child inspection after Stop found no KataGo. The real lifecycle smoke separately passed Start/finite/cancel/Stop/Restart/Switch on `aa9a6fa72470f296511307d0312572647dfcd389` (`D:\dev\weiqi\acceptance\r8-profile-aa9a6fa-real\real-lifecycle.log`); the subsequent application delta only formats typed UI errors. This is N01/N04's ticket-01 slice, not release packaging or GenericGtp runtime acceptance. ENG-01 historical evidence remains attributed to its original run; ENG-09/ENG-10 are not accepted by this ticket.
 
+### 2.1 Verified Capability Admission (ENG-09)
+
+Engine Settings distinguishes the saved/draft profile and static adapter ceiling from `当前 run 已验证`; `当前 run 能力` in the workspace always describes primary A, including during A→B switching. Saving adapter/argv/settings leaves A immutable and pending. Missing verification or an absent analysis group cannot authorize work. GenericGtp Start/Switch/Restart reports runtime unavailable before lifecycle IPC; editing A's saved adapter to Generic also refuses Restart while A's existing verified KataGo analysis remains usable.
+
+Finite, continuous and whole-game/task admission are independent. Current query commands additionally request ownership/policy; visits limits, leading-candidate conditions and swing score/winrate filters require the respective capabilities. Preview submits no engine query. Start/Continue recheck after asynchronous work and before saving task presets/submitting work. Rust independently refuses before I/O, takeover or task mutation. Unsupported runs preserve historical SGF analysis and durable continuous intent, including existing holds; cancellation of owned work remains available.
+
+Repository regression commands:
+
+```bash
+cargo test -p app-model
+cargo test -p engine-manager -p lizzieyzy-next-desktop --lib --tests
+cd apps/desktop
+npx vitest run src/TruthfulAnalysisActions.test.tsx src/EngineLifecycle.test.tsx src/SelectedNodeAnalysis.test.tsx src/AnalysisPresentation.test.tsx src/SubBoardContentMode.test.tsx src/VariationReplay.test.tsx src/components/EngineSetupPanel.test.tsx src/domain/foregroundEngine.test.ts src/App.test.tsx src/App.preferences.test.tsx
+npm run build
+```
+
+On application source `b23f3eb16c16ad63bf4570d7ecc9bf22c274ea05`, model20, manager22 unit+9 catalog+135 lifecycle and gateway151 checks passed. The affected frontend run passed249/250; its old NoEngine preference-race fixture was corrected to use a verified Ready run, then all24 preference tests and TypeScript/Vite build passed. All250 affected cases therefore passed across these runs. The new request-feature regressions first failed with unsupported selected-node IPC and a saved task preset, then passed with ownership/policy and candidate admission. Six new manager admission cases retain independent protocol-log/state evidence. Repository-controlled capability states are not native GenericGtp runs.
+
+Windows M01–M03 passed on exact committed debug candidate `D:\dev\weiqi\worktrees\lizzieyzy-next-tauri\r8-capability-b23f3eb\candidate.json`, source SHA above. Evidence: `D:\dev\weiqi\acceptance\r8-capability-b23f3eb-run1\capability-evidence.json`, screenshots and process snapshots in the same directory. Private desktop PID71284/HWND47846250 used isolated app ID `org.lizzieyzy.next.acceptance.r1b73404ef1cc4b4882626d20e605390a`; the native WebView URL was `http://tauri.localhost/`. KataGo v1.12.3 Eigen CPU AVX2/FMA, model `D:\katago\yzy\weights\kata1-b20c256x2-s5303129600-d1228401921.bin.gz`, and config/workdir `D:\dev\weiqi\acceptance\r8-profile-01-assets` supplied the real runtime.
+
+- M01: both adapters saved/reloaded through the same page; Generic argv `['', 'two words', '中文参数']` retained item boundaries. Native invalid visits refused without changes. A real read-only catalog caused `os error 5` while disk bytes, published catalog, run, game and preferences stayed unchanged; attributes were restored afterward.
+- M02: real Ready run `6d0d2070-be5a-46bc-9f73-72127e6e73bd` published all11 verified flags through IPC/UI. Unsaved/saved adapter changes and saved argv remained pending without changing that run. Explicit Restart created `77a99cc5-aa62-4b93-b54a-af2189b4dedd`, adopting `-override-config numSearchThreads=2` and visits12; owned PID71276's command line confirmed the argv. Catalog selection did not start GTP.
+- M03: Generic selection from NoEngine and from Ready A, plus Restart after saving A as Generic, explained refusal before lifecycle IPC. A CDP function-call breakpoint recorded two successful snapshot positive controls and no Start/Switch/Restart calls per refused action; full catalog/game/preferences/run snapshots were unchanged. Real continuous analysis reached its visits limit, finite analysis completed with17 visits, and a current-node task completed1/1. Stop reaped KataGo while SGF `LZ` history and durable intent remained readable; the desktop exited normally with code0.
+
+The exact candidate also passed `real_katago_ready_job_stop_restart_and_switch` (1 passed,1 filtered,52.55s), with `LIZZIEYZY_REAL_KATAGO=1` and explicit engine/model/config/workdir environment paths. Log: `D:\dev\weiqi\acceptance\r8-capability-checks\real-katago.log`; repository transcripts are in that directory. Earlier profile-cutover evidence above retains its original candidate attribution for unchanged legacy migration/autoload paths. No Generic GTP readiness, game-move, cross-protocol N02/N03/N05/N06, provider or release-package claim follows from these checks; `ENG-10` remains Missing.
+
+
 ### 3. Start From The Engine Switcher
 
 - In the main-workspace Engine Switcher, choose the saved profile (`选择引擎` starts it).
