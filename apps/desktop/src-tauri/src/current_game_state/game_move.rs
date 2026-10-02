@@ -79,6 +79,7 @@ impl CurrentGameState {
             error.job_id = Some(result.job_id);
             return Err(error);
         }
+        manager.claim_game_move_result(&result).map_err(Box::new)?;
         Ok(result)
     }
 }

@@ -77,6 +77,13 @@ pub(super) fn require_idle_move(state: &ManagerState) -> Result<(), EngineFailur
 }
 
 pub(super) fn seal_move_for_run(state: &mut ManagerState, run_id: &str) {
+    if state
+        .game_move_publication
+        .as_ref()
+        .is_some_and(|job| job.run_id == run_id)
+    {
+        state.game_move_publication = None;
+    }
     if let Some(slot) = state
         .game_move
         .as_mut()
@@ -93,6 +100,13 @@ pub(super) fn seal_move_for_run(state: &mut ManagerState, run_id: &str) {
 }
 
 pub(super) fn fail_move_for_run(state: &mut ManagerState, failure: &EngineFailureDto) {
+    if state
+        .game_move_publication
+        .as_ref()
+        .is_some_and(|job| Some(&job.run_id) == failure.run_id.as_ref())
+    {
+        state.game_move_publication = None;
+    }
     if let Some(slot) = state
         .game_move
         .as_mut()
@@ -193,6 +207,7 @@ impl ForegroundEngineManager {
             let stdin = engine_stdin(&state, &run.run_id)
                 .ok_or_else(|| fail(EngineFailureKind::InvalidState, "engine stdin unavailable"))?;
             let deadline = Instant::now() + Duration::from_millis(u64::from(budget.deadline_ms));
+            state.game_move_publication = None;
             state.game_move = Some(MoveSlot {
                 identity: identity.clone(),
                 events: events_tx.clone(),
@@ -245,6 +260,14 @@ impl ForegroundEngineManager {
 
     pub fn cancel_game_move(&self, run_id: &str, job_id: &str) -> Result<(), EngineFailureDto> {
         let mut state = self.lock();
+        if state
+            .game_move_publication
+            .as_ref()
+            .is_some_and(|job| job.run_id == run_id && job.job_id == job_id)
+        {
+            state.game_move_publication = None;
+            return Ok(());
+        }
         let slot = state
             .game_move
             .as_mut()
@@ -270,8 +293,54 @@ impl ForegroundEngineManager {
         Ok(())
     }
 
+    /// Consumes the latest completed result's publication permit exactly once.
+    /// Position/mode/lifecycle invalidation remains effective after compute cleanup.
+    pub fn claim_game_move_result(&self, result: &GameMoveResultDto) -> Result<(), EngineFailureDto> {
+        let mut state = self.lock();
+        if !state.game_move_publication.as_ref().is_some_and(|identity| {
+            identity.run_id == result.run_id
+                && identity.job_id == result.job_id
+                && identity.generation == result.generation
+                && identity.node_path == result.node_path
+        }) || !matches!(&state.phase, Phase::Ready(run) if run.run_id == result.run_id)
+        {
+            return Err(failure(
+                EngineOperationDto::Job,
+                EngineFailureKind::Cancellation,
+                "move publication was retired".into(),
+                Some(&result.run_id),
+                None,
+                None,
+            )
+            .with_job_id(&result.job_id));
+        }
+        state.game_move_publication = None;
+        Ok(())
+    }
+
+    pub fn cancel_current_game_move(&self) {
+        let mut state = self.lock();
+        state.game_move_publication = None;
+        if let Some(slot) = state.game_move.as_mut() {
+            slot.sealed.get_or_insert_with(|| {
+                move_failure(
+                    &slot.identity,
+                    EngineFailureKind::Cancellation,
+                    "move cancelled by current-game transition",
+                )
+            });
+        }
+    }
+
     pub fn invalidate_game_move_position(&self, generation: u64, path: &NodePath) {
         let mut state = self.lock();
+        if state
+            .game_move_publication
+            .as_ref()
+            .is_some_and(|job| job.generation != generation || job.node_path != *path)
+        {
+            state.game_move_publication = None;
+        }
         if let Some(slot) = state
             .game_move
             .as_mut()
@@ -288,6 +357,7 @@ impl ForegroundEngineManager {
     }
 
     pub(super) fn finish_move_before_switch(&self) -> Result<bool, EngineFailureDto> {
+        self.lock().game_move_publication = None;
         let active = self.snapshot().game_move_job;
         let Some(active) = active else {
             return Ok(false);
@@ -603,6 +673,7 @@ impl MoveWorker {
                 ));
             }
             if result.is_ok() {
+                state.game_move_publication = Some(self.identity.clone());
                 state.game_move = None;
                 publish_snapshot(&mut state);
                 drop(state);

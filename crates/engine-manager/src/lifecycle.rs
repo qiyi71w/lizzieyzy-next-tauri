@@ -236,6 +236,7 @@ struct ManagerState {
     continuous_departing: bool,
     finite_admission_pending: bool,
     game_move: Option<game_move::MoveSlot>,
+    game_move_publication: Option<app_model::GameMoveJobDto>,
     gtp_command_seq: u32,
 }
 
@@ -278,6 +279,7 @@ impl ForegroundEngineManager {
                     continuous_departing: false,
                     finite_admission_pending: false,
                     game_move: None,
+                    game_move_publication: None,
                     gtp_command_seq: 100,
                 }),
             }),
@@ -485,6 +487,7 @@ impl ForegroundEngineManager {
         let mut state = self.lock();
         if !state.continuous_departing {
             state.continuous_departing = true;
+            state.game_move_publication = None;
             if let Some(identity) = state.game_move.as_ref().map(|slot| slot.identity.clone()) {
                 game_move::seal_move_for_run(&mut state, &identity.run_id);
             }
@@ -2639,6 +2642,7 @@ impl Inner {
         }
         state.jobs.clear();
         state.game_move = None;
+        state.game_move_publication = None;
         state.phase = Phase::NoEngine { failure: None };
         publish_snapshot(&mut state);
     }

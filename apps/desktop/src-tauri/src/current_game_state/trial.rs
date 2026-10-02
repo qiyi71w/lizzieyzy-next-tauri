@@ -52,9 +52,7 @@ pub(super) fn seal_review_jobs(
     let Some(manager) = manager else {
         return Ok(Vec::new());
     };
-    if let Some(job) = manager.snapshot().game_move_job {
-        manager.cancel_game_move(&job.run_id, &job.job_id).map_err(|error| error.message)?;
-    }
+    manager.cancel_current_game_move();
     let jobs = crate::document_departure::jobs_from_snapshot(&manager.snapshot());
     for job in &jobs {
         holder

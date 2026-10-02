@@ -190,3 +190,41 @@ fn navigation_and_generation_changes_seal_pending_and_completed_results() {
         }
     }
 }
+
+#[test]
+fn completed_results_stay_sealed_after_path_or_mode_round_trips() {
+    for transition in ["path", "trial", "cancel", "departure"] {
+        let rig = Rig::new("normal");
+        let request = rig.request();
+        let path = request.node_path.clone();
+        let generation = request.generation;
+        let result = rig
+            .state
+            .start_game_move(&rig.manager, request)
+            .unwrap()
+            .wait()
+            .unwrap();
+        let job_id = result.job_id.clone();
+        match transition {
+            "trial" => {
+                let session = rig.state.enter_trial().unwrap();
+                rig.state.exit_trial(session.session_id).unwrap();
+            }
+            "cancel" => rig
+                .manager
+                .cancel_game_move(&result.run_id, &result.job_id)
+                .unwrap(),
+            "departure" => {
+                rig.manager.begin_continuous_departure();
+                rig.manager.finish_continuous_departure(false);
+            }
+            _ => {
+                rig.state.select_path(NodePath::default(), generation).unwrap();
+                rig.state.select_path(path, generation).unwrap();
+            }
+        }
+        let error = rig.state.publish_game_move(&rig.manager, result).unwrap_err();
+        assert_eq!(error.kind, EngineFailureKind::Cancellation);
+        assert_eq!(error.job_id.as_deref(), Some(job_id.as_str()));
+    }
+}
