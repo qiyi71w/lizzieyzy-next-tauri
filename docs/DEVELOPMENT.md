@@ -160,7 +160,7 @@ Expected result: the status message reports a loaded/opened game and the board c
 - Select `KataGoAnalysis` or `GenericGtp`, then pick or type the executable program path.
 - Enter additional argv as separate items. Empty items, spaces and non-ASCII text must remain single arguments, not shell text.
 - For KataGo, pick or type the model and analysis config paths and set a positive finite max visits value. Do not add adapter-owned mode/model/config arguments to argv.
-- GenericGtp exposes no KataGo settings. Its runtime is not available in this configuration cutover.
+- GenericGtp exposes no KataGo settings. Supply the engine's GTP argv explicitly (for GNU Go, `--mode`, `gtp`); Start verifies its protocol before publishing Ready.
 - Optionally set a working directory.
 - Save the profile.
 - Add a second profile if Autoload or Switch coverage is part of the change.
@@ -169,7 +169,7 @@ Expected result: successfully saved additions, renames and deletions immediately
 
 For migration coverage, seed an isolated app-data directory with an old unversioned collection or single-profile file. Loading must preserve values without rewriting the bytes. Explicit Save writes version 1. An unknown version or malformed settings must report an error without replacing the stored file. A denied write must retain the prior catalog and Run.
 
-While KataGo is Ready, save changed argv or finite visits. The live snapshot and process remain unchanged and the profile is pending; Restart must create a new Run from the saved values. Attempting GenericGtp Start/Switch must return unsupported without creating a child or disturbing that KataGo Run.
+While KataGo is Ready, save changed argv or finite visits. The live snapshot and process remain unchanged and the profile is pending; Restart must create a new Run from the saved values. A GenericGtp candidate cannot replace that run until its complete handshake succeeds; a failed candidate leaves the original run and work intact.
 
 During A-to-B switching, deleting either A or candidate B must fail at the backend, preserving the catalog and switching state. After B promotes, inactive A can be deleted and active B remains protected.
 
@@ -179,7 +179,7 @@ Windows native evidence: exact application source `966e282b986c4e42a3f7bcdf73b1a
 
 ### 2.1 Verified Capability Admission (ENG-09)
 
-Engine Settings distinguishes the saved/draft profile and static adapter ceiling from `当前 run 已验证`; `当前 run 能力` in the workspace always describes primary A, including during A→B switching. Saving adapter/argv/settings leaves A immutable and pending. Missing verification or an absent analysis group cannot authorize work. GenericGtp Start/Switch/Restart reports runtime unavailable before lifecycle IPC; editing A's saved adapter to Generic also refuses Restart while A's existing verified KataGo analysis remains usable.
+Engine Settings distinguishes the saved/draft profile and static adapter ceiling from `当前 run 已验证`; `当前 run 能力` in the workspace always describes primary A, including during A→B switching. Saving adapter/argv/settings leaves A immutable and pending. Missing verification or an absent analysis group cannot authorize work. GenericGtp Start/Switch/Restart now enters the shared lifecycle; its verified protocol facts do not admit analysis or game operations.
 
 Finite, continuous and whole-game/task admission are independent. Current query commands additionally request ownership/policy; visits limits, leading-candidate conditions and swing score/winrate filters require the respective capabilities. Preview submits no engine query. Start/Continue recheck after asynchronous work and before saving task presets/submitting work. Rust independently refuses before I/O, takeover or task mutation. Unsupported runs preserve historical SGF analysis and durable continuous intent, including existing holds; cancellation of owned work remains available.
 
@@ -202,6 +202,13 @@ Windows M01–M03 passed on exact committed debug candidate `D:\dev\weiqi\worktr
 - M03: Generic selection from NoEngine and from Ready A, plus Restart after saving A as Generic, explained refusal before lifecycle IPC. A CDP function-call breakpoint recorded two successful snapshot positive controls and no Start/Switch/Restart calls per refused action; full catalog/game/preferences/run snapshots were unchanged. Real continuous analysis reached its visits limit, finite analysis completed with17 visits, and a current-node task completed1/1. Stop reaped KataGo while SGF `LZ` history and durable intent remained readable; the desktop exited normally with code0.
 
 The exact candidate also passed `real_katago_ready_job_stop_restart_and_switch` (1 passed,1 filtered,52.55s), with `LIZZIEYZY_REAL_KATAGO=1` and explicit engine/model/config/workdir environment paths. Log: `D:\dev\weiqi\acceptance\r8-capability-checks\real-katago.log`; repository transcripts are in that directory. Earlier profile-cutover evidence above retains its original candidate attribution for unchanged legacy migration/autoload paths. No Generic GTP readiness, game-move, cross-protocol N02/N03/N05/N06, provider or release-package claim follows from these checks; `ENG-10` remains Missing.
+
+### 2.2 Generic GTP lifecycle (R8 ticket 03)
+
+Repository checks: `cargo test -p app-model -p engine-manager` (189 passed, 2 real-KataGo tests ignored); `cargo test -p lizzieyzy-next-desktop --lib` (149 passed); the four affected capability/lifecycle frontend files (87 passed); `npm run build`. The five `gtp_` real-pipe scenarios cover split CRLF/multiline frames, stderr isolation, wrong IDs, malformed/oversized/flooded output, missing commands/v1, command rejection, exit/EOF, never-ending/trickle timeout, explicit recovery, cross-protocol promotion/rollback/latest intent and Stop during handshake. These fixture results are not native acceptance.
+
+Real-engine qualification uses [Ben Lambrechts' Cygwin Windows GNU Go 3.8 build](https://gnugo.baduk.org/gnugo2/gnugo-3.8.zip), with argv `--mode gtp --chinese-rules --positional-superko --forbid-suicide --level 1 --seed 1`. `D:\dev\weiqi\acceptance\r8-gtp-assets\qualification.json` records the full 42-command transcript: GTP v2, GNU Go/3.8, 138 commands, board sizes 1/2/5/9/13/19 accepted and 20 rejected, komi round-trip, forbidden suicide, immediate ko and repetition after two passes rejected, play/pass, `time_settings 0 1 1`, `time_left b 1 1`, `genmove b` → `C4`, and clean `quit`. Separate scoring probes distinguish Chinese area (`B+25.0`) from Japanese territory (`B+23.0`) on the same one-stone 5×5 board. This qualifies the configured engine, not a manager game/clock API or all rule/history combinations. Ticket 04 owns exact-position/budget operations; ticket 05 owns final Windows N02/N04 integration. `ENG-10` remains Missing.
+
 
 
 ### 3. Start From The Engine Switcher

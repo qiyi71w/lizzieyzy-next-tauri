@@ -78,7 +78,6 @@ describe("engine profile configuration editor", () => {
     await change(field("适配器"), "generic_gtp");
     expect(host.textContent).not.toContain("最大计算量");
     expect(host.querySelector('input[placeholder="/path/to/model.bin.gz"]')).toBeNull();
-    expect(host.textContent).toContain("运行时尚不可用");
     await change(field("名称"), "GNU Go 中文");
     await change(field("引擎"), "/gnu go/gnugo");
     await click("保存配置");
@@ -124,6 +123,32 @@ describe("engine profile configuration editor", () => {
     const restarted: ForegroundEngineSnapshotDto = { ...snapshot, revision: 2, lifecycle: { state: "ready", run: { ...run, run_id: "run-2", profile_snapshot: restartProfile } } };
     await act(async () => { root!.render(<EngineSetupPanel engineSnapshot={restarted} />); });
     expect(host.textContent).not.toContain("存在待应用更改");
+  });
+
+  it("keeps verified GTP facts visible when a saved profile changes adapter and identity", async () => {
+    const settings = await loadEngineProfilesSettings();
+    settings.profiles[0].profile = { name: "Saved GTP", program: "/gtp", argv: [], working_dir: null, adapter_kind: "generic_gtp", settings: {} };
+    await saveEngineProfilesSettings(settings);
+    const facts = { protocol_version: 2, name: "Handshake engine", version: "3.8", commands: ["boardsize", "clear_board", "komi", "play", "genmove", "quit", "time_settings", "time_left", "set_free_handicap", "custom_rules"] };
+    const snapshot: ForegroundEngineSnapshotDto = {
+      revision: 1, continuous: { enabled: true, phase: "unavailable" },
+      lifecycle: { state: "ready", run: {
+        run_id: "gtp-1", profile_id: settings.profiles[0].id, adapter_kind: "generic_gtp",
+        profile_snapshot: structuredClone(settings.profiles[0].profile),
+        capability_snapshot: { adapter_kind: "generic_gtp", gtp: facts }
+      } }
+    };
+    await render(snapshot);
+    const verifiedLabel = host.querySelector('[aria-label="当前 run 能力"]')?.textContent;
+    expect(verifiedLabel).toContain(facts.name);
+    expect(verifiedLabel).toContain(facts.version);
+    for (const command of facts.commands) expect(verifiedLabel).toContain(command);
+    await change(field("名称"), "Pending engine");
+    await change(field("适配器"), "kata_go_analysis");
+    await click("保存配置");
+    expect((await loadEngineProfilesSettings()).profiles[0].profile.adapter_kind).toBe("kata_go_analysis");
+    expect(host.querySelector('[aria-label="当前 run 能力"]')?.textContent).toBe(verifiedLabel);
+    expect(host.querySelector('[aria-label="当前 run 能力"]')?.textContent).not.toContain("Pending engine");
   });
 
   it("shows malformed storage and save errors instead of silently replacing the catalog", async () => {

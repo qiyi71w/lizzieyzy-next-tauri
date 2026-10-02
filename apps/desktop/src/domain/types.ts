@@ -194,6 +194,8 @@ export type EngineFailureKind =
   | "asset"
   | "readiness"
   | "protocol"
+  | "command"
+  | "process_exit"
   | "nonzero_exit"
   | "timeout"
   | "cancellation"
@@ -212,9 +214,16 @@ export type EngineFailureDto = {
   message: string;
   diagnostic_summary?: string | null;
 };
+export type EngineGtpFactsDto = {
+  protocol_version: number;
+  name: string;
+  version: string;
+  commands: string[];
+};
 export type EngineCapabilitySnapshotDto = {
   adapter_kind: EngineBackendDto;
   analysis?: EngineAnalysisCapabilitiesDto | null;
+  gtp?: EngineGtpFactsDto | null;
 };
 export type EngineAnalysisCapabilitiesDto = {
   selected_node_analysis: boolean;

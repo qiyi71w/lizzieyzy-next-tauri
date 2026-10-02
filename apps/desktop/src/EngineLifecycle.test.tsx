@@ -370,7 +370,7 @@ async function openEngineSettings(host: HTMLElement) {
 }
 
 describe("foreground engine lifecycle UI", () => {
-  it.each([false, true])("refuses a saved GenericGtp selection before IPC with an existing run: %s", async (withPrimary) => {
+  it.each([false, true])("starts GenericGtp with an existing authoritative run: %s", async (withPrimary) => {
     const generic = { id: "generic", profile: {
       name: "Saved generic", program: "/bin/gtp", argv: [], working_dir: null, adapter_kind: "generic_gtp" as const, settings: {}
     } };
@@ -387,21 +387,56 @@ describe("foreground engine lifecycle UI", () => {
       switcher.value = "generic";
       switcher.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    expect(host.textContent).toContain("运行支持尚未提供");
-    expect(backend.startForegroundEngine).not.toHaveBeenCalled();
-    expect(backend.switchForegroundEngine).not.toHaveBeenCalled();
+    if (withPrimary) {
+      expect(backend.switchForegroundEngine).toHaveBeenCalledWith("generic");
+      expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+    } else {
+      expect(backend.startForegroundEngine).toHaveBeenCalledWith("generic");
+      expect(backend.switchForegroundEngine).not.toHaveBeenCalled();
+    }
     expect(backend.saveEngineProfilesSettings).not.toHaveBeenCalled();
     expect(switcher.value).toBe(withPrimary ? "profile-1" : "");
     expect(host.querySelector(".engine-chip-label")?.textContent).toBe(beforeLabel);
     expect(host.querySelector(".doc-name")?.textContent).toBe(beforeGame);
     expect(catalog.profiles[1]).toEqual(generic);
+    const genericRun = {
+      run_id: "generic-run", profile_id: generic.id, adapter_kind: "generic_gtp" as const,
+      profile_snapshot: generic.profile,
+      capability_snapshot: {
+        adapter_kind: "generic_gtp" as const,
+        gtp: { protocol_version: 2, name: "Verified pipe engine", version: "3.8", commands: ["boardsize", "clear_board", "komi", "play", "genmove", "quit", "time_settings", "time_left", "set_free_handicap", "custom_rules"] }
+      }
+    };
     if (withPrimary) {
+      await act(async () => {
+        listeners.onSnapshot?.({ revision: 3, continuous: { enabled: true, phase: "waiting" }, lifecycle: {
+          state: "switching", primary: readyRun("run-1", savedProfile),
+          candidate: { ...genericRun, capability_snapshot: null }, switch_id: "switch-gtp"
+        } });
+      });
+      expect(buttonNamed(host, "重启").disabled).toBe(true);
       await act(async () => { buttonNamed(host, "分析当前节点").click(); });
-      expect(buttonNamed(host, "取消此手").disabled).toBe(false);
+      expect(backend.startSelectedNodeAnalysis.mock.calls.at(-1)?.[0].runId).toBe("run-1");
+      expect(host.querySelector('[aria-label="当前 run 能力"]')?.textContent).not.toContain("Verified pipe engine");
     }
+    await act(async () => {
+      listeners.onSnapshot?.({ revision: 4, continuous: { enabled: true, phase: "unavailable" }, lifecycle: { state: "ready", run: genericRun } });
+    });
+    expect(switcher.value).toBe("generic");
+    expect(buttonNamed(host, "分析当前节点").disabled).toBe(true);
+    expect(buttonNamed(host, "重启").disabled).toBe(false);
+    expect(buttonNamed(host, "停止").disabled).toBe(false);
+    const facts = host.querySelector('[aria-label="当前 run 能力"]')?.textContent;
+    expect(facts).toContain(genericRun.capability_snapshot.gtp.name);
+    expect(facts).toContain(genericRun.capability_snapshot.gtp.version);
+    for (const command of genericRun.capability_snapshot.gtp.commands) expect(facts).toContain(command);
+    await act(async () => { buttonNamed(host, "重启").click(); });
+    expect(backend.restartForegroundEngine).toHaveBeenCalledOnce();
+    await act(async () => { buttonNamed(host, "停止").click(); });
+    expect(backend.stopForegroundEngine).toHaveBeenCalledOnce();
   });
 
-  it("keeps saved GenericGtp changes pending and refuses Restart without changing verified A", async () => {
+  it("keeps saved GenericGtp changes pending until explicit Restart without changing verified A", async () => {
     const host = await renderApp();
     await readyEngine(host);
     const panel = await openEngineSettings(host);
@@ -415,14 +450,13 @@ describe("foreground engine lifecycle UI", () => {
     expect(backend.saveEngineProfilesSettings.mock.calls.at(-1)?.[0].profiles[0].profile.adapter_kind).toBe("generic_gtp");
     expect(panel.querySelector('[aria-label="当前 run 能力"]')?.textContent).toContain("单点 支持");
     backend.saveEngineProfilesSettings.mockClear();
-    await act(async () => { buttonNamed(host, "重启").click(); });
-    expect(backend.restartForegroundEngine).not.toHaveBeenCalled();
-    expect(backend.saveEngineProfilesSettings).not.toHaveBeenCalled();
-    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("Local KataGo");
-    expect(host.textContent).toContain("运行支持尚未提供");
     await act(async () => { buttonNamed(host, "分析当前节点").click(); });
     expect(buttonNamed(host, "取消此手").disabled).toBe(false);
     expect(backend.startSelectedNodeAnalysis.mock.calls.at(-1)?.[0].runId).toBe("run-1");
+    await act(async () => { buttonNamed(host, "重启").click(); });
+    expect(backend.restartForegroundEngine).toHaveBeenCalledOnce();
+    expect(backend.saveEngineProfilesSettings).not.toHaveBeenCalled();
+    expect(host.querySelector(".engine-chip-label")?.textContent).toBe("Local KataGo");
   });
 
   it("shows authoritative no-engine status and does not start from Engine Settings selection", async () => {
@@ -1459,11 +1493,15 @@ describe("foreground engine lifecycle UI", () => {
     });
   });
 
-  it.each(["start", "switch", "restart"] as const)("shows typed unsupported %s failures without changing the live engine", async (operation) => {
+  it.each([
+    ["start", "unsupported_capability", "GTP engine is missing required command genmove"],
+    ["switch", "command", "GTP version command failed"],
+    ["restart", "process_exit", "GTP engine exited before readiness"]
+  ] as const)("shows typed %s failures without changing the live engine", async (operation, kind, message) => {
     const host = await renderApp();
     if (operation !== "start") await readyEngine(host);
     const label = host.querySelector(".engine-chip-label")?.textContent;
-    const failure = { kind: "unsupported_capability", operation, message: "GenericGtp runtime is not available" };
+    const failure = { kind, operation, message };
     if (operation === "start") backend.startForegroundEngine.mockRejectedValueOnce(failure);
     else if (operation === "switch") backend.switchForegroundEngine.mockRejectedValueOnce(failure);
     else backend.restartForegroundEngine.mockRejectedValueOnce(failure);

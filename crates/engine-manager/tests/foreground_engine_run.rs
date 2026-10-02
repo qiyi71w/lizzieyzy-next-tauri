@@ -1183,6 +1183,7 @@ fn selected_node_unsupported_capability_does_not_write_protocol() {
     let before = std::fs::read_to_string(&log).unwrap_or_default();
     manager.set_capability_snapshot_for_tests(Some(EngineCapabilitySnapshotDto {
         adapter_kind: EngineBackend::KataGoAnalysis,
+        gtp: None,
         analysis: Some(EngineAnalysisCapabilitiesDto {
             selected_node_analysis: false,
             continuous_analysis: true,
@@ -1208,10 +1209,14 @@ fn selected_node_unsupported_capability_does_not_write_protocol() {
 #[cfg(unix)]
 #[test]
 fn admission_missing_analysis_preserves_active_lanes_and_protocol() {
-    for missing in [None, Some(EngineCapabilitySnapshotDto {
-        adapter_kind: EngineBackend::GenericGtp,
-        analysis: None,
-    })] {
+    for missing in [
+        None,
+        Some(EngineCapabilitySnapshotDto {
+            adapter_kind: EngineBackend::GenericGtp,
+            gtp: None,
+            analysis: None,
+        }),
+    ] {
         let temp = TestTempDir::new("admission-missing-analysis");
         let (manager, _, run_id, log) = hold_both_lanes_manager(&temp);
         let (selected, whole) = start_both_lanes(&manager, &run_id, 42);
@@ -1228,9 +1233,14 @@ fn admission_missing_analysis_preserves_active_lanes_and_protocol() {
         manager.set_capability_snapshot_for_tests(missing);
         let before = manager.snapshot();
         let task_before = manager.analysis_task_snapshot();
-        for request in [selected_request(&run_id, 42, vec![1]), continuous_request(&run_id, 42, vec![1])] {
-            assert_eq!(manager.start_selected_node_job(request).unwrap_err().kind,
-                EngineFailureKind::UnsupportedCapability);
+        for request in [
+            selected_request(&run_id, 42, vec![1]),
+            continuous_request(&run_id, 42, vec![1]),
+        ] {
+            assert_eq!(
+                manager.start_selected_node_job(request).unwrap_err().kind,
+                EngineFailureKind::UnsupportedCapability
+            );
         }
         for lane in [AnalysisJobLane::SelectedNode, AnalysisJobLane::WholeGame] {
             assert_eq!(manager.register_job(&run_id, lane, Arc::new(AnalysisCancelToken::new()))
@@ -1255,18 +1265,34 @@ fn admission_continue_rechecks_capabilities_without_replacing_paused_task() {
     let temp = TestTempDir::new("admission-paused-task");
     std::fs::write(temp.path().join("cancel-final"), "").unwrap();
     let (manager, _, events, run_id) = ready_manager(&temp, &task_engine_script(temp.path()));
-    let verified = lifecycle_run(&manager.snapshot().lifecycle).unwrap().capability_snapshot.clone();
-    let task = manager.start_analysis_task(whole_game_request(&run_id, 42, 2),
-        analysis_scope(), task_conditions(32)).unwrap();
-    wait_job(&events, Duration::from_secs(2), |job| job.outcome == AnalysisJobOutcomeDto::Progress);
+    let verified = lifecycle_run(&manager.snapshot().lifecycle)
+        .unwrap()
+        .capability_snapshot
+        .clone();
+    let task = manager
+        .start_analysis_task(
+            whole_game_request(&run_id, 42, 2),
+            analysis_scope(),
+            task_conditions(32),
+        )
+        .unwrap();
+    wait_job(&events, Duration::from_secs(2), |job| {
+        job.outcome == AnalysisJobOutcomeDto::Progress
+    });
     manager.pause_analysis_task(&run_id, &task.task_id).unwrap();
     let paused = wait_task(&manager, AnalysisTaskStateDto::Paused);
     let before_log = std::fs::read_to_string(temp.path().join("queries.jsonl")).unwrap();
     let mut whole_disabled = verified.clone().unwrap();
     whole_disabled.analysis.as_mut().unwrap().whole_game_analysis = false;
-    for missing in [None, Some(EngineCapabilitySnapshotDto {
-        adapter_kind: EngineBackend::GenericGtp, analysis: None,
-    }), Some(whole_disabled)] {
+    for missing in [
+        None,
+        Some(EngineCapabilitySnapshotDto {
+            adapter_kind: EngineBackend::GenericGtp,
+            analysis: None,
+            gtp: None,
+        }),
+        Some(whole_disabled),
+    ] {
         manager.set_capability_snapshot_for_tests(missing);
         let before = manager.snapshot();
         assert_eq!(manager.continue_analysis_task(&run_id, &task.task_id, 42).unwrap_err().kind,
@@ -1321,8 +1347,9 @@ fn admission_finite_continuous_and_whole_game_are_independent() {
             std::thread::sleep(Duration::from_millis(10));
         }
         manager.cancel_job(&run_id, &job.job_id).unwrap();
-        wait_job(&events, Duration::from_secs(2), |event| event.job_id == job.job_id
-            && event.outcome == AnalysisJobOutcomeDto::Cancelled);
+        wait_job(&events, Duration::from_secs(2), |event| {
+            event.job_id == job.job_id && event.outcome == AnalysisJobOutcomeDto::Cancelled
+        });
         manager.teardown().unwrap();
     }
 }
@@ -4075,27 +4102,6 @@ fn later_start_miss_replaces_autoload_snapshot_failure() {
     assert_eq!(failure.profile_id.as_deref(), Some("bad-start"));
 }
 
-#[test]
-fn start_generic_from_no_engine_preserves_snapshot() {
-    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-    catalog.upsert(SavedEngineProfile {
-        profile_id: "gtp".into(),
-        profile: EngineProfileDto {
-            name: "GTP".into(),
-            program: "/bin/gtp".into(),
-            argv: vec![],
-            working_dir: None,
-            adapter: EngineAdapterSettings::GenericGtp(GenericGtpSettings {}),
-        },
-    });
-    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
-    let before = manager.snapshot();
-    let failure = manager.start("gtp").unwrap_err();
-    assert_eq!(failure.kind, EngineFailureKind::UnsupportedCapability);
-    assert_eq!(failure.operation, EngineOperationDto::Start);
-    assert_eq!(manager.snapshot(), before);
-}
-
 #[cfg(unix)]
 #[test]
 fn switch_keeps_primary_a_until_ready_b_promotes() {
@@ -4722,37 +4728,6 @@ impl AnalysisJobCancel for FileCancel {
     fn cancel(&self) {
         std::fs::write(&self.0, "cancelled").unwrap();
     }
-}
-
-#[cfg(unix)]
-#[test]
-fn generic_start_and_switch_are_rejected_before_io_without_disturbing_ready_run() {
-    let temp = TestTempDir::new("generic-no-io");
-    let (manager, catalog, _, _) = ready_manager(&temp, &resident_echo_script());
-    let before = manager.snapshot();
-    let marker = temp.path().join("generic-spawned");
-    let executable = temp.path().join("gtp.sh");
-    write_executable(&executable, &format!("touch '{}'\n", marker.display()));
-    catalog.upsert(SavedEngineProfile {
-        profile_id: "gtp".into(),
-        profile: EngineProfileDto {
-            name: "GTP".into(),
-            program: executable.to_string_lossy().into_owned(),
-            argv: vec!["gtp".into()],
-            working_dir: Some("/missing/gtp-cwd".into()),
-            adapter: EngineAdapterSettings::GenericGtp(GenericGtpSettings {}),
-        },
-    });
-    let start = manager.start("gtp").unwrap_err();
-    assert_eq!(start.kind, EngineFailureKind::UnsupportedCapability);
-    assert_eq!(start.operation, EngineOperationDto::Start);
-    assert_eq!(manager.snapshot(), before);
-    let switch = manager.switch_to("gtp").unwrap_err();
-    assert_eq!(switch.kind, EngineFailureKind::UnsupportedCapability);
-    assert_eq!(switch.operation, EngineOperationDto::Switch);
-    assert_eq!(manager.snapshot(), before);
-    assert!(!marker.exists());
-    manager.teardown().unwrap();
 }
 
 #[cfg(unix)]
@@ -6234,10 +6209,6 @@ fn saving_every_profile_field_and_autoload_keeps_live_run_immutable_until_restar
         profile: generic,
     });
     assert_eq!(manager.snapshot(), before);
-    let rejected = manager.restart().unwrap_err();
-    assert_eq!(rejected.kind, EngineFailureKind::UnsupportedCapability);
-    assert_eq!(rejected.operation, EngineOperationDto::Restart);
-    assert_eq!(manager.snapshot(), before);
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-1".into(),
         profile: edited.clone(),
@@ -6254,4 +6225,242 @@ fn saving_every_profile_field_and_autoload_keeps_live_run_immutable_until_restar
         before_run.capability_snapshot
     );
     manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+fn gtp_profile(temp: &TestTempDir, mode: &str) -> EngineProfileDto {
+    EngineProfileDto {
+        name: format!("GTP {mode}"),
+        program: "/usr/bin/python3".into(),
+        adapter: EngineAdapterSettings::GenericGtp(GenericGtpSettings {}),
+        argv: vec![
+            format!("{}/tests/fixtures/gtp_process.py", env!("CARGO_MANIFEST_DIR")),
+            mode.into(),
+            temp.path().join(mode).to_string_lossy().into(),
+        ],
+        ..engine_manager::default_engine_profile_record().profile
+    }
+}
+
+#[cfg(unix)]
+fn gtp_manager(
+    temp: &TestTempDir,
+    mode: &str,
+) -> (ForegroundEngineManager, Arc<InMemoryEngineProfileCatalog>) {
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "gtp".into(),
+        profile: gtp_profile(temp, mode),
+    });
+    let manager = ForegroundEngineManager::new(
+        catalog.clone(),
+        ForegroundEngineConfig {
+            readiness_timeout: Duration::from_millis(500),
+            stop_drain_timeout: Duration::from_millis(100),
+            ..ForegroundEngineConfig::for_tests()
+        },
+    );
+    (manager, catalog)
+}
+
+#[cfg(unix)]
+fn assert_gtp_reaped(temp: &TestTempDir, mode: &str) {
+    let pid = std::fs::read_to_string(temp.path().join(format!("{mode}.pid"))).unwrap();
+    assert!(
+        !Path::new(&format!("/proc/{pid}")).exists(),
+        "GTP child {pid} was not reaped"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn gtp_fragmented_crlf_multiline_and_stderr_publish_only_verified_facts() {
+    for mode in ["fragment", "stderr"] {
+        let temp = TestTempDir::new(mode);
+        let (manager, _) = gtp_manager(&temp, mode);
+        manager.start("gtp").unwrap();
+        let snapshot = wait_lifecycle(&manager, Duration::from_secs(2), |s| {
+            matches!(s, ForegroundEngineLifecycleDto::Ready { .. })
+        });
+        let run = run_from_ready(&snapshot.lifecycle);
+        let caps = run.capability_snapshot.as_ref().unwrap();
+        assert_eq!(caps.adapter_kind, EngineBackend::GenericGtp);
+        assert!(caps.analysis.is_none());
+        let facts = caps.gtp.as_ref().unwrap();
+        assert_eq!(
+            (&*facts.name, &*facts.version, facts.protocol_version),
+            ("Fixture GTP", "0.1", 2)
+        );
+        assert_eq!(
+            facts.commands,
+            [
+                "boardsize",
+                "clear_board",
+                "komi",
+                "play",
+                "genmove",
+                "quit",
+                "time_settings",
+                "time_left"
+            ]
+        );
+        let before = std::fs::read_to_string(temp.path().join(mode)).unwrap();
+        assert_eq!(
+            manager
+                .start_selected_node_job(selected_request(&run.run_id, 1, vec![]))
+                .unwrap_err()
+                .kind,
+            EngineFailureKind::UnsupportedCapability
+        );
+        assert_eq!(std::fs::read_to_string(temp.path().join(mode)).unwrap(), before);
+        assert_eq!(before, "1 protocol_version\n2 name\n3 version\n4 list_commands\n");
+        manager.teardown().unwrap();
+        assert_gtp_reaped(&temp, mode);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn gtp_typed_failures_have_total_deadline_and_reap_children() {
+    for (mode, expected) in [
+        ("badid", EngineFailureKind::Protocol),
+        ("badframe", EngineFailureKind::Protocol),
+        ("missing", EngineFailureKind::UnsupportedCapability),
+        ("v1", EngineFailureKind::UnsupportedCapability),
+        ("error", EngineFailureKind::Command),
+        ("exit", EngineFailureKind::ProcessExit),
+        ("hang", EngineFailureKind::Timeout),
+        ("dribble", EngineFailureKind::Timeout),
+        ("flood", EngineFailureKind::Protocol),
+        ("oversize", EngineFailureKind::Protocol),
+    ] {
+        let temp = TestTempDir::new(mode);
+        let (manager, _) = gtp_manager(&temp, mode);
+        let events = manager.subscribe();
+        let start = Instant::now();
+        manager.start("gtp").unwrap();
+        let failure = wait_failure(&events, Duration::from_secs(2), |_| true);
+        assert_eq!(failure.kind, expected, "{mode}: {failure:?}");
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(
+            matches!(
+                manager.snapshot().lifecycle,
+                ForegroundEngineLifecycleDto::Error { .. }
+            ),
+            "{mode} must require explicit recovery"
+        );
+        assert_gtp_reaped(&temp, mode);
+        manager.teardown().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn gtp_idle_eof_or_unsolicited_response_seals_run_until_manual_restart() {
+    for (mode, expected) in [
+        ("eof", EngineFailureKind::ProcessExit),
+        ("unsolicited", EngineFailureKind::Protocol),
+    ] {
+        let temp = TestTempDir::new(mode);
+        let (manager, catalog) = gtp_manager(&temp, mode);
+        manager.start("gtp").unwrap();
+        let ready = wait_lifecycle(&manager, Duration::from_secs(2), |s| {
+            matches!(s, ForegroundEngineLifecycleDto::Ready { .. })
+        });
+        let old_id = run_from_ready(&ready.lifecycle).run_id.clone();
+        let error = wait_lifecycle(&manager, Duration::from_secs(2), |s| {
+            matches!(s, ForegroundEngineLifecycleDto::Error { .. })
+        });
+        let ForegroundEngineLifecycleDto::Error { failure, .. } = error.lifecycle else {
+            unreachable!()
+        };
+        assert_eq!(failure.kind, expected);
+        assert_gtp_reaped(&temp, mode);
+        catalog.upsert(SavedEngineProfile {
+            profile_id: "gtp".into(),
+            profile: gtp_profile(&temp, "good"),
+        });
+        assert_eq!(
+            manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::Error {
+                run: lifecycle_run(&manager.snapshot().lifecycle).unwrap().clone(),
+                failure
+            }
+        );
+        manager.restart().unwrap();
+        let ready = wait_lifecycle(&manager, Duration::from_secs(2), |s| {
+            matches!(s, ForegroundEngineLifecycleDto::Ready { .. })
+        });
+        assert_ne!(run_from_ready(&ready.lifecycle).run_id, old_id);
+        manager.teardown().unwrap();
+        assert_gtp_reaped(&temp, "good");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn gtp_cross_protocol_switch_preserves_primary_work_and_latest_intent() {
+    let temp = TestTempDir::new("gtp-switch");
+    let (manager, catalog, events, primary) = ready_manager(&temp, &hold_then_echo_script());
+    let job = manager
+        .start_selected_node_job(selected_request(&primary, 1, vec![]))
+        .unwrap();
+    for mode in ["badid", "slow", "good"] {
+        catalog.upsert(SavedEngineProfile {
+            profile_id: mode.into(),
+            profile: gtp_profile(&temp, mode),
+        });
+    }
+    manager.switch_to("badid").unwrap();
+    let failure = wait_failure(&events, Duration::from_secs(2), |f| f.switch_id.is_some());
+    assert_eq!(failure.kind, EngineFailureKind::Protocol);
+    let snapshot = manager.snapshot();
+    assert_eq!(run_from_ready(&snapshot.lifecycle).run_id, primary);
+    assert_eq!(snapshot.selected_node_job.unwrap().job_id, job.job_id);
+    manager.switch_to("slow").unwrap();
+    manager.switch_to("good").unwrap();
+    let ready = wait_lifecycle(
+        &manager,
+        Duration::from_secs(3),
+        |s| matches!(s, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "good"),
+    );
+    assert_eq!(
+        run_from_ready(&ready.lifecycle).adapter_kind,
+        EngineBackend::GenericGtp
+    );
+    manager.switch_to("profile-1").unwrap();
+    let ready = wait_lifecycle(
+        &manager,
+        Duration::from_secs(3),
+        |s| matches!(s, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "profile-1"),
+    );
+    assert!(run_from_ready(&ready.lifecycle)
+        .capability_snapshot
+        .as_ref()
+        .unwrap()
+        .gtp
+        .is_none());
+    manager.teardown().unwrap();
+    assert_gtp_reaped(&temp, "good");
+}
+
+#[cfg(unix)]
+#[test]
+fn gtp_stop_during_handshake_cannot_publish_late_ready() {
+    let temp = TestTempDir::new("gtp-stop");
+    let (manager, _) = gtp_manager(&temp, "slow");
+    let events = manager.subscribe();
+    manager.start("gtp").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !temp.path().join("slow.pid").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    manager.stop().unwrap();
+    wait_lifecycle(&manager, Duration::from_secs(2), |s| {
+        matches!(s, ForegroundEngineLifecycleDto::NoEngine { .. })
+    });
+    assert_gtp_reaped(&temp, "slow");
+    std::thread::sleep(Duration::from_millis(850));
+    assert!(events.try_iter().all(|e| !matches!(e, ForegroundEngineEventDto::Snapshot { snapshot } if matches!(snapshot.lifecycle, ForegroundEngineLifecycleDto::Ready { .. }))));
 }

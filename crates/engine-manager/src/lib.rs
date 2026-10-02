@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 mod catalog;
+mod gtp;
 mod lifecycle;
 
 pub use catalog::{

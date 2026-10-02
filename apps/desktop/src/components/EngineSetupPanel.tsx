@@ -327,9 +327,9 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
       <p className="message">每项是一个原样传递的参数；空值、空格和中文不会拆分或经 shell 解释。</p>
       <p className="message">已保存配置与当前草稿的能力均待 run 验证。保存只更新目录；不会改变当前 run 的已验证能力。</p>
       <p className="message">{adapterKind === "generic_gtp"
-        ? "静态 adapter 上限：GenericGtp 不提供 rich-analysis；运行支持尚未提供。"
+        ? "静态 adapter 上限：GenericGtp 不提供 rich-analysis；公共取步操作尚未实现。"
         : "静态 adapter 上限：KataGoAnalysis 可提供单点、连续、整谱/task、候选/PV、胜率/分数、ownership/policy、visits 限制与协议取消；实际能力以当前 run 验证结果为准。"}</p>
-      {adapterKind === "generic_gtp" ? <p className="message" role="status">GenericGtp 配置可保存；运行时尚不可用，不能 Start 或切换，也未验证分析或取步能力。</p> : null}
+      {adapterKind === "generic_gtp" ? <p className="message" role="status">启动后验证 GTP v2、引擎名称、版本与命令列表；保存配置不会验证协议或改变当前 run。</p> : null}
       <p className="message" aria-label="当前 run 能力">{verifiedEngineCapabilitiesLabel(snapshot)}</p>
       <div className="engine-run-row">
         {adapterKind === "kata_go_analysis" ?

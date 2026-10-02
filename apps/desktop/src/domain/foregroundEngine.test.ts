@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   admitsForegroundEngineJobs,
+  admitsForegroundEngineQuery,
   canRestartForegroundEngine,
   canStopForegroundEngine,
   displayedEngineFailure,
@@ -103,8 +104,22 @@ describe("foreground engine snapshot merge", () => {
   it("does not infer analysis capability from an adapter or a Ready state", () => {
     const unverified = { ...run, capability_snapshot: null };
     expect(admitsForegroundEngineJobs(snapshot(1, { state: "ready", run: unverified }))).toBe(false);
-    const generic = { ...run, adapter_kind: "generic_gtp" as const, capability_snapshot: { adapter_kind: "generic_gtp" as const, analysis: null } };
-    expect(admitsForegroundEngineJobs(snapshot(2, { state: "ready", run: generic }))).toBe(false);
+    const generic: EngineRunDto = {
+      ...run,
+      adapter_kind: "generic_gtp",
+      profile_snapshot: { name: "Saved GTP", program: "/bin/gtp", argv: [], working_dir: null, adapter_kind: "generic_gtp", settings: {} },
+      capability_snapshot: {
+        adapter_kind: "generic_gtp",
+        gtp: { protocol_version: 2, name: "Verified GTP", version: "3.8", commands: ["boardsize", "clear_board", "komi", "play", "genmove", "quit", "time_settings", "time_left"] }
+      }
+    };
+    const genericReady = snapshot(2, { state: "ready", run: generic });
+    for (const capability of ["selected_node_analysis", "continuous_analysis", "whole_game_analysis"] as const) {
+      expect(admitsForegroundEngineJobs(genericReady, capability)).toBe(false);
+      expect(admitsForegroundEngineQuery(genericReady, capability)).toBe(false);
+    }
+    expect(canRestartForegroundEngine(genericReady)).toBe(true);
+    expect(canStopForegroundEngine(genericReady)).toBe(true);
     const refused = { ...run, capability_snapshot: { adapter_kind: "kata_go_analysis" as const, analysis: { selected_node_analysis: false, continuous_analysis: true, whole_game_analysis: true, candidates: true, pv: true, winrate: true, root_score: true, ownership: true, policy: true, visits_limit: true, protocol_cancel: true } } };
     expect(admitsForegroundEngineJobs(snapshot(3, { state: "ready", run: refused }))).toBe(false);
   });

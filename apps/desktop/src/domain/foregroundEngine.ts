@@ -69,6 +69,12 @@ export function verifiedEngineCapabilitiesLabel(snapshot: ForegroundEngineSnapsh
   if (!run) return "当前没有运行引擎";
   const capabilities = run.capability_snapshot;
   if (!capabilities) return "当前 run：能力待验证";
+  if (capabilities.gtp) {
+    const facts = capabilities.gtp;
+    const clocks = ["time_settings", "time_left"]
+      .map((command) => `${command} ${facts.commands.includes(command) ? "已发现" : "未发现"}`).join(" · ");
+    return `当前 run 已验证：${facts.name} ${facts.version} · GTP v${facts.protocol_version}；${clocks}；已发现命令：${facts.commands.join(", ")}。时钟、setup、rules 命令的存在不代表已支持时间映射、准确规则或任意局面；不提供 rich-analysis，公共取步操作尚未实现。`;
+  }
   if (!capabilities.analysis) return "当前 run 已验证：不支持分析";
   const labels: [keyof EngineAnalysisCapabilitiesDto, string][] = [
     ["selected_node_analysis", "单点"], ["continuous_analysis", "连续"],
@@ -77,10 +83,6 @@ export function verifiedEngineCapabilitiesLabel(snapshot: ForegroundEngineSnapsh
     ["policy", "policy"], ["visits_limit", "visits 限制"], ["protocol_cancel", "协议取消"]
   ];
   return `当前 run 已验证：${labels.map(([key, label]) => `${label} ${capabilities.analysis![key] ? "支持" : "不支持"}`).join(" · ")}`;
-}
-
-export function engineRuntimeUnavailableReason(profile: EngineProfileDto): string | null {
-  return profile.adapter_kind === "generic_gtp" ? "GenericGtp 适配器运行支持尚未提供；配置可保存，但不能 Start、切换或 Restart。" : null;
 }
 
 export function canStopForegroundEngine(snapshot: ForegroundEngineSnapshotDto): boolean {

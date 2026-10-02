@@ -95,7 +95,6 @@ import {
 import {
   admitsForegroundEngineJobs,
   admitsForegroundEngineQuery,
-  engineRuntimeUnavailableReason,
   verifiedEngineCapabilitiesLabel,
   canRestartForegroundEngine,
   canStopForegroundEngine,
@@ -1040,8 +1039,6 @@ export function App() {
     if (state !== "no_engine" && state !== "ready" && state !== "switching") return;
     const profile = engineProfiles.find((record) => record.id === profileId)?.profile;
     if (!profile) return;
-    const unavailable = engineRuntimeUnavailableReason(profile);
-    if (unavailable) { setMessage(unavailable); return; }
     setEngineFailure(null);
     try {
       if (state === "no_engine") await startForegroundEngine(profileId);
@@ -3601,11 +3598,6 @@ export function App() {
           });
         },
         onRestart: () => {
-          const run = runFromSnapshot(engineSnapshotRef.current);
-          const profile = engineProfiles.find((record) => record.id === run?.profile_id)?.profile;
-          if (!profile) return;
-          const unavailable = engineRuntimeUnavailableReason(profile);
-          if (unavailable) { setMessage(unavailable); return; }
           void restartForegroundEngine().catch((error) => {
             setMessage(errorMessage(error));
           });

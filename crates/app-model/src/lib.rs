@@ -440,6 +440,8 @@ pub enum EngineFailureKind {
     Asset,
     Readiness,
     Protocol,
+    Command,
+    ProcessExit,
     NonzeroExit,
     Timeout,
     Cancellation,
@@ -479,6 +481,17 @@ impl std::error::Error for EngineFailureDto {}
 pub struct EngineCapabilitySnapshotDto {
     pub adapter_kind: EngineBackend,
     pub analysis: Option<EngineAnalysisCapabilitiesDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gtp: Option<EngineGtpFactsDto>,
+}
+
+/// Observed protocol facts only; command discovery does not admit game operations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineGtpFactsDto {
+    pub protocol_version: u8,
+    pub name: String,
+    pub version: String,
+    pub commands: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1082,6 +1095,7 @@ mod foreground_engine_wire {
                     profile_snapshot: sample_profile(),
                     capability_snapshot: Some(EngineCapabilitySnapshotDto {
                         adapter_kind: EngineBackend::KataGoAnalysis,
+                        gtp: None,
                         analysis: Some(EngineAnalysisCapabilitiesDto {
                             selected_node_analysis: true,
                             continuous_analysis: true,
