@@ -10,8 +10,14 @@ pub struct PreparedSgfEdit {
 
 #[derive(Debug)]
 enum PreparedMutation {
-    Append { parent: NodePath, node: SgfNode },
-    Result { properties: Vec<SgfProperty>, result: String },
+    Append {
+        parent: NodePath,
+        node: SgfNode,
+    },
+    Result {
+        properties: Vec<SgfProperty>,
+        result: String,
+    },
     Unchanged,
 }
 
@@ -40,23 +46,36 @@ impl CurrentSgfDocument {
                 key: match color {
                     PlayerColor::Black => "B",
                     PlayerColor::White => "W",
-                }.into(),
-                values: vec![serialize_vertex(&vertex, self.document.board_width, self.document.board_height)?],
+                }
+                .into(),
+                values: vec![serialize_vertex(
+                    &vertex,
+                    self.document.board_width,
+                    self.document.board_height,
+                )?],
             }],
             children: Vec::new(),
         };
         let mut nodes = self.nodes_on_path(path)?;
         let index = nodes.last().expect("validated path").children.len();
         let mut selected_after = path.clone();
-        selected_after.indices.push(u32::try_from(index).map_err(|_| invalid_history_path())?);
+        selected_after
+            .indices
+            .push(u32::try_from(index).map_err(|_| invalid_history_path())?);
         nodes.push(&node);
         let snapshot = self.snapshot_from_nodes(&selected_after, &nodes)?;
         Ok(PreparedSgfEdit {
-            mutation: PreparedMutation::Append { parent: path.clone(), node },
+            mutation: PreparedMutation::Append {
+                parent: path.clone(),
+                node,
+            },
             outcome: DocumentEditOutcome {
                 snapshot,
                 edit: Some(SgfDocumentEdit {
-                    reversal: DocumentReversal::RemoveSubtree { parent: path.clone(), index },
+                    reversal: DocumentReversal::RemoveSubtree {
+                        parent: path.clone(),
+                        index,
+                    },
                     selected_before: path.clone(),
                     selected_after,
                 }),
@@ -65,11 +84,7 @@ impl CurrentSgfDocument {
     }
 
     /// Prepares a standard result without changing root properties or cached metadata.
-    pub fn prepare_result(
-        &self,
-        path: &NodePath,
-        result: &str,
-    ) -> Result<PreparedSgfEdit, CurrentGameError> {
+    pub fn prepare_result(&self, path: &NodePath, result: &str) -> Result<PreparedSgfEdit, CurrentGameError> {
         validate_result(result)?;
         let snapshot = self.snapshot(path)?;
         let root = self.root()?;
@@ -80,15 +95,30 @@ impl CurrentSgfDocument {
                 outcome: DocumentEditOutcome { snapshot, edit: None },
             });
         }
-        let index = before.first().map(|(index, _)| *index).unwrap_or(root.properties.len());
-        let mut staged_root = SgfNode { properties: root.properties.clone(), children: Vec::new() };
-        replace_result_properties(&mut staged_root, &[(index, SgfProperty {
-            key: "RE".into(),
-            values: vec![result.into()],
-        })]);
+        let index = before
+            .first()
+            .map(|(index, _)| *index)
+            .unwrap_or(root.properties.len());
+        let mut staged_root = SgfNode {
+            properties: root.properties.clone(),
+            children: Vec::new(),
+        };
+        replace_result_properties(
+            &mut staged_root,
+            &[(
+                index,
+                SgfProperty {
+                    key: "RE".into(),
+                    values: vec![result.into()],
+                },
+            )],
+        );
         let properties = staged_root.properties;
         Ok(PreparedSgfEdit {
-            mutation: PreparedMutation::Result { properties, result: result.into() },
+            mutation: PreparedMutation::Result {
+                properties,
+                result: result.into(),
+            },
             outcome: DocumentEditOutcome {
                 snapshot,
                 edit: Some(SgfDocumentEdit {
@@ -109,10 +139,13 @@ impl CurrentSgfDocument {
             PreparedMutation::Append { parent, node } => {
                 self.node_mut(&parent)
                     .expect("prepared path remains valid under owner lock")
-                    .children.push(node);
+                    .children
+                    .push(node);
             }
             PreparedMutation::Result { properties, result } => {
-                self.document.root.as_mut()
+                self.document
+                    .root
+                    .as_mut()
                     .expect("prepared root remains valid under owner lock")
                     .properties = properties;
                 self.document.result = Some(result);
@@ -137,18 +170,29 @@ mod tests {
         let mut document = game();
         let root = NodePath::default();
         let before = document.serialize().unwrap();
-        let prepared = document.prepare_play(&root, MoveVertex::Point(PointDto { x: 2, y: 2 })).unwrap();
+        let prepared = document
+            .prepare_play(&root, MoveVertex::Point(PointDto { x: 2, y: 2 }))
+            .unwrap();
         assert_eq!(document.serialize().unwrap(), before);
         let outcome = document.apply_prepared(prepared);
-        assert_eq!(outcome.snapshot, document.snapshot(&outcome.snapshot.path).unwrap());
+        assert_eq!(
+            outcome.snapshot,
+            document.snapshot(&outcome.snapshot.path).unwrap()
+        );
         assert_eq!(outcome.snapshot.position.to_play, PlayerColor::White);
         let path = outcome.snapshot.path.clone();
         let after = document.serialize().unwrap();
         let mut history = DocumentHistory::default();
         history.commit(outcome.edit.unwrap());
-        assert!(document.prepare_play(&path, MoveVertex::Point(PointDto { x: 2, y: 2 })).is_err());
-        assert!(document.prepare_play(&root, MoveVertex::Point(PointDto { x: 2, y: 2 })).is_err());
-        assert!(document.prepare_play(&NodePath { indices: vec![99] }, MoveVertex::Pass).is_err());
+        assert!(document
+            .prepare_play(&path, MoveVertex::Point(PointDto { x: 2, y: 2 }))
+            .is_err());
+        assert!(document
+            .prepare_play(&root, MoveVertex::Point(PointDto { x: 2, y: 2 }))
+            .is_err());
+        assert!(document
+            .prepare_play(&NodePath { indices: vec![99] }, MoveVertex::Pass)
+            .is_err());
         assert_eq!(document.serialize().unwrap(), after);
         let pass = document.prepare_play(&path, MoveVertex::Pass).unwrap();
         assert_eq!(document.serialize().unwrap(), after);
@@ -167,11 +211,14 @@ mod tests {
     fn prepared_result_preserves_metadata_and_is_private_until_applied() {
         let mut document = CurrentSgfDocument::open(
             "(;SZ[9]RU[Chinese]KM[7.5]RE[W+1.5]C[personal]XX[unknown]LZ[opaque](;B[aa])(;B[bb]))",
-        ).unwrap();
+        )
+        .unwrap();
         let path = NodePath { indices: vec![1] };
         let before = document.serialize().unwrap();
         assert!(document.prepare_result(&path, "unfinished").is_err());
-        assert!(document.prepare_result(&NodePath { indices: vec![99] }, "B+R").is_err());
+        assert!(document
+            .prepare_result(&NodePath { indices: vec![99] }, "B+R")
+            .is_err());
         let prepared = document.prepare_result(&path, "B+R").unwrap();
         assert_eq!(document.serialize().unwrap(), before);
         assert_eq!(document.result(), Some("W+1.5"));

@@ -5465,8 +5465,7 @@ fn continuous_preferences_failed_persistence_preserves_intent_and_budget() {
     manager.abort_reserved_match("persistence-rollback").unwrap();
     let saved = manager
         .commit_continuous_preferences(true, changed_budget, || {
-            std::fs::write(temp.path().join("preferences"), "saved")
-                .map_err(|error| error.to_string())?;
+            std::fs::write(temp.path().join("preferences"), "saved").map_err(|error| error.to_string())?;
             Ok("saved")
         })
         .unwrap();

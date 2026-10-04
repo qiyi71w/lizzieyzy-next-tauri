@@ -28,13 +28,16 @@ type MoveCompletion = (
 
 impl GameMoveHandle {
     pub fn wait(self) -> Result<GameMoveResultDto, EngineFailureDto> {
-        self.completion.recv().map(|(result, _)| result).unwrap_or_else(|_| {
-            Err(move_failure(
-                &self.identity,
-                EngineFailureKind::Protocol,
-                "move worker disconnected",
-            ))
-        })
+        self.completion
+            .recv()
+            .map(|(result, _)| result)
+            .unwrap_or_else(|_| {
+                Err(move_failure(
+                    &self.identity,
+                    EngineFailureKind::Protocol,
+                    "move worker disconnected",
+                ))
+            })
     }
 
     /// Frames share this move's exact identity. A slow consumer never blocks the worker.
@@ -42,7 +45,9 @@ impl GameMoveHandle {
         self,
         mut on_frame: impl FnMut(&GameMoveJobDto, app_model::AnalysisFrameDto),
     ) -> Result<GameMoveResultDto, EngineFailureDto> {
-        let Some(frames) = self.frames.as_ref() else { return self.wait(); };
+        let Some(frames) = self.frames.as_ref() else {
+            return self.wait();
+        };
         loop {
             match self.completion.try_recv() {
                 Ok((result, final_frame)) => {
@@ -75,11 +80,13 @@ impl GameMoveHandle {
                             }
                             return result;
                         }
-                        Err(_) => return Err(move_failure(
-                            &self.identity,
-                            EngineFailureKind::Protocol,
-                            "move worker disconnected",
-                        )),
+                        Err(_) => {
+                            return Err(move_failure(
+                                &self.identity,
+                                EngineFailureKind::Protocol,
+                                "move worker disconnected",
+                            ))
+                        }
                     }
                 }
             }
@@ -162,8 +169,11 @@ pub(super) fn seal_move_for_run(state: &mut ManagerState, run_id: &str) {
         .filter(|slot| slot.identity.run_id == run_id)
     {
         slot.sealed.get_or_insert_with(|| {
-            let mut error = move_failure(&slot.identity, EngineFailureKind::Cancellation,
-                "the foreground run was retired");
+            let mut error = move_failure(
+                &slot.identity,
+                EngineFailureKind::Cancellation,
+                "the foreground run was retired",
+            );
             error.profile_id = Some(slot.profile_id.clone());
             error
         });
@@ -196,10 +206,21 @@ pub(super) fn validate_move_position(
     position: &sgf::ExactPosition,
     budget: app_model::ComputeBudgetDto,
 ) -> Result<Vec<String>, EngineFailureDto> {
-    let fail = |message: &str| failure(EngineOperationDto::Job,
-        EngineFailureKind::UnsupportedCapability, message.into(), Some(&run.run_id),
-        Some(&run.profile_id), None);
-    if !run.capability_snapshot.as_ref().is_some_and(|caps| caps.game_move) {
+    let fail = |message: &str| {
+        failure(
+            EngineOperationDto::Job,
+            EngineFailureKind::UnsupportedCapability,
+            message.into(),
+            Some(&run.run_id),
+            Some(&run.profile_id),
+            None,
+        )
+    };
+    if !run
+        .capability_snapshot
+        .as_ref()
+        .is_some_and(|caps| caps.game_move)
+    {
         return Err(fail("run does not admit game moves"));
     }
     if budget.deadline_ms == 0 {
@@ -208,10 +229,14 @@ pub(super) fn validate_move_position(
     match run.adapter_kind {
         EngineBackend::KataGoAnalysis => {
             let capabilities = analysis_capabilities(run)?;
-            if !capabilities.visits_limit || !capabilities.protocol_cancel
+            if !capabilities.visits_limit
+                || !capabilities.protocol_cancel
                 || budget.max_visits.is_none_or(|visits| visits == 0)
-                || position.dto().komi.abs() > 400.0 {
-                return Err(fail("KataGo move requires positive max_visits, target cancellation and komi in [-400,400]"));
+                || position.dto().komi.abs() > 400.0
+            {
+                return Err(fail(
+                    "KataGo move requires positive max_visits, target cancellation and komi in [-400,400]",
+                ));
             }
             Ok(Vec::new())
         }
@@ -229,21 +254,38 @@ impl ForegroundEngineManager {
         self.start_game_move_owned(None, request, MoveMode::Move)
     }
 
-    pub fn start_reserved_game_move(&self, owner: &str, request: GameMoveRequest) -> Result<GameMoveHandle, EngineFailureDto> {
+    pub fn start_reserved_game_move(
+        &self,
+        owner: &str,
+        request: GameMoveRequest,
+    ) -> Result<GameMoveHandle, EngineFailureDto> {
         self.start_game_move_owned(Some(owner), request, MoveMode::Move)
     }
 
     /// Computes session-only candidates without granting permission to publish a move.
-    pub fn start_reserved_analysis(&self, owner: &str, request: GameMoveRequest) -> Result<GameMoveHandle, EngineFailureDto> {
+    pub fn start_reserved_analysis(
+        &self,
+        owner: &str,
+        request: GameMoveRequest,
+    ) -> Result<GameMoveHandle, EngineFailureDto> {
         self.start_game_move_owned(Some(owner), request, MoveMode::AnalysisOnly)
     }
 
     /// Reports candidates from the actual engine move query, never a second analysis lane.
-    pub fn start_reserved_game_move_with_analysis(&self, owner: &str, request: GameMoveRequest) -> Result<GameMoveHandle, EngineFailureDto> {
+    pub fn start_reserved_game_move_with_analysis(
+        &self,
+        owner: &str,
+        request: GameMoveRequest,
+    ) -> Result<GameMoveHandle, EngineFailureDto> {
         self.start_game_move_owned(Some(owner), request, MoveMode::MoveWithAnalysis)
     }
 
-    fn start_game_move_owned(&self, owner: Option<&str>, request: GameMoveRequest, mode: MoveMode) -> Result<GameMoveHandle, EngineFailureDto> {
+    fn start_game_move_owned(
+        &self,
+        owner: Option<&str>,
+        request: GameMoveRequest,
+        mode: MoveMode,
+    ) -> Result<GameMoveHandle, EngineFailureDto> {
         let job_uuid = Uuid::new_v4();
         let identity = GameMoveJobDto {
             run_id: request.identity.run_id.clone(),
@@ -265,18 +307,27 @@ impl ForegroundEngineManager {
             let mut state = self.lock();
             match_reservation::require_move_owner(&state, owner, &identity.run_id)?;
             // Complete pure admission precedes any cancellation, process write or slot mutation.
-            let run = ready_move_run(&state, &identity.run_id).ok_or_else(|| fail(
-                EngineFailureKind::InvalidState, "move requires a living Ready owned run"))?;
+            let run = ready_move_run(&state, &identity.run_id).ok_or_else(|| {
+                fail(
+                    EngineFailureKind::InvalidState,
+                    "move requires a living Ready owned run",
+                )
+            })?;
             let budget = request.identity.budget;
             let plan = validate_move_position(&run, &request.position, budget)?;
             if mode != MoveMode::Move {
                 if run.adapter_kind != EngineBackend::KataGoAnalysis {
-                    return Err(fail(EngineFailureKind::UnsupportedCapability,
-                        "reserved analysis requires a verified KataGo analysis run"));
+                    return Err(fail(
+                        EngineFailureKind::UnsupportedCapability,
+                        "reserved analysis requires a verified KataGo analysis run",
+                    ));
                 }
                 let capabilities = analysis_capabilities(&run)?;
-                if !capabilities.candidates || !capabilities.selected_node_analysis
-                    || !capabilities.visits_limit || !capabilities.protocol_cancel {
+                if !capabilities.candidates
+                    || !capabilities.selected_node_analysis
+                    || !capabilities.visits_limit
+                    || !capabilities.protocol_cancel
+                {
                     return Err(fail(EngineFailureKind::UnsupportedCapability,
                         "reserved analysis requires verified candidates, selected-node analysis, visits limits and target cancellation"));
                 }
@@ -357,36 +408,61 @@ impl ForegroundEngineManager {
             };
             let result = worker.compute(plan);
             let result = worker.finish(result);
-            let final_frame = if result.is_ok() { worker.final_frame.take() } else { None };
+            let final_frame = if result.is_ok() {
+                worker.final_frame.take()
+            } else {
+                None
+            };
             // Drop the receiver before joining, so a saturated event channel cannot hold the writer.
             drop(worker);
             let _ = writer.join();
             let _ = completed.send((result, final_frame));
         });
-        Ok(GameMoveHandle { identity, completion, frames })
+        Ok(GameMoveHandle {
+            identity,
+            completion,
+            frames,
+        })
     }
 
     /// Seals only session analysis, then waits for the existing worker's target drain.
-    pub fn cancel_reserved_analysis(&self, owner: &str, job: &GameMoveJobDto) -> Result<(), EngineFailureDto> {
+    pub fn cancel_reserved_analysis(
+        &self,
+        owner: &str,
+        job: &GameMoveJobDto,
+    ) -> Result<(), EngineFailureDto> {
         {
             let mut state = self.lock();
             match_reservation::require_move_owner(&state, Some(owner), &job.run_id)?;
             if !matches!(&state.phase, Phase::Ready(run) if run.run_id == job.run_id) {
-                return Err(move_failure(job, EngineFailureKind::InvalidState,
-                    "reserved analysis cancellation requires the current Ready run"));
+                return Err(move_failure(
+                    job,
+                    EngineFailureKind::InvalidState,
+                    "reserved analysis cancellation requires the current Ready run",
+                ));
             }
-            let Some(slot) = state.game_move.as_mut()
+            let Some(slot) = state
+                .game_move
+                .as_mut()
                 .filter(|slot| slot.identity.run_id == job.run_id && slot.identity.job_id == job.job_id)
             else {
                 // A completed target cannot cancel a subsequent move or consume its permit.
                 return Ok(());
             };
             if slot.identity != *job || !slot.analysis_only {
-                return Err(move_failure(job, EngineFailureKind::InvalidState,
-                    "reserved analysis cancellation cannot stop an engine move or mismatched identity"));
+                return Err(move_failure(
+                    job,
+                    EngineFailureKind::InvalidState,
+                    "reserved analysis cancellation cannot stop an engine move or mismatched identity",
+                ));
             }
-            slot.sealed.get_or_insert_with(|| move_failure(job, EngineFailureKind::Cancellation,
-                "reserved analysis cancelled by owner"));
+            slot.sealed.get_or_insert_with(|| {
+                move_failure(
+                    job,
+                    EngineFailureKind::Cancellation,
+                    "reserved analysis cancelled by owner",
+                )
+            });
         }
         let deadline = Instant::now() + self.inner.config.stop_drain_timeout * 3 + Duration::from_secs(1);
         loop {
@@ -396,13 +472,19 @@ impl ForegroundEngineManager {
                 return match &state.phase {
                     Phase::Ready(run) if run.run_id == job.run_id => Ok(()),
                     Phase::Error { failure, .. } => Err(failure.clone()),
-                    _ => Err(move_failure(job, EngineFailureKind::InvalidState,
-                        "reserved analysis run changed during cleanup")),
+                    _ => Err(move_failure(
+                        job,
+                        EngineFailureKind::InvalidState,
+                        "reserved analysis run changed during cleanup",
+                    )),
                 };
             }
             if Instant::now() >= deadline {
-                return Err(move_failure(job, EngineFailureKind::Timeout,
-                    "reserved analysis cleanup did not release the move slot"));
+                return Err(move_failure(
+                    job,
+                    EngineFailureKind::Timeout,
+                    "reserved analysis cleanup did not release the move slot",
+                ));
             }
             drop(state);
             thread::sleep(Duration::from_millis(5));
@@ -451,11 +533,19 @@ impl ForegroundEngineManager {
         self.claim_game_move_result_owned(None, result)
     }
 
-    pub fn claim_reserved_game_move_result(&self, owner: &str, result: &GameMoveResultDto) -> Result<(), EngineFailureDto> {
+    pub fn claim_reserved_game_move_result(
+        &self,
+        owner: &str,
+        result: &GameMoveResultDto,
+    ) -> Result<(), EngineFailureDto> {
         self.claim_game_move_result_owned(Some(owner), result)
     }
 
-    fn claim_game_move_result_owned(&self, owner: Option<&str>, result: &GameMoveResultDto) -> Result<(), EngineFailureDto> {
+    fn claim_game_move_result_owned(
+        &self,
+        owner: Option<&str>,
+        result: &GameMoveResultDto,
+    ) -> Result<(), EngineFailureDto> {
         let mut state = self.lock();
         match_reservation::require_move_owner(&state, owner, &result.run_id)?;
         if !state.game_move_publication.as_ref().is_some_and(|identity| {
@@ -481,7 +571,9 @@ impl ForegroundEngineManager {
 
     pub fn cancel_current_game_move(&self) {
         let mut state = self.lock();
-        if state.match_reservation.is_some() { return; }
+        if state.match_reservation.is_some() {
+            return;
+        }
         state.game_move_publication = None;
         if let Some(slot) = state.game_move.as_mut() {
             slot.sealed.get_or_insert_with(|| {
@@ -602,7 +694,13 @@ impl MoveWorker {
 
     fn write_error(&self, message: &str) -> EngineFailureDto {
         let mut error = self.error(EngineFailureKind::Protocol, message);
-        if self.manager.lock().match_reservation.as_ref().is_some_and(|reservation| reservation.runs.len() == 2) {
+        if self
+            .manager
+            .lock()
+            .match_reservation
+            .as_ref()
+            .is_some_and(|reservation| reservation.runs.len() == 2)
+        {
             error.operation = EngineOperationDto::UnexpectedExit;
         }
         error
@@ -665,9 +763,7 @@ impl MoveWorker {
         loop {
             match self.receive()? {
                 MoveInput::Written(Ok(())) => {}
-                MoveInput::Written(Err(message)) => {
-                    return Err(self.write_error(&message))
-                }
+                MoveInput::Written(Err(message)) => return Err(self.write_error(&message)),
                 MoveInput::Line(line) => {
                     if let Some(response) = decoder
                         .push(&line)
@@ -727,9 +823,7 @@ impl MoveWorker {
                 loop {
                     match self.receive()? {
                         MoveInput::Written(Ok(())) => {}
-                        MoveInput::Written(Err(message)) => {
-                            return Err(self.write_error(&message))
-                        }
+                        MoveInput::Written(Err(message)) => return Err(self.write_error(&message)),
                         MoveInput::Line(line) => {
                             let position = self.request.position.dto();
                             let result = match katago_result(
@@ -751,9 +845,13 @@ impl MoveWorker {
                             if self.mode != MoveMode::Move {
                                 // The strict move parser above fences id/turn and every warning/error
                                 // before the common rich-analysis parser and normalizer are used.
-                                let response = katago_protocol::parse_response_line(&line)
-                                    .map_err(|error| self.error(EngineFailureKind::Protocol, &error.to_string()))?;
-                                if !response.has_valid_search_result(position.board_width, position.board_height) {
+                                let response =
+                                    katago_protocol::parse_response_line(&line).map_err(|error| {
+                                        self.error(EngineFailureKind::Protocol, &error.to_string())
+                                    })?;
+                                if !response
+                                    .has_valid_search_result(position.board_width, position.board_height)
+                                {
                                     return Err(self.error(EngineFailureKind::Protocol,
                                         "KataGo reserved analysis response has invalid search accounting or geometry"));
                                 }
@@ -768,7 +866,11 @@ impl MoveWorker {
                                     self.final_frame = Some(frame);
                                 } else {
                                     // Dropping a saturated intermediate sample cannot stall the deadline.
-                                    let _ = self.frames.as_ref().expect("enabled analysis stream").try_send(frame);
+                                    let _ = self
+                                        .frames
+                                        .as_ref()
+                                        .expect("enabled analysis stream")
+                                        .try_send(frame);
                                 }
                             }
                             if let Some(result) = result {
@@ -910,22 +1012,36 @@ impl MoveWorker {
             let mut error = result.as_ref().expect_err("failed result").clone();
             error.profile_id = Some(self.run.profile_id.clone());
             if let Some(Err(cleanup)) = cleanup {
-                error.message.push_str(&format!("; process cleanup failed: {cleanup}"));
+                error
+                    .message
+                    .push_str(&format!("; process cleanup failed: {cleanup}"));
                 error.kind = EngineFailureKind::Timeout;
             } else if self.run.adapter_kind == EngineBackend::KataGoAnalysis
-                && state.match_reservation.as_ref().is_some_and(|reservation| reservation.pausing)
+                && state
+                    .match_reservation
+                    .as_ref()
+                    .is_some_and(|reservation| reservation.pausing)
             {
-                error.message.push_str("; KataGo cancellation/drain was not acknowledged; the run cannot be resumed");
+                error
+                    .message
+                    .push_str("; KataGo cancellation/drain was not acknowledged; the run cannot be resumed");
                 error.kind = EngineFailureKind::Timeout;
             }
             result = Err(error.clone());
             if let Some(reservation) = state.match_reservation.as_mut() {
-                if reservation.runs.iter().any(|run| run.run_id == self.identity.run_id) {
+                if reservation
+                    .runs
+                    .iter()
+                    .any(|run| run.run_id == self.identity.run_id)
+                {
                     // Pause's own cancellation of a GTP move ends at a confirmed reap. The session
                     // survives; only an explicit Resume may rebuild this side. Anything else fails.
-                    if reaped && self.run.adapter_kind == EngineBackend::GenericGtp
+                    if reaped
+                        && self.run.adapter_kind == EngineBackend::GenericGtp
                         && error.kind == EngineFailureKind::Cancellation
-                        && reservation.pausing && !reservation.sealed {
+                        && reservation.pausing
+                        && !reservation.sealed
+                    {
                         reservation.retired.push(self.identity.run_id.clone());
                     } else {
                         reservation.failure.get_or_insert_with(|| error.clone());
@@ -940,7 +1056,10 @@ impl MoveWorker {
                 {
                     Phase::NoEngine { failure: None }
                 } else {
-                    Phase::Error { run: self.run.clone(), failure: error }
+                    Phase::Error {
+                        run: self.run.clone(),
+                        failure: error,
+                    }
                 };
             }
         } else if let Err(error) = &result {
@@ -951,7 +1070,11 @@ impl MoveWorker {
                 }
             }
         }
-        if state.game_move.as_ref().is_some_and(|slot| slot.identity == self.identity) {
+        if state
+            .game_move
+            .as_ref()
+            .is_some_and(|slot| slot.identity == self.identity)
+        {
             // A failed reap retains the exclusive slot until explicit lifecycle retirement.
             if clean_katago || owned_live(&state, &self.identity.run_id).is_none() {
                 state.game_move = None;

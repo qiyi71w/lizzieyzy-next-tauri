@@ -1418,8 +1418,9 @@ export function App() {
   async function handleStopMatch() {
     matchCancelRef.current = true;
     const state = matchStateRef.current;
-    if (!state?.session_id) { if (!matchStartingRef.current) setMatchDialogOpen(false); return; }
-    if (matchStopPendingRef.current || !matchOwnsWorkspace()) return;
+    const sessionOwnsWorkspace = Boolean(state?.resources_held) || ["starting", "playing", "paused", "ending"].includes(state?.phase ?? "idle");
+    if (!state?.session_id || !sessionOwnsWorkspace) { if (!matchStartingRef.current) setMatchDialogOpen(false); return; }
+    if (matchStopPendingRef.current) return;
     matchStopPendingRef.current = true;
     setMatchStopPending(true);
     try { await adoptMatchUpdate(await humanMatchStop(state.session_id)); }

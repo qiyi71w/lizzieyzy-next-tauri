@@ -232,8 +232,10 @@ pub fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPrefe
 pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String> {
     match fs::read_to_string(path) {
         Ok(contents) => match serde_json::from_str::<AppPreferencesDto>(&contents) {
-            Ok(preferences) if preferences.continuous_budget.validate().is_ok()
-                && preferences.match_defaults.validate().is_ok() => {
+            Ok(preferences)
+                if preferences.continuous_budget.validate().is_ok()
+                    && preferences.match_defaults.validate().is_ok() =>
+            {
                 let preferences = normalize_app_preferences(preferences);
                 let valid = preferences
                     .task_single_stage_conditions

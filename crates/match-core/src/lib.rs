@@ -21,10 +21,19 @@ impl HumanMatch {
         if settings.profile_id.is_none() {
             return Err("Choose a saved engine profile before starting.".into());
         }
-        let trailing_pass = position.moves.last().is_some_and(|last| last.vertex == MoveVertex::Pass);
-        Ok(Self { human: Some(settings.human_color), to_play: position.to_play,
-            turn: 1, consecutive_passes: u8::from(trailing_pass), committed_moves: 0,
-            max_moves: None, end: None })
+        let trailing_pass = position
+            .moves
+            .last()
+            .is_some_and(|last| last.vertex == MoveVertex::Pass);
+        Ok(Self {
+            human: Some(settings.human_color),
+            to_play: position.to_play,
+            turn: 1,
+            consecutive_passes: u8::from(trailing_pass),
+            committed_moves: 0,
+            max_moves: None,
+            end: None,
+        })
     }
 
     /// Both sides are engines. Only moves committed after this start count toward the limit.
@@ -32,20 +41,41 @@ impl HumanMatch {
         settings.validate_participants()?;
         for (side, settings) in [("Black", &settings.pk_black), ("White", &settings.pk_white)] {
             if settings.profile_id.is_none() {
-                return Err(format!("Choose a saved engine profile for PK {side} before starting."));
+                return Err(format!(
+                    "Choose a saved engine profile for PK {side} before starting."
+                ));
             }
         }
-        let trailing_pass = position.moves.last().is_some_and(|last| last.vertex == MoveVertex::Pass);
-        Ok(Self { human: None, to_play: position.to_play,
-            turn: 1, consecutive_passes: u8::from(trailing_pass), committed_moves: 0,
-            max_moves: Some(settings.pk_max_moves), end: None })
+        let trailing_pass = position
+            .moves
+            .last()
+            .is_some_and(|last| last.vertex == MoveVertex::Pass);
+        Ok(Self {
+            human: None,
+            to_play: position.to_play,
+            turn: 1,
+            consecutive_passes: u8::from(trailing_pass),
+            committed_moves: 0,
+            max_moves: Some(settings.pk_max_moves),
+            end: None,
+        })
     }
 
-    pub fn turn(&self) -> u64 { self.turn }
-    pub fn to_play(&self) -> PlayerColor { self.to_play }
-    pub fn end(&self) -> Option<MatchEndDto> { self.end }
-    pub fn committed_moves(&self) -> u32 { self.committed_moves }
-    pub fn human_turn(&self) -> bool { self.end.is_none() && Some(self.to_play) == self.human }
+    pub fn turn(&self) -> u64 {
+        self.turn
+    }
+    pub fn to_play(&self) -> PlayerColor {
+        self.to_play
+    }
+    pub fn end(&self) -> Option<MatchEndDto> {
+        self.end
+    }
+    pub fn committed_moves(&self) -> u32 {
+        self.committed_moves
+    }
+    pub fn human_turn(&self) -> bool {
+        self.end.is_none() && Some(self.to_play) == self.human
+    }
 
     /// Revokes callbacks for this turn without changing the committed position or termination rules.
     pub fn invalidate_turn(&mut self) {
@@ -75,7 +105,10 @@ impl HumanMatch {
     }
 
     pub fn resignation_result(&self) -> &'static str {
-        match self.to_play { PlayerColor::Black => "W+R", PlayerColor::White => "B+R" }
+        match self.to_play {
+            PlayerColor::Black => "W+R",
+            PlayerColor::White => "B+R",
+        }
     }
 }
 
@@ -85,7 +118,10 @@ mod tests {
     use app_model::{ExactRulesDto, MoveDto, PointDto};
 
     fn pk_settings(max_moves: u32) -> MatchDefaultsDto {
-        let mut settings = MatchDefaultsDto { pk_max_moves: max_moves, ..MatchDefaultsDto::default() };
+        let mut settings = MatchDefaultsDto {
+            pk_max_moves: max_moves,
+            ..MatchDefaultsDto::default()
+        };
         settings.pk_black.profile_id = Some("same-profile".into());
         settings.pk_white.profile_id = Some("same-profile".into());
         settings
@@ -95,12 +131,22 @@ mod tests {
         let mut to_play = PlayerColor::Black;
         let mut moves = Vec::new();
         for (index, vertex) in vertices.iter().enumerate() {
-            moves.push(MoveDto { color: to_play, vertex: vertex.clone(), move_number: index as u32 + 1 });
+            moves.push(MoveDto {
+                color: to_play,
+                vertex: vertex.clone(),
+                move_number: index as u32 + 1,
+            });
             to_play = to_play.opponent();
         }
         ExactPositionDto {
-            board_width: 9, board_height: 9, komi: 7.5, rules: ExactRulesDto::Chinese,
-            initial_player: PlayerColor::Black, to_play, initial_stones: Vec::new(), moves,
+            board_width: 9,
+            board_height: 9,
+            komi: 7.5,
+            rules: ExactRulesDto::Chinese,
+            initial_player: PlayerColor::Black,
+            to_play,
+            initial_stones: Vec::new(),
+            moves,
         }
     }
 
@@ -174,7 +220,11 @@ mod tests {
         for black in [true, false] {
             for invalid in ["missing", "blank", "deadline", "visits"] {
                 let mut settings = pk_settings(3);
-                let side = if black { &mut settings.pk_black } else { &mut settings.pk_white };
+                let side = if black {
+                    &mut settings.pk_black
+                } else {
+                    &mut settings.pk_white
+                };
                 match invalid {
                     "missing" => side.profile_id = None,
                     "blank" => side.profile_id = Some(" \t".into()),
@@ -182,7 +232,10 @@ mod tests {
                     "visits" => side.kata_max_visits = 0,
                     _ => unreachable!(),
                 }
-                assert!(HumanMatch::new_pk(&settings, &inherited).is_err(), "black={black}: {invalid}");
+                assert!(
+                    HumanMatch::new_pk(&settings, &inherited).is_err(),
+                    "black={black}: {invalid}"
+                );
             }
         }
     }
@@ -203,7 +256,8 @@ mod tests {
     #[test]
     fn human_roles_and_unlimited_moves_are_unchanged() {
         let settings = MatchDefaultsDto {
-            profile_id: Some("human-engine".into()), pk_max_moves: 1,
+            profile_id: Some("human-engine".into()),
+            pk_max_moves: 1,
             ..MatchDefaultsDto::default()
         };
         let mut game = HumanMatch::new(&settings, &position(&[])).unwrap();

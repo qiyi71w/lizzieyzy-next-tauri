@@ -360,7 +360,9 @@ impl ForegroundEngineManager {
         request.mode = AnalysisJobModeDto::Continuous;
         let cancel = {
             let mut state = self.lock();
-            if state.match_reservation.is_some() { return; }
+            if state.match_reservation.is_some() {
+                return;
+            }
             let changed = state.continuous_target.as_ref().is_none_or(|old| {
                 !same_position(
                     old.generation,
@@ -397,7 +399,9 @@ impl ForegroundEngineManager {
     pub fn clear_continuous_position(&self) {
         let cancel = {
             let mut state = self.lock();
-            if state.match_reservation.is_some() { return; }
+            if state.match_reservation.is_some() {
+                return;
+            }
             let changed = state.continuous_target.take().is_some();
             if changed {
                 clear_weak_holds_for_new_position(&mut state);
@@ -473,7 +477,9 @@ impl ForegroundEngineManager {
     pub fn authorize_continuous_start(&self) {
         {
             let mut state = self.lock();
-            if state.match_reservation.is_some() { return; }
+            if state.match_reservation.is_some() {
+                return;
+            }
             if state.continuous_departing
                 || state.finite_admission_pending
                 || current_selected_job(&state).is_some_and(|job| job.state == AnalysisJobStateDto::Stopping)
@@ -511,7 +517,9 @@ impl ForegroundEngineManager {
 
     pub fn begin_continuous_departure(&self) {
         let mut state = self.lock();
-        if state.match_reservation.is_some() { return; }
+        if state.match_reservation.is_some() {
+            return;
+        }
         if !state.continuous_departing {
             state.continuous_departing = true;
             state.game_move_publication = None;
@@ -529,7 +537,9 @@ impl ForegroundEngineManager {
     pub fn finish_continuous_departure(&self, committed_replacement: bool) {
         {
             let mut state = self.lock();
-            if state.match_reservation.is_some() { return; }
+            if state.match_reservation.is_some() {
+                return;
+            }
             state.continuous_departing = false;
             if committed_replacement {
                 clear_resumable_holds(&mut state);
@@ -1624,7 +1634,9 @@ impl ForegroundEngineManager {
 
     pub fn set_capability_snapshot_for_tests(&self, snapshot: Option<EngineCapabilitySnapshotDto>) {
         let mut state = self.lock();
-        if state.match_reservation.is_some() { return; }
+        if state.match_reservation.is_some() {
+            return;
+        }
         if let Phase::Ready(run) = &mut state.phase {
             run.capability_snapshot = snapshot;
         }
@@ -1749,7 +1761,9 @@ impl ForegroundEngineManager {
     fn reconcile_continuous(&self) {
         let work = {
             let mut state = self.lock();
-            if state.match_reservation.is_some() { return; }
+            if state.match_reservation.is_some() {
+                return;
+            }
             if state.continuous_departing
                 || state.finite_admission_pending
                 || state.game_move.is_some()
@@ -2038,8 +2052,12 @@ impl Inner {
                 // Keep even a late-spawned child manager-owned until its exit is confirmed.
                 state.retiring.push((run.clone(), Arc::new(Mutex::new(engine))));
                 drop(state);
-                let manager = ForegroundEngineManager { inner: Arc::clone(self) };
-                thread::spawn(move || { let _ = manager.reap_retiring_runs(); });
+                let manager = ForegroundEngineManager {
+                    inner: Arc::clone(self),
+                };
+                thread::spawn(move || {
+                    let _ = manager.reap_retiring_runs();
+                });
                 return Ok(());
             }
             if as_candidate {
@@ -2071,7 +2089,9 @@ impl Inner {
                 .and_then(|jsonl| {
                     let stdin = engine_stdin(&self.lock(), &run.run_id)
                         .ok_or_else(|| "readiness process was retired".to_owned())?;
-                    let mut guard = stdin.lock().map_err(|_| "engine stdin lock poisoned".to_owned())?;
+                    let mut guard = stdin
+                        .lock()
+                        .map_err(|_| "engine stdin lock poisoned".to_owned())?;
                     let input = guard.as_mut().ok_or_else(|| "engine stdin closed".to_owned())?;
                     write_jsonl(input, &jsonl).map_err(|error| error.to_string())
                 });
@@ -2086,7 +2106,6 @@ impl Inner {
                 ));
             }
         }
-
 
         let gtp = if generic {
             let Some(facts) = self.await_gtp_readiness(operation, run, as_candidate)? else {
@@ -2124,9 +2143,16 @@ impl Inner {
                 if state.operation == operation {
                     if let Some(reservation) = state.match_reservation.as_mut() {
                         if !reservation.sealed {
-                            if let Some(ready) = reservation.runs.iter_mut().find(|ready| ready.run_id == run.run_id) {
+                            if let Some(ready) = reservation
+                                .runs
+                                .iter_mut()
+                                .find(|ready| ready.run_id == run.run_id)
+                            {
                                 ready.capability_snapshot = Some(capabilities);
-                                reservation.ready = reservation.runs.iter().all(|run| run.capability_snapshot.is_some());
+                                reservation.ready = reservation
+                                    .runs
+                                    .iter()
+                                    .all(|run| run.capability_snapshot.is_some());
                             }
                         }
                     }
@@ -2844,8 +2870,13 @@ impl Inner {
                 }
             };
             let mut state = self.lock();
-            if match_reservation::handle_reserved_stdout_failure(&mut state, &run_id,
-                Instant::now() + self.config.stop_drain_timeout, kind, &message) {
+            if match_reservation::handle_reserved_stdout_failure(
+                &mut state,
+                &run_id,
+                Instant::now() + self.config.stop_drain_timeout,
+                kind,
+                &message,
+            ) {
                 return;
             }
             let Some(run) = admitting_run(&state.phase, &run_id) else {
@@ -2911,9 +2942,13 @@ impl Inner {
                 }
                 Ok(Ok(None)) | Ok(Err(_)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                     let mut state = self.lock();
-                    if match_reservation::handle_reserved_stdout_failure(&mut state, &run_id,
-                        Instant::now() + self.config.stop_drain_timeout, EngineFailureKind::ProcessExit,
-                        "The owned match engine stdout closed or failed unexpectedly.") {
+                    if match_reservation::handle_reserved_stdout_failure(
+                        &mut state,
+                        &run_id,
+                        Instant::now() + self.config.stop_drain_timeout,
+                        EngineFailureKind::ProcessExit,
+                        "The owned match engine stdout closed or failed unexpectedly.",
+                    ) {
                         return;
                     }
                     drop(state);
@@ -3457,7 +3492,13 @@ impl Inner {
 
     fn check_job_deadlines(self: &Arc<Self>, run_id: &str) {
         let state = self.lock();
-        if state.match_reservation.as_ref().is_some_and(|reservation| !reservation.committed) { return; }
+        if state
+            .match_reservation
+            .as_ref()
+            .is_some_and(|reservation| !reservation.committed)
+        {
+            return;
+        }
         if admitting_run(&state.phase, run_id).is_none() {
             return;
         }
@@ -3505,7 +3546,11 @@ impl Inner {
             None,
             None,
         );
-        if state.match_reservation.as_ref().is_some_and(|reservation| !reservation.committed) {
+        if state
+            .match_reservation
+            .as_ref()
+            .is_some_and(|reservation| !reservation.committed)
+        {
             state.continuous_safety_hold = true;
             return published;
         }
@@ -4467,12 +4512,20 @@ fn admitting_run(phase: &Phase, run_id: &str) -> Option<EngineRunDto> {
 }
 
 fn owned_live<'a>(state: &'a ManagerState, run_id: &str) -> Option<&'a LiveEngine> {
-    state.live.iter().chain(state.candidate.iter()).chain(state.match_residents.iter())
+    state
+        .live
+        .iter()
+        .chain(state.candidate.iter())
+        .chain(state.match_residents.iter())
         .find(|live| live.run_id == run_id)
 }
 
 fn owned_live_mut<'a>(state: &'a mut ManagerState, run_id: &str) -> Option<&'a mut LiveEngine> {
-    state.live.iter_mut().chain(state.candidate.iter_mut()).chain(state.match_residents.iter_mut())
+    state
+        .live
+        .iter_mut()
+        .chain(state.candidate.iter_mut())
+        .chain(state.match_residents.iter_mut())
         .find(|live| live.run_id == run_id)
 }
 
@@ -4482,7 +4535,10 @@ fn take_owned_live(state: &mut ManagerState, run_id: &str) -> Option<LiveEngine>
     } else if state.candidate.as_ref().is_some_and(|live| live.run_id == run_id) {
         state.candidate.take()
     } else {
-        state.match_residents.iter().position(|live| live.run_id == run_id)
+        state
+            .match_residents
+            .iter()
+            .position(|live| live.run_id == run_id)
             .map(|index| state.match_residents.remove(index))
     }
 }
@@ -4490,8 +4546,12 @@ fn take_owned_live(state: &mut ManagerState, run_id: &str) -> Option<LiveEngine>
 fn ready_move_run(state: &ManagerState, run_id: &str) -> Option<EngineRunDto> {
     if let Some(reservation) = state.match_reservation.as_ref() {
         if reservation.committed && !reservation.sealed {
-            return reservation.runs.iter().find(|run| run.run_id == run_id)
-                .filter(|_| owned_live(state, run_id).is_some()).cloned();
+            return reservation
+                .runs
+                .iter()
+                .find(|run| run.run_id == run_id)
+                .filter(|_| owned_live(state, run_id).is_some())
+                .cloned();
         }
         return None;
     }

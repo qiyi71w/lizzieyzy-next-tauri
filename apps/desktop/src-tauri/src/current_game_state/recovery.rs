@@ -137,8 +137,10 @@ impl CurrentGameState {
         document.snapshot(&envelope.selected_path)?;
         let mut holder = self.holder.lock().expect("current game state");
         if holder.human_match.blocks() {
-            return Err(CurrentGameError { kind: CurrentGameErrorKind::DepartureBlocked,
-                message: "Stop the match before restoring a recovery document.".into() });
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::DepartureBlocked,
+                message: "Stop the match before restoring a recovery document.".into(),
+            });
         }
         if holder.departure.is_some() {
             return Err(departure::departure_in_progress());

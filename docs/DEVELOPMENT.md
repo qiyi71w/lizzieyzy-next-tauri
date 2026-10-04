@@ -476,6 +476,20 @@ These are repository and controlled-process results on the transplanted working 
 
 Independent bounded-transplant FULL_REVIEW: **Standards CLEAN, Spec SUCCESS; zero findings and zero follow-up items**. Both axes covered the 58-file staged diff, source-preservation evidence and the manually combined response boundary. Parent reconciliation confirmed unchanged HEAD, full diff, status and untracked configuration throughout review; no repair batch was needed.
 
+### 2.12 PR #16 review repairs
+
+Local repairs to PR head `ef703e7495be27f07c488ae45735c84fc137c410` cover review comments 1–6: intentional startup Stop/exit returns Idle/Stopped after confirmed cleanup; a previous idle session cannot consume a new startup cancellation; missing profiles release the empty reservation before process I/O; aborting an uncommitted reservation rearms ordinary cancellation supervision without resuming analysis. Genuine preparation/cleanup failures remain visible. The completeness index now matches all 112 parity rows (69 Accepted, 8 Partial, 10 Missing, 25 Deferred). CI-reported Rust formatting is corrected, and match-owner errors use the existing desktop boxed-error convention without changing wire DTOs.
+
+The startup-cancellation, stale-session cancellation, missing-profile reservation and suspended-watchdog regressions failed before their corresponding fixes. Focused frontend checks passed: eight files, **260 tests**, plus TypeScript/Vite production build. Final `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` passed. Rust match-owner regressions passed **46/46**, including readiness-held child cleanup for Stop/confirmed exit, exit admission refusing a prepared candidate, genuine failure retention and PK cancellation. Manager `game_move` passed **38/38**, including waiting for authoritative No-engine before restarting after watchdog cleanup.
+
+The follow-on Pause/departure repair closes a race in which cancellation delivery failure removed the Job before departure collected its snapshot. The owner now propagates the same sealed task's Run failure before Save/replacement. `task_pause_cleanup_failure_aborts_departure_and_retains_game` fixes this ordering deterministically: wait for delivery failure and Job removal before departure, retain the original 9×9 game without opening/writing Save, then verify explicit Stop permits a fresh 13×13 replacement. The controlled-child regression failed before the source fix and passed afterward; its deadline-failure branch also passed. Final `CARGO_INCREMENTAL=0 cargo test --workspace -- --test-threads=1`: **730 passed, 0 failed, 3 ignored**, including all 198 desktop tests. Format and full-target Clippy checks passed. The three opt-in real-engine tests remain unexecuted; incremental compilation was disabled because runtime interruption had corrupted local build artifacts.
+
+A browser smoke exercised the modified App with controlled Tauri IPC: previous idle `human-1`, delayed new startup, Stop before the new Starting event, then cancellation of **only `human-2`**. The final state was Idle/Stopped with no held resources or startup-failure banner; the match dialog reopened normally. This is browser presentation evidence, not native IPC acceptance.
+
+A temporary executable exercised the production manager with real controlled JSONL child pipes. Missing-profile refusal released the reservation while the same old Ready Run still returned D4 (PID 10277). An unclean analysis drain preserved the foreground child across abort, then the restored ordinary watchdog reported Timeout (PID 10286). Explicit Stop/teardown confirmed both children reaped and reservations released. The executable, isolated data and browser/Vite session were removed after verification.
+
+These results apply to the local review-repair working tree, not a pushed or newly committed native candidate. Real KataGo/GNU Go, Windows native GUI and installed artifacts were **not rerun**; §2.5–§2.10 retain their original candidate attribution.
+
 ### 3. Start From The Engine Switcher
 
 - In the main-workspace Engine Switcher, choose the saved profile (`选择引擎` starts it).

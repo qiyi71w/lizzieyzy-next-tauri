@@ -685,6 +685,33 @@ describe("App human match ownership", () => {
     expect(alert?.textContent).toContain("timeout");
     expect(buttonNamed(host, "停止").disabled).toBe(true);
   });
+  it("cancels a new startup rather than the previous idle session", async () => {
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, matchDefaults: settings } });
+    engineSetupProfiles.current = [savedProfile];
+    const host = await renderApp();
+    const old = playing(2, initialGame);
+    old.match_state = { ...old.match_state, phase: "idle", end: "stopped", resources_held: false };
+    await act(async () => { matchListener?.(old); });
+    let finishStart!: (update: MatchUpdateDto) => void;
+    matchApi.humanMatchStart.mockImplementationOnce(() => new Promise((resolve) => { finishStart = resolve; }));
+    const starting = playing(3, initialGame);
+    starting.match_state = { ...starting.match_state, session_id: "human-2", phase: "starting", committed: false };
+    const stopped: MatchUpdateDto = { current: null, match_state: { ...starting.match_state, revision: 4,
+      phase: "idle", end: "stopped", resources_held: false } };
+    let finishOldStop!: (update: MatchUpdateDto) => void;
+    matchApi.humanMatchStop.mockImplementation((id) => id === "human-1"
+      ? new Promise((resolve) => { finishOldStop = resolve; }) : Promise.resolve(stopped));
+    act(() => buttonNamed(host, "人机新局").click());
+    await act(async () => { buttonNamed(host, "开始新局").click(); });
+    await act(async () => { buttonNamed(host, "停止启动").click(); });
+    await act(async () => { matchListener?.(starting); });
+    // Resolve both requests so even the failing-before case leaves no pending work.
+    await act(async () => { finishOldStop?.(old); finishStart(stopped); });
+    expect(matchApi.humanMatchStop.mock.calls.map(([id]) => id)).toEqual(["human-2"]);
+    expect(requiredElement(host, '[aria-label="对局状态"]').textContent).toContain("idle");
+    expect(host.textContent).not.toContain("启动失败");
+    expect(buttonNamed(host, "停止").disabled).toBe(true);
+  });
   it("cancels dirty-document departure without starting or reserving a match", async () => {
     currentGameFixture.mockResolvedValue({ ...initialGame, dirty: true });
     preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, matchDefaults: settings } });

@@ -32,9 +32,9 @@ use continuous_analysis::{foreground_engine_continuous_action, PreferencesState}
 mod main_window_pin;
 use main_window_pin::{main_window_pin_status, set_main_window_pin, MainWindowPin};
 mod current_game_state;
-mod human_match;
 mod document_departure;
 mod file_activation;
+mod human_match;
 mod save_as;
 mod session_recovery;
 #[cfg(windows)]
@@ -1277,7 +1277,10 @@ pub fn run() {
                             let _ = emit_handle.emit("foreground-engine://snapshot", snapshot);
                         }
                         ForegroundEngineEventDto::Failure { failure } => {
-                            if let Some(update) = emit_handle.state::<CurrentGameState>().observe_match_failure(&failure) {
+                            if let Some(update) = emit_handle
+                                .state::<CurrentGameState>()
+                                .observe_match_failure(&failure)
+                            {
                                 human_match::publish(&emit_handle, update);
                                 human_match::drive(emit_handle.clone());
                             }

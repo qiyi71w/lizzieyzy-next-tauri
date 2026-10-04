@@ -95,7 +95,9 @@ impl CurrentGameState {
 
     // Called with the holder locked: accepted cursor/edit order is also target order.
     fn follow_continuous_position(&self, holder: &mut CurrentGameHolder) {
-        if holder.human_match.blocks() { return; }
+        if holder.human_match.blocks() {
+            return;
+        }
         let Some(manager) = self.analysis_manager.get() else {
             return;
         };
@@ -143,10 +145,26 @@ impl CurrentGameState {
         }
     }
 
-    pub fn analysis_jobs(&self) -> Option<Vec<AnalysisJobStartedDto>> {
-        self.analysis_manager
-            .get()
-            .map(|manager| crate::document_departure::jobs_from_snapshot(&manager.snapshot()))
+    pub fn analysis_jobs(&self) -> crate::EngineCommandResult<Option<Vec<AnalysisJobStartedDto>>> {
+        let Some(manager) = self.analysis_manager.get() else {
+            return Ok(None);
+        };
+        // Keep task admission ordered while reading its identity and the later Run snapshot.
+        let holder = self.holder.lock().expect("current game state");
+        let sealed_task_run = manager.analysis_task_snapshot().and_then(|task| {
+            let identity = (task.run_id, task.job_id);
+            holder.closed_jobs.contains(&identity).then_some(identity.0)
+        });
+        match manager.snapshot() {
+            app_model::ForegroundEngineSnapshotDto {
+                lifecycle: app_model::ForegroundEngineLifecycleDto::Error { run, failure },
+                ..
+            } if sealed_task_run.as_deref() == Some(run.run_id.as_str()) => {
+                // Failed Pause cleanup removes the Job, but must still refuse departure.
+                Err(Box::new(failure))
+            }
+            snapshot => Ok(Some(crate::document_departure::jobs_from_snapshot(&snapshot))),
+        }
     }
 
     #[cfg(test)]

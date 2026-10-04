@@ -68,19 +68,26 @@ impl PreferencesState {
         owner: &str,
         defaults: impl FnOnce(&app_model::MatchDefaultsDto) -> app_model::MatchDefaultsDto,
         install: impl FnOnce(&app_model::MatchDefaultsDto) -> T,
-    ) -> Result<T, app_model::EngineFailureDto> {
+    ) -> crate::EngineCommandResult<T> {
         // Same lock order as preference saving: preferences, then manager.
         let mut committed = self.0.lock().expect("preferences transaction");
-        manager.commit_reserved_match(owner, || {
-            let mut preferences = committed.as_ref()
-                .ok_or("Preferences must finish loading before starting a match.")?
-                .preferences.clone();
-            preferences.match_defaults = defaults(&preferences.match_defaults);
-            let saved = app_preferences::save_to_path(path, preferences)?;
-            let installed = install(&saved.match_defaults);
-            *committed = Some(AppPreferencesLoadResultDto { preferences: saved, recovery: None });
-            Ok(installed)
-        })
+        manager
+            .commit_reserved_match(owner, || {
+                let mut preferences = committed
+                    .as_ref()
+                    .ok_or("Preferences must finish loading before starting a match.")?
+                    .preferences
+                    .clone();
+                preferences.match_defaults = defaults(&preferences.match_defaults);
+                let saved = app_preferences::save_to_path(path, preferences)?;
+                let installed = install(&saved.match_defaults);
+                *committed = Some(AppPreferencesLoadResultDto {
+                    preferences: saved,
+                    recovery: None,
+                });
+                Ok(installed)
+            })
+            .map_err(Box::new)
     }
 
     pub fn update_workspace_visibility(
@@ -221,18 +228,15 @@ impl PreferencesState {
                     .selected_node_job
                     .is_some_and(|job| job.mode == AnalysisJobModeDto::Finite);
                 preferences.continuous_analysis_enabled = start;
-                preferences = manager.commit_continuous_preferences(
-                    start,
-                    preferences.continuous_budget,
-                    || {
+                preferences =
+                    manager.commit_continuous_preferences(start, preferences.continuous_budget, || {
                         let saved = app_preferences::save_to_path(path, preferences)?;
                         *committed = Some(AppPreferencesLoadResultDto {
                             preferences: saved.clone(),
                             recovery: None,
                         });
                         Ok(saved)
-                    },
-                )?;
+                    })?;
                 if start && !finite {
                     manager.authorize_continuous_start();
                 }
