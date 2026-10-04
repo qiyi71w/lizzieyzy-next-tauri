@@ -10,8 +10,8 @@ mod exact_position;
 mod gib;
 pub use analysis::{encode_analysis_payload, parse_analysis_payload, AnalysisSlot, SgfAnalysisPayload};
 pub use current_game::{
-    CurrentSgfDocument, DocumentEditOutcome, DocumentHistory, DocumentHistoryOutcome, SgfDocumentEdit,
-    TrialLine,
+    CurrentSgfDocument, DocumentEditOutcome, DocumentHistory, DocumentHistoryOutcome, PreparedSgfEdit,
+    SgfDocumentEdit, StagedDocument, TrialLine,
 };
 pub use exact_position::ExactPosition;
 pub use gib::{import_gib, GibError};

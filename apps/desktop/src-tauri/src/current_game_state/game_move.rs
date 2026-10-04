@@ -29,6 +29,7 @@ impl CurrentGameState {
         // Admission and accepted cursor changes share this lock. No document mutation is needed.
         let holder = self.holder.lock().expect("current game state");
         if holder.departure.is_some()
+            || holder.human_match.blocks()
             || !matches!(holder.trial_mode, trial::TrialMode::Review)
             || holder.generation != request.generation
             || holder.selected_path != request.node_path
@@ -65,6 +66,7 @@ impl CurrentGameState {
         let holder = self.holder.lock().expect("current game state");
         let snapshot = manager.snapshot();
         if holder.departure.is_some()
+            || holder.human_match.blocks()
             || !matches!(holder.trial_mode, trial::TrialMode::Review)
             || holder.generation != result.generation
             || holder.selected_path != result.node_path

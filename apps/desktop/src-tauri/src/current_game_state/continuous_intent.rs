@@ -384,7 +384,7 @@ fn analysis_task_pause_continue_controllable_engine_smoke() {
         .replace(&envelope.sgf_text, envelope.source_path)
         .unwrap();
     assert!(recovered_manager.analysis_task_snapshot().is_none());
-    assert!(recovered.analysis_jobs().unwrap().is_empty());
+    assert!(recovered.analysis_jobs().unwrap().unwrap().is_empty());
     assert!(matches!(
         recovered_manager.snapshot().lifecycle,
         app_model::ForegroundEngineLifecycleDto::NoEngine { .. }
@@ -652,7 +652,7 @@ fn all_positions_two_stage_pause_continue_controllable_engine_smoke() {
         .replace(&envelope.sgf_text, envelope.source_path)
         .unwrap();
     assert!(recovered_manager.analysis_task_snapshot().is_none());
-    assert!(recovered.analysis_jobs().unwrap().is_empty());
+    assert!(recovered.analysis_jobs().unwrap().unwrap().is_empty());
     println!(
         "two-stage smoke: all overview targets completed at 32 visits before deep; deep Pause fenced the interrupted target; Continue used a fresh Job and completed both targets at 500 visits; Save/reopen retained comment and accepted analysis; recovery restored no runtime task."
     );
@@ -1028,6 +1028,18 @@ fn task_pause_cleanup_failure_aborts_departure_and_retains_game() {
         state
             .pause_analysis_task(&engine.manager, &task.run_id, &task.task_id)
             .unwrap();
+        if delivery_failure {
+            // Force the cancellation failure to remove its Job before departure snapshots it.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while !matches!(
+                engine.manager.snapshot().lifecycle,
+                app_model::ForegroundEngineLifecycleDto::Error { .. }
+            ) {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(engine.manager.snapshot().whole_game_job.is_none());
+        }
         let admission = state.prepare_replacement("(;SZ[13])", None).unwrap();
         let departure_id = match admission {
             app_model::DocumentDepartureAdmissionDto::Ready { departure_id }
@@ -1088,6 +1100,47 @@ fn task_pause_cleanup_failure_aborts_departure_and_retains_game() {
         assert_eq!(retained_position.board_height, 9);
         assert!(engine.manager.snapshot().whole_game_job.is_none());
         assert!(engine.manager.snapshot().selected_node_job.is_none());
+        assert!(!engine.directory.join("must-not-save.sgf").exists());
+
+        // Explicit Stop resolves the failed Run; its old Pause fence must not block a retry.
+        engine.manager.stop().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !matches!(
+            engine.manager.snapshot().lifecycle,
+            app_model::ForegroundEngineLifecycleDto::NoEngine { .. }
+        ) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let departure_id = match state.prepare_replacement("(;SZ[13])", None).unwrap() {
+            app_model::DocumentDepartureAdmissionDto::Ready { departure_id }
+            | app_model::DocumentDepartureAdmissionDto::NeedsDecision { departure_id } => departure_id,
+        };
+        let retried = crate::document_departure::resolve_replacement(
+            &state,
+            crate::document_departure::ReplacementResolution {
+                departure_id,
+                action: app_model::DocumentDepartureActionDto::Discard,
+                selected_path: NodePath::default(),
+            },
+            &[],
+            |job| {
+                engine
+                    .manager
+                    .cancel_job(&job.run_id, &job.job_id)
+                    .map_err(|e| e.to_string())
+            },
+            |job, budget| {
+                engine
+                    .manager
+                    .wait_for_job_cancellation(&job.run_id, &job.job_id, budget)
+                    .map_err(|e| e.to_string())
+            },
+            || panic!("Discard must not request a save destination"),
+        )
+        .unwrap();
+        assert!(retried.committed);
+        assert_eq!(retried.current.unwrap().snapshot.position.board_width, 13);
     }
 }
 

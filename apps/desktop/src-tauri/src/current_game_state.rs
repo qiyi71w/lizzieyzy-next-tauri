@@ -21,6 +21,7 @@ mod current_game_save_write;
 mod current_game_session_recovery;
 mod departure;
 mod game_move;
+pub(crate) mod human_match;
 pub(crate) mod recovery;
 mod scoring;
 mod trial;
@@ -48,6 +49,7 @@ struct ContentVersion {
 pub struct CurrentGameState {
     holder: Mutex<CurrentGameHolder>,
     recovery: Mutex<RecoveryCoordinator>,
+    match_departure: std::sync::Condvar,
     analysis_manager: OnceLock<engine_manager::ForegroundEngineManager>,
 }
 
@@ -77,6 +79,8 @@ struct CurrentGameHolder {
     trial_mode: trial::TrialMode,
     next_trial_id: u64,
     next_trial_revision: u64,
+    human_match: human_match::MatchState,
+    next_match_id: u64,
 }
 
 impl CurrentGameState {
@@ -91,6 +95,9 @@ impl CurrentGameState {
 
     // Called with the holder locked: accepted cursor/edit order is also target order.
     fn follow_continuous_position(&self, holder: &mut CurrentGameHolder) {
+        if holder.human_match.blocks() {
+            return;
+        }
         let Some(manager) = self.analysis_manager.get() else {
             return;
         };
@@ -138,10 +145,26 @@ impl CurrentGameState {
         }
     }
 
-    pub fn analysis_jobs(&self) -> Option<Vec<AnalysisJobStartedDto>> {
-        self.analysis_manager
-            .get()
-            .map(|manager| crate::document_departure::jobs_from_snapshot(&manager.snapshot()))
+    pub fn analysis_jobs(&self) -> crate::EngineCommandResult<Option<Vec<AnalysisJobStartedDto>>> {
+        let Some(manager) = self.analysis_manager.get() else {
+            return Ok(None);
+        };
+        // Keep task admission ordered while reading its identity and the later Run snapshot.
+        let holder = self.holder.lock().expect("current game state");
+        let sealed_task_run = manager.analysis_task_snapshot().and_then(|task| {
+            let identity = (task.run_id, task.job_id);
+            holder.closed_jobs.contains(&identity).then_some(identity.0)
+        });
+        match manager.snapshot() {
+            app_model::ForegroundEngineSnapshotDto {
+                lifecycle: app_model::ForegroundEngineLifecycleDto::Error { run, failure },
+                ..
+            } if sealed_task_run.as_deref() == Some(run.run_id.as_str()) => {
+                // Failed Pause cleanup removes the Job, but must still refuse departure.
+                Err(Box::new(failure))
+            }
+            snapshot => Ok(Some(crate::document_departure::jobs_from_snapshot(&snapshot))),
+        }
     }
 
     #[cfg(test)]
@@ -662,8 +685,8 @@ impl CurrentGameState {
 
     pub fn run_analysis_action<T>(&self, action: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
         let holder = self.holder.lock().expect("current game state");
-        if holder.departure.is_some() {
-            return Err("A document departure is still pending.".to_string());
+        if holder.departure.is_some() || holder.human_match.blocks() {
+            return Err("A document departure or match owns the current position.".to_string());
         }
         // Keep explicit authorization and its durable write before any later safety cutoff.
         action()
@@ -696,7 +719,7 @@ impl CurrentGameState {
         }
         let payload = SgfAnalysisPayload::from_frame(frame, "KataGo");
         let mut holder = self.holder.lock().expect("current game state");
-        if !matches!(holder.trial_mode, trial::TrialMode::Review) {
+        if holder.human_match.blocks() || !matches!(holder.trial_mode, trial::TrialMode::Review) {
             return None;
         }
         if holder.rejects_job(&event.run_id, &event.job_id)

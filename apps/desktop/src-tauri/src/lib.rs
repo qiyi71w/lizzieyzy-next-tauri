@@ -34,6 +34,7 @@ use main_window_pin::{main_window_pin_status, set_main_window_pin, MainWindowPin
 mod current_game_state;
 mod document_departure;
 mod file_activation;
+mod human_match;
 mod save_as;
 mod session_recovery;
 #[cfg(windows)]
@@ -1276,6 +1277,13 @@ pub fn run() {
                             let _ = emit_handle.emit("foreground-engine://snapshot", snapshot);
                         }
                         ForegroundEngineEventDto::Failure { failure } => {
+                            if let Some(update) = emit_handle
+                                .state::<CurrentGameState>()
+                                .observe_match_failure(&failure)
+                            {
+                                human_match::publish(&emit_handle, update);
+                                human_match::drive(emit_handle.clone());
+                            }
                             let _ = emit_handle.emit("foreground-engine://failure", failure);
                         }
                         ForegroundEngineEventDto::Job { mut job } => {
@@ -1396,6 +1404,14 @@ pub fn run() {
             foreground_engine_switch,
             foreground_engine_start_selected_node,
             foreground_engine_game_move,
+            human_match::human_match_snapshot,
+            human_match::human_match_start,
+            human_match::human_match_action,
+            human_match::human_match_stop,
+            human_match::pk_match_start,
+            human_match::pk_match_pause,
+            human_match::pk_match_resume,
+            human_match::human_match_analysis_policy,
             foreground_engine_cancel_game_move,
             foreground_engine_continuous_action,
             foreground_engine_cancel_job

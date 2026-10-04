@@ -19,6 +19,8 @@ pub const UNREADABLE_RECOVERY_MESSAGE: &str = "Unreadable preferences isolated; 
 #[serde(rename_all = "camelCase")]
 pub struct AppPreferencesDto {
     #[serde(default)]
+    pub match_defaults: app_model::MatchDefaultsDto,
+    #[serde(default)]
     pub workspace_shares: Option<WorkspaceSharesDto>,
     #[serde(default, deserialize_with = "deserialize_window_geometry")]
     pub window_geometry: Option<app_model::WindowGeometryDto>,
@@ -125,6 +127,7 @@ fn deserialize_window_geometry<'de, D: serde::Deserializer<'de>>(
 
 pub fn default_app_preferences() -> AppPreferencesDto {
     AppPreferencesDto {
+        match_defaults: app_model::MatchDefaultsDto::default(),
         workspace_shares: None,
         window_geometry: None,
         workspace_visibility: app_model::WorkspaceVisibilityDto::default(),
@@ -229,7 +232,10 @@ pub fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPrefe
 pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String> {
     match fs::read_to_string(path) {
         Ok(contents) => match serde_json::from_str::<AppPreferencesDto>(&contents) {
-            Ok(preferences) if preferences.continuous_budget.validate().is_ok() => {
+            Ok(preferences)
+                if preferences.continuous_budget.validate().is_ok()
+                    && preferences.match_defaults.validate().is_ok() =>
+            {
                 let preferences = normalize_app_preferences(preferences);
                 let valid = preferences
                     .task_single_stage_conditions
@@ -274,6 +280,7 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
 }
 
 pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPreferencesDto, String> {
+    preferences.match_defaults.validate()?;
     if let Some(shares) = preferences.workspace_shares {
         shares.validate()?;
     }
@@ -574,6 +581,7 @@ mod tests {
 
     fn sample_preferences() -> AppPreferencesDto {
         AppPreferencesDto {
+            match_defaults: app_model::MatchDefaultsDto::default(),
             workspace_shares: None,
             window_geometry: None,
             workspace_visibility: app_model::WorkspaceVisibilityDto {

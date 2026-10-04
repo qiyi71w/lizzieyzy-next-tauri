@@ -64,6 +64,16 @@ export function admitsForegroundEngineQuery(
   return admitsForegroundEngineJobs(snapshot, capability) && analysis?.ownership === true && analysis.policy === true;
 }
 
+export function verifiedGameMoveCapabilitiesLabel(snapshot: ForegroundEngineSnapshotDto): string {
+  const capabilities = runFromSnapshot(snapshot)?.capability_snapshot;
+  if (!capabilities) return "落子能力未验证；引擎 Ready 后验证。";
+  if (!capabilities.game_move) return "当前 run 已验证：落子不可用（未通过精确局面取步资格验证）。";
+  const boundary = capabilities.adapter_kind === "generic_gtp"
+    ? "方形棋盘 2/5/9/13/19 路；Chinese KGS；贴目 −1000 至 1000（半目）；不支持 setup/让子；不支持 visits 限制或 rich-analysis；具备 time_settings / time_left 时将剩余请求预算传给引擎"
+    : "方形棋盘 2–19 路；Chinese / Chinese KGS；贴目 −400 至 400（半目）；支持根节点黑棋让子 setup（至少两子、白先）；需要正整数 max visits";
+  return `当前 run 已验证：落子支持。精确局面契约范围：${boundary}。每步请求截止须大于 0，是管理器强制的单次请求上限，并非整局时钟。`;
+}
+
 export function verifiedEngineCapabilitiesLabel(snapshot: ForegroundEngineSnapshotDto): string {
   const run = runFromSnapshot(snapshot);
   if (!run) return "当前没有运行引擎";
@@ -73,16 +83,16 @@ export function verifiedEngineCapabilitiesLabel(snapshot: ForegroundEngineSnapsh
     const facts = capabilities.gtp;
     const clocks = ["time_settings", "time_left"]
       .map((command) => `${command} ${facts.commands.includes(command) ? "已发现" : "未发现"}`).join(" · ");
-    return `当前 run 已验证：${facts.name} ${facts.version} · GTP v${facts.protocol_version}；${clocks}；已发现命令：${facts.commands.join(", ")}。时钟、setup、rules 命令的存在不代表已支持时间映射、准确规则或任意局面；不提供 rich-analysis，公共取步操作尚未实现。`;
+    return `当前 run 已验证：${facts.name} ${facts.version} · GTP v${facts.protocol_version}；${clocks}；已发现命令：${facts.commands.join(", ")}。命令存在不代表支持时间映射、准确规则或任意局面；不提供 rich-analysis。${verifiedGameMoveCapabilitiesLabel(snapshot)}`;
   }
-  if (!capabilities.analysis) return "当前 run 已验证：不支持分析";
+  if (!capabilities.analysis) return `当前 run 已验证：不支持分析。${verifiedGameMoveCapabilitiesLabel(snapshot)}`;
   const labels: [keyof EngineAnalysisCapabilitiesDto, string][] = [
     ["selected_node_analysis", "单点"], ["continuous_analysis", "连续"],
     ["whole_game_analysis", "整谱/task"], ["candidates", "候选"], ["pv", "PV"],
     ["winrate", "胜率"], ["root_score", "分数"], ["ownership", "ownership"],
     ["policy", "policy"], ["visits_limit", "visits 限制"], ["protocol_cancel", "协议取消"]
   ];
-  return `当前 run 已验证：${labels.map(([key, label]) => `${label} ${capabilities.analysis![key] ? "支持" : "不支持"}`).join(" · ")}`;
+  return `当前 run 已验证：${labels.map(([key, label]) => `${label} ${capabilities.analysis![key] ? "支持" : "不支持"}`).join(" · ")}。${verifiedGameMoveCapabilitiesLabel(snapshot)}`;
 }
 
 export function canStopForegroundEngine(snapshot: ForegroundEngineSnapshotDto): boolean {

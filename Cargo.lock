@@ -2173,6 +2173,7 @@ dependencies = [
  "go-core",
  "gtk",
  "katago-protocol",
+ "match-core",
  "objc2-app-kit",
  "provider-core",
  "provider-fox",
@@ -2243,6 +2244,13 @@ dependencies = [
  "log",
  "tendril 0.5.0",
  "web_atoms",
+]
+
+[[package]]
+name = "match-core"
+version = "0.1.0"
+dependencies = [
+ "app-model",
 ]
 
 [[package]]

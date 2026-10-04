@@ -10,7 +10,9 @@ import {
   isForegroundEngineReady,
   mergeForegroundEngineSnapshot,
   profileHasPendingChanges,
-  shouldAcceptFailureEvent
+  shouldAcceptFailureEvent,
+  verifiedGameMoveCapabilitiesLabel,
+  verifiedEngineCapabilitiesLabel
 } from "./foregroundEngine";
 import type { EngineFailureDto, EngineRunDto, ForegroundEngineSnapshotDto } from "./types";
 
@@ -46,6 +48,22 @@ const run: EngineRunDto = {
 function snapshot(revision: number, lifecycle: ForegroundEngineSnapshotDto["lifecycle"]): ForegroundEngineSnapshotDto {
   return { revision, lifecycle, continuous: { enabled: null, phase: "loading" } };
 }
+
+describe("verified game move disclosure", () => {
+  it("requires qualification even when GTP advertises genmove and setup commands", () => {
+    const gtpRun: EngineRunDto = {
+      ...run, adapter_kind: "generic_gtp",
+      capability_snapshot: { adapter_kind: "generic_gtp", game_move: false,
+        gtp: { name: "GNU Go", version: "3.8", protocol_version: 2, commands: ["genmove", "set_free_handicap", "time_settings"] } }
+    };
+    const ready = snapshot(1, { state: "ready", run: gtpRun });
+    expect(verifiedGameMoveCapabilitiesLabel(ready)).toContain("落子不可用");
+    expect(verifiedGameMoveCapabilitiesLabel(ready)).not.toContain("Chinese KGS");
+  });
+  it("does not qualify a run before capabilities are known", () => {
+    expect(verifiedGameMoveCapabilitiesLabel(snapshot(1, { state: "ready", run: { ...run, capability_snapshot: null } }))).toContain("未验证");
+  });
+});
 
 describe("foreground engine snapshot merge", () => {
   it("keeps the higher revision and does not apply an older snapshot", () => {

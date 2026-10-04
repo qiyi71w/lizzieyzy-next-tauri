@@ -275,6 +275,57 @@ export type GameMoveResultDto = GameMoveJobDto & {
   result: GameMoveDto;
   engine_time_mapped: boolean;
 };
+
+export type PkSideDefaultsDto = { profile_id: string | null; deadline_ms: number; kata_max_visits: number };
+export type MatchModeDto = "human" | "pk";
+export type MatchDefaultsDto = {
+  board_size: number;
+  komi: number;
+  handicap: number;
+  human_color: PlayerColor;
+  rules: ExactRulesDto | null;
+  profile_id: string | null;
+  deadline_ms: number;
+  kata_max_visits: number;
+  pk_black: PkSideDefaultsDto;
+  pk_white: PkSideDefaultsDto;
+  pk_max_moves: number;
+};
+export type MatchPhaseDto = "idle" | "starting" | "playing" | "paused" | "ending" | "error";
+export type MatchEndDto = "stopped" | "resigned" | "two_passes" | "failed" | "move_limit";
+export type MatchAnalysisPolicyDto = "off" | "human_turn" | "engine_turn" | "both";
+export type MatchAnalysisFrameDto = { turn: MatchTurnDto; epoch: number; job: GameMoveJobDto; frame: AnalysisFrameDto };
+export type MatchAnalysisDto = { supported: boolean; policy: MatchAnalysisPolicyDto; epoch: number; frame: MatchAnalysisFrameDto | null };
+export type MatchSnapshotDto = {
+  revision: number;
+  phase: MatchPhaseDto;
+  mode: MatchModeDto;
+  session_id: string | null;
+  turn: number;
+  to_play: PlayerColor | null;
+  settings: MatchDefaultsDto | null;
+  run_id: string | null;
+  pk_runs: [EngineRunDto, EngineRunDto] | null;
+  job: GameMoveJobDto | null;
+  end: MatchEndDto | null;
+  failure: EngineFailureDto | null;
+  failed_side: PlayerColor | null;
+  resources_held: boolean;
+  committed: boolean;
+  committed_moves: number;
+  pause_pending: boolean;
+  /** Sides whose cancelled GTP run Pause reaped; explicit Resume rebuilds them from the original snapshot. */
+  rebuild_sides: PlayerColor[];
+  resume_pending: boolean;
+  analysis: MatchAnalysisDto;
+};
+export type MatchTurnDto = { session_id: string; turn: number; generation: number; node_path: NodePath };
+export type HumanMatchActionDto = { kind: "play"; vertex: MoveVertex } | { kind: "resign" };
+export type MatchUpdateDto = { match_state: MatchSnapshotDto; current: CurrentGameResultDto | null };
+export type MatchStartDto =
+  | { kind: "new"; discard_confirmed: boolean }
+  | { kind: "continue"; node_path: NodePath; root_metadata_confirmed: boolean };
+export type HumanMatchStartDto = { settings: MatchDefaultsDto; generation: number; snapshot_seq: number; start: MatchStartDto };
 export type ForegroundEngineLifecycleDto =
   | { state: "no_engine"; failure?: EngineFailureDto }
   | { state: "starting"; run: EngineRunDto }

@@ -20,6 +20,7 @@ app-preferences = { path = "../../../crates/app-preferences" }
 current-game-recovery = { path = "../../../crates/current-game-recovery" }
 engine-manager = { path = "../../../crates/engine-manager" }
 katago-protocol = { path = "../../../crates/katago-protocol" }
+match-core = { path = "../../../crates/match-core" }
 provider-fox = { path = "../../../crates/provider-fox" }
 provider-yike = { path = "../../../crates/provider-yike" }
 provider-core = { path = "../../../crates/provider-core" }

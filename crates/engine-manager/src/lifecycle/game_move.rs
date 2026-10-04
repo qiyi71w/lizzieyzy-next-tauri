@@ -17,18 +17,80 @@ pub struct GameMoveRequest {
 
 pub struct GameMoveHandle {
     pub identity: GameMoveJobDto,
-    completion: Receiver<Result<GameMoveResultDto, EngineFailureDto>>,
+    completion: Receiver<MoveCompletion>,
+    frames: Option<Receiver<app_model::AnalysisFrameDto>>,
 }
+
+type MoveCompletion = (
+    Result<GameMoveResultDto, EngineFailureDto>,
+    Option<app_model::AnalysisFrameDto>,
+);
 
 impl GameMoveHandle {
     pub fn wait(self) -> Result<GameMoveResultDto, EngineFailureDto> {
-        self.completion.recv().unwrap_or_else(|_| {
-            Err(move_failure(
-                &self.identity,
-                EngineFailureKind::Protocol,
-                "move worker disconnected",
-            ))
-        })
+        self.completion
+            .recv()
+            .map(|(result, _)| result)
+            .unwrap_or_else(|_| {
+                Err(move_failure(
+                    &self.identity,
+                    EngineFailureKind::Protocol,
+                    "move worker disconnected",
+                ))
+            })
+    }
+
+    /// Frames share this move's exact identity. A slow consumer never blocks the worker.
+    pub fn wait_with_analysis(
+        self,
+        mut on_frame: impl FnMut(&GameMoveJobDto, app_model::AnalysisFrameDto),
+    ) -> Result<GameMoveResultDto, EngineFailureDto> {
+        let Some(frames) = self.frames.as_ref() else {
+            return self.wait();
+        };
+        loop {
+            match self.completion.try_recv() {
+                Ok((result, final_frame)) => {
+                    while let Ok(frame) = frames.try_recv() {
+                        on_frame(&self.identity, frame);
+                    }
+                    if let Some(frame) = final_frame {
+                        on_frame(&self.identity, frame);
+                    }
+                    return result;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    return Err(move_failure(
+                        &self.identity,
+                        EngineFailureKind::Protocol,
+                        "move worker disconnected",
+                    ));
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+            match frames.recv_timeout(Duration::from_millis(5)) {
+                Ok(frame) => on_frame(&self.identity, frame),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    // Completion follows worker cleanup, which may still be joining its writer.
+                    match self.completion.recv() {
+                        Ok((result, final_frame)) => {
+                            if let Some(frame) = final_frame {
+                                on_frame(&self.identity, frame);
+                            }
+                            return result;
+                        }
+                        Err(_) => {
+                            return Err(move_failure(
+                                &self.identity,
+                                EngineFailureKind::Protocol,
+                                "move worker disconnected",
+                            ))
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -37,6 +99,9 @@ pub(super) struct MoveSlot {
     events: SyncSender<MoveInput>,
     sealed: Option<EngineFailureDto>,
     adapter: EngineBackend,
+    profile_id: String,
+    pub(super) finished: bool,
+    analysis_only: bool,
 }
 
 enum MoveInput {
@@ -48,12 +113,23 @@ struct MoveWorker {
     manager: ForegroundEngineManager,
     request: GameMoveRequest,
     identity: GameMoveJobDto,
+    job_uuid: Uuid,
     run: EngineRunDto,
     deadline: Instant,
     events: Receiver<MoveInput>,
     writes: Sender<String>,
     submitted: bool,
     query_rejected: bool,
+    mode: MoveMode,
+    frames: Option<SyncSender<app_model::AnalysisFrameDto>>,
+    final_frame: Option<app_model::AnalysisFrameDto>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MoveMode {
+    Move,
+    MoveWithAnalysis,
+    AnalysisOnly,
 }
 
 fn move_failure(identity: &GameMoveJobDto, kind: EngineFailureKind, message: &str) -> EngineFailureDto {
@@ -93,11 +169,13 @@ pub(super) fn seal_move_for_run(state: &mut ManagerState, run_id: &str) {
         .filter(|slot| slot.identity.run_id == run_id)
     {
         slot.sealed.get_or_insert_with(|| {
-            move_failure(
+            let mut error = move_failure(
                 &slot.identity,
                 EngineFailureKind::Cancellation,
                 "the foreground run was retired",
-            )
+            );
+            error.profile_id = Some(slot.profile_id.clone());
+            error
         });
     }
 }
@@ -115,16 +193,103 @@ pub(super) fn fail_move_for_run(state: &mut ManagerState, failure: &EngineFailur
         .as_mut()
         .filter(|slot| failure.run_id.as_ref() == Some(&slot.identity.run_id))
     {
-        slot.sealed
-            .get_or_insert_with(|| move_failure(&slot.identity, failure.kind, &failure.message));
+        slot.sealed.get_or_insert_with(|| {
+            let mut error = failure.clone().with_job_id(&slot.identity.job_id);
+            error.profile_id = Some(slot.profile_id.clone());
+            error
+        });
+    }
+}
+
+pub(super) fn validate_move_position(
+    run: &EngineRunDto,
+    position: &sgf::ExactPosition,
+    budget: app_model::ComputeBudgetDto,
+) -> Result<Vec<String>, EngineFailureDto> {
+    let fail = |message: &str| {
+        failure(
+            EngineOperationDto::Job,
+            EngineFailureKind::UnsupportedCapability,
+            message.into(),
+            Some(&run.run_id),
+            Some(&run.profile_id),
+            None,
+        )
+    };
+    if !run
+        .capability_snapshot
+        .as_ref()
+        .is_some_and(|caps| caps.game_move)
+    {
+        return Err(fail("run does not admit game moves"));
+    }
+    if budget.deadline_ms == 0 {
+        return Err(fail("move deadline must be positive"));
+    }
+    match run.adapter_kind {
+        EngineBackend::KataGoAnalysis => {
+            let capabilities = analysis_capabilities(run)?;
+            if !capabilities.visits_limit
+                || !capabilities.protocol_cancel
+                || budget.max_visits.is_none_or(|visits| visits == 0)
+                || position.dto().komi.abs() > 400.0
+            {
+                return Err(fail(
+                    "KataGo move requires positive max_visits, target cancellation and komi in [-400,400]",
+                ));
+            }
+            Ok(Vec::new())
+        }
+        EngineBackend::GenericGtp => {
+            if budget.max_visits.is_some() {
+                return Err(fail("GTP cannot enforce a visits budget"));
+            }
+            gtp_sync_plan(run, position.dto()).map_err(|message| fail(&message))
+        }
     }
 }
 
 impl ForegroundEngineManager {
     pub fn start_game_move(&self, request: GameMoveRequest) -> Result<GameMoveHandle, EngineFailureDto> {
+        self.start_game_move_owned(None, request, MoveMode::Move)
+    }
+
+    pub fn start_reserved_game_move(
+        &self,
+        owner: &str,
+        request: GameMoveRequest,
+    ) -> Result<GameMoveHandle, EngineFailureDto> {
+        self.start_game_move_owned(Some(owner), request, MoveMode::Move)
+    }
+
+    /// Computes session-only candidates without granting permission to publish a move.
+    pub fn start_reserved_analysis(
+        &self,
+        owner: &str,
+        request: GameMoveRequest,
+    ) -> Result<GameMoveHandle, EngineFailureDto> {
+        self.start_game_move_owned(Some(owner), request, MoveMode::AnalysisOnly)
+    }
+
+    /// Reports candidates from the actual engine move query, never a second analysis lane.
+    pub fn start_reserved_game_move_with_analysis(
+        &self,
+        owner: &str,
+        request: GameMoveRequest,
+    ) -> Result<GameMoveHandle, EngineFailureDto> {
+        self.start_game_move_owned(Some(owner), request, MoveMode::MoveWithAnalysis)
+    }
+
+    fn start_game_move_owned(
+        &self,
+        owner: Option<&str>,
+        request: GameMoveRequest,
+        mode: MoveMode,
+    ) -> Result<GameMoveHandle, EngineFailureDto> {
+        let job_uuid = Uuid::new_v4();
         let identity = GameMoveJobDto {
             run_id: request.identity.run_id.clone(),
-            job_id: Uuid::new_v4().to_string(),
+            job_id: job_uuid.to_string(),
             generation: request.identity.generation,
             node_path: request.identity.node_path.clone(),
         };
@@ -132,59 +297,41 @@ impl ForegroundEngineManager {
         let (events_tx, events) = mpsc::sync_channel(64);
         let (writes, writes_rx) = mpsc::channel::<String>();
         let (completed, completion) = mpsc::channel();
+        let (frames_tx, frames) = if mode == MoveMode::Move {
+            (None, None)
+        } else {
+            let (sender, receiver) = mpsc::sync_channel(8);
+            (Some(sender), Some(receiver))
+        };
         let (run, plan, stdin, deadline) = {
             let mut state = self.lock();
+            match_reservation::require_move_owner(&state, owner, &identity.run_id)?;
             // Complete pure admission precedes any cancellation, process write or slot mutation.
-            let run = match &state.phase {
-                Phase::Ready(run) if run.run_id == identity.run_id => run.clone(),
-                _ => {
-                    return Err(fail(
-                        EngineFailureKind::InvalidState,
-                        "move requires the current Ready run",
-                    ))
-                }
-            };
-            if !run
-                .capability_snapshot
-                .as_ref()
-                .is_some_and(|caps| caps.game_move)
-            {
-                return Err(fail(
-                    EngineFailureKind::UnsupportedCapability,
-                    "run does not admit game moves",
-                ));
-            }
+            let run = ready_move_run(&state, &identity.run_id).ok_or_else(|| {
+                fail(
+                    EngineFailureKind::InvalidState,
+                    "move requires a living Ready owned run",
+                )
+            })?;
             let budget = request.identity.budget;
-            if budget.deadline_ms == 0 {
-                return Err(fail(
-                    EngineFailureKind::UnsupportedCapability,
-                    "move deadline must be positive",
-                ));
+            let plan = validate_move_position(&run, &request.position, budget)?;
+            if mode != MoveMode::Move {
+                if run.adapter_kind != EngineBackend::KataGoAnalysis {
+                    return Err(fail(
+                        EngineFailureKind::UnsupportedCapability,
+                        "reserved analysis requires a verified KataGo analysis run",
+                    ));
+                }
+                let capabilities = analysis_capabilities(&run)?;
+                if !capabilities.candidates
+                    || !capabilities.selected_node_analysis
+                    || !capabilities.visits_limit
+                    || !capabilities.protocol_cancel
+                {
+                    return Err(fail(EngineFailureKind::UnsupportedCapability,
+                        "reserved analysis requires verified candidates, selected-node analysis, visits limits and target cancellation"));
+                }
             }
-            let plan = match run.adapter_kind {
-                EngineBackend::KataGoAnalysis => {
-                    let capabilities = analysis_capabilities(&run)?;
-                    if !capabilities.visits_limit
-                        || !capabilities.protocol_cancel
-                        || budget.max_visits.is_none_or(|visits| visits == 0)
-                        || request.position.dto().komi.abs() > 400.0
-                    {
-                        return Err(fail(EngineFailureKind::UnsupportedCapability,
-                            "KataGo move requires positive max_visits, target cancellation and komi in [-400,400]"));
-                    }
-                    Vec::new()
-                }
-                EngineBackend::GenericGtp => {
-                    if budget.max_visits.is_some() {
-                        return Err(fail(
-                            EngineFailureKind::UnsupportedCapability,
-                            "GTP cannot enforce a visits budget",
-                        ));
-                    }
-                    gtp_sync_plan(&run, request.position.dto())
-                        .map_err(|message| fail(EngineFailureKind::UnsupportedCapability, &message))?
-                }
-            };
             require_idle_move(&state)?;
             if state.finite_admission_pending
                 || state.continuous_departing
@@ -216,6 +363,9 @@ impl ForegroundEngineManager {
                 events: events_tx.clone(),
                 sealed: None,
                 adapter: run.adapter_kind,
+                profile_id: run.profile_id.clone(),
+                finished: false,
+                analysis_only: mode == MoveMode::AnalysisOnly,
             });
             publish_snapshot(&mut state);
             (run, plan, stdin, deadline)
@@ -245,25 +395,105 @@ impl ForegroundEngineManager {
                 manager,
                 request,
                 identity: worker_identity,
+                job_uuid,
                 run,
                 deadline,
                 events,
                 writes,
                 submitted: false,
                 query_rejected: false,
+                mode,
+                frames: frames_tx,
+                final_frame: None,
             };
             let result = worker.compute(plan);
             let result = worker.finish(result);
+            let final_frame = if result.is_ok() {
+                worker.final_frame.take()
+            } else {
+                None
+            };
             // Drop the receiver before joining, so a saturated event channel cannot hold the writer.
             drop(worker);
             let _ = writer.join();
-            let _ = completed.send(result);
+            let _ = completed.send((result, final_frame));
         });
-        Ok(GameMoveHandle { identity, completion })
+        Ok(GameMoveHandle {
+            identity,
+            completion,
+            frames,
+        })
+    }
+
+    /// Seals only session analysis, then waits for the existing worker's target drain.
+    pub fn cancel_reserved_analysis(
+        &self,
+        owner: &str,
+        job: &GameMoveJobDto,
+    ) -> Result<(), EngineFailureDto> {
+        {
+            let mut state = self.lock();
+            match_reservation::require_move_owner(&state, Some(owner), &job.run_id)?;
+            if !matches!(&state.phase, Phase::Ready(run) if run.run_id == job.run_id) {
+                return Err(move_failure(
+                    job,
+                    EngineFailureKind::InvalidState,
+                    "reserved analysis cancellation requires the current Ready run",
+                ));
+            }
+            let Some(slot) = state
+                .game_move
+                .as_mut()
+                .filter(|slot| slot.identity.run_id == job.run_id && slot.identity.job_id == job.job_id)
+            else {
+                // A completed target cannot cancel a subsequent move or consume its permit.
+                return Ok(());
+            };
+            if slot.identity != *job || !slot.analysis_only {
+                return Err(move_failure(
+                    job,
+                    EngineFailureKind::InvalidState,
+                    "reserved analysis cancellation cannot stop an engine move or mismatched identity",
+                ));
+            }
+            slot.sealed.get_or_insert_with(|| {
+                move_failure(
+                    job,
+                    EngineFailureKind::Cancellation,
+                    "reserved analysis cancelled by owner",
+                )
+            });
+        }
+        let deadline = Instant::now() + self.inner.config.stop_drain_timeout * 3 + Duration::from_secs(1);
+        loop {
+            let state = self.lock();
+            match_reservation::require_move_owner(&state, Some(owner), &job.run_id)?;
+            if state.game_move.as_ref().is_none_or(|slot| slot.identity != *job) {
+                return match &state.phase {
+                    Phase::Ready(run) if run.run_id == job.run_id => Ok(()),
+                    Phase::Error { failure, .. } => Err(failure.clone()),
+                    _ => Err(move_failure(
+                        job,
+                        EngineFailureKind::InvalidState,
+                        "reserved analysis run changed during cleanup",
+                    )),
+                };
+            }
+            if Instant::now() >= deadline {
+                return Err(move_failure(
+                    job,
+                    EngineFailureKind::Timeout,
+                    "reserved analysis cleanup did not release the move slot",
+                ));
+            }
+            drop(state);
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 
     pub fn cancel_game_move(&self, run_id: &str, job_id: &str) -> Result<(), EngineFailureDto> {
         let mut state = self.lock();
+        match_reservation::require_unreserved(&state)?;
         if state
             .game_move_publication
             .as_ref()
@@ -300,13 +530,30 @@ impl ForegroundEngineManager {
     /// Consumes the latest completed result's publication permit exactly once.
     /// Position/mode/lifecycle invalidation remains effective after compute cleanup.
     pub fn claim_game_move_result(&self, result: &GameMoveResultDto) -> Result<(), EngineFailureDto> {
+        self.claim_game_move_result_owned(None, result)
+    }
+
+    pub fn claim_reserved_game_move_result(
+        &self,
+        owner: &str,
+        result: &GameMoveResultDto,
+    ) -> Result<(), EngineFailureDto> {
+        self.claim_game_move_result_owned(Some(owner), result)
+    }
+
+    fn claim_game_move_result_owned(
+        &self,
+        owner: Option<&str>,
+        result: &GameMoveResultDto,
+    ) -> Result<(), EngineFailureDto> {
         let mut state = self.lock();
+        match_reservation::require_move_owner(&state, owner, &result.run_id)?;
         if !state.game_move_publication.as_ref().is_some_and(|identity| {
             identity.run_id == result.run_id
                 && identity.job_id == result.job_id
                 && identity.generation == result.generation
                 && identity.node_path == result.node_path
-        }) || !matches!(&state.phase, Phase::Ready(run) if run.run_id == result.run_id)
+        }) || ready_move_run(&state, &result.run_id).is_none()
         {
             return Err(failure(
                 EngineOperationDto::Job,
@@ -324,6 +571,9 @@ impl ForegroundEngineManager {
 
     pub fn cancel_current_game_move(&self) {
         let mut state = self.lock();
+        if state.match_reservation.is_some() {
+            return;
+        }
         state.game_move_publication = None;
         if let Some(slot) = state.game_move.as_mut() {
             slot.sealed.get_or_insert_with(|| {
@@ -361,7 +611,11 @@ impl ForegroundEngineManager {
     }
 
     pub(super) fn finish_move_before_switch(&self) -> Result<bool, EngineFailureDto> {
-        self.lock().game_move_publication = None;
+        {
+            let mut state = self.lock();
+            match_reservation::require_unreserved(&state)?;
+            state.game_move_publication = None;
+        }
         let active = self.snapshot().game_move_job;
         let Some(active) = active else {
             return Ok(false);
@@ -433,7 +687,23 @@ impl Inner {
 
 impl MoveWorker {
     fn error(&self, kind: EngineFailureKind, message: &str) -> EngineFailureDto {
-        move_failure(&self.identity, kind, message)
+        let mut error = move_failure(&self.identity, kind, message);
+        error.profile_id = Some(self.run.profile_id.clone());
+        error
+    }
+
+    fn write_error(&self, message: &str) -> EngineFailureDto {
+        let mut error = self.error(EngineFailureKind::Protocol, message);
+        if self
+            .manager
+            .lock()
+            .match_reservation
+            .as_ref()
+            .is_some_and(|reservation| reservation.runs.len() == 2)
+        {
+            error.operation = EngineOperationDto::UnexpectedExit;
+        }
+        error
     }
 
     fn check(&self) -> Result<(), EngineFailureDto> {
@@ -446,7 +716,7 @@ impl MoveWorker {
         if let Some(error) = &slot.sealed {
             return Err(error.clone());
         }
-        if !matches!(&state.phase, Phase::Ready(run) if run.run_id == self.identity.run_id) {
+        if ready_move_run(&state, &self.identity.run_id).is_none() {
             return Err(self.error(EngineFailureKind::Cancellation, "foreground run changed"));
         }
         if Instant::now() >= self.deadline {
@@ -493,9 +763,7 @@ impl MoveWorker {
         loop {
             match self.receive()? {
                 MoveInput::Written(Ok(())) => {}
-                MoveInput::Written(Err(message)) => {
-                    return Err(self.error(EngineFailureKind::Protocol, &message))
-                }
+                MoveInput::Written(Err(message)) => return Err(self.write_error(&message)),
                 MoveInput::Line(line) => {
                     if let Some(response) = decoder
                         .push(&line)
@@ -540,22 +808,25 @@ impl MoveWorker {
         let mut mapped = false;
         let result = match self.run.adapter_kind {
             EngineBackend::KataGoAnalysis => {
-                let payload = katago_query(
+                let mut query = katago_query(
                     self.request.position.dto(),
                     &self.identity.job_id,
                     self.request.identity.budget.max_visits.expect("admitted visits"),
-                )
-                .to_string();
-                self.write(payload)?;
+                );
+                if self.mode != MoveMode::Move {
+                    query["reportDuringSearchEvery"] = serde_json::json!(0.05);
+                    if analysis_capabilities(&self.run)?.ownership {
+                        query["includeOwnership"] = serde_json::json!(true);
+                    }
+                }
+                self.write(query.to_string())?;
                 loop {
                     match self.receive()? {
                         MoveInput::Written(Ok(())) => {}
-                        MoveInput::Written(Err(message)) => {
-                            return Err(self.error(EngineFailureKind::Protocol, &message))
-                        }
+                        MoveInput::Written(Err(message)) => return Err(self.write_error(&message)),
                         MoveInput::Line(line) => {
                             let position = self.request.position.dto();
-                            match katago_result(
+                            let result = match katago_result(
                                 &line,
                                 &self.identity.job_id,
                                 position.moves.len(),
@@ -564,12 +835,46 @@ impl MoveWorker {
                             )
                             .map_err(|message| self.error(EngineFailureKind::Protocol, &message))?
                             {
-                                KataGoMoveResponse::Searching => {}
-                                KataGoMoveResponse::Complete(result) => break result,
+                                KataGoMoveResponse::Searching => None,
+                                KataGoMoveResponse::Complete(result) => Some(result),
                                 KataGoMoveResponse::Rejected(message) => {
                                     self.query_rejected = true;
                                     return Err(self.error(EngineFailureKind::Protocol, &message));
                                 }
+                            };
+                            if self.mode != MoveMode::Move {
+                                // The strict move parser above fences id/turn and every warning/error
+                                // before the common rich-analysis parser and normalizer are used.
+                                let response =
+                                    katago_protocol::parse_response_line(&line).map_err(|error| {
+                                        self.error(EngineFailureKind::Protocol, &error.to_string())
+                                    })?;
+                                if !response
+                                    .has_valid_search_result(position.board_width, position.board_height)
+                                {
+                                    return Err(self.error(EngineFailureKind::Protocol,
+                                        "KataGo reserved analysis response has invalid search accounting or geometry"));
+                                }
+                                let frame = katago_protocol::normalize_response(
+                                    self.job_uuid,
+                                    response,
+                                    position.board_width,
+                                    position.board_height,
+                                );
+                                self.check()?;
+                                if result.is_some() {
+                                    self.final_frame = Some(frame);
+                                } else {
+                                    // Dropping a saturated intermediate sample cannot stall the deadline.
+                                    let _ = self
+                                        .frames
+                                        .as_ref()
+                                        .expect("enabled analysis stream")
+                                        .try_send(frame);
+                                }
+                            }
+                            if let Some(result) = result {
+                                break result;
                             }
                         }
                     }
@@ -682,7 +987,9 @@ impl MoveWorker {
                 ));
             }
             if result.is_ok() {
-                state.game_move_publication = Some(self.identity.clone());
+                if self.mode != MoveMode::AnalysisOnly {
+                    state.game_move_publication = Some(self.identity.clone());
+                }
                 state.game_move = None;
                 publish_snapshot(&mut state);
                 drop(state);
@@ -693,29 +1000,58 @@ impl MoveWorker {
         let clean_katago = self.run.adapter_kind == EngineBackend::KataGoAnalysis
             && (!self.submitted || self.query_rejected || self.drain_katago());
         let mut state = self.manager.lock();
-        // Only this run can be retired. Stop/restart may already have reaped it and started another.
-        if !clean_katago
-            && state
-                .live
-                .as_ref()
-                .is_some_and(|live| live.run_id == self.identity.run_id)
-        {
+        // Retirement follows identity, never whichever side happens to be foreground.
+        if !clean_katago {
             let deadline = Instant::now() + self.manager.inner.config.stop_drain_timeout;
-            let cleanup = terminate_process(state.live.as_mut().expect("owned process"), deadline);
-            if cleanup.is_ok() {
-                state.live = None;
+            let cleanup = owned_live_mut(&mut state, &self.identity.run_id)
+                .map(|live| terminate_process(live, deadline));
+            let reaped = matches!(&cleanup, Some(Ok(())));
+            if reaped {
+                take_owned_live(&mut state, &self.identity.run_id);
             }
             let mut error = result.as_ref().expect_err("failed result").clone();
-            if let Err(cleanup) = cleanup {
+            error.profile_id = Some(self.run.profile_id.clone());
+            if let Some(Err(cleanup)) = cleanup {
                 error
                     .message
                     .push_str(&format!("; process cleanup failed: {cleanup}"));
                 error.kind = EngineFailureKind::Timeout;
-                result = Err(error.clone());
+            } else if self.run.adapter_kind == EngineBackend::KataGoAnalysis
+                && state
+                    .match_reservation
+                    .as_ref()
+                    .is_some_and(|reservation| reservation.pausing)
+            {
+                error
+                    .message
+                    .push_str("; KataGo cancellation/drain was not acknowledged; the run cannot be resumed");
+                error.kind = EngineFailureKind::Timeout;
+            }
+            result = Err(error.clone());
+            if let Some(reservation) = state.match_reservation.as_mut() {
+                if reservation
+                    .runs
+                    .iter()
+                    .any(|run| run.run_id == self.identity.run_id)
+                {
+                    // Pause's own cancellation of a GTP move ends at a confirmed reap. The session
+                    // survives; only an explicit Resume may rebuild this side. Anything else fails.
+                    if reaped
+                        && self.run.adapter_kind == EngineBackend::GenericGtp
+                        && error.kind == EngineFailureKind::Cancellation
+                        && reservation.pausing
+                        && !reservation.sealed
+                    {
+                        reservation.retired.push(self.identity.run_id.clone());
+                    } else {
+                        reservation.failure.get_or_insert_with(|| error.clone());
+                        reservation.sealed = true;
+                    }
+                }
             }
             if matches!(&state.phase, Phase::Ready(run) if run.run_id == self.identity.run_id) {
                 state.phase = if error.kind == EngineFailureKind::Cancellation
-                    && state.live.is_none()
+                    && owned_live(&state, &self.identity.run_id).is_none()
                     && self.run.adapter_kind == EngineBackend::GenericGtp
                 {
                     Phase::NoEngine { failure: None }
@@ -726,20 +1062,24 @@ impl MoveWorker {
                     }
                 };
             }
+        } else if let Err(error) = &result {
+            if error.kind != EngineFailureKind::Cancellation {
+                if let Some(reservation) = state.match_reservation.as_mut() {
+                    reservation.failure.get_or_insert_with(|| error.clone());
+                    reservation.sealed = true;
+                }
+            }
         }
         if state
             .game_move
             .as_ref()
             .is_some_and(|slot| slot.identity == self.identity)
         {
-            // A failed reap must retain the exclusive slot until explicit lifecycle retirement.
-            if clean_katago
-                || state
-                    .live
-                    .as_ref()
-                    .is_none_or(|live| live.run_id != self.identity.run_id)
-            {
+            // A failed reap retains the exclusive slot until explicit lifecycle retirement.
+            if clean_katago || owned_live(&state, &self.identity.run_id).is_none() {
                 state.game_move = None;
+            } else if let Some(slot) = state.game_move.as_mut() {
+                slot.finished = true;
             }
         }
         publish_snapshot(&mut state);

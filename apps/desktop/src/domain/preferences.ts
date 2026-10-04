@@ -1,5 +1,5 @@
 import type { NextMoveReviewMarkerMode } from "./nextMoveReviewMarker";
-import type { AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, ContinuousAnalysisBudgetDto, WindowGeometryDto, WorkspaceSharesDto } from "./types";
+import type { AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, ContinuousAnalysisBudgetDto, MatchDefaultsDto, PkSideDefaultsDto, WindowGeometryDto, WorkspaceSharesDto } from "./types";
 
 export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
@@ -11,6 +11,7 @@ export type { NextMoveReviewMarkerMode };
 import type { WorkspaceVisibilityDto } from "./types";
 
 export type AppPreferences = ContinuousAnalysisBudgetDto & {
+  matchDefaults: MatchDefaultsDto;
   workspaceShares: WorkspaceSharesDto | null;
   windowGeometry: WindowGeometryDto | null;
   workspaceVisibility: WorkspaceVisibilityDto;
@@ -51,6 +52,9 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
 };
 
 export const defaultAppPreferences: AppPreferences = {
+  matchDefaults: { board_size: 19, komi: 7.5, handicap: 0, human_color: "black", rules: null, profile_id: null, deadline_ms: 30_000, kata_max_visits: 800,
+    pk_black: { profile_id: null, deadline_ms: 30_000, kata_max_visits: 800 },
+    pk_white: { profile_id: null, deadline_ms: 30_000, kata_max_visits: 800 }, pk_max_moves: 450 },
   workspaceShares: null,
   windowGeometry: null,
   workspaceVisibility: { left: true, right: true },
@@ -119,7 +123,12 @@ export const defaultAppPreferences: AppPreferences = {
   continuousStopOnEmptyBoard: false
 };
 
-type StoredAppPreferences = Partial<AppPreferences> & {
+type StoredMatchDefaults = Omit<Partial<MatchDefaultsDto>, "pk_black" | "pk_white"> & {
+  pk_black?: Partial<PkSideDefaultsDto>;
+  pk_white?: Partial<PkSideDefaultsDto>;
+};
+type StoredAppPreferences = Omit<Partial<AppPreferences>, "matchDefaults"> & {
+  matchDefaults?: StoredMatchDefaults;
   taskConditions?: AnalysisStageConditionsDto;
 };
 
@@ -137,11 +146,37 @@ function normalizeWindowGeometry(value: WindowGeometryDto | null | undefined): W
   return { x: value.x, y: value.y, width: value.width, height: value.height, scaleFactor: value.scaleFactor, maximized: value.maximized };
 }
 
+function normalizePkSide(value: Partial<PkSideDefaultsDto> | undefined): PkSideDefaultsDto {
+  return {
+    profile_id: typeof value?.profile_id === "string" && value.profile_id.trim() ? value.profile_id : null,
+    deadline_ms: integerValue(value?.deadline_ms, 30_000, 1, 4_294_967_295),
+    kata_max_visits: integerValue(value?.kata_max_visits, 800, 1, 4_294_967_295)
+  };
+}
+
+function normalizeMatchDefaults(value: StoredMatchDefaults | undefined): MatchDefaultsDto {
+  const fallback = defaultAppPreferences.matchDefaults;
+  return {
+    board_size: integerValue(value?.board_size, fallback.board_size, 2, 19),
+    komi: typeof value?.komi === "number" && Number.isFinite(value.komi) && Number.isInteger(value.komi * 2) ? value.komi : fallback.komi,
+    handicap: typeof value?.handicap === "number" && (value.handicap === 0 || (Number.isInteger(value.handicap) && value.handicap >= 2 && value.handicap <= 9)) ? value.handicap : 0,
+    human_color: value?.human_color === "white" ? "white" : "black",
+    rules: value?.rules === "chinese" || value?.rules === "chinese_kgs" ? value.rules : null,
+    profile_id: typeof value?.profile_id === "string" && value.profile_id.trim() ? value.profile_id : null,
+    deadline_ms: integerValue(value?.deadline_ms, fallback.deadline_ms, 1, 4_294_967_295),
+    kata_max_visits: integerValue(value?.kata_max_visits, fallback.kata_max_visits, 1, 4_294_967_295),
+    pk_black: normalizePkSide(value?.pk_black),
+    pk_white: normalizePkSide(value?.pk_white),
+    pk_max_moves: integerValue(value?.pk_max_moves, fallback.pk_max_moves, 1, 4_294_967_295)
+  };
+}
+
 export function normalizeAppPreferences(value: StoredAppPreferences | null | undefined): AppPreferences {
   const winrateLine = booleanValue(value?.winrateLine, defaultAppPreferences.winrateLine);
   const scoreLeadLine = booleanValue(value?.scoreLeadLine, defaultAppPreferences.scoreLeadLine);
   const defaultMaxVisits = integerValue(value?.defaultMaxVisits, defaultAppPreferences.defaultMaxVisits, 1, 1_000_000);
   return {
+    matchDefaults: normalizeMatchDefaults(value?.matchDefaults),
     workspaceShares: normalizeWorkspaceShares(value?.workspaceShares),
     windowGeometry: normalizeWindowGeometry(value?.windowGeometry),
     workspaceVisibility: {

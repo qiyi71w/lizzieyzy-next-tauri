@@ -5436,6 +5436,44 @@ fn wait_continuous_phase(
 }
 
 #[test]
+fn continuous_preferences_failed_persistence_preserves_intent_and_budget() {
+    let temp = TestTempDir::new("continuous-preferences-write-failure");
+    let manager = ForegroundEngineManager::new(
+        Arc::new(InMemoryEngineProfileCatalog::new()),
+        ForegroundEngineConfig::for_tests(),
+    );
+    let budget = app_model::ContinuousAnalysisBudgetDto::default();
+    manager.set_continuous_preferences(false, budget).unwrap();
+    let before = manager.snapshot().continuous;
+    let events = manager.subscribe();
+    let mut changed_budget = budget;
+    changed_budget.continuous_visits_limit += 1;
+
+    let error = manager
+        .commit_continuous_preferences(true, changed_budget, || {
+            // Writing to a directory exercises a real failed persistence operation.
+            std::fs::write(temp.path(), "preferences").map_err(|error| error.to_string())
+        })
+        .unwrap_err();
+
+    assert!(!error.is_empty());
+    assert_eq!(manager.snapshot().continuous, before);
+    assert!(events.try_recv().is_err());
+    manager.reserve_match("persistence-rollback").unwrap();
+    // Only an unchanged intent and budget are admitted while reserved.
+    manager.set_continuous_preferences(false, budget).unwrap();
+    manager.abort_reserved_match("persistence-rollback").unwrap();
+    let saved = manager
+        .commit_continuous_preferences(true, changed_budget, || {
+            std::fs::write(temp.path().join("preferences"), "saved").map_err(|error| error.to_string())?;
+            Ok("saved")
+        })
+        .unwrap();
+    assert_eq!(saved, "saved");
+    assert_eq!(manager.snapshot().continuous.enabled, Some(true));
+}
+
+#[test]
 fn continuous_intent_without_an_engine_waits_without_creating_a_job() {
     let manager = ForegroundEngineManager::new(
         Arc::new(InMemoryEngineProfileCatalog::new()),

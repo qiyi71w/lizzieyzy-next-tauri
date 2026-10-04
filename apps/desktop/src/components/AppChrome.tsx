@@ -51,6 +51,13 @@ type Props = {
   sheet: "none" | SheetId;
   onToggleSheet: (sheet: SheetId) => void;
   busy: boolean;
+  saveBusy?: boolean;
+  matchBlocked?: boolean;
+  humanTurn?: boolean;
+  onHumanNew?: () => void;
+  onHumanContinue?: () => void;
+  onPkNew?: () => void;
+  onPkContinue?: () => void;
   dirty: boolean;
   documentName: string;
   engineLabel: string;
@@ -154,8 +161,8 @@ export function AppChrome(props: Props) {
   const nativeAvailable = props.nativeRuntime !== false;
   const nativeUnavailable = props.nativeUnavailable ?? "Native current-game, edit, and authoritative Save require the Tauri desktop backend. Browser preview is non-authoritative.";
   const openDisabled = props.busy || !nativeAvailable;
-  const saveDisabled = props.busy || !nativeAvailable || !props.dirty;
-  const saveAsDisabled = props.busy || !nativeAvailable;
+  const saveDisabled = (props.saveBusy ?? props.busy) || !nativeAvailable || !props.dirty;
+  const saveAsDisabled = (props.saveBusy ?? props.busy) || !nativeAvailable;
   const recentOpenDisabled = props.busy || props.recentHistoryBusy || !nativeAvailable;
   const clearRecentDisabled = props.recentGamePaths.length === 0 || props.busy || props.recentHistoryBusy || !nativeAvailable;
   const retryRecentDisabled = props.busy || props.recentHistoryBusy || !nativeAvailable;
@@ -361,16 +368,21 @@ export function AppChrome(props: Props) {
           </ChromeMenu>
           <ChromeMenu label="棋局" open={openMenu === "game"} onToggle={() => setOpenMenu(openMenu === "game" ? null : "game")}>
             <MenuItem label="新对局" onClick={() => run(props.onNew)} disabled={props.busy} />
+            <MenuItem label="人机新局" onClick={() => run(() => props.onHumanNew?.())} disabled={props.busy || !nativeAvailable || !props.onHumanNew} title={!nativeAvailable ? "人机新局仅在桌面运行时可用。" : undefined} />
             <MenuItem label={actionLabelFromRegistry("review.try-play", props.trialActive ? "退出试下" : "试下")} onClick={() => run(() => props.onToggleTrial?.())} disabled={!nativeAvailable || props.busy || props.trialPending || !props.onToggleTrial} />
             <MenuItem label={actionLabelFromRegistry("review.scoring", props.scoringActive ? "计分中" : "本地计分")} onClick={() => run(() => props.onEnterScoring?.())} disabled={!nativeAvailable || props.busy || props.trialActive || props.trialPending || props.scoringActive || props.scoringPending || !props.onEnterScoring} />
             <SubMenu label="人机续弈">
+              <MenuItem label="从当前节点续弈" onClick={() => run(() => props.onHumanContinue?.())} disabled={props.busy || !nativeAvailable || !props.onHumanContinue} title={!nativeAvailable ? "人机续弈仅在桌面运行时可用。" : undefined} />
               <MenuItem label="人机对局(N)" disabled title="人机对局尚未接入，N 不会新建棋谱。" />
               <MenuItem label="人机对局(分析模式)" disabled title={later} />
               <MenuItem label="人机对局(Genmove模式)" disabled title={later} />
               <MenuItem label="续弈[AI执黑]" disabled title={later} />
               <MenuItem label="续弈[AI执白]" disabled title={later} />
             </SubMenu>
-            <MenuItem label="引擎对局" disabled title={later} />
+            <SubMenu label="引擎对局">
+              <MenuItem label="PK 新局" onClick={() => run(() => props.onPkNew?.())} disabled={props.busy || !nativeAvailable || !props.onPkNew} title={!nativeAvailable ? "PK 仅在桌面运行时可用。" : undefined} />
+              <MenuItem label="PK 从当前节点续弈" onClick={() => run(() => props.onPkContinue?.())} disabled={props.busy || !nativeAvailable || !props.onPkContinue} title={!nativeAvailable ? "PK 仅在桌面运行时可用。" : undefined} />
+            </SubMenu>
             <MenuItem label={actionLabelFromRegistry("game.root-setup", "起始局面设置")} onClick={() => run(props.onRootSetup)} disabled={!props.canRootSetup} title={!props.canRootSetup ? "仅无后续的根节点可直接设置起始局面" : undefined} />
             <MenuItem label={actionLabelFromRegistry("game.convert-position", "转换为起始局面")} onClick={() => run(props.onConvertPosition)} disabled={!props.canConvertPosition} title="确认后丢弃原着手树；可撤销" />
             <MenuItem label="清空棋盘(Ctrl+Home)" onClick={() => run(props.onClearBoard)} disabled={props.busy} />
@@ -394,8 +406,8 @@ export function AppChrome(props: Props) {
             <MenuItem label={AUTO_ANALYZE_LABEL} disabled title={later} />
             <MenuItem label={actionLabelFromRegistry("analysis.all-positions", "批量分析")} onClick={() => run(props.onAllPositionsAnalysis)} disabled={!props.taskEngineReady || props.wholeGameRunning} />
             <MenuItem label={actionLabelFromRegistry("analysis.quick", LIGHTNING_ANALYSIS_MENU_LABEL)} onClick={() => run(props.onQuickAnalysis)} disabled={!props.taskEngineReady || props.wholeGameRunning} />
-            <MenuItem label={actionLabelFromRegistry("view.policy-overlay", "纯网络")} onClick={() => run(() => props.onOverlayMode("policy"))} />
-            <MenuItem label="形势判断" onClick={() => run(() => props.onOverlayMode("ownership"))} />
+            <MenuItem label={actionLabelFromRegistry("view.policy-overlay", "纯网络")} onClick={() => run(() => props.onOverlayMode("policy"))} disabled={props.matchBlocked} />
+            <MenuItem label="形势判断" onClick={() => run(() => props.onOverlayMode("ownership"))} disabled={props.matchBlocked} />
             <div className="menu-sep" role="separator" />
             <MenuItem label="取消此手分析" onClick={() => run(props.onCancelSelectedNode)} disabled={!props.selectedNodeRunning} />
             <MenuItem label="取消整局分析" onClick={() => run(props.onCancelWholeGame)} disabled={!props.wholeGameRunning} />
@@ -408,14 +420,14 @@ export function AppChrome(props: Props) {
             <MenuItem label="添加黑子" disabled title={later} />
             <MenuItem label="添加白子" disabled title={later} />
             <MenuItem label="交替落子" disabled title={later} />
-            <MenuItem label={actionLabelFromRegistry("review.pass", "停一手")} onClick={() => run(() => props.onPass?.())} disabled={props.busy || !nativeAvailable || !props.onPass} title={!nativeAvailable ? nativeUnavailable : undefined} />
+            <MenuItem label={actionLabelFromRegistry("review.pass", "停一手")} onClick={() => run(() => props.onPass?.())} disabled={(props.busy && !props.humanTurn) || !nativeAvailable || !props.onPass} title={!nativeAvailable ? nativeUnavailable : undefined} />
             <div className="menu-sep" role="separator" />
             <MenuItem label={actionLabelFromRegistry("review.promote-main", "设为主分支")} onClick={() => run(() => props.onPromoteMain?.())} disabled={!props.canPromoteMain} />
             <MenuItem label={actionLabelFromRegistry("review.return-main", "返回主干")} onClick={() => run(() => props.onReturnMain?.())} disabled={!props.canReturnMain} />
-            <MenuItem label="跳转到最前" onClick={() => run(() => props.onFirstMove?.())} disabled={!props.onFirstMove} />
+            <MenuItem label="跳转到最前" onClick={() => run(() => props.onFirstMove?.())} disabled={props.matchBlocked || !props.onFirstMove} />
             <MenuItem label={actionLabelFromRegistry("review.remove-variation", "删除当前节点")} onClick={() => run(() => props.onRemoveVariation?.())} disabled={!props.canDeleteNode} title={!nativeAvailable ? nativeUnavailable : undefined} />
             <div className="menu-sep" role="separator" />
-            <MenuItem label="编辑棋谱原文" onClick={() => run(() => props.onToggleSheet("sgf"))} />
+            <MenuItem label="编辑棋谱原文" onClick={() => run(() => props.onToggleSheet("sgf"))} disabled={props.matchBlocked} />
             <MenuItem label="交换黑白" disabled title={later} />
             <MenuItem label="向右旋转" disabled title={later} />
             <MenuItem label="向左旋转" disabled title={later} />
@@ -423,13 +435,13 @@ export function AppChrome(props: Props) {
             <MenuItem label="垂直翻转" disabled title={later} />
           </ChromeMenu>
           <ChromeMenu label="同步" open={openMenu === "sync"} onToggle={() => setOpenMenu(openMenu === "sync" ? null : "sync")}>
-            <MenuItem label="野狐 / 弈客 / readboard" onClick={() => run(() => props.onToggleSheet("sync"))} />
+            <MenuItem label="野狐 / 弈客 / readboard" onClick={() => run(() => props.onToggleSheet("sync"))} disabled={props.matchBlocked} />
             <MenuItem label="弈客直播(Shift+O)" disabled title={later} />
             <MenuItem label="打开弈客网页版" disabled title={later} />
             <MenuItem label="弈客大厅" disabled title={later} />
-            <MenuItem label="野狐棋谱" onClick={() => run(() => props.onToggleSheet("sync"))} />
-            <MenuItem label="腾讯棋谱" onClick={() => run(() => props.onToggleSheet("sync"))} />
-            <MenuItem label="棋盘同步工具(Alt+O)" onClick={() => run(() => props.onToggleSheet("sync"))} />
+            <MenuItem label="野狐棋谱" onClick={() => run(() => props.onToggleSheet("sync"))} disabled={props.matchBlocked} />
+            <MenuItem label="腾讯棋谱" onClick={() => run(() => props.onToggleSheet("sync"))} disabled={props.matchBlocked} />
+            <MenuItem label="棋盘同步工具(Alt+O)" onClick={() => run(() => props.onToggleSheet("sync"))} disabled={props.matchBlocked} />
           </ChromeMenu>
         </div>
         <span className="menu-div" />
@@ -531,7 +543,7 @@ export function AppChrome(props: Props) {
             src={toolbarIcons.playpass}
             label="虚手"
             onClick={props.onPass}
-            disabled={props.busy || !nativeAvailable}
+            disabled={(props.busy && !props.humanTurn) || !nativeAvailable}
             title={!nativeAvailable ? nativeUnavailable : "虚手"}
           />
         </div>
@@ -547,7 +559,8 @@ export function AppChrome(props: Props) {
 
       <div className="param-strip">
         <button type="button" className="chrome-btn chrome-btn-primary" onClick={props.onNew} disabled={props.busy}>新对局</button>
-        <button type="button" className="chrome-btn" onClick={props.onCancelSelectedNode} disabled={!props.selectedNodeRunning}>暂停</button>
+        <button type="button" className="chrome-btn" onClick={props.onHumanNew} disabled={props.busy || !nativeAvailable || !props.onHumanNew} title={!nativeAvailable ? "人机新局仅在桌面运行时可用。" : undefined}>人机新局</button>
+        <button type="button" className="chrome-btn" onClick={props.onCancelSelectedNode} disabled={props.matchBlocked || !props.selectedNodeRunning}>暂停</button>
         <span className="tool-sep" />
         <label className="param-label">
           贴目:
@@ -585,6 +598,7 @@ export function AppChrome(props: Props) {
 }
 
 export function BottomBar(props: {
+  matchBlocked?: boolean;
   currentMove: number;
   maxMove: number;
   onMove: (move: number, forward?: boolean) => void;
@@ -646,20 +660,20 @@ export function BottomBar(props: {
 
   return (
     <nav className="folio-nav" aria-label="复盘导航">
-      <button type="button" className="chrome-btn" onClick={props.onSync}>同步</button>
-      <button type="button" className="chrome-btn" onClick={props.onEstimate}>Kata评估</button>
+      <button type="button" className="chrome-btn" onClick={props.onSync} disabled={props.matchBlocked}>同步</button>
+      <button type="button" className="chrome-btn" onClick={props.onEstimate} disabled={props.matchBlocked}>Kata评估</button>
       <button type="button" className="chrome-btn" onClick={props.onQuickAnalysis} disabled={!props.taskEngineReady || props.wholeGameRunning}>{LIGHTNING_ANALYSIS_TOOLBAR_LABEL}</button>
       {props.onBrowserDemoAnalyze ? (
         <button type="button" className="chrome-btn" onClick={props.onBrowserDemoAnalyze}>{BROWSER_DEMO_ANALYSIS_LABEL}</button>
       ) : null}
       <button type="button" className="chrome-btn" onClick={props.onContinuousAnalysis} disabled={props.continuousAnalysisAction.disabled} title={props.continuousAnalysisAction.title}>{props.continuousAnalysisAction.label}</button>
       <button type="button" className="chrome-btn" onClick={props.onAnalyzeGame} disabled={!props.taskEngineReady || props.wholeGameRunning}>{FIRST_CHILD_MAINLINE_ANALYSIS_LABEL}</button>
-      <button type="button" className="chrome-btn" onClick={props.onHeatmap}>纯网络</button>
-      <button type="button" className="chrome-btn" onClick={props.onRefresh}>刷新</button>
+      <button type="button" className="chrome-btn" onClick={props.onHeatmap} disabled={props.matchBlocked}>纯网络</button>
+      <button type="button" className="chrome-btn" onClick={props.onRefresh} disabled={props.matchBlocked}>刷新</button>
       <button type="button" className="chrome-btn" onClick={props.onAnalyzeOnce} disabled={!props.engineReady}>{SELECTED_NODE_ANALYSIS_LABEL}</button>
       <button type="button" className="chrome-btn" disabled title="尚未接入">设为主分支</button>
-      <button type="button" className="chrome-btn" onClick={props.onClearBoard}>清空棋盘</button>
-      <button type="button" className="chrome-btn" onClick={() => props.jumpRef.current?.focus()}>跳转</button>
+      <button type="button" className="chrome-btn" onClick={props.onClearBoard} disabled={props.matchBlocked}>清空棋盘</button>
+      <button type="button" className="chrome-btn" onClick={() => props.jumpRef.current?.focus()} disabled={props.matchBlocked}>跳转</button>
       {props.selectedNodeRunning ? (
         <button type="button" className="chrome-btn" onClick={props.onCancelSelectedNode}>取消此手</button>
       ) : null}
@@ -669,21 +683,23 @@ export function BottomBar(props: {
       {progressText ? <span className="nav-progress">{progressText}</span> : null}
       <span className="spacer" />
       <div className="nav-cluster" aria-label="手数导航">
-        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(0)} disabled={props.currentMove <= 0} title="首手">|&lt;</button>
-        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(Math.max(0, props.currentMove - 10))} disabled={props.currentMove <= 0} title="回退 10 手">&lt;&lt;</button>
-        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.currentMove - 1)} disabled={props.currentMove <= 0} title="上一手">&lt;</button>
+        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(0)} disabled={props.matchBlocked || props.currentMove <= 0} title="首手">|&lt;</button>
+        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(Math.max(0, props.currentMove - 10))} disabled={props.matchBlocked || props.currentMove <= 0} title="回退 10 手">&lt;&lt;</button>
+        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.currentMove - 1)} disabled={props.matchBlocked || props.currentMove <= 0} title="上一手">&lt;</button>
         <input
           ref={(node) => { props.jumpRef.current = node; }}
           className="jump"
+          disabled={props.matchBlocked}
           value={props.currentMove}
           aria-label="跳转手数"
           onChange={(event) => props.onMove(Number(event.target.value))}
         />
-        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.currentMove + 1, true)} disabled={props.currentMove >= props.maxMove} title="下一手">&gt;</button>
-        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(Math.min(props.maxMove, props.currentMove + 10))} disabled={props.currentMove >= props.maxMove} title="前进 10 手">&gt;&gt;</button>
-        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.maxMove)} disabled={props.currentMove >= props.maxMove} title="末手">&gt;|</button>
+        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.currentMove + 1, true)} disabled={props.matchBlocked || props.currentMove >= props.maxMove} title="下一手">&gt;</button>
+        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(Math.min(props.maxMove, props.currentMove + 10))} disabled={props.matchBlocked || props.currentMove >= props.maxMove} title="前进 10 手">&gt;&gt;</button>
+        <button type="button" className="chrome-btn nav-step" onClick={() => props.onMove(props.maxMove)} disabled={props.matchBlocked || props.currentMove >= props.maxMove} title="末手">&gt;|</button>
         <input
           className="move-slider"
+          disabled={props.matchBlocked}
           type="range"
           min={0}
           max={props.maxMove}
@@ -707,11 +723,11 @@ export function BottomBar(props: {
         <span className="move-indicator">分支 {props.siblingLabel}</span>
       </div>
       <span className="spacer" />
-      <button type="button" className="chrome-btn" onClick={props.onEstimate}>形势判断</button>
+      <button type="button" className="chrome-btn" onClick={props.onEstimate} disabled={props.matchBlocked}>形势判断</button>
       <button type="button" className="chrome-btn" aria-pressed={props.showMoveNumbers} onClick={() => props.onShowMoveNumbers(!props.showMoveNumbers)}>手数</button>
       <button type="button" className="chrome-btn" aria-pressed={props.showCoordinates} onClick={() => props.onShowCoordinates(!props.showCoordinates)}>坐标</button>
       <button type="button" className="chrome-btn" aria-pressed={props.keyboardPlacement} onClick={() => props.onKeyboardPlacement(!props.keyboardPlacement)}>键盘落子</button>
-      <button type="button" className="chrome-btn" aria-pressed={props.autoPlaying} onClick={props.onAutoPlay}>自动播放</button>
+      <button type="button" className="chrome-btn" aria-pressed={props.autoPlaying} onClick={props.onAutoPlay} disabled={props.matchBlocked}>自动播放</button>
       <span className="nav-to-play">{props.toPlay === "black" ? "下一手 黑" : "下一手 白"}</span>
       <span className="nav-message" title={props.message}>{props.message}</span>
     </nav>

@@ -78,6 +78,10 @@ vi.mock("./api/backend", () => ({
   isTauriRuntime: () => true,
   nativeCurrentGameUnavailable: "Native current-game commands require the Tauri desktop runtime."
 }));
+vi.mock("./api/match", () => ({ nativeMatchUnavailable: "Desktop only", humanMatchStart: vi.fn(), humanMatchAction: vi.fn(), humanMatchStop: vi.fn(), pkMatchStart: vi.fn(), pkMatchPause: vi.fn(), pkMatchResume: vi.fn(),
+  subscribeHumanMatch: async () => () => undefined,
+  humanMatchSnapshot: async () => ({ current: null, match_state: { revision: 0, mode: "human", pk_runs: null, committed_moves: 0, pause_pending: false, rebuild_sides: [], resume_pending: false, phase: "idle", session_id: null, turn: 0, to_play: null, settings: null, run_id: null, job: null, end: null, failure: null, failed_side: null, resources_held: false, committed: false } })
+}));
 
 const preferencesApi = vi.hoisted(() => ({
   loadAppPreferences: vi.fn(),
