@@ -20,6 +20,9 @@ import { AnalysisTaskPanel, type AnalysisScopeDraft } from "./components/Analysi
 import { ProviderPanel } from "./components/ProviderPanel";
 import { NewDocumentDialog } from "./components/NewDocumentDialog";
 import { GameMetadataDialog } from "./components/GameMetadataDialog";
+import { HumanMatchDialog } from "./components/HumanMatchDialog";
+import { humanMatchAction, humanMatchAnalysisPolicy, humanMatchSnapshot, humanMatchStart, humanMatchStop, pkMatchStart, pkMatchPause, pkMatchResume, nativeMatchUnavailable, subscribeHumanMatch } from "./api/match";
+import type { HumanMatchActionDto, HumanMatchStartDto, MatchAnalysisPolicyDto, MatchDefaultsDto, MatchModeDto, MatchSnapshotDto, MatchUpdateDto } from "./domain/types";
 import {
   analysisTaskSnapshot,
   applyRootSetup,
@@ -143,7 +146,7 @@ type PendingPreferencesSave = {
   onSaved?: (preferences: AppPreferences) => void;
   onFailed?: (error: unknown) => void;
 };
-type CandidatePreview = { index: number; scope: ReviewPresentationScope };
+type CandidatePreview = { index: number; scope: ReviewPresentationScope; matchFrameIdentity: string | null };
 type ReplacementOptions = {
   confirmMessage: string;
   fallbackName?: string | null;
@@ -198,6 +201,32 @@ export function App() {
   );
   const [boardIntentFeedback, setBoardIntentFeedback] = useState<string | null>(null);
   const nativeRuntime = isTauriRuntime();
+  const [matchState, setMatchState] = useState<MatchSnapshotDto | null>(null);
+  const matchStateRef = useRef<MatchSnapshotDto | null>(null);
+  const [matchDialogOpen, setMatchDialogOpen] = useState(false);
+  const [matchDialogMode, setMatchDialogMode] = useState<MatchModeDto>("human");
+  // Continue pins the node/generation the dialog describes; the backend rejects the start if the document moved on.
+  const [matchContinuation, setMatchContinuation] = useState<Pick<CurrentGameResultDto, "generation" | "snapshot_seq" | "selected_path" | "snapshot" | "tree"> | null>(null);
+  const [matchStarting, setMatchStarting] = useState(false);
+  const [matchStartError, setMatchStartError] = useState<string | null>(null);
+  const matchDocumentGenerationRef = useRef<number | null>(null);
+  const matchStartingRef = useRef(false);
+  const matchCancelRef = useRef(false);
+  const matchActionPendingRef = useRef(false);
+  const matchControlPendingRef = useRef<"pause" | "resume" | null>(null);
+  const matchStopPendingRef = useRef(false);
+  const [matchControlPending, setMatchControlPending] = useState<"pause" | "resume" | null>(null);
+  const [matchStopPending, setMatchStopPending] = useState(false);
+  const [matchAnalysisPending, setMatchAnalysisPending] = useState(false);
+  const matchAnalysisPendingRef = useRef(false);
+  const scoredMatchRef = useRef<string | null>(null);
+  const committedMatchRef = useRef<string | null>(null);
+  const matchBlocked = matchStarting || Boolean(matchState?.resources_held) || ["starting", "playing", "paused", "ending"].includes(matchState?.phase ?? "idle");
+  const humanTurn = matchState?.mode === "human" && matchState.phase === "playing" && matchState.to_play === matchState.settings?.human_color;
+  function matchOwnsWorkspace() {
+    const state = matchStateRef.current;
+    return matchStartingRef.current || Boolean(state?.resources_held) || ["starting", "playing", "paused", "ending"].includes(state?.phase ?? "idle");
+  }
   const [selectedNodeRunning, setSelectedNodeRunning] = useState(false);
   const [wholeGameRunning, setWholeGameRunning] = useState(false);
   const [wholeGameProgress, setWholeGameProgress] = useState<WholeGameProgress | null>(null);
@@ -268,9 +297,9 @@ export function App() {
     lastSwitchIdRef.current
   );
   const engineLabel = engineStatusLabel(engineSnapshot);
-  const engineReady = admitsForegroundEngineQuery(engineSnapshot) && admitsForegroundEngineJobs(engineSnapshot, "visits_limit");
-  const taskEngineReady = admitsForegroundEngineJobs(engineSnapshot, "whole_game_analysis");
-  const continuousEngineReady = admitsForegroundEngineQuery(engineSnapshot, "continuous_analysis")
+  const engineReady = !matchBlocked && admitsForegroundEngineQuery(engineSnapshot) && admitsForegroundEngineJobs(engineSnapshot, "visits_limit");
+  const taskEngineReady = !matchBlocked && admitsForegroundEngineJobs(engineSnapshot, "whole_game_analysis");
+  const continuousEngineReady = !matchBlocked && admitsForegroundEngineQuery(engineSnapshot, "continuous_analysis")
     && (!preferences.continuousVisitsLimitEnabled || admitsForegroundEngineJobs(engineSnapshot, "visits_limit"));
   const { showCoordinates, showMoveNumbers } = preferences;
   const [showBlackCandidates, setShowBlackCandidates] = useState(true);
@@ -560,23 +589,34 @@ export function App() {
     },
     [visibleFrames, currentMove, treeFrame]
   );
-  const visibleCurrentFrame = useMemo(() => applyPreferencesToFrame(currentFrame, preferences), [currentFrame, preferences]);
+  const matchFrame = useMemo(() => matchAnalysisPending ? undefined : currentMatchAnalysisFrame(matchState, currentGame), [matchState, currentGame, matchAnalysisPending]);
+  const matchFrameIdentity = matchFrame && matchState?.analysis.frame
+    ? JSON.stringify([matchState.session_id, matchState.turn, matchState.analysis.epoch, matchState.run_id, matchFrame.job_id, currentGame?.generation, selectedPathKey])
+    : null;
+  const presentationFrame = matchBlocked ? matchFrame : currentFrame;
+  const visibleCurrentFrame = useMemo(() => applyPreferencesToFrame(presentationFrame, preferences), [presentationFrame, preferences]);
+  useEffect(() => {
+    setSelectedCandidateIndex(null);
+    setCandidatePreview(null);
+    setReplayProgress({ identity: "", prefix: 0 });
+  }, [matchFrameIdentity]);
   const previewCandidateIndex = candidatePreview
-    && presentationLive
+    && candidatePreview.matchFrameIdentity === matchFrameIdentity
+    && (matchBlocked ? Boolean(matchFrame) : presentationLive)
     && shouldPublishReviewPresentation(activeScope, candidatePreview.scope)
     ? candidatePreview.index
     : null;
-  const hideCandidates = (currentPosition.to_play === "black" && !showBlackCandidates)
-    || (currentPosition.to_play === "white" && !showWhiteCandidates);
+  const hideCandidates = !matchBlocked && ((currentPosition.to_play === "black" && !showBlackCandidates)
+    || (currentPosition.to_play === "white" && !showWhiteCandidates));
   const activeCandidateIndex = previewCandidateIndex ?? selectedCandidateIndex ?? 0;
   const activeCandidate = visibleCurrentFrame?.candidates[activeCandidateIndex]
     ?? visibleCurrentFrame?.candidates[0]
     ?? null;
-  const replayCandidate = currentFrame?.candidates[activeCandidateIndex]
-    ?? currentFrame?.candidates[0]
+  const replayCandidate = presentationFrame?.candidates[activeCandidateIndex]
+    ?? presentationFrame?.candidates[0]
     ?? null;
   const replaySteps = variationReplayPointSteps(replayCandidate);
-  const replayIdentityKeyValue = variationReplayIdentityKey(variationReplayIdentity(selectedPath, replayCandidate));
+  const replayIdentityKeyValue = `${matchFrameIdentity ?? "review"}:${variationReplayIdentityKey(variationReplayIdentity(selectedPath, replayCandidate))}`;
   const replayArmed = preferences.variationReplayEnabled && replaySteps.length > 0;
   const replayEligible = replayArmed && (
     (preferences.showCandidates && overlayMode === "candidates" && !hideCandidates)
@@ -621,9 +661,9 @@ export function App() {
   const siblingIndex = selectedPath.indices.at(-1);
   const canParent = Boolean(!scoring && !scoringPending && reviewGame && parentOfSelected);
   const canRemoveVariation = Boolean(nativeRuntime && !trial && !trialPending && !scoring && !scoringPending && currentGame && selectedPath.indices.length > 0);
-  const canRootSetup = nativeRuntime && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending && selectedPath.indices.length === 0
+  const canRootSetup = !matchBlocked && nativeRuntime && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending && selectedPath.indices.length === 0
     && currentGame?.tree.children.length === 0 && !rootSetupDraft && !conversionPrompt && !editActionPending;
-  const canConvertPosition = nativeRuntime && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending
+  const canConvertPosition = !matchBlocked && nativeRuntime && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending
     && (Boolean(currentGame?.tree.children.length) || Boolean(currentGame?.tree.properties.some((property) => property.key === "B" || property.key === "W")))
     && !rootSetupDraft && !conversionPrompt && !editActionPending;
   const canNext = Boolean(!scoring && !scoringPending && selectedNode && selectedNode.children.length > 0);
@@ -666,6 +706,7 @@ export function App() {
     ? engineSnapshot.continuous.enabled
     : preferences.continuousAnalysisEnabled;
   const continuousAnalysisAction: ContinuousAnalysisAction = (() => {
+    if (matchBlocked) return { label: CONTINUOUS_ANALYSIS_START_LABEL, disabled: true, title: "对局占用工作区。", status: "对局中" };
     if (scoring || scoringPending) {
       return { label: CONTINUOUS_ANALYSIS_START_LABEL, disabled: true, title: "计分期间不能启动分析。", status: continuousPhaseStatus(continuousPhase) };
     }
@@ -706,7 +747,7 @@ export function App() {
   const documentPath = currentGame?.native_path ?? currentFilePath;
   const documentName = useMemo(() => documentPath ? fileNameFromPath(documentPath) : fallbackFileName ?? "未命名棋谱", [documentPath, fallbackFileName]);
   const saveFileName = documentName.toLowerCase().endsWith(".sgf") ? documentName : `${documentName}.sgf`;
-  const documentFlowBusy = fileFlowBusy || departurePending || Boolean(newDocumentOpen) || Boolean(rootSetupDraft) || Boolean(conversionPrompt) || Boolean(metadataDraft) || Boolean(markupDialog) || Boolean(departurePrompt) || Boolean(teardownPrompt) || Boolean(recoveryPrompt);
+  const documentFlowBusy = matchBlocked || matchDialogOpen || fileFlowBusy || departurePending || Boolean(newDocumentOpen) || Boolean(rootSetupDraft) || Boolean(conversionPrompt) || Boolean(metadataDraft) || Boolean(markupDialog) || Boolean(departurePrompt) || Boolean(teardownPrompt) || Boolean(recoveryPrompt);
   const historyActionBlocked = documentFlowBusy || editActionPending;
   const canUndo = nativeRuntime && !scoring && !scoringPending && Boolean(trial ? trial.can_undo : currentGame?.can_undo) && !historyActionBlocked && !trialPending;
   const canRedo = nativeRuntime && !scoring && !scoringPending && !trial && Boolean(currentGame?.can_redo) && !historyActionBlocked && !trialPending;
@@ -727,8 +768,8 @@ export function App() {
 
   useEffect(() => {
     const openEnabled = nativeRuntime && !historyActionBlocked;
-    const saveEnabled = openEnabled && documentDirty;
-    const passEnabled = openEnabled;
+    const saveEnabled = nativeRuntime && !fileFlowBusy && !departurePending && !matchStarting && documentDirty;
+    const passEnabled = humanTurn || openEnabled;
 
     shortcutRegistry.bind("file.new", () => {
       void handleNewGame();
@@ -774,7 +815,7 @@ export function App() {
       if (saveEnabled) void handleSaveSgfDocument(false);
     });
     shortcutRegistry.bind("file.save-as", () => {
-      if (openEnabled) void handleSaveSgfDocument(true);
+      if (nativeRuntime && !fileFlowBusy && !departurePending && !matchStarting) void handleSaveSgfDocument(true);
     });
     shortcutRegistry.bind("file.copy-sgf", () => {
       void handleCopySgf();
@@ -856,6 +897,14 @@ export function App() {
     });
 
     function onKey(event: KeyboardEvent) {
+      if (matchOwnsWorkspace() && !departurePrompt) {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && !matchStartingRef.current) {
+          event.preventDefault();
+          void handleSaveSgfDocument(event.shiftKey);
+        }
+        return;
+      }
+      if (matchDialogOpen && !departurePrompt) return;
       if (departurePrompt) {
         if (event.key === "Escape") {
           event.preventDefault();
@@ -877,6 +926,12 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [
+    matchBlocked,
+    matchDialogOpen,
+    humanTurn,
+    matchStarting,
+    fileFlowBusy,
+    departurePending,
     chosenChildren,
     currentGame,
     trial,
@@ -934,6 +989,7 @@ export function App() {
   }, [autoPlaying, positions, reviewGame, chosenChildren, rootSetupDraft, conversionPrompt, markupDialog]);
 
   function toggleSheet(next: SheetId) {
+    if (matchOwnsWorkspace() && (next === "sync" || next === "engine" || next === "sgf")) return;
     setSheet((current) => current === next ? "none" : next);
   }
 
@@ -1019,6 +1075,7 @@ export function App() {
 
 
   function handleEngineCommand(kind: "once" | "game") {
+    if (matchOwnsWorkspace()) return;
     if (scoringRef.current || scoringPendingRef.current || (trialRef.current && kind === "game")) return;
     const snapshot = engineSnapshotRef.current;
     const run = runFromSnapshot(snapshot);
@@ -1032,6 +1089,7 @@ export function App() {
   }
 
   async function handleSelectSwitcherProfile(profileId: string) {
+    if (matchOwnsWorkspace()) return;
     if (!profileId) return;
     const run = runFromSnapshot(engineSnapshot);
     if (run?.profile_id === profileId) return;
@@ -1073,6 +1131,7 @@ export function App() {
   }
 
   async function handleRailVisibility(side: "left" | "right", visible: boolean) {
+    if (matchOwnsWorkspace()) return;
     if (workspace.owner.snapshot.frozen || !preferencesLoadSettledRef.current || railVisibilityBusyRef.current || departurePendingRef.current || departurePrompt) return;
     railVisibilityBusyRef.current = true;
     setRailVisibilityBusy(true);
@@ -1162,7 +1221,7 @@ export function App() {
       while (pendingPreferencesSaveRef.current && !continuousActionInFlightRef.current) {
         const pending = pendingPreferencesSaveRef.current;
         try {
-          const saved = { ...await trackR7Write(saveAppPreferences(pending.preferences)), recentGamePaths: committedPreferencesRef.current.recentGamePaths, windowGeometry: committedPreferencesRef.current.windowGeometry, workspaceVisibility: committedPreferencesRef.current.workspaceVisibility };
+          const saved = { ...await trackR7Write(saveAppPreferences(pending.preferences)), matchDefaults: committedPreferencesRef.current.matchDefaults, recentGamePaths: committedPreferencesRef.current.recentGamePaths, windowGeometry: committedPreferencesRef.current.windowGeometry, workspaceVisibility: committedPreferencesRef.current.workspaceVisibility };
           committedPreferencesRef.current = saved;
           setPreferences(saved);
           pending.onSaved?.(saved);
@@ -1201,6 +1260,173 @@ export function App() {
 
 
 
+  async function adoptMatchUpdate(update: MatchUpdateDto) {
+    const next = update.match_state;
+    if (next.revision <= (matchStateRef.current?.revision ?? -1)) return;
+    matchStateRef.current = next;
+    setMatchState(next);
+    if (next.committed && next.settings && committedMatchRef.current !== next.session_id) {
+      committedMatchRef.current = next.session_id;
+      committedPreferencesRef.current = { ...committedPreferencesRef.current, matchDefaults: next.settings };
+      setPreferences((current) => ({ ...current, matchDefaults: next.settings! }));
+      setMatchDialogOpen(false);
+    }
+    if (matchCancelRef.current && next.phase === "starting" && next.session_id) void handleStopMatch();
+    const current = update.current;
+    // Document generation/snapshot_seq order independently of analysis-only session revisions.
+    const previous = currentGameRef.current;
+    if (!current || (previous && (current.generation < previous.generation || current.snapshot_seq < previous.snapshot_seq))) return;
+    if (previous && current.generation === previous.generation && current.snapshot_seq === previous.snapshot_seq) return;
+    matchDocumentGenerationRef.current = current.generation;
+    clearLocalAnalysisSession();
+    beginReviewRequest();
+    clearReviewData();
+    setCandidatePreview(null);
+    setAutoPlaying(false);
+    setSheet("none");
+    adoptCurrentGame(current);
+    setChosenChildren(chosenFromPath(current.selected_path));
+    pendingSelectedPathRef.current = current.selected_path;
+    setCurrentMove(current.snapshot.position.move_number);
+    setDirty(current.dirty);
+    setCurrentFilePath(current.native_path ?? null);
+    if (previous && next.phase === "playing") soundAcceptedMove(previous.snapshot, current.snapshot);
+    try {
+      const artifacts = await artifactsFromCurrentGame();
+      if (currentGameRef.current?.generation !== current.generation || currentGameRef.current?.snapshot_seq !== current.snapshot_seq) return;
+      setGame(artifacts.projection);
+      setSgfText(artifacts.serialized);
+      setPositions(replayGamePositions(artifacts.projection));
+    } catch (error) { setMessage(`对局棋谱投影失败: ${errorMessage(error)}`); }
+  }
+
+  useEffect(() => {
+    if (!nativeRuntime) return;
+    let disposed = false;
+    let unsubscribe: (() => void) | undefined;
+    void subscribeHumanMatch((update) => { if (!disposed) void adoptMatchUpdate(update); })
+      .then(async (stop) => {
+        if (disposed) { stop(); return; }
+        unsubscribe = stop;
+        const update = await humanMatchSnapshot();
+        if (!disposed) await adoptMatchUpdate(update);
+      }).catch((error) => { if (!disposed) setMessage(`对局状态读取失败: ${errorMessage(error)}`); });
+    return () => { disposed = true; unsubscribe?.(); };
+  }, [nativeRuntime]);
+
+  useEffect(() => {
+    if (matchState?.end !== "two_passes" || matchState.resources_held || matchBlocked || documentFlowBusy
+      || currentGameRef.current?.generation !== matchDocumentGenerationRef.current
+      || !matchState.session_id || scoredMatchRef.current === matchState.session_id) return;
+    scoredMatchRef.current = matchState.session_id;
+    void handleEnterScoring();
+  }, [matchState, matchBlocked, documentFlowBusy]);
+
+  function openMatchDialog(continuing: boolean, mode: MatchModeDto = "human") {
+    if (!nativeRuntime) { setMessage(nativeMatchUnavailable); return; }
+    if (documentFlowBusy || trial || trialPending || scoring || scoringPending || !preferencesLoaded) return;
+    const baseline = continuing ? currentGameRef.current : null;
+    if (continuing && !baseline) return;
+    setAutoPlaying(false);
+    setSheet("none");
+    setMatchDialogMode(mode);
+    setMatchStartError(null);
+    setMatchContinuation(baseline ? { generation: baseline.generation, snapshot_seq: baseline.snapshot_seq, selected_path: baseline.selected_path, snapshot: baseline.snapshot, tree: baseline.tree } : null);
+    setMatchDialogOpen(true);
+  }
+
+  async function handleStartMatch(settings: MatchDefaultsDto, continuation: typeof matchContinuation, mode: MatchModeDto) {
+    const continuing = continuation !== null;
+    if (!nativeRuntime || matchOwnsWorkspace() || fileFlowDepthRef.current !== 0 || !currentGameRef.current) return;
+    matchStartingRef.current = true;
+    matchCancelRef.current = false;
+    setMatchStarting(true);
+    setMatchStartError(null);
+    let entered = false;
+    try {
+      await enterFileFlow();
+      entered = true;
+      let discardConfirmed = false;
+      // A Continue keeps the current document and file; only a New game departs from it.
+      if (!continuing && currentGameRef.current.dirty) {
+        const decision = await requestDepartureDecision(`保存当前棋谱后开始${mode === "pk" ? " PK " : "人机"}新局？放弃仅在新局启动成功后替换原谱。`);
+        if (decision === "cancel" || matchCancelRef.current) return;
+        if (decision === "save") {
+          await handleSaveSgfDocument(false);
+          if (currentGameRef.current?.dirty || matchCancelRef.current) return;
+        } else discardConfirmed = true;
+      }
+      if (matchCancelRef.current) return;
+      const baseline = continuation ?? currentGameRef.current;
+      if (!baseline) return;
+      const request: HumanMatchStartDto = { settings, generation: baseline.generation, snapshot_seq: baseline.snapshot_seq,
+        start: continuing ? { kind: "continue", node_path: baseline.selected_path, root_metadata_confirmed: true }
+          : { kind: "new", discard_confirmed: discardConfirmed } };
+      await adoptMatchUpdate(await (mode === "pk" ? pkMatchStart(request) : humanMatchStart(request)));
+    } catch (error) {
+      const failure = `${mode === "pk" ? "PK" : "人机"}启动失败: ${errorMessage(error)}`;
+      setMatchStartError(failure);
+      setMessage(failure);
+    }
+    finally {
+      matchStartingRef.current = false;
+      setMatchStarting(false);
+      if (entered) await leaveFileFlow();
+    }
+  }
+
+  async function handleHumanAction(action: HumanMatchActionDto) {
+    const state = matchStateRef.current;
+    const current = currentGameRef.current;
+    if (matchActionPendingRef.current || !state?.session_id || state.mode !== "human" || state.phase !== "playing"
+      || state.to_play !== state.settings?.human_color || !current) return;
+    matchActionPendingRef.current = true;
+    try {
+      await adoptMatchUpdate(await humanMatchAction({ session_id: state.session_id, turn: state.turn, generation: current.generation, node_path: current.selected_path }, action));
+    } catch (error) { setMessage(`人类落子失败: ${errorMessage(error)}`); }
+    finally { matchActionPendingRef.current = false; }
+  }
+
+  async function handlePkControl(action: "pause" | "resume") {
+    const state = matchStateRef.current;
+    if (matchControlPendingRef.current || matchStopPendingRef.current || !state?.session_id || state.mode !== "pk"
+      || state.pause_pending || state.resume_pending || (action === "pause" ? state.phase !== "playing" : state.phase !== "paused")) return;
+    matchControlPendingRef.current = action;
+    setMatchControlPending(action);
+    try {
+      await adoptMatchUpdate(await (action === "pause" ? pkMatchPause(state.session_id) : pkMatchResume(state.session_id)));
+    } catch (error) { setMessage(`${action === "pause" ? "暂停" : "恢复"} PK 失败，可重试: ${errorMessage(error)}`); }
+    finally { matchControlPendingRef.current = null; setMatchControlPending(null); }
+  }
+
+  async function handleMatchAnalysisPolicy(policy: MatchAnalysisPolicyDto) {
+    const state = matchStateRef.current;
+    const current = currentGameRef.current;
+    if (!nativeRuntime || matchAnalysisPendingRef.current || matchStopPendingRef.current || !state?.session_id
+      || state.mode !== "human" || state.phase !== "playing" || !state.analysis.supported || !current) return;
+    matchAnalysisPendingRef.current = true;
+    setMatchAnalysisPending(true);
+    try {
+      await adoptMatchUpdate(await humanMatchAnalysisPolicy({ session_id: state.session_id, turn: state.turn, generation: current.generation, node_path: current.selected_path }, policy));
+    } catch (error) { setMessage(`本场分析策略更新失败: ${errorMessage(error)}`); }
+    finally {
+      matchAnalysisPendingRef.current = false;
+      setMatchAnalysisPending(false);
+    }
+  }
+
+  async function handleStopMatch() {
+    matchCancelRef.current = true;
+    const state = matchStateRef.current;
+    if (!state?.session_id) { if (!matchStartingRef.current) setMatchDialogOpen(false); return; }
+    if (matchStopPendingRef.current || !matchOwnsWorkspace()) return;
+    matchStopPendingRef.current = true;
+    setMatchStopPending(true);
+    try { await adoptMatchUpdate(await humanMatchStop(state.session_id)); }
+    catch (error) { setMessage(`停止对局失败，可重试: ${errorMessage(error)}`); }
+    finally { matchStopPendingRef.current = false; setMatchStopPending(false); }
+  }
+
   function isCurrentGameSnapshot(result: CurrentGameResultDto): boolean {
     const current = currentGameRef.current;
     return current !== null && result.generation === current.generation && result.snapshot_seq >= current.snapshot_seq;
@@ -1225,6 +1451,7 @@ export function App() {
   }
 
   async function handleToggleTrial() {
+    if (matchOwnsWorkspace()) return;
     if (!nativeRuntime || !currentGameRef.current || scoringRef.current || scoringPendingRef.current || trialTransitionRef.current || (!trialRef.current && documentFlowBusy) || departurePendingRef.current || fileFlowDepthRef.current !== 0 || navigatingRef.current || analysisTaskActionInFlightRef.current || editActionPendingRef.current) return;
     trialTransitionRef.current = true;
     setTrialPending(true);
@@ -1262,6 +1489,7 @@ export function App() {
     }
   }
   async function handleEnterScoring() {
+    if (matchOwnsWorkspace()) return;
     if (!nativeRuntime || !currentGameRef.current || scoringRef.current || scoringPendingRef.current || trialRef.current || trialTransitionRef.current || documentFlowBusy || navigatingRef.current || analysisTaskActionInFlightRef.current || editActionPendingRef.current) return;
     scoringPendingRef.current = true;
     setScoringPending(true);
@@ -1901,6 +2129,7 @@ export function App() {
     nativePath: string | null,
     options: ReplacementOptions
   ): Promise<boolean> {
+    if (matchOwnsWorkspace()) return false;
     if (rootSetupDraft || conversionPrompt || metadataDraft || markupDialog) {
       setMessage("请先完成或取消当前棋谱编辑。");
       return false;
@@ -2020,6 +2249,7 @@ export function App() {
   }
 
   async function handleFileActivation(delivery: FileActivationDeliveryDto): Promise<void> {
+    if (matchOwnsWorkspace()) { setMessage("对局期间不能打开其他棋谱。"); return; }
     if (delivery.kind === "rejected") {
       setMessage(delivery.message);
       return;
@@ -2288,6 +2518,7 @@ export function App() {
   };
 
   async function handleRunKataGo(_profile: EngineProfileDto, maxVisits: number) {
+    if (matchOwnsWorkspace()) return;
     const snapshot = engineSnapshotRef.current;
     const run = runFromSnapshot(snapshot);
     if (!admitsForegroundEngineQuery(snapshot) || !admitsForegroundEngineJobs(snapshot, "visits_limit")) {
@@ -2341,6 +2572,7 @@ export function App() {
   }
 
   async function handleContinuousAnalysisAction() {
+    if (matchOwnsWorkspace()) return;
     if (trialTransitionRef.current || scoringRef.current || scoringPendingRef.current) return;
     if (!preferencesLoadSettledRef.current || continuousActionInFlightRef.current) return;
     const snapshot = engineSnapshotRef.current;
@@ -2669,6 +2901,7 @@ export function App() {
   }
 
   async function handleStartAnalysisTask() {
+    if (matchOwnsWorkspace()) return;
     if (trialRef.current || trialTransitionRef.current || scoringRef.current || scoringPendingRef.current) return;
     const run = runFromSnapshot(engineSnapshotRef.current);
     if (!run || !analysisScopePreview) return;
@@ -2706,6 +2939,7 @@ export function App() {
   }
 
   async function handleQuickAnalysisTask() {
+    if (matchOwnsWorkspace()) return;
     if (trialRef.current || trialTransitionRef.current || scoringRef.current || scoringPendingRef.current) return;
     const run = runFromSnapshot(engineSnapshotRef.current);
     const game = currentGameRef.current;
@@ -2733,6 +2967,7 @@ export function App() {
   }
 
   async function handleAllPositionsAnalysisTask() {
+    if (matchOwnsWorkspace()) return;
     if (trialRef.current || trialTransitionRef.current || scoringRef.current || scoringPendingRef.current) return;
     const run = runFromSnapshot(engineSnapshotRef.current);
     const game = currentGameRef.current;
@@ -2790,6 +3025,7 @@ export function App() {
   }
 
   async function handleContinueAnalysisTask() {
+    if (matchOwnsWorkspace()) return;
     if (trialRef.current || trialTransitionRef.current) return;
     const task = analysisTaskRef.current;
     const run = runFromSnapshot(engineSnapshotRef.current);
@@ -2850,6 +3086,7 @@ export function App() {
   };
 
   async function handleAnalyzeKataGoGame(runId: string, maxVisits: number) {
+    if (matchOwnsWorkspace()) return;
     const game = currentGameRef.current;
     if (!admitsForegroundEngineQuery(engineSnapshotRef.current, "whole_game_analysis")
       || !admitsForegroundEngineJobs(engineSnapshotRef.current, "visits_limit")
@@ -3045,6 +3282,7 @@ export function App() {
   }
 
   async function handleCommitPersonalComment(comment: string) {
+    if (matchOwnsWorkspace()) return;
     if (trialRef.current || trialTransitionRef.current || !currentGame || rootSetupDraft || conversionPrompt || editActionPendingRef.current) return;
     if (!nativeRuntime) {
       setMessage(nativeCurrentGameUnavailable);
@@ -3087,6 +3325,7 @@ export function App() {
   }
 
   async function selectNode(path: NodePath, generation = reviewGame?.generation, forward = false) {
+    if (matchOwnsWorkspace()) return;
     if (scoringRef.current || scoringPendingRef.current) return;
     const active = trialRef.current;
     if (active || trialTransitionRef.current) {
@@ -3268,6 +3507,7 @@ export function App() {
 
   async function commitMarkup(action: SgfMarkupActionDto, captured?: { path: NodePath; generation: number }) {
     const before = currentGameRef.current;
+    if (matchOwnsWorkspace()) return;
     if (trialRef.current || trialTransitionRef.current || !nativeRuntime || !before || rootSetupDraft || conversionPrompt || metadataDraft || newDocumentOpen || editActionPendingRef.current || departurePendingRef.current || fileFlowBusy) return;
     const path = captured?.path ?? before.selected_path;
     const generation = captured?.generation ?? before.generation;
@@ -3292,6 +3532,7 @@ export function App() {
   }
 
   function handleBoardPoint(point: PointDto) {
+    if (matchOwnsWorkspace()) { void handleHumanAction({ kind: "play", vertex: { point } }); return; }
     if (scoringRef.current || scoringPendingRef.current) {
       if (scoringRef.current) void handleUpdateScoring({ kind: "point", point });
       return;
@@ -3319,6 +3560,7 @@ export function App() {
   }
 
   async function playAt(vertex: MoveVertex) {
+    if (matchOwnsWorkspace()) { await handleHumanAction({ kind: "play", vertex }); return; }
     if (!nativeRuntime) {
       setMessage(nativeCurrentGameUnavailable);
       return;
@@ -3547,7 +3789,7 @@ export function App() {
   }
 
   function previewCandidate(index: number | null) {
-    setCandidatePreview(index === null ? null : { index, scope: activeScope });
+    setCandidatePreview(index === null ? null : { index, scope: activeScope, matchFrameIdentity });
   }
 
   function selectCandidate(index: number) {
@@ -3567,6 +3809,13 @@ export function App() {
     {!nativeRuntime ? <p className="native-runtime-note" role="status">{nativeCurrentGameUnavailable}</p> : null}
     <AppChrome
       windowPin={windowPin}
+      saveBusy={fileFlowBusy || departurePending || matchStarting || Boolean(departurePrompt) || Boolean(teardownPrompt)}
+      matchBlocked={matchBlocked}
+      humanTurn={humanTurn}
+      onHumanNew={() => openMatchDialog(false)}
+      onHumanContinue={() => openMatchDialog(true)}
+      onPkNew={() => openMatchDialog(false, "pk")}
+      onPkContinue={() => openMatchDialog(true, "pk")}
       sheet={sheet}
       onToggleSheet={toggleSheet}
       busy={historyActionBlocked}
@@ -3586,18 +3835,20 @@ export function App() {
         profiles: engineProfiles.map((profile) => ({ id: profile.id, name: profile.profile.name })),
         selectedProfileId: runFromSnapshot(engineSnapshot)?.profile_id
           ?? (engineSnapshot.lifecycle.state === "no_engine" ? "" : ""),
-        canStop: canStopForegroundEngine(engineSnapshot),
-        canRestart: canRestartForegroundEngine(engineSnapshot),
+        canStop: !matchBlocked && canStopForegroundEngine(engineSnapshot),
+        canRestart: !matchBlocked && canRestartForegroundEngine(engineSnapshot),
         failureMessage: visibleEngineFailure?.message ?? null,
         failureKind: visibleEngineFailure?.kind ?? null,
         failureOperation: visibleEngineFailure?.operation ?? null,
         onSelectProfile: (profileId) => void handleSelectSwitcherProfile(profileId),
         onStop: () => {
+          if (matchOwnsWorkspace()) return;
           void stopForegroundEngine().catch((error) => {
             setMessage(error instanceof Error ? error.message : String(error));
           });
         },
         onRestart: () => {
+          if (matchOwnsWorkspace()) return;
           void restartForegroundEngine().catch((error) => {
             setMessage(errorMessage(error));
           });
@@ -3619,14 +3870,14 @@ export function App() {
       showWhiteCandidates={showWhiteCandidates}
       onShowBlackCandidates={setShowBlackCandidates}
       onShowWhiteCandidates={setShowWhiteCandidates}
-      onRestoreWorkspace={workspace.restoreDefaults}
-      workspaceDisabled={workspace.disabled}
+      onRestoreWorkspace={() => { if (!matchOwnsWorkspace()) workspace.restoreDefaults(); }}
+      workspaceDisabled={workspace.disabled || matchBlocked}
       windowGeometryStatus={windowGeometryStatusText}
       windowGeometryCanRetry={Boolean(windowGeometryFailure) || windowGeometry.phase === "unsaved"}
       windowGeometryDisabled={windowGeometryDisabled}
       onResetWindowGeometry={() => void performWindowGeometryAction(resetWindowGeometry)}
       onRetryWindowGeometry={() => void performWindowGeometryAction(retryWindowGeometry)}
-      railVisibilityDisabled={!preferencesLoaded || railVisibilityBusy || departurePending || Boolean(departurePrompt) || workspace.frozen}
+      railVisibilityDisabled={matchBlocked || !preferencesLoaded || railVisibilityBusy || departurePending || Boolean(departurePrompt) || workspace.frozen}
       onRailVisibility={(side, visible) => void handleRailVisibility(side, visible)}
       selectedNodeRunning={selectedNodeRunning}
       wholeGameRunning={wholeGameRunning}
@@ -3674,23 +3925,72 @@ export function App() {
       onPromoteMain={() => void handlePromoteMain()}
       onReturnMain={handleReturnMain}
       onFirstMove={() => handleMoveSelect(0)}
-      onAutoPlay={() => { if (!scoringRef.current && !scoringPendingRef.current) setAutoPlaying((value) => !value); }}
+      onAutoPlay={() => { if (!matchOwnsWorkspace() && !scoringRef.current && !scoringPendingRef.current) setAutoPlaying((value) => !value); }}
       onOverlayMode={setOverlayMode}
       message={recentHistoryError ? `${message} ${recentHistoryError}` : message}
       toPlay={currentPosition.to_play}
     />
+    {matchDialogOpen ? <HumanMatchDialog mode={matchDialogMode} defaults={preferences.matchDefaults} profiles={engineProfiles} engineSnapshot={engineSnapshot} pending={matchBlocked}
+      continuation={matchContinuation?.snapshot.position ?? null} continuationRoot={matchContinuation?.tree}
+      error={matchStartError ?? (matchState?.failure ? `${matchState.failure.kind} · 配置 ${matchState.failure.profile_id ?? "—"} · ${matchState.failed_side ?? "—"} · ${matchState.failure.message}` : null)}
+      onStart={(settings) => void handleStartMatch(settings, matchContinuation, matchDialogMode)} onCancel={() => {
+        if (matchOwnsWorkspace()) void handleStopMatch();
+        else setMatchDialogOpen(false);
+      }} /> : null}
     <div className="workspace-visibility-controls" role="toolbar" aria-label="侧栏显隐">
+    {matchState?.session_id || matchStarting ? <div className="human-match-status" role="region" aria-label="对局状态">
+      <span role="status">{(matchStarting ? matchDialogMode : matchState?.mode) === "pk" ? "PK" : "人机"} · {matchStarting ? "starting" : matchState?.phase} · 轮到 {matchState?.to_play === "white" ? "白" : matchState?.to_play === "black" ? "黑" : "—"} · 本场提交 {matchState?.committed_moves ?? 0}{matchState?.mode === "pk" ? ` / ${matchState.settings?.pk_max_moves ?? "—"}` : ""}</span>
+      {matchState?.mode === "human" ? <span>人类 {matchState.settings?.human_color === "white" ? "白" : "黑"}</span> : null}
+      <span>占用：{matchState?.resources_held ? "是" : "否"}{matchState?.pause_pending ? " · 暂停清理中，暂不可恢复" : ""}{matchState?.resume_pending ? " · 正在按原始配置快照重建 GTP 引擎" : ""}</span>
+      {matchState?.phase === "paused" && matchState.rebuild_sides.length > 0 && !matchState.resume_pending
+        ? <span role="status">{matchState.rebuild_sides.map((side) => side === "white" ? "白方" : "黑方").join("、")} GTP 取步已取消并回收进程；点击恢复将按本场原始配置快照重建新 run，暂停期间的配置修改不生效。</span> : null}
+      <span>Session: {matchState?.session_id ?? "—"} · Run: {matchState?.run_id ?? "—"} · Job: {matchState?.job?.job_id ?? "—"}</span>
+      {matchState?.pk_runs?.map((run, side) => <span key={run.run_id}>{side === 0 ? "黑方" : "白方"}：{run.profile_snapshot.name}{run.adapter_kind === "generic_gtp" ? "（GTP，仅硬截止）" : ""} · 配置 {run.profile_id} · Run {run.run_id}</span>)}
+      {matchState?.end ? <span>结束：{matchState.end}</span> : null}
+      {matchState?.failure ? <span role="alert">{matchState.failure.kind} · 配置 {matchState.failure.profile_id ?? "—"} · {matchState.failed_side ?? "—"} · {matchState.failure.message}</span> : null}
+      {matchState?.mode === "pk" ? <>
+        <button type="button" className="chrome-btn" disabled={matchState.phase !== "playing" || matchState.pause_pending || matchState.resume_pending || Boolean(matchControlPending) || matchStopPending} onClick={() => void handlePkControl("pause")}>暂停 PK</button>
+        <button type="button" className="chrome-btn" disabled={matchState.phase !== "paused" || matchState.pause_pending || matchState.resume_pending || Boolean(matchControlPending) || matchStopPending} onClick={() => void handlePkControl("resume")}>恢复 PK</button>
+      </> : matchState?.mode === "human" ? <>
+        <label>
+          <input type="checkbox" aria-label="本场候选分析" aria-describedby="human-match-analysis-hint"
+            checked={Boolean(matchState.analysis.policy && matchState.analysis.policy !== "off")}
+            disabled={matchState.phase !== "playing" || !matchState.analysis.supported || matchAnalysisPending || matchStopPending}
+            onChange={(event) => void handleMatchAnalysisPolicy(event.target.checked ? "both" : "off")} />
+          本场候选分析
+        </label>
+        <label>分析回合
+          <select aria-label="本场分析回合" aria-describedby="human-match-analysis-hint"
+            value={matchState.analysis.policy === "off" ? "both" : matchState.analysis.policy}
+            disabled={matchState.phase !== "playing" || !matchState.analysis.supported || matchState.analysis.policy === "off" || matchAnalysisPending || matchStopPending}
+            onChange={(event) => {
+              const policy = event.target.value;
+              if (policy === "human_turn" || policy === "engine_turn" || policy === "both") void handleMatchAnalysisPolicy(policy);
+            }}>
+            <option value="human_turn">人类回合</option>
+            <option value="engine_turn">引擎回合</option>
+            <option value="both">双方回合</option>
+          </select>
+        </label>
+        <span id="human-match-analysis-hint">{matchState.analysis.supported
+          ? "仅本场有效，不改变普通复盘偏好。引擎正在取步时更改策略，分析从下一符合策略的回合生效；行棋角色与预算不变。"
+          : "本场未验证候选分析能力；已合格 GTP 仅支持取步，不提供候选、visits 或 ownership 分析。"}</span>
+        <button type="button" className="chrome-btn" disabled={!humanTurn} onClick={() => void handleHumanAction({ kind: "play", vertex: "pass" })}>停一手</button>
+        <button type="button" className="chrome-btn" disabled={!humanTurn} onClick={() => void handleHumanAction({ kind: "resign" })}>认输</button>
+      </> : null}
+      <button type="button" className="chrome-btn" disabled={!matchBlocked || matchStopPending} onClick={() => void handleStopMatch()}>停止</button>
+    </div> : null}
       <button ref={railRestoreRef} type="button" aria-pressed={preferences.workspaceVisibility.left}
-        disabled={!preferencesLoaded || departurePending || Boolean(departurePrompt) || workspace.frozen}
+        disabled={matchBlocked || !preferencesLoaded || departurePending || Boolean(departurePrompt) || workspace.frozen}
         onClick={() => void handleRailVisibility("left", !preferences.workspaceVisibility.left)}>左侧栏</button>
       <button type="button" aria-pressed={preferences.workspaceVisibility.right}
-        disabled={!preferencesLoaded || departurePending || Boolean(departurePrompt) || workspace.frozen}
+        disabled={matchBlocked || !preferencesLoaded || departurePending || Boolean(departurePrompt) || workspace.frozen}
         onClick={() => void handleRailVisibility("right", !preferences.workspaceVisibility.right)}>右侧栏</button>
       <details aria-label="当前 run 能力"><summary>当前 run 能力</summary><p>{verifiedEngineCapabilitiesLabel(engineSnapshot)}</p></details>
       {railVisibilityBusy ? <span role="status">正在保存侧栏…</span> : null}
       {railVisibilityError ? <span role="alert">{railVisibilityError}</span> : null}
     </div>
-    <Workspace shares={workspace.shares} onSharesChange={workspace.setShares} disabled={workspace.disabled}
+    <Workspace shares={workspace.shares} onSharesChange={(shares) => { if (!matchOwnsWorkspace()) workspace.setShares(shares); }} disabled={workspace.disabled || matchBlocked}
       visibility={preferences.workspaceVisibility}>
       <aside ref={leftRailRef} className="rail" hidden={!preferences.workspaceVisibility.left}>
         <div className="rail-block">
@@ -3818,7 +4118,7 @@ export function App() {
       preview={analysisScopePreview}
       task={analysisTask}
       canRun={nativeRuntime && taskEngineReady && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending && !departurePending && !departurePrompt}
-      busy={analysisTaskRequestPending}
+      busy={matchBlocked || analysisTaskRequestPending}
       error={analysisTaskError}
       onDraftChange={handleAnalysisScopeDraftChange}
       onPreview={() => void handlePreviewAnalysisScope()}
@@ -3833,14 +4133,15 @@ export function App() {
     </div>
     </div>
     <BottomBar
+      matchBlocked={matchBlocked}
       currentMove={reviewIndex}
       maxMove={reviewMax}
       onMove={handleMoveSelect}
-      canParent={canParent}
-      canNext={canNext}
-      canPrevSibling={canPrevSibling}
-      canNextSibling={canNextSibling}
-      canRemoveVariation={canRemoveVariation}
+      canParent={!matchBlocked && canParent}
+      canNext={!matchBlocked && canNext}
+      canPrevSibling={!matchBlocked && canPrevSibling}
+      canNextSibling={!matchBlocked && canNextSibling}
+      canRemoveVariation={!matchBlocked && canRemoveVariation}
       siblingLabel={siblingLabel}
       nativeUnavailable={nativeRuntime ? undefined : nativeCurrentGameUnavailable}
       onParent={handleParent}
@@ -3867,7 +4168,7 @@ export function App() {
       onRefresh={() => void handleParseSgf()}
       onClearBoard={() => void handleNewGame()}
       onEstimate={() => setOverlayMode("ownership")}
-      onAutoPlay={() => { if (!scoringRef.current && !scoringPendingRef.current) setAutoPlaying((value) => !value); }}
+      onAutoPlay={() => { if (!matchOwnsWorkspace() && !scoringRef.current && !scoringPendingRef.current) setAutoPlaying((value) => !value); }}
       autoPlaying={autoPlaying}
       showCoordinates={showCoordinates}
       showMoveNumbers={showMoveNumbers}
@@ -3904,18 +4205,18 @@ export function App() {
               ref={importFileInputRef}
               type="file"
               accept=".sgf,.txt,.gib,application/x-go-sgf,text/plain,application/octet-stream"
-              disabled={false}
+              disabled={matchBlocked}
               onClick={handleImportPickerOpen}
               onChange={(event) => void handleImportFile(event.target.files?.[0] ?? null)}
             />
           </label>
-          <button type="button" onClick={() => void loadSample()} disabled={false}>载入示例</button>
+          <button type="button" onClick={() => void loadSample()} disabled={matchBlocked}>载入示例</button>
         </div>
       </div> : null}
-      {sheet === "sync" ? <ProviderPanel disabled={false} onImport={handleProviderImport} /> : null}
+      {sheet === "sync" ? <ProviderPanel disabled={matchBlocked} onImport={handleProviderImport} /> : null}
       <div hidden={sheet !== "engine"}>
         <EngineSetupPanel
-          disabled={false}
+          disabled={matchBlocked}
           engineSnapshot={engineSnapshot}
           onProfilesChange={setEngineProfiles}
         />
@@ -3927,12 +4228,12 @@ export function App() {
         disabled={!preferencesLoaded || continuousActionPending || workspace.frozen}
         scoreLeadAvailable={chartModel.scoreAvailable}
         onChange={(nextPreferences) => void handlePreferencesChange(nextPreferences)}
-        onRestoreWorkspace={workspace.restoreDefaults}
-        workspaceDisabled={workspace.disabled}
+        onRestoreWorkspace={() => { if (!matchOwnsWorkspace()) workspace.restoreDefaults(); }}
+        workspaceDisabled={workspace.disabled || matchBlocked}
         windowGeometryStatus={windowGeometryStatusText}
         windowGeometryDisabled={windowGeometryDisabled}
         onResetWindowGeometry={() => void performWindowGeometryAction(resetWindowGeometry)}
-        railVisibilityDisabled={!preferencesLoaded || railVisibilityBusy || departurePending || Boolean(departurePrompt) || workspace.frozen}
+        railVisibilityDisabled={matchBlocked || !preferencesLoaded || railVisibilityBusy || departurePending || Boolean(departurePrompt) || workspace.frozen}
         onRailVisibility={(side, visible) => void handleRailVisibility(side, visible)}
       /> : null}
     </section>
@@ -4077,6 +4378,25 @@ function applyPreferencePatches(base: AppPreferences, patches: Array<Partial<App
     (current, patch) => normalizeAppPreferences({ ...current, ...patch }),
     base
   );
+}
+
+function currentMatchAnalysisFrame(match: MatchSnapshotDto | null, current: CurrentGameResultDto | null): AnalysisFrameDto | undefined {
+  const analysis = match?.analysis;
+  const envelope = analysis?.frame;
+  if (!match || match.mode !== "human" || match.phase !== "playing" || match.end || match.failure || !analysis?.supported || !envelope || !current
+    || !match.settings || !match.to_play || analysis.policy === "off") return undefined;
+  const human = match.to_play === match.settings.human_color;
+  if (analysis.policy !== "both" && analysis.policy !== (human ? "human_turn" : "engine_turn")) return undefined;
+  const token = envelope.turn;
+  const job = envelope.job;
+  const activeJob = match.job;
+  if (envelope.epoch !== analysis.epoch || token.session_id !== match.session_id || token.turn !== match.turn
+    || token.generation !== current.generation || !samePath(token.node_path, current.selected_path)
+    || job.run_id !== match.run_id || envelope.frame.job_id !== job.job_id
+    || job.generation !== token.generation || !samePath(job.node_path, token.node_path)
+    || (activeJob && (activeJob.job_id !== job.job_id || activeJob.run_id !== job.run_id
+      || activeJob.generation !== job.generation || !samePath(activeJob.node_path, job.node_path)))) return undefined;
+  return envelope.frame;
 }
 
 function applyPreferencesToFrame(frame: AnalysisFrameDto | undefined, preferences: AppPreferences): AnalysisFrameDto | undefined {

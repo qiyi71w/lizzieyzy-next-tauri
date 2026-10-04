@@ -44,13 +44,43 @@ impl PreferencesState {
         preferences.window_geometry = latest.window_geometry;
         preferences.workspace_visibility = latest.workspace_visibility;
         preferences.main_window_always_on_top = latest.main_window_always_on_top;
-        let saved = app_preferences::save_to_path(path, preferences)?;
-        manager.set_continuous_preferences(saved.continuous_analysis_enabled, saved.continuous_budget)?;
-        *committed = Some(AppPreferencesLoadResultDto {
-            preferences: saved.clone(),
-            recovery: None,
-        });
-        Ok(saved)
+        preferences.match_defaults = latest.match_defaults.clone();
+        manager.commit_continuous_preferences(
+            preferences.continuous_analysis_enabled,
+            preferences.continuous_budget,
+            || {
+                let saved = app_preferences::save_to_path(path, preferences)?;
+                *committed = Some(AppPreferencesLoadResultDto {
+                    preferences: saved.clone(),
+                    recovery: None,
+                });
+                Ok(saved)
+            },
+        )
+    }
+
+    /// Persists the match defaults derived from the saved ones, then installs the match with the
+    /// defaults actually written. Nothing is installed when the write fails.
+    pub(crate) fn commit_match<T>(
+        &self,
+        path: &Path,
+        manager: &ForegroundEngineManager,
+        owner: &str,
+        defaults: impl FnOnce(&app_model::MatchDefaultsDto) -> app_model::MatchDefaultsDto,
+        install: impl FnOnce(&app_model::MatchDefaultsDto) -> T,
+    ) -> Result<T, app_model::EngineFailureDto> {
+        // Same lock order as preference saving: preferences, then manager.
+        let mut committed = self.0.lock().expect("preferences transaction");
+        manager.commit_reserved_match(owner, || {
+            let mut preferences = committed.as_ref()
+                .ok_or("Preferences must finish loading before starting a match.")?
+                .preferences.clone();
+            preferences.match_defaults = defaults(&preferences.match_defaults);
+            let saved = app_preferences::save_to_path(path, preferences)?;
+            let installed = install(&saved.match_defaults);
+            *committed = Some(AppPreferencesLoadResultDto { preferences: saved, recovery: None });
+            Ok(installed)
+        })
     }
 
     pub fn update_workspace_visibility(
@@ -191,15 +221,21 @@ impl PreferencesState {
                     .selected_node_job
                     .is_some_and(|job| job.mode == AnalysisJobModeDto::Finite);
                 preferences.continuous_analysis_enabled = start;
-                preferences = app_preferences::save_to_path(path, preferences)?;
-                manager.set_continuous_preferences(start, preferences.continuous_budget)?;
+                preferences = manager.commit_continuous_preferences(
+                    start,
+                    preferences.continuous_budget,
+                    || {
+                        let saved = app_preferences::save_to_path(path, preferences)?;
+                        *committed = Some(AppPreferencesLoadResultDto {
+                            preferences: saved.clone(),
+                            recovery: None,
+                        });
+                        Ok(saved)
+                    },
+                )?;
                 if start && !finite {
                     manager.authorize_continuous_start();
                 }
-                *committed = Some(AppPreferencesLoadResultDto {
-                    preferences: preferences.clone(),
-                    recovery: None,
-                });
             }
         }
         Ok(preferences)

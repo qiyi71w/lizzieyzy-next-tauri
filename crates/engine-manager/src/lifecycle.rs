@@ -28,6 +28,7 @@ pub use app_model::AnalysisJobEventDto;
 pub use app_model::AnalysisJobLaneDto as AnalysisJobLane;
 
 mod game_move;
+mod match_reservation;
 pub use game_move::{GameMoveHandle, GameMoveRequest};
 
 pub trait AnalysisJobCancel: Send + Sync {
@@ -221,6 +222,7 @@ struct ManagerState {
     operation_kind: EngineOperationDto,
     live: Option<LiveEngine>,
     candidate: Option<LiveEngine>,
+    match_residents: Vec<LiveEngine>,
     switch_seq: u64,
     last_activity: Instant,
     jobs: Vec<RegisteredJob>,
@@ -238,6 +240,8 @@ struct ManagerState {
     game_move: Option<game_move::MoveSlot>,
     game_move_publication: Option<app_model::GameMoveJobDto>,
     gtp_command_seq: u32,
+    match_reservation: Option<match_reservation::MatchReservation>,
+    retiring: Vec<(EngineRunDto, Arc<Mutex<LiveEngine>>)>,
 }
 
 struct Inner {
@@ -264,6 +268,7 @@ impl ForegroundEngineManager {
                     operation_kind: EngineOperationDto::Start,
                     live: None,
                     candidate: None,
+                    match_residents: Vec::new(),
                     switch_seq: 0,
                     jobs: Vec::new(),
                     analysis_task: None,
@@ -281,6 +286,8 @@ impl ForegroundEngineManager {
                     game_move: None,
                     game_move_publication: None,
                     gtp_command_seq: 100,
+                    match_reservation: None,
+                    retiring: Vec::new(),
                 }),
             }),
         }
@@ -304,13 +311,26 @@ impl ForegroundEngineManager {
         enabled: bool,
         budget: ContinuousAnalysisBudgetDto,
     ) -> Result<(), String> {
+        self.commit_continuous_preferences(enabled, budget, || Ok(()))
+    }
+
+    /// Holds admission through persistence and intent installation. The callback must not
+    /// call back into the manager; acquire any preference lock before entering this method.
+    pub fn commit_continuous_preferences<T>(
+        &self,
+        enabled: bool,
+        budget: ContinuousAnalysisBudgetDto,
+        persist: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
         budget.validate()?;
-        {
+        let saved = {
             let mut state = self.lock();
             let budget_changed = state.continuous_budget != budget;
             if state.continuous_intent == Some(enabled) && !budget_changed {
-                return Ok(());
+                return persist();
             }
+            match_reservation::require_unreserved(&state).map_err(|error| error.message)?;
+            let saved = persist()?;
             state.continuous_intent = Some(enabled);
             state.continuous_budget = budget;
             if budget_changed {
@@ -330,15 +350,17 @@ impl ForegroundEngineManager {
                 let _ = self.request_job_stop_locked(&mut state, &job.run_id, &job.job_id, disposition);
             }
             publish_snapshot(&mut state);
-        }
+            saved
+        };
         self.reconcile_continuous();
-        Ok(())
+        Ok(saved)
     }
 
     pub fn follow_continuous_position(&self, mut request: SelectedNodeJobRequest) {
         request.mode = AnalysisJobModeDto::Continuous;
         let cancel = {
             let mut state = self.lock();
+            if state.match_reservation.is_some() { return; }
             let changed = state.continuous_target.as_ref().is_none_or(|old| {
                 !same_position(
                     old.generation,
@@ -375,6 +397,7 @@ impl ForegroundEngineManager {
     pub fn clear_continuous_position(&self) {
         let cancel = {
             let mut state = self.lock();
+            if state.match_reservation.is_some() { return; }
             let changed = state.continuous_target.take().is_some();
             if changed {
                 clear_weak_holds_for_new_position(&mut state);
@@ -395,6 +418,7 @@ impl ForegroundEngineManager {
         swing_criteria: Option<&AnalysisSwingCriteriaDto>,
     ) -> Result<(), EngineFailureDto> {
         let state = self.lock();
+        match_reservation::require_unreserved(&state)?;
         let run = current_admitting_run(&state.phase).ok_or_else(|| {
             continuous_invalid_state(&state, "Analysis task requires a Ready Foreground Engine Run")
         })?;
@@ -403,6 +427,7 @@ impl ForegroundEngineManager {
 
     pub fn continuous_primary_action(&self) -> Result<ContinuousPrimaryAction, EngineFailureDto> {
         let state = self.lock();
+        match_reservation::require_unreserved(&state)?;
         if state.continuous_departing
             || state.finite_admission_pending
             || matches!(state.phase, Phase::Stopping(_))
@@ -448,6 +473,7 @@ impl ForegroundEngineManager {
     pub fn authorize_continuous_start(&self) {
         {
             let mut state = self.lock();
+            if state.match_reservation.is_some() { return; }
             if state.continuous_departing
                 || state.finite_admission_pending
                 || current_selected_job(&state).is_some_and(|job| job.state == AnalysisJobStateDto::Stopping)
@@ -485,6 +511,7 @@ impl ForegroundEngineManager {
 
     pub fn begin_continuous_departure(&self) {
         let mut state = self.lock();
+        if state.match_reservation.is_some() { return; }
         if !state.continuous_departing {
             state.continuous_departing = true;
             state.game_move_publication = None;
@@ -502,6 +529,7 @@ impl ForegroundEngineManager {
     pub fn finish_continuous_departure(&self, committed_replacement: bool) {
         {
             let mut state = self.lock();
+            if state.match_reservation.is_some() { return; }
             state.continuous_departing = false;
             if committed_replacement {
                 clear_resumable_holds(&mut state);
@@ -524,6 +552,7 @@ impl ForegroundEngineManager {
     }
 
     pub fn apply_autoload(&self) -> Result<(), EngineFailureDto> {
+        match_reservation::require_unreserved(&self.lock())?;
         let Some(profile_id) = self.inner.catalog.autoload_profile_id() else {
             return Ok(());
         };
@@ -534,6 +563,7 @@ impl ForegroundEngineManager {
         operation_kind: EngineOperationDto,
         profile_id: &str,
     ) -> Result<(), EngineFailureDto> {
+        match_reservation::require_unreserved(&self.lock())?;
         let saved = match self.inner.catalog.get(profile_id) {
             Some(saved) => saved,
             None => {
@@ -552,6 +582,7 @@ impl ForegroundEngineManager {
 
         let (operation, run) = {
             let mut state = self.lock();
+            match_reservation::require_unreserved(&state)?;
             if !matches!(state.phase, Phase::NoEngine { .. }) {
                 return Err(failure(
                     operation_kind,
@@ -588,6 +619,10 @@ impl ForegroundEngineManager {
     }
 
     pub fn teardown(&self) -> Result<(), EngineFailureDto> {
+        if let Some(owner) = self.match_reservation_owner() {
+            self.stop_reserved_match(&owner)?;
+        }
+        self.reap_retiring_runs()?;
         let Some(operation) = self.begin_stop(EngineOperationDto::Teardown)? else {
             return Ok(());
         };
@@ -599,6 +634,7 @@ impl ForegroundEngineManager {
     pub fn restart(&self) -> Result<(), EngineFailureDto> {
         let (operation, profile_id) = {
             let mut state = self.lock();
+            match_reservation::require_unreserved(&state)?;
             let run = match &state.phase {
                 Phase::Ready(run) | Phase::Error { run, .. } => run.clone(),
                 _ => {
@@ -651,6 +687,7 @@ impl ForegroundEngineManager {
     }
 
     pub fn switch_to(&self, profile_id: &str) -> Result<(), EngineFailureDto> {
+        match_reservation::require_unreserved(&self.lock())?;
         let saved = self.inner.catalog.get(profile_id).ok_or_else(|| {
             failure(
                 EngineOperationDto::Switch,
@@ -666,6 +703,7 @@ impl ForegroundEngineManager {
         }
         let (operation, candidate, switch_id) = {
             let mut state = self.lock();
+            match_reservation::require_unreserved(&state)?;
             game_move::require_idle_move(&state)?;
             let primary = match &state.phase {
                 Phase::Ready(run) => run.clone(),
@@ -713,6 +751,7 @@ impl ForegroundEngineManager {
         cancel: Arc<dyn AnalysisJobCancel>,
     ) -> Result<String, EngineFailureDto> {
         let mut state = self.lock();
+        match_reservation::require_unreserved(&state)?;
         game_move::require_idle_move(&state)?;
         let run = admitting_run(&state.phase, run_id).ok_or_else(|| {
             continuous_invalid_state(
@@ -1055,6 +1094,7 @@ impl ForegroundEngineManager {
         let cancel = AnalysisCancelToken::new();
         let (task, bound_query) = {
             let mut state = self.lock();
+            match_reservation::require_unreserved(&state)?;
             game_move::require_idle_move(&state)?;
             let run = match admitting_run(&state.phase, &request.run_id) {
                 Some(run) => run,
@@ -1209,6 +1249,7 @@ impl ForegroundEngineManager {
         task_id: &str,
     ) -> Result<AnalysisTaskDto, EngineFailureDto> {
         let mut state = self.lock();
+        match_reservation::require_unreserved(&state)?;
         let task = state
             .analysis_task
             .as_ref()
@@ -1244,6 +1285,7 @@ impl ForegroundEngineManager {
     ) -> Result<AnalysisTaskDto, EngineFailureDto> {
         let (task, jsonl) = {
             let mut state = self.lock();
+            match_reservation::require_unreserved(&state)?;
             let task = state
                 .analysis_task
                 .as_ref()
@@ -1460,6 +1502,7 @@ impl ForegroundEngineManager {
 
     pub fn cancel_job(&self, run_id: &str, job_id: &str) -> Result<(), EngineFailureDto> {
         let mut state = self.lock();
+        match_reservation::require_unreserved(&state)?;
         if state.analysis_task.as_ref().is_some_and(|task| {
             task.run_id == run_id && task.job_id == job_id && task.state == AnalysisTaskStateDto::Paused
         }) {
@@ -1581,6 +1624,7 @@ impl ForegroundEngineManager {
 
     pub fn set_capability_snapshot_for_tests(&self, snapshot: Option<EngineCapabilitySnapshotDto>) {
         let mut state = self.lock();
+        if state.match_reservation.is_some() { return; }
         if let Phase::Ready(run) = &mut state.phase {
             run.capability_snapshot = snapshot;
         }
@@ -1705,6 +1749,7 @@ impl ForegroundEngineManager {
     fn reconcile_continuous(&self) {
         let work = {
             let mut state = self.lock();
+            if state.match_reservation.is_some() { return; }
             if state.continuous_departing
                 || state.finite_admission_pending
                 || state.game_move.is_some()
@@ -1799,6 +1844,7 @@ impl ForegroundEngineManager {
 
     pub fn assert_profile_deletable(&self, profile_id: &str) -> Result<(), EngineFailureDto> {
         let state = self.lock();
+        match_reservation::assert_reserved_profile_deletable(&state, profile_id)?;
         let blocked = match &state.phase {
             Phase::Starting(run) | Phase::Ready(run) | Phase::Stopping(run) => Some(run),
             Phase::Switching {
@@ -1830,6 +1876,7 @@ impl ForegroundEngineManager {
 
     fn begin_stop(&self, _operation_kind: EngineOperationDto) -> Result<Option<u64>, EngineFailureDto> {
         let mut state = self.lock();
+        match_reservation::require_unreserved(&state)?;
         let run = match &state.phase {
             Phase::NoEngine { .. } => return Ok(None),
             Phase::Starting(run) | Phase::Ready(run) | Phase::Stopping(run) => run.clone(),
@@ -1935,7 +1982,7 @@ impl Inner {
                 None,
             )
         })?;
-        let mut stdin = child.stdin.take().ok_or_else(|| {
+        let stdin = child.stdin.take().ok_or_else(|| {
             failure(
                 kind,
                 EngineFailureKind::Start,
@@ -1976,6 +2023,31 @@ impl Inner {
         } else {
             spawn_stderr_reader(stderr)
         };
+        {
+            let mut state = self.lock();
+            let process_id = child.id();
+            let engine = LiveEngine {
+                child,
+                stdin: Arc::new(Mutex::new(Some(stdin))),
+                stdout_rx: Some(stdout_rx),
+                stderr_rx,
+                run_id: run.run_id.clone(),
+                process_id,
+            };
+            if state.operation != operation {
+                // Keep even a late-spawned child manager-owned until its exit is confirmed.
+                state.retiring.push((run.clone(), Arc::new(Mutex::new(engine))));
+                drop(state);
+                let manager = ForegroundEngineManager { inner: Arc::clone(self) };
+                thread::spawn(move || { let _ = manager.reap_retiring_runs(); });
+                return Ok(());
+            }
+            if as_candidate {
+                state.candidate = Some(engine);
+            } else {
+                state.live = Some(engine);
+            }
+        }
         let probe_id = format!("lifecycle-readiness-{}", run.run_id);
         if !generic {
             let query = AnalysisQuery {
@@ -1996,9 +2068,14 @@ impl Inner {
             let result = query
                 .to_jsonl()
                 .map_err(|error| error.to_string())
-                .and_then(|jsonl| write_jsonl(&mut stdin, &jsonl).map_err(|error| error.to_string()));
+                .and_then(|jsonl| {
+                    let stdin = engine_stdin(&self.lock(), &run.run_id)
+                        .ok_or_else(|| "readiness process was retired".to_owned())?;
+                    let mut guard = stdin.lock().map_err(|_| "engine stdin lock poisoned".to_owned())?;
+                    let input = guard.as_mut().ok_or_else(|| "engine stdin closed".to_owned())?;
+                    write_jsonl(input, &jsonl).map_err(|error| error.to_string())
+                });
             if let Err(error) = result {
-                let _ = kill_timed_out_child(&mut child);
                 return Err(failure(
                     kind,
                     EngineFailureKind::Protocol,
@@ -2010,28 +2087,6 @@ impl Inner {
             }
         }
 
-        {
-            let mut state = self.lock();
-            if state.operation != operation {
-                drop(state);
-                let _ = kill_timed_out_child(&mut child);
-                return Ok(());
-            }
-            let process_id = child.id();
-            let engine = LiveEngine {
-                child,
-                stdin: Arc::new(Mutex::new(Some(stdin))),
-                stdout_rx: Some(stdout_rx),
-                stderr_rx,
-                run_id: run.run_id.clone(),
-                process_id,
-            };
-            if as_candidate {
-                state.candidate = Some(engine);
-            } else {
-                state.live = Some(engine);
-            }
-        }
 
         let gtp = if generic {
             let Some(facts) = self.await_gtp_readiness(operation, run, as_candidate)? else {
@@ -2064,7 +2119,22 @@ impl Inner {
             gtp,
         };
         if as_candidate {
-            self.promote_candidate(operation, run, capabilities);
+            let mut state = self.lock();
+            if state.match_reservation.is_some() {
+                if state.operation == operation {
+                    if let Some(reservation) = state.match_reservation.as_mut() {
+                        if !reservation.sealed {
+                            if let Some(ready) = reservation.runs.iter_mut().find(|ready| ready.run_id == run.run_id) {
+                                ready.capability_snapshot = Some(capabilities);
+                                reservation.ready = reservation.runs.iter().all(|run| run.capability_snapshot.is_some());
+                            }
+                        }
+                    }
+                }
+            } else {
+                drop(state);
+                self.promote_candidate(operation, run, capabilities);
+            }
         } else {
             self.admit_ready(operation, run, capabilities);
         }
@@ -2654,10 +2724,10 @@ impl Inner {
             thread::sleep(Duration::from_millis(30));
             let status = {
                 let mut state = self.lock();
-                let Some(live) = state.live.as_mut() else {
+                let Some(live) = owned_live_mut(&mut state, &run_id) else {
                     return;
                 };
-                if live.run_id != run_id || live.process_id != process_id {
+                if live.process_id != process_id {
                     return;
                 }
                 match live.child.try_wait() {
@@ -2675,10 +2745,13 @@ impl Inner {
 
     fn handle_unexpected_exit(&self, operation: u64, run_id: &str, process_id: u32, exit_code: Option<i32>) {
         let mut state = self.lock();
-        let Some(live) = state.live.as_ref() else {
+        let Some(live) = owned_live(&state, run_id) else {
             return;
         };
-        if live.run_id != run_id || live.process_id != process_id {
+        if live.process_id != process_id {
+            return;
+        }
+        if match_reservation::handle_reserved_exit(&mut state, run_id, exit_code) {
             return;
         }
         match &state.phase {
@@ -2748,14 +2821,10 @@ impl Inner {
         publish_snapshot(state);
         publish_event(state, ForegroundEngineEventDto::Failure { failure: published });
     }
+    /// Match residents are owned outside `live`, so ownership, not the primary slot, keeps the pump.
     fn pump_gtp_stdout(self: Arc<Self>, run_id: String, stdout_rx: Receiver<io::Result<Option<String>>>) {
         loop {
-            if !self
-                .lock()
-                .live
-                .as_ref()
-                .is_some_and(|live| live.run_id == run_id)
-            {
+            if owned_live(&self.lock(), &run_id).is_none() {
                 return;
             }
             let (kind, message) = match stdout_rx.recv_timeout(Duration::from_millis(50)) {
@@ -2775,6 +2844,10 @@ impl Inner {
                 }
             };
             let mut state = self.lock();
+            if match_reservation::handle_reserved_stdout_failure(&mut state, &run_id,
+                Instant::now() + self.config.stop_drain_timeout, kind, &message) {
+                return;
+            }
             let Some(run) = admitting_run(&state.phase, &run_id) else {
                 return;
             };
@@ -2822,8 +2895,7 @@ impl Inner {
             self.check_job_deadlines(&run_id);
             let owned = {
                 let state = self.lock();
-                state.live.as_ref().is_some_and(|live| live.run_id == run_id)
-                    || state.candidate.as_ref().is_some_and(|live| live.run_id == run_id)
+                owned_live(&state, &run_id).is_some()
             };
             if !owned {
                 return;
@@ -2838,7 +2910,14 @@ impl Inner {
                     }
                 }
                 Ok(Ok(None)) | Ok(Err(_)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    thread::sleep(Duration::from_millis(50))
+                    let mut state = self.lock();
+                    if match_reservation::handle_reserved_stdout_failure(&mut state, &run_id,
+                        Instant::now() + self.config.stop_drain_timeout, EngineFailureKind::ProcessExit,
+                        "The owned match engine stdout closed or failed unexpectedly.") {
+                        return;
+                    }
+                    drop(state);
+                    thread::sleep(Duration::from_millis(50));
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
@@ -3378,6 +3457,7 @@ impl Inner {
 
     fn check_job_deadlines(self: &Arc<Self>, run_id: &str) {
         let state = self.lock();
+        if state.match_reservation.as_ref().is_some_and(|reservation| !reservation.committed) { return; }
         if admitting_run(&state.phase, run_id).is_none() {
             return;
         }
@@ -3425,6 +3505,10 @@ impl Inner {
             None,
             None,
         );
+        if state.match_reservation.as_ref().is_some_and(|reservation| !reservation.committed) {
+            state.continuous_safety_hold = true;
+            return published;
+        }
         let Some(run) = admitting_run(&state.phase, run_id) else {
             return published;
         };
@@ -4205,6 +4289,7 @@ fn validate_continuous_run_capabilities(
 }
 
 fn validate_continuous_capabilities(state: &ManagerState) -> Result<(), EngineFailureDto> {
+    match_reservation::require_unreserved(state)?;
     let run = current_admitting_run(&state.phase).ok_or_else(|| {
         continuous_invalid_state(
             state,
@@ -4218,6 +4303,7 @@ fn validate_selected_admission(
     state: &ManagerState,
     request: &SelectedNodeJobRequest,
 ) -> Result<EngineRunDto, EngineFailureDto> {
+    match_reservation::require_unreserved(state)?;
     game_move::require_idle_move(state)?;
     let run_id = request.run_id.as_str();
     if state.continuous_departing {
@@ -4380,18 +4466,43 @@ fn admitting_run(phase: &Phase, run_id: &str) -> Option<EngineRunDto> {
     }
 }
 
+fn owned_live<'a>(state: &'a ManagerState, run_id: &str) -> Option<&'a LiveEngine> {
+    state.live.iter().chain(state.candidate.iter()).chain(state.match_residents.iter())
+        .find(|live| live.run_id == run_id)
+}
+
+fn owned_live_mut<'a>(state: &'a mut ManagerState, run_id: &str) -> Option<&'a mut LiveEngine> {
+    state.live.iter_mut().chain(state.candidate.iter_mut()).chain(state.match_residents.iter_mut())
+        .find(|live| live.run_id == run_id)
+}
+
+fn take_owned_live(state: &mut ManagerState, run_id: &str) -> Option<LiveEngine> {
+    if state.live.as_ref().is_some_and(|live| live.run_id == run_id) {
+        state.live.take()
+    } else if state.candidate.as_ref().is_some_and(|live| live.run_id == run_id) {
+        state.candidate.take()
+    } else {
+        state.match_residents.iter().position(|live| live.run_id == run_id)
+            .map(|index| state.match_residents.remove(index))
+    }
+}
+
+fn ready_move_run(state: &ManagerState, run_id: &str) -> Option<EngineRunDto> {
+    if let Some(reservation) = state.match_reservation.as_ref() {
+        if reservation.committed && !reservation.sealed {
+            return reservation.runs.iter().find(|run| run.run_id == run_id)
+                .filter(|_| owned_live(state, run_id).is_some()).cloned();
+        }
+        return None;
+    }
+    match &state.phase {
+        Phase::Ready(run) if run.run_id == run_id => Some(run.clone()),
+        _ => None,
+    }
+}
+
 fn engine_stdin(state: &ManagerState, run_id: &str) -> Option<Arc<Mutex<Option<ChildStdin>>>> {
-    if let Some(live) = state.live.as_ref() {
-        if live.run_id == run_id {
-            return Some(live.stdin.clone());
-        }
-    }
-    if let Some(live) = state.candidate.as_ref() {
-        if live.run_id == run_id {
-            return Some(live.stdin.clone());
-        }
-    }
-    None
+    owned_live(state, run_id).map(|live| live.stdin.clone())
 }
 
 fn close_live_stdin(live: &LiveEngine) {

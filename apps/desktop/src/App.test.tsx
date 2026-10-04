@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 
-import { StrictMode, act } from "react";
+import { StrictMode, act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnalysisFrameDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureAdmissionDto, FileActivationDeliveryDto, FileActivationRejectionDto, GameDto, MainWindowPinStatusDto, NodePath, RecoveryProtectionDto, RecoveryStartupDto } from "./domain/types";
 import type { AppPreferences } from "./domain/preferences";
 import type { WorkspaceSharesDto } from "./domain/types";
 import type { WindowGeometryStatusDto } from "./domain/types";
+import type { EngineProfileRecordDto, HumanMatchActionDto, HumanMatchStartDto, MatchAnalysisPolicyDto, MatchTurnDto, MatchUpdateDto } from "./domain/types";
 
 const currentGameFixture = vi.hoisted(() => vi.fn());
 const backend = vi.hoisted(() => ({
@@ -96,6 +97,20 @@ vi.mock("./api/backend", () => ({
   nativeCurrentGameUnavailable: "Native current-game commands require the Tauri desktop runtime."
 }));
 
+const matchApi = vi.hoisted(() => ({
+  humanMatchSnapshot: vi.fn<() => Promise<MatchUpdateDto>>(),
+  humanMatchStart: vi.fn<(request: HumanMatchStartDto) => Promise<MatchUpdateDto>>(),
+  humanMatchAction: vi.fn<(turn: MatchTurnDto, action: HumanMatchActionDto) => Promise<MatchUpdateDto>>(),
+  humanMatchAnalysisPolicy: vi.fn<(turn: MatchTurnDto, policy: MatchAnalysisPolicyDto) => Promise<MatchUpdateDto>>(),
+  humanMatchStop: vi.fn<(sessionId: string) => Promise<MatchUpdateDto>>(),
+  pkMatchStart: vi.fn<(request: HumanMatchStartDto) => Promise<MatchUpdateDto>>(),
+  pkMatchPause: vi.fn<(sessionId: string) => Promise<MatchUpdateDto>>(),
+  pkMatchResume: vi.fn<(sessionId: string) => Promise<MatchUpdateDto>>(),
+  subscribeHumanMatch: vi.fn<(listener: (update: MatchUpdateDto) => void) => Promise<() => void>>()
+}));
+vi.mock("./api/match", () => ({ ...matchApi, nativeMatchUnavailable: "人机新局仅在桌面运行时可用。" }));
+let matchListener: ((update: MatchUpdateDto) => void) | undefined;
+
 const preferencesApi = vi.hoisted(() => ({
   loadAppPreferences: vi.fn<() => Promise<{ preferences: AppPreferences; recovery?: { message: string } }>>(() => Promise.reject(new Error("preferences unavailable in test"))),
   updateWorkspaceShares: vi.fn<(shares: WorkspaceSharesDto | null) => Promise<unknown>>(async () => undefined),
@@ -121,7 +136,13 @@ vi.mock("./api/mainWindowPin", () => mainWindowPinApi);
 
 vi.mock("./api/preferences", () => preferencesApi);
 
-vi.mock("./components/EngineSetupPanel", () => ({ EngineSetupPanel: () => null }));
+const engineSetupProfiles = vi.hoisted(() => ({ current: [] as EngineProfileRecordDto[] }));
+vi.mock("./components/EngineSetupPanel", () => ({
+  EngineSetupPanel: ({ onProfilesChange }: { onProfilesChange?: (profiles: EngineProfileRecordDto[]) => void }) => {
+    useEffect(() => { if (engineSetupProfiles.current.length) onProfilesChange?.(engineSetupProfiles.current); }, [onProfilesChange]);
+    return null;
+  }
+}));
 vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
 vi.mock("./components/WinrateChart", () => ({
   WinrateChart: () => <canvas aria-label="胜率走势" />
@@ -300,6 +321,15 @@ let root: Root | null = null;
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  matchApi.humanMatchSnapshot.mockReset().mockResolvedValue({ current: null, match_state: { revision: 0, mode: "human", pk_runs: null, committed_moves: 0, pause_pending: false, rebuild_sides: [], resume_pending: false, phase: "idle", session_id: null, turn: 0, to_play: null, settings: null, run_id: null, job: null, end: null, failure: null, failed_side: null, resources_held: false, committed: false, analysis: { supported: false, policy: "off", epoch: 0, frame: null } } });
+  matchApi.subscribeHumanMatch.mockReset().mockImplementation(async (listener) => { matchListener = listener; return () => { matchListener = undefined; }; });
+  matchApi.humanMatchStart.mockReset();
+  matchApi.humanMatchAction.mockReset();
+  matchApi.humanMatchAnalysisPolicy.mockReset();
+  matchApi.humanMatchStop.mockReset();
+  matchApi.pkMatchStart.mockReset();
+  matchApi.pkMatchPause.mockReset();
+  matchApi.pkMatchResume.mockReset();
   vi.spyOn(HTMLCanvasElement.prototype, "clientWidth", "get").mockReturnValue(450);
   vi.spyOn(HTMLCanvasElement.prototype, "clientHeight", "get").mockReturnValue(450);
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
@@ -359,12 +389,482 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  engineSetupProfiles.current = [];
   act(() => root?.unmount());
   root = null;
   document.body.replaceChildren();
   vi.clearAllMocks();
   vi.restoreAllMocks();
 });
+describe("App human match ownership", () => {
+  const settings = { ...defaultAppPreferences.matchDefaults, profile_id: "profile-1", rules: "chinese" as const };
+  function playing(revision: number, current: CurrentGameResultDto): MatchUpdateDto {
+    return { current, match_state: { revision, mode: "human", pk_runs: null, committed_moves: revision - 2, pause_pending: false, rebuild_sides: [], resume_pending: false, phase: "playing", session_id: "human-1", turn: revision, to_play: "black", settings, run_id: "run-match", job: null, end: null, failure: null, failed_side: null, resources_held: true, committed: true, analysis: { supported: true, policy: "off", epoch: 0, frame: null } } };
+  }
+  function analyzing(revision: number, current = initialGame): MatchUpdateDto {
+    const update = playing(revision, current);
+    const turn = { session_id: "human-1", turn: 1, generation: current.generation, node_path: current.selected_path };
+    const job = { run_id: "run-match", job_id: "match-analysis", generation: current.generation, node_path: current.selected_path };
+    update.match_state.turn = 1;
+    update.match_state.job = job;
+    update.match_state.analysis = { supported: true, policy: "both", epoch: 1,
+      frame: { turn, epoch: 1, job, frame: { ...currentAnalysisFrame, job_id: job.job_id } } };
+    return update;
+  }
+  function candidateCoordinates(host: HTMLElement) {
+    return [...host.querySelectorAll(".cand-coord")].map((cell) => cell.textContent);
+  }
+  it("clears ended Human candidates before PK starts and keeps Human analysis unavailable through PK rebuild", async () => {
+    const pkSettings = { ...settings,
+      pk_black: { profile_id: savedProfile.id, deadline_ms: 30000, kata_max_visits: 800 },
+      pk_white: { profile_id: savedProfile.id, deadline_ms: 7000, kata_max_visits: 250 } };
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, matchDefaults: pkSettings } });
+    engineSetupProfiles.current = [savedProfile];
+    const host = await renderApp();
+    const human = analyzing(2);
+    human.match_state.settings = pkSettings;
+    human.match_state.analysis.frame!.frame.candidates = [{ ...currentAnalysisFrame.candidates[0], vertex: { point: { x: 3, y: 5 } } }];
+    await act(async () => { matchListener?.(human); });
+    expect(candidateCoordinates(host)).toEqual(["D4"]);
+    const ended: MatchUpdateDto = { current: null, match_state: { ...human.match_state, revision: 3,
+      phase: "idle", end: "stopped", resources_held: false, job: null,
+      analysis: { supported: false, policy: "off", epoch: 2, frame: null } } };
+    matchApi.humanMatchStop.mockResolvedValueOnce(ended);
+    await act(async () => { buttonNamed(requiredElement(host, '[aria-label="对局状态"]'), "停止").click(); });
+    expect(candidateCoordinates(host)).not.toContain("D4");
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="本场候选分析"]').disabled).toBe(true);
+    const pk: MatchUpdateDto = { current: { ...initialGame, generation: 2, snapshot_seq: 2 },
+      match_state: { ...playing(4, initialGame).match_state, mode: "pk", session_id: "pk-1", settings: pkSettings,
+        run_id: "pk-black-run", committed_moves: 0,
+        analysis: { supported: false, policy: "off", epoch: 0, frame: null },
+        pk_runs: [
+          { run_id: "pk-black-run", profile_id: savedProfile.id, adapter_kind: "kata_go_analysis", profile_snapshot: savedProfile.profile, capability_snapshot: { adapter_kind: "kata_go_analysis", game_move: true } },
+          { run_id: "pk-white-run", profile_id: savedProfile.id, adapter_kind: "kata_go_analysis", profile_snapshot: savedProfile.profile, capability_snapshot: { adapter_kind: "kata_go_analysis", game_move: true } }
+        ] } };
+    matchApi.pkMatchStart.mockResolvedValueOnce(pk);
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "PK 新局").click());
+    await act(async () => { buttonNamed(host, "开始新局").click(); });
+    expect(candidateCoordinates(host)).toEqual([]);
+    expect(host.querySelector('input[aria-label="本场候选分析"]')).toBeNull();
+    expect(host.querySelector('select[aria-label="本场分析回合"]')).toBeNull();
+    expect(buttonNamed(host, "暂停 PK").disabled).toBe(false);
+    await act(async () => {
+      matchListener?.({ current: null, match_state: { ...pk.match_state, revision: 5, phase: "paused", rebuild_sides: ["white"], resume_pending: true } });
+      matchListener?.(human);
+    });
+    expect(candidateCoordinates(host)).toEqual([]);
+    expect(host.querySelector('input[aria-label="本场候选分析"]')).toBeNull();
+    expect(buttonNamed(host, "恢复 PK").disabled).toBe(true);
+    expect(matchApi.humanMatchAnalysisPolicy).not.toHaveBeenCalled();
+    expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
+  });
+  it("keeps the independent Continue document projection when a newer analysis-only update arrives", async () => {
+    currentGameFixture.mockResolvedValue(branchingGame);
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, matchDefaults: settings } });
+    engineSetupProfiles.current = [savedProfile];
+    const host = await renderApp();
+    const path = { indices: [0, 0] };
+    const current: CurrentGameResultDto = { ...branchingGame, generation: 4, snapshot_seq: 2, selected_path: path,
+      tree: { ...branchingGame.tree, children: [{ ...branchingGame.tree.children[0], children: [
+        { properties: [{ key: "W", values: ["pp"] }, { key: "C", values: ["continued personal C"] }], children: [] },
+        ...branchingGame.tree.children[0].children
+      ] }] },
+      snapshot: { ...branchingGame.snapshot, path, personal_comment: "continued personal C" } };
+    const started = playing(2, current);
+    matchApi.humanMatchStart.mockResolvedValueOnce(started);
+    let finishProjection!: (projection: GameDto) => void;
+    backend.projectCurrentGameMainline.mockReturnValueOnce(new Promise<GameDto>((resolve) => { finishProjection = resolve; }));
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "从当前节点续弈").click());
+    act(() => requiredElement<HTMLInputElement>(host, ".human-match-root-confirmation input").click());
+    await act(async () => { buttonNamed(host, "开始续弈").click(); });
+    expect(requiredElement(host, ".personal-comment").textContent).toBe("continued personal C");
+    const analyzingCurrent = analyzing(3, current);
+    analyzingCurrent.current = null;
+    analyzingCurrent.match_state.turn = started.match_state.turn;
+    analyzingCurrent.match_state.analysis.frame!.turn.turn = started.match_state.turn;
+    matchApi.humanMatchAnalysisPolicy.mockResolvedValueOnce(analyzingCurrent);
+    await act(async () => { requiredElement<HTMLInputElement>(host, 'input[aria-label="本场候选分析"]').click(); });
+    expect(candidateCoordinates(host)).toEqual(["J1"]);
+    await act(async () => { finishProjection({ ...initialProjection, summary: { ...initialProjection.summary, komi: 6.5, move_count: 2 } }); });
+    expect(requiredElement<HTMLInputElement>(host, ".param-input-sm").value).toBe("6.5");
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("2");
+    expect(requiredElement(host, ".personal-comment").textContent).toBe("continued personal C");
+    expect(candidateCoordinates(host)).toEqual(["J1"]);
+    expect(matchApi.humanMatchAnalysisPolicy).toHaveBeenCalledWith({ session_id: "human-1", turn: 2,
+      generation: 4, node_path: path }, "both");
+    expect(backend.setCurrentGamePersonalComment).not.toHaveBeenCalled();
+  });
+  it.each(["analysis-only", "same-document"])("keeps committed projection across a newer %s match revision", async (kind) => {
+    const host = await renderApp();
+    const current = { ...initialGame, generation: initialGame.generation + 1, snapshot_seq: initialGame.snapshot_seq + 1 };
+    let resolveProjection!: (projection: GameDto) => void;
+    backend.projectCurrentGameMainline.mockReturnValueOnce(new Promise<GameDto>((resolve) => { resolveProjection = resolve; }));
+    await act(async () => { matchListener?.(playing(2, current)); });
+    const progress = analyzing(3, current);
+    if (kind === "analysis-only") progress.current = null;
+    await act(async () => { matchListener?.(progress); });
+    await act(async () => { resolveProjection({ ...initialProjection, summary: { ...initialProjection.summary, komi: 6.5 } }); });
+    expect(requiredElement<HTMLInputElement>(host, ".param-input-sm").value).toBe("6.5");
+    expect(candidateCoordinates(host)).toEqual(["J1"]);
+  });
+  it("rejects pending projection after a newer document is committed", async () => {
+    const host = await renderApp();
+    const first = { ...initialGame, generation: initialGame.generation + 1, snapshot_seq: initialGame.snapshot_seq + 1 };
+    let resolveOld!: (projection: GameDto) => void;
+    backend.projectCurrentGameMainline.mockReturnValueOnce(new Promise<GameDto>((resolve) => { resolveOld = resolve; }));
+    await act(async () => { matchListener?.(playing(2, first)); });
+    backend.projectCurrentGameMainline.mockResolvedValueOnce({ ...initialProjection, summary: { ...initialProjection.summary, komi: 8.5 } });
+    await act(async () => { matchListener?.(playing(3, { ...first, generation: first.generation + 1, snapshot_seq: first.snapshot_seq + 1 })); });
+    expect(requiredElement<HTMLInputElement>(host, ".param-input-sm").value).toBe("8.5");
+    await act(async () => { resolveOld({ ...initialProjection, summary: { ...initialProjection.summary, komi: 6.5 } }); });
+    expect(requiredElement<HTMLInputElement>(host, ".param-input-sm").value).toBe("8.5");
+  });
+
+  it("keeps unsupported GTP analysis disabled and enables verified analysis as both without saving preferences", async () => {
+    const host = await renderApp();
+    const unsupported = playing(2, initialGame);
+    unsupported.match_state.analysis.supported = false;
+    await act(async () => { matchListener?.(unsupported); });
+    const enabled = requiredElement<HTMLInputElement>(host, 'input[aria-label="本场候选分析"]');
+    const role = requiredElement<HTMLSelectElement>(host, 'select[aria-label="本场分析回合"]');
+    expect(enabled.checked).toBe(false);
+    expect(enabled.disabled).toBe(true);
+    expect(role.disabled).toBe(true);
+    expect(host.querySelector("#human-match-analysis-hint")?.textContent).toContain("GTP 仅支持取步");
+    expect(candidateCoordinates(host)).toEqual([]);
+    await act(async () => { matchListener?.(playing(3, initialGame)); });
+    expect(enabled.disabled).toBe(false);
+    const active = analyzing(4);
+    matchApi.humanMatchAnalysisPolicy.mockResolvedValueOnce(active);
+    const saves = preferencesApi.saveAppPreferences.mock.calls.length;
+    act(() => enabled.click());
+    expect(enabled.disabled).toBe(true);
+    expect(role.disabled).toBe(true);
+    await act(async () => { await matchApi.humanMatchAnalysisPolicy.mock.results.at(-1)?.value; });
+    expect(enabled.checked).toBe(true);
+    expect(role.value).toBe("both");
+    expect(role.disabled).toBe(false);
+    expect(candidateCoordinates(host)).toEqual(["J1"]);
+    expect(preferencesApi.saveAppPreferences.mock.calls.length).toBe(saves);
+    expect(host.querySelector("#human-match-analysis-hint")?.textContent).toContain("预算不变");
+    for (const policy of ["human_turn", "engine_turn", "both"] as const) {
+      const next = analyzing(5 + ["human_turn", "engine_turn", "both"].indexOf(policy));
+      next.match_state.analysis.policy = policy;
+      next.match_state.analysis.epoch = next.match_state.revision;
+      next.match_state.analysis.frame!.epoch = next.match_state.analysis.epoch;
+      matchApi.humanMatchAnalysisPolicy.mockResolvedValueOnce(next);
+      await act(async () => { role.value = policy; role.dispatchEvent(new Event("change", { bubbles: true })); });
+      expect(role.value).toBe(policy);
+      expect(candidateCoordinates(host)).toEqual(policy === "engine_turn" ? [] : ["J1"]);
+    }
+    const ended = analyzing(8);
+    ended.match_state.phase = "idle";
+    ended.match_state.end = "stopped";
+    ended.match_state.resources_held = false;
+    await act(async () => { matchListener?.(ended); });
+    expect(enabled.disabled).toBe(true);
+    expect(role.disabled).toBe(true);
+    expect(candidateCoordinates(host)).toEqual([]);
+  });
+  it("hides session candidates through ordinary preferences while retaining root evaluation", async () => {
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, showCandidates: false } });
+    const host = await renderApp();
+    const engine = analyzing(2, acceptedGame);
+    engine.match_state.to_play = "white";
+    engine.match_state.analysis.policy = "engine_turn";
+    engine.match_state.analysis.frame!.frame.score_mean_black = 9.5;
+    await act(async () => { matchListener?.(engine); });
+    expect(candidateCoordinates(host)).toEqual([]);
+    expect(host.textContent).toContain("+9.5");
+  });
+  it("projects finite engine-turn candidates and rejects human-only policy for that same role", async () => {
+    const host = await renderApp();
+    const engine = analyzing(2, acceptedGame);
+    engine.match_state.to_play = "white";
+    engine.match_state.analysis.policy = "engine_turn";
+    await act(async () => { matchListener?.(engine); });
+    expect(candidateCoordinates(host)).toEqual(["J1"]);
+    await act(async () => { matchListener?.({ ...engine, match_state: { ...engine.match_state, revision: 3,
+      analysis: { ...engine.match_state.analysis, policy: "human_turn" } } }); });
+    expect(candidateCoordinates(host)).toEqual([]);
+  });
+  it("seals closed epochs against out-of-order frames and clears candidate selection without changing SGF", async () => {
+    const host = await renderApp();
+    const active = analyzing(2);
+    active.match_state.analysis.frame!.frame.candidates = [...currentAnalysisFrame.candidates, analysisFrame.candidates[0]];
+    await act(async () => { matchListener?.(active); });
+    expect(candidateCoordinates(host)).toEqual(["J1", "C6"]);
+    const candidate = requiredElement<HTMLTableRowElement>(host, ".cand-row:nth-child(2)");
+    act(() => candidate.click());
+    expect(candidate.classList.contains("is-selected")).toBe(true);
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    expect(backend.setCurrentGamePersonalComment).not.toHaveBeenCalled();
+    const closed = analyzing(3);
+    closed.match_state.analysis = { supported: true, policy: "off", epoch: 2, frame: null };
+    matchApi.humanMatchAnalysisPolicy.mockResolvedValueOnce(closed);
+    await act(async () => { requiredElement<HTMLInputElement>(host, 'input[aria-label="本场候选分析"]').click(); });
+    expect(candidateCoordinates(host)).toEqual([]);
+    await act(async () => { matchListener?.(active); });
+    expect(candidateCoordinates(host)).toEqual([]);
+    const reopened = analyzing(4);
+    reopened.match_state.analysis.epoch = 3;
+    await act(async () => { matchListener?.(reopened); });
+    expect(candidateCoordinates(host)).toEqual([]);
+    const fresh = analyzing(5);
+    fresh.match_state.analysis.epoch = 3;
+    fresh.match_state.analysis.frame!.epoch = 3;
+    await act(async () => { matchListener?.(fresh); });
+    expect(candidateCoordinates(host)).toEqual(["J1"]);
+    expect(requiredElement(host, ".cand-row").classList.contains("is-selected")).toBe(true);
+    const completed = { ...fresh, match_state: { ...fresh.match_state, revision: 6, job: null } };
+    await act(async () => { matchListener?.(completed); });
+    expect(candidateCoordinates(host)).toEqual(["J1"]);
+    const stopped = analyzing(7);
+    stopped.match_state.phase = "idle";
+    stopped.match_state.resources_held = false;
+    stopped.match_state.end = "stopped";
+    await act(async () => { matchListener?.(stopped); matchListener?.(fresh); });
+    expect(candidateCoordinates(host)).toEqual([]);
+  });
+  it.each(["session", "turn", "run", "frame-job", "active-job", "document", "path", "job-document", "job-path", "error"])("hides mismatched %s analysis at the rendered consumer", async (mismatch) => {
+    const host = await renderApp();
+    await act(async () => { matchListener?.(analyzing(2)); });
+    expect(candidateCoordinates(host)).toEqual(["J1"]);
+    const stale = analyzing(3);
+    const envelope = stale.match_state.analysis.frame!;
+    if (mismatch === "session") envelope.turn.session_id = "old-session";
+    if (mismatch === "turn") stale.match_state.turn = 2;
+    if (mismatch === "run") stale.match_state.run_id = "replacement-run";
+    if (mismatch === "frame-job") envelope.frame.job_id = "old-job";
+    if (mismatch === "active-job") stale.match_state.job = { ...envelope.job, job_id: "new-job" };
+    if (mismatch === "document") stale.current = { ...initialGame, generation: 2, snapshot_seq: 2 };
+    if (mismatch === "path") envelope.turn.node_path = { indices: [0] };
+    if (mismatch === "job-document") envelope.job.generation = 0;
+    if (mismatch === "job-path") envelope.job.node_path = { indices: [0] };
+    if (mismatch === "error") stale.match_state.phase = "error";
+    await act(async () => { matchListener?.(stale); });
+    expect(candidateCoordinates(host)).toEqual([]);
+    await act(async () => { matchListener?.(analyzing(2)); });
+    expect(candidateCoordinates(host)).toEqual([]);
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+  });
+  it("routes human pass through the turn identity and ignores a late response after a newer event", async () => {
+    const host = await renderApp();
+    const committed = { ...initialGame, generation: 2, snapshot_seq: 2, dirty: true };
+    await act(async () => { matchListener?.(playing(2, committed)); });
+    const moved = { ...acceptedGame, generation: 2, snapshot_seq: 3 };
+    matchApi.humanMatchAction.mockImplementationOnce(async () => {
+      matchListener?.(playing(3, moved));
+      return playing(2, committed);
+    });
+    await act(async () => { buttonNamed(host, "停一手").click(); });
+    expect(matchApi.humanMatchAction).toHaveBeenCalledWith({ session_id: "human-1", turn: 2, generation: 2, node_path: { indices: [] } }, { kind: "play", vertex: "pass" });
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').disabled).toBe(true);
+    backend.selectCurrentGameNode.mockClear();
+    pressKey(buttonNamed(host, "坐标"), "Home");
+    pressKey(buttonNamed(host, "坐标"), "z", { ctrlKey: true });
+    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    expect(backend.undoCurrentGame).not.toHaveBeenCalled();
+    expect(buttonNamed(host, "存档").disabled).toBe(false);
+  });
+  it("retains the failure profile, side and cause after match resources are released", async () => {
+    const host = await renderApp();
+    const failed = playing(2, { ...initialGame, generation: 2, snapshot_seq: 2 });
+    failed.match_state = { ...failed.match_state, phase: "error", resources_held: false,
+      run_id: null, failed_side: "white",
+      failure: { operation: "job", kind: "timeout", profile_id: "retained-profile-id",
+        message: "move hard deadline expired" } };
+    await act(async () => { matchListener?.(failed); });
+    const alert = [...host.querySelectorAll('[role="alert"]')].find((element) => element.textContent?.includes("move hard deadline expired"));
+    expect(alert?.textContent).toContain("retained-profile-id");
+    expect(alert?.textContent).toContain("white");
+    expect(alert?.textContent).toContain("timeout");
+    expect(buttonNamed(host, "停止").disabled).toBe(true);
+  });
+  it("cancels dirty-document departure without starting or reserving a match", async () => {
+    currentGameFixture.mockResolvedValue({ ...initialGame, dirty: true });
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, matchDefaults: settings } });
+    const host = await renderApp();
+    act(() => buttonNamed(host, "人机新局").click());
+    await act(async () => { buttonNamed(host, "开始新局").click(); });
+    const departure = requiredElement(host, '.document-departure-actions');
+    const cancel = [...host.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].filter((button) => button.textContent === "取消").at(-1);
+    expect(departure).not.toBeNull();
+    expect(cancel).toBeDefined();
+    await act(async () => { cancel?.click(); });
+    expect(matchApi.humanMatchStart).not.toHaveBeenCalled();
+    expect(matchApi.humanMatchStop).not.toHaveBeenCalled();
+  });
+  it("continues a dirty document from the selected node without a departure prompt", async () => {
+    currentGameFixture.mockResolvedValue({ ...initialGame, dirty: true });
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, matchDefaults: settings } });
+    engineSetupProfiles.current = [savedProfile];
+    matchApi.humanMatchStart.mockResolvedValueOnce(playing(2, { ...initialGame, generation: 2, snapshot_seq: 2, dirty: true }));
+    const host = await renderApp();
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "从当前节点续弈").click());
+    const confirm = requiredElement<HTMLInputElement>(host, ".human-match-root-confirmation input");
+    act(() => confirm.click());
+    await act(async () => { buttonNamed(host, "开始续弈").click(); });
+    expect(matchApi.humanMatchStart).toHaveBeenCalledWith({ settings, generation: initialGame.generation, snapshot_seq: initialGame.snapshot_seq,
+      start: { kind: "continue", node_path: { indices: [] }, root_metadata_confirmed: true } });
+    expect(host.querySelector('[aria-label="人机续弈"]')).toBeNull();
+  });
+  it("starts Continue from the node the dialog confirmed even when a pending navigation lands first", async () => {
+    currentGameFixture.mockResolvedValue(branchingGame);
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, matchDefaults: settings } });
+    engineSetupProfiles.current = [savedProfile];
+    matchApi.humanMatchStart.mockRejectedValueOnce(new Error("stale"));
+    const host = await renderApp();
+    let release!: (value: CurrentGameResultDto) => void;
+    const pending = new Promise<CurrentGameResultDto>((resolve) => { release = resolve; });
+    backend.selectCurrentGameNode.mockReset();
+    backend.selectCurrentGameNode.mockReturnValueOnce(pending);
+    act(() => buttonNamed(host, "父节点").click());
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "从当前节点续弈").click());
+    await act(async () => {
+      release({ ...branchingGame, snapshot_seq: 2, selected_path: { indices: [0] }, snapshot: { ...branchingGame.snapshot, path: { indices: [0] } } });
+      await pending;
+    });
+    act(() => requiredElement<HTMLInputElement>(host, ".human-match-root-confirmation input").click());
+    await act(async () => { buttonNamed(host, "开始续弈").click(); });
+    expect(matchApi.humanMatchStart).toHaveBeenCalledWith({ settings, generation: branchingGame.generation, snapshot_seq: branchingGame.snapshot_seq,
+      start: { kind: "continue", node_path: branchingGame.selected_path, root_metadata_confirmed: true } });
+  });
+});
+
+describe("App KataGo PK ownership", () => {
+  const settings = { ...defaultAppPreferences.matchDefaults, rules: "chinese" as const,
+    pk_black: { profile_id: savedProfile.id, deadline_ms: 30000, kata_max_visits: 800 },
+    pk_white: { profile_id: savedProfile.id, deadline_ms: 7000, kata_max_visits: 250 } };
+  function playing(revision: number, current: CurrentGameResultDto): MatchUpdateDto {
+    return { current, match_state: { revision, mode: "pk", phase: "playing", session_id: "pk-1", turn: revision,
+      to_play: "black", settings, run_id: "pk-black-run", job: null, end: null, failure: null, failed_side: null,
+      resources_held: true, committed: true, committed_moves: 2, pause_pending: false, rebuild_sides: [], resume_pending: false,
+      analysis: { supported: false, policy: "off", epoch: 0, frame: null },
+      pk_runs: [
+        { run_id: "pk-black-run", profile_id: savedProfile.id, adapter_kind: "kata_go_analysis", profile_snapshot: savedProfile.profile, capability_snapshot: { adapter_kind: "kata_go_analysis", game_move: true } },
+        { run_id: "pk-white-run", profile_id: savedProfile.id, adapter_kind: "kata_go_analysis", profile_snapshot: savedProfile.profile, capability_snapshot: { adapter_kind: "kata_go_analysis", game_move: true } }
+      ] } };
+  }
+  it("ignores board/pass/resign input on PK even when the saved human color is to play", async () => {
+    const host = await renderApp();
+    await act(async () => { matchListener?.(playing(2, { ...acceptedGame, generation: 2, snapshot_seq: 2 })); });
+    const canvas = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 450, 450);
+    act(() => canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 225, clientY: 225 })));
+    act(() => buttonNamed(host, "编辑").click());
+    const pass = buttonNamed(host, "停一手(P)");
+    expect(pass.disabled).toBe(true);
+    act(() => pass.click());
+    pressKey(canvas, "p");
+    expect(matchApi.humanMatchAction).not.toHaveBeenCalled();
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    expect([...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "认输")).toBeUndefined();
+    expect(buttonNamed(host, "左侧栏").disabled).toBe(true);
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').disabled).toBe(true);
+    const status = requiredElement(host, '[aria-label="对局状态"]');
+    expect(status.textContent).toContain("PK · playing");
+    expect(status.textContent).toContain("本场提交 2 / 450");
+    expect(status.textContent).toContain("pk-black-run");
+    expect(status.textContent).toContain("pk-white-run");
+    expect(status.textContent).toContain(savedProfile.id);
+    expect(matchApi.pkMatchResume).not.toHaveBeenCalled();
+    expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
+  });
+  it("guards repeated Pause/Resume and does not resume while native cleanup is pending", async () => {
+    const host = await renderApp();
+    const active = playing(2, { ...initialGame, generation: 2, snapshot_seq: 2 });
+    await act(async () => { matchListener?.(active); });
+    let finishPause!: (update: MatchUpdateDto) => void;
+    const pause = new Promise<MatchUpdateDto>((resolve) => { finishPause = resolve; });
+    matchApi.pkMatchPause.mockReturnValueOnce(pause);
+    act(() => { buttonNamed(host, "暂停 PK").click(); buttonNamed(host, "暂停 PK").click(); });
+    expect(matchApi.pkMatchPause).toHaveBeenCalledTimes(1);
+    expect(buttonNamed(host, "暂停 PK").disabled).toBe(true);
+    const cleaning: MatchUpdateDto = { current: null, match_state: { ...active.match_state, revision: 3, phase: "paused", pause_pending: true } };
+    await act(async () => { matchListener?.(cleaning); finishPause(cleaning); await pause; });
+    expect(buttonNamed(host, "恢复 PK").disabled).toBe(true);
+    act(() => buttonNamed(host, "恢复 PK").click());
+    expect(matchApi.pkMatchResume).not.toHaveBeenCalled();
+    const paused: MatchUpdateDto = { current: null, match_state: { ...cleaning.match_state, revision: 4, pause_pending: false, rebuild_sides: [], resume_pending: false } };
+    await act(async () => { matchListener?.(paused); });
+    expect(buttonNamed(host, "恢复 PK").disabled).toBe(false);
+    expect(buttonNamed(host, "暂停 PK").disabled).toBe(true);
+    expect(buttonNamed(host, "左侧栏").disabled).toBe(true);
+    let finishResume!: (update: MatchUpdateDto) => void;
+    const resume = new Promise<MatchUpdateDto>((resolve) => { finishResume = resolve; });
+    matchApi.pkMatchResume.mockReturnValueOnce(resume);
+    act(() => { buttonNamed(host, "恢复 PK").click(); buttonNamed(host, "恢复 PK").click(); });
+    expect(matchApi.pkMatchResume).toHaveBeenCalledTimes(1);
+    expect(matchApi.pkMatchResume).toHaveBeenCalledWith("pk-1");
+    expect(buttonNamed(host, "恢复 PK").disabled).toBe(true);
+    await act(async () => { finishResume({ current: null, match_state: { ...active.match_state, revision: 5 } }); await resume; });
+    expect(buttonNamed(host, "暂停 PK").disabled).toBe(false);
+  });
+  it("pins PK Continue to the confirmed node and inherited root when pending navigation lands", async () => {
+    currentGameFixture.mockResolvedValue(branchingGame);
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, matchDefaults: settings } });
+    engineSetupProfiles.current = [savedProfile];
+    matchApi.pkMatchStart.mockRejectedValueOnce(new Error("stale"));
+    const host = await renderApp();
+    let finish!: (current: CurrentGameResultDto) => void;
+    const pending = new Promise<CurrentGameResultDto>((resolve) => { finish = resolve; });
+    backend.selectCurrentGameNode.mockReset().mockReturnValueOnce(pending);
+    act(() => buttonNamed(host, "父节点").click());
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "PK 从当前节点续弈").click());
+    const dialog = requiredElement(host, '[aria-label="PK续弈"]');
+    expect(dialog.textContent).toContain(`第 ${branchingGame.snapshot.position.move_number} 手后`);
+    await act(async () => { finish({ ...branchingGame, snapshot_seq: 2, selected_path: { indices: [0] }, snapshot: { ...branchingGame.snapshot, path: { indices: [0] } } }); await pending; });
+    act(() => requiredElement<HTMLInputElement>(host, ".human-match-root-confirmation input").click());
+    await act(async () => { buttonNamed(host, "开始续弈").click(); });
+    expect(matchApi.pkMatchStart).toHaveBeenCalledWith({ settings, generation: branchingGame.generation, snapshot_seq: branchingGame.snapshot_seq,
+      start: { kind: "continue", node_path: branchingGame.selected_path, root_metadata_confirmed: true } });
+    expect(matchApi.humanMatchStart).not.toHaveBeenCalled();
+    expect(host.querySelector('button[aria-label="Discard"]')).toBeNull();
+    expect(dialog.textContent).toContain("stale");
+  });
+  it("confirms PK New departure without replacing the old document on start failure", async () => {
+    currentGameFixture.mockResolvedValue(branchingGame);
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, matchDefaults: settings } });
+    engineSetupProfiles.current = [savedProfile];
+    matchApi.pkMatchStart.mockRejectedValueOnce(new Error("white run readiness failed"));
+    const host = await renderApp();
+    backend.resolveDocumentReplacement.mockClear();
+    act(() => buttonNamed(host, "棋局").click());
+    act(() => buttonNamed(host, "PK 新局").click());
+    await act(async () => { buttonNamed(host, "开始新局").click(); });
+    expect(matchApi.pkMatchStart).not.toHaveBeenCalled();
+    await act(async () => { buttonLabeled(host, "Discard").click(); });
+    expect(matchApi.pkMatchStart).toHaveBeenCalledWith({ settings, generation: branchingGame.generation, snapshot_seq: branchingGame.snapshot_seq, start: { kind: "new", discard_confirmed: true } });
+    expect(host.querySelector('[aria-label="PK新局"]')).not.toBeNull();
+    expect(host.textContent).toContain("white run readiness failed");
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe(String(branchingGame.snapshot.position.move_number));
+    expect(backend.resolveDocumentReplacement).not.toHaveBeenCalled();
+  });
+  it("keeps a paused PK match intact when graceful shutdown is cancelled", async () => {
+    backend.prepareApplicationExit.mockResolvedValueOnce({ status: "needs_decision", departure_id: 54 });
+    const host = await renderApp();
+    const active = playing(2, { ...initialGame, generation: 2, snapshot_seq: 2, dirty: true });
+    await act(async () => { matchListener?.({ current: active.current, match_state: { ...active.match_state, phase: "paused" } }); });
+    act(() => buttonNamed(host, "文件").click());
+    await act(async () => { buttonNamed(host, "退出").click(); await backend.prepareApplicationExit.mock.results.at(-1)?.value; });
+    await act(async () => { buttonLabeled(host, "Cancel").click(); await backend.resolveApplicationExit.mock.results.at(-1)?.value; });
+    expect(matchApi.humanMatchStop).not.toHaveBeenCalled();
+    expect(matchApi.pkMatchResume).not.toHaveBeenCalled();
+    expect(requiredElement(host, '[aria-label="对局状态"]').textContent).toContain("PK · paused");
+    expect(buttonNamed(host, "恢复 PK").disabled).toBe(false);
+    expect(buttonNamed(host, "左侧栏").disabled).toBe(true);
+    expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+  });
+});
+
 describe("node markup authoring", () => {
   it("cancels text without a write and commits only the selected point through the native wrapper", async () => {
     backend.editCurrentGameMarkup.mockImplementation(async (_path, _generation, action) => ({

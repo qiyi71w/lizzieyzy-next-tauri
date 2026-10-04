@@ -10,9 +10,14 @@ Path('pid').write_text(str(os.getpid()))
 active = {}
 first = True
 rejected = False
+move_count = 0
 for raw in sys.stdin:
     with open('trace', 'a') as trace:
         trace.write(raw)
+    if mode == 'readiness_fail':
+        raise SystemExit(3)
+    if mode == 'readiness_hold':
+        time.sleep(60)
     if raw.startswith('{'):
         request = json.loads(raw)
         ident = request['id']
@@ -27,6 +32,12 @@ for raw in sys.stdin:
         active[ident] = turn
         if first:
             first = False
+            Path('run-' + ident.removeprefix('lifecycle-readiness-')).write_text(str(os.getpid()))
+            if mode == 'second_readiness_fail':
+                remaining = int(Path('remaining-ready').read_text())
+                if remaining == 0:
+                    raise SystemExit(3)
+                Path('remaining-ready').write_text(str(remaining - 1))
             print(json.dumps({'id': ident, 'turnNumber': 0}), flush=True)
             continue
         if mode in ('error', 'errors') and not rejected:
@@ -34,11 +45,32 @@ for raw in sys.stdin:
             active.pop(ident)
             print(json.dumps({'id': ident, mode: 'query rejected'}), flush=True)
             continue
+        move_count += 1
+        if mode == 'pause_once' and move_count == 1:
+            continue
+        if mode == 'exit':
+            raise SystemExit(3)
         if mode in ('hold', 'unclean'):
             continue
         result = {'id': ident, 'turnNumber': turn, 'isDuringSearch': False,
                   'moveInfos': [{'move': 'A1', 'order': 1, 'visits': 1000},
                                 {'move': 'D4', 'order': 0, 'visits': 1}]}
+        if 'reportDuringSearchEvery' in request:
+            result['rootInfo'] = {'visits': request.get('maxVisits', 32), 'winrate': 0.6,
+                                  'scoreLead': 1.5}
+            for candidate in result['moveInfos']:
+                candidate.update(winrate=0.6, scoreMean=1.5, pv=[candidate['move']])
+            if request.get('includeOwnership'):
+                result['ownership'] = [0.25] * (request['boardXSize'] * request['boardYSize'])
+            for visits in range(1, 21 if mode == 'analysis_flood' else 2):
+                intermediate = dict(result, isDuringSearch=True,
+                                    rootInfo=dict(result['rootInfo'], visits=visits))
+                print(json.dumps(intermediate), flush=True)
+                time.sleep(0.005)
+            if mode == 'analysis_hold':
+                continue
+            if mode == 'analysis_invalid_accounting':
+                result['rootInfo']['visits'] = 0
         if mode == 'warning':
             print(json.dumps({'id': ident, 'warning': 'rules changed'}), flush=True)
         if mode == 'duplicate':

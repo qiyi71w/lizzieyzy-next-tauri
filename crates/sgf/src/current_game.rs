@@ -31,10 +31,19 @@ pub struct SgfDocumentEdit {
     selected_after: NodePath,
 }
 
+impl SgfDocumentEdit {
+    pub fn selected_after(&self) -> &NodePath {
+        &self.selected_after
+    }
+}
+
 type SavedAnalysisProperties = Vec<(NodePath, Vec<(usize, SgfProperty)>)>;
 
 #[derive(Debug)]
 enum DocumentReversal {
+    ReplaceDocument {
+        document: SgfDocument,
+    },
     SetComment {
         path: NodePath,
         properties: Vec<(usize, SgfProperty)>,
@@ -69,6 +78,28 @@ enum DocumentReversal {
         properties: Vec<(usize, SgfProperty)>,
         children: Option<Vec<SgfNode>>,
     },
+    /// Composite unit: undo applies the steps last-first, and the reversed list redoes them.
+    Sequence(Vec<DocumentReversal>),
+}
+
+/// A privately staged document plus the inverse of exactly its changes to the live document it
+/// was staged from. Without an inverse, installation replaces the whole document (New).
+#[derive(Debug)]
+pub struct StagedDocument {
+    document: CurrentSgfDocument,
+    inverse: Option<DocumentReversal>,
+}
+
+impl StagedDocument {
+    pub fn document(&self) -> &CurrentSgfDocument {
+        &self.document
+    }
+}
+
+impl From<CurrentSgfDocument> for StagedDocument {
+    fn from(document: CurrentSgfDocument) -> Self {
+        Self { document, inverse: None }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +113,10 @@ pub struct DocumentEditOutcome {
     pub snapshot: SelectedNodeSnapshotDto,
     pub edit: Option<SgfDocumentEdit>,
 }
+
+#[path = "prepared_edit.rs"]
+mod prepared_edit;
+pub use prepared_edit::PreparedSgfEdit;
 
 /// A session-only branch rooted at the selected position. The retained ancestors
 /// preserve replay and simple-ko context; only the branch below the entry is exposed.
@@ -367,6 +402,167 @@ fn selected_markup(node: &SgfNode, board_width: u8, board_height: u8) -> Vec<app
 }
 
 impl CurrentSgfDocument {
+    /// Builds a private, strictly representable new game without changing a live document.
+    pub fn stage_new_game(
+        board_size: u8,
+        komi: f32,
+        handicap: u8,
+        rules: app_model::ExactRulesDto,
+        black_name: &str,
+        white_name: &str,
+    ) -> Result<Self, CurrentGameError> {
+        let invalid = |message: &str| CurrentGameError {
+            kind: CurrentGameErrorKind::MalformedSgf,
+            message: message.into(),
+        };
+        if !(2..=19).contains(&board_size) {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::UnsupportedBoardSize,
+                message: "New games require a square board from 2 through 19.".into(),
+            });
+        }
+        if !komi.is_finite() || (f64::from(komi) * 2.0).fract() != 0.0 {
+            return Err(invalid("Komi must be a finite half-point value."));
+        }
+        let komi = if komi == 0.0 { 0.0 } else { komi };
+        if handicap != 0 && (!(2..=9).contains(&handicap) || !matches!(board_size, 9 | 13 | 19)) {
+            return Err(invalid("Fixed handicap requires 2 through 9 stones on a 9, 13, or 19 board."));
+        }
+        let rules = match rules {
+            app_model::ExactRulesDto::Chinese => "Chinese",
+            app_model::ExactRulesDto::ChineseKgs => "Chinese-KGS",
+        };
+        let mut root = SgfNode {
+            properties: [
+                ("GM", "1".into()),
+                ("FF", "4".into()),
+                ("SZ", board_size.to_string()),
+                ("KM", format!("{komi:.1}")),
+                ("RU", rules.into()),
+                ("HA", handicap.to_string()),
+                ("PB", black_name.into()),
+                ("PW", white_name.into()),
+            ]
+            .into_iter()
+            .map(|(key, value)| SgfProperty { key: key.into(), values: vec![value] })
+            .collect(),
+            children: Vec::new(),
+        };
+        let mut board = Board::new(board_size, board_size).map_err(rule_error)?;
+        if handicap >= 2 {
+            let low = if board_size == 9 { 2 } else { 3 };
+            let high = board_size - 1 - low;
+            let middle = board_size / 2;
+            // Opposite corners first; odd counts 5 and 7 add the center last.
+            let points = [
+                (high, low), (low, high), (high, high), (low, low),
+                (low, middle), (high, middle), (middle, low), (middle, high),
+            ];
+            let edge_count = if handicap >= 5 && handicap % 2 == 1 { handicap - 1 } else { handicap };
+            for &(x, y) in &points[..usize::from(edge_count)] {
+                board.set_stone(go_core::Point { x, y }, Some(go_core::Color::Black)).map_err(rule_error)?;
+            }
+            if handicap >= 5 && handicap % 2 == 1 {
+                board.set_stone(go_core::Point { x: middle, y: middle }, Some(go_core::Color::Black)).map_err(rule_error)?;
+            }
+        }
+        replace_root_setup_properties(
+            &mut root,
+            &stones_from_board(&board),
+            if handicap >= 2 { PlayerColor::White } else { PlayerColor::Black },
+            false,
+        );
+        let staged = Self {
+            document: SgfDocument {
+                board_width: board_size,
+                board_height: board_size,
+                komi,
+                handicap: Some(handicap),
+                black_name: Some(black_name.into()),
+                white_name: Some(white_name.into()),
+                result: None,
+                moves: Vec::new(),
+                root: Some(root),
+            },
+        };
+        staged.exact_position(&NodePath::default()).map_err(|message| invalid(&message))?;
+        Ok(staged)
+    }
+
+    /// Builds a private copy whose mainline ends at a fresh structure node under `start`.
+    ///
+    /// The start path is promoted to the first child at every depth and the session endpoint is a
+    /// new property-free child, so no existing continuation can be reused. Old routes keep every
+    /// property as variations. Root PB/PW are replaced and every RE is cleared because they belong
+    /// to the whole document. The staged inverse covers only these changes, so undoing the start
+    /// keeps analysis accepted later on surviving nodes.
+    pub fn stage_continuation(
+        &self,
+        start: &NodePath,
+        black_name: &str,
+        white_name: &str,
+    ) -> Result<(StagedDocument, NodePath, crate::ExactPosition), String> {
+        // Rejects unsupported or missing start nodes before anything is copied.
+        let position = self.exact_position(start)?;
+        let mut staged = self.clone();
+        let root = staged.document.root.as_mut().expect("exact position requires a root");
+        let mut steps = vec![DocumentReversal::SetResult {
+            properties: result_properties(root),
+            result: staged.document.result.take(),
+        }];
+        root.properties.retain(|property| property.key != "RE");
+        steps.push(DocumentReversal::SetMetadata {
+            properties: metadata_properties(root),
+            komi: staged.document.komi,
+            analysis: None,
+        });
+        for (key, value) in [("PB", black_name), ("PW", white_name)] {
+            let property = SgfProperty { key: key.into(), values: vec![value.into()] };
+            match root.properties.iter().position(|property| property.key == key) {
+                Some(index) => {
+                    root.properties[index] = property;
+                    let mut seen = false;
+                    root.properties.retain(|property| property.key != key || !std::mem::replace(&mut seen, true));
+                }
+                None => root.properties.push(property),
+            }
+        }
+        let mut moves = Vec::new();
+        let mut node = root;
+        for (depth, &index) in start.indices.iter().enumerate() {
+            if index != 0 {
+                let promoted = node.children.remove(index as usize);
+                node.children.insert(0, promoted);
+                moves.push((NodePath { indices: vec![0; depth] }, index as usize));
+            }
+            node = &mut node.children[0];
+        }
+        if !moves.is_empty() {
+            steps.push(DocumentReversal::PromoteMainline { moves, to_front: false });
+        }
+        node.children.insert(0, SgfNode { properties: Vec::new(), children: Vec::new() });
+        let parent = NodePath { indices: vec![0; start.indices.len()] };
+        steps.push(DocumentReversal::RemoveSubtree { parent, index: 0 });
+        let endpoint = NodePath { indices: vec![0; start.indices.len() + 1] };
+        let staged = StagedDocument { document: staged, inverse: Some(DocumentReversal::Sequence(steps)) };
+        Ok((staged, endpoint, position))
+    }
+
+    /// Installs a staged document as one reversible, ownership-moving history unit.
+    pub fn replace_with_history(
+        &mut self,
+        staged: StagedDocument,
+        selected_before: &NodePath,
+        selected_after: NodePath,
+    ) -> SgfDocumentEdit {
+        let replaced = std::mem::replace(&mut self.document, staged.document.document);
+        SgfDocumentEdit {
+            reversal: staged.inverse.unwrap_or(DocumentReversal::ReplaceDocument { document: replaced }),
+            selected_before: selected_before.clone(),
+            selected_after,
+        }
+    }
+
     pub fn open(input: &str) -> Result<Self, CurrentGameError> {
         let document = parse_sgf(input)?;
         if document.root.is_none() {
@@ -439,8 +635,16 @@ impl CurrentSgfDocument {
 
     pub fn snapshot(&self, path: &NodePath) -> Result<SelectedNodeSnapshotDto, CurrentGameError> {
         let nodes = self.nodes_on_path(path)?;
+        self.snapshot_from_nodes(path, &nodes)
+    }
+
+    fn snapshot_from_nodes(
+        &self,
+        path: &NodePath,
+        nodes: &[&SgfNode],
+    ) -> Result<SelectedNodeSnapshotDto, CurrentGameError> {
         let selected = *nodes.last().expect("path walk includes the root");
-        let (position, stone_move_numbers) = self.replay_nodes(&nodes)?;
+        let (position, stone_move_numbers) = self.replay_nodes(nodes)?;
         let projected = crate::analysis::project_node_analysis(
             selected,
             self.document.board_width,
@@ -1168,6 +1372,10 @@ impl CurrentSgfDocument {
 
     fn apply_reversal(&mut self, reversal: &mut DocumentReversal) -> Result<bool, CurrentGameError> {
         match reversal {
+            DocumentReversal::ReplaceDocument { document } => {
+                std::mem::swap(&mut self.document, document);
+                Ok(true)
+            }
             DocumentReversal::SetComment { path, properties } => {
                 let node = self.node_mut(path)?;
                 let inverse = comment_properties(node);
@@ -1274,6 +1482,14 @@ impl CurrentSgfDocument {
                 }
                 Ok(true)
             }
+            DocumentReversal::Sequence(steps) => {
+                let mut structural = false;
+                for step in steps.iter_mut().rev() {
+                    structural |= self.apply_reversal(step)?;
+                }
+                steps.reverse();
+                Ok(structural)
+            }
         }
     }
 
@@ -1330,7 +1546,12 @@ impl CurrentSgfDocument {
         })?;
         let mut captures_black = 0u32;
         let mut captures_white = 0u32;
-        let mut to_play = PlayerColor::Black;
+        // Matches the exact-position authority: a black-only root setup without PL is a handicap, White first.
+        let handicap_root = nodes.first().is_some_and(|root| {
+            root.properties.iter().any(|property| property.key == "AB" && !property.values.is_empty())
+                && !root.properties.iter().any(|property| matches!(property.key.as_str(), "AW" | "AE"))
+        });
+        let mut to_play = if handicap_root { PlayerColor::White } else { PlayerColor::Black };
         let mut last_move = None;
         let mut move_number = 0u32;
         let mut errors = Vec::new();
@@ -1575,13 +1796,13 @@ fn replace_result_properties(node: &mut SgfNode, desired: &[(usize, SgfProperty)
 }
 
 fn validate_result(result: &str) -> Result<(), CurrentGameError> {
-    if result == "0" {
+    if matches!(result, "0" | "B+R" | "W+R") {
         return Ok(());
     }
     let Some(rest) = result.strip_prefix("B+").or_else(|| result.strip_prefix("W+")) else {
         return Err(CurrentGameError {
             kind: CurrentGameErrorKind::MalformedSgf,
-            message: format!("result must be 0, B+<n>, or W+<n>; found: {result}"),
+            message: format!("result must be 0, B+<n>, W+<n>, B+R or W+R; found: {result}"),
         });
     };
     if rest.is_empty() {
@@ -3259,8 +3480,6 @@ mod root_result_history {
         let before_serialized = document.serialize().unwrap();
 
         let invalid_results = [
-            "B+R",
-            "W+R",
             "B+Resign",
             "W+Resign",
             "B+T",
@@ -3442,5 +3661,264 @@ mod root_result_history {
         assert_eq!(document.result(), Some("W+0.5"));
         assert!(document.snapshot(&root_path).unwrap().primary_analysis.is_some());
         assert!(document.snapshot(&move_path).unwrap().primary_analysis.is_some());
+    }
+}
+
+#[cfg(test)]
+mod new_game_staging {
+    use super::*;
+    use app_model::ExactRulesDto;
+
+    #[test]
+    fn fixed_handicap_projects_actual_hoshi_and_white_turn() {
+        for size in [9, 13, 19] {
+            let low = if size == 9 { 2 } else { 3 };
+            let high = size - 1 - low;
+            let middle = size / 2;
+            for rules in [ExactRulesDto::Chinese, ExactRulesDto::ChineseKgs] {
+                for handicap in 2..=9 {
+                    let staged = CurrentSgfDocument::stage_new_game(size, 0.5, handicap, rules, "Human", "Engine").unwrap();
+                    let exact = staged.exact_position(&NodePath::default()).unwrap();
+                    let dto = exact.dto();
+                    assert_eq!(dto.rules, rules);
+                    assert_eq!(dto.initial_player, PlayerColor::White);
+                    assert_eq!(dto.to_play, PlayerColor::White);
+                    assert_eq!(dto.initial_stones.len(), usize::from(handicap));
+                    assert!(dto.initial_stones.iter().all(|stone| stone.color == PlayerColor::Black));
+                    let has = |x, y| dto.initial_stones.iter().any(|stone| stone.x == x && stone.y == y);
+                    assert!(has(high, low) && has(low, high));
+                    assert_eq!(has(middle, middle), handicap >= 5 && handicap % 2 == 1);
+                    if handicap == 9 {
+                        for x in [low, middle, high] {
+                            for y in [low, middle, high] {
+                                assert!(has(x, y));
+                            }
+                        }
+                    }
+                    let reopened = CurrentSgfDocument::open(&staged.serialize().unwrap()).unwrap();
+                    assert_eq!(reopened.exact_position(&NodePath::default()).unwrap().dto(), dto);
+                    assert_eq!(reopened.scoring_handicap().unwrap(), Some(u32::from(handicap)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_handicap_and_names_roundtrip_without_generated_comment_or_result() {
+        let black = "Human ] \\ (;C[injected])";
+        let white = "Engine [test] \\";
+        for size in [2, 9, 19] {
+            let staged = CurrentSgfDocument::stage_new_game(size, -0.5, 0, ExactRulesDto::ChineseKgs, black, white).unwrap();
+            let reopened = CurrentSgfDocument::open(&staged.serialize().unwrap()).unwrap();
+            let root = reopened.root().unwrap();
+            assert_eq!(property_values(root, "PB").unwrap(), &[black.to_string()]);
+            assert_eq!(property_values(root, "PW").unwrap(), &[white.to_string()]);
+            for key in ["AB", "C", "RE"] {
+                assert!(property_values(root, key).is_none());
+            }
+            let exact = reopened.exact_position(&NodePath::default()).unwrap();
+            assert!(exact.dto().initial_stones.is_empty());
+            assert_eq!(exact.dto().to_play, PlayerColor::Black);
+            assert_eq!(exact.dto().komi, -0.5);
+        }
+    }
+
+    #[test]
+    fn unsupported_inputs_are_rejected_without_changing_existing_document() {
+        let old = CurrentSgfDocument::open("(;SZ[9]C[keep];B[aa])").unwrap();
+        let before = old.serialize().unwrap();
+        for (size, komi, handicap) in [
+            (0, 7.5, 0), (1, 7.5, 0), (20, 7.5, 0), (255, 7.5, 0),
+            (19, f32::NAN, 0), (19, f32::INFINITY, 0), (19, f32::NEG_INFINITY, 0),
+            (19, 7.25, 0), (19, 1.0 / 3.0, 0),
+            (19, 7.5, 1), (19, 7.5, 10), (19, 7.5, 255),
+            (2, 0.5, 2), (8, 0.5, 2), (11, 0.5, 2), (17, 0.5, 9),
+        ] {
+            assert!(CurrentSgfDocument::stage_new_game(size, komi, handicap, ExactRulesDto::Chinese, "", "").is_err());
+        }
+        // stage_new_game takes an exhaustive rules enum; unrecognized SGF rules
+        // remain rejected by the same strict projection used before staging succeeds.
+        for rule in ["Japanese", "unknown", ""] {
+            let document = CurrentSgfDocument::open(&format!("(;SZ[19]KM[7.5]RU[{rule}])")).unwrap();
+            assert!(document.exact_position(&NodePath::default()).is_err());
+        }
+        assert_eq!(old.serialize().unwrap(), before);
+    }
+
+    #[test]
+    fn start_is_one_history_unit_restoring_entire_tree_and_selection() {
+        let mut document = CurrentSgfDocument::open(
+            "(;GM[1]SZ[9]KM[6.5]RU[Chinese]PB[Old black]PW[Old white]RE[W+R]C[root]XX[unknown]LZ[opaque analysis](;B[aa]C[main];W[bb])(;B[cc]LZ2[second analysis];W[dd]C[branch]))",
+        ).unwrap();
+        let selected = NodePath { indices: vec![1, 0] };
+        let old_snapshot = document.snapshot(&selected).unwrap();
+        let old_sgf = document.serialize().unwrap();
+        let staged = CurrentSgfDocument::stage_new_game(19, 7.5, 0, ExactRulesDto::ChineseKgs, "New black", "New white").unwrap();
+        let new_sgf = staged.serialize().unwrap();
+        let edit = document.replace_with_history(staged.into(), &selected, NodePath::default());
+        assert_eq!(edit.selected_after(), &NodePath::default());
+        let mut history = DocumentHistory::default();
+        history.commit(edit);
+        assert_eq!(document.serialize().unwrap(), new_sgf);
+        assert_eq!(document.result(), None);
+        for _ in 0..2 {
+            let undo = history.undo(&mut document).unwrap().unwrap();
+            assert!(undo.structural);
+            assert_eq!(undo.selected_path, selected);
+            assert_eq!(document.serialize().unwrap(), old_sgf);
+            assert_eq!(document.snapshot(&selected).unwrap(), old_snapshot);
+            assert_eq!(document.result(), Some("W+R"));
+            assert!(!history.can_undo());
+            let redo = history.redo(&mut document).unwrap().unwrap();
+            assert!(redo.structural);
+            assert_eq!(redo.selected_path, NodePath::default());
+            assert_eq!(document.serialize().unwrap(), new_sgf);
+            assert!(!history.can_redo());
+        }
+        history.undo(&mut document).unwrap().unwrap();
+        let reused = document.play_with_history(
+            &NodePath::default(), &NodePath::default(),
+            MoveVertex::Point(app_model::PointDto { x: 2, y: 2 }),
+        ).unwrap();
+        assert!(reused.edit.is_none());
+        assert_eq!(reused.snapshot.path, NodePath { indices: vec![1] });
+        assert_eq!(document.serialize().unwrap(), old_sgf);
+    }
+}
+
+#[cfg(test)]
+mod continuation_staging {
+    use super::*;
+
+    const OLD: &str = "(;GM[1]SZ[9]KM[6.5]RU[Chinese]PB[Old black]PW[Old white]RE[W+R]C[root](;B[aa]C[main];W[bb])(;B[cc]C[start];W[dd]C[old reply];B[ee]))";
+
+    fn node<'a>(document: &'a CurrentSgfDocument, indices: &[u32]) -> &'a SgfNode {
+        document.nodes_on_path(&NodePath { indices: indices.to_vec() }).unwrap().pop().unwrap()
+    }
+    fn root_values<'a>(document: &'a CurrentSgfDocument, key: &str) -> Option<&'a [String]> {
+        property_values(document.root().unwrap(), key).map(Vec::as_slice)
+    }
+    fn analysis(visits: u32) -> crate::SgfAnalysisPayload {
+        crate::SgfAnalysisPayload {
+            engine_name: "KataGo".into(),
+            visits,
+            winrate_black: 0.5,
+            score_mean_black: None,
+            score_stdev: None,
+            pda: None,
+            candidates: vec![app_model::CandidateMoveDto {
+                vertex: MoveVertex::Pass,
+                visits,
+                winrate_black: 0.5,
+                score_mean_black: 0.0,
+                policy_prior: None,
+                pv: vec![MoveVertex::Pass],
+            }],
+            ownership: None,
+        }
+    }
+
+    #[test]
+    fn non_mainline_start_becomes_independent_mainline_preserving_old_routes() {
+        let mut document = CurrentSgfDocument::open(OLD).unwrap();
+        let old_sgf = document.serialize().unwrap();
+        let old_main = node(&document, &[0]).clone();
+        let old_reply = node(&document, &[1, 0]).clone();
+        let start = NodePath { indices: vec![1] };
+        let (staged, endpoint, position) = document.stage_continuation(&start, "Human", "Engine").unwrap();
+        assert_eq!(endpoint, NodePath { indices: vec![0, 0] });
+        assert_eq!(position.dto(), document.exact_position(&start).unwrap().dto());
+        assert_eq!(document.serialize().unwrap(), old_sgf, "staging must not touch the live document");
+
+        let mut history = DocumentHistory::default();
+        history.commit(document.replace_with_history(staged, &start, endpoint.clone()));
+        // The structure endpoint carries no move, pass, number or comment.
+        assert!(node(&document, &[0, 0]).properties.is_empty());
+        assert_eq!(document.exact_position(&endpoint).unwrap().dto(), position.dto());
+        assert_eq!(root_values(&document, "PB"), Some(&["Human".to_string()][..]));
+        assert_eq!(root_values(&document, "PW"), Some(&["Engine".to_string()][..]));
+        assert_eq!(root_values(&document, "RE"), None);
+        assert_eq!(root_values(&document, "C"), Some(&["root".to_string()][..]));
+        assert_eq!(node(&document, &[1]), &old_main);
+        assert_eq!(node(&document, &[0, 1]), &old_reply);
+
+        // The same next move as the old continuation still creates an independent node.
+        let prepared = document.prepare_play(&endpoint, MoveVertex::Point(app_model::PointDto { x: 3, y: 3 })).unwrap();
+        let outcome = document.apply_prepared(prepared);
+        assert_eq!(outcome.snapshot.path, NodePath { indices: vec![0, 0, 0] });
+        history.commit(outcome.edit.unwrap());
+        assert_eq!(node(&document, &[0, 1]), &old_reply);
+
+        let reopened = CurrentSgfDocument::open(&document.serialize().unwrap()).unwrap();
+        assert_eq!(reopened.default_selected_path(), NodePath { indices: vec![0, 0, 0] });
+        assert_eq!(node(&reopened, &[0, 1]), &old_reply);
+        assert_eq!(node(&reopened, &[1]), &old_main);
+        assert!(node(&reopened, &[0, 0]).properties.is_empty());
+
+        history.undo(&mut document).unwrap().unwrap();
+        let undo = history.undo(&mut document).unwrap().unwrap();
+        assert!(undo.structural);
+        assert_eq!(undo.selected_path, start);
+        assert_eq!(document.serialize().unwrap(), old_sgf);
+        assert_eq!(document.result(), Some("W+R"));
+        let redo = history.redo(&mut document).unwrap().unwrap();
+        assert_eq!(redo.selected_path, endpoint);
+        assert_eq!(root_values(&document, "RE"), None);
+    }
+
+    #[test]
+    fn startup_undo_reverses_only_continuation_content_keeping_later_analysis() {
+        let mut document = CurrentSgfDocument::open(OLD).unwrap();
+        let start = NodePath { indices: vec![1] };
+        let (staged, endpoint, _) = document.stage_continuation(&start, "Human", "Engine").unwrap();
+        let mut history = DocumentHistory::default();
+        history.commit(document.replace_with_history(staged, &start, endpoint.clone()));
+        // Analysis accepted after the session ended belongs to surviving nodes, not to the startup.
+        let old_main = NodePath { indices: vec![1] };
+        document.replace_primary_analysis(&old_main, &analysis(321)).unwrap();
+        document.replace_primary_analysis(&NodePath::default(), &analysis(654)).unwrap();
+
+        let undo = history.undo(&mut document).unwrap().unwrap();
+        assert!(undo.structural);
+        assert_eq!(undo.selected_path, start);
+        let visits = |document: &CurrentSgfDocument, path: &NodePath| {
+            document.snapshot(path).unwrap().primary_analysis.map(|frame| frame.visits)
+        };
+        // The old mainline returns to index 0 and keeps the analysis accepted while it was a variation.
+        assert_eq!(visits(&document, &NodePath { indices: vec![0] }), Some(321));
+        assert_eq!(visits(&document, &NodePath::default()), Some(654));
+        assert_eq!(root_values(&document, "PB"), Some(&["Old black".to_string()][..]));
+        assert_eq!(root_values(&document, "PW"), Some(&["Old white".to_string()][..]));
+        assert_eq!(document.result(), Some("W+R"));
+        let restored = CurrentSgfDocument::open(OLD).unwrap();
+        assert_eq!(node(&document, &[1]), node(&restored, &[1]));
+
+        document.replace_primary_analysis(&start, &analysis(987)).unwrap();
+        let redo = history.redo(&mut document).unwrap().unwrap();
+        assert_eq!(redo.selected_path, endpoint);
+        assert_eq!(visits(&document, &NodePath { indices: vec![0] }), Some(987));
+        assert_eq!(visits(&document, &NodePath { indices: vec![1] }), Some(321));
+        assert_eq!(visits(&document, &NodePath::default()), Some(654));
+        assert!(node(&document, &endpoint.indices).properties.is_empty());
+        assert_eq!(root_values(&document, "PB"), Some(&["Human".to_string()][..]));
+        assert_eq!(document.result(), None);
+    }
+
+    #[test]
+    fn ordinary_review_play_still_reuses_existing_child() {
+        let mut document = CurrentSgfDocument::open(OLD).unwrap();
+        let start = NodePath { indices: vec![1] };
+        let reused = document.play_with_history(&start, &start,
+            MoveVertex::Point(app_model::PointDto { x: 3, y: 3 })).unwrap();
+        assert!(reused.edit.is_none());
+        assert_eq!(reused.snapshot.path, NodePath { indices: vec![1, 0] });
+    }
+
+    #[test]
+    fn unsupported_or_missing_start_is_rejected_before_staging() {
+        let japanese = CurrentSgfDocument::open("(;SZ[9]KM[6.5]RU[Japanese];B[aa])").unwrap();
+        assert!(japanese.stage_continuation(&NodePath { indices: vec![0] }, "Human", "Engine").is_err());
+        let document = CurrentSgfDocument::open(OLD).unwrap();
+        assert!(document.stage_continuation(&NodePath { indices: vec![2] }, "Human", "Engine").is_err());
     }
 }

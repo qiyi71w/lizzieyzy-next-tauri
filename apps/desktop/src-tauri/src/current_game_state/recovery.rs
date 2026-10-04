@@ -136,6 +136,10 @@ impl CurrentGameState {
         let document = CurrentSgfDocument::open(&envelope.sgf_text)?;
         document.snapshot(&envelope.selected_path)?;
         let mut holder = self.holder.lock().expect("current game state");
+        if holder.human_match.blocks() {
+            return Err(CurrentGameError { kind: CurrentGameErrorKind::DepartureBlocked,
+                message: "Stop the match before restoring a recovery document.".into() });
+        }
         if holder.departure.is_some() {
             return Err(departure::departure_in_progress());
         }
@@ -165,6 +169,10 @@ impl CurrentGameState {
         holder.edits_blocked = false;
         holder.closed_jobs.clear();
         holder.analysis_target = None;
+        // Restoring a document is not authorization to resume its engine work.
+        if let Some(manager) = self.analysis_manager.get() {
+            manager.finish_continuous_departure(false);
+        }
         self.follow_continuous_position(&mut holder);
         holder.current_result()
     }

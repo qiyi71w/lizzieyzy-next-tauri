@@ -141,6 +141,7 @@ impl CurrentGameState {
         }
         holder.departure = None;
         holder.edits_blocked = false;
+        self.match_departure.notify_all();
         holder.exit_disposition = None;
         let current = holder.result_dto(selected_path)?;
         if let Some(manager) = self.analysis_manager.get() {
@@ -190,6 +191,10 @@ impl CurrentGameState {
             _ => return Err(departure_in_progress()),
         }
         holder.exit_disposition = Some(disposition);
+        if holder.human_match.blocks() {
+            holder.human_match.seal(app_model::MatchEndDto::Stopped, None);
+            self.match_departure.notify_all();
+        }
         let current = holder.result_dto(selected_path)?;
         Ok(ApplicationExitOutcomeDto {
             committed: true,
@@ -273,6 +278,9 @@ impl CurrentGameState {
         if holder.departure.is_some() {
             return Err(departure_in_progress());
         }
+        if holder.human_match.blocks() && !matches!(target, DepartureTarget::ApplicationExit) {
+            return Err(departure_blocked());
+        }
         if matches!(
             holder.trial_mode,
             super::trial::TrialMode::Entering(_)
@@ -341,7 +349,7 @@ impl CurrentGameHolder {
     }
 
     pub(super) fn ensure_editable(&self) -> Result<(), CurrentGameError> {
-        if self.edits_blocked {
+        if self.edits_blocked || self.human_match.blocks() {
             Err(departure_blocked())
         } else if self.departure.is_some() {
             Err(departure_in_progress())

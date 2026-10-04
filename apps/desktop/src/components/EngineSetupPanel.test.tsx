@@ -143,11 +143,21 @@ describe("engine profile configuration editor", () => {
     expect(verifiedLabel).toContain(facts.name);
     expect(verifiedLabel).toContain(facts.version);
     for (const command of facts.commands) expect(verifiedLabel).toContain(command);
+    expect(verifiedLabel).toContain("落子不可用");
+    if (snapshot.lifecycle.state !== "ready") throw new Error("Expected Ready fixture");
+    const qualified: ForegroundEngineSnapshotDto = { ...snapshot, revision: 2,
+      lifecycle: { state: "ready", run: { ...snapshot.lifecycle.run,
+        capability_snapshot: { adapter_kind: "generic_gtp", game_move: true, gtp: { ...facts, name: "GNU Go" } } } } };
+    await act(async () => { root!.render(<EngineSetupPanel engineSnapshot={qualified} />); });
+    const qualifiedLabel = host.querySelector('[aria-label="当前 run 能力"]')?.textContent;
+    expect(qualifiedLabel).toContain("落子支持");
+    expect(qualifiedLabel).toContain("2/5/9/13/19");
+    expect(qualifiedLabel).toContain("Chinese KGS");
     await change(field("名称"), "Pending engine");
     await change(field("适配器"), "kata_go_analysis");
     await click("保存配置");
     expect((await loadEngineProfilesSettings()).profiles[0].profile.adapter_kind).toBe("kata_go_analysis");
-    expect(host.querySelector('[aria-label="当前 run 能力"]')?.textContent).toBe(verifiedLabel);
+    expect(host.querySelector('[aria-label="当前 run 能力"]')?.textContent).toBe(qualifiedLabel);
     expect(host.querySelector('[aria-label="当前 run 能力"]')?.textContent).not.toContain("Pending engine");
   });
 

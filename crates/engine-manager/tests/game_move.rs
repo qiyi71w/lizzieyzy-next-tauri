@@ -22,6 +22,7 @@ const GNU_ARGS: [&str; 9] = [
 ];
 struct Rig {
     manager: ForegroundEngineManager,
+    catalog: Arc<InMemoryEngineProfileCatalog>,
     dir: PathBuf,
     run: String,
     kata: bool,
@@ -71,7 +72,7 @@ impl Rig {
         second.profile_id = "second".into();
         catalog.upsert(second);
         let manager = ForegroundEngineManager::new(
-            catalog,
+            catalog.clone(),
             ForegroundEngineConfig {
                 stop_drain_timeout: Duration::from_millis(150),
                 ..ForegroundEngineConfig::for_tests()
@@ -89,6 +90,7 @@ impl Rig {
         };
         Self {
             manager,
+            catalog,
             dir,
             run,
             kata,
@@ -573,4 +575,704 @@ fn old_query_id_cannot_supply_a_current_move() {
         rig.manager.snapshot().lifecycle,
         ForegroundEngineLifecycleDto::Ready { .. }
     ));
+}
+
+fn match_analysis_request(run_id: &str) -> SelectedNodeJobRequest {
+    SelectedNodeJobRequest {
+        run_id: run_id.into(), mode: AnalysisJobModeDto::Finite, generation: 17,
+        node_path: NodePath::default(), board_width: 5, board_height: 5, position_empty: true,
+        query: katago_protocol::AnalysisQuery {
+            id: "analysis".into(), moves: Vec::new(), initial_stones: Vec::new(),
+            rules: "chinese".into(), komi: 6.5, board_x_size: 5, board_y_size: 5,
+            analyze_turns: Some(vec![0]), max_visits: Some(8), include_ownership: None,
+            include_policy: None, report_during_search_every: None, override_settings: None,
+        },
+    }
+}
+
+#[test]
+fn match_preparation_drains_analysis_or_preserves_unresponsive_foreground() {
+    for clean in [true, false] {
+        let rig = Rig::new(true, if clean { "hold" } else { "unclean" });
+        let old_pid = std::fs::read_to_string(rig.dir.join("pid")).unwrap();
+        let job = rig.manager.start_selected_node_job(match_analysis_request(&rig.run)).unwrap();
+        rig.wait_for(&job.job_id);
+        std::fs::write(rig.dir.join("mode"), "normal").unwrap();
+        let request = rig.request(3000);
+        rig.manager.reserve_match("drain").unwrap();
+        let prepared = rig.manager.prepare_reserved_match("drain", "second", &request.position, request.identity.budget);
+        assert_eq!(prepared.is_ok(), clean);
+        if !clean { assert_eq!(prepared.unwrap_err().kind, EngineFailureKind::Timeout); }
+        rig.manager.abort_reserved_match("drain").unwrap();
+        assert!(std::path::Path::new(&format!("/proc/{old_pid}")).exists());
+        assert!(matches!(rig.manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::Ready { run } if run.run_id == rig.run));
+        assert!(rig.trace().contains("terminateId"));
+    }
+}
+
+#[test]
+fn match_profile_change_prevents_install_closure_and_keeps_candidate_deletion_protected() {
+    let rig = Rig::new(true, "normal");
+    let request = rig.request(3000);
+    rig.manager.reserve_match("profile").unwrap();
+    let run = rig.manager.prepare_reserved_match("profile", "second", &request.position, request.identity.budget).unwrap();
+    assert!(rig.manager.assert_profile_deletable(&run.profile_id).is_err());
+    assert!(rig.manager.commit_reserved_match::<()>("other", || panic!("wrong owner installed")).is_err());
+    let mut changed = rig.catalog.get("second").unwrap();
+    changed.profile.name = "changed after prepare".into();
+    rig.catalog.upsert(changed);
+    assert!(rig.manager.commit_reserved_match::<()>("profile", || panic!("changed profile installed")).is_err());
+    rig.manager.abort_reserved_match("profile").unwrap();
+    rig.manager.abort_reserved_match("profile").unwrap();
+    rig.manager.stop_reserved_match("profile").unwrap();
+    rig.manager.assert_profile_deletable("second").unwrap();
+}
+
+#[test]
+fn match_reservation_refuses_ordinary_mutations_and_analysis_without_process_io() {
+    let rig = Rig::new(true, "normal");
+    let before = rig.trace();
+    rig.manager.reserve_match("session").unwrap();
+    assert_eq!(rig.manager.match_reservation_owner().as_deref(), Some("session"));
+    assert!(rig.manager.reserve_match("other").is_err());
+    assert!(rig.manager.start("second").is_err());
+    assert!(rig.manager.stop().is_err());
+    assert!(rig.manager.restart().is_err());
+    assert!(rig.manager.switch_to("second").is_err());
+    assert!(rig.manager.start_game_move(rig.request(3000)).is_err());
+    assert!(rig.manager.start_selected_node_job(match_analysis_request(&rig.run)).is_err());
+    let selected = match_analysis_request(&rig.run);
+    assert!(rig.manager.start_whole_game_analysis(WholeGameJobRequest {
+        run_id: rig.run.clone(), generation: 17,
+        work_items: vec![WholeGameWorkItem { node_path: selected.node_path, query: selected.query,
+            board_width: 5, board_height: 5, move_number: 0 }],
+    }).is_err());
+    assert!(rig.manager.check_analysis_task_admission(None).is_err());
+    assert!(rig.manager.resume_continuous().is_err());
+    assert!(rig.manager.abort_reserved_match("other").is_err());
+    assert!(matches!(rig.manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { run } if run.run_id == rig.run));
+    assert_eq!(rig.trace(), before);
+    rig.manager.abort_reserved_match("session").unwrap();
+    assert_eq!(rig.manager.match_reservation_owner(), None);
+    assert!(matches!(rig.manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { run } if run.run_id == rig.run));
+}
+
+#[test]
+fn match_candidate_failure_and_failed_install_preserve_old_foreground() {
+    for kata in [false, true] {
+        let rig = Rig::new(kata, "normal");
+        let old_pid = std::fs::read_to_string(rig.dir.join("pid")).unwrap();
+        std::fs::write(rig.dir.join("mode"), "readiness_fail").unwrap();
+        rig.manager.reserve_match("failed-ready").unwrap();
+        let request = rig.request(3000);
+        assert!(rig.manager.prepare_reserved_match("failed-ready", "second", &request.position, request.identity.budget).is_err());
+        rig.reaped();
+        assert!(std::path::Path::new(&format!("/proc/{old_pid}")).exists());
+        assert!(matches!(rig.manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::Ready { run } if run.run_id == rig.run));
+        assert_eq!(rig.manager.match_reservation_owner(), None);
+
+        std::fs::write(rig.dir.join("mode"), "normal").unwrap();
+        rig.manager.reserve_match("persist-failure").unwrap();
+        let candidate = rig.manager.prepare_reserved_match("persist-failure", "second", &request.position, request.identity.budget).unwrap();
+        assert_ne!(candidate.run_id, rig.run);
+        assert!(candidate.capability_snapshot.as_ref().unwrap().game_move);
+        assert!(rig.manager.assert_profile_deletable("second").is_err());
+        let error = rig.manager.commit_reserved_match::<()>("persist-failure", || Err("disk full".into())).unwrap_err();
+        assert!(error.message.contains("disk full"));
+        assert!(matches!(rig.manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::Ready { run } if run.run_id == rig.run));
+        rig.manager.abort_reserved_match("persist-failure").unwrap();
+        rig.reaped();
+        assert!(std::path::Path::new(&format!("/proc/{old_pid}")).exists());
+    }
+}
+
+#[test]
+fn reserved_move_uses_selected_candidate_and_consumes_publication_once() {
+    for kata in [false, true] {
+        let rig = Rig::new(kata, "normal");
+        let old_pid = std::fs::read_to_string(rig.dir.join("pid")).unwrap();
+        let mut request = rig.request(3000);
+        rig.manager.reserve_match("session").unwrap();
+        let candidate = rig.manager.prepare_reserved_match("session", "second", &request.position, request.identity.budget).unwrap();
+        let installed = rig.manager.commit_reserved_match("session", || Ok(42)).unwrap();
+        assert_eq!(installed, 42);
+        assert!(rig.manager.abort_reserved_match("session").is_err());
+        assert!(rig.manager.start_reserved_game_move("session", request.clone()).is_err());
+        request.identity.run_id = candidate.run_id.clone();
+        assert!(rig.manager.start_reserved_game_move("other", request.clone()).is_err());
+        let result = rig.manager.start_reserved_game_move("session", request).unwrap().wait().unwrap();
+        assert_eq!(result.run_id, candidate.run_id);
+        assert!(rig.manager.claim_game_move_result(&result).is_err());
+        assert!(rig.manager.claim_reserved_game_move_result("other", &result).is_err());
+        let mut stale = result.clone();
+        stale.generation += 1;
+        assert!(rig.manager.claim_reserved_game_move_result("session", &stale).is_err());
+        rig.manager.claim_reserved_game_move_result("session", &result).unwrap();
+        assert!(rig.manager.claim_reserved_game_move_result("session", &result).is_err());
+        rig.manager.stop_reserved_match("session").unwrap();
+        rig.reaped();
+        assert!(!std::path::Path::new(&format!("/proc/{old_pid}")).exists());
+        assert_eq!(rig.manager.match_reservation_owner(), None);
+        assert!(matches!(rig.manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. }));
+        assert!(rig.manager.claim_reserved_game_move_result("session", &result).is_err());
+    }
+}
+
+#[test]
+fn match_prepare_enforces_exact_setup_and_qualified_gtp_identity() {
+    for (kata, mode, allowed) in [(true, "normal", true), (false, "normal", false), (false, "identity", false)] {
+        let rig = Rig::new(kata, "normal");
+        std::fs::write(rig.dir.join("mode"), mode).unwrap();
+        let position = CurrentSgfDocument::open("(;SZ[5]RU[Chinese-KGS]KM[6.5]AB[aa][ee]PL[W])")
+            .unwrap().exact_position(&NodePath::default()).unwrap();
+        rig.manager.reserve_match("setup").unwrap();
+        let result = rig.manager.prepare_reserved_match("setup", "second", &position, rig.request(3000).identity.budget);
+        assert_eq!(result.is_ok(), allowed);
+        if allowed { rig.manager.abort_reserved_match("setup").unwrap(); }
+        assert!(matches!(rig.manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::Ready { run } if run.run_id == rig.run));
+    }
+    let rig = Rig::new(false, "normal");
+    std::fs::write(rig.dir.join("mode"), "identity").unwrap();
+    let request = rig.request(3000);
+    rig.manager.reserve_match("identity").unwrap();
+    let error = rig.manager.prepare_reserved_match("identity", "second", &request.position, request.identity.budget).unwrap_err();
+    assert_eq!(error.kind, EngineFailureKind::UnsupportedCapability);
+}
+
+#[test]
+fn match_stop_seals_pending_move_reaps_children_and_does_not_resume_analysis() {
+    for kata in [false, true] {
+        let rig = Rig::new(kata, "normal");
+        std::fs::write(rig.dir.join("mode"), "hold").unwrap();
+        let mut request = rig.request(3000);
+        rig.manager.reserve_match("stop").unwrap();
+        let candidate = rig.manager.prepare_reserved_match("stop", "second", &request.position, request.identity.budget).unwrap();
+        rig.manager.commit_reserved_match("stop", || Ok(())).unwrap();
+        request.identity.run_id = candidate.run_id;
+        let handle = rig.manager.start_reserved_game_move("stop", request).unwrap();
+        if kata { rig.wait_for("initialStones"); } else { rig.wait_for("genmove"); }
+        rig.manager.stop_reserved_match("stop").unwrap();
+        assert!(handle.wait().is_err());
+        rig.reaped();
+        let after = rig.trace();
+        assert!(rig.manager.snapshot().selected_node_job.is_none());
+        assert_eq!(rig.manager.match_reservation_owner(), None);
+        assert_eq!(rig.trace(), after);
+    }
+}
+
+#[test]
+fn match_can_commit_from_unloaded_and_rejects_zero_budget_before_commit() {
+    let rig = Rig::new(true, "normal");
+    rig.manager.teardown().unwrap();
+    let request = rig.request(3000);
+    rig.manager.reserve_match("invalid-budget").unwrap();
+    assert!(rig.manager.prepare_reserved_match("invalid-budget", "second", &request.position,
+        ComputeBudgetDto { deadline_ms: 0, max_visits: Some(8) }).is_err());
+    assert!(matches!(rig.manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. }));
+    rig.manager.reserve_match("new").unwrap();
+    let run = rig.manager.prepare_reserved_match("new", "second", &request.position, request.identity.budget).unwrap();
+    rig.manager.commit_reserved_match("new", || Ok(())).unwrap();
+    assert!(matches!(rig.manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { run: current } if current.run_id == run.run_id));
+    rig.manager.stop_reserved_match("new").unwrap();
+    rig.reaped();
+}
+
+#[test]
+fn match_abort_during_handshake_keeps_old_process_and_releases_candidate() {
+    for kata in [false, true] {
+        let rig = Rig::new(kata, "normal");
+        let old_pid = std::fs::read_to_string(rig.dir.join("pid")).unwrap();
+        std::fs::write(rig.dir.join("mode"), "readiness_hold").unwrap();
+        rig.manager.reserve_match("handshake").unwrap();
+        let manager = rig.manager.clone();
+        let request = rig.request(3000);
+        let preparing = std::thread::spawn(move || {
+            manager.prepare_reserved_match("handshake", "second", &request.position, request.identity.budget)
+        });
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let pid = std::fs::read_to_string(rig.dir.join("pid")).unwrap();
+            if !pid.is_empty() && pid != old_pid { break; }
+            assert!(Instant::now() < deadline, "candidate never spawned");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        rig.manager.abort_reserved_match("handshake").unwrap();
+        assert!(preparing.join().unwrap().is_err());
+        rig.reaped();
+        assert!(std::path::Path::new(&format!("/proc/{old_pid}")).exists());
+        assert_eq!(rig.manager.match_reservation_owner(), None);
+        assert!(matches!(rig.manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::Ready { run } if run.run_id == rig.run));
+    }
+}
+
+fn pk_pid(rig: &Rig, run: &EngineRunDto) -> String {
+    std::fs::read_to_string(rig.dir.join(format!("run-{}", run.run_id))).unwrap()
+}
+
+fn assert_pid_alive(pid: &str, alive: bool) {
+    assert_eq!(std::path::Path::new(&format!("/proc/{pid}")).exists(), alive,
+        "unexpected process ownership for PID {pid}");
+}
+
+fn prepare_pk(rig: &Rig, owner: &str) -> [EngineRunDto; 2] {
+    let request = rig.request(3000);
+    rig.manager.reserve_match(owner).unwrap();
+    rig.manager.prepare_reserved_pk(owner,
+        [("engine", request.identity.budget), ("engine", request.identity.budget)],
+        &request.position).unwrap()
+}
+
+#[test]
+fn pk_same_profile_owns_distinct_processes_and_dispatches_both_sides() {
+    let rig = Rig::new(true, "normal");
+    let old_pid = std::fs::read_to_string(rig.dir.join("pid")).unwrap();
+    let runs = prepare_pk(&rig, "pk");
+    assert_ne!(runs[0].run_id, runs[1].run_id);
+    assert_eq!(runs[0].profile_id, runs[1].profile_id);
+    let pids = runs.each_ref().map(|run| pk_pid(&rig, run));
+    assert_ne!(pids[0], pids[1]);
+    assert_ne!(pids[0], old_pid);
+    assert_ne!(pids[1], old_pid);
+    assert!(matches!(rig.manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { run } if run.run_id == rig.run));
+    rig.manager.commit_reserved_match("pk", || Ok(())).unwrap();
+    for run in &runs {
+        let mut request = rig.request(3000);
+        request.identity.run_id = run.run_id.clone();
+        let result = rig.manager.start_reserved_game_move("pk", request).unwrap().wait().unwrap();
+        assert_eq!(result.run_id, run.run_id);
+        rig.manager.claim_reserved_game_move_result("pk", &result).unwrap();
+        assert!(rig.manager.assert_profile_deletable("engine").is_err());
+        for pid in &pids { assert_pid_alive(pid, true); }
+    }
+    rig.manager.stop_reserved_match("pk").unwrap();
+    for pid in &pids { assert_pid_alive(pid, false); }
+    assert_pid_alive(&old_pid, false);
+    assert_eq!(rig.manager.match_reservation_owner(), None);
+}
+
+#[test]
+fn pk_second_prepare_failure_reports_white_and_rolls_back_only_candidates() {
+    let rig = Rig::new(true, "normal");
+    let old_pid = std::fs::read_to_string(rig.dir.join("pid")).unwrap();
+    std::fs::write(rig.dir.join("mode"), "second_readiness_fail").unwrap();
+    std::fs::write(rig.dir.join("remaining-ready"), "1").unwrap();
+    rig.manager.reserve_match("pk").unwrap();
+    let request = rig.request(3000);
+    let (side, error) = rig.manager.prepare_reserved_pk("pk",
+        [("engine", request.identity.budget), ("engine", request.identity.budget)],
+        &request.position).unwrap_err();
+    assert_eq!(side, PlayerColor::White);
+    assert_eq!(error.profile_id.as_deref(), Some("engine"));
+    assert!(error.run_id.is_some());
+    for entry in std::fs::read_dir(&rig.dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_name().to_string_lossy().starts_with("run-") {
+            let pid = std::fs::read_to_string(entry.path()).unwrap();
+            assert_pid_alive(&pid, pid == old_pid);
+        }
+    }
+    assert_pid_alive(&old_pid, true);
+    assert_eq!(rig.manager.match_reservation_owner(), None);
+    assert!(matches!(rig.manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { run } if run.run_id == rig.run));
+}
+
+#[test]
+fn pk_commit_checks_second_profile_before_install_and_abort_preserves_foreground() {
+    let rig = Rig::new(true, "normal");
+    let old_pid = std::fs::read_to_string(rig.dir.join("pid")).unwrap();
+    let request = rig.request(3000);
+    rig.manager.reserve_match("pk").unwrap();
+    let runs = rig.manager.prepare_reserved_pk("pk",
+        [("engine", request.identity.budget), ("second", request.identity.budget)],
+        &request.position).unwrap();
+    assert!(rig.manager.assert_profile_deletable("second").is_err());
+    let pids = runs.each_ref().map(|run| pk_pid(&rig, run));
+    let mut changed = rig.catalog.get("second").unwrap();
+    changed.profile.name.push_str(" changed");
+    rig.catalog.upsert(changed);
+    let error = rig.manager.commit_reserved_match::<()>("pk", || panic!("stale profile installed")).unwrap_err();
+    assert_eq!(error.run_id.as_deref(), Some(runs[1].run_id.as_str()));
+    rig.manager.abort_reserved_match("pk").unwrap();
+    for pid in &pids { assert_pid_alive(pid, false); }
+    assert_pid_alive(&old_pid, true);
+    assert!(matches!(rig.manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { run } if run.run_id == rig.run));
+    let runs = prepare_pk(&rig, "failed-install");
+    let pids = runs.each_ref().map(|run| pk_pid(&rig, run));
+    assert!(rig.manager.commit_reserved_match::<()>("failed-install", || Err("disk full".into())).is_err());
+    rig.manager.abort_reserved_match("failed-install").unwrap();
+    for pid in &pids { assert_pid_alive(pid, false); }
+    assert_pid_alive(&old_pid, true);
+}
+
+#[test]
+fn pk_candidate_exit_before_commit_never_installs_or_retires_the_old_foreground() {
+    for side in 0..2 {
+        let rig = Rig::new(true, "normal");
+        let old_pid = std::fs::read_to_string(rig.dir.join("pid")).unwrap();
+        let runs = prepare_pk(&rig, "pk");
+        let pids = runs.each_ref().map(|run| pk_pid(&rig, run));
+        assert!(std::process::Command::new("kill").args(["-TERM", &pids[side]]).status().unwrap().success());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while std::fs::read_to_string(format!("/proc/{}/stat", pids[side]))
+            .is_ok_and(|status| status.split_whitespace().nth(2) != Some("Z")) {
+            assert!(Instant::now() < deadline, "candidate did not exit before commit");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let error = rig.manager.commit_reserved_match::<()>("pk", || panic!("dead candidate installed")).unwrap_err();
+        assert_eq!(error.kind, EngineFailureKind::ProcessExit);
+        assert_eq!(error.run_id.as_deref(), Some(runs[side].run_id.as_str()));
+        assert_eq!(error.profile_id.as_deref(), Some("engine"));
+        rig.manager.abort_reserved_match("pk").unwrap();
+        for pid in &pids { assert_pid_alive(pid, false); }
+        assert_pid_alive(&old_pid, true);
+        assert_eq!(rig.manager.match_reservation_owner(), None);
+        assert!(matches!(rig.manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::Ready { run } if run.run_id == rig.run));
+    }
+}
+
+#[test]
+fn pk_gtp_visits_budget_is_refused_before_spawn_and_deadline_only_gtp_pair_dispatches_each_run() {
+    let rig = Rig::new(false, "normal");
+    let old_pid = std::fs::read_to_string(rig.dir.join("pid")).unwrap();
+    let request = rig.request(3000);
+    let visits = ComputeBudgetDto { deadline_ms: 3000, max_visits: Some(8) };
+    rig.manager.reserve_match("pk").unwrap();
+    let (side, error) = rig.manager.prepare_reserved_pk("pk",
+        [("engine", request.identity.budget), ("second", visits)], &request.position).unwrap_err();
+    assert_eq!(side, PlayerColor::White);
+    assert_eq!(error.kind, EngineFailureKind::UnsupportedCapability);
+    assert_eq!(error.profile_id.as_deref(), Some("second"));
+    assert_eq!(std::fs::read_to_string(rig.dir.join("pid")).unwrap(), old_pid);
+    rig.manager.abort_reserved_match("pk").unwrap();
+    assert_pid_alive(&old_pid, true);
+    let runs = prepare_pk(&rig, "gtp-pair");
+    assert_ne!(runs[0].run_id, runs[1].run_id);
+    assert!(runs.iter().all(|run| run.adapter_kind == EngineBackend::GenericGtp));
+    rig.manager.commit_reserved_match("gtp-pair", || Ok(())).unwrap();
+    // The White run is a match resident, not the primary; its stdout must still reach the move.
+    for run in &runs {
+        let mut request = rig.request(3000);
+        request.identity.run_id = run.run_id.clone();
+        let result = rig.manager.start_reserved_game_move("gtp-pair", request).unwrap().wait().unwrap();
+        assert_eq!(result.run_id, run.run_id);
+        rig.manager.claim_reserved_game_move_result("gtp-pair", &result).unwrap();
+    }
+    rig.manager.stop_reserved_match("gtp-pair").unwrap();
+    assert_pid_alive(&old_pid, false);
+}
+
+#[test]
+fn pk_pause_acknowledges_cancel_and_admits_fresh_job_on_same_process() {
+    let rig = Rig::new(true, "pause_once");
+    let runs = prepare_pk(&rig, "pk");
+    let pids = runs.each_ref().map(|run| pk_pid(&rig, run));
+    rig.manager.commit_reserved_match("pk", || Ok(())).unwrap();
+    let mut request = rig.request(3000);
+    request.identity.run_id = runs[1].run_id.clone();
+    let first = rig.manager.start_reserved_game_move("pk", request.clone()).unwrap();
+    let old_job = first.identity.job_id.clone();
+    rig.wait_for(&old_job);
+    rig.manager.pause_reserved_match("pk").unwrap();
+    assert_eq!(first.wait().unwrap_err().kind, EngineFailureKind::Cancellation);
+    assert_eq!(rig.manager.match_reservation_owner().as_deref(), Some("pk"));
+    for pid in &pids { assert_pid_alive(pid, true); }
+    let second = rig.manager.start_reserved_game_move("pk", request).unwrap();
+    assert_ne!(second.identity.job_id, old_job);
+    let result = second.wait().unwrap();
+    rig.manager.claim_reserved_game_move_result("pk", &result).unwrap();
+    rig.manager.pause_reserved_match("pk").unwrap();
+    assert!(rig.manager.claim_reserved_game_move_result("pk", &result).is_err());
+    rig.manager.stop_reserved_match("pk").unwrap();
+    for pid in &pids { assert_pid_alive(pid, false); }
+}
+
+#[test]
+fn pk_idle_second_exit_is_observable_during_work_and_after_pause() {
+    for paused in [false, true] {
+        let rig = Rig::new(true, "hold");
+        let runs = prepare_pk(&rig, "pk");
+        let pids = runs.each_ref().map(|run| pk_pid(&rig, run));
+        rig.manager.commit_reserved_match("pk", || Ok(())).unwrap();
+        let events = rig.manager.subscribe();
+        let mut request = rig.request(3000);
+        request.identity.run_id = runs[0].run_id.clone();
+        let handle = rig.manager.start_reserved_game_move("pk", request.clone()).unwrap();
+        rig.wait_for(&handle.identity.job_id);
+        let active = if paused {
+            rig.manager.pause_reserved_match("pk").unwrap();
+            assert!(handle.wait().is_err());
+            None
+        } else { Some(handle) };
+        assert!(std::process::Command::new("kill").args(["-TERM", &pids[1]]).status().unwrap().success());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let error = loop {
+            if let Ok(ForegroundEngineEventDto::Failure { failure }) = events.recv_timeout(Duration::from_millis(20)) {
+                if failure.operation == EngineOperationDto::UnexpectedExit { break failure; }
+            }
+            assert!(Instant::now() < deadline, "idle run exit was not published");
+        };
+        assert_eq!(error.run_id.as_deref(), Some(runs[1].run_id.as_str()));
+        assert_eq!(error.profile_id.as_deref(), Some("engine"));
+        if let Some(handle) = active { assert!(handle.wait().is_err()); }
+        assert!(rig.manager.start_reserved_game_move("pk", request).is_err());
+        assert_eq!(rig.manager.match_reservation_owner().as_deref(), Some("pk"));
+        rig.manager.stop_reserved_match("pk").unwrap();
+        for pid in &pids { assert_pid_alive(pid, false); }
+    }
+}
+
+fn commit_analysis_match(rig: &Rig, deadline_ms: u32) -> GameMoveRequest {
+    let mut request = rig.request(deadline_ms);
+    rig.manager.reserve_match("analysis").unwrap();
+    let candidate = rig.manager.prepare_reserved_match("analysis", "second",
+        &request.position, request.identity.budget).unwrap();
+    rig.manager.commit_reserved_match("analysis", || Ok(())).unwrap();
+    request.identity.run_id = candidate.run_id;
+    request
+}
+
+#[test]
+fn reserved_analysis_frames_use_exact_move_job_and_never_grant_a_human_move_permit() {
+    let rig = Rig::new(true, "normal");
+    let request = commit_analysis_match(&rig, 3000);
+    for analysis_only in [true, false] {
+        let handle = if analysis_only {
+            rig.manager.start_reserved_analysis("analysis", request.clone())
+        } else {
+            rig.manager.start_reserved_game_move_with_analysis("analysis", request.clone())
+        }.unwrap();
+        let identity = handle.identity.clone();
+        let mut frames = Vec::new();
+        let result = handle.wait_with_analysis(|job, frame| {
+            assert_eq!(job, &identity);
+            assert_eq!(frame.job_id.to_string(), job.job_id);
+            assert_eq!(frame.turn, request.position.dto().moves.len() as u32);
+            frames.push(frame);
+        }).unwrap();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].visits, 1);
+        assert_eq!(frames[1].visits, 8);
+        assert_eq!(frames[1].candidates.len(), 2);
+        assert_eq!(result.job_id, identity.job_id);
+        assert_eq!(result.result, GameMoveDto::Move {
+            vertex: MoveVertex::Point(PointDto { x: 3, y: 1 }),
+        });
+        if analysis_only {
+            assert!(rig.manager.claim_reserved_game_move_result("analysis", &result).is_err());
+            rig.manager.cancel_reserved_analysis("analysis", &identity).unwrap();
+        } else {
+            rig.manager.claim_reserved_game_move_result("analysis", &result).unwrap();
+            assert!(rig.manager.claim_reserved_game_move_result("analysis", &result).is_err());
+        }
+        let trace = rig.trace();
+        let query: serde_json::Value = serde_json::from_str(trace.lines().last().unwrap()).unwrap();
+        assert_eq!(query["id"], identity.job_id);
+        assert_eq!(query["reportDuringSearchEvery"], 0.05);
+        assert_eq!(query["maxVisits"], 8);
+        assert_eq!(query["includeOwnership"], true);
+        assert_eq!(frames[1].ownership.as_ref().unwrap().len(), 25);
+        assert_eq!(query["moves"], serde_json::json!([["B", "A5"], ["W", "pass"]]));
+        assert!(rig.manager.snapshot().selected_node_job.is_none());
+        assert!(rig.manager.snapshot().whole_game_job.is_none());
+    }
+    // Compatibility wait ignores optional analysis and cannot manufacture a permit.
+    let result = rig.manager.start_reserved_analysis("analysis", request).unwrap().wait().unwrap();
+    assert!(rig.manager.claim_reserved_game_move_result("analysis", &result).is_err());
+    rig.manager.stop_reserved_match("analysis").unwrap();
+}
+
+#[test]
+fn reserved_analysis_cancel_drains_before_move_and_cannot_cancel_an_engine_job() {
+    let rig = Rig::new(true, "analysis_hold");
+    let request = commit_analysis_match(&rig, 3000);
+    let handle = rig.manager.start_reserved_analysis("analysis", request.clone()).unwrap();
+    let analysis_job = handle.identity.clone();
+    rig.wait_for("reportDuringSearchEvery");
+    let before = rig.trace();
+    assert!(rig.manager.cancel_reserved_analysis("other", &analysis_job).is_err());
+    let mut stale = analysis_job.clone();
+    stale.generation += 1;
+    assert!(rig.manager.cancel_reserved_analysis("analysis", &stale).is_err());
+    stale = analysis_job.clone();
+    stale.run_id = rig.run.clone();
+    assert!(rig.manager.cancel_reserved_analysis("analysis", &stale).is_err());
+    assert!(rig.manager.start_reserved_game_move("analysis", request.clone()).is_err());
+    assert!(rig.manager.start_selected_node_job(match_analysis_request(&analysis_job.run_id)).is_err());
+    assert_eq!(rig.trace(), before);
+    rig.manager.cancel_reserved_analysis("analysis", &analysis_job).unwrap();
+    assert!(rig.manager.snapshot().game_move_job.is_none());
+    assert_eq!(handle.wait().unwrap_err().kind, EngineFailureKind::Cancellation);
+    let result = rig.manager.start_reserved_game_move("analysis", request.clone()).unwrap().wait().unwrap();
+    rig.manager.claim_reserved_game_move_result("analysis", &result).unwrap();
+    let handle = rig.manager.start_reserved_game_move_with_analysis("analysis", request).unwrap();
+    let engine_job = handle.identity.clone();
+    assert!(rig.manager.cancel_reserved_analysis("analysis", &engine_job).is_err());
+    rig.manager.cancel_reserved_analysis("analysis", &analysis_job).unwrap();
+    assert_eq!(rig.manager.snapshot().game_move_job, Some(engine_job));
+    rig.manager.stop_reserved_match("analysis").unwrap();
+    assert!(handle.wait().is_err());
+    rig.reaped();
+}
+
+#[test]
+fn gtp_reserved_analysis_is_rejected_before_any_process_mutation() {
+    let rig = Rig::new(false, "normal");
+    let request = commit_analysis_match(&rig, 3000);
+    let before = rig.trace();
+    for move_enabled in [false, true] {
+        let error = match if move_enabled {
+            rig.manager.start_reserved_game_move_with_analysis("analysis", request.clone())
+        } else {
+            rig.manager.start_reserved_analysis("analysis", request.clone())
+        } {
+            Ok(_) => panic!("GTP admitted reserved candidates"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind, EngineFailureKind::UnsupportedCapability);
+    }
+    assert_eq!(rig.trace(), before);
+    assert!(rig.manager.snapshot().game_move_job.is_none());
+    let result = rig.manager.start_reserved_game_move("analysis", request).unwrap().wait().unwrap();
+    rig.manager.claim_reserved_game_move_result("analysis", &result).unwrap();
+    rig.manager.stop_reserved_match("analysis").unwrap();
+}
+
+#[test]
+fn slow_reserved_analysis_consumer_cannot_hold_deadline_or_final_completion() {
+    let rig = Rig::new(true, "analysis_flood");
+    let mut request = commit_analysis_match(&rig, 3000);
+    request.identity.budget.max_visits = Some(32);
+    let handle = rig.manager.start_reserved_game_move_with_analysis("analysis", request).unwrap();
+    let mut frames = Vec::new();
+    let result = handle.wait_with_analysis(|_, frame| {
+        if frames.is_empty() {
+            // This callback cannot finish until the independent worker has released ownership.
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while rig.manager.snapshot().game_move_job.is_some() {
+                assert!(Instant::now() < deadline, "slow callback stalled move worker");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+        frames.push(frame);
+    }).unwrap();
+    assert!(frames.len() <= 10, "intermediate publication must stay bounded");
+    assert_eq!(frames.last().unwrap().visits, 32, "completed frame must not be dropped");
+    rig.manager.claim_reserved_game_move_result("analysis", &result).unwrap();
+    rig.manager.stop_reserved_match("analysis").unwrap();
+}
+
+#[test]
+fn reserved_analysis_preserves_strict_warnings_turn_fences_and_hard_deadline() {
+    for mode in ["warning", "wrongturn", "analysis_invalid_accounting", "analysis_hold"] {
+        let rig = Rig::new(true, mode);
+        let request = commit_analysis_match(&rig, if mode == "analysis_hold" { 100 } else { 3000 });
+        let handle = rig.manager.start_reserved_analysis("analysis", request).unwrap();
+        let error = handle.wait_with_analysis(|_, _| {}).unwrap_err();
+        assert_eq!(error.kind, if mode == "analysis_hold" {
+            EngineFailureKind::Timeout
+        } else {
+            EngineFailureKind::Protocol
+        });
+        assert!(rig.manager.snapshot().game_move_job.is_none());
+        assert!(matches!(rig.manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::Ready { .. }));
+        rig.manager.stop_reserved_match("analysis").unwrap();
+    }
+}
+
+#[test]
+fn rejected_reserved_analysis_keeps_run_ready_but_seals_match_without_frames() {
+    for (mode, analysis_only) in [("error", true), ("errors", true), ("error", false), ("errors", false)] {
+        let rig = Rig::new(true, mode);
+        let request = commit_analysis_match(&rig, 3000);
+        let handle = if analysis_only {
+            rig.manager.start_reserved_analysis("analysis", request.clone())
+        } else {
+            rig.manager.start_reserved_game_move_with_analysis("analysis", request.clone())
+        }.unwrap();
+        let identity = handle.identity.clone();
+        let failure = handle.wait_with_analysis(|_, _| panic!("rejected query published analysis")).unwrap_err();
+        assert_eq!(failure.kind, EngineFailureKind::Protocol);
+        assert_eq!(failure.run_id.as_deref(), Some(identity.run_id.as_str()));
+        assert_eq!(failure.job_id.as_deref(), Some(identity.job_id.as_str()));
+        assert_eq!(failure.profile_id.as_deref(), Some("second"));
+        assert!(matches!(rig.manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::Ready { run } if run.run_id == identity.run_id));
+        assert!(rig.manager.snapshot().game_move_job.is_none());
+        assert!(!rig.trace().contains("terminateId"));
+        let pid = std::fs::read_to_string(rig.dir.join("pid")).unwrap();
+        assert_pid_alive(&pid, true);
+        assert_eq!(rig.manager.match_reservation_owner().as_deref(), Some("analysis"));
+        assert!(rig.manager.start_reserved_game_move("analysis", request).is_err());
+        rig.manager.stop_reserved_match("analysis").unwrap();
+        rig.reaped();
+        assert!(rig.manager.match_reservation_owner().is_none());
+    }
+}
+
+#[test]
+fn pk_unconfirmed_pause_preserves_occupancy_until_stop() {
+    let rig = Rig::new(true, "unclean");
+    let runs = prepare_pk(&rig, "pk");
+    rig.manager.commit_reserved_match("pk", || Ok(())).unwrap();
+    let mut request = rig.request(3000);
+    request.identity.run_id = runs[1].run_id.clone();
+    let handle = rig.manager.start_reserved_game_move("pk", request.clone()).unwrap();
+    rig.wait_for(&handle.identity.job_id);
+    let error = rig.manager.pause_reserved_match("pk").unwrap_err();
+    assert_eq!(error.kind, EngineFailureKind::Timeout);
+    assert_eq!(error.run_id.as_deref(), Some(runs[1].run_id.as_str()));
+    assert_eq!(error.profile_id.as_deref(), Some("engine"));
+    assert!(error.job_id.is_some());
+    assert!(handle.wait().is_err());
+    assert_eq!(rig.manager.match_reservation_owner().as_deref(), Some("pk"));
+    assert!(rig.manager.start_reserved_game_move("pk", request).is_err());
+    assert!(rig.manager.assert_profile_deletable("engine").is_err());
+    rig.manager.stop_reserved_match("pk").unwrap();
+    for run in &runs { assert_pid_alive(&pk_pid(&rig, run), false); }
+}
+
+#[test]
+fn pk_stop_during_pause_drain_never_revives_reservation() {
+    let rig = Rig::new(true, "hold");
+    let runs = prepare_pk(&rig, "pk");
+    rig.manager.commit_reserved_match("pk", || Ok(())).unwrap();
+    let mut request = rig.request(3000);
+    request.identity.run_id = runs[1].run_id.clone();
+    let handle = rig.manager.start_reserved_game_move("pk", request.clone()).unwrap();
+    rig.wait_for(&handle.identity.job_id);
+    let manager = rig.manager.clone();
+    let pausing = std::thread::spawn(move || manager.pause_reserved_match("pk"));
+    rig.wait_for("terminateId");
+    rig.manager.stop_reserved_match("pk").unwrap();
+    assert!(pausing.join().unwrap().is_err());
+    assert!(handle.wait().is_err());
+    assert_eq!(rig.manager.match_reservation_owner(), None);
+    assert!(rig.manager.start_reserved_game_move("pk", request).is_err());
+    for run in &runs { assert_pid_alive(&pk_pid(&rig, run), false); }
+}
+
+#[test]
+fn match_stop_seals_reserved_human_analysis_and_keeps_it_unclaimable() {
+    let rig = Rig::new(true, "analysis_hold");
+    let request = commit_analysis_match(&rig, 3000);
+    let handle = rig.manager.start_reserved_analysis("analysis", request).unwrap();
+    rig.wait_for("reportDuringSearchEvery");
+    rig.manager.stop_reserved_match("analysis").unwrap();
+    assert_eq!(handle.wait().unwrap_err().kind, EngineFailureKind::Cancellation);
+    assert!(rig.manager.snapshot().game_move_job.is_none());
+    assert!(rig.manager.match_reservation_owner().is_none());
+    rig.reaped();
 }

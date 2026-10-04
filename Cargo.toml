@@ -12,6 +12,7 @@ members = [
   "crates/katago-protocol",
   "crates/analysis-core",
   "crates/engine-manager",
+  "crates/match-core",
   "crates/app-preferences",
   "crates/current-game-recovery",
   "crates/storage",
