@@ -1,4 +1,6 @@
-use app_model::{AnalysisJobModeDto, NodePath, SelectedNodeSnapshotDto, WorkspaceSharesDto};
+use app_model::{
+    AnalysisJobModeDto, NodePath, ReadboardSyncPreferencesDto, SelectedNodeSnapshotDto, WorkspaceSharesDto,
+};
 use app_preferences::{AppPreferencesDto, AppPreferencesLoadResultDto};
 use engine_manager::{ContinuousPrimaryAction, ForegroundEngineManager, SelectedNodeJobRequest};
 use katago_protocol::{analysis_query_from_position, AnalysisQueryOptions};
@@ -7,9 +9,16 @@ use tauri::{AppHandle, State};
 
 // Serializes durable writes with primary actions; failed writes never reach the manager.
 #[derive(Default)]
-pub struct PreferencesState(Mutex<Option<AppPreferencesLoadResultDto>>);
+pub struct PreferencesState(
+    Mutex<Option<AppPreferencesLoadResultDto>>,
+    provider_core::network::NetworkState,
+);
 
 impl PreferencesState {
+    pub fn network(&self) -> &provider_core::network::NetworkState {
+        &self.1
+    }
+
     pub fn load(
         &self,
         path: &Path,
@@ -24,6 +33,8 @@ impl PreferencesState {
             loaded.preferences.continuous_analysis_enabled,
             loaded.preferences.continuous_budget,
         )?;
+        self.network()
+            .commit(loaded.preferences.network.clone(), || Ok(()))?;
         *committed = Some(loaded.clone());
         Ok(loaded)
     }
@@ -45,6 +56,13 @@ impl PreferencesState {
         preferences.workspace_visibility = latest.workspace_visibility;
         preferences.main_window_always_on_top = latest.main_window_always_on_top;
         preferences.match_defaults = latest.match_defaults.clone();
+        preferences.network = latest.network.clone();
+        preferences.yike_locator = latest.yike_locator.clone();
+        preferences.yike_sync = latest.yike_sync.clone();
+        preferences.readboard_sync = latest.readboard_sync;
+        preferences.tencent_history = latest.tencent_history.clone();
+        preferences.readboard_executable_path = latest.readboard_executable_path.clone();
+        preferences.fox_kifu = latest.fox_kifu.clone();
         manager.commit_continuous_preferences(
             preferences.continuous_analysis_enabled,
             preferences.continuous_budget,
@@ -57,6 +75,241 @@ impl PreferencesState {
                 Ok(saved)
             },
         )
+    }
+
+    pub fn save_network(
+        &self,
+        path: &Path,
+        settings: app_model::NetworkSettingsDto,
+    ) -> Result<app_model::NetworkSnapshotDto, String> {
+        let mut committed = self.0.lock().expect("preferences transaction");
+        let mut preferences = committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before changing network settings.")?
+            .preferences
+            .clone();
+        preferences.network = settings.clone();
+        self.network().commit(settings, || {
+            let saved = app_preferences::save_to_path(path, preferences)?;
+            *committed = Some(AppPreferencesLoadResultDto {
+                preferences: saved,
+                recovery: None,
+            });
+            Ok(())
+        })
+    }
+
+    pub fn yike_locator(&self) -> Result<Option<String>, String> {
+        let committed = self.0.lock().expect("preferences transaction");
+        let locator = &committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before reading the Yike locator.")?
+            .preferences
+            .yike_locator;
+        Ok(locator
+            .as_deref()
+            .and_then(|value| provider_yike::canonical_yike_locator(value).ok()))
+    }
+
+    pub fn save_yike_locator(&self, path: &Path, locator: Option<String>) -> Result<Option<String>, String> {
+        let locator = locator
+            .as_deref()
+            .map(provider_yike::canonical_yike_locator)
+            .transpose()
+            .map_err(|_| {
+                "Enter a supported public Yike locator without credentials or private query parameters."
+                    .to_string()
+            })?;
+        let mut committed = self.0.lock().expect("preferences transaction");
+        let mut preferences = committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before saving the Yike locator.")?
+            .preferences
+            .clone();
+        preferences.yike_locator = locator.clone();
+        let saved = app_preferences::save_to_path(path, preferences)?;
+        *committed = Some(AppPreferencesLoadResultDto {
+            preferences: saved,
+            recovery: None,
+        });
+        Ok(locator)
+    }
+
+    pub fn yike_sync_preferences(&self) -> Result<app_model::YikeSyncPreferencesDto, String> {
+        let committed = self.0.lock().expect("preferences transaction");
+        let mut value = committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before synchronization.")?
+            .preferences
+            .yike_sync
+            .clone();
+        value.locator = value
+            .locator
+            .as_deref()
+            .and_then(|locator| provider_yike::canonical_yike_locator(locator).ok());
+        Ok(value)
+    }
+
+    pub fn save_yike_sync_preferences(
+        &self,
+        path: &Path,
+        mut value: app_model::YikeSyncPreferencesDto,
+    ) -> Result<app_model::YikeSyncPreferencesDto, String> {
+        if value.interval_seconds == 0 {
+            return Err("The sync interval must be a positive whole number of seconds.".into());
+        }
+        value.locator = value
+            .locator
+            .as_deref()
+            .map(provider_yike::canonical_yike_locator)
+            .transpose()
+            .map_err(|error| error.message)?;
+        let mut committed = self.0.lock().expect("preferences transaction");
+        let mut preferences = committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before synchronization.")?
+            .preferences
+            .clone();
+        preferences.yike_sync = value.clone();
+        let saved = app_preferences::save_to_path(path, preferences)?;
+        *committed = Some(AppPreferencesLoadResultDto {
+            preferences: saved,
+            recovery: None,
+        });
+        Ok(value)
+    }
+
+    pub fn readboard_sync_preferences(&self) -> Result<ReadboardSyncPreferencesDto, String> {
+        let committed = self.0.lock().expect("preferences transaction");
+        let value = committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before synchronization.")?
+            .preferences
+            .readboard_sync;
+        Ok(value)
+    }
+
+    pub fn save_readboard_sync_preferences(
+        &self,
+        path: &Path,
+        value: ReadboardSyncPreferencesDto,
+    ) -> Result<ReadboardSyncPreferencesDto, String> {
+        let mut committed = self.0.lock().expect("preferences transaction");
+        let mut preferences = committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before synchronization.")?
+            .preferences
+            .clone();
+        preferences.readboard_sync = value;
+        let saved = app_preferences::save_to_path(path, preferences)?;
+        *committed = Some(AppPreferencesLoadResultDto {
+            preferences: saved,
+            recovery: None,
+        });
+        Ok(value)
+    }
+
+    pub fn tencent_history(&self) -> Result<app_model::TencentHistoryDto, String> {
+        let committed = self.0.lock().expect("preferences transaction");
+        Ok(committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before reading Tencent history.")?
+            .preferences
+            .tencent_history
+            .clone())
+    }
+
+    pub fn save_tencent_query(
+        &self,
+        path: &Path,
+        query: Option<app_model::TencentQueryDto>,
+    ) -> Result<app_model::TencentHistoryDto, String> {
+        let query = query
+            .map(|mut query| {
+                query.value = query.value.trim().to_string();
+                if query.value.is_empty() || query.value.chars().any(char::is_control) {
+                    return Err("Enter a non-empty public Tencent username or chessId.".to_string());
+                }
+                Ok(query)
+            })
+            .transpose()?;
+        let mut committed = self.0.lock().expect("preferences transaction");
+        let mut preferences = committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before saving Tencent history.")?
+            .preferences
+            .clone();
+        let history = &mut preferences.tencent_history;
+        if let Some(query) = query {
+            history.recent.retain(|previous| previous != &query);
+            history.recent.insert(0, query.clone());
+            history.recent.truncate(8);
+            history.last_query = Some(query);
+        } else {
+            *history = app_model::TencentHistoryDto::default();
+        }
+        let result = history.clone();
+        let saved = app_preferences::save_to_path(path, preferences)?;
+        *committed = Some(AppPreferencesLoadResultDto {
+            preferences: saved,
+            recovery: None,
+        });
+        Ok(result)
+    }
+
+    pub fn readboard_path(&self) -> Result<Option<String>, String> {
+        let committed = self.0.lock().expect("preferences transaction");
+        Ok(committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before readboard configuration.")?
+            .preferences
+            .readboard_executable_path
+            .clone())
+    }
+
+    pub fn save_readboard_path(&self, path: &Path, executable: String) -> Result<String, String> {
+        let mut committed = self.0.lock().expect("preferences transaction");
+        let loaded = committed
+            .as_mut()
+            .ok_or("Preferences must finish loading before readboard configuration.")?;
+        let mut preferences = loaded.preferences.clone();
+        preferences.readboard_executable_path = Some(executable.clone());
+        let saved = app_preferences::save_to_path(path, preferences)?;
+        loaded.preferences = saved;
+        Ok(executable)
+    }
+
+    pub fn fox_kifu(&self) -> Result<app_model::FoxKifuStateDto, String> {
+        let committed = self.0.lock().expect("preferences transaction");
+        let state = &committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before reading Fox recents.")?
+            .preferences
+            .fox_kifu;
+        Ok(provider_fox::sanitize_state(state))
+    }
+
+    /// Narrow atomic write of the Fox owner field. A failed write keeps the previous durable state.
+    pub fn update_fox_kifu(
+        &self,
+        path: &Path,
+        update: impl FnOnce(&app_model::FoxKifuStateDto) -> Result<app_model::FoxKifuStateDto, String>,
+    ) -> Result<app_model::FoxKifuStateDto, String> {
+        let mut committed = self.0.lock().expect("preferences transaction");
+        let mut preferences = committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before saving Fox recents.")?
+            .preferences
+            .clone();
+        preferences.fox_kifu =
+            provider_fox::sanitize_state(&update(&provider_fox::sanitize_state(&preferences.fox_kifu))?);
+        let saved = app_preferences::save_to_path(path, preferences)?;
+        let state = saved.fox_kifu.clone();
+        *committed = Some(AppPreferencesLoadResultDto {
+            preferences: saved,
+            recovery: None,
+        });
+        Ok(state)
     }
 
     /// Persists the match defaults derived from the saved ones, then installs the match with the
@@ -302,6 +555,34 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    fn readboard_path_survives_stale_save_restart_and_failed_write() {
+        let directory = std::env::temp_dir().join(format!("readboard-prefs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("preferences.json");
+        let manager = ForegroundEngineManager::new(
+            Arc::new(InMemoryEngineProfileCatalog::new()),
+            ForegroundEngineConfig::for_tests(),
+        );
+        let state = PreferencesState::default();
+        let mut stale = state.load(&path, &manager).unwrap().preferences;
+        let executable = r"C:\Readboard Tools\readboard.exe";
+        state.save_readboard_path(&path, executable.into()).unwrap();
+        stale.show_coordinates = false;
+        state.save(&path, &manager, stale).unwrap();
+        assert!(state
+            .save_readboard_path(&directory, r"C:\Other\readboard.exe".into())
+            .is_err());
+        assert_eq!(state.readboard_path().unwrap().as_deref(), Some(executable));
+        let restarted = PreferencesState::default()
+            .load(&path, &manager)
+            .unwrap()
+            .preferences;
+        assert_eq!(restarted.readboard_executable_path.as_deref(), Some(executable));
+        assert!(!restarted.show_coordinates);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn geometry_autosave_preserves_unconsumed_preference_recovery() {
         let directory = std::env::temp_dir().join(format!("geometry-recovery-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
@@ -413,6 +694,301 @@ mod tests {
                 ..restarted
             }
         );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn network_preferences_fail_atomically_restore_and_preserve_other_owner_writes() {
+        let directory = std::env::temp_dir().join(format!("network-prefs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("preferences.json");
+        let manager = ForegroundEngineManager::new(
+            Arc::new(InMemoryEngineProfileCatalog::new()),
+            ForegroundEngineConfig::for_tests(),
+        );
+        let state = PreferencesState::default();
+        let stale = state.load(&path, &manager).unwrap().preferences;
+        let before = state.network().snapshot();
+        let identity = state.network().begin(before.policy_revision, 0).unwrap();
+        let lease = state.network().operation(&identity).unwrap().lease();
+        let manual = app_model::NetworkSettingsDto {
+            mode: app_model::NetworkModeDto::Manual,
+            manual_host: "localhost".into(),
+            manual_port: 8123,
+        };
+        assert!(state.save_network(&directory, manual.clone()).is_err());
+        assert_eq!(state.network().snapshot(), before);
+        assert!(lease.check().is_ok());
+        let saved = state.save_network(&path, manual.clone()).unwrap();
+        assert_eq!(saved.policy_revision, before.policy_revision + 1);
+        assert_eq!(
+            lease.check().unwrap_err().kind,
+            app_model::ProviderErrorKind::Cancelled
+        );
+        state.save(&path, &manager, stale).unwrap();
+        let restarted = PreferencesState::default();
+        assert_eq!(
+            restarted.load(&path, &manager).unwrap().preferences.network,
+            manual
+        );
+        assert_eq!(restarted.network().snapshot().settings, manual);
+        let secret = app_model::NetworkSettingsDto {
+            manual_host: "user:secret@proxy".into(),
+            ..manual
+        };
+        assert!(state.save_network(&path, secret).is_err());
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("secret"));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn yike_locator_preserves_owner_writes_and_rejects_secrets_atomically() {
+        let directory = std::env::temp_dir().join(format!("yike-prefs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("preferences.json");
+        let manager = ForegroundEngineManager::new(
+            Arc::new(InMemoryEngineProfileCatalog::new()),
+            ForegroundEngineConfig::for_tests(),
+        );
+        let state = PreferencesState::default();
+        let stale = state.load(&path, &manager).unwrap().preferences;
+        let locator = "https://home.yikeweiqi.com/#/live/new-room/186031";
+        let saved = state.save_yike_locator(&path, Some(locator.into())).unwrap();
+        assert_eq!(saved.as_deref(), Some(locator));
+        state.save(&path, &manager, stale).unwrap();
+        let durable = std::fs::read(&path).unwrap();
+        assert!(state.save_yike_locator(&directory, None).is_err());
+        assert_eq!(state.yike_locator().unwrap(), saved);
+        assert!(state
+            .save_yike_locator(&path, Some(format!("{locator}?token=private")))
+            .is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), durable);
+        let restarted = PreferencesState::default();
+        restarted.load(&path, &manager).unwrap();
+        assert_eq!(restarted.yike_locator().unwrap(), saved);
+        state.save_yike_locator(&path, None).unwrap();
+        assert_eq!(state.yike_locator().unwrap(), None);
+        assert_eq!(
+            app_preferences::load_from_path(&path)
+                .unwrap()
+                .preferences
+                .yike_locator,
+            None
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn external_sync_preferences_survive_stale_save_without_changing_global_sound() {
+        let directory = std::env::temp_dir().join(format!("sync-prefs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("preferences.json");
+        let manager = ForegroundEngineManager::new(
+            Arc::new(InMemoryEngineProfileCatalog::new()),
+            ForegroundEngineConfig::for_tests(),
+        );
+        let state = PreferencesState::default();
+        let stale = state.load(&path, &manager).unwrap().preferences;
+        let preferences = app_model::YikeSyncPreferencesDto {
+            interval_seconds: 3,
+            locator: Some("https://home.yikeweiqi.com/#/unite/79438407".into()),
+            jump_to_last: true,
+            mute: true,
+        };
+        state
+            .save_yike_sync_preferences(&path, preferences.clone())
+            .unwrap();
+        let saved = state.save(&path, &manager, stale.clone()).unwrap();
+        assert_eq!(saved.yike_sync, preferences);
+        let mut expected = stale;
+        expected.yike_sync = preferences.clone();
+        assert_eq!(saved, expected);
+        assert!(state
+            .save_yike_sync_preferences(&directory, app_model::YikeSyncPreferencesDto::default())
+            .is_err());
+        assert!(state
+            .save_yike_sync_preferences(
+                &path,
+                app_model::YikeSyncPreferencesDto {
+                    interval_seconds: 0,
+                    ..preferences.clone()
+                }
+            )
+            .is_err());
+        assert_eq!(state.yike_sync_preferences().unwrap(), preferences);
+        let restarted = PreferencesState::default();
+        restarted.load(&path, &manager).unwrap();
+        assert_eq!(restarted.yike_sync_preferences().unwrap(), preferences);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn readboard_sync_preferences_survive_stale_save_without_changing_global_sound() {
+        let directory = std::env::temp_dir().join(format!("readboard-sync-prefs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("preferences.json");
+        let manager = ForegroundEngineManager::new(
+            Arc::new(InMemoryEngineProfileCatalog::new()),
+            ForegroundEngineConfig::for_tests(),
+        );
+        let state = PreferencesState::default();
+        assert_eq!(
+            state.readboard_sync_preferences().unwrap_err(),
+            "Preferences must finish loading before synchronization."
+        );
+        let stale = state.load(&path, &manager).unwrap().preferences;
+        let preferences = ReadboardSyncPreferencesDto {
+            always_sync: false,
+            focus: false,
+            mute: false,
+            jump_to_last: true,
+        };
+        state.save_readboard_sync_preferences(&path, preferences).unwrap();
+        let saved = state.save(&path, &manager, stale.clone()).unwrap();
+        assert_eq!(saved.readboard_sync, preferences);
+        assert_eq!(saved.sound_enabled, stale.sound_enabled);
+        let mut expected = stale;
+        expected.readboard_sync = preferences;
+        assert_eq!(saved, expected);
+        assert!(state
+            .save_readboard_sync_preferences(&directory, ReadboardSyncPreferencesDto::default())
+            .is_err());
+        assert_eq!(state.readboard_sync_preferences().unwrap(), preferences);
+        let restarted = PreferencesState::default();
+        restarted.load(&path, &manager).unwrap();
+        assert_eq!(restarted.readboard_sync_preferences().unwrap(), preferences);
+        assert!(restarted.load(&path, &manager).unwrap().preferences.sound_enabled);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn tencent_history_bounds_deduplicates_and_survives_stale_saves_and_failed_clear() {
+        use app_model::{TencentHistoryDto, TencentQueryDto, TencentQueryKindDto};
+        let directory = std::env::temp_dir().join(format!("tencent-prefs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("preferences.json");
+        let manager = ForegroundEngineManager::new(
+            Arc::new(InMemoryEngineProfileCatalog::new()),
+            ForegroundEngineConfig::for_tests(),
+        );
+        let state = PreferencesState::default();
+        let stale = state.load(&path, &manager).unwrap().preferences;
+        let locator = "https://home.yikeweiqi.com/#/live/new-room/186031";
+        state.save_yike_locator(&path, Some(locator.into())).unwrap();
+        for number in 0..10 {
+            state
+                .save_tencent_query(
+                    &path,
+                    Some(TencentQueryDto {
+                        kind: TencentQueryKindDto::Username,
+                        value: format!(" player-{number} "),
+                    }),
+                )
+                .unwrap();
+        }
+        let newest = TencentQueryDto {
+            kind: TencentQueryKindDto::Username,
+            value: "player-5".into(),
+        };
+        let saved = state.save_tencent_query(&path, Some(newest.clone())).unwrap();
+        assert_eq!(saved.last_query, Some(newest.clone()));
+        assert_eq!(
+            saved
+                .recent
+                .iter()
+                .map(|query| query.value.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "player-5", "player-9", "player-8", "player-7", "player-6", "player-4", "player-3",
+                "player-2"
+            ]
+        );
+        state.save(&path, &manager, stale).unwrap();
+        assert!(state.save_tencent_query(&directory, None).is_err());
+        assert_eq!(state.tencent_history().unwrap(), saved);
+        assert_eq!(state.yike_locator().unwrap().as_deref(), Some(locator));
+        let restarted = PreferencesState::default();
+        restarted.load(&path, &manager).unwrap();
+        assert_eq!(restarted.tencent_history().unwrap(), saved);
+        assert!(state
+            .save_tencent_query(
+                &path,
+                Some(TencentQueryDto {
+                    kind: TencentQueryKindDto::ChessId,
+                    value: "  ".into(),
+                })
+            )
+            .is_err());
+        assert_eq!(state.tencent_history().unwrap(), saved);
+        let other = TencentQueryDto {
+            kind: TencentQueryKindDto::ChessId,
+            value: "player-5".into(),
+        };
+        let both = state.save_tencent_query(&path, Some(other.clone())).unwrap();
+        assert_eq!(both.recent[0], other);
+        assert_eq!(both.recent[1], newest);
+        assert_eq!(
+            state.save_tencent_query(&path, None).unwrap(),
+            TencentHistoryDto::default()
+        );
+        assert_eq!(
+            app_preferences::load_from_path(&path)
+                .unwrap()
+                .preferences
+                .tencent_history,
+            TencentHistoryDto::default()
+        );
+        assert_eq!(state.yike_locator().unwrap().as_deref(), Some(locator));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn fox_recents_persist_atomically_survive_stale_saves_and_clear_separately() {
+        let directory = std::env::temp_dir().join(format!("fox-prefs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("preferences.json");
+        let manager = ForegroundEngineManager::new(
+            Arc::new(InMemoryEngineProfileCatalog::new()),
+            ForegroundEngineConfig::for_tests(),
+        );
+        let state = PreferencesState::default();
+        let stale = state.load(&path, &manager).unwrap().preferences;
+        let lookup = app_model::FoxLookupDto {
+            kind: app_model::FoxLookupKindDto::Nickname,
+            value: "绝艺".into(),
+        };
+        let account = app_model::FoxAccountDto {
+            uid: "8772065".into(),
+            nickname: "绝艺".into(),
+        };
+        let remember = |current: &app_model::FoxKifuStateDto| {
+            provider_fox::remember_lookup(current, &lookup, Some(&account)).map_err(|error| error.message)
+        };
+        let saved = state.update_fox_kifu(&path, remember).unwrap();
+        assert_eq!(saved.recents, vec![account.clone()]);
+        assert_eq!(saved.last_query.as_ref(), Some(&lookup));
+        state.save(&path, &manager, stale).unwrap();
+        let durable = std::fs::read(&path).unwrap();
+        assert!(state
+            .update_fox_kifu(&directory, |_| Ok(Default::default()))
+            .is_err());
+        assert_eq!(state.fox_kifu().unwrap(), saved);
+        assert_eq!(std::fs::read(&path).unwrap(), durable);
+        let restarted = PreferencesState::default();
+        restarted.load(&path, &manager).unwrap();
+        assert_eq!(restarted.fox_kifu().unwrap(), saved);
+        let cleared = state
+            .update_fox_kifu(&path, |current| {
+                Ok(app_model::FoxKifuStateDto {
+                    recents: Vec::new(),
+                    last_query: current.last_query.clone(),
+                })
+            })
+            .unwrap();
+        assert!(cleared.recents.is_empty());
+        assert_eq!(cleared.last_query.as_ref(), Some(&lookup));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("8772065") && !text.contains("chesslist"));
         std::fs::remove_dir_all(directory).unwrap();
     }
 

@@ -1,3 +1,5 @@
+pub mod network;
+
 use app_model::{ProviderError, ProviderErrorKind, ProviderFetchRequest, ProviderFetchResult};
 use std::sync::{Arc, Mutex};
 
@@ -60,6 +62,39 @@ pub fn first_non_blank<'a>(values: impl IntoIterator<Item = &'a str>) -> Option<
 
 pub trait ProviderTransport {
     fn fetch(&self, request: &ProviderFetchRequest) -> ProviderResult<ProviderFetchResult>;
+    /// Alternative read endpoints are one operation, not fresh retry budgets.
+    fn fetch_alternatives(&self, requests: &[ProviderFetchRequest]) -> ProviderResult<ProviderFetchResult> {
+        let mut last = invalid_request("No provider read endpoint was supplied.");
+        for request in requests {
+            match self.fetch(request).and_then(checked_response) {
+                Ok(result) => return Ok(result),
+                Err(error)
+                    if matches!(
+                        error.kind,
+                        ProviderErrorKind::TransportFailed | ProviderErrorKind::Timeout
+                    ) =>
+                {
+                    last = error
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Err(last)
+    }
+}
+
+pub fn checked_response(result: ProviderFetchResult) -> ProviderResult<ProviderFetchResult> {
+    let kind = match result.status_code {
+        200..=299 => return Ok(result),
+        401 | 403 | 407 => ProviderErrorKind::AuthenticationFailed,
+        404 | 410 => ProviderErrorKind::NotFound,
+        408 | 425 | 429 | 500 | 502 | 503 | 504 => ProviderErrorKind::TransportFailed,
+        _ => ProviderErrorKind::InvalidRequest,
+    };
+    Err(provider_error(
+        kind,
+        format!("Provider returned HTTP {}.", result.status_code),
+    ))
 }
 
 #[derive(Debug, Clone)]

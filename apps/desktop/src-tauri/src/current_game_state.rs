@@ -20,6 +20,9 @@ mod current_game_save_write;
 #[cfg(test)]
 mod current_game_session_recovery;
 mod departure;
+mod external_sync;
+#[cfg(test)]
+mod external_sync_tests;
 mod game_move;
 pub(crate) mod human_match;
 pub(crate) mod recovery;
@@ -45,11 +48,19 @@ struct ContentVersion {
     edit: u64,
     nonhistory: u64,
 }
+pub(crate) struct CurrentGameSaveSnapshot {
+    serialized: String,
+    version: ContentVersion,
+    document_identity: u64,
+}
+
 #[derive(Default)]
 pub struct CurrentGameState {
     holder: Mutex<CurrentGameHolder>,
     recovery: Mutex<RecoveryCoordinator>,
     match_departure: std::sync::Condvar,
+    /// Wakes a readboard start waiting for its first provable frame (paired with `holder`).
+    external_sync_changed: std::sync::Condvar,
     analysis_manager: OnceLock<engine_manager::ForegroundEngineManager>,
 }
 
@@ -81,6 +92,7 @@ struct CurrentGameHolder {
     next_trial_revision: u64,
     human_match: human_match::MatchState,
     next_match_id: u64,
+    external_sync: external_sync::ExternalSyncOwner,
 }
 
 impl CurrentGameState {
@@ -236,30 +248,56 @@ impl CurrentGameState {
         after_snapshot: impl FnOnce(),
         allow_departure: bool,
     ) -> Result<CurrentGameResultDto, String> {
+        let snapshot = self.capture_save_snapshot_allowing_departure(selected_path, allow_departure)?;
+        after_snapshot();
+        self.persist_save_snapshot(path, snapshot)
+    }
+
+    pub(crate) fn capture_save_snapshot(
+        &self,
+        selected_path: NodePath,
+    ) -> Result<CurrentGameSaveSnapshot, String> {
+        self.capture_save_snapshot_allowing_departure(selected_path, false)
+    }
+
+    fn capture_save_snapshot_allowing_departure(
+        &self,
+        selected_path: NodePath,
+        allow_departure: bool,
+    ) -> Result<CurrentGameSaveSnapshot, String> {
+        let holder = self.holder.lock().expect("current game state");
+        if holder.edits_blocked && !allow_departure {
+            return Err("cannot save while a document departure is in progress".to_string());
+        }
+        let document = holder
+            .document
+            .as_ref()
+            .ok_or_else(|| no_current_game().to_string())?;
+        document
+            .snapshot(&selected_path)
+            .map_err(|error| error.to_string())?;
+        Ok(CurrentGameSaveSnapshot {
+            serialized: document.serialize().map_err(|error| error.to_string())?,
+            version: holder.content_version(),
+            document_identity: holder.document_identity,
+        })
+    }
+
+    pub(crate) fn persist_save_snapshot(
+        &self,
+        path: String,
+        snapshot: CurrentGameSaveSnapshot,
+    ) -> Result<CurrentGameResultDto, String> {
         let trimmed = path.trim();
         if trimmed.is_empty() {
             return Err("path must not be empty".to_string());
         }
         let target = std::path::PathBuf::from(trimmed);
-        let (serialized, version, document_identity) = {
-            let holder = self.holder.lock().expect("current game state");
-            if holder.edits_blocked && !allow_departure {
-                return Err("cannot save while a document departure is in progress".to_string());
-            }
-            let document = holder
-                .document
-                .as_ref()
-                .ok_or_else(|| no_current_game().to_string())?;
-            document
-                .snapshot(&selected_path)
-                .map_err(|error| error.to_string())?;
-            (
-                document.serialize().map_err(|error| error.to_string())?,
-                holder.content_version(),
-                holder.document_identity,
-            )
-        };
-        after_snapshot();
+        let CurrentGameSaveSnapshot {
+            serialized,
+            version,
+            document_identity,
+        } = snapshot;
         std::fs::write(&target, &serialized)
             .map_err(|err| format!("failed to write SGF file {}: {err}", target.display()))?;
         let mut holder = self.holder.lock().expect("current game state");
@@ -492,7 +530,7 @@ impl CurrentGameState {
         task_id: &str,
     ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
         let holder = self.holder.lock().expect("current game state");
-        holder.ensure_editable().map_err(|error| {
+        holder.ensure_review_access().map_err(|error| {
             crate::job_failure(run_id, app_model::EngineFailureKind::InvalidState, error.message)
         })?;
         manager
@@ -506,7 +544,7 @@ impl CurrentGameState {
         path: &NodePath,
     ) -> Result<(SelectedNodeSnapshotDto, u8, u8, f32, String), CurrentGameError> {
         let holder = self.holder.lock().expect("current game state");
-        holder.ensure_editable()?;
+        holder.ensure_review_access()?;
         let document = holder.document.as_ref().ok_or_else(no_current_game)?;
         if holder.generation != generation {
             return Err(CurrentGameError {
@@ -535,7 +573,7 @@ impl CurrentGameState {
         generation: u64,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
-        holder.ensure_editable()?;
+        holder.ensure_review_access()?;
         if holder.document.is_none() {
             return Err(no_current_game());
         }
@@ -822,7 +860,7 @@ impl CurrentGameHolder {
         scope: &app_model::AnalysisScopeDto,
         swing_criteria: Option<&app_model::AnalysisSwingCriteriaDto>,
     ) -> Result<WholeGameAdmission, CurrentGameError> {
-        self.ensure_editable()?;
+        self.ensure_review_access()?;
         let document = self.document.as_ref().ok_or_else(no_current_game)?;
         if self.generation != generation {
             return Err(CurrentGameError {
@@ -1122,7 +1160,7 @@ impl CurrentGameHolder {
         path: NodePath,
         payload: SgfAnalysisPayload,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
-        self.ensure_editable()?;
+        self.ensure_review_access()?;
         if self.generation != generation {
             return Err(CurrentGameError {
                 kind: CurrentGameErrorKind::NoCurrentGame,

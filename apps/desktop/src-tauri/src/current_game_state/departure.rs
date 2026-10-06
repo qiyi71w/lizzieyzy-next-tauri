@@ -14,6 +14,8 @@ pub(super) enum DepartureTarget {
     Replacement {
         candidate: CurrentSgfDocument,
         candidate_path: Option<String>,
+        network_lease: Option<(provider_core::network::NetworkLease, u64)>,
+        external_start: Option<std::num::NonZeroU64>,
     },
     ApplicationExit,
 }
@@ -36,6 +38,31 @@ impl CurrentGameState {
         self.admit_departure(DepartureTarget::Replacement {
             candidate,
             candidate_path: native_path,
+            network_lease: None,
+            external_start: None,
+        })
+    }
+
+    pub fn document_identity(&self) -> u64 {
+        self.holder.lock().expect("current game state").document_identity
+    }
+
+    pub fn prepare_provider_replacement(
+        &self,
+        sgf_text: &str,
+        lease: provider_core::network::NetworkLease,
+        document_identity: u64,
+    ) -> Result<DocumentDepartureAdmissionDto, CurrentGameError> {
+        lease.check().map_err(|error| CurrentGameError {
+            kind: CurrentGameErrorKind::DepartureBlocked,
+            message: error.message,
+        })?;
+        let candidate = CurrentSgfDocument::open(sgf_text)?;
+        self.admit_departure(DepartureTarget::Replacement {
+            candidate,
+            candidate_path: None,
+            network_lease: Some((lease, document_identity)),
+            external_start: None,
         })
     }
 
@@ -55,6 +82,18 @@ impl CurrentGameState {
                 }
             }
             _ => return Err(departure_in_progress()),
+        }
+        if let Some(DepartureSession {
+            target:
+                DepartureTarget::Replacement {
+                    external_start: Some(id),
+                    ..
+                },
+            ..
+        }) = holder.departure.as_ref()
+        {
+            let id = id.get();
+            holder.external_sync.cancel_start(id);
         }
         holder.departure = None;
         Ok(DocumentDepartureOutcomeDto {
@@ -107,12 +146,54 @@ impl CurrentGameState {
         let DepartureTarget::Replacement {
             candidate,
             candidate_path,
+            network_lease,
+            external_start,
         } = session.target
         else {
             holder.departure = Some(session);
             return Err(departure_blocked());
         };
-        let current = holder.install_document(candidate, candidate_path)?;
+        let external_start = external_start.map(std::num::NonZeroU64::get);
+        let yike_source = match external_start.filter(|id| holder.external_sync.start_needs_source(*id)) {
+            Some(_) => Some((candidate.clone(), candidate.serialize()?)),
+            None => None,
+        };
+        // Document and session install together, inside the provider lease when one exists.
+        let install = |holder: &mut CurrentGameHolder| -> Result<CurrentGameResultDto, CurrentGameError> {
+            let current = holder.install_document(candidate, candidate_path)?;
+            let Some(id) = external_start else {
+                return Ok(current);
+            };
+            let document_identity = holder.document_identity;
+            match holder.external_sync.install(id, document_identity, yike_source) {
+                // A readboard candidate carries the engine's cursor inside the installed document.
+                Some(selected) => holder.select_path(selected),
+                None => Ok(current),
+            }
+        };
+        let current = if let Some((lease, _)) = network_lease {
+            match lease.with_valid(|| install(&mut holder)) {
+                Ok(current) => current?,
+                Err(error) => {
+                    holder.edits_blocked = false;
+                    if let Some(id) = external_start {
+                        holder.external_sync.cancel_start(id);
+                    }
+                    self.match_departure.notify_all();
+                    if let Some(manager) = self.analysis_manager.get() {
+                        manager.finish_continuous_departure(false);
+                    }
+                    return Ok(DocumentDepartureOutcomeDto {
+                        committed: false,
+                        analysis_stopped: true,
+                        current: Some(holder.current_result()?),
+                        message: error.message,
+                    });
+                }
+            }
+        } else {
+            install(&mut holder)?
+        };
         self.note_recovery(&holder);
         if let Some(manager) = self.analysis_manager.get() {
             manager.clear_continuous_position();
@@ -140,6 +221,9 @@ impl CurrentGameState {
             _ => return Err(departure_in_progress()),
         }
         holder.departure = None;
+        if let Some(id) = holder.external_sync.starting_id() {
+            holder.external_sync.cancel_start(id);
+        }
         holder.edits_blocked = false;
         self.match_departure.notify_all();
         holder.exit_disposition = None;
@@ -270,11 +354,40 @@ impl CurrentGameState {
         self.holder.lock().expect("current game state").exit_disposition
     }
 
-    fn admit_departure(
+    pub(super) fn admit_departure(
         &self,
         target: DepartureTarget,
     ) -> Result<DocumentDepartureAdmissionDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
+        if let DepartureTarget::Replacement {
+            network_lease: Some((_, identity)),
+            ..
+        } = &target
+        {
+            if holder.document_identity != *identity {
+                return Err(CurrentGameError {
+                    kind: CurrentGameErrorKind::DepartureBlocked,
+                    message: "The current document changed; preview the provider again.".into(),
+                });
+            }
+        }
+        if let DepartureTarget::Replacement {
+            external_start,
+            network_lease,
+            ..
+        } = &target
+        {
+            if let Some(id) = external_start {
+                holder.external_sync.validate_start(id.get())?;
+                if !matches!(holder.trial_mode, super::trial::TrialMode::Review) {
+                    return Err(departure_blocked());
+                }
+            } else if holder.external_sync.starting_id().is_some()
+                || (holder.external_sync.active.is_some() && network_lease.is_none())
+            {
+                return Err(external_sync::sync_stale());
+            }
+        }
         if holder.departure.is_some() {
             return Err(departure_in_progress());
         }
@@ -318,6 +431,7 @@ impl CurrentGameHolder {
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let selected_path = document.default_selected_path();
         document.snapshot(&selected_path)?;
+        self.external_sync.seal_active();
         self.document = Some(document);
         self.generation = self.generation.saturating_add(1);
         self.history.clear();
@@ -349,6 +463,13 @@ impl CurrentGameHolder {
     }
 
     pub(super) fn ensure_editable(&self) -> Result<(), CurrentGameError> {
+        if self.external_sync.active.is_some() || self.external_sync.starting_id().is_some() {
+            return Err(CurrentGameError { kind: CurrentGameErrorKind::DepartureBlocked, message: "External sync owns this read-only game. Stop synchronization before editing, Match or Trial.".into() });
+        }
+        self.ensure_review_access()
+    }
+
+    pub(super) fn ensure_review_access(&self) -> Result<(), CurrentGameError> {
         if self.edits_blocked || self.human_match.blocks() {
             Err(departure_blocked())
         } else if self.departure.is_some() {

@@ -2,10 +2,9 @@ use app_model::{
     AnalysisFrameDto, AnalysisJobModeDto, AnalysisJobStartedDto, AppHealthDto, CurrentGameError,
     CurrentGameResultDto, EngineFailureDto, EngineFailureKind, EngineOperationDto, EngineProfileDto,
     ForegroundEngineEventDto, ForegroundEngineSnapshotDto, GameFileFormatDto, GameFileImportDto, MoveVertex,
-    NodePath, PlayerColor, PositionDto, ProviderError, ProviderErrorKind, ProviderFetchMethod,
-    ProviderFetchRequest, ProviderFetchResult, ProviderGameMetadata, ProviderImportRequest,
-    ProviderImportResult, ProviderKind, ReadboardSidecarProbeRequest, ReadboardSidecarProbeResult,
-    ReadboardSidecarSyncSnapshotRequest, ReadboardSidecarSyncSnapshotResult, StoneDto,
+    NodePath, PlayerColor, PositionDto, ProviderError, ProviderErrorKind, ProviderImportRequest,
+    ProviderImportResult, ProviderKind, ReadboardSidecarSyncSnapshotRequest,
+    ReadboardSidecarSyncSnapshotResult, StoneDto,
 };
 use engine_manager::{
     build_command_spec, check_assets, default_engine_profiles_settings, normalize_engine_profiles,
@@ -13,20 +12,21 @@ use engine_manager::{
     EngineProfileCatalog, EngineProfilesSettings as EngineProfilesSettingsDto, ForegroundEngineConfig,
     ForegroundEngineManager, SavedEngineProfile, SelectedNodeJobRequest, WholeGameWorkItem,
 };
-use go_core::ReadBoardLocalContext;
 use katago_protocol::{analysis_query_from_position, AnalysisQueryOptions};
-use provider_core::{
-    invalid_payload, invalid_request, invalid_url, timeout, transport_failed, ProviderResult,
-    ProviderTransport,
-};
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod continuous_analysis;
+mod external_sync;
+mod provider_network;
+use provider_network::{
+    begin_provider_request, cancel_provider_request, clear_fox_recents, load_fox_kifu_state,
+    load_tencent_history, load_yike_locator, network_snapshot, provider_fox_list, provider_fox_list_more,
+    provider_fox_preview, provider_tencent_list, provider_tencent_preview, provider_yike_list,
+    provider_yike_preview, remember_fox_lookup, save_network_settings, save_tencent_query, save_yike_locator,
+};
 mod window_geometry;
 use continuous_analysis::{foreground_engine_continuous_action, PreferencesState};
 mod main_window_pin;
@@ -35,10 +35,13 @@ mod current_game_state;
 mod document_departure;
 mod file_activation;
 mod human_match;
+mod readboard;
 mod save_as;
 mod session_recovery;
 #[cfg(windows)]
 extern crate windows_core;
+#[cfg(test)]
+use app_model::ProviderGameMetadata;
 use app_preferences::{AppPreferencesDto, AppPreferencesLoadResultDto, APP_PREFERENCES_FILE};
 use current_game_recovery::FileRecoveryStore;
 use current_game_state::{CurrentGameState, WholeGameAdmission};
@@ -60,188 +63,8 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 const ENGINE_PROFILE_FILE: &str = "lizzieyzy-next-engine-profile.json";
-const DEFAULT_PROVIDER_HTTP_TIMEOUT_MS: u64 = 30_000;
 
 type EngineCommandResult<T> = Result<T, Box<EngineFailureDto>>;
-
-#[derive(Debug, Default)]
-struct ReqwestProviderTransport;
-
-impl ProviderTransport for ReqwestProviderTransport {
-    fn fetch(&self, request: &ProviderFetchRequest) -> ProviderResult<ProviderFetchResult> {
-        if !is_http_url(&request.url) {
-            return Err(invalid_url(format!(
-                "provider transport only supports http(s) URLs: {}",
-                request.url
-            )));
-        }
-        let client = reqwest::blocking::Client::builder()
-            .redirect(reqwest::redirect::Policy::limited(10))
-            .build()
-            .map_err(map_reqwest_error)?;
-        let method = match request.method {
-            ProviderFetchMethod::Get => reqwest::Method::GET,
-            ProviderFetchMethod::Post => reqwest::Method::POST,
-        };
-        let mut builder = client
-            .request(method, &request.url)
-            .timeout(Duration::from_millis(
-                request.timeout_ms.unwrap_or(DEFAULT_PROVIDER_HTTP_TIMEOUT_MS),
-            ));
-        for (name, value) in &request.headers {
-            builder = builder.header(
-                reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|err| {
-                    invalid_request(format!("invalid provider request header `{name}`: {err}"))
-                })?,
-                reqwest::header::HeaderValue::from_str(value).map_err(|err| {
-                    invalid_request(format!(
-                        "invalid provider request header value for `{name}`: {err}"
-                    ))
-                })?,
-            );
-        }
-        if let Some(body) = &request.body {
-            builder = builder.body(body.clone());
-        }
-
-        let response = builder.send().map_err(map_reqwest_error)?;
-        let url = response.url().to_string();
-        let status_code = response.status().as_u16();
-        let headers = response_headers(response.headers());
-        let content_type = headers
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-            .map(|(_, value)| value.clone());
-        let payload = response.text().map_err(map_reqwest_error)?;
-
-        Ok(ProviderFetchResult {
-            provider: request.provider,
-            url,
-            status_code,
-            payload,
-            headers,
-            content_type,
-            metadata: ProviderGameMetadata {
-                source_url: request.source_url.clone(),
-                request_url: Some(request.url.clone()),
-                source_id: request.source_id.clone(),
-                ..ProviderGameMetadata::default()
-            },
-            warnings: Vec::new(),
-        })
-    }
-}
-
-fn map_reqwest_error(error: reqwest::Error) -> ProviderError {
-    if error.is_timeout() {
-        return timeout(format!("provider request timed out: {error}"));
-    }
-    if error.is_builder() || error.is_request() {
-        return invalid_request(format!("provider request could not be built: {error}"));
-    }
-    transport_failed(format!("provider request failed: {error}"))
-}
-
-fn response_headers(headers: &reqwest::header::HeaderMap) -> BTreeMap<String, String> {
-    headers
-        .iter()
-        .filter_map(|(name, value)| {
-            value
-                .to_str()
-                .ok()
-                .map(|value| (name.as_str().to_string(), value.to_string()))
-        })
-        .collect()
-}
-
-fn prepare_yike_fetch_request(mut request: ProviderFetchRequest) -> ProviderFetchRequest {
-    let signature = provider_yike::YikeRequestSignature::now();
-    let signed_headers = provider_yike::signed_headers(signature.current_time_millis, signature.nonce);
-    for (name, value) in signed_headers {
-        insert_header_if_missing(&mut request.headers, &name, value);
-    }
-    request
-}
-
-fn fetch_yike_with_transport<T: ProviderTransport + ?Sized>(
-    request: ProviderFetchRequest,
-    transport: &T,
-) -> ProviderResult<ProviderFetchResult> {
-    let result = transport.fetch(&prepare_yike_fetch_request(request))?;
-    ensure_provider_http_success(&result, "Yike provider fetch failed")?;
-    validate_yike_fetch_payload(&result)?;
-    Ok(result)
-}
-
-fn validate_yike_fetch_payload(result: &ProviderFetchResult) -> ProviderResult<()> {
-    let url = result.url.to_ascii_lowercase();
-    let request_url = result
-        .metadata
-        .request_url
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if url.contains("/golive/list") || request_url.contains("/golive/list") {
-        provider_yike::parse_live_list_json(&result.payload).map(|_| ())
-    } else if url.contains("/golives/")
-        || url.contains("/golive/dtl")
-        || request_url.contains("/golives/")
-        || request_url.contains("/golive/dtl")
-    {
-        provider_yike::parse_live_detail_json(&result.payload).map(|_| ())
-    } else {
-        Err(invalid_payload(format!(
-            "unsupported Yike fetch response URL for runtime validation: {}",
-            result.url
-        )))
-    }
-}
-
-fn prepare_fox_http_fetch_request(mut request: ProviderFetchRequest) -> ProviderFetchRequest {
-    insert_header_if_missing(
-        &mut request.headers,
-        "User-Agent",
-        provider_fox::FOX_MOBILE_USER_AGENT.to_string(),
-    );
-    request
-}
-
-fn fetch_fox_with_transport<T: ProviderTransport + ?Sized>(
-    request: ProviderFetchRequest,
-    transport: &T,
-) -> ProviderResult<ProviderFetchResult> {
-    if is_http_url(&request.url) {
-        let mut result = transport.fetch(&prepare_fox_http_fetch_request(request))?;
-        ensure_provider_http_success(&result, "Fox provider fetch failed")?;
-        result.warnings.push(
-            "Fox HTTP URL fetched directly; provider command normalization was not applied.".to_string(),
-        );
-        return Ok(result);
-    }
-    provider_fox::fetch_command(&request.url, transport)
-}
-
-fn ensure_provider_http_success(result: &ProviderFetchResult, context: &str) -> ProviderResult<()> {
-    if !(200..400).contains(&result.status_code) {
-        return Err(transport_failed(format!(
-            "{context}: HTTP {} for {}",
-            result.status_code, result.url
-        )));
-    }
-    Ok(())
-}
-
-fn insert_header_if_missing(headers: &mut BTreeMap<String, String>, name: &str, value: String) {
-    if !headers.keys().any(|key| key.eq_ignore_ascii_case(name)) {
-        headers.insert(name.to_string(), value);
-    }
-}
-
-fn is_http_url(url: &str) -> bool {
-    reqwest::Url::parse(url)
-        .map(|url| matches!(url.scheme(), "http" | "https"))
-        .unwrap_or(false)
-}
 
 struct DiskEngineCatalog {
     handle: AppHandle,
@@ -292,45 +115,15 @@ fn parse_sgf_summary(sgf_text: String) -> Result<app_model::GameDto, String> {
 }
 
 #[tauri::command]
-fn provider_parse_yike_url(raw_url: String) -> Result<provider_yike::YikeUrlDescriptor, ProviderError> {
-    provider_yike::parse_yike_url(&raw_url)
-}
-
-#[tauri::command]
 fn provider_import_from_payload(
     request: ProviderImportRequest,
 ) -> Result<ProviderImportResult, ProviderError> {
     let result = match request.provider {
         ProviderKind::Yike => provider_yike::import_payload(request),
         ProviderKind::Fox => provider_fox::import_payload(request),
+        ProviderKind::Tencent => provider_tencent::import_payload(request),
     }?;
     enrich_provider_import_result(result)
-}
-
-#[tauri::command]
-fn provider_fetch_yike(request: ProviderFetchRequest) -> Result<ProviderFetchResult, ProviderError> {
-    validate_provider_fetch_request(&request, ProviderKind::Yike, "provider_fetch_yike")?;
-    let transport = ReqwestProviderTransport;
-    fetch_yike_with_transport(request, &transport)
-}
-
-#[tauri::command]
-fn provider_fetch_fox(request: ProviderFetchRequest) -> Result<ProviderFetchResult, ProviderError> {
-    validate_provider_fetch_request(&request, ProviderKind::Fox, "provider_fetch_fox")?;
-    let transport = ReqwestProviderTransport;
-    fetch_fox_with_transport(request, &transport)
-}
-
-#[tauri::command]
-fn readboard_sidecar_probe(
-    request: ReadboardSidecarProbeRequest,
-) -> Result<ReadboardSidecarProbeResult, ProviderError> {
-    validate_timeout_ms(request.timeout_ms, "readboard_sidecar_probe")?;
-    Ok(readboard_sidecar::probe_readboard_sidecar(
-        &request,
-        &readboard_sidecar::ReadboardSidecarOptions::default(),
-    )
-    .into_dto())
 }
 
 #[tauri::command]
@@ -363,21 +156,7 @@ fn readboard_sidecar_sync_snapshot(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        let parsed = readboard_sidecar::parse_snapshot_line(protocol_line).map_err(readboard_error)?;
-        let local = ReadBoardLocalContext {
-            board_size: parsed.snapshot.board_size,
-            positions: Vec::new(),
-            current_index: 0,
-            main_end_index: 0,
-        };
-        let first_sync = request
-            .metadata
-            .get("first_sync")
-            .map(|value| value != "false" && value != "0")
-            .unwrap_or(true);
-        return readboard_sidecar::sync_snapshot_line(&request, protocol_line, first_sync, local)
-            .map(|outcome| outcome.into_dto())
-            .map_err(readboard_error);
+        return readboard_sidecar::preview_snapshot_line(&request, protocol_line).map_err(readboard_error);
     }
     Err(ProviderError {
         kind: ProviderErrorKind::RuntimeUnavailable,
@@ -474,13 +253,14 @@ async fn save_current_game_as(
     selected_path: NodePath,
     default_file_name: Option<String>,
 ) -> Result<Option<CurrentGameResultDto>, String> {
+    let snapshot = state.capture_save_snapshot(selected_path)?;
     let default_file_name = default_file_name.unwrap_or_else(|| "review.sgf".to_string());
     let app = app.clone();
     let outcome =
         tauri::async_runtime::spawn_blocking(move || save_as::pick_save_as_outcome(&app, &default_file_name))
             .await
             .map_err(|error| error.to_string())??;
-    save_as::persist_current_game_save_as(&state, outcome, selected_path)
+    save_as::persist_current_game_save_as(&state, outcome, snapshot)
 }
 
 #[tauri::command]
@@ -1171,26 +951,6 @@ fn enrich_provider_import_result(
     Ok(result)
 }
 
-fn validate_provider_fetch_request(
-    request: &ProviderFetchRequest,
-    expected_provider: ProviderKind,
-    command_name: &str,
-) -> Result<(), ProviderError> {
-    if request.provider != expected_provider {
-        return Err(ProviderError {
-            kind: ProviderErrorKind::InvalidRequest,
-            message: format!("{command_name} received provider {:?}", request.provider),
-        });
-    }
-    if request.url.trim().is_empty() {
-        return Err(ProviderError {
-            kind: ProviderErrorKind::InvalidRequest,
-            message: format!("{command_name} requires a non-empty url"),
-        });
-    }
-    validate_timeout_ms(request.timeout_ms, command_name)
-}
-
 fn validate_timeout_ms(timeout_ms: Option<u64>, command_name: &str) -> Result<(), ProviderError> {
     if timeout_ms == Some(0) {
         return Err(ProviderError {
@@ -1202,20 +962,8 @@ fn validate_timeout_ms(timeout_ms: Option<u64>, command_name: &str) -> Result<()
 }
 
 fn readboard_error(error: readboard_sidecar::ReadboardSidecarError) -> ProviderError {
-    let kind = match &error {
-        readboard_sidecar::ReadboardSidecarError::MissingLaunchTarget => {
-            ProviderErrorKind::RuntimeUnavailable
-        }
-        readboard_sidecar::ReadboardSidecarError::EmptyProtocolLine
-        | readboard_sidecar::ReadboardSidecarError::MissingField(_)
-        | readboard_sidecar::ReadboardSidecarError::InvalidField { .. }
-        | readboard_sidecar::ReadboardSidecarError::DuplicateField { .. } => {
-            ProviderErrorKind::InvalidPayload
-        }
-        readboard_sidecar::ReadboardSidecarError::Sync(_) => ProviderErrorKind::ParseFailed,
-    };
     ProviderError {
-        kind,
+        kind: ProviderErrorKind::InvalidPayload,
         message: error.to_string(),
     }
 }
@@ -1257,7 +1005,9 @@ pub fn run() {
         .manage(CurrentGameState::default())
         .manage(PreferencesState::default())
         .manage(MainWindowPin::default())
+        .manage(provider_yike::sync::YikeSyncRuntime::default())
         .setup(|app| {
+            readboard::install(app.handle());
             let recovery_path = session_recovery::recovery_file_path(app.handle())?;
             app.manage(Mutex::new(FileRecoveryStore::new(recovery_path)));
             spawn_recovery_writer(app.handle().clone());
@@ -1316,11 +1066,22 @@ pub fn run() {
                 }
             }
             window_geometry::start(app.handle());
+            external_sync::start(app.handle())?;
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            external_sync::external_sync_snapshot,
+            external_sync::load_yike_sync_preferences,
+            external_sync::save_yike_sync_preferences,
+            external_sync::begin_yike_sync,
+            external_sync::prepare_yike_sync,
+            external_sync::cancel_external_sync_start,
+            external_sync::resolve_external_sync_start,
+            external_sync::retry_external_sync,
+            external_sync::stop_external_sync,
+            external_sync::open_yike_sync_browser,
             window_geometry::window_geometry_status,
             window_geometry::reset_window_geometry,
             window_geometry::retry_window_geometry,
@@ -1330,11 +1091,36 @@ pub fn run() {
             set_main_window_pin,
             health,
             parse_sgf_summary,
-            provider_parse_yike_url,
             provider_import_from_payload,
-            provider_fetch_yike,
-            provider_fetch_fox,
-            readboard_sidecar_probe,
+            provider_yike_list,
+            provider_yike_preview,
+            load_yike_locator,
+            save_yike_locator,
+            provider_fox_list,
+            provider_fox_list_more,
+            provider_fox_preview,
+            load_fox_kifu_state,
+            remember_fox_lookup,
+            clear_fox_recents,
+            provider_tencent_list,
+            provider_tencent_preview,
+            load_tencent_history,
+            save_tencent_query,
+            network_snapshot,
+            save_network_settings,
+            begin_provider_request,
+            cancel_provider_request,
+            readboard::readboard_runtime_snapshot,
+            readboard::readboard_runtime_path,
+            readboard::readboard_save_runtime_path,
+            readboard::readboard_runtime_start,
+            readboard::readboard_runtime_stop,
+            readboard::readboard_runtime_restart,
+            readboard::load_readboard_sync_preferences,
+            readboard::save_readboard_sync_preferences,
+            readboard::begin_readboard_sync,
+            readboard::prepare_readboard_sync,
+            readboard::readboard_focus,
             readboard_sidecar_sync_snapshot,
             replay_sgf_positions,
             read_game_file,
@@ -1815,153 +1601,6 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn provider_fetch_yike_adds_missing_signature_headers_without_network() {
-        let mut request = provider_fetch_request(ProviderKind::Yike);
-        request
-            .headers
-            .insert("AppKey".to_string(), "caller-app-key".to_string());
-
-        let prepared = prepare_yike_fetch_request(request);
-
-        assert_eq!(
-            prepared.headers.get("AppKey").map(String::as_str),
-            Some("caller-app-key")
-        );
-        assert!(prepared.headers.contains_key("CurTime"));
-        assert!(prepared.headers.contains_key("CheckSum"));
-        assert!(prepared.headers.contains_key("Nonce"));
-        assert!(prepared.headers.contains_key("accesstoken"));
-    }
-
-    #[test]
-    fn provider_fetch_fox_http_adds_default_user_agent_without_network() {
-        let request = provider_fetch_request(ProviderKind::Fox);
-
-        let prepared = prepare_fox_http_fetch_request(request);
-
-        assert_eq!(
-            prepared.headers.get("User-Agent").map(String::as_str),
-            Some(provider_fox::FOX_MOBILE_USER_AGENT)
-        );
-    }
-
-    #[test]
-    fn provider_fetch_yike_validates_detail_payload_and_preserves_signature_headers_without_network() {
-        let mut request = provider_fetch_request(ProviderKind::Yike);
-        request.url = "https://api-new.yikeweiqi.com/v1/golives/186031".to_string();
-        request
-            .headers
-            .insert("AppKey".to_string(), "caller-app-key".to_string());
-        let transport = provider_core::RecordingProviderTransport::with_result(Ok(provider_fetch_result(
-            ProviderKind::Yike,
-            "https://api-new.yikeweiqi.com/v1/golives/186031",
-            200,
-            r#"{"status":0,"result":{"sgf":"(;GM[1]SZ[19];B[aa])","status":2}}"#,
-        )));
-
-        let result = fetch_yike_with_transport(request, &transport).unwrap();
-
-        assert_eq!(result.status_code, 200);
-        let requests = transport.requests().unwrap();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(
-            requests[0].headers.get("AppKey").map(String::as_str),
-            Some("caller-app-key")
-        );
-        assert!(requests[0].headers.contains_key("CurTime"));
-        assert!(requests[0].headers.contains_key("CheckSum"));
-        assert!(requests[0].headers.contains_key("Nonce"));
-        assert!(requests[0].headers.contains_key("accesstoken"));
-    }
-
-    #[test]
-    fn provider_fetch_yike_maps_http_and_bad_json_without_network() {
-        let mut request = provider_fetch_request(ProviderKind::Yike);
-        request.url = "https://api-new.yikeweiqi.com/v1/golives/186031".to_string();
-        let transport = provider_core::StaticProviderTransport::ok(provider_fetch_result(
-            ProviderKind::Yike,
-            "https://api-new.yikeweiqi.com/v1/golives/186031",
-            503,
-            "service unavailable",
-        ));
-
-        let error = fetch_yike_with_transport(request.clone(), &transport).unwrap_err();
-        assert_eq!(error.kind, ProviderErrorKind::TransportFailed);
-        assert!(error.message.contains("HTTP 503"));
-
-        let transport = provider_core::StaticProviderTransport::ok(provider_fetch_result(
-            ProviderKind::Yike,
-            "https://api-new.yikeweiqi.com/v1/golives/186031",
-            200,
-            "{",
-        ));
-
-        let error = fetch_yike_with_transport(request, &transport).unwrap_err();
-        assert_eq!(error.kind, ProviderErrorKind::InvalidPayload);
-    }
-
-    #[test]
-    fn provider_fetch_yike_validates_list_payload_without_network() {
-        let mut request = provider_fetch_request(ProviderKind::Yike);
-        request.url = "https://api.yikeweiqi.com/v2/golive/list?p=1&since=0&official=&version=2".to_string();
-        let transport = provider_core::StaticProviderTransport::ok(provider_fetch_result(
-            ProviderKind::Yike,
-            &request.url,
-            200,
-            r#"{"Status":1200,"Result":{"since":12,"list":[]}}"#,
-        ));
-
-        let result = fetch_yike_with_transport(request, &transport).unwrap();
-
-        assert_eq!(result.status_code, 200);
-    }
-
-    #[test]
-    fn provider_fetch_fox_http_checks_status_and_warns_without_network() {
-        let mut request = provider_fetch_request(ProviderKind::Fox);
-        request.url = "https://example.test/fox".to_string();
-        let transport = provider_core::StaticProviderTransport::ok(provider_fetch_result(
-            ProviderKind::Fox,
-            "https://example.test/fox",
-            500,
-            "server error",
-        ));
-
-        let error = fetch_fox_with_transport(request.clone(), &transport).unwrap_err();
-        assert_eq!(error.kind, ProviderErrorKind::TransportFailed);
-        assert!(error.message.contains("HTTP 500"));
-
-        let transport = provider_core::StaticProviderTransport::ok(provider_fetch_result(
-            ProviderKind::Fox,
-            "https://example.test/fox",
-            200,
-            "{}",
-        ));
-        let result = fetch_fox_with_transport(request, &transport).unwrap();
-
-        assert!(result.warnings.iter().any(|warning| warning.contains("directly")));
-    }
-
-    #[test]
-    fn provider_fetch_commands_validate_provider_before_runtime() {
-        let error = provider_fetch_yike(provider_fetch_request(ProviderKind::Fox)).unwrap_err();
-
-        assert_eq!(error.kind, ProviderErrorKind::InvalidRequest);
-        assert!(error.message.contains("provider_fetch_yike"));
-    }
-
-    #[test]
-    fn provider_fetch_fox_non_http_uses_command_parser_without_network() {
-        let mut request = provider_fetch_request(ProviderKind::Fox);
-        request.url = "not-a-fox-command".to_string();
-
-        let error = provider_fetch_fox(request).unwrap_err();
-
-        assert_eq!(error.kind, ProviderErrorKind::InvalidRequest);
-        assert!(error.message.contains("Fox command"));
-    }
-
-    #[test]
     fn provider_enrichment_projects_rectangular_dimensions() {
         let enriched = enrich_provider_import_result(ProviderImportResult {
             provider: ProviderKind::Yike,
@@ -1986,22 +1625,6 @@ for line in sys.stdin:
 
         assert_eq!(enriched.summary.board_width, Some(9));
         assert_eq!(enriched.summary.board_height, Some(13));
-    }
-
-    #[test]
-    fn readboard_sidecar_probe_returns_structured_runtime_status() {
-        let result = readboard_sidecar_probe(ReadboardSidecarProbeRequest {
-            endpoint: Some("local-test-endpoint".to_string()),
-            timeout_ms: Some(100),
-        })
-        .unwrap();
-
-        assert!(!result.available);
-        assert_eq!(result.endpoint.as_deref(), Some("local-test-endpoint"));
-        assert!(result
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("UnsupportedEndpoint")));
     }
 
     #[test]
@@ -2044,39 +1667,6 @@ for line in sys.stdin:
             .contains("readboard image OCR runtime is unavailable"));
     }
 
-    fn provider_fetch_request(provider: ProviderKind) -> ProviderFetchRequest {
-        ProviderFetchRequest {
-            provider,
-            url: "https://example.test/provider".to_string(),
-            method: app_model::ProviderFetchMethod::Get,
-            headers: std::collections::BTreeMap::new(),
-            body: None,
-            source_url: None,
-            source_id: None,
-            timeout_ms: Some(100),
-        }
-    }
-
-    fn provider_fetch_result(
-        provider: ProviderKind,
-        url: &str,
-        status_code: u16,
-        payload: &str,
-    ) -> ProviderFetchResult {
-        ProviderFetchResult {
-            provider,
-            url: url.to_string(),
-            status_code,
-            payload: payload.to_string(),
-            headers: std::collections::BTreeMap::new(),
-            content_type: Some("application/json".to_string()),
-            metadata: ProviderGameMetadata {
-                request_url: Some(url.to_string()),
-                ..ProviderGameMetadata::default()
-            },
-            warnings: Vec::new(),
-        }
-    }
     #[test]
     fn game_file_import_routes_formats_and_keeps_gib_read_only() {
         let directory = std::env::temp_dir().join(format!("game-file-import-{}", Uuid::new_v4()));

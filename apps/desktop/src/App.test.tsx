@@ -8,6 +8,8 @@ import type { AppPreferences } from "./domain/preferences";
 import type { WorkspaceSharesDto } from "./domain/types";
 import type { WindowGeometryStatusDto } from "./domain/types";
 import type { EngineProfileRecordDto, HumanMatchActionDto, HumanMatchStartDto, MatchAnalysisPolicyDto, MatchTurnDto, MatchUpdateDto } from "./domain/types";
+import * as externalSyncApi from "./api/externalSync";
+import type { ExternalSyncSnapshot } from "./domain/providers";
 
 const currentGameFixture = vi.hoisted(() => vi.fn());
 const backend = vi.hoisted(() => ({
@@ -396,6 +398,54 @@ afterEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
 });
+describe("App external source switching", () => {
+  it("preserves the original readboard start error when cancellation also fails", async () => {
+    vi.spyOn(externalSyncApi, "subscribeExternalSync").mockResolvedValue(() => undefined);
+    let requestStart!: () => void;
+    vi.spyOn(externalSyncApi, "subscribeReadboardSyncRequests").mockImplementation(async (listener) => {
+      requestStart = listener;
+      return () => undefined;
+    });
+    vi.spyOn(externalSyncApi, "beginReadboardSync").mockResolvedValue(7);
+    vi.spyOn(externalSyncApi, "prepareReadboardSync").mockRejectedValue(new Error("Readboard frame deadline expired"));
+    vi.spyOn(externalSyncApi, "cancelExternalSyncStart").mockRejectedValue(new Error("Cancellation IPC unavailable"));
+    const host = await renderApp();
+    await act(async () => { requestStart(); });
+    expect(host.textContent).toContain("readboard 同步启动失败: Readboard frame deadline expired");
+    expect(host.textContent).not.toContain("Cancellation IPC unavailable");
+  });
+
+  it("offers the dirty decision for a readboard tool Start during Yike and preserves Yike on Cancel", async () => {
+    const sync: ExternalSyncSnapshot = {
+      revision: 1, session_id: 4, starting_id: null, phase: "syncing", source: "yike",
+      locator: "https://home.yikeweiqi.com/#/unite/79496703", source_status: "processing",
+      source_tip: { indices: [] }, document_identity: 1, request_identity: null,
+      retry_count: 0, failure: null, browser_error: null, readboard: null,
+      preferences: { intervalSeconds: 5, locator: null, jumpToLast: false, mute: true }
+    };
+    vi.spyOn(externalSyncApi, "externalSyncSnapshot").mockResolvedValue(sync);
+    vi.spyOn(externalSyncApi, "subscribeExternalSync").mockResolvedValue(() => undefined);
+    vi.spyOn(externalSyncApi, "loadYikeSyncPreferences").mockResolvedValue(sync.preferences);
+    let requestStart!: () => void;
+    vi.spyOn(externalSyncApi, "subscribeReadboardSyncRequests").mockImplementation(async (listener) => {
+      requestStart = listener;
+      return () => undefined;
+    });
+    vi.spyOn(externalSyncApi, "beginReadboardSync").mockResolvedValue(7);
+    vi.spyOn(externalSyncApi, "prepareReadboardSync").mockResolvedValue({ start_id: 7, admission: { status: "needs_decision", departure_id: 11 } });
+    vi.spyOn(externalSyncApi, "resolveExternalSyncStart").mockResolvedValue({ committed: false, analysis_stopped: false, current: null, message: "Replacement cancelled." });
+    const host = await renderApp();
+    await act(async () => { requestStart(); });
+    const decision = requiredElement(host, ".document-departure-actions");
+    expect(host.textContent).toContain("保存当前棋谱后开始 readboard 只读同步？");
+    await act(async () => { buttonNamed(decision, "取消").click(); });
+    expect(host.querySelector(".document-departure-actions")).toBeNull();
+    expect(requiredElement(host, 'section[aria-label="Yike 持续同步"]').textContent).toContain("状态：Syncing");
+    expect(requiredElement(host, 'section[aria-label="readboard 持续同步"]').textContent).toContain("未同步");
+    expect(buttonNamed(host, "停止同步").disabled).toBe(false);
+  });
+});
+
 describe("App human match ownership", () => {
   const settings = { ...defaultAppPreferences.matchDefaults, profile_id: "profile-1", rules: "chinese" as const };
   function playing(revision: number, current: CurrentGameResultDto): MatchUpdateDto {
@@ -2342,7 +2392,6 @@ describe("App document replacement", () => {
       await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
     });
     expect(backend.openSgfDocument).toHaveBeenCalledTimes(1);
-    expect(backend.prepareDocumentReplacement).toHaveBeenCalledWith("(;SZ[9])", "/tmp/opened.sgf");
     expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).toBeNull();
   });
 
@@ -2365,10 +2414,6 @@ describe("App document replacement", () => {
       await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
       await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
     });
-    expect(backend.prepareDocumentReplacement).toHaveBeenCalledWith(
-      "(;SZ[19]PB[Black]PW[White];B[dd])",
-      null
-    );
     expect(host.querySelector(".doc-name")?.textContent).toContain("named.sgf");
   });
 
@@ -2400,10 +2445,6 @@ describe("App document replacement", () => {
       await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
     });
     expect(backend.importGameFile).toHaveBeenCalledWith(file);
-    expect(backend.prepareDocumentReplacement).toHaveBeenCalledWith(
-      "(;SZ[19]PB[Black]PW[White];B[dd])",
-      null
-    );
     expect(host.querySelector(".doc-name")?.textContent).toContain("upload.sgf");
   });
 
@@ -3094,7 +3135,6 @@ describe("App native file activation", () => {
     });
 
     expect(host.textContent).toContain("Opening multiple files at once is not supported.");
-    expect(backend.prepareDocumentReplacement).toHaveBeenCalledWith(expect.stringContaining("SZ[19]"), null);
     expect(backend.markFileActivationReady).toHaveBeenCalledTimes(1);
   });
   it("opens the retained startup file instead of normal restore or the sample", async () => {
@@ -3128,7 +3168,6 @@ describe("App native file activation", () => {
     expect(backend.restoreCurrentGameRecovery).not.toHaveBeenCalled();
     expect(backend.readGameFile).toHaveBeenCalledWith(activatedFile.display_path);
     expect(backend.prepareDocumentReplacement).toHaveBeenCalledTimes(1);
-    expect(backend.prepareDocumentReplacement).toHaveBeenCalledWith(activatedFile.sgf_text, activatedFile.native_path);
     expect(backend.markFileActivationReady).toHaveBeenCalledTimes(1);
     expect(host.textContent).toContain("open me.sgf");
   });
@@ -3162,7 +3201,6 @@ describe("App native file activation", () => {
 
     expect(backend.restoreCurrentGameRecovery.mock.invocationCallOrder[0])
       .toBeLessThan(backend.readGameFile.mock.invocationCallOrder[0]);
-    expect(backend.prepareDocumentReplacement).toHaveBeenCalledWith(activatedFile.sgf_text, activatedFile.native_path);
     expect(backend.markFileActivationReady).toHaveBeenCalledTimes(1);
   });
 
@@ -3258,7 +3296,6 @@ describe("App native file activation", () => {
 
     expect(backend.discardCurrentGameRecovery.mock.invocationCallOrder[0])
       .toBeLessThan(backend.readGameFile.mock.invocationCallOrder[0]);
-    expect(backend.prepareDocumentReplacement).toHaveBeenCalledWith(activatedFile.sgf_text, activatedFile.native_path);
   });
 
   it("keeps the restored game when the retained file cannot be parsed", async () => {

@@ -18,6 +18,10 @@ import { ApplicationTeardownDialog } from "./components/ApplicationTeardownDialo
 import { CurrentGameRecoveryDialog } from "./components/CurrentGameRecoveryDialog";
 import { AnalysisTaskPanel, type AnalysisScopeDraft } from "./components/AnalysisTaskPanel";
 import { ProviderPanel } from "./components/ProviderPanel";
+import { YikeSyncPanel } from "./components/YikeSyncPanel";
+import { ReadboardSyncPanel } from "./components/ReadboardSyncPanel";
+import { beginYikeSync, prepareYikeSync, beginReadboardSync, prepareReadboardSync, requestReadboardFocus, cancelExternalSyncStart, resolveExternalSyncStart, externalSyncSnapshot, subscribeExternalSync, subscribeReadboardSyncRequests, retryExternalSync, stopExternalSync, openYikeSyncBrowser } from "./api/externalSync";
+import type { ExternalSyncSnapshot, ExternalSyncSource, ExternalSyncStart, ExternalSyncUpdate } from "./domain/providers";
 import { NewDocumentDialog } from "./components/NewDocumentDialog";
 import { GameMetadataDialog } from "./components/GameMetadataDialog";
 import { HumanMatchDialog } from "./components/HumanMatchDialog";
@@ -114,7 +118,7 @@ import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, select
 import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "./domain/preferences";
 import { buildNextMoveReviewMarkers, cycleNextMoveReviewMarker } from "./domain/nextMoveReviewMarker";
 import { admitsChartSeriesChange, buildWinrateChartModel, displayedWinrate } from "./domain/winrateChart";
-import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult } from "./domain/providers";
+import { providerDocumentName, providerLabel, providerSourceLabel, type ProviderImportResult, type ProviderRequestIdentity } from "./domain/providers";
 import { admitsAnalysisAttachment, admitsAnalysisPublication, admitsWholeGameNodeResult, matchesWholeGameJobIdentity } from "./domain/analysisJob";
 import { createShortcutRegistry } from "./domain/shortcuts";
 import {
@@ -148,6 +152,7 @@ type PendingPreferencesSave = {
 };
 type CandidatePreview = { index: number; scope: ReviewPresentationScope; matchFrameIdentity: string | null };
 type ReplacementOptions = {
+  networkIdentity?: ProviderRequestIdentity;
   confirmMessage: string;
   fallbackName?: string | null;
   successMessage: (projection: GameDto, fileName: string) => string;
@@ -241,6 +246,13 @@ export function App() {
   const [fallbackFileName, setFallbackFileName] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [currentGame, setCurrentGame] = useState<CurrentGameResultDto | null>(null);
+  const [externalSync, setExternalSync] = useState<ExternalSyncSnapshot | null>(null);
+  const externalSyncRef = useRef<ExternalSyncSnapshot | null>(null);
+  const [syncStarting, setSyncStarting] = useState<ExternalSyncSource | null>(null);
+  const syncStartingRef = useRef(false);
+  const syncStartIdRef = useRef<number | null>(null);
+  const syncCancelRef = useRef(false);
+  const externalBlocked = syncStarting !== null || externalSync?.session_id != null || externalSync?.starting_id != null;
   const [rootSetupDraft, setRootSetupDraft] = useState<RootSetupDraft | null>(null);
   const [conversionPrompt, setConversionPrompt] = useState<{ generation: number; path: NodePath } | null>(null);
   const [trial, setTrial] = useState<TrialSessionDto | null>(null);
@@ -278,6 +290,7 @@ export function App() {
   const [recentHistoryError, setRecentHistoryError] = useState<string | null>(null);
   const failedRecentActionRef = useRef<{ openedPath: string | null } | null>(null);
   const [sheet, setSheet] = useState<"none" | SheetId>("none");
+  const [providerEntry, setProviderEntry] = useState<"yike" | "fox" | "tencent">("yike");
   const [newDocumentOpen, setNewDocumentOpen] = useState(false);
   const [metadataDraft, setMetadataDraft] = useState<{
     generation: number; blackName: string; whiteName: string; komi: number; handicap: string | null;
@@ -660,10 +673,10 @@ export function App() {
   const parentNode = reviewGame && parentOfSelected ? nodeAt(reviewGame.tree, parentOfSelected) : null;
   const siblingIndex = selectedPath.indices.at(-1);
   const canParent = Boolean(!scoring && !scoringPending && reviewGame && parentOfSelected);
-  const canRemoveVariation = Boolean(nativeRuntime && !trial && !trialPending && !scoring && !scoringPending && currentGame && selectedPath.indices.length > 0);
-  const canRootSetup = !matchBlocked && nativeRuntime && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending && selectedPath.indices.length === 0
+  const canRemoveVariation = Boolean(!externalBlocked && nativeRuntime && !trial && !trialPending && !scoring && !scoringPending && currentGame && selectedPath.indices.length > 0);
+  const canRootSetup = !externalBlocked && !matchBlocked && nativeRuntime && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending && selectedPath.indices.length === 0
     && currentGame?.tree.children.length === 0 && !rootSetupDraft && !conversionPrompt && !editActionPending;
-  const canConvertPosition = !matchBlocked && nativeRuntime && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending
+  const canConvertPosition = !externalBlocked && !matchBlocked && nativeRuntime && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending
     && (Boolean(currentGame?.tree.children.length) || Boolean(currentGame?.tree.properties.some((property) => property.key === "B" || property.key === "W")))
     && !rootSetupDraft && !conversionPrompt && !editActionPending;
   const canNext = Boolean(!scoring && !scoringPending && selectedNode && selectedNode.children.length > 0);
@@ -748,7 +761,7 @@ export function App() {
   const documentName = useMemo(() => documentPath ? fileNameFromPath(documentPath) : fallbackFileName ?? "未命名棋谱", [documentPath, fallbackFileName]);
   const saveFileName = documentName.toLowerCase().endsWith(".sgf") ? documentName : `${documentName}.sgf`;
   const documentFlowBusy = matchBlocked || matchDialogOpen || fileFlowBusy || departurePending || Boolean(newDocumentOpen) || Boolean(rootSetupDraft) || Boolean(conversionPrompt) || Boolean(metadataDraft) || Boolean(markupDialog) || Boolean(departurePrompt) || Boolean(teardownPrompt) || Boolean(recoveryPrompt);
-  const historyActionBlocked = documentFlowBusy || editActionPending;
+  const historyActionBlocked = documentFlowBusy || externalBlocked || editActionPending;
   const canUndo = nativeRuntime && !scoring && !scoringPending && Boolean(trial ? trial.can_undo : currentGame?.can_undo) && !historyActionBlocked && !trialPending;
   const canRedo = nativeRuntime && !scoring && !scoringPending && !trial && Boolean(currentGame?.can_redo) && !historyActionBlocked && !trialPending;
   const canDeleteNode = Boolean(nativeRuntime && !scoring && !scoringPending && !trial && !trialPending && currentGame && !historyActionBlocked);
@@ -1259,6 +1272,148 @@ export function App() {
   }
 
 
+  async function adoptExternalUpdate(update: ExternalSyncUpdate) {
+    const previousSync = externalSyncRef.current;
+    if (update.sync.revision >= (previousSync?.revision ?? -1)) {
+      externalSyncRef.current = update.sync;
+      setExternalSync(update.sync);
+    }
+    const current = update.current;
+    const previous = currentGameRef.current;
+    if (!current || (previous && (current.generation < previous.generation || (current.generation === previous.generation && current.snapshot_seq <= previous.snapshot_seq)))) return;
+    if (previousSync?.session_id !== update.sync.session_id) clearLocalAnalysisSession();
+    beginReviewRequest();
+    clearReviewData();
+    adoptCurrentGame(current);
+    pendingSelectedPathRef.current = current.selected_path;
+    setChosenChildren(chosenFromPath(current.selected_path));
+    setCurrentMove(current.snapshot.position.move_number);
+    setDirty(current.dirty);
+    setCurrentFilePath(current.native_path ?? null);
+    setFallbackFileName(update.sync.source === "readboard" ? "readboard-sync.sgf" : "yike-sync.sgf");
+    presentCurrentGameAnalysis(current);
+    if (previous && previousSync?.session_id === update.sync.session_id && !syncMuted(update.sync)) soundAcceptedMove(previous.snapshot, current.snapshot);
+    try {
+      const artifacts = await artifactsFromCurrentGame();
+      if (currentGameRef.current?.generation !== current.generation || currentGameRef.current?.snapshot_seq !== current.snapshot_seq) return;
+      setGame(artifacts.projection);
+      setSgfText(artifacts.serialized);
+      setPositions(replayGamePositions(artifacts.projection));
+    } catch (error) { setMessage(`同步棋谱投影失败: ${errorMessage(error)}`); }
+  }
+
+  useEffect(() => {
+    if (!nativeRuntime) return;
+    let disposed = false;
+    let unsubscribe: (() => void) | undefined;
+    let querying = false;
+    const refresh = async () => {
+      if (querying) return;
+      querying = true;
+      try { const sync = await externalSyncSnapshot(); if (!disposed) await adoptExternalUpdate({ sync, current: null }); }
+      catch (error) { if (!disposed) setMessage(`同步状态读取失败: ${errorMessage(error)}`); }
+      finally { querying = false; }
+    };
+    void subscribeExternalSync((update) => { if (!disposed) void adoptExternalUpdate(update); })
+      .then((stop) => { if (disposed) stop(); else { unsubscribe = stop; void refresh(); } })
+      .catch((error) => { if (!disposed) setMessage(`同步事件订阅失败: ${errorMessage(error)}`); });
+    const timer = window.setInterval(() => { if (externalSyncRef.current?.session_id != null || syncStartingRef.current) void refresh(); }, 250);
+    return () => { disposed = true; unsubscribe?.(); window.clearInterval(timer); };
+  }, [nativeRuntime]);
+
+  const readboardStartRef = useRef<() => Promise<void>>(async () => {});
+  readboardStartRef.current = handleStartReadboardSync;
+  useEffect(() => {
+    if (!nativeRuntime) return;
+    let disposed = false;
+    let unsubscribe: (() => void) | undefined;
+    void subscribeReadboardSyncRequests(() => {
+      if (disposed || syncStartingRef.current || externalSyncRef.current?.source === "readboard") return;
+      setSheet("sync");
+      void readboardStartRef.current().catch((error) => setMessage(`readboard 同步启动失败: ${errorMessage(error)}`));
+    })
+      .then((stop) => { if (disposed) stop(); else unsubscribe = stop; })
+      .catch((error) => { if (!disposed) setMessage(`readboard 同步请求订阅失败: ${errorMessage(error)}`); });
+    return () => { disposed = true; unsubscribe?.(); };
+  }, [nativeRuntime]);
+
+  function handleStartSync(locator: string, play: boolean) {
+    return runExternalStart("yike", async () => {
+      const id = await beginYikeSync(locator);
+      return { id, prepare: () => prepareYikeSync(id) };
+    }, "保存当前棋谱后开始 Yike 只读同步？取消会保留当前局和原同步会话。", async (id) => {
+      if (!play) return;
+      const opened = await openYikeSyncBrowser(id);
+      await adoptExternalUpdate({ sync: opened, current: null });
+      if (opened.browser_error) setMessage(opened.browser_error);
+    });
+  }
+
+  function handleStartReadboardSync() {
+    return runExternalStart("readboard", async () => {
+      const id = await beginReadboardSync();
+      return { id, prepare: () => prepareReadboardSync(id) };
+    }, "保存当前棋谱后开始 readboard 只读同步？取消会保留当前局和原同步会话。");
+  }
+
+  // One SGF-07 Start for both sources: reserve, prepare the candidate, one dirty decision, commit.
+  async function runExternalStart(
+    source: ExternalSyncSource,
+    begin: () => Promise<{ id: number; prepare: () => Promise<ExternalSyncStart> }>,
+    decision: string,
+    afterCommit?: (id: number) => Promise<void>
+  ) {
+    if (!nativeRuntime || syncStartingRef.current || matchOwnsWorkspace() || documentFlowBusy || trialRef.current || scoringRef.current || editActionPendingRef.current) throw new Error("请先完成或取消当前编辑、试下或棋谱事务。");
+    syncStartingRef.current = true;
+    syncCancelRef.current = false;
+    setSyncStarting(source);
+    let enteredFileFlow = false;
+    try {
+      await enterFileFlow();
+      enteredFileFlow = true;
+      const { id, prepare } = await begin();
+      syncStartIdRef.current = id;
+      if (syncCancelRef.current) { await cancelExternalSyncStart(id); return; }
+      const prepared = await prepare();
+      if (syncCancelRef.current) { await cancelExternalSyncStart(id); return; }
+      const action: DocumentDepartureActionDto = prepared.admission.status === "needs_decision"
+        ? await requestDepartureDecision(decision) : "discard";
+      if (action !== "cancel") { departurePendingRef.current = true; setDeparturePending(true); }
+      const outcome = await resolveExternalSyncStart({ departureId: prepared.admission.departure_id, action, selectedPath: currentGameRef.current?.selected_path ?? { indices: [] }, defaultFileName: saveFileName });
+      const sync = await externalSyncSnapshot();
+      await adoptExternalUpdate({ sync, current: outcome.current ?? null });
+      setMessage(outcome.message);
+      if (outcome.committed && sync.session_id === id) await afterCommit?.(id);
+    } catch (error) {
+      if (syncStartIdRef.current != null) {
+        try { await cancelExternalSyncStart(syncStartIdRef.current); }
+        catch { /* Cleanup failure must not replace the original start error. */ }
+      }
+      if (!syncCancelRef.current) throw error;
+    } finally {
+      syncStartIdRef.current = null;
+      syncStartingRef.current = false;
+      setSyncStarting(null);
+      departurePendingRef.current = false;
+      setDeparturePending(false);
+      if (enteredFileFlow) await leaveFileFlow();
+    }
+  }
+
+  async function handleCancelSyncStart() {
+    syncCancelRef.current = true;
+    departurePrompt?.choose("cancel");
+    const id = syncStartIdRef.current ?? externalSyncRef.current?.starting_id;
+    if (id != null) await adoptExternalUpdate({ sync: await cancelExternalSyncStart(id), current: null });
+  }
+
+  async function handleSyncAction(action: "retry" | "stop" | "browser") {
+    const id = externalSyncRef.current?.session_id;
+    if (id == null) return;
+    if (action === "stop") await adoptExternalUpdate(await stopExternalSync(id));
+    else await adoptExternalUpdate({ sync: await (action === "retry" ? retryExternalSync(id) : openYikeSyncBrowser(id)), current: null });
+  }
+
 
   async function adoptMatchUpdate(update: MatchUpdateDto) {
     const next = update.match_state;
@@ -1323,6 +1478,7 @@ export function App() {
   }, [matchState, matchBlocked, documentFlowBusy]);
 
   function openMatchDialog(continuing: boolean, mode: MatchModeDto = "human") {
+    if (externalBlocked) return;
     if (!nativeRuntime) { setMessage(nativeMatchUnavailable); return; }
     if (documentFlowBusy || trial || trialPending || scoring || scoringPending || !preferencesLoaded) return;
     const baseline = continuing ? currentGameRef.current : null;
@@ -1452,6 +1608,7 @@ export function App() {
   }
 
   async function handleToggleTrial() {
+    if (externalBlocked) return;
     if (matchOwnsWorkspace()) return;
     if (!nativeRuntime || !currentGameRef.current || scoringRef.current || scoringPendingRef.current || trialTransitionRef.current || (!trialRef.current && documentFlowBusy) || departurePendingRef.current || fileFlowDepthRef.current !== 0 || navigatingRef.current || analysisTaskActionInFlightRef.current || editActionPendingRef.current) return;
     trialTransitionRef.current = true;
@@ -1490,6 +1647,7 @@ export function App() {
     }
   }
   async function handleEnterScoring() {
+    if (externalBlocked) return;
     if (matchOwnsWorkspace()) return;
     if (!nativeRuntime || !currentGameRef.current || scoringRef.current || scoringPendingRef.current || trialRef.current || trialTransitionRef.current || documentFlowBusy || navigatingRef.current || analysisTaskActionInFlightRef.current || editActionPendingRef.current) return;
     scoringPendingRef.current = true;
@@ -2130,6 +2288,7 @@ export function App() {
     nativePath: string | null,
     options: ReplacementOptions
   ): Promise<boolean> {
+    if (externalBlocked && !options.networkIdentity) { setMessage("外部来源占用只读棋谱；请先 Stop 再导入或编辑。"); return false; }
     if (matchOwnsWorkspace()) return false;
     if (rootSetupDraft || conversionPrompt || metadataDraft || markupDialog) {
       setMessage("请先完成或取消当前棋谱编辑。");
@@ -2165,7 +2324,7 @@ export function App() {
     await enterFileFlow();
 
     try {
-      const admission = await prepareDocumentReplacement(sgfInput, nativePath);
+      const admission = await prepareDocumentReplacement(sgfInput, nativePath, options.networkIdentity);
       const action: DocumentDepartureActionDto = admission.status === "needs_decision"
         ? await requestDepartureDecision(options.confirmMessage)
         : "discard";
@@ -3193,10 +3352,11 @@ export function App() {
     }
   }
 
-  async function handleProviderImport(result: ProviderImportResult) {
+  async function handleProviderImport(result: ProviderImportResult, networkIdentity?: ProviderRequestIdentity) {
     const source = providerSourceLabel(result);
     const warningText = result.warnings.length > 0 ? ` ${result.warnings.length} provider warning(s).` : "";
     const applied = await applyReplacement(result.sgf_text, null, {
+      networkIdentity,
       confirmMessage: "放弃未保存的棋谱并载入 Provider 棋谱？",
       fallbackName: providerDocumentName(result),
       successMessage: (projection) =>
@@ -3216,6 +3376,7 @@ export function App() {
   }
 
   async function handleNewGame() {
+    if (externalBlocked) return;
     if (!preferencesLoaded || documentFlowBusy || newDocumentFlowReservedRef.current || departurePendingRef.current || departurePrompt) return;
     newDocumentFlowReservedRef.current = true;
     const admission = enterFileFlow();
@@ -3283,6 +3444,7 @@ export function App() {
   }
 
   async function handleCommitPersonalComment(comment: string) {
+    if (externalBlocked) return;
     if (matchOwnsWorkspace()) return;
     if (trialRef.current || trialTransitionRef.current || !currentGame || rootSetupDraft || conversionPrompt || editActionPendingRef.current) return;
     if (!nativeRuntime) {
@@ -3320,6 +3482,7 @@ export function App() {
   }
 
   function soundAcceptedMove(before: SelectedNodeSnapshotDto, after: SelectedNodeSnapshotDto) {
+    if (syncMuted(externalSyncRef.current)) return;
     if (!preferencesLoadSettledRef.current || !committedPreferencesRef.current.soundEnabled) return;
     const kind = acceptedMoveSound(before, after);
     if (kind) void playMoveSound(kind).catch((error) => setMessage(`声音播放失败: ${errorMessage(error)}`));
@@ -3533,6 +3696,7 @@ export function App() {
   }
 
   function handleBoardPoint(point: PointDto) {
+    if (externalBlocked) return;
     if (matchOwnsWorkspace()) { void handleHumanAction({ kind: "play", vertex: { point } }); return; }
     if (scoringRef.current || scoringPendingRef.current) {
       if (scoringRef.current) void handleUpdateScoring({ kind: "point", point });
@@ -3682,6 +3846,7 @@ export function App() {
     }
   }
   function openMetadataEditor() {
+    if (externalBlocked) return;
     const game = currentGameRef.current;
     if (trialRef.current || trialTransitionRef.current || !nativeRuntime || !game || documentFlowBusy || editActionPendingRef.current || navigatingRef.current) return;
     const value = (key: string) => game.tree.properties.find((property) => property.key === key)?.values[0];
@@ -3791,6 +3956,11 @@ export function App() {
 
   function previewCandidate(index: number | null) {
     setCandidatePreview(index === null ? null : { index, scope: activeScope, matchFrameIdentity });
+    // Java FloatBoard: browsing a candidate variation lets readboard give focus back (`loss`), never per frame.
+    const sync = externalSyncRef.current;
+    if (index !== null && sync?.source === "readboard" && sync.phase === "syncing" && sync.readboard?.preferences.focus) {
+      void requestReadboardFocus().catch((error) => setMessage(`readboard 焦点请求失败: ${errorMessage(error)}`));
+    }
   }
 
   function selectCandidate(index: number) {
@@ -3819,6 +3989,7 @@ export function App() {
       onPkContinue={() => openMatchDialog(true, "pk")}
       sheet={sheet}
       onToggleSheet={toggleSheet}
+      onOpenProvider={(provider) => { if (!matchOwnsWorkspace()) { setProviderEntry(provider); setSheet("sync"); } }}
       busy={historyActionBlocked}
       trialActive={Boolean(trial)}
       trialPending={trialPending || Boolean(scoring) || scoringPending}
@@ -3890,7 +4061,7 @@ export function App() {
       canRootSetup={canRootSetup && !documentFlowBusy}
       canConvertPosition={canConvertPosition && !documentFlowBusy}
       onEditMetadata={openMetadataEditor}
-      canEditMetadata={nativeRuntime && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending && !documentFlowBusy && !editActionPending}
+      canEditMetadata={nativeRuntime && Boolean(currentGame) && !externalBlocked && !trial && !trialPending && !scoring && !scoringPending && !documentFlowBusy && !editActionPending}
       onOpen={() => void handleOpenSgfDocument()}
       recentGamePaths={preferences.recentGamePaths}
       recentHistoryBusy={recentHistoryBusy || !preferencesLoaded}
@@ -4016,7 +4187,7 @@ export function App() {
           currentPosition={currentPosition}
           personalComment={selectedPersonalComment}
           generatedInformation={selectedGeneratedInformation}
-          commentEditorEnabled={nativeRuntime && Boolean(currentGame) && !documentFlowBusy && !trial && !trialPending && !scoring && !scoringPending}
+          commentEditorEnabled={nativeRuntime && Boolean(currentGame) && !externalBlocked && !documentFlowBusy && !trial && !trialPending && !scoring && !scoringPending}
           onCommitPersonalComment={(comment) => void handleCommitPersonalComment(comment)}
           selectedCandidateIndex={selectedCandidateIndex}
           onSelectCandidate={(index) => { if (preferences.workspaceVisibility.left) selectCandidate(index); }}
@@ -4214,7 +4385,15 @@ export function App() {
           <button type="button" onClick={() => void loadSample()} disabled={matchBlocked}>载入示例</button>
         </div>
       </div> : null}
-      {sheet === "sync" ? <ProviderPanel disabled={matchBlocked} onImport={handleProviderImport} /> : null}
+      {sheet === "sync" ? <>
+        <YikeSyncPanel snapshot={syncView(externalSync, "yike")} disabled={matchBlocked || Boolean(trial) || Boolean(scoring) || departurePending || syncStarting === "readboard"} starting={syncStarting === "yike"}
+          onStart={handleStartSync} onCancelStart={handleCancelSyncStart} onRetry={() => handleSyncAction("retry")}
+          onStop={() => handleSyncAction("stop")} onOpenBrowser={() => handleSyncAction("browser")} />
+        <ReadboardSyncPanel snapshot={syncView(externalSync, "readboard")} disabled={matchBlocked || Boolean(trial) || Boolean(scoring) || departurePending || syncStarting === "yike"} starting={syncStarting === "readboard"}
+          onStart={handleStartReadboardSync} onCancelStart={handleCancelSyncStart} onRetry={() => handleSyncAction("retry")}
+          onStop={() => handleSyncAction("stop")} />
+        <ProviderPanel key={`${externalSync?.session_id != null ? `sync:${externalSync.document_identity}` : `local:${currentGame?.generation ?? 0}`}:${providerEntry}`} initialProvider={providerEntry} disabled={matchBlocked || syncStarting !== null} onImport={handleProviderImport} onStartSync={handleStartSync} />
+      </> : null}
       <div hidden={sheet !== "engine"}>
         <EngineSetupPanel
           disabled={matchBlocked}
@@ -4334,6 +4513,17 @@ export function App() {
   </main>;
 }
 
+
+/** One source's view of the single owner: another source's session reads as idle here. */
+function syncView(sync: ExternalSyncSnapshot | null, source: ExternalSyncSource): ExternalSyncSnapshot | null {
+  if (!sync || sync.source === null || sync.source === source) return sync;
+  return { ...sync, phase: "idle", session_id: null, starting_id: null, failure: null, source_status: null, browser_error: null, retry_count: 0, readboard: null };
+}
+
+function syncMuted(sync: ExternalSyncSnapshot | null): boolean {
+  if (sync?.session_id == null) return false;
+  return sync.source === "readboard" ? sync.readboard?.preferences.mute ?? true : sync.preferences.mute;
+}
 
 function isAnalysisTaskReserved(task: AnalysisTaskDto | null): boolean {
   return task != null && (task.state === "queued"

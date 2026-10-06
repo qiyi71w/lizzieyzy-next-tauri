@@ -11,7 +11,8 @@ mod gib;
 pub use analysis::{encode_analysis_payload, parse_analysis_payload, AnalysisSlot, SgfAnalysisPayload};
 pub use current_game::{
     CurrentSgfDocument, DocumentEditOutcome, DocumentHistory, DocumentHistoryOutcome, PreparedSgfEdit,
-    SgfDocumentEdit, StagedDocument, TrialLine,
+    ReadboardSync, ReadboardSyncOutcome, ReadboardViewPreferences, SgfDocumentEdit, StagedDocument,
+    TrialLine,
 };
 pub use exact_position::ExactPosition;
 pub use gib::{import_gib, GibError};
@@ -77,7 +78,8 @@ pub fn normalize_yike_sgf_mainline(input: &str) -> String {
     }
 }
 
-/// Remove Fox payload backslashes that occur outside SGF property values.
+/// Remove Fox payload backslashes that occur outside SGF property values; escaped
+/// line breaks and tabs there (`\r`, `\n`, `\t` written as text) are dropped whole.
 ///
 /// Backslash escapes inside property values are preserved, including escaped
 /// closing brackets.
@@ -106,7 +108,9 @@ pub fn sanitize_fox_sgf(input: &str) -> String {
         }
 
         if current == '\\' {
-            index += 1;
+            // Some Fox records carry escaped line breaks (`\r\n` as text) between properties.
+            let skip_escaped_whitespace = matches!(chars.get(index + 1), Some('r' | 'n' | 't'));
+            index += if skip_escaped_whitespace { 2 } else { 1 };
             continue;
         }
         output.push(current);

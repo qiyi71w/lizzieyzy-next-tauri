@@ -19,7 +19,21 @@ pub const UNREADABLE_RECOVERY_MESSAGE: &str = "Unreadable preferences isolated; 
 #[serde(rename_all = "camelCase")]
 pub struct AppPreferencesDto {
     #[serde(default)]
+    pub network: app_model::NetworkSettingsDto,
+    #[serde(default)]
+    pub yike_locator: Option<String>,
+    #[serde(default)]
+    pub yike_sync: app_model::YikeSyncPreferencesDto,
+    #[serde(default)]
+    pub readboard_sync: app_model::ReadboardSyncPreferencesDto,
+    #[serde(default)]
+    pub tencent_history: app_model::TencentHistoryDto,
+    #[serde(default)]
+    pub readboard_executable_path: Option<String>,
+    #[serde(default)]
     pub match_defaults: app_model::MatchDefaultsDto,
+    #[serde(default, deserialize_with = "deserialize_fox_kifu")]
+    pub fox_kifu: app_model::FoxKifuStateDto,
     #[serde(default)]
     pub workspace_shares: Option<WorkspaceSharesDto>,
     #[serde(default, deserialize_with = "deserialize_window_geometry")]
@@ -125,9 +139,24 @@ fn deserialize_window_geometry<'de, D: serde::Deserializer<'de>>(
     Ok(value.map(|value| serde_json::from_value(value).unwrap_or_default()))
 }
 
+// Malformed Fox recents are the Fox owner's to drop; they never quarantine other preferences.
+fn deserialize_fox_kifu<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<app_model::FoxKifuStateDto, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
 pub fn default_app_preferences() -> AppPreferencesDto {
     AppPreferencesDto {
+        network: app_model::NetworkSettingsDto::default(),
+        yike_locator: None,
+        yike_sync: app_model::YikeSyncPreferencesDto::default(),
+        readboard_sync: app_model::ReadboardSyncPreferencesDto::default(),
+        tencent_history: app_model::TencentHistoryDto::default(),
+        readboard_executable_path: None,
         match_defaults: app_model::MatchDefaultsDto::default(),
+        fox_kifu: app_model::FoxKifuStateDto::default(),
         workspace_shares: None,
         window_geometry: None,
         workspace_visibility: app_model::WorkspaceVisibilityDto::default(),
@@ -234,7 +263,8 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
         Ok(contents) => match serde_json::from_str::<AppPreferencesDto>(&contents) {
             Ok(preferences)
                 if preferences.continuous_budget.validate().is_ok()
-                    && preferences.match_defaults.validate().is_ok() =>
+                    && preferences.match_defaults.validate().is_ok()
+                    && preferences.network.validate().is_ok() =>
             {
                 let preferences = normalize_app_preferences(preferences);
                 let valid = preferences
@@ -280,6 +310,7 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
 }
 
 pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPreferencesDto, String> {
+    preferences.network.validate()?;
     preferences.match_defaults.validate()?;
     if let Some(shares) = preferences.workspace_shares {
         shares.validate()?;
@@ -581,7 +612,14 @@ mod tests {
 
     fn sample_preferences() -> AppPreferencesDto {
         AppPreferencesDto {
+            network: app_model::NetworkSettingsDto::default(),
+            yike_locator: None,
+            yike_sync: app_model::YikeSyncPreferencesDto::default(),
+            readboard_sync: app_model::ReadboardSyncPreferencesDto::default(),
+            tencent_history: app_model::TencentHistoryDto::default(),
+            readboard_executable_path: None,
             match_defaults: app_model::MatchDefaultsDto::default(),
+            fox_kifu: app_model::FoxKifuStateDto::default(),
             workspace_shares: None,
             window_geometry: None,
             workspace_visibility: app_model::WorkspaceVisibilityDto {
@@ -1181,6 +1219,47 @@ mod tests {
         let reloaded_unrelated = load_from_path(&path).unwrap();
         assert_eq!(reloaded_unrelated.preferences.scoring_rule, "area");
         assert_eq!(reloaded_unrelated.preferences.candidate_limit, 7);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn readboard_sync_preferences_persist_and_load_with_independent_defaults() {
+        let (dir, path) = temp_prefs();
+        let mut prefs = sample_preferences();
+        prefs.readboard_sync = app_model::ReadboardSyncPreferencesDto {
+            always_sync: false,
+            focus: false,
+            mute: false,
+            jump_to_last: true,
+        };
+        let saved = save_to_path(&path, prefs.clone()).unwrap();
+        assert_eq!(saved.readboard_sync, prefs.readboard_sync);
+        let loaded = load_from_path(&path).unwrap();
+        assert_eq!(loaded.preferences.readboard_sync, prefs.readboard_sync);
+
+        // Missing readboardSync key yields defaults
+        fs::write(&path, r#"{"soundEnabled":false}"#).unwrap();
+        let loaded_missing = load_from_path(&path).unwrap();
+        assert_eq!(
+            loaded_missing.preferences.readboard_sync,
+            app_model::ReadboardSyncPreferencesDto::default()
+        );
+        assert!(!loaded_missing.preferences.sound_enabled);
+
+        // Partial readboardSync key preserves other field defaults
+        fs::write(&path, r#"{"readboardSync":{"mute":false}}"#).unwrap();
+        let loaded_partial = load_from_path(&path).unwrap();
+        assert_eq!(
+            loaded_partial.preferences.readboard_sync,
+            app_model::ReadboardSyncPreferencesDto {
+                always_sync: true,
+                focus: true,
+                mute: false,
+                jump_to_last: false,
+            }
+        );
+        assert!(loaded_partial.preferences.sound_enabled);
 
         let _ = fs::remove_dir_all(dir);
     }

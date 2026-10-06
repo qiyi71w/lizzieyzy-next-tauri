@@ -8,3 +8,5 @@ rust-version.workspace = true
 
 [dependencies]
 app-model = { path = "../app-model" }
+curl = { version = "0.4", features = ["ssl", "spnego", "ntlm"] }
+url = "2"

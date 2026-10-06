@@ -121,6 +121,10 @@ pub struct DocumentEditOutcome {
 mod prepared_edit;
 pub use prepared_edit::PreparedSgfEdit;
 
+mod external_sync;
+mod readboard_sync;
+pub use readboard_sync::{ReadboardSync, ReadboardSyncOutcome, ReadboardViewPreferences};
+
 /// A session-only branch rooted at the selected position. The retained ancestors
 /// preserve replay and simple-ko context; only the branch below the entry is exposed.
 pub struct TrialLine {

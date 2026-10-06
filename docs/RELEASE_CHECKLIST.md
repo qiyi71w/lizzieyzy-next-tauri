@@ -55,10 +55,10 @@ The GitHub Actions dry-run workflow is `.github/workflows/release-dry-run.yml`. 
 Provider/readboard acceptance:
 
 - Provider contract tests must run through the Rust workspace test gate, with the exact package or filter recorded in the handoff. A zero-test focused filter is not evidence.
-- Provider runtime path checks must record whether `provider_fetch_yike` and `provider_fetch_fox` were exercised offline only or against real services.
-- Fox runtime path checks must cover the supported `chessid`, `uid`, and `user_name` command shapes.
-- Readboard domain tests must run through the Rust workspace test gate, with `readboard_sidecar_probe` and `readboard_sidecar_sync_snapshot` path checks recorded separately.
-- ProviderPanel is the expected UI surface for provider fetch, readboard probe, and readboard sync controls. If the controls are absent in a candidate, mark that UI path as pending.
+- Provider runtime path checks must record whether `provider_yike_list`, `provider_yike_preview`, `provider_fox_*` and `provider_tencent_*` were exercised offline only or against real services.
+- Fox runtime path checks must cover nickname and UID lists (with continuation) and chessid preview/import.
+- Readboard domain tests must run through the Rust workspace test gate, with `readboard_runtime_*` lifecycle and shared external-sync checks recorded separately from the offline `readboard_sidecar_sync_snapshot` preview.
+- ProviderPanel hosts the three provider centers and ReadboardPanel lifecycle; the sync sheet hosts YikeSyncPanel and ReadboardSyncPanel. Native scenarios must exercise these product entry points.
 - Offline provider/readboard contracts and runtime path checks are not the same as live Fox/Yike external-network or readboard sidecar validation.
 
 ## Native Desktop Scenarios
@@ -148,7 +148,7 @@ These checks are required before release notes claim live Fox, Yike, or readboar
 ### Yike Runtime Fetch
 
 - Record Yike account/session type, network environment, provider endpoint or resource type, and app build.
-- Fetch a real supported Yike resource through `provider_fetch_yike` from ProviderPanel or the intended test/debug harness.
+- Fetch Recommend/Local or a real supported Yike locator through `provider_yike_list` / `provider_yike_preview` from ProviderPanel or the intended test/debug harness.
 - Confirm normalized DTOs match the fetched resource and are not stale fallback data.
 - Repeat with missing/expired auth or blocked network.
 
@@ -157,29 +157,29 @@ Pass: real fetch succeeds when the environment is valid, and auth/network failur
 ### Fox Runtime Fetch
 
 - Record Fox account/session or client prerequisites, target client state, network environment, and app build.
-- Fetch or capture real supported Fox resources through `provider_fetch_fox` for `chessid`, `uid`, and `user_name`.
+- Look up a real nickname, UID and chessid through the Fox kifu center (`provider_fox_list` / `provider_fox_list_more` / `provider_fox_preview`), continue a list, and import a previewed game.
 - Confirm normalized DTOs match the fetched/captured resource and are not stale fallback data.
 - Repeat with unavailable client/session or blocked network.
 
 Pass: real fetch/capture succeeds when prerequisites are valid, and unavailable-client/session/network failures return structured errors.
 
-### readboard Sidecar Probe
+### readboard Runtime Readiness
 
-- Record sidecar version, launch method, port/path, target client/window state, OS, and app build.
-- Probe the sidecar through `readboard_sidecar_probe` while it is running.
-- Probe again when the sidecar is stopped or unreachable.
-- Confirm timeout handling by using an invalid port/path or blocked process if practical.
+- Record exact Next/readboard candidates, executable path, Windows run identity, target client/window and evidence directory.
+- Use ReadboardPanel Browse, Save path and Start (`readboard_runtime_start`); verify `readboard_runtime_snapshot` reaches Ready only after wire `220430` handshake. Readiness must not replace the current game or start an engine.
+- Exercise a missing executable and the applicable controlled incompatible/timeout/early-exit cases; keep controlled-process evidence separate from the fixed real runtime.
+- Stop and Restart through the lifecycle controls; observe the old owned PID/socket release and the new runtime generation before another Ready. A retained cleanup failure must remain visible.
 
-Pass: probe distinguishes ready, not running, incompatible, and timeout states.
+Pass: actual process/protocol readiness and typed failure states agree with the UI, and owned resources are reclaimed. This is not yet live-board synchronization evidence.
 
-### readboard Sync
+### readboard Live Sync
 
-- With the sidecar running, sync from a real target board state.
-- Exercise protocol line sync through `readboard_sidecar_sync_snapshot`.
-- Confirm board size, stone coordinates, move state, and player-to-play where available.
-- Restart the sidecar or alter the target board state and sync again.
+- With the fixed runtime Ready, select a real target board and Start from ReadboardSyncPanel (`begin_readboard_sync` / `prepare_readboard_sync`) or the sidecar. Both explicit entry points can switch from Yike. The first provable frame passes the shared SGF-07 decision; dirty Cancel retains the old document/session.
+- Compare accepted stones, dimensions, source move metadata and side to play with the target; observe later frames and target changes in the same authoritative document. Reject old runtime/session frames rather than allowing a competing writer.
+- Disconnect the sidecar and verify ErrorPaused retains the last-good read-only game. Retry must obtain a new Ready generation before resuming; Stop leaves an editable document. Observe actual owned process/socket cleanup on runtime Stop and application exit.
+- Save/reopen the accepted position and record candidate, target, session/generation, screenshots and runtime evidence. Inherit equivalent prior cases with their original candidates; do not relabel them as new measurements.
 
-Pass: sync reflects the live board state and recovers cleanly after sidecar restart or target-state changes.
+Pass: actual target updates and recovery cross the shared owner boundary with the required identity fences. Separately, `readboard_sidecar_sync_snapshot` may preview a pasted protocol line offline; its normalized DTO is not evidence of live target recognition, session ownership or resource cleanup.
 
 ### Image OCR Unsupported Path
 
@@ -256,10 +256,10 @@ Automated checks:
 - Yike runtime fetch: PASS/FAIL/SKIPPED, offline/live:
 - Fox chessid fetch: PASS/FAIL/SKIPPED, offline/live:
 - Fox uid fetch: PASS/FAIL/SKIPPED, offline/live:
-- Fox user_name fetch: PASS/FAIL/SKIPPED, offline/live:
+- Fox nickname list: PASS/FAIL/SKIPPED, offline/live:
 - readboard domain tests: PASS/FAIL/SKIPPED, package/filter:
-- readboard sidecar probe: PASS/FAIL/SKIPPED, offline/live:
-- readboard protocol line sync: PASS/FAIL/SKIPPED, offline/live:
+- readboard controlled process/socket lifecycle: PASS/FAIL/SKIPPED, package/filter:
+- readboard offline protocol snapshot preview: PASS/FAIL/SKIPPED, package/filter:
 - image OCR unavailable structured error: PASS/FAIL/SKIPPED:
 - npm ci: PASS/FAIL/SKIPPED
 - npm test: PASS/FAIL/SKIPPED
@@ -278,9 +278,9 @@ Native desktop scenarios:
 - Yike live fetch: PASS/FAIL/SKIPPED
 - Fox chessid live fetch: PASS/FAIL/SKIPPED
 - Fox uid live fetch: PASS/FAIL/SKIPPED
-- Fox user_name live fetch: PASS/FAIL/SKIPPED
-- readboard live probe: PASS/FAIL/SKIPPED
-- readboard live protocol line sync: PASS/FAIL/SKIPPED
+- Fox nickname live list: PASS/FAIL/SKIPPED
+- readboard fixed-runtime ready220430/Stop/Restart and PID/socket cleanup: PASS/FAIL/BLOCKED, candidate/run:
+- readboard real-target live owner/frames/Retry/Stop/Save/reopen: PASS/FAIL/BLOCKED, candidate/run:
 - image OCR unavailable structured error: PASS/FAIL/SKIPPED
 
 Known limitations:

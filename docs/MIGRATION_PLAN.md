@@ -74,7 +74,7 @@ The existing Tauri implementation is the migration starting point and must be pr
 - Persisted engine profiles, asset checks, KataGo command construction, one manager-owned event contract, independent selected-node and first-child-mainline lanes, incremental progress, lane-local cancellation, timeout/error propagation, and exact identity rejection.
 - Java-compatible `LZ` / `LZOP` / `LZ2` / `LZOP2` SGF exchange and exact-node attachment. Save / Save As is the only active analysis persistence path; the unshipped SQLite analysis-cache product surface and runtime are removed.
 - Yike and Fox runtime fetch/import command paths with normalized DTO/error boundaries.
-- readboard probe and protocol-line snapshot parsing/preview command paths.
+- readboard native Windows lifecycle with durable EXE selection, exact ready/version220430 handshake, bounded cancellable Start/Stop/Restart, typed failures and APP-03 owned-resource cleanup; offline protocol-line snapshot preview remains separate.
 - Release asset/workflow preflight and compile-oriented dry-run paths.
 
 ### Known Workflow Gaps
@@ -87,7 +87,8 @@ The existing Tauri implementation is the migration starting point and must be pr
 - `WINDOW-01` is Accepted within the approved R7 scope: serialized physical-origin/logical-client restoration, caption/work-area validation, normal/max/min restart, isolated reset, visible failure/Retry and both exit fences. Exact `baa9747d11ee9e2130904ff057adbe7cfd968153` proves actual negative-monitor restart/removal, system DPI, Explorer replacement and small-work-area recovery. macOS native is user-approved SKIPPED; its unverified AppKit candidate and historical review attribution remain unchanged.
 - All six feature worktrees are integrated and all seven R7 owner items are Accepted. Windows A01–A18 pass18/18 on `baa9747…`; `f4e478e…` resolves the formatting/lint envelopes and passes five affected native document cases. Subsequent test-fixture repairs pass desktop-lib146/146 in default-parallel and serial runs,20 shared-fixture checks, formatting and strict Linux lib/tests lint. Final bounded Standards/Spec reviews are CLEAN on `406250408043e68fe67f6082c583429600768c0c`; ticket07 is CLOSED/ACCEPTED and R7 exited. macOS remains approved SKIPPED (2026-09-30), without changing support or other platform gates. Ticket08 is unblocked but unexecuted; R6 metadata/HUD scopes are unchanged.
 - R8 `ENG-09` and `ENG-10` are Accepted. The final integration runtime candidate is `42cd91a657d2710b826cc1b94f21f168de64a0fa`; [DEVELOPMENT §2.4](DEVELOPMENT.md#24-r8-integrated-acceptance-and-r9-handoff-ticket-05) records P01–P11, M01–M03 attribution, N01–N06 and the R9 handoff. Generic GTP has bounded manager-owned lifecycle/readiness and qualified exact-position budgeted moves; KataGo uses the same public read operation with exact JSONL and target-final cleanup. R9 Match Session acceptance is separately recorded in §2.10; macOS/Linux GUI and release packaging are not claimed.
-- Provider/readboard repository plumbing exists, but live sessions remain unvalidated; Yike ongoing sync and Tencent kifu import are unclaimed; readboard snapshots are previewed rather than synchronized into the active game.
+- R10 tickets01–09 are complete. Yike/Fox/Tencent business workflows, public-room ongoing synchronization, browser handoff/retention, real readboard synchronization and the integrated Windows source-runtime scenarios retain their candidate-specific evidence in DEVELOPMENT. Ticket09 reconciled every final review and recorded zero follow-up candidates against final integration `91b4e1756c509fcc36c38bcd892c5315620f7893`. PROV-01–04, READ-01–02 and NET-01 remain Partial: installed-network evidence is Not run, explicitly non-blocking for R10 completion under the approved 2026-10-06 exception.
+- READ-01 real Windows readiness/Stop/Restart/exit passed on Next `eadb577…` with fixed readboard `cdcc7b3…` and was re-run on `f75cacf…` (DEVELOPMENT §3). R10 ticket07 READ-02 synchronization through the unique external-sync owner passed business acceptance on Windows Next `f75cacf…` with real Fox spectator rooms (DEVELOPMENT §4). Ticket08 verified explicit Yike→readboard and active-readboard→Tencent handoff on `367a7eb` (tree-equivalent to `bfdd28f`), retaining Partial for the unverified installed/platform scope; that gap is non-blocking for R10 completion under the approved exception.
 - Signing, notarization, production updater apply/handoff/rollback, bundled installed-runtime resolution, and Canonical Artifact Installed Live Evidence remain incomplete.
 
 These gaps are tracked individually in `PARITY_MATRIX.md`. Provider, adapter, game-mode, and release work stay behind their Migration Phase Gates rather than becoming the next migration frontier.
@@ -176,11 +177,21 @@ Ticket 03's capability-gated, session-only Human role analysis is integrated for
 
 ### Providers And readboard
 
-Keep `provider_fetch_yike`, `provider_fetch_fox`, `readboard_sidecar_probe`, and `readboard_sidecar_sync_snapshot` and their typed error boundaries. R10 completes preview, one-shot import, and ongoing synchronization on top of `SGF-07`.
+Yike uses `provider_yike_list` and `provider_yike_preview` for normalized public reads. Fox uses `provider_fox_list` / `provider_fox_list_more` / `provider_fox_preview` for typed nickname/UID/chessid lookups, `lastCode` continuation (100-game batches, 25-row pages), and CGI/H5 preview under one retry budget. Fox-only recents (at most eight) and the last lookup persist through PREF-01. These boundaries feed one-shot import through `SGF-07`; ongoing synchronization has a separate owner. Ticket04 native/provider-live acceptance passed on `f1270ba` (DEVELOPMENT); PROV-02 remains Partial for ticket08 platform/installed network admission.
+
+Readboard keeps `readboard_sidecar_sync_snapshot` as its offline, position-only preview boundary. Readboard lifecycle uses `readboard_runtime_path`, `readboard_save_runtime_path`, and the snapshot/start/stop/restart commands plus `readboard://runtime`; the file/TCP probe and fictitious JAR launch path are removed. R10 ticket 02 proves lifecycle only. Ticket 07 consumes the existing crate-owned Child/socket and generation fence: decoded frames reach the unique current-game external-sync owner through `begin_readboard_sync` / `prepare_readboard_sync` and the shared SGF-07 resolve, not a second process, listener or document.
+
+Tencent uses its independent `provider_tencent_list` / `provider_tencent_preview` and `TencentKifuCenter`, with 25-row pages, raw-tail cursor continuation, bounded PREF-01 query history and identity-fenced explicit SGF-07 import. Ticket05 native/provider-live business acceptance passed on candidates `844fa4c2ae6a414c4e3c10cbf7c84c2db7bc9b3c` and `e201634b613e1ea766117e53df99a7a021fdc8a7`; DEVELOPMENT records per-candidate checks, failure/retry, cancellation and restart evidence. PROV-04 remains Partial for unverified platform/installed network evidence, non-blocking for R10 completion under the 2026-10-06 exception.
+
+R10 ticket01 cuts existing Yike/Fox HTTP calls over to one durable Direct/System/Manual network policy and a minimal provider center. Request/policy/document identities fence preview and SGF-07 admission; APP-03 cancels and drains owned work. Windows WinHTTP and macOS CFNetwork adapters provide per-URL native resolution; Linux consumes proxy environment. NET-01 remains Partial for the unverified native-platform, enterprise-CA and installed-route matrix; the 2026-10-06 exception makes that gap non-blocking for R10 completion. Ticket01 does not complete provider lists, ongoing sync, Tencent or readboard import.
+
+R10 ticket03 implements the Recommend/Local public center, five-family locator recognition, full-source-tree preview, explicit import, and owner-scoped public-locator persistence. Unite obtains its own ephemeral public guest credential and rejects non-Go or mismatched-room responses; see DEVELOPMENT for source-runtime and Windows native evidence. Under user-approved scope revision (2026-10-05), legacy game/hall compatibility is an upstream nonblocking limitation rather than an active R10 release gate. Ticket03's handoff is `116199cc84341c57d29632771b51bbbc5d23daac` with runtime `6d41c36b925b615583c160796dcdcc582b95561f`; PROV-01 remains Partial for unverified platform/installed network evidence, non-blocking for R10 completion under the 2026-10-06 exception.
 
 Preview never mutates the current game. One-shot import fetches and parses first, then replaces once through `SGF-07`. Ongoing synchronization starts only from explicit Start sync or Play & Sync; the external source is then authoritative until stop. Play & Sync opens the public Yike room in the system browser and starts matching Next read-only sync; Next does not read browser authentication; stopping Next sync does not close the browser.
 
-Image OCR remains unsupported unless an OCR-capable runtime, explicit parity item, and live evidence are added. Preview-only readboard sync is not complete import parity.
+Ticket06 implements one Rust current-game external-sync owner, separate preview/sync network lanes, full-source-tree reconciliation, same-hand-count revision detection, identity-fenced commits, bounded retry/ErrorPaused recovery, Stop-to-editable, independent persisted sync preferences and browser handoff. Save/Save As captures the invocation snapshot before a native picker; later frames remain dirty. Ticket06 business acceptance is complete with native/provider-live evidence in DEVELOPMENT; PROV-03 remains Partial pending ticket08 platform/installed network admission. Ticket07 reuses this owner for readboard sessions with its own Java-oracle frame engine (`sgf::ReadboardSync`); there is no competing readboard current-game writer.
+
+Image OCR remains unsupported unless an OCR-capable runtime, explicit parity item, and live evidence are added. Readboard structured frames are not OCR.
 
 ### Release And Installed Runtime
 
@@ -344,7 +355,7 @@ The only product coupling between R10 and R11 is whether domain 06 later accepts
 | Contribution account, consent, client component, backend/device, concurrency, and auto-save | `CONTRIB-01` | Deferred |
 | Contribute Open Watch / Close Watch | `GAME-09` | Deferred |
 
-Update networking uses the OS proxy through `REL-03`. Next-owned remote-provider HTTP(S)/WebSocket(S) uses Provider Network Policy through `PROV-01`–`PROV-07` and Deferred `RCOMP-01` when admitted; browser-owned authorization traffic stays excluded, and no independent proxy item, application preference, or Java-key migration exists. `CONTRIB-01` is not a Provider: its process-owned Contribution Network Policy supports only a fixed unauthenticated lowercase `https_proxy`, then `http_proxy`, else direct, with no platform resolver, PAC/WPAD, `NO_PROXY`, credential, or fallback claim.
+`NET-01` owns the unified Direct/System/Manual policy for Next-owned remote HTTP(S)/WebSocket(S), defaulting to Direct. R10 routes Yike, Fox and Tencent through this policy and atomically persists its preferences. Future update (`REL-03`), remote-compute (`RCOMP-01`) and contribution (`CONTRIB-01`) owners must consume the same policy when admitted; those consumers are not implemented by R10. Browser-owned traffic, local sidecars, inbound WebBoard and SSH remain outside this policy. System mode owns environment/platform resolution, PAC/WPAD and `NO_PROXY`; Manual uses the explicitly configured unauthenticated proxy. No route failure silently falls back to Direct. Earlier transport-owner-specific network dispositions are historical where superseded by `NET-01`.
 
 ### Traceability Gap Closure
 
@@ -354,7 +365,7 @@ All thirteen records now map exactly once to supported Parity Items or explicit 
 
 | Frozen ID | Resolved item or exclusion |
 | --- | --- |
-| `SET-NETWORK-PROXY` | Abandoned Java proxy UI/keys. Provider Network Policy on `PROV-01`–`PROV-07`; no proxy Parity Item |
+| `SET-NETWORK-PROXY` | `NET-01` successor: Direct/System/Manual preferences and shared provider transport; Partial pending installed-platform evidence. Java-key import remains separate. |
 | `SET-NEXT-MOVE` | Missing `ANA-10` |
 | `SET-WINRATE-GRAPH` | Missing `ANA-11` |
 | `SET-SUBBOARD` | Missing `ANA-12`; heatmap-on-sub and mouse-over freeze Abandoned |
@@ -747,12 +758,13 @@ Fixture-only backend evidence cannot mark a GAME item Accepted.
 
 **Goal:** Complete external preview, one-shot import, and ongoing synchronization on the R5 replacement and shutdown seams.
 
-**Owns:** `PROV-01`, `PROV-02`, `PROV-03`, `PROV-04`, `READ-01`, `READ-02`, `READ-03`. Accepted `READ-03` remains the OCR-unsupported foundation.
+**Owns:** `NET-01`, `PROV-01`, `PROV-02`, `PROV-03`, `PROV-04`, `READ-01`, `READ-02`, `READ-03`. Accepted `READ-03` remains the OCR-unsupported foundation.
 
 **Migration Phase Gate:** `SGF-07`, `PREF-01`, and `APP-03` accepted. Engine lifecycle is not required for `PROV-01`, `PROV-02`, `PROV-04`, or `READ-01`.
 
 **Delivery Order:**
 
+0. `NET-01` unified Direct/System/Manual policy and current provider consumer cutover.
 1. `PROV-01` Yike preview/import and `READ-01` sidecar readiness.
 2. `PROV-02` Fox preview/import and `PROV-04` Tencent kifu preview/import.
 3. `PROV-03` Yike ongoing sync / Play & Sync after `PROV-01`.
@@ -765,14 +777,14 @@ Fixture-only backend evidence cannot mark a GAME item Accepted.
 - Yike Start sync and Play & Sync under the ongoing-synchronization model. Play & Sync is dual-channel: system browser for that room's login and webpage moves; Next public read-only signed path only. Native account-authorized read/play is Deferred `PROV-07`, not an R10 expansion.
 - Sidecar probe/ready/incompatible/unavailable/timeout/restart as `READ-01`; equivalent one-way external-authoritative sidecar sync as `READ-02`, including disconnect and stop-to-editable.
 - `PROV-01`–`PROV-07` shared contracts: Yike 10s deadline; Fox and Tencent 20s connect and 25s read; at most three retries after the initial attempt, and only for idempotent transient reads; provider writes never automatically retry; ignore stale results; preserve last-good board on failure. `PROV-01`–`PROV-06` persist no provider user secret. Deferred `PROV-07` may persist one provider-issued authorization only in the System Credential Store; Deferred `RCOMP-01` owns its separate confirmed System Credential Store/session-only contract.
-- `PROV-01`–`PROV-07`, plus Deferred `RCOMP-01` when admitted, resolve process-environment override, Windows/macOS platform proxy including system-owned PAC/WPAD, or Linux proxy environment variables on every Next-owned remote HTTP(S)/WebSocket(S) request; honor `NO_PROXY` and redirect destinations; and exclude system-browser traffic, local readboard, inbound WebBoard, SSH, and updates.
+- `NET-01` supplies Direct/System/Manual policy to all current provider requests, including redirect destinations. System resolves process-environment override, Windows/macOS platform proxy including system-owned PAC/WPAD, or Linux proxy environment variables and honors `NO_PROXY`. Future remote-compute, contribution and update owners inherit this policy when admitted; browser-owned traffic, local readboard, inbound WebBoard and SSH stay excluded.
 - Proxy authentication and TLS trust are system-managed. Next stores no proxy credentials, adds no custom-CA or certificate bypass, never falls back direct, and preserves provider state while sanitized source/`host:port` diagnostics offer Retry.
 
 **Exit when:**
 
-- `PROV-01` through `PROV-04` and `READ-01` through `READ-03` are accepted.
+- `NET-01`, `PROV-01` through `PROV-04` and `READ-01` through `READ-03` meet their active acceptance scope. Tickets01–09 are complete, and ticket09 records zero follow-up candidates. Under the approved 2026-10-06 exception, T3 installed-network evidence remains Not run and non-blocking for R10 completion; Partial statuses retain the unverified platform scope.
 - Repository evidence names concrete non-zero focused tests for parsers, URL families, atomic import/sync transitions through `SGF-07`, cancellation, stale-result suppression, timeout/retry classification, last-good recovery, and stop-to-editable. Shared Provider Network Policy fixtures prove precedence, `NO_PROXY`, per-target/redirect resolution, HTTP(S) routing, platform-resolved PAC, no-direct fallback, system trust, and sanitization; WebSocket evidence becomes due with the first admitted WebSocket provider item.
-- Live evidence is separate per mode and records public Yike categories, every accepted Yike URL family, Play & Sync handoff, Fox and Tencent lookup plus pagination, upstream failure and latency, and readboard ready/sync/disconnect/restart. Before a Shipped Platform accepts its first remote-provider path, installed live evidence also records its platform proxy source, `NO_PROXY`, a real HTTPS provider operation, and an operator-installed enterprise CA; Windows/macOS additionally cover fixed system proxy and PAC. WebSocket live evidence becomes due with its provider item.
+- Live evidence is separate per mode and records public Yike categories, every accepted Yike URL family, Play & Sync handoff, Fox and Tencent lookup plus pagination, upstream failure and latency, and readboard ready/sync/disconnect/restart. Before a Shipped Platform accepts its first remote-provider path, installed live evidence also records its platform proxy source, `NO_PROXY`, a real HTTPS provider operation, and an operator-installed enterprise CA; Windows/macOS additionally cover fixed system proxy and PAC. The 2026-10-06 exception records the outstanding installed-network matrix as Not run and removes it from R10 completion blockers; installed/platform acceptance still requires that evidence. WebSocket live evidence becomes due with its provider item.
 
 `PROV-05`–`PROV-07`, `RCOMP-01`, `PUB-01`, and `GAME-10` do not block this exit. Deferred provider items require no current live evidence and inherit Provider Network Policy when admitted. `PROV-06` promotion first proves guest Personal semantics; `PROV-07` promotion requires its official authorization plus per-family read/write, System Credential Store, sole-Match, and Installed Live Evidence contracts. Deferred `GAME-10` requires no current engine play-back evidence and does not expand `READ-02`; promotion requires its own repository and Installed Live Evidence. Existing Partial plumbing is evidence toward the numbered R10 items, not completion.
 

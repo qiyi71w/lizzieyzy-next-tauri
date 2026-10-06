@@ -1,3 +1,4 @@
+import type { FoxKifuState, NetworkSettings, ReadboardSyncPreferences, TencentHistory, YikeSyncPreferences } from "./providers";
 import type { NextMoveReviewMarkerMode } from "./nextMoveReviewMarker";
 import type { AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, ContinuousAnalysisBudgetDto, MatchDefaultsDto, PkSideDefaultsDto, WindowGeometryDto, WorkspaceSharesDto } from "./types";
 
@@ -11,7 +12,15 @@ export type { NextMoveReviewMarkerMode };
 import type { WorkspaceVisibilityDto } from "./types";
 
 export type AppPreferences = ContinuousAnalysisBudgetDto & {
+  network: NetworkSettings;
+  yikeLocator: string | null;
+  yikeSync: YikeSyncPreferences;
+  readboardSync: ReadboardSyncPreferences;
+  tencentHistory: TencentHistory;
+  readboardExecutablePath: string | null;
   matchDefaults: MatchDefaultsDto;
+  /** Fox-owned recents; written only through the Fox commands and preserved by full saves. */
+  foxKifu: FoxKifuState;
   workspaceShares: WorkspaceSharesDto | null;
   windowGeometry: WindowGeometryDto | null;
   workspaceVisibility: WorkspaceVisibilityDto;
@@ -52,6 +61,13 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
 };
 
 export const defaultAppPreferences: AppPreferences = {
+  network: { mode: "direct", manual_host: "127.0.0.1", manual_port: 7897 },
+  yikeLocator: null,
+  yikeSync: { intervalSeconds: 1, locator: null, jumpToLast: false, mute: false },
+  readboardSync: { alwaysSync: true, focus: true, mute: true, jumpToLast: false },
+  tencentHistory: { recent: [], last_query: null },
+  readboardExecutablePath: null,
+  foxKifu: { recents: [], last_query: null },
   matchDefaults: { board_size: 19, komi: 7.5, handicap: 0, human_color: "black", rules: null, profile_id: null, deadline_ms: 30_000, kata_max_visits: 800,
     pk_black: { profile_id: null, deadline_ms: 30_000, kata_max_visits: 800 },
     pk_white: { profile_id: null, deadline_ms: 30_000, kata_max_visits: 800 }, pk_max_moves: 450 },
@@ -127,9 +143,10 @@ type StoredMatchDefaults = Omit<Partial<MatchDefaultsDto>, "pk_black" | "pk_whit
   pk_black?: Partial<PkSideDefaultsDto>;
   pk_white?: Partial<PkSideDefaultsDto>;
 };
-type StoredAppPreferences = Omit<Partial<AppPreferences>, "matchDefaults"> & {
+type StoredAppPreferences = Omit<Partial<AppPreferences>, "matchDefaults" | "readboardSync"> & {
   matchDefaults?: StoredMatchDefaults;
   taskConditions?: AnalysisStageConditionsDto;
+  readboardSync?: Partial<ReadboardSyncPreferences> | unknown;
 };
 
 export function normalizeWorkspaceShares(value: WorkspaceSharesDto | null | undefined): WorkspaceSharesDto | null {
@@ -176,6 +193,13 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
   const scoreLeadLine = booleanValue(value?.scoreLeadLine, defaultAppPreferences.scoreLeadLine);
   const defaultMaxVisits = integerValue(value?.defaultMaxVisits, defaultAppPreferences.defaultMaxVisits, 1, 1_000_000);
   return {
+    network: value?.network ?? defaultAppPreferences.network,
+    yikeLocator: typeof value?.yikeLocator === "string" ? value.yikeLocator : null,
+    yikeSync: value?.yikeSync ?? defaultAppPreferences.yikeSync,
+    readboardSync: normalizeReadboardSync(value?.readboardSync),
+    tencentHistory: value?.tencentHistory ?? { recent: [], last_query: null },
+    readboardExecutablePath: typeof value?.readboardExecutablePath === "string" ? value.readboardExecutablePath : null,
+    foxKifu: value?.foxKifu ?? defaultAppPreferences.foxKifu,
     matchDefaults: normalizeMatchDefaults(value?.matchDefaults),
     workspaceShares: normalizeWorkspaceShares(value?.workspaceShares),
     windowGeometry: normalizeWindowGeometry(value?.windowGeometry),
@@ -374,6 +398,16 @@ function nextMoveReviewMarkerValue(value: unknown): NextMoveReviewMarkerMode {
 
 function booleanValue(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+function normalizeReadboardSync(value: unknown): ReadboardSyncPreferences {
+  const record = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  return {
+    alwaysSync: booleanValue(record.alwaysSync, defaultAppPreferences.readboardSync.alwaysSync),
+    focus: booleanValue(record.focus, defaultAppPreferences.readboardSync.focus),
+    mute: booleanValue(record.mute, defaultAppPreferences.readboardSync.mute),
+    jumpToLast: booleanValue(record.jumpToLast, defaultAppPreferences.readboardSync.jumpToLast)
+  };
 }
 
 function finiteValue(value: unknown, fallback: number): number {

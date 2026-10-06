@@ -191,6 +191,32 @@ pub fn stop_foreground_resources(manager: &ForegroundEngineManager, budget: Dura
     }
 }
 
+fn stop_application_resources(
+    app: &AppHandle,
+    manager: &ForegroundEngineManager,
+    network: &provider_core::network::NetworkState,
+    budget: Duration,
+) -> Vec<String> {
+    let deadline = Instant::now() + budget;
+    let readboard = app.state::<readboard_sidecar::ReadboardRuntime>();
+    readboard.begin_teardown();
+    app.state::<CurrentGameState>().seal_external_sync_for_exit();
+    let sync_drained = app
+        .state::<provider_yike::sync::YikeSyncRuntime>()
+        .shutdown(deadline.saturating_duration_since(Instant::now()));
+    let drained = network.shutdown(deadline.saturating_duration_since(Instant::now()));
+    let mut outstanding =
+        stop_foreground_resources(manager, deadline.saturating_duration_since(Instant::now()));
+    if !sync_drained {
+        outstanding.push("Yike sync worker/timer".to_string());
+    }
+    if !drained {
+        outstanding.push("provider network requests".to_string());
+    }
+    outstanding.extend(readboard.teardown(deadline.saturating_duration_since(Instant::now())));
+    outstanding
+}
+
 fn exit_from_departure(
     outcome: DocumentDepartureOutcomeDto,
     disposition: Option<ApplicationExitDispositionDto>,
@@ -391,10 +417,23 @@ fn persist_replacement_outcome(
 #[tauri::command]
 pub fn prepare_document_replacement(
     state: State<CurrentGameState>,
+    preferences: State<crate::continuous_analysis::PreferencesState>,
     sgf_text: String,
     native_path: Option<String>,
+    network_identity: Option<app_model::ProviderRequestIdentityDto>,
 ) -> Result<DocumentDepartureAdmissionDto, CurrentGameError> {
-    state.prepare_replacement(&sgf_text, native_path)
+    if let Some(identity) = network_identity {
+        let operation = preferences
+            .network()
+            .operation(&identity)
+            .map_err(|error| CurrentGameError {
+                kind: app_model::CurrentGameErrorKind::DepartureBlocked,
+                message: error.message,
+            })?;
+        state.prepare_provider_replacement(&sgf_text, operation.lease(), identity.document_identity)
+    } else {
+        state.prepare_replacement(&sgf_text, native_path)
+    }
 }
 
 #[tauri::command]
@@ -480,6 +519,7 @@ pub async fn resolve_application_exit(
     selected_path: NodePath,
     default_file_name: Option<String>,
 ) -> Result<ApplicationExitOutcomeDto, CurrentGameError> {
+    let preferences = app.state::<crate::continuous_analysis::PreferencesState>();
     let closed_jobs = jobs_from_snapshot(&manager.snapshot());
     let cancel_job = |job: &AnalysisJobStartedDto| {
         manager
@@ -513,7 +553,7 @@ pub async fn resolve_application_exit(
                 departure_id,
                 selected_path,
                 destination,
-                |budget| stop_foreground_resources(&manager, budget),
+                |budget| stop_application_resources(&app, &manager, preferences.network(), budget),
                 APPLICATION_TEARDOWN_BUDGET,
             )?
         }
@@ -531,7 +571,7 @@ pub async fn resolve_application_exit(
             cancel_job,
             wait_for_job,
             || Ok(save_path),
-            |budget| stop_foreground_resources(&manager, budget),
+            |budget| stop_application_resources(&app, &manager, preferences.network(), budget),
         )?
     };
     let store = app.state::<Mutex<FileRecoveryStore>>();
@@ -540,9 +580,11 @@ pub async fn resolve_application_exit(
 
 #[tauri::command]
 pub fn retry_application_teardown(
+    app: AppHandle,
     state: State<CurrentGameState>,
     manager: State<ForegroundEngineManager>,
     store: State<Mutex<FileRecoveryStore>>,
+    preferences: State<crate::continuous_analysis::PreferencesState>,
     departure_id: u64,
     selected_path: NodePath,
 ) -> Result<ApplicationExitOutcomeDto, CurrentGameError> {
@@ -550,7 +592,7 @@ pub fn retry_application_teardown(
         &state,
         departure_id,
         selected_path,
-        |budget| stop_foreground_resources(&manager, budget),
+        |budget| stop_application_resources(&app, &manager, preferences.network(), budget),
         APPLICATION_TEARDOWN_BUDGET,
     )?;
     Ok(persist_exit_outcome(&state, &store, outcome))
