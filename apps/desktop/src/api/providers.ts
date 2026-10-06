@@ -1,16 +1,25 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  TencentQuery,
+  TencentHistory,
+  TencentListResult,
+  TencentPreviewResult,
+  YikeCategory,
+  YikeListResult,
+  YikePreviewResult,
+  FoxAccount,
+  FoxKifuState,
+  FoxListResult,
+  FoxLookup,
+  FoxPreviewResult,
   ProviderGameMetadata,
-  ProviderFetchRequest,
-  ProviderFetchResult,
+  ProviderRequestIdentity,
+  NetworkSettings,
+  NetworkSnapshot,
   ProviderImportRequest,
   ProviderImportResult,
-  ReadboardSidecarProbeRequest,
-  ReadboardSidecarProbeResult,
   ReadboardSidecarSyncSnapshotRequest,
-  ReadboardSidecarSyncSnapshotResult,
-  YikeRoomKind,
-  YikeUrlDescriptor
+  ReadboardSidecarSyncSnapshotResult
 } from "../domain/providers";
 
 declare global {
@@ -21,37 +30,102 @@ declare global {
 
 const isTauriRuntime = () => typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
 
-export async function parseYikeUrl(rawUrl: string): Promise<YikeUrlDescriptor> {
-  if (!isTauriRuntime()) return parseYikeUrlLocally(rawUrl);
-  return await invoke<YikeUrlDescriptor>("provider_parse_yike_url", { rawUrl });
-}
 
 export async function importProviderPayload(request: ProviderImportRequest): Promise<ProviderImportResult> {
   if (!isTauriRuntime()) return importProviderPayloadLocally(request);
   return await invoke<ProviderImportResult>("provider_import_from_payload", { request });
 }
 
-export async function fetchYikeProvider(request: ProviderFetchRequest): Promise<ProviderFetchResult> {
-  if (!isTauriRuntime()) throw new Error("Yike fetch requires the desktop Tauri runtime; browser preview can only import pasted payloads.");
-  return await invoke<ProviderFetchResult>("provider_fetch_yike", { request });
+export async function fetchYikeList(category: YikeCategory, page: number, since: number, identity: ProviderRequestIdentity): Promise<YikeListResult> {
+  if (!isTauriRuntime()) throw new Error("Yike 公共列表需要原生桌面运行环境。");
+  return invoke<YikeListResult>("provider_yike_list", { category, page, since, identity });
 }
 
-export async function fetchFoxProvider(request: ProviderFetchRequest): Promise<ProviderFetchResult> {
-  if (!isTauriRuntime()) throw new Error("Fox fetch requires the desktop Tauri runtime; browser preview can only import pasted payloads.");
-  return await invoke<ProviderFetchResult>("provider_fetch_fox", { request });
+export async function previewYikeLocator(locator: string, identity: ProviderRequestIdentity): Promise<YikePreviewResult> {
+  if (!isTauriRuntime()) throw new Error("Yike 远程预览需要原生桌面运行环境。");
+  return invoke<YikePreviewResult>("provider_yike_preview", { locator, identity });
 }
 
-export async function probeReadboardSidecar(request: ReadboardSidecarProbeRequest): Promise<ReadboardSidecarProbeResult> {
-  if (!isTauriRuntime()) {
-    return {
-      available: false,
-      endpoint: request.endpoint?.trim() || null,
-      version: null,
-      warnings: ["Readboard sidecar probing requires the desktop Tauri runtime; browser preview cannot reach the local sidecar."]
-    };
-  }
-  return await invoke<ReadboardSidecarProbeResult>("readboard_sidecar_probe", { request });
+export async function loadYikeLocator(): Promise<string | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke<string | null>("load_yike_locator");
 }
+
+export async function saveYikeLocator(locator: string | null): Promise<string | null> {
+  if (!isTauriRuntime()) throw new Error("Yike locator 保存需要原生桌面运行环境。");
+  return invoke<string | null>("save_yike_locator", { locator });
+}
+
+const foxRuntimeMessage = "野狐棋谱查询需要原生桌面运行环境。";
+
+export async function fetchFoxList(lookup: FoxLookup, identity: ProviderRequestIdentity): Promise<FoxListResult> {
+  if (!isTauriRuntime()) throw new Error(foxRuntimeMessage);
+  return invoke<FoxListResult>("provider_fox_list", { lookup, identity });
+}
+
+export async function fetchFoxListMore(account: FoxAccount, cursor: string, identity: ProviderRequestIdentity): Promise<FoxListResult> {
+  if (!isTauriRuntime()) throw new Error(foxRuntimeMessage);
+  return invoke<FoxListResult>("provider_fox_list_more", { account, cursor, identity });
+}
+
+export async function previewFoxGame(chessid: string, identity: ProviderRequestIdentity): Promise<FoxPreviewResult> {
+  if (!isTauriRuntime()) throw new Error(foxRuntimeMessage);
+  return invoke<FoxPreviewResult>("provider_fox_preview", { chessid, identity });
+}
+
+export async function loadFoxKifuState(): Promise<FoxKifuState> {
+  if (!isTauriRuntime()) return { recents: [], last_query: null };
+  return invoke<FoxKifuState>("load_fox_kifu_state");
+}
+
+export async function rememberFoxLookup(lookup: FoxLookup, account: FoxAccount | null): Promise<FoxKifuState> {
+  if (!isTauriRuntime()) throw new Error(foxRuntimeMessage);
+  return invoke<FoxKifuState>("remember_fox_lookup", { lookup, account });
+}
+
+export async function clearFoxRecents(): Promise<FoxKifuState> {
+  if (!isTauriRuntime()) throw new Error(foxRuntimeMessage);
+  return invoke<FoxKifuState>("clear_fox_recents");
+}
+
+export async function fetchTencentList(username: string, lastCode: string, identity: ProviderRequestIdentity): Promise<TencentListResult> {
+  if (!isTauriRuntime()) throw new Error("Tencent 查询需要原生桌面运行环境。");
+  return invoke<TencentListResult>("provider_tencent_list", { username, lastCode, identity });
+}
+
+export async function previewTencentChess(chessId: string, identity: ProviderRequestIdentity): Promise<TencentPreviewResult> {
+  if (!isTauriRuntime()) throw new Error("Tencent 预览需要原生桌面运行环境。");
+  return invoke<TencentPreviewResult>("provider_tencent_preview", { chessId, identity });
+}
+
+export async function loadTencentHistory(): Promise<TencentHistory> {
+  if (!isTauriRuntime()) return { recent: [], last_query: null };
+  return invoke<TencentHistory>("load_tencent_history");
+}
+
+export async function saveTencentQuery(query: TencentQuery | null): Promise<TencentHistory> {
+  if (!isTauriRuntime()) throw new Error("Tencent 历史保存需要原生桌面运行环境。");
+  return invoke<TencentHistory>("save_tencent_query", { query });
+}
+
+export async function networkSnapshot(): Promise<NetworkSnapshot> {
+  if (!isTauriRuntime()) throw new Error("网络设置及远程预览需要原生桌面运行环境。");
+  return invoke<NetworkSnapshot>("network_snapshot");
+}
+
+export async function saveNetworkSettings(settings: NetworkSettings): Promise<NetworkSnapshot> {
+  if (!isTauriRuntime()) throw new Error("网络设置需要原生桌面运行环境。");
+  return invoke<NetworkSnapshot>("save_network_settings", { settings });
+}
+
+export async function beginProviderRequest(policyRevision: number): Promise<ProviderRequestIdentity> {
+  return invoke<ProviderRequestIdentity>("begin_provider_request", { policyRevision });
+}
+
+export async function cancelProviderRequest(identity: ProviderRequestIdentity): Promise<void> {
+  return invoke("cancel_provider_request", { identity });
+}
+
 
 export async function syncReadboardSidecarSnapshot(
   request: ReadboardSidecarSyncSnapshotRequest
@@ -90,136 +164,6 @@ function importProviderPayloadLocally(request: ProviderImportRequest): ProviderI
   };
 }
 
-function parseYikeUrlLocally(rawUrl: string): YikeUrlDescriptor {
-  const trimmed = rawUrl.trim();
-  if (!trimmed) throw new Error("Enter a Yike URL to preview.");
-
-  let parsed: URL;
-  try {
-    parsed = new URL(trimmed);
-  } catch {
-    throw new Error(unsupportedYikePreviewMessage());
-  }
-
-  if (!isYikeHost(parsed.hostname)) throw new Error(unsupportedYikePreviewMessage());
-
-  const descriptor = parseYikeRoute(parsed);
-  if (!descriptor) throw new Error(unsupportedYikePreviewMessage());
-  return descriptor;
-}
-
-function parseYikeRoute(parsed: URL): YikeUrlDescriptor | null {
-  for (const route of yikeRouteCandidates(parsed)) {
-    const liveDescriptor = parseYikeLiveRoute(route);
-    if (liveDescriptor) return liveDescriptor;
-
-    const gameDescriptor = parseYikeGameRoute(route);
-    if (gameDescriptor) return gameDescriptor;
-  }
-
-  const hallRoomId = yikeHallRoomId(parsed);
-  if (hallRoomId) return yikeGameRoomDescriptor(hallRoomId);
-  return null;
-}
-
-function parseYikeLiveRoute(route: string): YikeUrlDescriptor | null {
-  const match = /^\/?live\/(new-room|room)\/(\d+)(?:\/(\d+)\/(\d+))?\/?$/.exec(route);
-  if (!match) return null;
-
-  const [, roomType, id, suffixKind, suffixRoom] = match;
-  if (suffixKind !== undefined && suffixRoom !== undefined && !isZeroSuffix(suffixKind, suffixRoom) && Number(suffixRoom) <= 0) {
-    return null;
-  }
-
-  if (roomType === "new-room") {
-    return {
-      provider: "yike",
-      room_kind: "new_live_room",
-      id,
-      room_id: isZeroSuffix(suffixKind, suffixRoom) ? Number(id) : numberOrFallback(suffixRoom, Number(id)),
-      request_url: `https://api-new.yikeweiqi.com/v1/golives/${id}`
-    };
-  }
-
-  const suffixRoomId = numberOrFallback(suffixRoom, Number(id));
-  const roomKind: YikeRoomKind = suffixKind === undefined || suffixRoomId <= 0 ? "old_live_board" : "old_live_room";
-  return {
-    provider: "yike",
-    room_kind: roomKind,
-    id,
-    room_id: roomKind === "old_live_room" ? suffixRoomId : Number(id),
-    request_url: roomKind === "old_live_room"
-      ? `https://api.yikeweiqi.com/golive/dtl?id=${id}&flag=1`
-      : `https://api.yikeweiqi.com/golive/dtl?id=${id}`
-  };
-}
-
-function parseYikeGameRoute(route: string): YikeUrlDescriptor | null {
-  const match = /^\/?game\/[a-zA-Z]+\/\d+\/(\d+)\/?$/.exec(route);
-  return match ? yikeGameRoomDescriptor(match[1]) : null;
-}
-
-function yikeGameRoomDescriptor(roomId: string): YikeUrlDescriptor {
-  return {
-    provider: "yike",
-    room_kind: "game_room",
-    id: roomId,
-    room_id: Number(roomId),
-    request_url: `https://api.yikeweiqi.com/golive/dtl?id=${roomId}`
-  };
-}
-
-function yikeRouteCandidates(parsed: URL): string[] {
-  const routes = [parsed.pathname];
-  if (parsed.hash.startsWith("#")) {
-    const hash = parsed.hash.slice(1);
-    const hashPath = hash.split("?")[0];
-    if (hashPath) routes.push(hashPath);
-  }
-  return routes.map((route) => safeDecodeURIComponent(route).replace(/^\/+/, ""));
-}
-
-function yikeHallRoomId(parsed: URL): string | null {
-  const roomId = hallRoomIdFromSearch(parsed.searchParams);
-  if (roomId) return roomId;
-
-  const hashQuery = parsed.hash.split("?")[1];
-  if (!hashQuery) return null;
-  return hallRoomIdFromSearch(new URLSearchParams(hashQuery));
-}
-
-function hallRoomIdFromSearch(searchParams: URLSearchParams): string | null {
-  const roomId = searchParams.get("room");
-  if (!roomId || !/^\d+$/.test(roomId) || !searchParams.has("hall")) return null;
-  return roomId;
-}
-
-function isYikeHost(hostname: string): boolean {
-  const lowerHostname = hostname.toLowerCase();
-  return lowerHostname === "yikeweiqi.com" || lowerHostname.endsWith(".yikeweiqi.com");
-}
-
-function numberOrFallback(value: string | undefined, fallback: number): number {
-  if (value === undefined) return fallback;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function isZeroSuffix(suffixKind: string | undefined, suffixRoom: string | undefined): boolean {
-  return suffixKind === "0" && suffixRoom === "0";
-}
-
-function safeDecodeURIComponent(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-function unsupportedYikePreviewMessage(): string {
-  return "Browser preview only recognizes supported yikeweiqi.com live, game, or hall URLs. The desktop backend may support exact parsing for this URL, and payload or SGF import still works offline.";
-}
 
 function extractSgfFromPayload(payload: string): string {
   const trimmed = payload.trim();

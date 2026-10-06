@@ -655,11 +655,23 @@ pub struct AppHealthDto {
     pub notes: Vec<String>,
 }
 
+mod network;
+pub use network::*;
+mod yike;
+pub use yike::*;
+mod external_sync;
+pub use external_sync::*;
+mod tencent;
+pub use tencent::*;
+mod fox;
+pub use fox::*;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
     Yike,
     Fox,
+    Tencent,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -748,6 +760,11 @@ pub enum ProviderErrorKind {
     ParseFailed,
     TransportFailed,
     Timeout,
+    Cancelled,
+    ProxyFailed,
+    AuthenticationFailed,
+    TlsFailed,
+    NotFound,
     RuntimeUnavailable,
     NotImplemented,
 }
@@ -796,25 +813,33 @@ pub struct ProviderFetchResult {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct ReadboardSidecarProbeRequest {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub endpoint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_ms: Option<u64>,
+pub enum ReadboardPhaseDto {
+    Idle,
+    Starting,
+    Ready,
+    Stopping,
+    Stopped,
+    Unavailable,
+    Incompatible,
+    Timeout,
+    Exited,
+    Disconnected,
+    CleanupFailed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct ReadboardSidecarProbeResult {
-    pub available: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+pub struct ReadboardRuntimeDto {
+    pub generation: u64,
+    pub revision: u64,
+    pub phase: ReadboardPhaseDto,
+    pub executable_path: Option<String>,
+    pub process_id: Option<u32>,
     pub endpoint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-    #[serde(default)]
-    pub warnings: Vec<String>,
+    pub wire_version: Option<String>,
+    pub resources_held: bool,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

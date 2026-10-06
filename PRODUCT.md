@@ -53,11 +53,11 @@ Confirmed in the Next workspace:
 - KataGo one-shot and full-game batch analysis via analysis JSONL, with progress, cancellation, timeouts, and asset checks.
 - Multiple engine profiles in app data; SQLite analysis cache keyed from parsed SGF content and raw SGF hash.
 - Preferences: candidate/ownership/policy visibility, candidate limit, auto-load cache, auto-save analysis, default visits, quick/deep review mode, classic/high-contrast board theme.
-- Yike/Fox provider and readboard sidecar commands are wired as offline contracts plus runtime path plumbing (`provider_fetch_yike`, `provider_fetch_fox` for `chessid` / `uid` / `user_name`, `readboard_sidecar_probe`, `readboard_sidecar_sync_snapshot`).
+- Yike public lists and normalized previews use `provider_yike_list` / `provider_yike_preview`; Fox nickname/UID lists, continuation and chessid preview use `provider_fox_list` / `provider_fox_list_more` / `provider_fox_preview`, with Fox-only recents. Tencent has independent `provider_tencent_list` / `provider_tencent_preview` and history. Explicit Import uses SGF-07. Readboard uses `readboard_runtime_*` lifecycle commands, read-only ongoing sync through `begin_readboard_sync` / `prepare_readboard_sync` and the shared external-sync owner, plus the offline `readboard_sidecar_sync_snapshot` preview. Native and provider-live evidence is recorded separately in DEVELOPMENT.
 
 Constraints and undecided product facts:
 
-- Not full Java/Swing feature parity. Missing or unproven: live Fox/Yike network behavior, live readboard sidecar, legacy capture/import beyond current SGF flows, full settings migration, layout/theme parity, every analysis shortcut and advanced review workflow, bundled KataGo layout, signed/notarized installers.
+- Not full Java/Swing feature parity. Missing or unproven: live Fox/Yike network behavior, readboard sidecar beyond the recorded Windows source-runtime evidence, legacy capture/import beyond current SGF flows, full settings migration, layout/theme parity, every analysis shortcut and advanced review workflow, bundled KataGo layout, signed/notarized installers.
 - Browser preview may show fake review frames and local cache fallback. That is not the shipped analysis path.
 - In-app chrome is currently English while the confirmed audience is Chinese-first. UI language strategy beyond that gap is undecided.
 - Accessibility standard (for example WCAG target) is undecided; high-contrast board theme is a preference, not a stated compliance claim.

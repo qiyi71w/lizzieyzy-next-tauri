@@ -23,12 +23,13 @@ katago-protocol = { path = "../../../crates/katago-protocol" }
 match-core = { path = "../../../crates/match-core" }
 provider-fox = { path = "../../../crates/provider-fox" }
 provider-yike = { path = "../../../crates/provider-yike" }
+provider-tencent = { path = "../../../crates/provider-tencent" }
 provider-core = { path = "../../../crates/provider-core" }
 go-core = { path = "../../../crates/go-core" }
 readboard-sidecar = { path = "../../../crates/readboard-sidecar" }
 sgf = { path = "../../../crates/sgf" }
 save-as-dialog = { path = "../../../crates/save-as-dialog" }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+url = "2"
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true

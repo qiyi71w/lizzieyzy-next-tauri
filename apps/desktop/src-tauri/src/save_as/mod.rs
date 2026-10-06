@@ -1,5 +1,5 @@
-use crate::current_game_state::CurrentGameState;
-use app_model::{CurrentGameResultDto, NodePath};
+use crate::current_game_state::{CurrentGameSaveSnapshot, CurrentGameState};
+use app_model::CurrentGameResultDto;
 use save_as_dialog::{persist_save_as, SaveAsDialogOutcome};
 use tauri::{AppHandle, Runtime};
 
@@ -9,9 +9,9 @@ mod windows_picker;
 pub fn persist_current_game_save_as(
     state: &CurrentGameState,
     outcome: SaveAsDialogOutcome,
-    selected_path: NodePath,
+    snapshot: CurrentGameSaveSnapshot,
 ) -> Result<Option<CurrentGameResultDto>, String> {
-    persist_save_as(outcome, |path| state.save_to_path(path, selected_path))
+    persist_save_as(outcome, |path| state.persist_save_snapshot(path, snapshot))
 }
 
 pub fn pick_save_as_outcome<R: Runtime>(

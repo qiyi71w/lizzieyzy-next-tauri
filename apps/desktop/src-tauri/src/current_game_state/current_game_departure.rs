@@ -137,6 +137,48 @@ fn replacement_validates_candidate_before_dirty_prompt() {
 }
 
 #[test]
+fn provider_import_rejects_superseded_policy_and_document_without_replacing_current_game() {
+    let state = CurrentGameState::default();
+    state.replace(BRANCHING, None).unwrap();
+    let network = provider_core::network::NetworkState::default();
+    let id = network.begin(0, state.document_identity()).unwrap();
+    let lease = network.operation(&id).unwrap().lease();
+    let before = state.serialize().unwrap();
+    let admission = state
+        .prepare_provider_replacement(EMPTY, lease.clone(), id.document_identity)
+        .unwrap();
+    let departure_id = match admission {
+        DocumentDepartureAdmissionDto::Ready { departure_id }
+        | DocumentDepartureAdmissionDto::NeedsDecision { departure_id } => departure_id,
+    };
+    state.begin_protected_commit(departure_id, &[]).unwrap();
+    network
+        .commit(app_model::NetworkSettingsDto::default(), || Ok(()))
+        .unwrap();
+    let outcome = state.commit_replacement(departure_id).unwrap();
+    assert!(!outcome.committed);
+    assert_eq!(state.serialize().unwrap(), before);
+    state
+        .set_personal_comment(path(&[]), "still editable".into())
+        .unwrap();
+
+    let id = network.begin(1, state.document_identity()).unwrap();
+    let lease = network.operation(&id).unwrap().lease();
+    state.replace(EMPTY, None).unwrap();
+    assert_eq!(
+        state
+            .prepare_provider_replacement(BRANCHING, lease, id.document_identity)
+            .unwrap_err()
+            .kind,
+        CurrentGameErrorKind::DepartureBlocked
+    );
+    assert_eq!(
+        state.serialize().unwrap(),
+        sgf::CurrentSgfDocument::open(EMPTY).unwrap().serialize().unwrap()
+    );
+}
+
+#[test]
 fn dirty_replacement_cannot_commit_before_a_departure_decision() {
     let state = CurrentGameState::default();
     state

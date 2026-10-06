@@ -1,14 +1,14 @@
 use app_model::{
-    ProviderFetchMethod, ProviderFetchRequest, ProviderFetchResult, ProviderGameMetadata,
-    ProviderGameSummary, ProviderImportRequest, ProviderImportResult, ProviderKind,
+    FoxAccountDto, ProviderFetchMethod, ProviderFetchRequest, ProviderGameMetadata, ProviderGameSummary,
+    ProviderImportRequest, ProviderImportResult, ProviderKind,
 };
-use provider_core::{
-    first_non_blank, invalid_payload, invalid_request, require_non_blank, transport_failed, ProviderResult,
-    ProviderTransport,
-};
+use provider_core::{first_non_blank, invalid_payload, provider_error, require_non_blank, ProviderResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
+
+mod kifu;
+pub use kifu::*;
 
 pub const FOX_BASE_URL: &str = "https://h5.foxwq.com/yehuDiamond/chessbook_local";
 pub const FOX_QUERY_USER_URL: &str = "https://newframe.foxwq.com/cgi/QueryUserInfoPanel";
@@ -16,22 +16,12 @@ pub const FOX_SGF_CGI_URLS: [&str; 2] = [
     "http://happyapp.huanle.qq.com/cgi-bin/CommonMobileCGI/TXWQFetchChess",
     "http://cgi.foxwq.com/cgi-bin/CommonMobileCGI/TXWQFetchChess",
 ];
-pub const FOX_HTTP_CONNECT_TIMEOUT_MS: u64 = 20_000;
 pub const FOX_HTTP_READ_TIMEOUT_MS: u64 = 25_000;
-pub const FOX_HTTP_MAX_RETRIES: u8 = 3;
 pub const FOX_MOBILE_USER_AGENT: &str =
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 \
      (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
 pub const FOX_CGI_USER_AGENT: &str = "okhttp/3.12.12";
 const FORM_URLENCODED: &str = "application/x-www-form-urlencoded";
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FoxFetchCommand {
-    UserName { user_name: String },
-    Uid { uid: String, last_code: String },
-    ChessId { chessid: String },
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -61,55 +51,6 @@ struct SgfParser<'a> {
     index: usize,
 }
 
-pub fn parse_fetch_command(command: &str) -> ProviderResult<FoxFetchCommand> {
-    let command = require_non_blank(command, "command")?;
-    let Some((action, arguments)) = split_once_whitespace(command) else {
-        return Err(invalid_request(
-            "Fox command must include an action and arguments",
-        ));
-    };
-    let arguments = require_non_blank(arguments, "arguments")?;
-    match action {
-        "user_name" => Ok(FoxFetchCommand::UserName {
-            user_name: arguments.to_string(),
-        }),
-        "uid" => {
-            let (uid, last_code) = match split_once_whitespace(arguments) {
-                Some((uid, last_code)) => (uid, require_non_blank(last_code, "last_code")?),
-                None => (arguments, "0"),
-            };
-            Ok(FoxFetchCommand::Uid {
-                uid: require_non_blank(uid, "uid")?.to_string(),
-                last_code: last_code.to_string(),
-            })
-        }
-        "chessid" => Ok(FoxFetchCommand::ChessId {
-            chessid: arguments.to_string(),
-        }),
-        _ => Err(invalid_request(format!(
-            "unsupported Fox command action: {action}"
-        ))),
-    }
-}
-
-pub fn fetch_command<T: ProviderTransport + ?Sized>(
-    command: &str,
-    transport: &T,
-) -> ProviderResult<ProviderFetchResult> {
-    fetch(parse_fetch_command(command)?, transport)
-}
-
-pub fn fetch<T: ProviderTransport + ?Sized>(
-    command: FoxFetchCommand,
-    transport: &T,
-) -> ProviderResult<ProviderFetchResult> {
-    match command {
-        FoxFetchCommand::UserName { user_name } => fetch_user_name(&user_name, transport),
-        FoxFetchCommand::Uid { uid, last_code } => fetch_uid(&uid, &last_code, transport),
-        FoxFetchCommand::ChessId { chessid } => fetch_chessid(&chessid, transport),
-    }
-}
-
 pub fn query_user_request(user_name: &str) -> ProviderResult<ProviderFetchRequest> {
     let user_name = require_non_blank(user_name, "user_name")?;
     Ok(get_request(
@@ -118,12 +59,14 @@ pub fn query_user_request(user_name: &str) -> ProviderResult<ProviderFetchReques
     ))
 }
 
+/// The list endpoint honours only the camelCase `lastCode` cursor; `lastcode` is silently ignored
+/// upstream and returns the first batch again.
 pub fn chess_list_request(uid: &str, last_code: &str) -> ProviderResult<ProviderFetchRequest> {
     let uid = require_non_blank(uid, "uid")?;
     let last_code = require_non_blank(last_code, "last_code")?;
     Ok(get_request(
         format!(
-            "{FOX_BASE_URL}/YHWQFetchChessList?srcuid=0&dstuid={}&type=1&lastcode={}&searchkey=&uin={}",
+            "{FOX_BASE_URL}/YHWQFetchChessList?srcuid=0&dstuid={}&type=1&lastCode={}&searchkey=&uin={}",
             url_encode(uid),
             url_encode(last_code),
             url_encode(uid)
@@ -207,216 +150,29 @@ pub fn sanitize_sgf(sgf: &str) -> String {
     sgf::sanitize_fox_sgf(sgf)
 }
 
-fn fetch_user_name<T: ProviderTransport + ?Sized>(
-    user_name: &str,
-    transport: &T,
-) -> ProviderResult<ProviderFetchResult> {
-    let user_name = require_non_blank(user_name, "user_name")?;
-    if user_name.chars().all(|char| char.is_ascii_digit()) {
-        let result = fetch_uid(user_name, "0", transport)?;
-        return wrap_chess_list_with_user_info(result, user_name, user_name, user_name);
-    }
-
-    let user_response = fetch_request(query_user_request(user_name)?, transport)?;
-    let user_info = parse_user_info(&user_response.payload, user_name)?;
-    let result = fetch_uid(&user_info.uid, "0", transport)?;
-    wrap_chess_list_with_user_info(result, &user_info.uid, &user_info.nickname, user_name)
-}
-
-fn fetch_uid<T: ProviderTransport + ?Sized>(
-    uid: &str,
-    last_code: &str,
-    transport: &T,
-) -> ProviderResult<ProviderFetchResult> {
-    let uid = require_non_blank(uid, "uid")?;
-    let last_code = require_non_blank(last_code, "last_code")?;
-    let mut result = fetch_request(chess_list_request(uid, last_code)?, transport)?;
-    result.metadata.source_id = result.metadata.source_id.or_else(|| Some(uid.to_string()));
-    result
-        .metadata
-        .extra
-        .entry("fox_uid".to_string())
-        .or_insert_with(|| uid.to_string());
-    result
-        .metadata
-        .extra
-        .entry("fox_last_code".to_string())
-        .or_insert_with(|| last_code.to_string());
-    Ok(result)
-}
-
-fn fetch_chessid<T: ProviderTransport + ?Sized>(
-    chessid: &str,
-    transport: &T,
-) -> ProviderResult<ProviderFetchResult> {
-    let chessid = require_non_blank(chessid, "chessid")?;
-    let mut cgi_fallback_reasons = Vec::new();
-    for request in cgi_sgf_requests(chessid)? {
-        let request_url = request.url.clone();
-        let response = match fetch_request(request, transport) {
-            Ok(response) => response,
-            Err(error) => {
-                cgi_fallback_reasons.push(format!(
-                    "CGI {request_url} fetch failed: {}",
-                    provider_error_description(&error)
-                ));
-                continue;
-            }
-        };
-        if let Some(reason) = cgi_sgf_payload_fallback_reason(&request_url, &response.payload) {
-            cgi_fallback_reasons.push(reason);
-            continue;
-        }
-        match normalize_runtime_sgf_response(response, chessid) {
-            Ok(result) => return Ok(result),
-            Err(error) => cgi_fallback_reasons.push(format!(
-                "CGI {request_url} normalization failed: {}",
-                provider_error_description(&error)
-            )),
-        }
-    }
-
-    let response = fetch_request(h5_sgf_request(chessid)?, transport)
-        .map_err(|error| with_cgi_fallback_context(error, &cgi_fallback_reasons, "H5 fetch failed"))?;
-    let mut result = normalize_runtime_sgf_response(response, chessid).map_err(|error| {
-        with_cgi_fallback_context(error, &cgi_fallback_reasons, "H5 normalization failed")
-    })?;
-    result.warnings.extend(
-        cgi_fallback_reasons
-            .into_iter()
-            .map(|reason| format!("Fox CGI fallback: {reason}")),
-    );
-    Ok(result)
-}
-
-fn fetch_request<T: ProviderTransport + ?Sized>(
-    request: ProviderFetchRequest,
-    transport: &T,
-) -> ProviderResult<ProviderFetchResult> {
-    let result = transport.fetch(&request)?;
-    if !(200..400).contains(&result.status_code) {
-        return Err(transport_failed(format!(
-            "Fox transport returned HTTP {} for {}",
-            result.status_code, result.url
-        )));
-    }
-    Ok(result)
-}
-
-fn normalize_runtime_sgf_response(
-    mut response: ProviderFetchResult,
-    fallback_source_id: &str,
-) -> ProviderResult<ProviderFetchResult> {
-    let payload = require_non_blank(&response.payload, "payload")?;
-    let normalized = normalize_payload(payload)?;
-    let mut metadata = normalized.metadata;
-    metadata.request_url = metadata.request_url.or_else(|| Some(response.url.clone()));
-    metadata.source_id = metadata
-        .source_id
-        .or_else(|| Some(fallback_source_id.to_string()));
-    merge_metadata(&mut metadata, response.metadata);
-
-    response.payload = normalized_payload_text(payload, &normalized.sgf_text)?;
-    response.metadata = metadata;
-    Ok(response)
-}
-
-fn normalized_payload_text(payload: &str, normalized_sgf: &str) -> ProviderResult<String> {
-    if payload.trim_start().starts_with('(') {
-        return Ok(normalized_sgf.to_string());
-    }
-
-    let mut json: Value = serde_json::from_str(payload)
-        .map_err(|err| invalid_payload(format!("failed to parse Fox payload JSON: {err}")))?;
-    let Some(object) = json.as_object_mut() else {
-        return Err(invalid_payload("Fox payload JSON must be an object"));
-    };
-    object.insert("chess".to_string(), Value::String(normalized_sgf.to_string()));
-    Ok(json.to_string())
-}
-
-fn cgi_sgf_payload_fallback_reason(url: &str, payload: &str) -> Option<String> {
-    if payload.trim().is_empty() {
-        return Some(format!("CGI {url} returned empty payload"));
-    }
-    let json = match serde_json::from_str::<Value>(payload) {
-        Ok(json) => json,
-        Err(error) => return Some(format!("CGI {url} returned invalid JSON: {error}")),
-    };
-    let result = json.get("result").and_then(json_i64);
-    if result != Some(0) {
-        let mut message = format!(
-            "CGI {url} returned result {}",
-            result
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "missing".to_string())
-        );
-        if let Some(result_message) = json.get("resultstr").and_then(json_scalar_string) {
-            if !result_message.trim().is_empty() {
-                message.push_str(": ");
-                message.push_str(result_message.trim());
-            }
-        }
-        return Some(message);
-    }
-    if json
-        .get("chess")
-        .and_then(json_scalar_string)
-        .is_none_or(|value| value.trim().is_empty())
-    {
-        return Some(format!("CGI {url} returned no SGF chess text"));
-    }
-    None
-}
-
-fn provider_error_description(error: &app_model::ProviderError) -> String {
-    format!("{:?}: {}", error.kind, error.message)
-}
-
-fn with_cgi_fallback_context(
-    mut error: app_model::ProviderError,
-    cgi_fallback_reasons: &[String],
-    h5_context: &str,
-) -> app_model::ProviderError {
-    if !cgi_fallback_reasons.is_empty() {
-        error.message = format!(
-            "{h5_context}: {}; CGI fallback reasons: {}",
-            provider_error_description(&error),
-            cgi_fallback_reasons.join("; ")
-        );
-    }
-    error
-}
-
-fn parse_user_info(payload: &str, query_text: &str) -> ProviderResult<FoxUserInfo> {
+/// Resolves a nickname lookup response into a non-secret account. Any rejection is `not_found`.
+fn parse_user_info(payload: &str, query_text: &str) -> ProviderResult<FoxAccountDto> {
     let json: Value = serde_json::from_str(require_non_blank(payload, "payload")?)
         .map_err(|err| invalid_payload(format!("failed to parse Fox user JSON: {err}")))?;
+    if !json.is_object() {
+        return Err(invalid_payload("Fox user payload JSON must be an object"));
+    }
     let result = if json.get("result").is_some() {
         json.get("result").and_then(json_i64).unwrap_or(-1)
     } else {
         json.get("errcode").and_then(json_i64).unwrap_or(-1)
     };
-    if result != 0 {
-        let fallback = format!("Can't find a Fox account for nickname: {query_text}");
-        let result_message = json
-            .get("resultstr")
-            .and_then(json_scalar_string)
-            .unwrap_or_default();
-        let error_message = json
-            .get("errmsg")
-            .and_then(json_scalar_string)
-            .unwrap_or_default();
-        let message = first_non_blank([result_message.as_str(), error_message.as_str(), fallback.as_str()])
-            .unwrap_or("Fox user lookup failed")
-            .to_string();
-        return Err(invalid_payload(message));
-    }
-
     let uid = json
         .get("uid")
         .and_then(json_scalar_string)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| invalid_payload("Fox account was found, but the numeric UID was empty."))?;
+        .filter(|value| is_fox_uid(value))
+        .unwrap_or_default();
+    if result != 0 || uid.is_empty() {
+        return Err(provider_error(
+            app_model::ProviderErrorKind::NotFound,
+            "No Fox account matches this nickname.",
+        ));
+    }
     let username = json
         .get("username")
         .and_then(json_scalar_string)
@@ -435,53 +191,7 @@ fn parse_user_info(payload: &str, query_text: &str) -> ProviderResult<FoxUserInf
     .unwrap_or(query_text)
     .to_string();
 
-    Ok(FoxUserInfo { uid, nickname })
-}
-
-fn wrap_chess_list_with_user_info(
-    mut result: ProviderFetchResult,
-    uid: &str,
-    nickname: &str,
-    query_text: &str,
-) -> ProviderResult<ProviderFetchResult> {
-    let mut json: Value = serde_json::from_str(require_non_blank(&result.payload, "payload")?)
-        .map_err(|err| invalid_payload(format!("failed to parse Fox chess list JSON: {err}")))?;
-    let Some(object) = json.as_object_mut() else {
-        return Err(invalid_payload("Fox chess list payload JSON must be an object"));
-    };
-    let uid = uid.trim();
-    let nickname = nickname.trim();
-    let query_text = query_text.trim();
-    if !uid.is_empty() {
-        object.insert("fox_uid".to_string(), Value::String(uid.to_string()));
-        result.metadata.source_id = result.metadata.source_id.or_else(|| Some(uid.to_string()));
-        result
-            .metadata
-            .extra
-            .insert("fox_uid".to_string(), uid.to_string());
-    }
-    if !nickname.is_empty() {
-        object.insert("fox_nickname".to_string(), Value::String(nickname.to_string()));
-        result
-            .metadata
-            .extra
-            .insert("fox_nickname".to_string(), nickname.to_string());
-    }
-    if !query_text.is_empty() {
-        object.insert("fox_query".to_string(), Value::String(query_text.to_string()));
-        result
-            .metadata
-            .extra
-            .insert("fox_query".to_string(), query_text.to_string());
-    }
-    result.payload = json.to_string();
-    Ok(result)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct FoxUserInfo {
-    uid: String,
-    nickname: String,
+    Ok(FoxAccountDto { uid, nickname })
 }
 
 fn metadata_from_sgf(sgf: &str) -> ProviderGameMetadata {
@@ -633,11 +343,14 @@ fn default_headers(user_agent: &str) -> BTreeMap<String, String> {
     ])
 }
 
-fn split_once_whitespace(value: &str) -> Option<(&str, &str)> {
-    let value = value.trim();
-    let split_at = value.find(char::is_whitespace)?;
-    let (left, right) = value.split_at(split_at);
-    Some((left, right.trim()))
+/// Fox UIDs are positive decimal integers. `0` and non-digits make the list endpoint return
+/// unrelated public games instead of an error.
+pub(crate) fn is_fox_uid(value: &str) -> bool {
+    is_decimal_id(value) && value.bytes().any(|byte| byte != b'0')
+}
+
+pub(crate) fn is_decimal_id(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 32 && value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn url_encode(value: &str) -> String {
@@ -760,7 +473,10 @@ impl<'a> SgfParser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use app_model::ProviderErrorKind;
+    use app_model::{
+        FoxKifuStateDto, FoxLookupDto, FoxLookupKindDto, ProviderErrorKind, ProviderFetchResult,
+    };
+    use provider_core::{transport_failed, ProviderTransport};
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
@@ -899,238 +615,385 @@ mod tests {
     }
 
     #[test]
-    fn builds_legacy_fox_endpoint_requests() {
+    fn list_request_uses_the_cursor_parameter_the_endpoint_honours() {
+        let request = chess_list_request("12345", "678").unwrap();
         assert_eq!(
-            parse_fetch_command("uid 12345 678").unwrap(),
-            FoxFetchCommand::Uid {
-                uid: "12345".to_string(),
-                last_code: "678".to_string()
-            }
+            request.url,
+            format!("{FOX_BASE_URL}/YHWQFetchChessList?srcuid=0&dstuid=12345&type=1&lastCode=678&searchkey=&uin=12345")
         );
+        let cgi = cgi_sgf_requests("9").unwrap();
+        assert_eq!(cgi[0].method, ProviderFetchMethod::Post);
+        assert_eq!(cgi[0].body.as_deref(), Some("chessid=9"));
         assert_eq!(
-            parse_fetch_command("uid 12345").unwrap(),
-            FoxFetchCommand::Uid {
-                uid: "12345".to_string(),
-                last_code: "0".to_string()
-            }
-        );
-
-        let user_request = query_user_request("棋 手").unwrap();
-        assert_eq!(
-            user_request.url,
-            format!("{FOX_QUERY_USER_URL}?srcuid=0&username=%E6%A3%8B+%E6%89%8B")
-        );
-        assert_eq!(user_request.method, ProviderFetchMethod::Get);
-        assert_eq!(
-            user_request.headers.get("User-Agent").map(String::as_str),
-            Some(FOX_MOBILE_USER_AGENT)
-        );
-
-        let list_request = chess_list_request("12345", "678").unwrap();
-        assert_eq!(
-            list_request.url,
-            format!(
-                "{FOX_BASE_URL}/YHWQFetchChessList?srcuid=0&dstuid=12345&type=1&lastcode=678&searchkey=&uin=12345"
-            )
-        );
-        assert_eq!(list_request.timeout_ms, Some(FOX_HTTP_READ_TIMEOUT_MS));
-
-        let cgi_requests = cgi_sgf_requests("game 1").unwrap();
-        assert_eq!(cgi_requests.len(), 2);
-        assert_eq!(cgi_requests[0].url, FOX_SGF_CGI_URLS[0]);
-        assert_eq!(cgi_requests[0].method, ProviderFetchMethod::Post);
-        assert_eq!(cgi_requests[0].body.as_deref(), Some("chessid=game+1"));
-        assert_eq!(
-            cgi_requests[0].headers.get("Content-Type").map(String::as_str),
-            Some(FORM_URLENCODED)
-        );
-        assert_eq!(
-            cgi_requests[0].headers.get("User-Agent").map(String::as_str),
+            cgi[0].headers.get("User-Agent").map(String::as_str),
             Some(FOX_CGI_USER_AGENT)
         );
-
-        let h5_request = h5_sgf_request("game 1").unwrap();
-        assert_eq!(
-            h5_request.url,
-            format!("{FOX_BASE_URL}/YHWQFetchChess?chessid=game+1")
-        );
     }
 
     #[test]
-    fn chessid_fetch_preserves_cgi_fallback_warnings_when_h5_succeeds() {
-        let transport = SequenceTransport::new(vec![
-            Err(transport_failed("connection reset")),
-            Ok(fetch_response(
-                FOX_SGF_CGI_URLS[1],
-                200,
-                r#"{"result":1,"resultstr":"not found","chess":"(;SZ[19];B[aa])"}"#,
-            )),
-            Ok(fetch_response(
-                &format!("{FOX_BASE_URL}/YHWQFetchChess?chessid=game+1"),
-                200,
-                r#"{"result":0,"resultstr":"ok","chessid":"game 1","chess":"(;SZ[19]PB[Black]PW[White];B[aa](;W[bb])(;W[cc]))"}"#,
-            )),
-        ]);
-
-        let result = fetch_command("chessid game 1", &transport).unwrap();
-        let requests = transport.requests();
-
-        assert_eq!(requests.len(), 3);
-        assert_eq!(requests[0].url, FOX_SGF_CGI_URLS[0]);
-        assert_eq!(requests[1].url, FOX_SGF_CGI_URLS[1]);
+    fn lookups_are_validated_before_io() {
+        let transport = SequenceTransport::new(vec![]);
+        for (kind, value) in [
+            (FoxLookupKindDto::Uid, "0"),
+            (FoxLookupKindDto::Uid, "12a"),
+            (FoxLookupKindDto::Nickname, "  "),
+            (FoxLookupKindDto::Nickname, "a\nb"),
+            (FoxLookupKindDto::Chessid, "123"),
+        ] {
+            let error = fetch_account_list(&transport, &lookup(kind, value)).unwrap_err();
+            assert_eq!(error.kind, ProviderErrorKind::InvalidRequest, "{kind:?} {value}");
+        }
         assert_eq!(
-            requests[2].url,
-            format!("{FOX_BASE_URL}/YHWQFetchChess?chessid=game+1")
+            fetch_game_preview(&transport, "abc").unwrap_err().kind,
+            ProviderErrorKind::InvalidRequest
         );
-        assert_eq!(result.metadata.source_id.as_deref(), Some("game 1"));
-        assert_eq!(result.metadata.provider_status.as_deref(), Some("0"));
         assert_eq!(
-            result.metadata.extra.get("provider_message").map(String::as_str),
-            Some("ok")
+            fetch_list_continuation(&transport, &account("0", ""), "5")
+                .unwrap_err()
+                .kind,
+            ProviderErrorKind::InvalidRequest
         );
-        assert_eq!(result.warnings.len(), 2);
-        assert!(result.warnings[0].contains("Fox CGI fallback"));
-        assert!(result.warnings[0].contains(FOX_SGF_CGI_URLS[0]));
-        assert!(result.warnings[0].contains("connection reset"));
-        assert!(result.warnings[1].contains(FOX_SGF_CGI_URLS[1]));
-        assert!(result.warnings[1].contains("result 1: not found"));
-        let json: Value = serde_json::from_str(&result.payload).unwrap();
-        assert_eq!(
-            json["chess"].as_str().unwrap(),
-            "(;GM[1]FF[4]CA[UTF-8]SZ[19]PB[Black]PW[White];B[aa];W[bb])"
-        );
+        assert!(transport.requests().is_empty());
     }
 
     #[test]
-    fn chessid_fetch_uses_first_valid_cgi_payload_without_h5_request() {
-        let transport = SequenceTransport::new(vec![Ok(fetch_response(
-            FOX_SGF_CGI_URLS[0],
-            200,
-            r#"{"result":0,"resultstr":"ok","chessid":"abc123","chess":"(;SZ[19];B[aa])"}"#,
-        ))]);
-
-        let result = fetch_command("chessid abc123", &transport).unwrap();
-
-        assert_eq!(transport.requests().len(), 1);
-        assert_eq!(result.url, FOX_SGF_CGI_URLS[0]);
-        assert_eq!(result.metadata.source_id.as_deref(), Some("abc123"));
-        assert!(result.warnings.is_empty());
-        assert!(result
-            .payload
-            .contains(r#""chess":"(;GM[1]FF[4]CA[UTF-8]SZ[19];B[aa])""#));
-    }
-
-    #[test]
-    fn user_name_fetch_queries_user_then_wraps_chess_list_with_metadata() {
+    fn nickname_lookup_resolves_account_then_lists_games_without_sgf() {
         let transport = SequenceTransport::new(vec![
             Ok(fetch_response(
-                &format!("{FOX_QUERY_USER_URL}?srcuid=0&username=Good+Player"),
+                FOX_QUERY_USER_URL,
                 200,
-                r#"{"result":0,"uid":2468,"username":"Good Player"}"#,
+                r#"{"result":0,"uid":"2468","username":"Good Player"}"#,
             )),
             Ok(fetch_response(
-                &format!("{FOX_BASE_URL}/YHWQFetchChessList?srcuid=0&dstuid=2468&type=1&lastcode=0&searchkey=&uin=2468"),
+                FOX_BASE_URL,
                 200,
-                r#"{"result":0,"chesslist":[]}"#,
+                &list_json(&[("901", "2468", "1"), ("900", "1", "2468")]),
             )),
         ]);
-
-        let result = fetch_command("user_name Good Player", &transport).unwrap();
+        let page =
+            fetch_account_list(&transport, &lookup(FoxLookupKindDto::Nickname, " Good Player ")).unwrap();
         let requests = transport.requests();
-
-        assert_eq!(requests.len(), 2);
         assert_eq!(
             requests[0].url,
             format!("{FOX_QUERY_USER_URL}?srcuid=0&username=Good+Player")
         );
+        assert!(requests[1].url.contains("dstuid=2468&type=1&lastCode=0"));
+        assert_eq!(page.account, account("2468", "Good Player"));
         assert_eq!(
-            requests[1].url,
-            format!("{FOX_BASE_URL}/YHWQFetchChessList?srcuid=0&dstuid=2468&type=1&lastcode=0&searchkey=&uin=2468")
+            page.games.iter().map(|g| g.chessid.as_str()).collect::<Vec<_>>(),
+            ["901", "900"]
         );
-        let json: Value = serde_json::from_str(&result.payload).unwrap();
-        assert_eq!(json["fox_uid"], "2468");
-        assert_eq!(json["fox_nickname"], "Good Player");
-        assert_eq!(json["fox_query"], "Good Player");
-        assert_eq!(result.metadata.source_id.as_deref(), Some("2468"));
-        assert_eq!(
-            result.metadata.extra.get("fox_query").map(String::as_str),
-            Some("Good Player")
-        );
+        assert_eq!(page.games[0].account_won, Some(true));
+        assert_eq!(page.games[0].result, "黑中盘胜");
+        assert_eq!(page.games[0].black_rank, "职业9段");
+        assert_eq!(page.next_cursor.as_deref(), Some("900"));
+        assert!(!page.has_more, "a short batch ends the list");
     }
 
     #[test]
-    fn numeric_user_name_fetches_list_directly() {
+    fn unknown_nickname_is_not_found_and_does_not_list() {
         let transport = SequenceTransport::new(vec![Ok(fetch_response(
-            &format!("{FOX_BASE_URL}/YHWQFetchChessList?srcuid=0&dstuid=2468&type=1&lastcode=0&searchkey=&uin=2468"),
+            FOX_QUERY_USER_URL,
+            200,
+            r#"{"result":104013,"uid":"0","username":""}"#,
+        ))]);
+        let error = fetch_account_list(&transport, &lookup(FoxLookupKindDto::Nickname, "ghost")).unwrap_err();
+        assert_eq!(error.kind, ProviderErrorKind::NotFound);
+        assert_eq!(transport.requests().len(), 1);
+    }
+
+    #[test]
+    fn first_batch_is_capped_and_continuation_skips_cursor_and_duplicates() {
+        let first: Vec<_> = (0..101)
+            .map(|i| (format!("{}", 5000 - i), "7".to_string()))
+            .collect();
+        let first_rows: Vec<_> = first
+            .iter()
+            .map(|(id, uid)| (id.as_str(), uid.as_str(), "1"))
+            .collect();
+        let transport = SequenceTransport::new(vec![Ok(fetch_response(
+            FOX_BASE_URL,
+            200,
+            &list_json(&first_rows),
+        ))]);
+        let page = fetch_account_list(&transport, &lookup(FoxLookupKindDto::Uid, "7")).unwrap();
+        assert_eq!(page.games.len(), FOX_LIST_BATCH_LIMIT);
+        assert_eq!(page.next_cursor.as_deref(), Some("4901"));
+        assert!(page.has_more);
+        assert_eq!(
+            page.account.nickname, "p7",
+            "UID lookups learn the nickname from the account's games"
+        );
+
+        let transport = SequenceTransport::new(vec![Ok(fetch_response(
+            FOX_BASE_URL,
+            200,
+            &list_json(&[
+                ("4901", "7", "1"),
+                ("4900", "7", "1"),
+                ("4900", "7", "1"),
+                ("4899", "7", "1"),
+            ]),
+        ))]);
+        let next = fetch_list_continuation(&transport, &page.account, "4901").unwrap();
+        assert!(transport.requests()[0].url.contains("lastCode=4901"));
+        assert_eq!(
+            next.games.iter().map(|g| g.chessid.as_str()).collect::<Vec<_>>(),
+            ["4900", "4899"]
+        );
+        assert!(!next.has_more);
+    }
+
+    #[test]
+    fn empty_batch_ends_and_rejected_or_malformed_lists_are_typed() {
+        let transport = SequenceTransport::new(vec![Ok(fetch_response(
+            FOX_BASE_URL,
             200,
             r#"{"result":0,"chesslist":[]}"#,
         ))]);
-
-        let result = fetch_command("user_name 2468", &transport).unwrap();
-
-        assert_eq!(transport.requests().len(), 1);
-        let json: Value = serde_json::from_str(&result.payload).unwrap();
-        assert_eq!(json["fox_uid"], "2468");
-        assert_eq!(json["fox_nickname"], "2468");
-        assert_eq!(json["fox_query"], "2468");
+        let page = fetch_list_continuation(&transport, &account("7", "p7"), "11").unwrap();
+        assert!(page.games.is_empty() && !page.has_more && page.next_cursor.is_none());
+        for body in [
+            r#"{"result":5,"chesslist":[]}"#,
+            r#"{"result":0}"#,
+            "<html>",
+            r#"{"result":0,"chesslist":[{"chessid":""}]}"#,
+        ] {
+            let transport = SequenceTransport::new(vec![Ok(fetch_response(FOX_BASE_URL, 200, body))]);
+            let error = fetch_account_list(&transport, &lookup(FoxLookupKindDto::Uid, "7")).unwrap_err();
+            assert_eq!(error.kind, ProviderErrorKind::InvalidPayload, "{body}");
+        }
+        let transport = SequenceTransport::new(vec![Ok(fetch_response(FOX_BASE_URL, 500, "down"))]);
+        assert_eq!(
+            fetch_account_list(&transport, &lookup(FoxLookupKindDto::Uid, "7"))
+                .unwrap_err()
+                .kind,
+            ProviderErrorKind::TransportFailed
+        );
     }
 
     #[test]
-    fn cgi_fixture_payload_normalizes_through_import_path() {
-        let request = ProviderImportRequest {
-            provider: ProviderKind::Fox,
-            payload: r#"{"result":0,"resultstr":"ok","chessid":"cgi-1","chess":"(;SZ[19]PB[Black]PW[White];B[aa](;W[bb])(;W[cc]))"}"#.to_string(),
-            source_url: None,
-            source_id: None,
-            metadata: ProviderGameMetadata::default(),
-        };
-
-        let result = import_payload(request).unwrap();
-
-        assert_eq!(result.summary.source_id.as_deref(), Some("cgi-1"));
+    fn chessid_preview_uses_first_cgi_record_and_normalizes_sgf() {
+        let transport = SequenceTransport::new(vec![Ok(fetch_response(
+            FOX_SGF_CGI_URLS[0],
+            200,
+            r#"{"result":0,"chess":"(;SZ[19]PB[Black]PW[White];B[aa](;W[bb])(;W[cc]))"}"#,
+        ))]);
+        let preview = fetch_game_preview(&transport, "42").unwrap();
+        assert_eq!(transport.requests().len(), 1);
         assert_eq!(
-            result.sgf_text,
+            preview.sgf_text,
             "(;GM[1]FF[4]CA[UTF-8]SZ[19]PB[Black]PW[White];B[aa];W[bb])"
         );
-        assert_eq!(result.metadata.provider_status.as_deref(), Some("0"));
+        assert_eq!(preview.summary.source_id.as_deref(), Some("42"));
     }
 
     #[test]
-    fn failed_h5_fallback_reports_invalid_payload() {
+    fn cgi_misses_and_transient_failures_fall_through_to_h5() {
+        let h5 = format!("{FOX_BASE_URL}/YHWQFetchChess");
         let transport = SequenceTransport::new(vec![
-            Ok(fetch_response(FOX_SGF_CGI_URLS[0], 200, r#"{"result":1}"#)),
-            Ok(fetch_response(FOX_SGF_CGI_URLS[1], 200, "")),
             Ok(fetch_response(
-                &format!("{FOX_BASE_URL}/YHWQFetchChess?chessid=abc"),
+                FOX_SGF_CGI_URLS[0],
                 200,
-                r#"{"result":0,"chess":""}"#,
+                r#"{"result":-3,"resultstr":"FetchChessFromDB Failed!!"}"#,
+            )),
+            Ok(fetch_response(
+                FOX_SGF_CGI_URLS[1],
+                200,
+                "<!DOCTYPE html><title>提示</title>",
+            )),
+            Ok(fetch_response(
+                &h5,
+                200,
+                r#"{"result":0,"chessid":"42","chess":"(;SZ[13];B[aa])"}"#,
             )),
         ]);
+        assert_eq!(
+            fetch_game_preview(&transport, "42").unwrap().sgf_text,
+            "(;GM[1]FF[4]CA[UTF-8]SZ[13];B[aa])"
+        );
+        assert_eq!(transport.requests().len(), 3);
 
-        let error = fetch_command("chessid abc", &transport).unwrap_err();
-
-        assert_eq!(error.kind, ProviderErrorKind::InvalidPayload);
-        assert!(error.message.contains("H5 normalization failed"));
-        assert!(error.message.contains(FOX_SGF_CGI_URLS[0]));
-        assert!(error.message.contains("result 1"));
-        assert!(error.message.contains(FOX_SGF_CGI_URLS[1]));
-        assert!(error.message.contains("empty payload"));
-        assert!(error.message.contains("Fox payload chess SGF text is empty"));
+        let transport = SequenceTransport::new(vec![
+            Err(transport_failed("reset")),
+            Ok(fetch_response(FOX_SGF_CGI_URLS[1], 503, "busy")),
+            Ok(fetch_response(
+                &h5,
+                200,
+                r#"{"result":0,"chess":"(;SZ[19];B[aa])"}"#,
+            )),
+        ]);
+        assert!(fetch_game_preview(&transport, "42").is_ok());
+        assert_eq!(transport.requests().len(), 3);
     }
 
     #[test]
-    fn http_failure_reports_transport_failed() {
-        let transport = SequenceTransport::new(vec![Ok(fetch_response(
-            &format!(
-                "{FOX_BASE_URL}/YHWQFetchChessList?srcuid=0&dstuid=42&type=1&lastcode=0&searchkey=&uin=42"
+    fn h5_miss_is_not_found_and_malformed_h5_is_terminal() {
+        let h5 = format!("{FOX_BASE_URL}/YHWQFetchChess");
+        for (body, kind) in [
+            (
+                r#"{"result":101200,"chessid":"1","chess":""}"#,
+                ProviderErrorKind::NotFound,
             ),
-            500,
-            "server error",
+            ("{", ProviderErrorKind::InvalidPayload),
+        ] {
+            let transport = SequenceTransport::new(vec![
+                Ok(fetch_response(FOX_SGF_CGI_URLS[0], 200, r#"{"result":-3}"#)),
+                Ok(fetch_response(FOX_SGF_CGI_URLS[1], 200, "<html>")),
+                Ok(fetch_response(&h5, 200, body)),
+            ]);
+            assert_eq!(
+                fetch_game_preview(&transport, "1").unwrap_err().kind,
+                kind,
+                "{body}"
+            );
+            assert_eq!(transport.requests().len(), 3);
+        }
+        let transport = SequenceTransport::new(vec![Ok(fetch_response(FOX_SGF_CGI_URLS[0], 404, "gone"))]);
+        assert_eq!(
+            fetch_game_preview(&transport, "1").unwrap_err().kind,
+            ProviderErrorKind::NotFound
+        );
+        assert_eq!(
+            transport.requests().len(),
+            1,
+            "classified failures do not switch endpoint"
+        );
+    }
+
+    #[test]
+    fn escaped_line_breaks_between_properties_do_not_corrupt_the_record() {
+        // Live H5 record 1785337045010001403 carries literal `\r\n` text between root properties.
+        let chess = "(;GM[1]FF[4]\\r\\nSZ[19]\\r\\nPB[A]\\r\\n;B[pd];W[dd])";
+        let transport = SequenceTransport::new(vec![Ok(fetch_response(
+            FOX_SGF_CGI_URLS[0],
+            200,
+            &serde_json::json!({ "result": 0, "chess": chess }).to_string(),
         ))]);
+        let preview = fetch_game_preview(&transport, "1").unwrap();
+        let document = sgf::parse_sgf(&preview.sgf_text).unwrap();
+        assert_eq!(
+            (document.board_width, document.moves.len()),
+            (19, 2),
+            "{}",
+            preview.sgf_text
+        );
+    }
 
-        let error = fetch_command("uid 42", &transport).unwrap_err();
+    #[test]
+    fn malformed_cgi_record_is_terminal_without_reading_another_endpoint() {
+        for body in ["{", "[1]", "null"] {
+            let transport = SequenceTransport::new(vec![
+                Ok(fetch_response(FOX_SGF_CGI_URLS[0], 200, body)),
+                Ok(fetch_response(
+                    FOX_SGF_CGI_URLS[1],
+                    200,
+                    r#"{"result":0,"chess":"(;SZ[19];B[aa])"}"#,
+                )),
+            ]);
+            assert_eq!(
+                fetch_game_preview(&transport, "1").unwrap_err().kind,
+                ProviderErrorKind::InvalidPayload,
+                "{body}"
+            );
+            assert_eq!(transport.requests().len(), 1, "{body}");
+        }
+    }
 
-        assert_eq!(error.kind, ProviderErrorKind::TransportFailed);
+    #[test]
+    fn professional_rank_codes_start_at_one_hundred() {
+        let row = |dan: i64| {
+            serde_json::json!({ "result": 0, "chesslist": [{
+            "chessid": "1", "blackuid": 7, "whiteuid": 8, "blackdan": dan, "whitedan": 17, "winner": 0,
+        }] })
+            .to_string()
+        };
+        for (dan, black, white) in [
+            (100, "职业1段", "1级"),
+            (108, "职业9段", "1级"),
+            (27, "10段", "1级"),
+            (16, "2级", "1级"),
+        ] {
+            let transport = SequenceTransport::new(vec![Ok(fetch_response(FOX_BASE_URL, 200, &row(dan)))]);
+            let game = fetch_account_list(&transport, &lookup(FoxLookupKindDto::Uid, "7"))
+                .unwrap()
+                .games
+                .remove(0);
+            assert_eq!(
+                (game.black_rank.as_str(), game.white_rank.as_str()),
+                (black, white),
+                "{dan}"
+            );
+        }
+    }
+
+    #[test]
+    fn recents_keep_eight_unique_accounts_and_the_last_query() {
+        let mut state = FoxKifuStateDto::default();
+        for uid in 1..=9 {
+            let uid = uid.to_string();
+            state = remember_lookup(
+                &state,
+                &lookup(FoxLookupKindDto::Uid, &uid),
+                Some(&account(&uid, &format!("n{uid}"))),
+            )
+            .unwrap();
+        }
+        assert_eq!(state.recents.len(), FOX_RECENTS_LIMIT);
+        assert_eq!(state.recents[0].uid, "9");
+        assert_eq!(state.recents[7].uid, "2");
+        state = remember_lookup(
+            &state,
+            &lookup(FoxLookupKindDto::Nickname, "n5"),
+            Some(&account("5", "n5")),
+        )
+        .unwrap();
+        assert_eq!(state.recents.iter().filter(|a| a.uid == "5").count(), 1);
+        assert_eq!(state.recents[0].uid, "5");
+        state = remember_lookup(&state, &lookup(FoxLookupKindDto::Chessid, " 77 "), None).unwrap();
+        assert_eq!(
+            state.recents[0].uid, "5",
+            "a chessid lookup changes only the last query"
+        );
+        assert_eq!(state.last_query, Some(lookup(FoxLookupKindDto::Chessid, "77")));
+        assert!(remember_lookup(&state, &lookup(FoxLookupKindDto::Uid, "0"), None).is_err());
+
+        let polluted = FoxKifuStateDto {
+            recents: vec![
+                account("0", "bad"),
+                account("3", "x"),
+                account("3", "dup"),
+                account("4", ""),
+            ],
+            last_query: Some(lookup(FoxLookupKindDto::Uid, "x")),
+        };
+        let clean = sanitize_state(&polluted);
+        assert_eq!(clean.recents, vec![account("3", "x"), account("4", "")]);
+        assert_eq!(clean.last_query, None);
+    }
+
+    fn lookup(kind: FoxLookupKindDto, value: &str) -> FoxLookupDto {
+        FoxLookupDto {
+            kind,
+            value: value.to_string(),
+        }
+    }
+
+    fn account(uid: &str, nickname: &str) -> FoxAccountDto {
+        FoxAccountDto {
+            uid: uid.to_string(),
+            nickname: nickname.to_string(),
+        }
+    }
+
+    /// Rows of (chessid, black uid, white uid); winner is black, players are named `p<uid>`.
+    fn list_json(rows: &[(&str, &str, &str)]) -> String {
+        let rows: Vec<Value> = rows.iter().map(|(id, black, white)| serde_json::json!({
+            "chessid": id, "blackuid": black.parse::<i64>().unwrap(), "whiteuid": white.parse::<i64>().unwrap(),
+            "blacknick": format!("p{black}"), "whitenick": format!("p{white}"), "blackdan": 108, "whitedan": 25,
+            "winner": 1, "point": -1, "rule": 1, "movenum": 120, "boardsize": 19, "starttime": "2026-10-05 12:00:00",
+        })).collect();
+        serde_json::json!({ "result": 0, "chesslist": rows }).to_string()
     }
 
     fn windowed_fox_sgf() -> String {

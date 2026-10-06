@@ -35,14 +35,14 @@ Not yet claimed as complete in the Next workspace:
 
 - Full legacy Java/Swing feature parity.
 - Fox/Yike online game providers as live external-network integrations.
-- readboard live sidecar integration in a real target environment.
+- readboard sidecar sync beyond the recorded Windows source-runtime evidence (installed packages and other-platform runtimes).
 - Production signing/notarization for macOS and Windows unless maintainer secrets are configured.
 - End-to-end clean-machine installer smoke coverage across all target platforms.
 - Complete migration of every legacy setting, layout preference, and analysis workflow.
 - Installed file-association acceptance for `APP-01`, which remains an R11 / `REL-04` obligation after the R5 native activation semantic gate passed.
 - Human-versus-engine and other engine-game workflows; N remains reserved for that separate migration scope.
 
-Provider and readboard work in this batch should be treated as offline contract/domain-command coverage until the owning implementation has live environment evidence. Do not describe live provider login, external network capture, or readboard sidecar operation as shipped from this repository alone.
+Provider and readboard work should be treated as offline contract/domain-command coverage until the owning implementation has live environment evidence. The readboard Windows source-runtime evidence is recorded in [DEVELOPMENT](docs/DEVELOPMENT.md) §3–§4. Do not describe live provider login, external network capture, or readboard sidecar operation beyond that recorded scope as shipped.
 
 ## Migration Overview
 
@@ -81,8 +81,8 @@ Status and evidence are separate. The evidence ladder is `Not started` → `Scaf
 | Window file drop | `APP-02` | Accepted | Native/live verified | Single-file SGF/GIB intake accepted; multi-file analysis remains Deferred and does not replace the current game. |
 | Adjustable and persisted layout | `LAYOUT-01`–`LAYOUT-03` | Missing | Not started | Splitters, persistence, and narrow reset behavior. |
 | Engine game modes | `GAME-01`–`GAME-03` | Missing | Not started | Session state, controls, batch revision, and SGF integration. |
-| Yike and Fox providers | `PROV-01`–`PROV-02` | Partial | Repository tested | Live sessions, network behavior, and recovery evidence. |
-| readboard probe and synchronization | `READ-01`–`READ-02` | Partial | Repository tested | Live sidecar evidence and active-game import. |
+| Yike, Fox and Tencent providers | `PROV-01`–`PROV-04` | Partial | Native/provider-live and cross-source verified (Windows source candidates) | Per-platform installed-network evidence Not run, user-approved non-blocking for R10 completion; original and integrated candidate evidence in DEVELOPMENT. |
+| readboard lifecycle and synchronization | `READ-01`–`READ-02` | Partial | Native/live and cross-source verified (Windows, Fox spectator target) | Installed-network evidence Not run, user-approved non-blocking for R10 completion; installed and other-platform runtimes remain unverified. |
 | Explicit OCR limitation | `READ-03` | Accepted | Repository tested | None until OCR support is deliberately introduced. |
 | Release preflight | `REL-01` | Partial | Repository tested | Installable production artifact evidence. |
 | Signing, updater, and installer workflows | `REL-02`–`REL-04` | Missing | Scaffolded | Production credentials, hosted update behavior, and platform smoke. |

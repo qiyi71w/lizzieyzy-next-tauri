@@ -3,6 +3,7 @@ import type { MainWindowPinControl } from "../hooks/useMainWindowPin";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toolbarIcons } from "../assets/toolbar";
 import type { AppPreferences } from "../domain/preferences";
+import type { ProviderKind } from "../domain/providers";
 import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
 import { claimedShortcutCatalog, formatShortcutChord, actionLabelFromRegistry } from "../domain/shortcuts";
 import {
@@ -50,6 +51,7 @@ type Props = {
   windowPin?: MainWindowPinControl;
   sheet: "none" | SheetId;
   onToggleSheet: (sheet: SheetId) => void;
+  onOpenProvider?: (provider: ProviderKind) => void;
   busy: boolean;
   saveBusy?: boolean;
   matchBlocked?: boolean;
@@ -435,12 +437,13 @@ export function AppChrome(props: Props) {
             <MenuItem label="垂直翻转" disabled title={later} />
           </ChromeMenu>
           <ChromeMenu label="同步" open={openMenu === "sync"} onToggle={() => setOpenMenu(openMenu === "sync" ? null : "sync")}>
-            <MenuItem label="野狐 / 弈客 / readboard" onClick={() => run(() => props.onToggleSheet("sync"))} disabled={props.matchBlocked} />
+            <MenuItem label="网络设置 / provider / readboard" onClick={() => run(() => props.onToggleSheet("sync"))} disabled={props.matchBlocked} />
+            <MenuItem label="弈客棋谱预览" onClick={() => run(() => props.onOpenProvider?.("yike"))} disabled={props.matchBlocked || !props.onOpenProvider} />
             <MenuItem label="弈客直播(Shift+O)" disabled title={later} />
             <MenuItem label="打开弈客网页版" disabled title={later} />
             <MenuItem label="弈客大厅" disabled title={later} />
-            <MenuItem label="野狐棋谱" onClick={() => run(() => props.onToggleSheet("sync"))} disabled={props.matchBlocked} />
-            <MenuItem label="腾讯棋谱" onClick={() => run(() => props.onToggleSheet("sync"))} disabled={props.matchBlocked} />
+            <MenuItem label="野狐棋谱" onClick={() => run(() => props.onOpenProvider?.("fox"))} disabled={props.matchBlocked || !props.onOpenProvider} />
+            <MenuItem label="腾讯棋谱" onClick={() => run(() => props.onOpenProvider?.("tencent"))} disabled={props.matchBlocked || !props.onOpenProvider} />
             <MenuItem label="棋盘同步工具(Alt+O)" onClick={() => run(() => props.onToggleSheet("sync"))} disabled={props.matchBlocked} />
           </ChromeMenu>
         </div>

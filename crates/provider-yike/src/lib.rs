@@ -3,15 +3,17 @@ use app_model::{
     ProviderGameSummary, ProviderImportRequest, ProviderImportResult, ProviderKind,
 };
 use provider_core::{
-    first_non_blank, invalid_payload, invalid_url, require_non_blank, transport_failed, ProviderResult,
-    ProviderTransport,
+    first_non_blank, invalid_payload, invalid_url, require_non_blank, ProviderResult, ProviderTransport,
 };
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+mod public_center;
+pub mod sync;
+
+pub use public_center::{canonical_yike_locator, fetch_public_list, fetch_public_preview};
 
 const APP_KEY: &str = "3396jtzhK57XhJom";
 const APP_SECRET: &str = "hfdSXRKm0DQyLmNXmNCNkZpjy2o5q1Hk";
@@ -26,6 +28,7 @@ pub enum YikeRoomKind {
     OldLiveBoard,
     GameRoom,
     NewLiveRoom,
+    UniteRoom,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -240,25 +243,37 @@ pub fn fetch_live_detail_import_with_signature<T: ProviderTransport>(
 
 pub fn parse_live_list_json(response: &str) -> ProviderResult<YikeLivePage> {
     let root = parse_json(response, "Yike live list")?;
-    let status = object_i64(&root, "Status").unwrap_or(0);
-    if status != 1200 {
-        return Err(invalid_payload(
-            object_string(&root, "Message").unwrap_or_else(|| "Yike live list request failed".to_string()),
-        ));
-    }
-
-    let Some(result) = root.get("Result").and_then(Value::as_object) else {
-        return Ok(YikeLivePage {
-            since: 0,
-            games: Vec::new(),
-        });
-    };
-    let since = result.get("since").and_then(value_u64).unwrap_or(0);
-    let games = result
+    public_center::validate_status(&root, "Status", 1200)?;
+    let result = root
+        .get("Result")
+        .and_then(Value::as_object)
+        .ok_or_else(|| invalid_payload("Yike live list response is missing Result"))?;
+    let since = result
+        .get("since")
+        .and_then(value_u64)
+        .filter(|since| *since <= i64::MAX as u64)
+        .ok_or_else(|| invalid_payload("Yike live list response has an invalid cursor"))?;
+    let items = result
         .get("list")
         .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(YikeLiveGame::from_value).collect())
-        .unwrap_or_default();
+        .ok_or_else(|| invalid_payload("Yike live list response is missing list"))?;
+    let games = items
+        .iter()
+        .map(|item| {
+            let game = YikeLiveGame::from_value(item)
+                .ok_or_else(|| invalid_payload("Yike live list contains an invalid entry"))?;
+            if game.id == 0
+                || game.id > i64::MAX as u64
+                || game.hall > i64::MAX as u64
+                || game.room > i64::MAX as u64
+                || (game.room == 0 && game.hall != 0)
+                || !matches!(game.version, 1 | 2)
+            {
+                return Err(invalid_payload("Yike live list contains an invalid locator"));
+            }
+            Ok(game)
+        })
+        .collect::<ProviderResult<Vec<_>>>()?;
     Ok(YikeLivePage { since, games })
 }
 
@@ -277,92 +292,7 @@ pub fn import_live_detail_json(
 }
 
 pub fn parse_yike_url(raw_url: &str) -> ProviderResult<YikeUrlDescriptor> {
-    let mut url = require_non_blank(raw_url, "url")?.to_string();
-    if url.ends_with("/0/0") {
-        url.truncate(url.len() - 4);
-    }
-
-    if let Some(captures) = new_live_full().captures(&url) {
-        let id = captures[3].to_string();
-        return Ok(YikeUrlDescriptor {
-            provider: ProviderKind::Yike,
-            room_kind: YikeRoomKind::NewLiveRoom,
-            room_id: parse_u64_or(&captures[4], parse_u64_or(&id, 0)),
-            request_url: live_detail_url(&id),
-            id,
-        });
-    }
-
-    if let Some(captures) = new_live_short().captures(&url) {
-        let id = captures[3].to_string();
-        return Ok(YikeUrlDescriptor {
-            provider: ProviderKind::Yike,
-            room_kind: YikeRoomKind::NewLiveRoom,
-            room_id: parse_u64_or(&id, 0),
-            request_url: live_detail_url(&id),
-            id,
-        });
-    }
-
-    if let Some(captures) = old_live_full().captures(&url) {
-        let id = captures[3].to_string();
-        let parsed_room_id = parse_i64_or(&captures[4], -1);
-        let (room_kind, room_id) = if parsed_room_id < 0 {
-            (YikeRoomKind::OldLiveBoard, parse_u64_or(&id, 0))
-        } else {
-            (YikeRoomKind::OldLiveRoom, parsed_room_id as u64)
-        };
-        if !id.trim().is_empty() && room_id > 0 {
-            return Ok(YikeUrlDescriptor {
-                provider: ProviderKind::Yike,
-                room_kind,
-                id: id.clone(),
-                room_id,
-                request_url: format!("https://api.{}/golive/dtl?id={id}&flag=1", &captures[1]),
-            });
-        }
-    }
-
-    if let Some(captures) = old_live_short().captures(&url) {
-        let id = captures[3].to_string();
-        if !id.trim().is_empty() {
-            return Ok(YikeUrlDescriptor {
-                provider: ProviderKind::Yike,
-                room_kind: YikeRoomKind::OldLiveBoard,
-                room_id: parse_u64_or(&id, 0),
-                request_url: format!("https://api.{}/golive/dtl?id={id}", &captures[1]),
-                id,
-            });
-        }
-    }
-
-    if let Some(captures) = game_room().captures(&url) {
-        let room_id = parse_u64_or(&captures[3], 0);
-        if room_id > 0 {
-            return Ok(YikeUrlDescriptor {
-                provider: ProviderKind::Yike,
-                room_kind: YikeRoomKind::GameRoom,
-                id: captures[3].to_string(),
-                room_id,
-                request_url: format!("https://api.{}/golive/dtl?id={room_id}", &captures[1]),
-            });
-        }
-    }
-
-    if let Some(captures) = hall_room().captures(&url) {
-        let room_id = parse_u64_or(&captures[3], 0);
-        if room_id > 0 {
-            return Ok(YikeUrlDescriptor {
-                provider: ProviderKind::Yike,
-                room_kind: YikeRoomKind::GameRoom,
-                id: captures[3].to_string(),
-                room_id,
-                request_url: format!("https://api.{}/golive/dtl?id={room_id}", &captures[1]),
-            });
-        }
-    }
-
-    Err(invalid_url("unsupported Yike URL"))
+    public_center::parse_descriptor(raw_url)
 }
 
 pub fn import_payload(request: ProviderImportRequest) -> ProviderResult<ProviderImportResult> {
@@ -376,7 +306,7 @@ pub fn import_payload(request: ProviderImportRequest) -> ProviderResult<Provider
     let provider_result = metadata.extra.get("provider_result").cloned();
     Ok(ProviderImportResult {
         provider: ProviderKind::Yike,
-        sgf_text: without_variations(&sgf_text),
+        sgf_text,
         summary: ProviderGameSummary {
             provider: ProviderKind::Yike,
             source_id,
@@ -388,27 +318,12 @@ pub fn import_payload(request: ProviderImportRequest) -> ProviderResult<Provider
     })
 }
 
-pub fn without_variations(sgf: &str) -> String {
-    if sgf.is_empty() {
-        return sgf.to_string();
-    }
-    let Some(start) = sgf.find('(') else {
-        return sgf.to_string();
-    };
-    let chars: Vec<char> = sgf.chars().collect();
-    match parse_game_tree(&chars, start) {
-        Some((text, _)) => text,
-        None => sgf.to_string(),
-    }
-}
-
 fn extract_sgf_payload(payload: &str) -> ProviderResult<(String, ProviderGameMetadata)> {
     if payload.trim_start().starts_with('(') {
         return Ok((payload.trim().to_string(), ProviderGameMetadata::default()));
     }
 
-    let json: Value = serde_json::from_str(payload)
-        .map_err(|err| invalid_payload(format!("failed to parse Yike payload JSON: {err}")))?;
+    let json = parse_json(payload, "Yike payload")?;
     if let Some(detail) = extract_live_detail_value(&json)? {
         let mut metadata = ProviderGameMetadata {
             provider_status: Some(detail.status.to_string()),
@@ -422,42 +337,12 @@ fn extract_sgf_payload(payload: &str) -> ProviderResult<(String, ProviderGameMet
         return Ok((detail.sgf, metadata));
     }
 
-    let sgf = first_json_string(&json, &["sgf", "clean_sgf", "chess"])
-        .ok_or_else(|| invalid_payload("Yike payload does not contain sgf or clean_sgf"))?;
-    let mut metadata = ProviderGameMetadata::default();
-    if let Some(status) = first_json_string(&json, &["status", "Status"]) {
-        metadata.provider_status = Some(status);
-    }
-    if let Some(result) = first_json_string(&json, &["game_result", "result", "Result"]) {
-        metadata.extra.insert("provider_result".to_string(), result);
-    }
-    Ok((sgf, metadata))
-}
-
-fn first_json_string(value: &Value, keys: &[&str]) -> Option<String> {
-    match value {
-        Value::Object(map) => {
-            for key in keys {
-                if let Some(value) = map.get(*key).and_then(json_scalar_string) {
-                    if !value.trim().is_empty() {
-                        return Some(value);
-                    }
-                }
-            }
-            map.values().find_map(|value| first_json_string(value, keys))
-        }
-        Value::Array(values) => values.iter().find_map(|value| first_json_string(value, keys)),
-        _ => None,
-    }
-}
-
-fn json_scalar_string(value: &Value) -> Option<String> {
-    match value {
-        Value::String(value) => Some(value.trim().to_string()),
-        Value::Number(value) => Some(value.to_string()),
-        Value::Bool(value) => Some(value.to_string()),
-        _ => None,
-    }
+    let sgf = json
+        .get("chess")
+        .and_then(Value::as_str)
+        .filter(|sgf| !sgf.trim().is_empty())
+        .ok_or_else(|| invalid_payload("Yike payload does not contain supported SGF data"))?;
+    Ok((sgf.to_string(), ProviderGameMetadata::default()))
 }
 
 fn merge_metadata(target: &mut ProviderGameMetadata, source: ProviderGameMetadata) {
@@ -489,12 +374,8 @@ fn signed_get_request(
 }
 
 fn ensure_http_success(result: &ProviderFetchResult, context: &str) -> ProviderResult<()> {
-    if result.status_code >= 400 {
-        return Err(transport_failed(format!(
-            "{context}: HTTP {} {}",
-            result.status_code,
-            result.payload.trim()
-        )));
+    if !(200..300).contains(&result.status_code) {
+        return Err(public_center::http_error(result.status_code, context));
     }
     Ok(())
 }
@@ -520,7 +401,7 @@ fn detail_to_import_result(
 
     Ok(ProviderImportResult {
         provider: ProviderKind::Yike,
-        sgf_text: without_variations(&sgf_text),
+        sgf_text,
         summary: ProviderGameSummary {
             provider: ProviderKind::Yike,
             source_id,
@@ -533,29 +414,47 @@ fn detail_to_import_result(
 }
 
 fn parse_json(response: &str, label: &str) -> ProviderResult<Value> {
-    serde_json::from_str(response)
-        .map_err(|err| invalid_payload(format!("failed to parse {label} JSON: {err}")))
+    serde_json::from_str(response).map_err(|_| invalid_payload(format!("malformed {label} JSON")))
 }
 
 fn parse_live_detail_value(root: &Value) -> ProviderResult<YikeLiveDetail> {
-    let status = object_i64(root, "status").unwrap_or(-1);
-    if status != 0 {
-        return Err(invalid_payload(
-            object_string(root, "message").unwrap_or_else(|| "Yike live detail request failed".to_string()),
-        ));
-    }
+    public_center::validate_status(root, "status", 0)?;
     let result = root
         .get("result")
+        .filter(|result| result.is_object())
         .ok_or_else(|| invalid_payload("Yike live detail response does not contain result"))?;
-    Ok(YikeLiveDetail::from_value(result))
+    let detail = YikeLiveDetail::from_value(result);
+    if detail.sgf.trim().is_empty() {
+        return Err(invalid_payload("Yike live detail response is missing SGF"));
+    }
+    Ok(detail)
 }
 
 fn extract_live_detail_value(value: &Value) -> ProviderResult<Option<YikeLiveDetail>> {
-    if value.get("result").is_some() && value.get("status").is_some() {
+    if value.get("Status").is_some() || value.get("Result").is_some() {
+        return public_center::parse_old_detail_value(value).map(Some);
+    }
+    if value.get("data").is_some() || value.get("code").is_some() {
+        return public_center::parse_unite_detail_value(value).map(Some);
+    }
+    if value.get("result").is_some()
+        || (value.get("status").is_some() && value.get("sgf").is_none() && value.get("clean_sgf").is_none())
+    {
         return parse_live_detail_value(value).map(Some);
     }
     if value.get("sgf").is_some() || value.get("clean_sgf").is_some() {
-        return Ok(Some(YikeLiveDetail::from_value(value)));
+        if value.get("status").is_some() {
+            let status = object_i64(value, "status")
+                .ok_or_else(|| invalid_payload("Yike payload has an invalid status"))?;
+            if !(0..=3).contains(&status) {
+                public_center::validate_status(value, "status", 0)?;
+            }
+        }
+        let detail = YikeLiveDetail::from_value(value);
+        if detail.sgf.trim().is_empty() {
+            return Err(invalid_payload("Yike payload is missing SGF"));
+        }
+        return Ok(Some(detail));
     }
     Ok(None)
 }
@@ -564,10 +463,19 @@ impl YikeLiveGame {
     fn from_value(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
         Some(Self {
-            id: object.get("Id").and_then(value_u64).unwrap_or(0),
-            version: object.get("Version").and_then(value_u64).unwrap_or(1),
-            hall: object.get("hall").and_then(value_u64).unwrap_or(0),
-            room: object.get("room").and_then(value_u64).unwrap_or(0),
+            id: object.get("Id").and_then(value_u64)?,
+            version: match object.get("Version") {
+                Some(value) => value_u64(value)?,
+                None => 1,
+            },
+            hall: match object.get("hall") {
+                Some(value) => value_u64(value)?,
+                None => 0,
+            },
+            room: match object.get("room") {
+                Some(value) => value_u64(value)?,
+                None => 0,
+            },
             status: object.get("Status").and_then(value_i64).unwrap_or(0),
             game_name: object.get("GameName").and_then(value_string).unwrap_or_default(),
             black_name: object.get("BlackName").and_then(value_string).unwrap_or_default(),
@@ -611,10 +519,11 @@ impl YikeLiveDetail {
     fn from_value(value: &Value) -> Self {
         let sgf = value
             .get("sgf")
-            .and_then(value_string)
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| value.get("clean_sgf").and_then(value_string))
-            .unwrap_or_default();
+            .and_then(Value::as_str)
+            .filter(|sgf| !sgf.trim().is_empty())
+            .or_else(|| value.get("clean_sgf").and_then(Value::as_str))
+            .unwrap_or_default()
+            .to_string();
         Self {
             sgf,
             status: object_i64(value, "status").unwrap_or(0),
@@ -925,115 +834,6 @@ fn hex_lower(bytes: &[u8]) -> String {
     output
 }
 
-fn parse_game_tree(chars: &[char], start: usize) -> Option<(String, usize)> {
-    if chars.get(start) != Some(&'(') {
-        return None;
-    }
-
-    let mut output = String::from("(");
-    let mut in_value = false;
-    let mut escaping = false;
-    let mut copied_first_child_tree = false;
-    let mut index = start + 1;
-    while index < chars.len() {
-        let current = chars[index];
-        if in_value {
-            output.push(current);
-            if escaping {
-                escaping = false;
-            } else if current == '\\' {
-                escaping = true;
-            } else if current == ']' {
-                in_value = false;
-            }
-            index += 1;
-            continue;
-        }
-
-        if current == '[' {
-            in_value = true;
-            output.push(current);
-            index += 1;
-            continue;
-        }
-
-        if current == '(' {
-            let (child, next_index) = parse_game_tree(chars, index)?;
-            if !copied_first_child_tree {
-                output.push_str(child.strip_prefix('(')?.strip_suffix(')')?);
-                copied_first_child_tree = true;
-            }
-            index = next_index;
-            continue;
-        }
-
-        if current == ')' {
-            output.push(current);
-            return Some((output, index + 1));
-        }
-
-        output.push(current);
-        index += 1;
-    }
-
-    None
-}
-
-fn parse_u64_or(value: &str, fallback: u64) -> u64 {
-    value.parse::<u64>().unwrap_or(fallback)
-}
-
-fn parse_i64_or(value: &str, fallback: i64) -> i64 {
-    value.parse::<i64>().unwrap_or(fallback)
-}
-
-fn new_live_full() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| {
-        Regex::new(r"(?s)^https?://.*?([^./]+\.[^./]+)/.*?(live/new-room/)([^/]+)/[0-9]+/([^/\s]+).*$")
-            .expect("valid Yike regex")
-    })
-}
-
-fn new_live_short() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| {
-        Regex::new(r"(?s)^https?://.*?([^./]+\.[^./]+)/.*?(live/new-room/)([^/\s]+)$")
-            .expect("valid Yike regex")
-    })
-}
-
-fn old_live_full() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| {
-        Regex::new(r"(?s)^https?://.*?([^./]+\.[^./]+)/.*?(live/room/)([^/]+)/[0-9]+/([^/\s]+).*$")
-            .expect("valid Yike regex")
-    })
-}
-
-fn old_live_short() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| {
-        Regex::new(r"(?s)^https?://.*?([^./]+\.[^./]+)/.*?(live/room/)([^/\s]+)$").expect("valid Yike regex")
-    })
-}
-
-fn game_room() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| {
-        Regex::new(r"(?s)^https?://.*?([^./]+\.[^./]+)/.*?(game/[a-zA-Z]+/)[0-9]+/([^/\s]+).*$")
-            .expect("valid Yike regex")
-    })
-}
-
-fn hall_room() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| {
-        Regex::new(r"(?s)^https?://.*?([^./]+\.[^./]+)/.*?(room=)([0-9]+)(&hall).*$")
-            .expect("valid Yike regex")
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1148,7 +948,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result.sgf_text, "(;GM[1]SZ[19];B[aa];W[bb])");
+        assert_eq!(result.sgf_text, "(;GM[1]SZ[19];B[aa](;W[bb])(;W[cc]))");
         assert_eq!(result.summary.source_id.as_deref(), Some("186031"));
         assert_eq!(result.summary.result.as_deref(), Some("W+2.5"));
         assert_eq!(result.metadata.provider_status.as_deref(), Some("3"));
@@ -1321,10 +1121,17 @@ mod tests {
     }
 
     #[test]
-    fn keeps_first_variation_as_mainline_and_drops_siblings() {
-        let sgf = "(;GM[1]SZ[19];B[aa](;W[bb];B[cc])(;W[dd];B[ee]);W[ff])";
-
-        assert_eq!(without_variations(sgf), "(;GM[1]SZ[19];B[aa];W[bb];B[cc];W[ff])");
+    fn import_payload_preserves_complete_source_tree_and_properties() {
+        let sgf = "(;GM[1]SZ[19]PB[Black]C[metadata];B[aa](;W[bb];B[cc])(;W[dd]C[branch];B[ee]))";
+        let result = import_payload(ProviderImportRequest {
+            provider: ProviderKind::Yike,
+            payload: sgf.to_string(),
+            source_url: None,
+            source_id: None,
+            metadata: ProviderGameMetadata::default(),
+        })
+        .unwrap();
+        assert_eq!(result.sgf_text, sgf);
     }
 
     #[test]
@@ -1341,7 +1148,7 @@ mod tests {
 
         assert_eq!(result.provider, ProviderKind::Yike);
         assert_eq!(result.summary.source_id.as_deref(), Some("186031"));
-        assert_eq!(result.sgf_text, "(;GM[1]SZ[19];B[aa];W[bb])");
+        assert_eq!(result.sgf_text, "(;GM[1]SZ[19];B[aa](;W[bb])(;W[cc]))");
     }
 
     fn fetch_result(status_code: u16, payload: &str) -> ProviderFetchResult {

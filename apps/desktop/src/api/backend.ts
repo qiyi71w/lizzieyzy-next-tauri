@@ -1,3 +1,4 @@
+import type { ProviderRequestIdentity } from "../domain/providers";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -160,12 +161,13 @@ export const nativeCurrentGameUnavailable =
 
 export async function prepareDocumentReplacement(
   sgfText: string,
-  nativePath: string | null
+  nativePath: string | null,
+  networkIdentity?: ProviderRequestIdentity
 ): Promise<DocumentDepartureAdmissionDto> {
   if (!isTauriRuntime()) {
     throw new Error(nativeCurrentGameUnavailable);
   }
-  return invoke<DocumentDepartureAdmissionDto>("prepare_document_replacement", { sgfText, nativePath });
+  return invoke<DocumentDepartureAdmissionDto>("prepare_document_replacement", { sgfText, nativePath, networkIdentity: networkIdentity ?? null });
 }
 
 export async function resolveDocumentReplacement(input: {

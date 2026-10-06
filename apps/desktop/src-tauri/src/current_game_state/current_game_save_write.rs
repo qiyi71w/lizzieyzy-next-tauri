@@ -151,7 +151,7 @@ fn current_game_save_as_redirect_does_not_write_or_adopt() {
             requested: "/denied-acl/denied.sgf".to_string(),
             redirected: redirected.to_string_lossy().into_owned(),
         },
-        edited.selected_path.clone(),
+        state.capture_save_snapshot(edited.selected_path.clone()).unwrap(),
     )
     .unwrap_err();
 
