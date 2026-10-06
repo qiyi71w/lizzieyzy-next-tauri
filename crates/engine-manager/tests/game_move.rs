@@ -29,6 +29,9 @@ struct Rig {
 }
 impl Rig {
     fn new(kata: bool, mode: &str) -> Self {
+        Self::with_cleanup_timeout(kata, mode, Duration::from_millis(150))
+    }
+    fn with_cleanup_timeout(kata: bool, mode: &str, stop_drain_timeout: Duration) -> Self {
         let dir = std::env::temp_dir().join(format!("r8-move-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("mode"), mode).unwrap();
@@ -74,7 +77,7 @@ impl Rig {
         let manager = ForegroundEngineManager::new(
             catalog.clone(),
             ForegroundEngineConfig {
-                stop_drain_timeout: Duration::from_millis(150),
+                stop_drain_timeout,
                 ..ForegroundEngineConfig::for_tests()
             },
         );
@@ -986,9 +989,9 @@ fn match_abort_during_handshake_keeps_old_process_and_releases_candidate() {
         let manager = rig.manager.clone();
         let request = rig.request(3000);
         let preparing = std::thread::spawn(move || {
-            assert!(manager
+            manager
                 .prepare_reserved_match("handshake", "second", &request.position, request.identity.budget)
-                .is_err());
+                .unwrap_err()
         });
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
@@ -999,13 +1002,79 @@ fn match_abort_during_handshake_keeps_old_process_and_releases_candidate() {
             assert!(Instant::now() < deadline, "candidate never spawned");
             std::thread::sleep(Duration::from_millis(2));
         }
-        rig.manager.abort_reserved_match("handshake").unwrap();
-        preparing.join().unwrap();
+        // Cleanup has a fixed budget, not a guarantee that SIGKILL has been scheduled.
+        abort_candidate_with_retry(&rig, "handshake");
+        let failure = preparing.join().unwrap();
+        assert_eq!(failure.kind, EngineFailureKind::Cancellation);
         rig.reaped();
         assert!(std::path::Path::new(&format!("/proc/{old_pid}")).exists());
         assert_eq!(rig.manager.match_reservation_owner(), None);
         assert!(matches!(rig.manager.snapshot().lifecycle,
             ForegroundEngineLifecycleDto::Ready { run } if run.run_id == rig.run));
+    }
+}
+
+fn abort_candidate_with_retry(rig: &Rig, owner: &str) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while let Err(failure) = rig.manager.abort_reserved_match(owner) {
+        assert_eq!(failure.kind, EngineFailureKind::Timeout, "{failure:?}");
+        assert_eq!(failure.operation, EngineOperationDto::Job);
+        assert_eq!(failure.profile_id.as_deref(), Some("second"));
+        assert!(failure.run_id.as_ref().is_some_and(|run| run != &rig.run));
+        assert!(matches!(rig.manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::Ready { run } if run.run_id == rig.run));
+        assert!(
+            Instant::now() < deadline,
+            "candidate cleanup did not finish: {failure:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn match_abort_unconfirmed_cleanup_retains_reservation_until_retry_reaps_candidate() {
+    for kata in [false, true] {
+        let rig = Rig::with_cleanup_timeout(kata, "normal", Duration::ZERO);
+        let old_pid = std::fs::read_to_string(rig.dir.join("pid")).unwrap();
+        rig.manager.reserve_match("cleanup").unwrap();
+        let request = rig.request(3000);
+        let candidate = rig
+            .manager
+            .prepare_reserved_match("cleanup", "second", &request.position, request.identity.budget)
+            .unwrap();
+
+        // A live candidate and no observation budget force the unconfirmed-kill path.
+        let failure = rig.manager.abort_reserved_match("cleanup").unwrap_err();
+        assert_eq!(failure.kind, EngineFailureKind::Timeout);
+        assert_eq!(failure.operation, EngineOperationDto::Job);
+        assert_eq!(failure.run_id.as_deref(), Some(candidate.run_id.as_str()));
+        assert_eq!(failure.profile_id.as_deref(), Some("second"));
+        assert_eq!(rig.manager.match_reservation_owner().as_deref(), Some("cleanup"));
+        assert!(rig.manager.reserve_match("replacement").is_err());
+        assert!(rig.manager.start("engine").is_err());
+        assert!(rig.manager.assert_profile_deletable("second").is_err());
+        assert!(matches!(rig.manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::Ready { run } if run.run_id == rig.run));
+
+        abort_candidate_with_retry(&rig, "cleanup");
+        rig.reaped();
+        assert!(std::path::Path::new(&format!("/proc/{old_pid}")).exists());
+        assert_eq!(rig.manager.match_reservation_owner(), None);
+        rig.manager.assert_profile_deletable("second").unwrap();
+        rig.manager.reserve_match("replacement").unwrap();
+        rig.manager.abort_reserved_match("replacement").unwrap();
+
+        // This rig also gives teardown zero observation time; explicitly finish reaping it.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while let Err(failure) = rig.manager.teardown() {
+            assert_eq!(failure.kind, EngineFailureKind::Timeout, "{failure:?}");
+            assert!(
+                Instant::now() < deadline,
+                "old engine cleanup did not finish: {failure:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!std::path::Path::new(&format!("/proc/{old_pid}")).exists());
     }
 }
 

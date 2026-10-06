@@ -14,6 +14,7 @@
 - Kept an admitted external-sync candidate owned by its protected replacement transaction: late Start cancellation cannot remove it during commit, and the readboard Cancel control is disabled throughout that phase.
 - Reset discarded pending readboard snapshot state while preserving Sync candidates; retain the original Start error when cancellation cleanup fails, and reserve the cleanup-failure diagnostic for the matching runtime phase.
 - Treat Windows WPAD-only discovery absence (`12180`) as permission to evaluate static system proxy/bypass settings; configured PAC and selected-route failures remain terminal. Corrected native request-error callback dispatch so WinHTTP failures reach this decision.
+- Corrected the controlled-engine handshake-cancellation test to exercise bounded Retry Stop when cleanup cannot yet be confirmed, without changing its 150ms cleanup budget or production behavior. Added zero-budget coverage for retained reservation/profile protection and release only after confirmed reaping.
 
 - Added the Yike public center with Recommend/Local pagination, cancellable record and URL previews, complete-tree SGF-07 imports, and a persisted public locator. Current public-source business acceptance is complete under the approved legacy-link scope; platform and installed-network admission remain separate.
 - Fixed unite public previews with operation-local anonymous access and canonical home-site links; reject non-Go games and mismatched room responses before import. Preserve separately supplied player/result metadata through SGF import and Save/reopen without replacing existing source properties.
@@ -57,6 +58,7 @@
 - 修复同步启动取消与受保护棋局替换之间的竞态：进入提交阶段后保留待安装候选，readboard 的“取消启动”在该阶段禁用。
 - 丢弃 readboard 待安装候选时重置快照上下文，Sync 控制保留候选；取消清理失败不覆盖原始启动错误，清理失败诊断仅用于对应 runtime 阶段。
 - Windows 仅在启用 WPAD、未配置 PAC URL 且返回 `12180` 时继续判断静态系统代理及 bypass；显式 PAC 和已选路由失败仍为终止错误。修正原生 request-error 回调常量，使 WinHTTP 错误进入该决策。
+- 修正受控引擎握手取消测试：首次未确认回收时验证有界 Retry Stop，保留150ms回收预算及生产行为；新增零预算用例，检查 reservation／profile 占用保护与确认回收后才释放的契约。
 
 - 新增 Yike 公共中心：Recommend／Local 分页、可取消的选局与 URL 预览、完整来源树的 SGF-07 一次性导入及公开 locator 持久化。按批准的历史链接范围修订完成当前公开来源业务验收；平台与 installed 网络仍单独准入。
 - 修复 unite 公开预览：使用操作内匿名访问及主站网页链接，在导入前拒绝非围棋与房间身份不匹配的响应；将独立返回的棋手与结果补入 SGF，导入和保存重开后仍保留，且不覆盖来源已有字段。
