@@ -1104,6 +1104,119 @@ fn readboard_session(state: &CurrentGameState, generation: u64) -> u64 {
 }
 
 #[test]
+fn pending_readboard_sync_control_preserves_the_received_candidate() {
+    let state = CurrentGameState::default();
+    state.replace(LOCAL_3, None).unwrap();
+    let id = state
+        .begin_readboard_start(
+            &runtime(7, app_model::ReadboardPhaseDto::Ready),
+            app_model::ReadboardSyncPreferencesDto::default(),
+        )
+        .unwrap();
+    state
+        .observe_readboard_frame(7, &board(["100", "040", "000"]))
+        .unwrap();
+    state
+        .readboard_control(7, go_core::ReadboardControl::Sync)
+        .unwrap();
+    let candidate = state.prepare_readboard_candidate(id, Duration::ZERO).unwrap();
+    let departure = departure_id(candidate.admission);
+    state.begin_protected_commit(departure, &[]).unwrap();
+    assert!(state.commit_replacement(departure).unwrap().committed);
+    assert_eq!(
+        state.serialize().unwrap(),
+        normalized("(;GM[1]FF[4]SZ[3]PB[Local];B[aa];W[bb])")
+    );
+    assert_eq!(
+        state
+            .external_sync_snapshot()
+            .readboard
+            .unwrap()
+            .source_move_number,
+        Some(2)
+    );
+}
+
+#[test]
+fn pending_readboard_clear_discards_the_candidates_move_number_context() {
+    let state = CurrentGameState::default();
+    let original = "(;SZ[3];B[aa];W[ba])";
+    state.replace(original, None).unwrap();
+    let id = state
+        .begin_readboard_start(
+            &runtime(7, app_model::ReadboardPhaseDto::Ready),
+            app_model::ReadboardSyncPreferencesDto::default(),
+        )
+        .unwrap();
+    let mut discarded = board(["000", "110", "000"]);
+    discarded.context = go_core::ReadboardRemoteContext::generic(true);
+    state.observe_readboard_frame(7, &discarded).unwrap();
+    state
+        .readboard_control(7, go_core::ReadboardControl::Clear)
+        .unwrap();
+    state
+        .observe_readboard_frame(7, &board(["140", "000", "000"]))
+        .unwrap();
+    assert_eq!(state.serialize().unwrap(), normalized(original));
+    let candidate = state.prepare_readboard_candidate(id, Duration::ZERO).unwrap();
+    let departure = departure_id(candidate.admission);
+    state.begin_protected_commit(departure, &[]).unwrap();
+    let installed = state.commit_replacement(departure).unwrap();
+    assert!(installed.committed);
+    assert_eq!(installed.current.unwrap().selected_path, path(&[0, 0]));
+    assert_eq!(state.serialize().unwrap(), normalized(original));
+    assert_eq!(
+        state
+            .external_sync_snapshot()
+            .readboard
+            .unwrap()
+            .source_move_number,
+        Some(2)
+    );
+}
+
+#[test]
+fn pending_readboard_clear_board_survives_start_before_the_first_frame() {
+    let state = CurrentGameState::default();
+    let original = "(;SZ[3]PB[Alice];B[aa];W[ba])";
+    state.replace(original, None).unwrap();
+    let id = state
+        .begin_readboard_start(
+            &runtime(7, app_model::ReadboardPhaseDto::Ready),
+            app_model::ReadboardSyncPreferencesDto::default(),
+        )
+        .unwrap();
+    state
+        .readboard_control(7, go_core::ReadboardControl::ClearBoard)
+        .unwrap();
+    state
+        .readboard_control(7, go_core::ReadboardControl::Start { size: Some((3, 3)) })
+        .unwrap();
+    state
+        .observe_readboard_frame(7, &board(["140", "000", "000"]))
+        .unwrap();
+    assert_eq!(state.serialize().unwrap(), normalized(original));
+    let candidate = state.prepare_readboard_candidate(id, Duration::ZERO).unwrap();
+    let departure = departure_id(candidate.admission);
+    state.begin_protected_commit(departure, &[]).unwrap();
+    let installed = state.commit_replacement(departure).unwrap();
+    assert!(installed.committed);
+    let current = installed.current.unwrap();
+    assert_eq!(current.selected_path, path(&[]));
+    assert!(current.tree.children.is_empty());
+    let properties = current
+        .tree
+        .properties
+        .into_iter()
+        .map(|property| (property.key, property.values))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(properties.get("AB").unwrap(), &["aa"]);
+    assert_eq!(properties.get("AW").unwrap(), &["ba"]);
+    assert_eq!(properties.get("PL").unwrap(), &["B"]);
+    assert!(!properties.contains_key("PB"));
+}
+
+#[test]
 fn protected_readboard_start_cannot_be_cancelled_before_atomic_install() {
     let state = CurrentGameState::default();
     state.replace(LOCAL_3, None).unwrap();

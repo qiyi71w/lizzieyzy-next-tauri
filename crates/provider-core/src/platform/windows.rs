@@ -11,6 +11,12 @@ use super::Route;
 use crate::{provider_error, runtime_unavailable, timeout};
 use app_model::ProviderErrorKind;
 
+const ERROR_OPERATION_ABORTED: u32 = 995;
+const ERROR_OPERATION_CANCELLED: u32 = 1223;
+const ERROR_WINHTTP_LOGIN_FAILURE: u32 = 12015;
+const ERROR_WINHTTP_TIMEOUT: u32 = 12002;
+const ERROR_WINHTTP_AUTODETECTION_FAILED: u32 = 12180;
+
 /// Resolves the proxy route for a given target URL using Windows WinHTTP APIs.
 pub(crate) fn resolve(url: &str, cancelled: &AtomicBool, deadline: Instant) -> crate::ProviderResult<Route> {
     if cancelled.load(Ordering::Relaxed) {
@@ -211,6 +217,48 @@ fn format_proxy_url(raw: &str) -> StaticProxyMatch {
     }
 
     StaticProxyMatch::Proxy(format!("{scheme}://{s}"))
+}
+
+fn select_static_route(
+    target: &ParsedTargetUrl,
+    proxy_str: Option<&str>,
+    bypass_str: Option<&str>,
+) -> crate::ProviderResult<Route> {
+    let proxy_str = match proxy_str {
+        Some(s) if !s.trim().is_empty() => s,
+        _ => {
+            return Ok(Route {
+                proxy: None,
+                source: "windows-direct",
+            });
+        }
+    };
+
+    // Check static bypass list
+    if let Some(bypass) = bypass_str {
+        if !bypass.trim().is_empty() && matches_bypass_list(bypass, &target.host, target.port) {
+            return Ok(Route {
+                proxy: None,
+                source: "windows-direct",
+            });
+        }
+    }
+
+    // Select proxy based on target scheme (HTTP vs HTTPS)
+    match select_static_proxy(proxy_str, &target.scheme) {
+        StaticProxyMatch::Proxy(proxy_url) => Ok(Route {
+            proxy: Some(proxy_url),
+            source: "windows-system",
+        }),
+        StaticProxyMatch::Direct => Ok(Route {
+            proxy: None,
+            source: "windows-direct",
+        }),
+        StaticProxyMatch::UnsupportedScheme => Err(provider_error(
+            ProviderErrorKind::ProxyFailed,
+            "unsupported proxy scheme",
+        )),
+    }
 }
 
 fn matches_bypass_list(bypass_str: &str, target_host: &str, target_port: u16) -> bool {
@@ -419,6 +467,27 @@ fn select_route_from_pac_entries(entries: &[PacResultEntry]) -> crate::ProviderR
     }
 }
 
+enum PacResolutionOutcome {
+    Route(Route),
+    AutodetectionFailed,
+}
+
+fn select_route_after_pac(
+    has_wpad: bool,
+    has_pac_url: bool,
+    result: crate::ProviderResult<PacResolutionOutcome>,
+    static_route: impl FnOnce() -> crate::ProviderResult<Route>,
+) -> crate::ProviderResult<Route> {
+    match result? {
+        PacResolutionOutcome::Route(route) => Ok(route),
+        PacResolutionOutcome::AutodetectionFailed if has_wpad && !has_pac_url => static_route(),
+        PacResolutionOutcome::AutodetectionFailed => Err(provider_error(
+            ProviderErrorKind::ProxyFailed,
+            "PAC resolution failed",
+        )),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Windows WinHTTP FFI and Native Implementation
 // ---------------------------------------------------------------------------
@@ -443,10 +512,6 @@ mod ffi {
 
     pub const ERROR_SUCCESS: DWORD = 0;
     pub const ERROR_IO_PENDING: DWORD = 997;
-    pub const ERROR_OPERATION_ABORTED: DWORD = 995;
-    pub const ERROR_OPERATION_CANCELLED: DWORD = 1223;
-    pub const ERROR_WINHTTP_LOGIN_FAILURE: DWORD = 12015;
-    pub const ERROR_WINHTTP_TIMEOUT: DWORD = 12002;
 
     pub const WINHTTP_ACCESS_TYPE_NO_PROXY: DWORD = 1;
     pub const WINHTTP_FLAG_ASYNC: DWORD = 0x10000000;
@@ -458,7 +523,7 @@ mod ffi {
     pub const WINHTTP_AUTO_DETECT_TYPE_DNS_A: DWORD = 0x00000002;
 
     pub const WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING: DWORD = 0x00000800;
-    pub const WINHTTP_CALLBACK_STATUS_REQUEST_ERROR: DWORD = 0x00020000;
+    pub const WINHTTP_CALLBACK_STATUS_REQUEST_ERROR: DWORD = 0x00200000;
     pub const WINHTTP_CALLBACK_STATUS_GETPROXYFORURL_COMPLETE: DWORD = 0x01000000;
 
     pub const WINHTTP_CALLBACK_FLAG_ALL_NOTIFICATIONS: DWORD = 0xffffffff;
@@ -820,50 +885,29 @@ fn winhttp_resolve(
     let pac_url = unsafe { wide_ptr_to_string(guard.0.lpszAutoConfigUrl) };
     let has_pac_url = pac_url.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false);
 
-    if has_wpad || has_pac_url {
-        // Dynamic PAC/WPAD resolution
-        return winhttp_resolve_pac(target, &guard, has_wpad, has_pac_url, cancelled, deadline);
-    }
-
-    // Static proxy evaluation
-    let proxy_str = unsafe { wide_ptr_to_string(guard.0.lpszProxy) };
-    let bypass_str = unsafe { wide_ptr_to_string(guard.0.lpszProxyBypass) };
-
-    let proxy_str = match proxy_str {
-        Some(s) if !s.trim().is_empty() => s,
-        _ => {
-            return Ok(Route {
-                proxy: None,
-                source: "windows-direct",
-            });
-        }
+    let static_route = || {
+        let proxy_str = unsafe { wide_ptr_to_string(guard.0.lpszProxy) };
+        let bypass_str = unsafe { wide_ptr_to_string(guard.0.lpszProxyBypass) };
+        select_static_route(target, proxy_str.as_deref(), bypass_str.as_deref())
     };
 
-    // Check static bypass list
-    if let Some(bypass) = bypass_str {
-        if !bypass.trim().is_empty() && matches_bypass_list(&bypass, &target.host, target.port) {
-            return Ok(Route {
-                proxy: None,
-                source: "windows-direct",
-            });
-        }
+    if has_wpad || has_pac_url {
+        let result = winhttp_resolve_pac(target, &guard, has_wpad, has_pac_url, cancelled, deadline);
+        return select_route_after_pac(has_wpad, has_pac_url, result, || {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(provider_error(
+                    ProviderErrorKind::Cancelled,
+                    "proxy resolution cancelled",
+                ));
+            }
+            if Instant::now() >= deadline {
+                return Err(timeout("proxy resolution timed out"));
+            }
+            static_route()
+        });
     }
 
-    // Select proxy based on target scheme (HTTP vs HTTPS)
-    match select_static_proxy(&proxy_str, &target.scheme) {
-        StaticProxyMatch::Proxy(proxy_url) => Ok(Route {
-            proxy: Some(proxy_url),
-            source: "windows-system",
-        }),
-        StaticProxyMatch::Direct => Ok(Route {
-            proxy: None,
-            source: "windows-direct",
-        }),
-        StaticProxyMatch::UnsupportedScheme => Err(provider_error(
-            ProviderErrorKind::ProxyFailed,
-            "unsupported proxy scheme",
-        )),
-    }
+    static_route()
 }
 
 #[cfg(target_os = "windows")]
@@ -874,7 +918,7 @@ fn winhttp_resolve_pac(
     has_pac_url: bool,
     cancelled: &AtomicBool,
     deadline: Instant,
-) -> crate::ProviderResult<Route> {
+) -> crate::ProviderResult<PacResolutionOutcome> {
     if cancelled.load(Ordering::Relaxed) {
         return Err(provider_error(
             ProviderErrorKind::Cancelled,
@@ -1040,15 +1084,17 @@ fn winhttp_resolve_pac(
     }
 
     match &guard.outcome {
-        ResolutionOutcome::Complete(entries) => select_route_from_pac_entries(entries),
+        ResolutionOutcome::Complete(entries) => {
+            select_route_from_pac_entries(entries).map(PacResolutionOutcome::Route)
+        }
         ResolutionOutcome::Error(err_code) => map_winhttp_error(*err_code),
         ResolutionOutcome::Pending => Err(timeout("proxy resolution timed out")),
     }
 }
 
-#[cfg(target_os = "windows")]
-fn map_winhttp_error<T>(code: u32) -> crate::ProviderResult<T> {
+fn map_winhttp_error(code: u32) -> crate::ProviderResult<PacResolutionOutcome> {
     match code {
+        ERROR_WINHTTP_AUTODETECTION_FAILED => Ok(PacResolutionOutcome::AutodetectionFailed),
         ERROR_OPERATION_CANCELLED | ERROR_OPERATION_ABORTED => Err(provider_error(
             ProviderErrorKind::Cancelled,
             "proxy resolution cancelled",
@@ -1225,5 +1271,191 @@ mod tests {
 
         // Empty entries must fail
         assert!(select_route_from_pac_entries(&[]).is_err());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn native_request_error_callback_preserves_autodetection_failure() {
+        let state = ResolverState {
+            mutex: std::sync::Mutex::new(ResolutionInner {
+                outcome: ResolutionOutcome::Pending,
+                handle_closed: false,
+            }),
+            condvar: std::sync::Condvar::new(),
+            closed_condvar: std::sync::Condvar::new(),
+        };
+        let mut result = WINHTTP_ASYNC_RESULT {
+            dwResult: 0,
+            dwError: 12180,
+        };
+        // Exercise the status emitted by the Windows SDK, not our local constant.
+        unsafe {
+            winhttp_status_callback(
+                std::ptr::null_mut(),
+                (&state as *const ResolverState) as DWORD_PTR,
+                0x00200000,
+                (&mut result as *mut WINHTTP_ASYNC_RESULT).cast(),
+                std::mem::size_of::<WINHTTP_ASYNC_RESULT>() as DWORD,
+            );
+        }
+        let guard = state.lock();
+        let ResolutionOutcome::Error(code) = guard.outcome else {
+            panic!("native request failure must complete the pending resolution");
+        };
+        assert!(matches!(
+            map_winhttp_error(code).unwrap(),
+            PacResolutionOutcome::AutodetectionFailed
+        ));
+    }
+
+    #[test]
+    fn test_wpad_absence_selects_static_proxy_bypass_or_direct_per_url() {
+        let proxy = Some("http=http-proxy.example:8080;https=https-proxy.example:8443");
+        let bypass = Some("*.example.com:8443");
+        for (url, proxy, bypass, expected_proxy, expected_source) in [
+            (
+                "http://api.example.com/record",
+                proxy,
+                bypass,
+                Some("http://http-proxy.example:8080"),
+                "windows-system",
+            ),
+            (
+                "https://api.example.com/record",
+                proxy,
+                bypass,
+                Some("http://https-proxy.example:8443"),
+                "windows-system",
+            ),
+            (
+                "https://api.example.com:8443/record",
+                proxy,
+                bypass,
+                None,
+                "windows-direct",
+            ),
+            (
+                "https://api.example.com/record",
+                Some("http=http-proxy.example:8080"),
+                None,
+                None,
+                "windows-direct",
+            ),
+            (
+                "https://api.example.com/record",
+                None,
+                None,
+                None,
+                "windows-direct",
+            ),
+        ] {
+            let target = parse_target_url(url).unwrap();
+            let route = select_route_after_pac(
+                true,
+                false,
+                map_winhttp_error(ERROR_WINHTTP_AUTODETECTION_FAILED),
+                || select_static_route(&target, proxy, bypass),
+            )
+            .unwrap();
+            assert_eq!(route.proxy.as_deref(), expected_proxy, "{url}");
+            assert_eq!(route.source, expected_source, "{url}");
+        }
+    }
+
+    #[test]
+    fn test_autodetection_failure_is_terminal_with_configured_pac_or_without_wpad() {
+        for (has_wpad, has_pac_url) in [(true, true), (false, true), (false, false)] {
+            let error = select_route_after_pac(
+                has_wpad,
+                has_pac_url,
+                map_winhttp_error(ERROR_WINHTTP_AUTODETECTION_FAILED),
+                || panic!("static routing must not run"),
+            )
+            .unwrap_err();
+            assert_eq!(error.kind, ProviderErrorKind::ProxyFailed);
+        }
+    }
+
+    #[test]
+    fn test_pac_errors_do_not_select_static_routes() {
+        for (code, expected_kind) in [
+            (12007, ProviderErrorKind::ProxyFailed), // Name resolution failure
+            (12166, ProviderErrorKind::ProxyFailed), // Bad PAC script
+            (12167, ProviderErrorKind::ProxyFailed), // PAC download failure
+            (
+                ERROR_WINHTTP_LOGIN_FAILURE,
+                ProviderErrorKind::AuthenticationFailed,
+            ),
+            (ERROR_WINHTTP_TIMEOUT, ProviderErrorKind::Timeout),
+            (ERROR_OPERATION_CANCELLED, ProviderErrorKind::Cancelled),
+            (ERROR_OPERATION_ABORTED, ProviderErrorKind::Cancelled),
+        ] {
+            for has_pac_url in [false, true] {
+                let error = select_route_after_pac(true, has_pac_url, map_winhttp_error(code), || {
+                    panic!("static routing must not run for error {code}")
+                })
+                .unwrap_err();
+                assert_eq!(error.kind, expected_kind, "{code}");
+            }
+        }
+
+        let error = select_route_after_pac(
+            true,
+            false,
+            Err(provider_error(ProviderErrorKind::ProxyFailed, "12180")),
+            || panic!("error messages must not authorize static routing"),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, ProviderErrorKind::ProxyFailed);
+    }
+
+    #[test]
+    fn test_pac_selected_routes_and_errors_do_not_select_static_routes() {
+        let proxy = PacResultEntry::Proxy {
+            scheme: "http",
+            host: "pac-proxy.example".into(),
+            port: 8080,
+        };
+        for (entries, expected_proxy) in [
+            (
+                vec![proxy.clone(), PacResultEntry::Direct],
+                Some("http://pac-proxy.example:8080"),
+            ),
+            (vec![PacResultEntry::Direct, proxy], None),
+        ] {
+            let route = select_route_after_pac(
+                true,
+                false,
+                select_route_from_pac_entries(&entries).map(PacResolutionOutcome::Route),
+                || panic!("selected PAC routes must take precedence"),
+            )
+            .unwrap();
+            assert_eq!(route.proxy.as_deref(), expected_proxy);
+            assert_eq!(route.source, "windows-pac");
+        }
+
+        for entries in [
+            vec![PacResultEntry::UnsupportedScheme, PacResultEntry::Direct],
+            vec![],
+        ] {
+            let error = select_route_after_pac(
+                true,
+                false,
+                select_route_from_pac_entries(&entries).map(PacResolutionOutcome::Route),
+                || panic!("selected PAC errors must remain terminal"),
+            )
+            .unwrap_err();
+            assert_eq!(error.kind, ProviderErrorKind::ProxyFailed);
+        }
+
+        let target = parse_target_url("https://example.com/record").unwrap();
+        let error = select_route_after_pac(
+            true,
+            false,
+            map_winhttp_error(ERROR_WINHTTP_AUTODETECTION_FAILED),
+            || select_static_route(&target, Some("socks://static-proxy.example:1080"), None),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, ProviderErrorKind::ProxyFailed);
     }
 }

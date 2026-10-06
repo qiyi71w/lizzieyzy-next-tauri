@@ -1011,8 +1011,13 @@ impl CurrentGameState {
                 self.external_sync_changed.notify_all();
                 return Some(holder.external_sync.snapshot());
             }
-            pending.sync.control(control);
-            pending.candidate = None;
+            if control != ReadboardControl::Sync {
+                if pending.candidate.take().is_some() {
+                    // The discarded candidate was never installed; its snapshot metadata is stale.
+                    pending.sync = ReadboardSync::new();
+                }
+                pending.sync.control(control);
+            }
         } else {
             let SyncSession {
                 source: SessionSource::Readboard(readboard),

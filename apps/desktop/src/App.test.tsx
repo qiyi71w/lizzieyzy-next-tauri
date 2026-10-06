@@ -399,6 +399,22 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("App external source switching", () => {
+  it("preserves the original readboard start error when cancellation also fails", async () => {
+    vi.spyOn(externalSyncApi, "subscribeExternalSync").mockResolvedValue(() => undefined);
+    let requestStart!: () => void;
+    vi.spyOn(externalSyncApi, "subscribeReadboardSyncRequests").mockImplementation(async (listener) => {
+      requestStart = listener;
+      return () => undefined;
+    });
+    vi.spyOn(externalSyncApi, "beginReadboardSync").mockResolvedValue(7);
+    vi.spyOn(externalSyncApi, "prepareReadboardSync").mockRejectedValue(new Error("Readboard frame deadline expired"));
+    vi.spyOn(externalSyncApi, "cancelExternalSyncStart").mockRejectedValue(new Error("Cancellation IPC unavailable"));
+    const host = await renderApp();
+    await act(async () => { requestStart(); });
+    expect(host.textContent).toContain("readboard 同步启动失败: Readboard frame deadline expired");
+    expect(host.textContent).not.toContain("Cancellation IPC unavailable");
+  });
+
   it("offers the dirty decision for a readboard tool Start during Yike and preserves Yike on Cancel", async () => {
     const sync: ExternalSyncSnapshot = {
       revision: 1, session_id: 4, starting_id: null, phase: "syncing", source: "yike",

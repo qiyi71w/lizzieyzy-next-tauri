@@ -35,7 +35,7 @@ export function phaseLabel(phase: ReadboardPhaseDto): string {
 
 function actionableDiagnostic(runtime: ReadboardRuntimeDto | null): string | null {
   if (!runtime) return null;
-  if (runtime.phase === "cleanup_failed" || (runtime.resources_held && runtime.phase !== "ready" && runtime.phase !== "starting")) {
+  if (runtime.phase === "cleanup_failed") {
     return "资源清理失败：旧进程或端口仍被占用，请点击“停止”重新清理。";
   }
   if (runtime.phase === "incompatible") {

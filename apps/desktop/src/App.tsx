@@ -1385,7 +1385,10 @@ export function App() {
       setMessage(outcome.message);
       if (outcome.committed && sync.session_id === id) await afterCommit?.(id);
     } catch (error) {
-      if (syncStartIdRef.current != null) await cancelExternalSyncStart(syncStartIdRef.current);
+      if (syncStartIdRef.current != null) {
+        try { await cancelExternalSyncStart(syncStartIdRef.current); }
+        catch { /* Cleanup failure must not replace the original start error. */ }
+      }
       if (!syncCancelRef.current) throw error;
     } finally {
       syncStartIdRef.current = null;

@@ -326,6 +326,27 @@ describe("ReadboardPanel", () => {
     expect(phaseEl?.textContent).toContain("连接断开 (disconnected)");
   });
 
+  it.each([
+    ["stopping", "Waiting for process exit"],
+    ["timeout", "超时"],
+    ["incompatible", "协议版本不兼容"],
+    ["exited", "进程已退出"],
+    ["disconnected", "连接已中断"]
+  ] as const)("preserves the %s diagnostic while resources are still held", async (phase, expected) => {
+    mockSnapshot.mockResolvedValue({
+      ...initialIdleRuntime,
+      phase,
+      resources_held: true,
+      message: "Waiting for process exit"
+    });
+    await renderPanel();
+    const diagnostic = host.querySelector('[aria-label="诊断信息"]');
+    expect(diagnostic?.textContent).toContain(expected);
+    expect(diagnostic?.textContent).not.toContain("资源清理失败");
+    expect(getButton("启动")?.disabled).toBe(true);
+    expect(getButton("停止")?.disabled).toBe(phase === "stopping");
+  });
+
   it("shows actionable diagnostic and allows Stop when cleanup failed with held resources", async () => {
     const cleanupFailedRuntime: ReadboardRuntimeDto = {
       generation: 1,
