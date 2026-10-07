@@ -46,7 +46,7 @@ export async function saveAppPreferences(preferences: AppPreferences): Promise<A
   const normalized = normalizeAppPreferences(preferences);
   if (!isTauriRuntime()) {
     const latest = loadBrowserPreferences().preferences;
-    const saved = { ...normalized, workspaceShares: latest.workspaceShares, windowGeometry: latest.windowGeometry, workspaceVisibility: latest.workspaceVisibility, recentGamePaths: latest.recentGamePaths };
+    const saved = { ...normalized, workspaceShares: latest.workspaceShares, windowGeometry: latest.windowGeometry, workspaceVisibility: latest.workspaceVisibility, recentGamePaths: latest.recentGamePaths, recentImageExportDirectory: latest.recentImageExportDirectory };
     saveBrowserPreferences(saved);
     return saved;
   }

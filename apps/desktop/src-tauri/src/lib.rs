@@ -37,6 +37,7 @@ mod file_activation;
 mod human_match;
 mod readboard;
 mod save_as;
+mod export;
 mod session_recovery;
 #[cfg(windows)]
 extern crate windows_core;
@@ -1072,6 +1073,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            export::export_selected_line,
+            export::export_rendered_image,
             external_sync::external_sync_snapshot,
             external_sync::load_yike_sync_preferences,
             external_sync::save_yike_sync_preferences,

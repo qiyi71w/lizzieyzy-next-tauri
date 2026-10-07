@@ -18,6 +18,7 @@ members = [
   "crates/current-game-recovery",
   "crates/storage",
   "crates/save-as-dialog",
+  "crates/image-export",
 ]
 
 [workspace.package]

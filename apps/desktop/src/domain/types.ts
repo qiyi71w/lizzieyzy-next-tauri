@@ -1,3 +1,5 @@
+export type ExportConfirmationDto = { title: string; message: string };
+
 export type WorkspaceSharesDto = { left: number; right: number };
 
 export type WindowGeometryDto = {

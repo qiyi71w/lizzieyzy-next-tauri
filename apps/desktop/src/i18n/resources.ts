@@ -1,5 +1,14 @@
 // Complete compatibility resource. New consumers add their keys here before use.
 export const baseResources = {
+  "action.file.export-branch": "保存当前分支",
+  "action.file.export-board": "保存主棋盘截图",
+  "export.noSurface": "当前主棋盘尚无可导出的已绘制图像。",
+  "export.invalidLine": "所选线路已失效。",
+  "export.cancelled": "导出已取消。",
+  "export.saved": "已导出：",
+  "export.failed": "导出失败：",
+  "export.overwriteTitle": "确认覆盖",
+  "export.overwritePrompt": "目标文件已存在，是否替换？",
   "search.title": "功能搜索",
   "search.placeholder": "搜索功能、设置、拼音或英文…",
   "search.hint": "离线检索 · ↑↓ 选择 · Enter 执行 · Escape 取消",

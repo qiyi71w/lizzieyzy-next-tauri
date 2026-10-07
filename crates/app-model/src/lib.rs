@@ -163,6 +163,12 @@ pub struct FileActivationRejectionDto {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportConfirmationDto {
+    pub title: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct NodePath {
     pub indices: Vec<u32>,

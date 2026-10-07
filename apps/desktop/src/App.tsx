@@ -4,6 +4,7 @@ import { useWorkspace } from "./workspace/useWorkspace";
 import { acceptedMoveSound } from "./domain/acceptedMoveSound";
 import { playMoveSound } from "./domain/moveSound";
 import { BoardCanvas } from "./components/BoardCanvas";
+import { captureRenderedSurface, chosenLeaf, exportRenderedImage, exportSelectedLine } from "./api/export";
 import { ScoringControls } from "./components/ScoringControls";
 import { WinrateChart } from "./components/WinrateChart";
 import { ReviewTree } from "./components/ReviewTree";
@@ -198,6 +199,8 @@ const defaultAnalysisScopeDraft: AnalysisScopeDraft = {
 
 
 export function App() {
+  const mainboardSurfaceRef = useRef<HTMLCanvasElement | null>(null);
+  const exportPendingRef = useRef(false);
   const [health, setHealth] = useState<AppHealthDto | null>(null);
   const [game, setGame] = useState<GameDto>(() => demoGame);
   const [positions, setPositions] = useState<PositionDto[]>(() => replayGamePositions(demoGame));
@@ -838,6 +841,8 @@ export function App() {
     shortcutRegistry.bind("file.save-as", () => {
       if (nativeRuntime && !fileFlowBusy && !departurePending && !matchStarting) void handleSaveSgfDocument(true);
     });
+    shortcutRegistry.bind("file.export-branch", () => void handleExportBranch());
+    shortcutRegistry.bind("file.export-board", () => void handleExportBoard());
     shortcutRegistry.bind("file.copy-sgf", () => {
       void handleCopySgf();
     });
@@ -2488,6 +2493,31 @@ export function App() {
     }
   }
 
+  async function handleExportBranch() {
+    const current = currentGameRef.current;
+    if (!nativeRuntime || !current || exportPendingRef.current || departurePendingRef.current) return;
+    exportPendingRef.current = true;
+    try {
+      const leaf = chosenLeaf(current.tree, current.selected_path, chosenChildren);
+      const path = await exportSelectedLine(current.generation, current.selected_path, leaf);
+      setMessage(path ? `${t("export.saved")}${path}` : t("export.cancelled"));
+    } catch (error) {
+      setMessage(`${t("export.failed")}${errorMessage(error)}`);
+    } finally { exportPendingRef.current = false; }
+  }
+
+  async function handleExportBoard() {
+    if (!nativeRuntime || exportPendingRef.current || departurePendingRef.current) return;
+    exportPendingRef.current = true;
+    try {
+      const snapshot = captureRenderedSurface(mainboardSurfaceRef.current);
+      const path = await exportRenderedImage(snapshot);
+      setMessage(path ? `${t("export.saved")}${path}` : t("export.cancelled"));
+    } catch (error) {
+      setMessage(`${t("export.failed")}${errorMessage(error)}`);
+    } finally { exportPendingRef.current = false; }
+  }
+
   async function handleSaveSgfDocument(saveAs = false) {
     if (!nativeRuntime) {
       setMessage(nativeCurrentGameUnavailable);
@@ -4109,6 +4139,8 @@ export function App() {
       nativeUnavailable={nativeCurrentGameUnavailable}
       onSave={() => void handleSaveSgfDocument(false)}
       onSaveAs={() => void handleSaveSgfDocument(true)}
+      onExportBranch={() => void handleExportBranch()}
+      onExportBoard={() => void handleExportBoard()}
       onLoadSample={() => void loadSample()}
       onParse={() => void handleParseSgf()}
       onFakeAnalyze={() => void handleFakeAnalyze()}
@@ -4242,6 +4274,7 @@ export function App() {
           onClick={() => void commitMarkup({ kind: "clear" })}>清空标记</button>
       </div>
         <BoardCanvas
+          surfaceRef={mainboardSurfaceRef}
           position={rootSetupDraft ? { ...currentPosition, stones: rootSetupDraft.stones, to_play: rootSetupDraft.toPlay, last_move: null, move_number: 0 } : currentPosition}
           markup={reviewGame?.snapshot.markup}
           analysis={rootSetupDraft || scoring ? undefined : visibleCurrentFrame}

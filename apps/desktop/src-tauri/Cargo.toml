@@ -29,6 +29,7 @@ go-core = { path = "../../../crates/go-core" }
 readboard-sidecar = { path = "../../../crates/readboard-sidecar" }
 sgf = { path = "../../../crates/sgf" }
 save-as-dialog = { path = "../../../crates/save-as-dialog" }
+image-export = { path = "../../../crates/image-export" }
 url = "2"
 serde.workspace = true
 serde_json.workspace = true
