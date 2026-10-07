@@ -30,6 +30,9 @@ The [approved preservation policy](MIGRATION_PLAN.md#capability-preservation-pol
 
 Accepted [ANA-16 — Current-game Analysis Tasks](../.scratch/current-game-analysis-tasks/spec.md) covers the explicit analysis workflows in CAP-04-ANA-06–CAP-04-ANA-08, following Accepted ANA-06. It does not expand ANA-02 or absorb multifile ANA-07, automatic-on-load quick analysis, tracking, or guidance. `NET-01` owns the approved app-wide network policy and current R10 provider consumers, with Partial status pending installed-platform evidence. Future network consumers and whitelist settings import retain their separate migration obligations.
 
+Current audited successors and the 139-heading/44-unfinished obligation index at the end of this file preserve all fields and assign residuals. Historical cuts require their item-specific decision source; absent approval or unmet user goals remain obligations.
+
+
 ## How to read a row
 
 Every Frozen ID from research 01–07 appears **once**. Ticket 08 reconstructed **135** unique Java Capabilities from the seven domain tables; reference 139. The four Frozen IDs that are not Capabilities (`CAP-04-ANA-05`, `CAP-04-ANA-14`, `REL-C12`, `REL-C13`) stay in their tables and in the completeness index. Ticket 01 routing keys that only point at domains 02–07 are not extra Capabilities; the owning research file already names them.
@@ -423,34 +426,34 @@ These were user-reachable Capabilities. Tickets 08–14 recorded their original 
 
 | Historically excluded observable behavior | Census pointer (row remains in the domain table) | Current route or historical surviving path |
 | --- | --- | --- |
-| `read` launch mode | SHELL-04 | No-engine review `UI-04` |
-| Visible Force Exit | SHELL-09 | Contextual Exit anyway only inside `APP-03` after teardown timeout |
-| Hostname-triggered persist/preference deletion | SET-FIRST-LAUNCH (hostname-wipe half) | `WINDOW-01` invalid-geometry reset only |
-| Forced initialize-settings wizard | SET-FIRST-USE | `PREF-01` surface |
-| Application font-size slider | SET-FRAME-FONT | System DPI |
-| Apple/Morandi/custom board assets | SET-THEME-APPLE-CLASSIC-CUSTOM | `APPEAR-01` curated pair |
-| Separate theme editor | SET-THEME-DIALOG | `APPEAR-01` in Preferences |
-| ExtraMode / classic / custom layouts | SET-LAYOUT-MODE | One adaptive workspace |
-| Toolbar wrap/order/visibility prefs | SET-LAYOUT-TOOLBAR | Fixed Next toolbar |
-| Comment-control instructional popup | SET-HINT-COMMENT-CTRL | — |
-| Auto-analyze pause-exit educational tip | SET-HINT-AUTOANALYZE | Separate guidance obligation; `CAP-04-ANA-08` restores through `ANA-16`, while `GUIDE-01` remains Deferred pending producer admission |
-| Lossy Swing raw / raw-with-comment saves | SGF-03-ADJ-SAVE-MORE (raw subset) | `SGF-05` comment separation; Save remains `SGF-06` |
-| Sub-Board Image Export | SGF-03-ADJ-SAVE-MORE (sub-board image subset) | — |
-| Thumbnail slots / second autosave-on-exit | SGF-03-ADJ-TEMP (manual slots) | `APP-04` |
-| Conditional ignore of file `KM` | SGF-03-ADJ-KOMI (ignore-file-komi pref) | Root `KM` authoritative |
-| Java 200 ms + delay dialog / manual reveal | SGF-03-ADJ-HOVER-DELAY | `UI-03` 120 ms |
-| Last-engine autoload | CAP-04-ENG-03 | `ENG-06` Autoload Default |
-| Background preload of extra GTP engines | CAP-04-ENG-09 | Switch / Match Reservation processes only |
-| Java in-tree cache toggle | CAP-04-PREF-LIZZIE-CACHE | `ANA-05` SQLite |
-| Lightning / part / all-branches flash | CAP-04-ANA-06 | `ANA-16` explicit task; automatic-on-load remainder stays a separate obligation |
-| Automatic current-game analysis | CAP-04-ANA-08 | `ANA-16` range/color/budgets/Pause/Continue/two-stage task; guidance remains separately owned |
-| Mutually exclusive large-sub / large-WR enlarge presets | SET-MAIN-PANEL (large extras) | `LAYOUT-01` / `LAYOUT-04` adaptive workspace; `UI-01` chart/mini-board presence |
-| Write generated winrate/score/playouts into personal `C` | SET-MAIN-PANEL (append-WR extra) | `SGF-05` personal comments; analysis pane display; deferred `ANA-08` structured headers |
-| Tracking analysis jobs | CAP-04-ANA-10 | `UI-03` hover eviction unchanged; readboard stays 06 |
-| Legacy genmove/analysis selector, raw timing, pure-net, play-mode overlay | GM-HUMAN-GENMOVE / GM-HUMAN-ANA (controls, not extra census IDs) | Adapter capability + `GAME-02` |
-| JCEF embedded Yike page/hall | CAP-06-YIKE-WEB / CAP-06-YIKE-HALL (embedded hosting half) | `PROV-03` Play & Sync; locators remain |
-| Reachable share shortcuts that do nothing | CAP-06-SHARE-CURRENT | No empty Next share actions |
-| Flavor guessing, bundled JRE, JCEF as updater components | REL-C04 remainder | `REL-05` manifest of `app-core` + acquired KataGo components |
+| `read` launch mode | SHELL-04 | No-engine review `UI-04`  Current obligation: [T02-H01](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h01); original route is historical, not evidence of equivalent completion. |
+| Visible Force Exit | SHELL-09 | Contextual Exit anyway only inside `APP-03` after teardown timeout  Current obligation: [T02-H02](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h02); original route is historical, not evidence of equivalent completion. |
+| Hostname-triggered persist/preference deletion | SET-FIRST-LAUNCH (hostname-wipe half) | `WINDOW-01` invalid-geometry reset only  Current obligation: [T02-H03](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h03); original route is historical, not evidence of equivalent completion. |
+| Forced initialize-settings wizard | SET-FIRST-USE | `PREF-01` surface  Current obligation: [T02-H04](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h04); original route is historical, not evidence of equivalent completion. |
+| Application font-size slider | SET-FRAME-FONT | System DPI  Current obligation: [T02-H05](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h05); original route is historical, not evidence of equivalent completion. |
+| Apple/Morandi/custom board assets | SET-THEME-APPLE-CLASSIC-CUSTOM | `APPEAR-01` curated pair  Current obligation: [T02-H06](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h06); original route is historical, not evidence of equivalent completion. |
+| Separate theme editor | SET-THEME-DIALOG | `APPEAR-01` in Preferences  Current obligation: [T02-H07](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h07); original route is historical, not evidence of equivalent completion. |
+| ExtraMode / classic / custom layouts | SET-LAYOUT-MODE | One adaptive workspace  Current obligation: [T02-H08](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h08); original route is historical, not evidence of equivalent completion. |
+| Toolbar wrap/order/visibility prefs | SET-LAYOUT-TOOLBAR | Fixed Next toolbar  Current obligation: [T02-H09](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h09); original route is historical, not evidence of equivalent completion. |
+| Comment-control instructional popup | SET-HINT-COMMENT-CTRL | —  Current obligation: [T02-H10](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h10); original route is historical, not evidence of equivalent completion. |
+| Auto-analyze pause-exit educational tip | SET-HINT-AUTOANALYZE | Separate guidance obligation; `CAP-04-ANA-08` restores through `ANA-16`, while `GUIDE-01` remains Deferred pending producer admission  Current obligation: [T02-H11](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h11); original route is historical, not evidence of equivalent completion. |
+| Lossy Swing raw / raw-with-comment saves | SGF-03-ADJ-SAVE-MORE (raw subset) | `SGF-05` comment separation; Save remains `SGF-06`  Current obligation: [T02-H12](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h12); original route is historical, not evidence of equivalent completion. |
+| Sub-Board Image Export | SGF-03-ADJ-SAVE-MORE (sub-board image subset) | —  Current obligation: [T02-H13](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h13); original route is historical, not evidence of equivalent completion. |
+| Thumbnail slots / second autosave-on-exit | SGF-03-ADJ-TEMP (manual slots) | `APP-04`  Current obligation: [T02-H14](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h14); original route is historical, not evidence of equivalent completion. |
+| Conditional ignore of file `KM` | SGF-03-ADJ-KOMI (ignore-file-komi pref) | Root `KM` authoritative  Current obligation: [T02-H15](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h15); original route is historical, not evidence of equivalent completion. |
+| Java 200 ms + delay dialog / manual reveal | SGF-03-ADJ-HOVER-DELAY | `UI-03` 120 ms  Current obligation: [T02-H16](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h16); original route is historical, not evidence of equivalent completion. |
+| Last-engine autoload | CAP-04-ENG-03 | `ENG-06` Autoload Default  Current obligation: [T02-H17](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h17); original route is historical, not evidence of equivalent completion. |
+| Background preload of extra GTP engines | CAP-04-ENG-09 | Switch / Match Reservation processes only  Current obligation: [T02-H18](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h18); original route is historical, not evidence of equivalent completion. |
+| Java in-tree cache toggle | CAP-04-PREF-LIZZIE-CACHE | `ANA-05` SQLite  Current obligation: [T02-H19](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h19); original route is historical, not evidence of equivalent completion. |
+| Lightning / part / all-branches flash | CAP-04-ANA-06 | `ANA-16` explicit task; automatic-on-load remainder stays a separate obligation  Current obligation: [T02-H20](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h20); original route is historical, not evidence of equivalent completion. |
+| Automatic current-game analysis | CAP-04-ANA-08 | `ANA-16` range/color/budgets/Pause/Continue/two-stage task; guidance remains separately owned  Current obligation: [T02-H21](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h21); original route is historical, not evidence of equivalent completion. |
+| Mutually exclusive large-sub / large-WR enlarge presets | SET-MAIN-PANEL (large extras) | `LAYOUT-01` / `LAYOUT-04` adaptive workspace; `UI-01` chart/mini-board presence  Current obligation: [T02-H22](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h22); original route is historical, not evidence of equivalent completion. |
+| Write generated winrate/score/playouts into personal `C` | SET-MAIN-PANEL (append-WR extra) | `SGF-05` personal comments; analysis pane display; deferred `ANA-08` structured headers  Current obligation: [T02-H23](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h23); original route is historical, not evidence of equivalent completion. |
+| Tracking analysis jobs | CAP-04-ANA-10 | `UI-03` hover eviction unchanged; readboard stays 06  Current obligation: [T02-H24](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h24); original route is historical, not evidence of equivalent completion. |
+| Legacy genmove/analysis selector, raw timing, pure-net, play-mode overlay | GM-HUMAN-GENMOVE / GM-HUMAN-ANA (controls, not extra census IDs) | Adapter capability + `GAME-02`  Current obligation: [T02-H25](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h25); original route is historical, not evidence of equivalent completion. |
+| JCEF embedded Yike page/hall | CAP-06-YIKE-WEB / CAP-06-YIKE-HALL (embedded hosting half) | `PROV-03` Play & Sync; locators remain  Current obligation: [T02-H26](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h26); original route is historical, not evidence of equivalent completion. |
+| Reachable share shortcuts that do nothing | CAP-06-SHARE-CURRENT | No empty Next share actions  Current obligation: [T02-H27](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h27); original route is historical, not evidence of equivalent completion. |
+| Flavor guessing, bundled JRE, JCEF as updater components | REL-C04 remainder | `REL-05` manifest of `app-core` + acquired KataGo components  Current obligation: [T02-H28](../.scratch/issue18-function-first/evidence/06-delivery-map.md#t02-h28); original route is historical, not evidence of equivalent completion. |
 
 Deferred items (`I18N-01`, `GUIDE-01`, `EXPORT-01`, `EXPORT-02`, `EXPORT-03`, `SGF-15`, `SGF-16`, `REVIEW-04`–`REVIEW-06`, `ENG-08`, `SSH-01`, `CONTRIB-01`, `ANA-06`–`ANA-09`, `GAME-06`–`GAME-10`, `PROV-05`–`PROV-07`, `RCOMP-01`, `PUB-01`) are **not** Abandoned.
 
@@ -462,7 +465,7 @@ Deferred items (`I18N-01`, `GUIDE-01`, `EXPORT-01`, `EXPORT-02`, `EXPORT-03`, `S
 
 Ticket 16 identified thirteen final owner-route or conflict records without supported Parity Item IDs from Tickets 08–14. Tickets 17–27 assigned the next-move, winrate-chart, Sub-Board mode, main-panel, guidance, provider-network, SSH/remote-compute, contribution, readboard GMA, Yike auth, and image-output remainders to supported IDs or explicit exclusions. Ticket 28 closes the final autoplay remainder through Missing R4 `ANA-13` Variation Replay and an explicit Engine Continuation exclusion.
 
-All thirteen records now map exactly once to supported Parity Items or explicit exclusions. No parity decision gap remains.
+The thirteen historical records had dispositions; current non-equivalent goals still require the named preservation decisions below. Historical closure does not prove equivalence or approve new deletion.
 
 ## Corpus reconciliation (Ticket 08)
 
@@ -518,3 +521,209 @@ Headings not counted: `REL-C12` `REL-C13`
 - Dispositions: `.scratch/migration-coverage-audit/issues/08-decide-application-shell-dispositions.md` … `14-decide-update-release-dispositions.md`, plus remainder tickets `17`–`28`
 - Standing R3 input used only as cited by Ticket 11: `.scratch/migration-coverage-audit/context/r3-foreground-engine-decisions.md`
 - Item status, evidence, remaining gap, and acceptance remain in [`PARITY_MATRIX.md`](PARITY_MATRIX.md). Phases, dependencies, and exit criteria remain in [`MIGRATION_PLAN.md`](MIGRATION_PLAN.md).
+
+## Current obligation index — frozen 139 headings
+
+This index preserves the original heading identity and full frozen field source. It is current obligation routing, not a second capability census or status table. Every T01/T02 intent below resolves in the [single delivery map](../.scratch/issue18-function-first/evidence/06-delivery-map.md); 07 owns A, 08 owns B–F/R11, publication approval is pending. The frozen domain rows above are unchanged.
+
+| Frozen heading | Historical mapping | Current retained obligation | Frozen field source |
+| --- | --- | --- | --- |
+| SHELL-01 | UI-01, UI-04, REL-04 | T02-REL-04 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L85) |
+| SHELL-02 | ENG-06, ENG-02 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L86) |
+| SHELL-03 | APP-01, SGF-07 | T01-ACTIVATION | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L87) |
+| SHELL-04 | UI-04 | T02-H01 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L88) |
+| SHELL-05 | APP-04 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L89) |
+| SHELL-06 | ENG-06, REL-05, WINDOW-01 | T01-RESOURCE | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L90) |
+| SHELL-07 | ENG-07 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L91) |
+| SHELL-08 | APP-03 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L92) |
+| SHELL-09 | APP-03 | T02-H02 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L93) |
+| SHELL-10 | UI-01 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L94) |
+| SHELL-11 | APP-05, UI-05 | T02-N-ENTRY | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L95) |
+| SHELL-12 | APP-02, APP-01, SGF-07, ANA-07 | T01-ACTIVATION；T02-ANA-07 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L96) |
+| SHELL-13 | APP-05 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L97) |
+| SET-RESET-WINDOW-POS | WINDOW-01 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L111) |
+| SET-RESTORE-PANEL-SIZES | LAYOUT-03 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L112) |
+| SET-RESET-HINTS | GUIDE-01, WINDOW-01 | T02-GUIDE-01；T02-GUIDANCE-PRODUCER | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L113) |
+| SET-FIRST-LAUNCH | PREF-01, WINDOW-01, LAYOUT-04, APPEAR-01 | T02-H03 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L114) |
+| SET-FIRST-USE | PREF-01 | T02-H04 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L115) |
+| SET-PERSIST-CONFIG | PREF-01 | T02-JAVA-IMPORT | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L116) |
+| SET-PERSIST-WINDOW | WINDOW-01, LAYOUT-02 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L117) |
+| SET-LANG | 原行明确处置（非新增Parity项） | T02-I18N-FOUNDATION | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L118) |
+| SET-LOOKS | 原行明确处置（非新增Parity项） | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L119) |
+| SET-FRAME-FONT | 原行明确处置（非新增Parity项） | T02-H05 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L120) |
+| SET-SOUND | REVIEW-08, PROV-03, READ-02, PREF-01 | T01-PROVIDERS；T01-READBOARD | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L121) |
+| SET-CONTRIBUTE-MENU-VIS | CONTRIB-01, GAME-09 | T01-CONTRIBUTION；T01-WATCH | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L122) |
+| SET-THEME-BOARD-STYLE | APPEAR-01 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L123) |
+| SET-THEME-APPLE-CLASSIC-CUSTOM | 原行明确处置（非新增Parity项） | T02-H06 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L124) |
+| SET-THEME-DIALOG | APPEAR-01, PREF-01 | T02-H07 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L125) |
+| SET-CONFIG-DIALOG-DISPLAY | PREF-01 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L126) |
+| SET-NETWORK-PROXY | NET-01 | T01-NETWORK | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L127) |
+| SET-BOARD-SIZE | SGF-10, GAME-04 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L128) |
+| SET-LAYOUT-MODE | LAYOUT-01, LAYOUT-02, LAYOUT-04 | T02-H08 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L129) |
+| SET-LAYOUT-PANELS | LAYOUT-04, UI-01 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L130) |
+| SET-LAYOUT-TOOLBAR | UI-05 | T02-H09 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L131) |
+| SET-BOARD-POS | LAYOUT-01, LAYOUT-02, LAYOUT-03 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L132) |
+| SET-COORDS | REVIEW-07, PREF-01 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L133) |
+| SET-MOVE-NUMBERS | REVIEW-07 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L134) |
+| SET-SUGGESTION-INFO | ANA-04, UI-03 | T02-GRANULAR-DISPLAY | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L135) |
+| SET-NEXT-MOVE | ANA-10 | T02-CUSTOM-GRADE | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L136) |
+| SET-WINRATE-GRAPH | ANA-11, PREF-01, UI-01, REVIEW-01, ANA-04 | T02-CUSTOM-GRADE | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L137) |
+| SET-SUBBOARD | ANA-12, ANA-04, UI-01, UI-03, PREF-01 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L138) |
+| SET-MAIN-PANEL | REVIEW-09, WINDOW-02, SGF-07, UI-01, SGF-05, LAYOUT-01, WINDOW-01, REVIEW-07, SGF-13 | T02-H22；T02-H23 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L139) |
+| SET-KATA-DISPLAY | ANA-04, UI-03 | T02-GRANULAR-DISPLAY | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L140) |
+| SET-HINT-NEWBOARD | SGF-07, SGF-10, GUIDE-01 | T02-GUIDE-01 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L141) |
+| SET-HINT-REPLACE | SGF-07 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L142) |
+| SET-HINT-COMMENT-CTRL | 原行明确处置（非新增Parity项） | T02-H10 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L143) |
+| SET-HINT-AUTOANALYZE | ANA-16, GUIDE-01 | T02-GUIDE-01；T02-H11；T02-GUIDANCE-PRODUCER | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L144) |
+| SET-CLEAR-PERSONAL-HISTORY | SGF-09, PROV-02, PROV-04, PROV-01, PROV-03, ANA-07 | T01-PROVIDERS；T02-ANA-07 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L145) |
+| SGF-03-RT | SGF-01 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L160) |
+| SGF-03-DTO | SGF-02 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L161) |
+| SGF-03-NAV | SGF-03 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L162) |
+| SGF-03-EDIT | SGF-04, UI-05 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L163) |
+| SGF-03-CMT | SGF-05, SGF-03 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L164) |
+| SGF-03-SAVE | SGF-06 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L165) |
+| SGF-03-RULE | RULE-01 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L166) |
+| SGF-03-CHROME | UI-01, LAYOUT-01 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L167) |
+| SGF-03-BOARD-INTENT | UI-02 | T02-UI-02 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L168) |
+| SGF-03-HOVER | UI-03, SGF-03 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L169) |
+| SGF-03-NOENGINE | UI-04 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L170) |
+| SGF-03-ACTIONS | UI-05 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L171) |
+| SGF-03-ADJ-OPEN | SGF-07, APP-01, APP-02 | T01-ACTIVATION | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L177) |
+| SGF-03-ADJ-GIB | SGF-08, SGF-07 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L178) |
+| SGF-03-ADJ-RECENT | SGF-09, SGF-07, PREF-01 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L179) |
+| SGF-03-ADJ-CLIP | UI-05, SGF-07 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L180) |
+| SGF-03-ADJ-SAVE-MORE | EXPORT-01, EXPORT-02, EXPORT-03 | T02-EXPORT-01；T02-EXPORT-02；T02-EXPORT-03；T02-H12；T02-H13 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L181) |
+| SGF-03-ADJ-TEMP | APP-04 | T02-H14 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L182) |
+| SGF-03-ADJ-NEW | SGF-10, SGF-07 | T02-N-ENTRY | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L183) |
+| SGF-03-ADJ-KOMI | SGF-07, SGF-08, SGF-10 | T02-H15 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L184) |
+| SGF-03-ADJ-SETUP | SGF-11, SGF-01, SGF-04 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L185) |
+| SGF-03-ADJ-INSERT | REVIEW-01, SGF-15, REVIEW-04 | T02-SGF-15；T02-REVIEW-04 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L186) |
+| SGF-03-ADJ-DELETE-MOVE | SGF-12, SGF-04, UI-05 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L187) |
+| SGF-03-ADJ-MAIN | SGF-12, SGF-03 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L188) |
+| SGF-03-ADJ-XFORM | SGF-16 | T02-SGF-16 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L189) |
+| SGF-03-ADJ-META | SGF-13, SGF-10, SGF-01 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L190) |
+| SGF-03-ADJ-MARKUP | SGF-14, SGF-01 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L191) |
+| SGF-03-ADJ-AUTOPLAY | UI-05, REVIEW-05, ANA-13, ANA-04, ANA-12, PREF-01 | T02-REVIEW-05 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L192) |
+| SGF-03-ADJ-NEXT-HINT | ANA-10 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L193) |
+| SGF-03-ADJ-TREE-CLICK | REVIEW-01 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L194) |
+| SGF-03-ADJ-TRYPLAY / SCORE / LADDER | REVIEW-02, REVIEW-03, REVIEW-06, SGF-03 | T02-REVIEW-06 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L195) |
+| SGF-03-ADJ-URL | PROV-01, PROV-03, PROV-05, SGF-07 | T01-PROVIDERS；T02-PROV-05 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L196) |
+| SGF-03-ADJ-PROVIDER | SGF-07 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L197) |
+| SGF-03-ADJ-HOVER-DELAY | UI-03 | T02-H16 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L198) |
+| SGF-03-ADJ-COMMENT-LAYERS | GAME-05, SGF-05, ANA-08 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L199) |
+| CAP-04-ENG-01 | ENG-01, ENG-09, ENG-06, ENG-08, GAME-04, SSH-01, RCOMP-01 | T02-ENG-08；T01-SSH；T01-REMOTE；T02-ADAPTER-EVIDENCE | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L214) |
+| CAP-04-ENG-02 | ENG-06 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L215) |
+| CAP-04-ENG-03 | 原行明确处置（非新增Parity项） | T02-H17 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L216) |
+| CAP-04-ENG-04 | UI-04, ENG-02 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L217) |
+| CAP-04-ENG-05 | ENG-02, ENG-10, SSH-01, RCOMP-01 | T01-SSH；T01-REMOTE | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L218) |
+| CAP-04-ENG-06 | ENG-02 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L219) |
+| CAP-04-ENG-07 | ENG-03, ENG-04 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L220) |
+| CAP-04-ENG-08 | ENG-07 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L221) |
+| CAP-04-ENG-09 | 原行明确处置（非新增Parity项） | T02-H18 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L222) |
+| CAP-04-ANA-01 | ENG-02, ENG-10 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L223) |
+| CAP-04-ANA-02 | ENG-02 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L224) |
+| CAP-04-ANA-03 | ENG-02 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L225) |
+| CAP-04-PREF-LIZZIE-CACHE | ANA-05 | T02-H19 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L226) |
+| CAP-04-ANA-04 | ANA-06, ANA-01 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L227) |
+| CAP-04-ANA-05 | ANA-01, ENG-05 | continuity heading；不重复计能力，保留原引用 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L228) |
+| CAP-04-ANA-06 | ANA-16, ANA-01, ANA-02 | T02-H20；T02-AUTOLOAD-QUICK | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L229) |
+| CAP-04-ANA-07 | ANA-16, ANA-02 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L230) |
+| CAP-04-ANA-08 | ANA-16, GUIDE-01 | T02-GUIDE-01；T02-H21 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L231) |
+| CAP-04-ANA-09 | ANA-07, APP-02 | T02-ANA-07 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L232) |
+| CAP-04-ANA-10 | UI-03 | T02-H24；T02-TRACKING | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L233) |
+| CAP-04-ANA-11 | ANA-04, UI-03 | T02-GRANULAR-DISPLAY | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L234) |
+| CAP-04-ANA-12 | ANA-03, ENG-05 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L235) |
+| CAP-04-ANA-13 | ANA-08, SGF-05, ANA-05, EXPORT-01, EXPORT-02 | T02-EXPORT-01；T02-EXPORT-02 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L236) |
+| CAP-04-ANA-14 | ANA-05, ANA-08 | continuity heading；不重复计能力，保留原引用 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L237) |
+| CAP-04-ANA-15 | ENG-07, ENG-04 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L238) |
+| GM-HUMAN-GENMOVE | GAME-01, GAME-02, GAME-04, GAME-05, SGF-06, APP-04, GAME-07 | T02-GAME-07；T02-H25；T02-N-ENTRY | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L252) |
+| GM-HUMAN-ANA | ANA-04 | T02-H25 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L253) |
+| GM-PK-SESSION | GAME-03, GAME-06, GAME-05, SGF-05 | T02-GAME-06 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L254) |
+| GM-HUMANSL | GAME-08, GAME-01, GAME-02, GAME-05 | T02-GAME-08 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L255) |
+| GM-MATCH-PASS | GAME-02, GAME-03, SGF-04, UI-05 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L256) |
+| GM-MATCH-STOP | GAME-01, GAME-02, GAME-05, SGF-06, APP-04 | 保留原映射的精确范围；未据此扩大Accepted | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L257) |
+| GM-CONTRIBUTE | CONTRIB-01, GAME-09, GAME-01 | T01-CONTRIBUTION；T01-WATCH | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L258) |
+| GM-MATCH-RULES-START | GAME-04, GAME-07 | T02-GAME-07；T02-CLOCK-DECISION | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L259) |
+| CAP-06-ONLINE-URL | PROV-01, PROV-03, PROV-05 | T01-PROVIDERS；T02-PROV-05；T02-TENCENT-PROTOCOL | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L273) |
+| CAP-06-YIKE-LIVE-CENTER | PROV-01, PROV-03, PROV-06, PROV-07 | T01-PROVIDERS；T02-PROV-06；T02-PROV-07；T02-YIKE-AUTH；T02-PERSONAL-EVIDENCE | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L274) |
+| CAP-06-YIKE-WEB | PROV-03 | T01-PROVIDERS；T02-H26 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L275) |
+| CAP-06-YIKE-HALL | PROV-01, PROV-03 | T01-PROVIDERS；T02-H26 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L276) |
+| CAP-06-FOX-KIFU | PROV-02, SGF-07 | T01-PROVIDERS | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L277) |
+| CAP-06-TENCENT-KIFU | PROV-04, SGF-07, PROV-02, PROV-05 | T01-PROVIDERS；T02-PROV-05 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L278) |
+| CAP-06-READBOARD | READ-01, READ-02, READ-03, GAME-10 | T01-READBOARD；T01-EXTERNAL | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L279) |
+| CAP-06-WEBBOARD | PUB-01 | T02-PUB-01 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L280) |
+| CAP-06-SHARE-CURRENT | 原行明确处置（非新增Parity项） | T02-H27 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L281) |
+| CAP-06-SYNC-SETTINGS | PROV-01, PROV-07, READ-02, PREF-01 | T01-PROVIDERS；T02-PROV-07；T01-READBOARD | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L282) |
+| REL-C01 | REL-04 | T02-REL-04 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L300) |
+| REL-C02 | REL-04 | T02-REL-04；T02-JAVA-IMPORT | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L301) |
+| REL-C03 | ENG-02, UI-04, REL-05 | T01-RESOURCE | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L302) |
+| REL-C04 | REL-05, CONTRIB-01 | T01-RESOURCE；T01-CONTRIBUTION；T02-H28 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L303) |
+| REL-C05 | REL-03 | T02-REL-03 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L304) |
+| REL-C06 | REL-06, APP-03 | T02-REL-06 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L305) |
+| REL-C07 | REL-07 | T02-REL-07 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L306) |
+| REL-C08 | REL-08 | T02-REL-08 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L307) |
+| REL-C09 | REL-02, REL-04, APP-01 | T02-REL-02；T02-REL-04；T01-ACTIVATION | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L308) |
+| REL-C10 | REL-09 | T01-DIAGNOSTICS | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L309) |
+| REL-C11 | REL-10 | T01-IDENTITY | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L310) |
+| REL-C12 | REL-09, REL-10 | T01-DIAGNOSTICS；T01-IDENTITY | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L316) |
+| REL-C13 | SGF-09 | continuity heading；不重复计能力，保留原引用 | [入口/默认/保存/失败/证据/runtime/处置](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L317) |
+
+### Original 44 unfinished owners
+
+Status and acceptance remain in Matrix; this table routes the original unfinished set only, without duplicating status. New successors are in Matrix and the upstream/delivery mapping.
+
+| Item | Responsibility intent | Frozen acceptance source |
+| --- | --- | --- |
+| UI-02 | T02-UI-02 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L97) |
+| APP-01 | T01-ACTIVATION | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L142) |
+| NET-01 | T01-NETWORK | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L231) |
+| PROV-01 | T01-PROVIDERS | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L232) |
+| PROV-02 | T01-PROVIDERS | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L233) |
+| PROV-03 | T01-PROVIDERS | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L234) |
+| PROV-04 | T01-PROVIDERS | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L235) |
+| READ-01 | T01-READBOARD | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L236) |
+| READ-02 | T01-READBOARD | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L237) |
+| REL-01 | T02-REL-01 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L246) |
+| REL-02 | T02-REL-02 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L247) |
+| REL-03 | T02-REL-03 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L248) |
+| REL-04 | T02-REL-04 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L249) |
+| REL-05 | T01-RESOURCE | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L250) |
+| REL-06 | T02-REL-06 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L251) |
+| REL-07 | T02-REL-07 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L252) |
+| REL-08 | T02-REL-08 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L253) |
+| REL-09 | T01-DIAGNOSTICS | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L254) |
+| REL-10 | T01-IDENTITY | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L255) |
+| I18N-01 | T02-I18N-01 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L263) |
+| GUIDE-01 | T02-GUIDE-01 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L264) |
+| SGF-15 | T02-SGF-15 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L265) |
+| SGF-16 | T02-SGF-16 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L266) |
+| REVIEW-04 | T02-REVIEW-04 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L267) |
+| REVIEW-05 | T02-REVIEW-05 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L268) |
+| REVIEW-06 | T02-REVIEW-06 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L269) |
+| EXPORT-01 | T02-EXPORT-01 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L270) |
+| EXPORT-02 | T02-EXPORT-02 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L271) |
+| EXPORT-03 | T02-EXPORT-03 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L272) |
+| ENG-08 | T02-ENG-08 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L273) |
+| SSH-01 | T01-SSH | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L274) |
+| CONTRIB-01 | T01-CONTRIBUTION | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L275) |
+| ANA-07 | T02-ANA-07 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L276) |
+| ANA-09 | T02-ANA-09 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L277) |
+| GAME-06 | T02-GAME-06 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L278) |
+| GAME-07 | T02-GAME-07 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L279) |
+| GAME-08 | T02-GAME-08 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L280) |
+| GAME-09 | T01-WATCH | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L281) |
+| GAME-10 | T01-EXTERNAL | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L282) |
+| PROV-05 | T02-PROV-05 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L283) |
+| PROV-06 | T02-PROV-06 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L284) |
+| PROV-07 | T02-PROV-07 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L285) |
+| RCOMP-01 | T01-REMOTE | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L286) |
+| PUB-01 | T02-PUB-01 | [固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/PARITY_MATRIX.md#L287) |
+
+### Preserved distinctions
+
+- `N` is not New; current New is `Ctrl+Home`, with no invented `Ctrl+N`. Accepted GAME-02 menu behavior is distinct from the stale legacy N entry; `T02-N-ENTRY` resolves that product/entry conflict.
+- READ-03 is the explicit OCR limitation only; RULE-01 is the frozen simple-ko scope, not superko; ENG-10 game_move evidence is GNU Go 3.8 with its admitted argv/rules/no-setup profile, not every adapter/platform.
+- ANA-10 Off/Variations/Graded and six fixed grades do not satisfy custom thresholds. `T02-CUSTOM-GRADE` decides that user goal; no arbitrary thresholds are invented.
+- Review Autoplay, Variation Replay (ANA-13: existing 500ms default and 100–5000ms range), and Engine Continuation are different goals. `T02-CONTINUATION` retains the latter and its historical Ticket28 decision; replay timings are not transplanted to REVIEW-05.
+- ANA-17 focus, ANA-18 tracking/granular presentation, ANA-19 automatic quick analysis and PREF-02 whitelist Java migration retain scope beyond accepted ANA-16. Font/theme/layout/manual slots/sub-board export/preload and other H goals remain decisions/retained obligations, not silently removed.
+- ADR single-series chart, main-board heatmap, personal C separation, external exact-authority and supported Yike authorization/sole Match remain binding. No restoration may bypass those boundaries.

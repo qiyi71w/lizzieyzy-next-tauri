@@ -399,6 +399,17 @@ Attached analysis lives in the SGF document. There is no separate durable analys
 - Live Yike/Fox/Tencent reads require public-service evidence; readboard requires the real runtime and target-window evidence. These records retain their original source candidates in DEVELOPMENT. Public reads do not require copying user credentials; platform trust and installed-network admission have separate gates.
 - Java/Swing files are behavior references during this migration track and should not be edited for Next scaffold validation.
 
+## Functional Resources And Release Independence
+
+These are approved planning boundaries, not claims that the future components exist. `ENG-11`, `REL-09` and `REL-10` are implemented with their first functional consumers; signing, packaged paths and final release-channel decisions remain R11.
+
+- A functional resource identifies source, version, resolved path, integrity and protocol/capability compatibility. Qualified local resources are allowed; neither this repository’s Releases nor a developer’s fixed path is a prerequisite. Resource failure is visible: Start remains No-engine, failed Switch B preserves Ready A, no implicit fallback or hidden engine switch.
+- Product identifier `org.lizzieyzy.next` and user-data identity are separate from Git repository location. Build identity, release/update source and issue/help addresses belong to centralized configuration. Current About `0.1.0` and Cargo repository metadata drift are tracked by `T01-IDENTITY`; this planning change does not edit runtime configuration. An unconfigured channel cannot expose a fabricated usable update/download action. R11 `T06-RELEASE-CHANNEL` owns final repository, credentials, signing/notarization and update keys.
+- Ordinary bounded diagnostics, visible typed failures, sanitization and cancellable size-bounded export accompany affected functions. Installed support/log locations are separately accepted. Export never sends support data without explicit user action.
+- One NET-01 Direct/System/Manual policy applies to Next-owned remote HTTP(S)/WebSocket(S). Browser-owned traffic, local readboard, SSH and inbound LAN are outside it. Subprocess consumers must state representable policy capabilities and visibly refuse an unsupported selected policy, never silently downgrade to Direct. Contribution’s lowercase `https_proxy`, then `http_proxy`, else Direct adapter is constrained by that rule; its credential/consent and reconnect contract remains distinct from provider reads.
+- `ITEM::functional` in Matrix is a scoped evidence reference. It does not change whole-item status or waive native engines/services/credentials. Qualified resource evidence is not signed-delivery evidence. GAME-09 waits for a passed Contribution Run, not for the final signed client package; GAME-10 still requires both actual Final-decision and Leading-candidate modes with exact authoritative successor confirmation and no external-write retry/rollback.
+- Whitelist Java migration (`PREF-02`) uses per-owner mappings, preview, explicit atomic apply, no source writes and no automatic engine start. Localization foundations begin with new UI; full translations and import acceptance close in F. This does not introduce a DTO or storage schema in this planning change.
+
 ## Provider And Sidecar Readiness
 
 | Area | Repository-Level Evidence | Requires External Environment |

@@ -10,7 +10,7 @@ Implemented in the Next workspace:
 
 - Tauri 2 desktop shell under `apps/desktop/src-tauri`.
 - React + TypeScript + Vite frontend under `apps/desktop`.
-- Rust workspace crates for app DTOs, Go rules, SGF parsing/replay/serialization, native Save As outcomes, KataGo protocol normalization, analysis classification, engine management, and SQLite-backed application storage.
+- Rust workspace crates for app DTOs, Go rules, SGF parsing/replay/serialization, native Save As outcomes, KataGo protocol normalization, analysis classification, engine management, durable preferences/recovery, providers and sidecar lifecycles.
 - One Rust-owned editable SGF workspace with complete-tree `NodePath` navigation, legal move/pass editing, variation removal, personal comments, setup/metadata preservation, and semantic save/reopen.
 - Native SGF/GIB Open and SGF Save / Save As through the Tauri desktop backend, including cancellation and failed-write state preservation; imported GIB files are never overwritten.
 - A Windows-native no-engine workflow covering open, navigate, edit, comment, remove, save, reopen, and rejected ACL Save As.
@@ -34,23 +34,26 @@ Implemented in the Next workspace:
 Not yet claimed as complete in the Next workspace:
 
 - Full legacy Java/Swing feature parity.
-- Fox/Yike online game providers as live external-network integrations.
+- Provider account-authorized play, Tencent live protocols, and all-platform installed-network trust. Public Yike/Fox/Tencent business paths have bounded recorded live evidence.
 - readboard sidecar sync beyond the recorded Windows source-runtime evidence (installed packages and other-platform runtimes).
 - Production signing/notarization for macOS and Windows unless maintainer secrets are configured.
 - End-to-end clean-machine installer smoke coverage across all target platforms.
 - Complete migration of every legacy setting, layout preference, and analysis workflow.
 - Installed file-association acceptance for `APP-01`, which remains an R11 / `REL-04` obligation after the R5 native activation semantic gate passed.
-- Human-versus-engine and other engine-game workflows; N remains reserved for that separate migration scope.
+- Advanced PK batches/clocks/HumanSL, remote engines/compute, contribution, AI teaching and the other A–F residuals. Human-versus-engine and single-game PK are already Accepted within their Matrix scopes; the legacy N entry still needs reconciliation.
 
-Provider and readboard work should be treated as offline contract/domain-command coverage until the owning implementation has live environment evidence. The readboard Windows source-runtime evidence is recorded in [DEVELOPMENT](docs/DEVELOPMENT.md) §3–§4. Do not describe live provider login, external network capture, or readboard sidecar operation beyond that recorded scope as shipped.
+Provider and readboard repository, controlled, native/service and installed evidence remain distinct. [DEVELOPMENT](docs/DEVELOPMENT.md) and [Matrix functional records](docs/PARITY_MATRIX.md#stable-functional-evidence-records) identify original candidates, actual conditions and gaps. Public reads and browser handoff do not prove account login/play; Windows source-runtime evidence does not prove installed or other-platform behavior.
 
 ## Migration Overview
 
 [The parity matrix](docs/PARITY_MATRIX.md) is the item-level source of truth. This table is a compact roll-up, not a second status tracker.
 
-The completed [Migration Baseline v1 traceability audit](docs/MIGRATION_TRACEABILITY_AUDIT.md) reconstructed 139 Frozen IDs and 108 baseline Parity Items with no unresolved mapping remainder. The [capability inventory](docs/JAVA_CAPABILITY_INVENTORY.md) records the frozen user-reachable surface. R3 Foreground Engine Lifecycle, R4 Analysis, R5 Safe Current Game, and R6 SGF Authoring / Review have exited. Supplemental continuous analysis (`ANA-06`) and current-game Analysis Tasks (`ANA-16`) are Accepted. R5 integrated Windows candidate `48db2b2` accepted `SGF-08`, `APP-02`, `APP-03`, `APP-04`, and `ANA-15`, and passed the `APP-01` semantic gate. R6 integrated Windows candidate `be6951b` completed authoring/review acceptance, including Save/recovery fault retries, real KataGo, SGF/GIB intake and actual sound. Final installed file association remains with R11; R7 adaptive workspace is the next numbered migration phase. These bounded acceptance results do not establish full Java workflow parity.
+The completed [Migration Baseline v1 traceability audit](docs/MIGRATION_TRACEABILITY_AUDIT.md) reconstructed 139 Frozen IDs and 108 baseline Parity Items with no unresolved mapping remainder. The [capability inventory](docs/JAVA_CAPABILITY_INVENTORY.md) records the frozen user-reachable surface. R3 Foreground Engine Lifecycle, R4 Analysis, R5 Safe Current Game, and R6 SGF Authoring / Review have exited. Supplemental continuous analysis (`ANA-06`) and current-game Analysis Tasks (`ANA-16`) are Accepted. R5 integrated Windows candidate `48db2b2` accepted `SGF-08`, `APP-02`, `APP-03`, `APP-04`, and `ANA-15`, and passed the `APP-01` semantic gate. R6 integrated Windows candidate `be6951b` completed authoring/review acceptance, including Save/recovery fault retries, real KataGo, SGF/GIB intake and actual sound. R7 adaptive workspace and R8/R9 owner scopes also retain their accepted results. Current work follows A–F function-first delivery, starting with common review/operations; R11 keeps final installed association and release obligations. The final release repository is undecided. These bounded acceptance results do not establish full Java workflow parity.
 
 Status and evidence are separate. The evidence ladder is `Not started` → `Scaffolded` → `Behavior implemented` → `Repository tested` → `Native/live verified`. Environment-independent behavior can be accepted at `Repository tested`; native/live evidence is not required for those items.
+
+The [current plan](docs/MIGRATION_PLAN.md#current-function-first-delivery) names A 常用复盘与操作, B 引擎与分析, C 远程与外部棋盘, D 高级对局, E 其他业务 and F 功能对等收尾. These are priorities, not an all-serial dependency chain. Diagnostics, qualified runtime resources, localization foundations and Java field mapping accompany their first real consumers. Unfrozen product/protocol choices remain named decisions; this planning revision does not implement them.
+
 
 | Capability | Parity items | Status | Highest completed evidence stage | Main remaining gap |
 | --- | --- | --- | --- | --- |
@@ -79,8 +82,8 @@ Status and evidence are separate. The evidence ladder is `Not started` → `Scaf
 | Truthful native analysis entries | `ANA-15` | Accepted | Native/live verified | Real KataGo failure preserves visible errors, personal comments and legal results without synthetic replacement. |
 | Native file activation | `APP-01` | Missing — R5 semantic gate passed | Native semantic gate verified; installed acceptance pending | R11 / `REL-04` production association and Canonical Artifact Installed Live Evidence. |
 | Window file drop | `APP-02` | Accepted | Native/live verified | Single-file SGF/GIB intake accepted; multi-file analysis remains Deferred and does not replace the current game. |
-| Adjustable and persisted layout | `LAYOUT-01`–`LAYOUT-03` | Missing | Not started | Splitters, persistence, and narrow reset behavior. |
-| Engine game modes | `GAME-01`–`GAME-03` | Missing | Not started | Session state, controls, batch revision, and SGF integration. |
+| Adjustable and persisted layout | `LAYOUT-01`–`LAYOUT-04` | Accepted | Native/live verified within recorded candidates | Additional historical font/theme/layout goals remain separately assigned; this is not every Java layout. |
+| Engine game modes | `GAME-01`–`GAME-05` | Accepted | Recorded owner-scope native/engine evidence | Advanced batches, clocks, HumanSL and external play remain separate items; adapter evidence is version/configuration bounded. |
 | Yike, Fox and Tencent providers | `PROV-01`–`PROV-04` | Partial | Native/provider-live and cross-source verified (Windows source candidates) | Per-platform installed-network evidence Not run, user-approved non-blocking for R10 completion; original and integrated candidate evidence in DEVELOPMENT. |
 | readboard lifecycle and synchronization | `READ-01`–`READ-02` | Partial | Native/live and cross-source verified (Windows, Fox spectator target) | Installed-network evidence Not run, user-approved non-blocking for R10 completion; installed and other-platform runtimes remain unverified. |
 | Explicit OCR limitation | `READ-03` | Accepted | Repository tested | None until OCR support is deliberately introduced. |
@@ -91,7 +94,7 @@ Status and evidence are separate. The evidence ladder is `Not started` → `Scaf
 ## Technology Stack
 
 - Desktop runtime: Tauri 2.
-- Backend: Rust workspace, Tauri commands, and SQLite application storage via `rusqlite`.
+- Backend: Rust workspace and Tauri commands; SGF-attached analysis, app-data preferences and document recovery are the active durable paths.
 - Frontend: React, TypeScript, Vite, `@tauri-apps/api`.
 - Core domains: SGF, Go rules, KataGo analysis JSONL, engine profiles.
 - Validation: `scripts/validate_scaffold.py`, Rust unit tests, frontend build, and smoke checks.
@@ -107,12 +110,13 @@ Status and evidence are separate. The evidence ladder is `Not started` → `Scaf
 - `crates/katago-protocol`: KataGo analysis query/response models.
 - `crates/analysis-core`: Candidate/problem classification helpers.
 - `crates/engine-manager`: Engine profiles, asset checks, Foreground Engine Run lifecycle, process execution, and cancellation.
-- `crates/storage`: SQLite application storage schema helpers.
+- `crates/storage`: Historical SQLite schema helpers; not the active durable analysis product path.
 - `docs/ARCHITECTURE_NEXT.md`: Current Next architecture and module boundaries.
 - `docs/JAVA_BASELINE.md`: Frozen Java behavior reference and successor policy.
 - `docs/JAVA_CAPABILITY_INVENTORY.md`: Exhaustive Migration Baseline v1 Capability and Entry Point census.
 - `docs/PARITY_MATRIX.md`: Stable parity items, status, evidence, gaps, and acceptance.
 - `docs/MIGRATION_PLAN.md`: Migration phase order and next executable slices.
+- `docs/UPSTREAM_DELTA.md`: Complete frozen Java increment, source/release evidence and behavior dispositions.
 - `docs/MIGRATION_TRACEABILITY_AUDIT.md`: Reproducible corpus-wide traceability audit and verdict.
 - `docs/DEVELOPMENT.md`: Local development and smoke validation commands.
 - `docs/RELEASE_CHECKLIST.md`: Release-readiness checklist and manual acceptance flow.
@@ -209,6 +213,7 @@ The production release workflow is `.github/workflows/release.yml`. It runs on `
 - [Java capability inventory](docs/JAVA_CAPABILITY_INVENTORY.md)
 - [Parity matrix](docs/PARITY_MATRIX.md)
 - [Migration plan](docs/MIGRATION_PLAN.md)
+- [Frozen upstream delta ledger](docs/UPSTREAM_DELTA.md)
 - [Migration traceability audit](docs/MIGRATION_TRACEABILITY_AUDIT.md)
 - [Development guide](docs/DEVELOPMENT.md)
 - [Release checklist](docs/RELEASE_CHECKLIST.md)

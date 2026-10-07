@@ -29,13 +29,15 @@ Each workflow crosses the Rust domain, Rust wire DTO, Tauri gateway, TypeScript 
 - [JAVA_BASELINE.md](JAVA_BASELINE.md) fixes the Java behavior reference at Migration Baseline v1 (`7b4027531c2b26062d0bfc27a040cc550cfbea4d`). The Next inventory baseline for this audit is `18c6d189b8b01069975c4c40ead63a010249cb8c`.
 - [DEVELOPMENT.md](DEVELOPMENT.md) and [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) own environment smoke and release procedures.
 
+- [UPSTREAM_DELTA.md](UPSTREAM_DELTA.md) owns the frozen Java increment, release provenance and behavior-group dispositions; it does not supersede Matrix status.
+
 Later Java `main` changes do not automatically change this plan. Data, SGF, Go-rule, and engine-correctness defects must be assessed; UX changes are judged individually; Swing-only implementation changes are ignored. Baseline changes follow the successor policy in `JAVA_BASELINE.md`.
 
 ## Capability Preservation Policy
 
 Approved Q1–Q12 remain binding: preserve the frozen Java baseline's reachable user capabilities, primary operation habits, and data semantics by default. A non-equivalent redesign leaves a migration obligation; permanent removal requires item-specific user approval. Historical Abandoned/absorbed decisions record their original scope, not blanket permission to discard the remaining user capability. Swing-only machinery need not be copied. Existing Accepted IDs, scopes, and evidence remain intact; materially new behavior receives a Successor Item.
 
-The approved mainline order is safety/input correction → continuous current-node analysis → current-game range/color/budget/Pause/Continue/two-stage analysis → R6/R7 expansion. Independent work may proceed alongside that order with explicit ownership at shared integration boundaries. Release claims remain tiered and bounded by actual acceptance; a usable tier does not erase tracked gaps.
+The current delivery priority is A 常用复盘与操作 → B 引擎与分析 → C 远程与外部棋盘 → D 高级对局 → E 其他业务 → F 功能对等收尾. This is Delivery Order, not a serial dependency chain. R11 retains its historical release number and follows functional migration; the final release repository is undecided. The earlier safety/input → continuous analysis → current-game tasks sequence remains completed history, not today’s next-batch rule.
 
 Two approved future directions remain obligations: one Direct/System/Manual policy for Next-owned remote HTTP(S)/WebSocket(S), including providers, compute, contribution and updates (excluding browser-owned traffic, local sidecars and SSH); and an explicit whitelist Java settings import for supported engine/display values with preview and atomic confirmation, no Java writes or automatic engine start. Their successor admission is separate from ANA-16; older narrower transport/import dispositions are historical, not the final migration scope.
 
@@ -155,7 +157,7 @@ Foreground Engine Runs, capability snapshots, Analysis Jobs, Match Sessions, and
 
 ### Durable Preferences And Owner-Routed Settings
 
-`PREF-01` owns the native durable-preference mechanism and one categorized Preferences surface plus contextual entry points. A missing file loads defaults. An unreadable file is isolated, defaults are loaded, and the recovery is reported. An explicit setting changes visible state only after an atomic write succeeds; failure preserves the last durable value and reports the error. Java `config.txt` is never imported.
+`PREF-01` owns the native durable-preference mechanism and one categorized Preferences surface plus contextual entry points. A missing file loads defaults. An unreadable file is isolated, defaults are loaded, and the recovery is reported. An explicit setting changes visible state only after an atomic write succeeds; failure preserves the last durable value and reports the error. The accepted `PREF-01` scope does not import Java `config.txt`. The separately owned whitelist-import successor maps fields alongside each new setting and closes in F: preview and explicit confirmation, atomic apply, no Java writes, no automatic engine start.
 
 Semantic effects stay with their behavior owners. `PREF-01` does not claim engine autoload, analysis presentation, board display, sound, scoring, layout, window geometry, appearance, guidance, match rules, provider locators, or update-channel behavior.
 
@@ -199,16 +201,32 @@ Platform admission is independent. Canonical Artifacts are Windows NSIS and port
 
 Installed variants use OS app-data and preserve it by default on removal. Windows portable uses package-local `user-data/`; deleting that directory is destructive. Packages start in No-engine Mode with `app-core` only. Engine Settings acquires signed KataGo backend and default-model components as Managed Installed Components; domain 04 owns the resulting profile and engine-start behavior. A later accepted domain owner may add a separate signed component through `REL-05` without transferring its capability semantics or making that Deferred component an earlier R11 exit; `CONTRIB-01` uses this seam for its Contribution Client Component.
 
+
+## Current Function-first Delivery
+
+| Batch | User outcome and scope | Gate/owner |
+| --- | --- | --- |
+| A 常用复盘与操作 | Branch/board/chart export; rotate/mirror/color swap; direct stone edits; point search; autoplay interval; ladder continuation; catalog order; legacy entry/shortcut preservation; global search. Internationalization foundations and Java field mapping start with the first affected UI/settings. | Planning 07 creates A tickets, including real shared output decisions and A integration acceptance. Independent exports/order/settings are not chained. |
+| B 引擎与分析 | Batch analysis; thread source/effective/temporary values; performance and startup; focus; adapters; autoload quick analysis; local restore/import/restart correctness; resource identity and diagnostics at their first real consumers. | Planning 08; one engine lifecycle and identity-valid events. Benchmark runner consumes stable profile/config identity; dynamic policy may consume the runner, never the reverse dependency. |
+| C 远程与外部棋盘 | SSH, both remote-compute modes, readboard two-way match with both decision modes; Tencent live protocol and remaining Yike personal/account functions. | Planning 08; named supported-protocol/auth decisions block affected implementation only. Real service/credential/sidecar checks stay required. |
+| D 高级对局 | PK batches/openings/color change/intervention, approved clocks, auto-resign, HumanSL, runtime komi and immutable per-match rule snapshots. | Planning 08; clock and structured rule-storage decisions precede their affected implementation, not unrelated match behavior. |
+| E 其他业务 | Grounded AI teaching, contribution and watcher, LAN publication, contextual guidance. | Planning 08; named service/consent/producer boundaries. Contribution functionality precedes watcher, not signed delivery. |
+| F 功能对等收尾 | Whitelist Java migration, complete locales, retained appearance/layout/entries/defaults/save semantics, UI-02 residuals, cross-function acceptance and appended upstream audit. | Planning 08 owns actual integration acceptance; planning 10 is read-only planning closeout, not this product acceptance. |
+| R11 historical release | Signed components, installers/associations, updater trust/channel, final repository decision and installed support paths. | Planning 08 records later decisions; no release repository selected by this plan. |
+
+The [single upstream ledger](UPSTREAM_DELTA.md) groups behavior across all three audited intervals, retains all 573 source objects and maps the 148 original records to final UDX groups. Counts describe provenance, not a feature count. [The delivery map](../.scratch/issue18-function-first/evidence/06-delivery-map.md) owns the allocation of stable task intents to 07/08 until approved publication. Shared prerequisites have one owner at their first real consumer; other batches consume that same result. Unfrozen clock, custom-grade, continuation, legacy N, provider authorization/protocol and other product choices remain named decisions, not silently selected behavior.
+
+Future upstream audits append after `af0e07a7386483f3bfc8a15780de72ffc2f0de4c`; they never move v1 or rewrite this frozen range. `T06-UPSTREAM-FINAL` owns F’s final audit; feature owners assess reachable serious correctness changes when discovered. Every additional source gets publication/containment evidence and a disposition.
 ## Dependency Graph
 
-Phase numbers group work and express Delivery Order. They are not Item Start Prerequisites, which remain canonical in [PARITY_MATRIX.md](PARITY_MATRIX.md). This graph records Plan-owned order and gates: R10 and R11 may proceed in either order after their own Migration Phase Gates, and other later phases may become dependency-legal beside a lower number once their hard gates are satisfied; they still must not be pulled into the named Next Executable Batch. Critical Edges may cite Matrix-owned Item Start Prerequisites for readability. Those citations are not a second `Depends on` set and must not be read as strengthening Matrix cells. Delivery Order, including `GAME-02` before `GAME-03`, does not block a start whose Matrix prerequisites are satisfied.
+Named batches express delivery priority only. Item Start Prerequisites remain canonical in [PARITY_MATRIX.md](PARITY_MATRIX.md); a dependency may reference a passed `ITEM::functional` record without requiring its unexecuted installed/release obligations. The R3–R11 graph below is historical phase organization, not the current frontier. Independent ready functions may proceed across A–F; reachable data/position/result/protocol correctness risks may be brought forward. No batch number itself is a prerequisite.
 
 ### How To Choose The Next Slice
 
-1. If a Next Executable Batch is named below, do that slice. Do not mix later-phase work into it.
-2. Otherwise pick an incomplete active item whose Matrix-owned Item Start Prerequisites are Accepted and whose applicable Plan-owned gate has passed. A named gate may be passed even when its cross-phase item is not yet Accepted. Final-acceptance gates are not Item Start Prerequisites for that item's earlier semantic work.
-3. Prefer the lowest-numbered incomplete phase, except R10 and R11 may proceed in either order after their own Migration Phase Gates.
-4. Deferred queue items are never phase exits and are never the next slice unless a later plan revision starts them.
+1. Start with the current A batch and its approved, published task contracts. A delivery-map intent is not yet an executable ticket or publication approval.
+2. A task becomes ready only after its actual Matrix prerequisites, named decisions, promotion conditions and required predecessor checks pass on the parent-validated integration tip. A worker report, tracker closure or unvalidated branch is insufficient.
+3. Prefer A–F delivery order while allowing semantically independent work and urgent reachable correctness repairs. Shared lifecycle/state ownership can require serialization even across different files. Release-only prerequisites do not block functional work.
+4. Deferred items retain their status and full admission requirements until their task performs promotion; this plan assigns work and does not promote them. R11 signing, installers, update channels and final release-repository selection remain later obligations.
 
 ```mermaid
 flowchart TB
@@ -262,22 +280,22 @@ R4 ran after R3 and pulled only `PREF-01` and `APP-05` forward from R5; both rem
 | `APP-01` R5 semantic gate | `APP-02` | One-file drop follows the recorded semantic open/replace contract, never final `APP-01` Accepted. |
 | `PREF-01` | `SGF-09`, `REVIEW-03`, `REVIEW-07`, `REVIEW-08`, `WINDOW-02`, `LAYOUT-02`, `LAYOUT-04`, `WINDOW-01`, `APPEAR-01`, `GUIDE-01`, `GAME-04`, `RCOMP-01`, R10 recents | Durable write mechanism only. |
 | `APP-03` | `REL-06` | Windows helper launch is followed by Safe Graceful Shutdown. |
-| `REL-02` | `REL-03`, `REL-05` | Feeds and managed components consume trusted artifacts. |
+| `REL-02` | `REL-03`, signed delivery of `REL-05` | Trusted feeds/components are release obligations. Qualified local runtime-resource functionality does not wait for signing or Releases. |
 | `REL-03`, `REL-05`, `APP-03` | `REL-06` | Windows download/apply. |
 | `REL-03` | `REL-07` | macOS/Linux package handoff. |
 | `REL-06` | `REL-08` | Rollback is the failure path of Windows apply. |
 | `APP-01` R5 semantic gate plus `REL-04` Installed Live association | `APP-01` Accepted | Split graph: semantic gate is R5; `REL-04` is the additional R11 final-acceptance gate only. It is not an Item Start Prerequisite for `APP-01` semantic work or `APP-02`. `APP-01` still owns open/replace semantics. |
-| `PROV-01` | `PROV-03` | Public locator/center before ongoing Yike sync. |
-| `PROV-01`, `PROV-03` | `PROV-06` | Personal-category discovery reuses the public provider center and hands supported public locators to existing import/sync owners without duplicating them. |
-| `PROV-03`, `GAME-01`, `GAME-05`, `PREF-01`, `APP-03` | `PROV-07` | Authenticated Yike read/play reuses external-authoritative sync, sole Match ownership, SGF/review handoff, non-secret preference storage, and bounded teardown; it never creates a second current-game turn owner. |
-| `READ-01` | `READ-02` | Sidecar readiness before ongoing sync. |
-| `READ-01`, `READ-02`, `GAME-01`, `GAME-05`, `ENG-02`, `ENG-09`, `APP-03` | `GAME-10` | Sidecar capabilities and external-authoritative sync, sole Match ownership and SGF handoff, capability-declared engine execution, and bounded teardown exist before External-board Engine Match is admitted. `GAME-10` never expands the R10 `READ-02` exit. |
+| `PROV-01::functional` | `PROV-03` | Public locator/center before ongoing Yike sync. |
+| `PROV-01::functional`, `PROV-03::functional` | `PROV-06` | Personal-category discovery reuses the public provider center and hands supported public locators to existing import/sync owners without duplicating them. |
+| `PROV-03::functional`, `GAME-01`, `GAME-05`, `PREF-01`, `APP-03` | `PROV-07` | Authenticated Yike read/play reuses external-authoritative sync, sole Match ownership, SGF/review handoff, non-secret preference storage, and bounded teardown; it never creates a second current-game turn owner. |
+| `READ-01::functional` | `READ-02` | Sidecar readiness before ongoing sync. |
+| `READ-01::functional`, `READ-02::functional`, `GAME-01`, `GAME-05`, `ENG-02`, `ENG-09`, `APP-03` | `GAME-10` | Sidecar capabilities and external-authoritative sync, sole Match ownership and SGF handoff, capability-declared engine execution, and bounded teardown exist before External-board Engine Match is admitted. `GAME-10` never expands the R10 `READ-02` exit. |
 | `GAME-01`, `GAME-04`, `GAME-05` | `GAME-02` | Ownership, rules, and SGF handoff before Human-vs-Engine. |
 | `GAME-02` (Delivery Order) | `GAME-03` | Deliver the Human-vs-Engine session before integrated single-game PK. This does not block `GAME-03` from starting once its Matrix-owned Item Start Prerequisites are satisfied. |
 
 ### APP-01 Cross-Phase Gate
 
-`APP-01` is the only active item split across two phases. Semantic-gate order and final-acceptance order are separate graphs.
+`APP-01` retains its original cross-phase split. The same evidence distinction now applies to all affected items through Matrix-owned stable functional records; it does not expand any Accepted scope.
 
 ```mermaid
 flowchart LR
@@ -854,7 +872,7 @@ Linux may publish an AppImage without a repository/package-manager signature onl
 
 ### Deferred Queue
 
-These items are stable and unnumbered. Each has an owner and a Plan-owned Promotion Gate in addition to its Matrix-owned Item Start Prerequisites; `—` means no additional promotion condition. None is an R3–R11 exit criterion until a later plan revision starts it.
+These 25 historical Deferred IDs retain their status, owner, and admission clauses. Their current A–F allocation is in the frozen delivery map; allocation is not promotion. The numbered-phase wording in historical admissions means a named current functional owner, not a requirement to finish R11. Native/real-service conditions remain mandatory for functionality; signed packaging and installation are separate R11 gates.
 
 | ID | Owner | Promotion Gate | Admission |
 | --- | --- | --- | --- |
@@ -870,14 +888,14 @@ These items are stable and unnumbered. Each has an owner and a Plan-owned Promot
 | `EXPORT-03` | Analysis export | — | At least one identity-valid selected-line point; invocation-time frozen `ANA-11` encoding; deterministic 1600 × 600 PNG with fixed perspective/series labels and no hover or application chrome; File → 更多保存 and registry-owned `Shift+Alt+S`; native default name; shared Recent Image Export Directory updated only on success; confirmed atomic overwrite; cancel/failure preserves target and all application state. |
 | `ENG-08` | Engine catalog | — | User-directed catalog reorder persists identities without changing Settings selection, Autoload Default, active run, pending edits, or job binding. |
 | `SSH-01` | SSH engine execution | — | One shared catalog; non-secret SSH profile fields plus System Credential Store/session-only fallback; every admitted stdio adapter preserves its declared capabilities; explicit Autoload Default marking; standard run, typed failure, explicit Restart, no local fallback or restart recovery; bounded deadlines fixed on promotion; repository and per-Shipped-Platform live evidence. |
-| `CONTRIB-01` | Contribution service | — | Promote only for official `katagotraining.org` with a separate signed client component built from an admitted KataGo tag for Windows/Linux CUDA and macOS Metal. Require versioned consent, System Credential Store/session-only fallback, argv-safe ephemeral config, Contribution Network Policy, curated backend/device and 1–16 games (default 1), one globally exclusive typed run, terminal auth/config/version failures, one cancellable 60-second reconnect window, explicit Retry, 30-second graceful-to-force Stop, no respawn/recovery, explicit component repair, default-off user-directory per-game auto-save, narrow local-data clearing, sanitized repository evidence, and a real production upload plus lifecycle/component/proxy/credential/save evidence on every Shipped Platform. Other services, custom commands/SSH, ONNX, `+bs50`, ROCm, OpenCL, raw config, and raw console require a successor or remain excluded. Service actions appear only after acceptance. |
+| `CONTRIB-01` | Contribution service | — | Promote only for official `katagotraining.org` with a separate qualified client built from an admitted KataGo tag (signed component delivery remains R11) for Windows/Linux CUDA and macOS Metal. Require versioned consent, System Credential Store/session-only fallback, argv-safe ephemeral config, Contribution Network Policy, curated backend/device and 1–16 games (default 1), one globally exclusive typed run, terminal auth/config/version failures, one cancellable 60-second reconnect window, explicit Retry, 30-second graceful-to-force Stop, no respawn/recovery, explicit component repair, default-off user-directory per-game auto-save, narrow local-data clearing, sanitized repository evidence, and a real production upload plus native lifecycle/component/proxy/credential/save evidence on every admitted functional platform; signed/installed evidence remains separately Not run until R11. Other services, custom commands/SSH, ONNX, `+bs50`, ROCm, OpenCL, raw config, and raw console require a successor or remain excluded. Service actions appear only after acceptance. |
 | `ANA-07` | Analysis | `APP-02` | Session-only SGF queue. Must not replace or dirty the current game. Queue state is not restored after restart. |
 | `ANA-09` | Engine adapters | Named engine/version product evidence | Named engine/version fixtures into the existing analysis model. Missing fields stay unavailable. Interface existence does not start this item. |
 | `GAME-06` | Game modes | — | Session-only PK batch with durable completed-game output. Restart does not restore an unfinished queue. |
 | `GAME-07` | Game modes | a separately approved clock policy | Application-owned remaining-time model. A Compute Budget timeout is not this item. |
 | `GAME-08` | Game modes | a HumanSL-compatible profile | Independent AI Coach Match Session, not a hidden option of `GAME-02`. |
-| `GAME-09` | Game modes plus contribution service | accepted `GAME-01`, accepted `CONTRIB-01` | Promote only as an explicitly opened watcher for an active Contribution Run. A transient tree selects active contributed games, navigates moves, and follows the latest move without replacing or dirtying the authoritative current game. Close Watch restores the exact prior game/cursor while contribution continues; Pause retains an open watcher; Stop Contribution, failure, or exit closes and restores; restart restores neither run nor watcher. Automatic rotation/next-game playback, non-19 filtering, result/rules/console controls, manual batch Save All, and service/network/auto-save ownership stay outside this item. No disabled watcher entry appears before acceptance. Repository fixtures and real-service Installed Live Evidence on every Shipped Platform prove exact preservation, stale-game rejection, navigation, Pause, Close, Stop/failure restoration, and restart. |
-| `GAME-10` | Game modes plus readboard | does not expand the R10 exit | Promote as one External-board Engine Match item only after active external-authoritative sync, target and per-mode engine capabilities, Match ownership, SGF handoff, and teardown are accepted. Final-decision and Leading-candidate modes share one Armed/Pending lifecycle and authoritative-snapshot commit rule. Promotion fixes bounded deadlines, adds the item to a numbered phase without expanding R10, and requires deterministic repository evidence plus real sidecar/target Installed Live Evidence for both modes on every admitted platform. |
+| `GAME-09` | Game modes plus contribution service | accepted `GAME-01`, passed `CONTRIB-01::functional` | Promote only as an explicitly opened watcher for an active Contribution Run. A transient tree selects active contributed games, navigates moves, and follows the latest move without replacing or dirtying the authoritative current game. Close Watch restores the exact prior game/cursor while contribution continues; Pause retains an open watcher; Stop Contribution, failure, or exit closes and restores; restart restores neither run nor watcher. Automatic rotation/next-game playback, non-19 filtering, result/rules/console controls, manual batch Save All, and service/network/auto-save ownership stay outside this item. No disabled watcher entry appears before acceptance. Repository fixtures and real-service native evidence on every admitted functional platform; signed/installed evidence remains R11. These checks prove exact preservation, stale-game rejection, navigation, Pause, Close, Stop/failure restoration, and restart. |
+| `GAME-10` | Game modes plus readboard | does not expand the R10 exit | Promote as one External-board Engine Match item only after active external-authoritative sync, target and per-mode engine capabilities, Match ownership, SGF handoff, and teardown have passed their required functional records. Final-decision and Leading-candidate modes share one Armed/Pending lifecycle and authoritative-snapshot commit rule. Promotion fixes bounded deadlines, assigns the item to C without expanding R10, and requires deterministic repository evidence plus real native sidecar/target evidence for both modes on every admitted platform; installation/trust remains R11. |
 | `PROV-05` | Providers | —; `PROV-04` is an exclusion, not a gate | Non-Yike Tencent/huanle live protocols as a separate item from kifu import. |
 | `PROV-06` | Providers | — | Keep Recommend as default and category/page session-only. Promote only after real guest Personal semantics, pagination/filter/outcome fixtures, and explicit public-locator handoff are proven. If authentication is required, remain Deferred until a later plan revision adds `PROV-07`; never absorb account auth or duplicate import/sync. |
 | `PROV-07` | Providers plus game modes | — | Promote only with one documented provider-supported Yike account authorization, System Credential Store persistence, bounded clearable locator recents, and an explicitly named initial locator-family set. Transactional Start and session switch prove account/side/exact-position/turn admission, visible provider-authoritative clock gating, sole Match ownership, one Pending Provider Move, Move/Pass/non-dismissible-confirmed Resign, exact readback commit, alternate-successor authority, no write retry, bounded read retry, Error/Reconcile reservation, warned Stop/Disconnect, authoritative terminal `RE`, and no live-session recovery. Repository evidence and per-Shipped-Platform live evidence cover every admitted family, credential lifecycle, Provider Network Policy, timeout/auth expiry, conflict, and restart. |
@@ -886,13 +904,18 @@ These items are stable and unnumbered. Each has an owner and a Plan-owned Promot
 
 ## Next Executable Batch
 
-**ANA-16 — Current-game Analysis Tasks is complete and Accepted.** Its eight-ticket set has closed with no follow-up candidates. The approved analysis-restoration sequence through range/color/budgets/Pause/Continue and both two-stage strategies is delivered. R5 has also exited; the next mainline feature batch requires its own planning decision.
+The current executable frontier is **A — 常用复盘与操作**, subject to each task’s actual blockers and publication approval. Ticket 07 owns A contracts; ticket 08 owns B–F/R11 allocation. The [frozen delivery map](../.scratch/issue18-function-first/evidence/06-delivery-map.md) supplies named intents, not published tickets. Task publication and final link closure remain planning tickets 07/08 and 09 respectively; no product implementation or #18 closure is claimed here.
+
+### Historical completed batches
+
+ANA-16 is complete and Accepted within its recorded eight-ticket scope; the analysis-restoration sequence does not satisfy newer focus, tracking or automatic-quick-analysis successors.
+
 
 R5 has exited. Integrated candidate `48db2b2833f9deb45bd7dcd47181f5da77348a0c` completed the native activation/drop, graceful-shutdown, recovery-failure, and truthful-analysis evidence; exact unchanged-path reuse for the ten-second teardown cases was paired with affected final-candidate smoke.
 
 `APP-01` remains Missing only for its R11 / `REL-04` production association and Canonical Artifact Installed Live Evidence obligation. `ENG-09`/`ENG-10`, `UI-02` residuals, and other phase gates retain their own scope; R5 exit does not promote them.
 
-R6 has subsequently exited on `be6951bf57afa07c4a1ae6d57075573b308f5dfd`. The [approved R7 Adaptive Workspace batch](R7_PLAN.md) is based on remote `main` at `5d44760f172867c520adb9c57adcd86678f72c54`; its specification and eight local tickets are published. Tickets 01 and 05 have no ticket blockers; later tickets follow the recorded DAG. Later phases and Deferred items are not part of this batch.
+Historical R7 planning record: R6 exited on `be6951bf57afa07c4a1ae6d57075573b308f5dfd`. [R7 Adaptive Workspace](R7_PLAN.md) was based on `5d44760f172867c520adb9c57adcd86678f72c54`. Its original eight-ticket DAG and scope remain historical evidence; they are not today’s next executable batch.
 
 Slice R3-A (Foreground engine identity and lifecycle) is complete. The historical scope below is audit record, not the current batch.
 
@@ -948,7 +971,7 @@ When a slice is parallelized:
 - Parent integration owns focused validation; workers do not run repository-wide suites while sibling changes are incomplete.
 - Reviewers may inspect all areas but do not silently rewrite another owner's files.
 
-After R3 exits, R4, R5, and R8 may be assigned in parallel when their Migration Phase Gates are satisfied. R10 and R11 may overlap after theirs. R9 waits for the GAME Migration Phase Gate.
+Parallel work follows actual read/write state, interface and lifecycle independence, not historical phase numbers. Parent integration owns validation and sole landing; accepted contracts precede bounded isolated assignments. Operational Closeout only reconciles completed reviews and follow-up dispositions; it does not implement features or replace integration acceptance.
 
 ## Migration Principle
 
