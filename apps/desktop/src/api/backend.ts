@@ -25,6 +25,7 @@ import type {
   EngineProfileRecordDto,
   EngineProfileDto,
   EngineProfilesSettingsDto,
+  EngineProfileOrderRequestDto,
   EngineFailureDto,
   ForegroundEngineSnapshotDto,
   FileActivationDeliveryDto,
@@ -512,6 +513,23 @@ export async function saveEngineProfilesSettings(settings: EngineProfilesSetting
     return normalized;
   }
   return await invoke<EngineProfilesSettingsDto>("save_engine_profiles_settings", { settings });
+}
+
+export async function reorderEngineProfilesSettings(request: EngineProfileOrderRequestDto): Promise<EngineProfilesSettingsDto> {
+  if (isTauriRuntime()) return await invoke<EngineProfilesSettingsDto>("reorder_engine_profiles_settings", { request });
+  const current = loadBrowserEngineProfilesSettings();
+  const ids = current.profiles.map((record) => record.id);
+  if (ids.length !== request.expected_profile_ids.length || ids.some((id, index) => id !== request.expected_profile_ids[index])) {
+    throw new Error("Engine profile catalog order is stale; reload profiles before reordering.");
+  }
+  const records = new Map(current.profiles.map((record) => [record.id, record]));
+  if (request.profile_ids.length !== ids.length || new Set(request.profile_ids).size !== ids.length || request.profile_ids.some((id) => !records.has(id))) {
+    throw new Error("Engine profile order must contain the complete catalog without unknown or duplicate IDs.");
+  }
+  if (ids.every((id, index) => id === request.profile_ids[index])) return current;
+  const reordered = { ...current, profiles: request.profile_ids.map((id) => records.get(id)!) };
+  saveBrowserEngineProfilesSettings(reordered);
+  return reordered;
 }
 
 export type ForegroundEngineEventHandlers = {

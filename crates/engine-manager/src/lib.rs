@@ -19,7 +19,7 @@ mod lifecycle;
 
 pub use catalog::{
     default_engine_profile_record, default_engine_profiles_settings, load_engine_profiles,
-    normalize_engine_profiles, parse_engine_profiles, replace_json_file, save_engine_profiles,
+    normalize_engine_profiles, parse_engine_profiles, reorder_engine_profiles, replace_json_file, save_engine_profiles,
     EngineProfileCatalog, EngineProfileRecord, EngineProfilesSettings, InMemoryEngineProfileCatalog,
     SavedEngineProfile, DEFAULT_ENGINE_PROFILE_ID, ENGINE_PROFILES_VERSION,
 };

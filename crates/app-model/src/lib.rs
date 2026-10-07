@@ -388,6 +388,13 @@ pub struct EngineProfileDto {
     pub adapter: EngineAdapterSettings,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineProfileOrderRequestDto {
+    pub expected_profile_ids: Vec<String>,
+    pub profile_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EngineBackend {

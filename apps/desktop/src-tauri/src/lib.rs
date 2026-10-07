@@ -63,6 +63,7 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 const ENGINE_PROFILE_FILE: &str = "lizzieyzy-next-engine-profile.json";
+static ENGINE_CATALOG_WRITES: Mutex<()> = Mutex::new(());
 
 type EngineCommandResult<T> = Result<T, Box<EngineFailureDto>>;
 
@@ -557,6 +558,7 @@ fn save_engine_profiles_settings(
     manager: State<'_, ForegroundEngineManager>,
     settings: EngineProfilesSettingsDto,
 ) -> Result<EngineProfilesSettingsDto, String> {
+    let _transaction = ENGINE_CATALOG_WRITES.lock().map_err(|_| "engine catalog lock poisoned")?;
     let current = load_engine_profiles_from_disk(&app_handle)?;
     let path = engine_profile_path(&app_handle)?;
     save_engine_profiles_at_path(&path, &manager, &current, settings)
@@ -577,6 +579,25 @@ fn save_engine_profiles_at_path(
         }
     }
     persist_engine_profiles(path, settings)
+}
+
+#[tauri::command]
+fn reorder_engine_profiles_settings(
+    app_handle: AppHandle,
+    request: app_model::EngineProfileOrderRequestDto,
+) -> Result<EngineProfilesSettingsDto, String> {
+    let _transaction = ENGINE_CATALOG_WRITES.lock().map_err(|_| "engine catalog lock poisoned")?;
+    let current = load_engine_profiles_from_disk(&app_handle)?;
+    let path = engine_profile_path(&app_handle)?;
+    reorder_engine_profiles_at_path(&path, current, &request)
+}
+
+fn reorder_engine_profiles_at_path(
+    path: &Path,
+    current: EngineProfilesSettingsDto,
+    request: &app_model::EngineProfileOrderRequestDto,
+) -> Result<EngineProfilesSettingsDto, String> {
+    engine_manager::reorder_engine_profiles(path, current, request)
 }
 
 fn bind_selected_node_job(
@@ -1176,6 +1197,7 @@ pub fn run() {
             update_workspace_shares,
             load_engine_profiles_settings,
             save_engine_profiles_settings,
+            reorder_engine_profiles_settings,
             katago_start_analyze_game,
             preview_analysis_scope,
             start_analysis_task,
@@ -1288,6 +1310,42 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), before);
         assert_eq!(engine_manager::load_engine_profiles(&path).unwrap(), current);
         assert_eq!(manager.snapshot(), run_before);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn gateway_order_preserves_late_edits_and_runtime_and_rejects_late_consumers() {
+        let directory = std::env::temp_dir().join(format!("profile-order-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("catalog.json");
+        let mut current = default_engine_profiles_settings();
+        let mut second = current.profiles[0].clone();
+        second.id = "second".into();
+        second.profile.name = "Second".into();
+        current.profiles.push(second);
+        current.autoload_profile_id = Some("second".into());
+        let request = app_model::EngineProfileOrderRequestDto {
+            expected_profile_ids: vec!["default".into(), "second".into()],
+            profile_ids: vec!["second".into(), "default".into()],
+        };
+        current.profiles[0].profile.name = "Late saved edit".into();
+        persist_engine_profiles(&path, current.clone()).unwrap();
+        let catalog = std::sync::Arc::new(engine_manager::InMemoryEngineProfileCatalog::new());
+        let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+        let runtime = manager.snapshot();
+        let reordered = reorder_engine_profiles_at_path(&path, engine_manager::load_engine_profiles(&path).unwrap(), &request).unwrap();
+        assert_eq!(reordered.selected_profile_id, current.selected_profile_id);
+        assert_eq!(reordered.autoload_profile_id, current.autoload_profile_id);
+        assert_eq!(reordered.profiles[1], current.profiles[0]);
+        assert_eq!(manager.snapshot(), runtime);
+        let before = std::fs::read(&path).unwrap();
+        assert!(reorder_engine_profiles_at_path(&path, reordered.clone(), &request).unwrap_err().contains("stale"));
+        std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
+        let reverse = app_model::EngineProfileOrderRequestDto { expected_profile_ids: request.profile_ids, profile_ids: request.expected_profile_ids };
+        assert!(reorder_engine_profiles_at_path(&path, reordered.clone(), &reverse).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(engine_manager::load_engine_profiles(&path).unwrap(), reordered);
+        assert_eq!(manager.snapshot(), runtime);
         std::fs::remove_dir_all(directory).unwrap();
     }
 
