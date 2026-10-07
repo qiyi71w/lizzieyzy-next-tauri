@@ -110,6 +110,8 @@ pub struct AppPreferencesDto {
     pub scoring_rule: String,
     #[serde(default)]
     pub recent_game_paths: Vec<String>,
+    #[serde(default)]
+    pub recent_image_export_directory: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,6 +197,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         default_komi: default_komi(),
         scoring_rule: default_scoring_rule(),
         recent_game_paths: Vec::new(),
+        recent_image_export_directory: None,
     }
 }
 
@@ -667,6 +670,7 @@ mod tests {
             default_komi: 7.5,
             scoring_rule: default_scoring_rule(),
             recent_game_paths: Vec::new(),
+            recent_image_export_directory: None,
         }
     }
 

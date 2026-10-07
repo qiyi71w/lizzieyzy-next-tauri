@@ -2,9 +2,10 @@
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EngineSetupPanel } from "./EngineSetupPanel";
 import { loadEngineProfilesSettings, saveEngineProfilesSettings } from "../api/backend";
+import * as backend from "../api/backend";
 import type { ForegroundEngineSnapshotDto } from "../domain/types";
 
 let root: Root | null = null;
@@ -21,6 +22,7 @@ afterEach(async () => {
   await act(async () => { root?.unmount(); });
   root = null;
   host.remove();
+  vi.restoreAllMocks();
   localStorage.clear();
 });
 
@@ -176,5 +178,108 @@ describe("engine profile configuration editor", () => {
     await click("保存配置");
     expect(host.textContent).toContain("Save failed:");
     expect(localStorage.getItem(key)).toBeNull();
+  });
+
+  it("persists all four row moves without saving drafts or changing selection, default, Run or Job", async () => {
+    const settings = await loadEngineProfilesSettings();
+    const alpha = { ...settings.profiles[0], id: "alpha", profile: { ...settings.profiles[0].profile, name: "Alpha" } };
+    const beta = { ...alpha, id: "beta", profile: { ...alpha.profile, name: "Beta" } };
+    settings.profiles.push(alpha, beta);
+    settings.selected_profile_id = "alpha";
+    settings.autoload_profile_id = "alpha";
+    await saveEngineProfilesSettings(settings);
+    const snapshot: ForegroundEngineSnapshotDto = {
+      revision: 17, lifecycle: { state: "ready", run: { run_id: "immutable-run", profile_id: "default", adapter_kind: "kata_go_analysis", profile_snapshot: structuredClone(settings.profiles[0].profile) } },
+      continuous: { enabled: true, phase: "searching" },
+      selected_node_job: { run_id: "immutable-run", job_id: "immutable-job", lane: "selected_node", mode: "continuous", state: "searching", generation: 3, node_path: { indices: [0] } }
+    };
+    const original = structuredClone(snapshot);
+    await render(snapshot);
+    await change(field("名称"), "Pending name");
+    await change(field("引擎"), "/pending engine");
+    await click("新增参数");
+    await change(field("参数 1"), "unsaved argv");
+    const order = () => Array.from(host.querySelectorAll<HTMLElement>("[data-profile-order-id]")).map((row) => row.dataset.profileOrderId);
+    const move = async (id: string, label: string) => {
+      const row = host.querySelector(`[data-profile-order-id="${id}"]`)!;
+      const button = Array.from(row.querySelectorAll("button")).find((element) => element.textContent === label)!;
+      await act(async () => { button.click(); });
+      expect(field("配置").value).toBe("alpha");
+      expect(field("名称").value).toBe("Pending name");
+      expect(field("引擎").value).toBe("/pending engine");
+      expect(field("参数 1").value).toBe("unsaved argv");
+      const saved = await loadEngineProfilesSettings();
+      expect(saved.selected_profile_id).toBe("alpha");
+      expect(saved.autoload_profile_id).toBe("alpha");
+      expect(saved.profiles.find((record) => record.id === "alpha")).toEqual(alpha);
+      expect(snapshot).toEqual(original);
+      expect((host.querySelector('[aria-label="Autoload Default"]') as HTMLInputElement).checked).toBe(true);
+    };
+    await move("beta", "置首"); expect(order()).toEqual(["beta", "default", "alpha"]);
+    await move("alpha", "上移"); expect(order()).toEqual(["beta", "alpha", "default"]);
+    await move("alpha", "下移"); expect(order()).toEqual(["beta", "default", "alpha"]);
+    await move("beta", "置尾"); expect(order()).toEqual(["default", "alpha", "beta"]);
+    for (const [id, labels] of [["default", ["置首", "上移"]], ["beta", ["下移", "置尾"]]] as const) {
+      const row = host.querySelector(`[data-profile-order-id="${id}"]`)!;
+      for (const label of labels) expect(Array.from(row.querySelectorAll("button")).find((button) => button.textContent === label)!.disabled).toBe(true);
+    }
+    const before = localStorage.getItem("lizzieyzy-next-engine-profile");
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("quota exhausted"); });
+    await move("beta", "置首");
+    expect(order()).toEqual(["default", "alpha", "beta"]);
+    expect(localStorage.getItem("lizzieyzy-next-engine-profile")).toBe(before);
+    expect(host.textContent).toContain("排序未保存");
+    expect(host.textContent).toContain("quota exhausted");
+    vi.restoreAllMocks();
+    await act(async () => { root!.unmount(); }); root = null;
+    await render(snapshot);
+    expect(order()).toEqual(["default", "alpha", "beta"]);
+    expect(field("配置").value).toBe("alpha");
+  });
+
+  it("retains edits typed during a reorder and fences concurrent catalog actions", async () => {
+    const settings = await loadEngineProfilesSettings();
+    settings.profiles.push({ ...settings.profiles[0], id: "second", profile: { ...settings.profiles[0].profile, name: "Second" } });
+    await saveEngineProfilesSettings(settings);
+    await render();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const reorder = backend.reorderEngineProfilesSettings;
+    const pending = vi.spyOn(backend, "reorderEngineProfilesSettings").mockImplementation(async (request) => {
+      await gate;
+      return await reorder(request);
+    });
+    await click("置尾");
+    expect(host.textContent).toContain("正在保存档案顺序");
+    expect((field("配置") as HTMLSelectElement).disabled).toBe(true);
+    expect(Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "保存配置")!.disabled).toBe(true);
+    await click("置尾");
+    expect(pending).toHaveBeenCalledOnce();
+    await change(field("名称"), "Typed while saving order");
+    await change(field("引擎"), "/late draft");
+    await act(async () => { release(); await gate; });
+    expect(field("名称").value).toBe("Typed while saving order");
+    expect(field("引擎").value).toBe("/late draft");
+    expect(field("配置").value).toBe("default");
+    expect(Array.from(host.querySelectorAll<HTMLElement>("[data-profile-order-id]")).map((row) => row.dataset.profileOrderId)).toEqual(["second", "default"]);
+    expect((await loadEngineProfilesSettings()).profiles[1]).toEqual(settings.profiles[0]);
+    expect((field("配置") as HTMLSelectElement).disabled).toBe(false);
+  });
+
+  it("shows a stale catalog error without losing the pending editor or replacing newer storage", async () => {
+    const settings = await loadEngineProfilesSettings();
+    settings.profiles.push({ ...settings.profiles[0], id: "second", profile: { ...settings.profiles[0].profile, name: "Second" } });
+    await saveEngineProfilesSettings(settings);
+    await render();
+    await change(field("名称"), "Retained pending edit");
+    await backend.reorderEngineProfilesSettings({ expected_profile_ids: ["default", "second"], profile_ids: ["second", "default"] });
+    const newerBytes = localStorage.getItem("lizzieyzy-next-engine-profile");
+    await click("置尾");
+    expect(host.textContent).toContain("排序未保存");
+    expect(host.textContent).toContain("stale");
+    expect(field("名称").value).toBe("Retained pending edit");
+    expect(field("配置").value).toBe("default");
+    expect(localStorage.getItem("lizzieyzy-next-engine-profile")).toBe(newerBytes);
+    expect(Array.from(host.querySelectorAll<HTMLElement>("[data-profile-order-id]")).map((row) => row.dataset.profileOrderId)).toEqual(["default", "second"]);
   });
 });

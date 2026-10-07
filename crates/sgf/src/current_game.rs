@@ -893,6 +893,40 @@ impl CurrentSgfDocument {
         Ok(serialize_sgf_document(&self.document)?)
     }
 
+    /// Serialize one frozen root-to-leaf route without promoting or copying its siblings.
+    pub fn serialize_selected_line(&self, leaf: &NodePath) -> Result<String, CurrentGameError> {
+        let mut node = self.root()?;
+        let mut output = String::from("(");
+        for depth in 0..=leaf.indices.len() {
+            output.push(';');
+            let mut has_size = false;
+            for property in &node.properties {
+                if depth == 0 && property.key == "SZ" {
+                    has_size = true;
+                    crate::push_property(&mut output, "SZ", &crate::serialize_board_dimensions(self.board_width(), self.board_height()));
+                } else {
+                    output.push_str(&property.key);
+                    for value in &property.values {
+                        output.push('[');
+                        output.push_str(&crate::escape_sgf_value(value));
+                        output.push(']');
+                    }
+                }
+            }
+            if depth == 0 && !has_size {
+                crate::push_property(&mut output, "SZ", &crate::serialize_board_dimensions(self.board_width(), self.board_height()));
+            }
+            if let Some(index) = leaf.indices.get(depth) {
+                node = node.children.get(*index as usize).ok_or_else(|| CurrentGameError {
+                    kind: CurrentGameErrorKind::InvalidNodePath,
+                    message: "invalid node path".into(),
+                })?;
+            }
+        }
+        output.push(')');
+        Ok(output)
+    }
+
     pub fn mainline_projection(&self) -> GameDto {
         to_game_dto(self.document.clone())
     }

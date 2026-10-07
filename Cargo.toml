@@ -18,12 +18,13 @@ members = [
   "crates/current-game-recovery",
   "crates/storage",
   "crates/save-as-dialog",
+  "crates/image-export",
 ]
 
 [workspace.package]
 edition = "2021"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/wimi321/lizzieyzy-next"
+repository = "https://github.com/qiyi71w/lizzieyzy-next-tauri"
 rust-version = "1.82"
 
 [workspace.dependencies]

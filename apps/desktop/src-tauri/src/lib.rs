@@ -1,3 +1,4 @@
+use app_model::CurrentGameSaveResultDto;
 use app_model::{
     AnalysisFrameDto, AnalysisJobModeDto, AnalysisJobStartedDto, AppHealthDto, CurrentGameError,
     CurrentGameResultDto, EngineFailureDto, EngineFailureKind, EngineOperationDto, EngineProfileDto,
@@ -7,7 +8,7 @@ use app_model::{
     ReadboardSidecarSyncSnapshotResult, StoneDto,
 };
 use engine_manager::{
-    build_command_spec, check_assets, default_engine_profiles_settings, normalize_engine_profiles,
+    build_command_spec, check_assets, default_engine_profiles_settings,
     parse_engine_profiles, save_engine_profiles as persist_engine_profiles, AssetCheck, CommandSpec,
     EngineProfileCatalog, EngineProfilesSettings as EngineProfilesSettingsDto, ForegroundEngineConfig,
     ForegroundEngineManager, SavedEngineProfile, SelectedNodeJobRequest, WholeGameWorkItem,
@@ -37,6 +38,7 @@ mod file_activation;
 mod human_match;
 mod readboard;
 mod save_as;
+mod export;
 mod session_recovery;
 #[cfg(windows)]
 extern crate windows_core;
@@ -63,6 +65,7 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 const ENGINE_PROFILE_FILE: &str = "lizzieyzy-next-engine-profile.json";
+static ENGINE_CATALOG_WRITES: Mutex<()> = Mutex::new(());
 
 type EngineCommandResult<T> = Result<T, Box<EngineFailureDto>>;
 
@@ -238,12 +241,19 @@ fn serialize_current_game(state: State<CurrentGameState>) -> Result<String, Curr
 }
 
 #[tauri::command]
-fn save_current_game(
-    state: State<CurrentGameState>,
+async fn save_current_game(
+    app: AppHandle,
+    state: State<'_, CurrentGameState>,
     path: String,
     selected_path: NodePath,
-) -> Result<CurrentGameResultDto, String> {
-    state.save_to_path(path, selected_path)
+) -> Result<CurrentGameSaveResultDto, String> {
+    let snapshot = state.capture_save_snapshot(selected_path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<CurrentGameState>()
+            .persist_save_snapshot(path, snapshot)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -252,15 +262,15 @@ async fn save_current_game_as(
     state: State<'_, CurrentGameState>,
     selected_path: NodePath,
     default_file_name: Option<String>,
-) -> Result<Option<CurrentGameResultDto>, String> {
+) -> Result<Option<CurrentGameSaveResultDto>, String> {
     let snapshot = state.capture_save_snapshot(selected_path)?;
     let default_file_name = default_file_name.unwrap_or_else(|| "review.sgf".to_string());
-    let app = app.clone();
-    let outcome =
-        tauri::async_runtime::spawn_blocking(move || save_as::pick_save_as_outcome(&app, &default_file_name))
-            .await
-            .map_err(|error| error.to_string())??;
-    save_as::persist_current_game_save_as(&state, outcome, snapshot)
+    tauri::async_runtime::spawn_blocking(move || {
+        let outcome = save_as::pick_save_as_outcome(&app, &default_file_name)?;
+        save_as::persist_current_game_save_as(&app.state::<CurrentGameState>(), outcome, snapshot)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -557,6 +567,7 @@ fn save_engine_profiles_settings(
     manager: State<'_, ForegroundEngineManager>,
     settings: EngineProfilesSettingsDto,
 ) -> Result<EngineProfilesSettingsDto, String> {
+    let _transaction = ENGINE_CATALOG_WRITES.lock().map_err(|_| "engine catalog lock poisoned")?;
     let current = load_engine_profiles_from_disk(&app_handle)?;
     let path = engine_profile_path(&app_handle)?;
     save_engine_profiles_at_path(&path, &manager, &current, settings)
@@ -568,7 +579,7 @@ fn save_engine_profiles_at_path(
     current: &EngineProfilesSettingsDto,
     settings: EngineProfilesSettingsDto,
 ) -> Result<EngineProfilesSettingsDto, String> {
-    let settings = normalize_engine_profiles(settings)?;
+    let settings = engine_manager::prepare_engine_profiles_save(current, settings)?;
     for record in &current.profiles {
         if !settings.profiles.iter().any(|next| next.id == record.id) {
             manager
@@ -577,6 +588,25 @@ fn save_engine_profiles_at_path(
         }
     }
     persist_engine_profiles(path, settings)
+}
+
+#[tauri::command]
+fn reorder_engine_profiles_settings(
+    app_handle: AppHandle,
+    request: app_model::EngineProfileOrderRequestDto,
+) -> Result<EngineProfilesSettingsDto, String> {
+    let _transaction = ENGINE_CATALOG_WRITES.lock().map_err(|_| "engine catalog lock poisoned")?;
+    let current = load_engine_profiles_from_disk(&app_handle)?;
+    let path = engine_profile_path(&app_handle)?;
+    reorder_engine_profiles_at_path(&path, current, &request)
+}
+
+fn reorder_engine_profiles_at_path(
+    path: &Path,
+    current: EngineProfilesSettingsDto,
+    request: &app_model::EngineProfileOrderRequestDto,
+) -> Result<EngineProfilesSettingsDto, String> {
+    engine_manager::reorder_engine_profiles(path, current, request)
 }
 
 fn bind_selected_node_job(
@@ -1072,6 +1102,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            export::export_selected_line,
+            export::export_rendered_image,
             external_sync::external_sync_snapshot,
             external_sync::load_yike_sync_preferences,
             external_sync::save_yike_sync_preferences,
@@ -1176,6 +1208,7 @@ pub fn run() {
             update_workspace_shares,
             load_engine_profiles_settings,
             save_engine_profiles_settings,
+            reorder_engine_profiles_settings,
             katago_start_analyze_game,
             preview_analysis_scope,
             start_analysis_task,
@@ -1288,6 +1321,66 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), before);
         assert_eq!(engine_manager::load_engine_profiles(&path).unwrap(), current);
         assert_eq!(manager.snapshot(), run_before);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn gateway_order_preserves_late_edits_and_runtime_and_rejects_late_consumers() {
+        let directory = std::env::temp_dir().join(format!("profile-order-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("catalog.json");
+        let mut current = default_engine_profiles_settings();
+        let mut second = current.profiles[0].clone();
+        second.id = "second".into();
+        second.profile.name = "Second".into();
+        current.profiles.push(second);
+        current.autoload_profile_id = Some("second".into());
+        let request = app_model::EngineProfileOrderRequestDto {
+            expected_profile_ids: vec!["default".into(), "second".into()],
+            profile_ids: vec!["second".into(), "default".into()],
+        };
+        current.profiles[0].profile.name = "Late saved edit".into();
+        persist_engine_profiles(&path, current.clone()).unwrap();
+        let catalog = std::sync::Arc::new(engine_manager::InMemoryEngineProfileCatalog::new());
+        let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+        let runtime = manager.snapshot();
+        let reordered = reorder_engine_profiles_at_path(&path, engine_manager::load_engine_profiles(&path).unwrap(), &request).unwrap();
+        assert_eq!(reordered.selected_profile_id, current.selected_profile_id);
+        assert_eq!(reordered.autoload_profile_id, current.autoload_profile_id);
+        assert_eq!(reordered.profiles[1], current.profiles[0]);
+        assert_eq!(manager.snapshot(), runtime);
+        let before = std::fs::read(&path).unwrap();
+        assert!(reorder_engine_profiles_at_path(&path, reordered.clone(), &request).unwrap_err().contains("stale"));
+        std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
+        let reverse = app_model::EngineProfileOrderRequestDto { expected_profile_ids: request.profile_ids, profile_ids: request.expected_profile_ids };
+        assert!(reorder_engine_profiles_at_path(&path, reordered.clone(), &reverse).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(engine_manager::load_engine_profiles(&path).unwrap(), reordered);
+        assert_eq!(manager.snapshot(), runtime);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn gateway_late_full_save_keeps_committed_order_and_appends_new_profiles() {
+        let directory = std::env::temp_dir().join(format!("profile-late-save-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("catalog.json");
+        let mut stale = default_engine_profiles_settings();
+        let mut second = stale.profiles[0].clone();
+        second.id = "second".into();
+        stale.profiles.push(second);
+        let mut current = stale.clone();
+        current.profiles.reverse();
+        persist_engine_profiles(&path, current.clone()).unwrap();
+        stale.profiles[0].profile.name = "Late editor save".into();
+        let mut new_record = stale.profiles[0].clone();
+        new_record.id = "new".into();
+        stale.profiles.insert(0, new_record);
+        let manager = ForegroundEngineManager::new(std::sync::Arc::new(engine_manager::InMemoryEngineProfileCatalog::new()), ForegroundEngineConfig::for_tests());
+        let saved = save_engine_profiles_at_path(&path, &manager, &current, stale).unwrap();
+        assert_eq!(saved.profiles.iter().map(|record| record.id.as_str()).collect::<Vec<_>>(), ["second", "default", "new"]);
+        assert_eq!(saved.profiles[1].profile.name, "Late editor save");
+        assert_eq!(engine_manager::load_engine_profiles(&path).unwrap(), saved);
         std::fs::remove_dir_all(directory).unwrap();
     }
 

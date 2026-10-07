@@ -1,3 +1,5 @@
+import { baseResources, t, type ResourceKey } from "../i18n/resources";
+
 export type ShortcutFocusRule = "focus-safe";
 
 export type ShortcutChord = {
@@ -39,7 +41,8 @@ export type ShortcutRegistry = {
   get(id: string): ShortcutDefinition;
   register(definition: ShortcutDefinition): void;
   bind(id: string, handler: BoundHandler): void;
-  dispatch(event: KeyboardEvent): boolean;
+  dispatch(event: KeyboardEvent, onlyId?: string): boolean;
+  execute(id: string): boolean;
   referenceEntries(): ShortcutReferenceEntry[];
 };
 
@@ -53,9 +56,11 @@ const CLAIMED_SHORTCUTS: ShortcutDefinition[] = [
   { id: "file.save", label: "保存", primary: { key: "s", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.save-as", label: "另存为", primary: { key: "s" }, aliases: [], focusRule: "focus-safe" },
   { id: "file.export-winrate-chart", label: "保存胜率图截图", primary: { key: "s", alt: true, shift: true }, aliases: [], focusRule: "focus-safe" },
+  { id: "file.export-branch", label: "保存当前分支", primary: { key: "s", ctrl: true, alt: true }, aliases: [], focusRule: "focus-safe" },
+  { id: "file.export-board", label: "保存主棋盘截图", primary: { key: "s", alt: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.copy-sgf", label: "复制棋谱", primary: { key: "c", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.paste-sgf", label: "粘贴棋谱", primary: { key: "v", ctrl: true }, aliases: [], focusRule: "focus-safe" },
-  { id: "game.human-vs-engine", label: "人机对局（未接入）", primary: { key: "n" }, aliases: [], focusRule: "focus-safe" },
+  { id: "game.human-vs-engine", label: t("action.game.human-vs-engine"), primary: { key: "n" }, aliases: [], focusRule: "focus-safe" },
   { id: "review.try-play", label: "试下／返回复盘", primary: { key: "v" }, aliases: [], focusRule: "focus-safe" },
   { id: "review.scoring", label: "本地计分", primary: { key: "k" }, aliases: [], focusRule: "focus-safe" },
   { id: "game.board-dimensions", label: "设置棋盘大小", primary: { key: "i", ctrl: true }, aliases: [], focusRule: "focus-safe" },
@@ -105,7 +110,10 @@ const CLAIMED_SHORTCUTS: ShortcutDefinition[] = [
 ];
 
 export function claimedShortcutCatalog(): readonly ShortcutDefinition[] {
-  return CLAIMED_SHORTCUTS.map(cloneDefinition);
+  return CLAIMED_SHORTCUTS.map((definition) => {
+    const key = `action.${definition.id}`;
+    return { ...cloneDefinition(definition), label: key in baseResources ? t(key as ResourceKey) : definition.label };
+  });
 }
 
 export function createShortcutRegistry(definitions: readonly ShortcutDefinition[] = claimedShortcutCatalog()): ShortcutRegistry {
@@ -142,14 +150,21 @@ export function createShortcutRegistry(definitions: readonly ShortcutDefinition[
       if (!items.some((item) => item.id === id)) throw new Error(`Unknown shortcut ${id}`);
       handlers.set(id, handler);
     },
-    dispatch(event) {
+    dispatch(event, onlyId) {
       if (event.isComposing || event.key === "Process") return false;
       if (isSystemReservedCombo(event)) return false;
       if (shouldIgnoreShortcutTarget(event.target)) return false;
-      const match = items.find((item) => chordsOf(item).some((chord) => matchesChord(event, chord)));
+      const match = items.find((item) => (!onlyId || item.id === onlyId) && chordsOf(item).some((chord) => matchesChord(event, chord)));
       if (!match) return false;
       if (shouldPreventDefault(event)) event.preventDefault();
       handlers.get(match.id)?.(event);
+      return true;
+    },
+    execute(id) {
+      const item = items.find((entry) => entry.id === id);
+      const handler = handlers.get(id);
+      if (!item || !handler) return false;
+      handler(new KeyboardEvent("keydown", { key: item.primary.key, ctrlKey: item.primary.ctrl, altKey: item.primary.alt, shiftKey: item.primary.shift }));
       return true;
     },
     referenceEntries() {
@@ -168,9 +183,9 @@ export function actionLabelFromRegistry(id: string, fallback: string): string {
   return `${fallback}(${formatShortcutChord(item.primary)})`;
 }
 
-export function formatShortcutChord(chord: ShortcutChord): string {
+export function formatShortcutChord(chord: ShortcutChord, platform = typeof navigator === "undefined" ? "" : navigator.platform): string {
   const parts: string[] = [];
-  if (chord.ctrl) parts.push("Ctrl");
+  if (chord.ctrl) parts.push(/Mac|iPhone|iPad/.test(platform) ? t("shortcut.command") : t("shortcut.control"));
   if (chord.alt) parts.push("Alt");
   if (chord.shift && !isShiftImpliedByKey(chord.key)) parts.push("Shift");
   parts.push(displayKey(chord.key));
@@ -265,7 +280,7 @@ function formatShortcutKeys(definition: ShortcutDefinition): string {
   if (isDigitRun(chords)) {
     return `${displayKey(chords[0].key)}–${displayKey(chords[chords.length - 1].key)}`;
   }
-  return chords.map(formatShortcutChord).join(", ");
+  return chords.map((chord) => formatShortcutChord(chord)).join(", ");
 }
 
 function isDigitRun(chords: ShortcutChord[]): boolean {

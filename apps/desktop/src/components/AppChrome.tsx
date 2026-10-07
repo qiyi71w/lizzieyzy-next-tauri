@@ -50,6 +50,9 @@ export type ContinuousAnalysisAction = {
 
 type Props = {
   onFunctionSearch?: () => void;
+  onBeforeFunctionSearch?: () => void;
+  onExportBranch?: () => void;
+  onExportBoard?: () => void;
   windowPin?: MainWindowPinControl;
   sheet: "none" | SheetId;
   onToggleSheet: (sheet: SheetId) => void;
@@ -241,9 +244,8 @@ export function AppChrome(props: Props) {
             <SubMenu label="更多保存">
               <MenuItem label="保存纯净棋谱" disabled title={later} />
               <MenuItem label="保存纯净棋谱(带评论)" disabled title={later} />
-              <MenuItem label="保存纯净分支" disabled title={later} />
-              <MenuItem label="保存主棋盘截图" disabled title={later} />
-              <MenuItem label="保存小棋盘截图" disabled title={later} />
+              <MenuItem label={`${t("action.file.export-branch")} (Ctrl+Alt+S)`} onClick={() => run(() => props.onExportBranch?.())} disabled={!nativeAvailable || props.busy} title={!nativeAvailable ? nativeUnavailable : undefined} />
+              <MenuItem label={`${t("action.file.export-board")} (Alt+S)`} onClick={() => run(() => props.onExportBoard?.())} disabled={!nativeAvailable || props.busy} title={!nativeAvailable ? nativeUnavailable : undefined} />
               <MenuItem label="保存胜率图截图" disabled title={later} />
             </SubMenu>
             <MenuItem label="存档与读档" disabled title={later} />
@@ -377,7 +379,7 @@ export function AppChrome(props: Props) {
             <MenuItem label={actionLabelFromRegistry("review.scoring", props.scoringActive ? "计分中" : "本地计分")} onClick={() => run(() => props.onEnterScoring?.())} disabled={!nativeAvailable || props.busy || props.trialActive || props.trialPending || props.scoringActive || props.scoringPending || !props.onEnterScoring} />
             <SubMenu label="人机续弈">
               <MenuItem label="从当前节点续弈" onClick={() => run(() => props.onHumanContinue?.())} disabled={props.busy || !nativeAvailable || !props.onHumanContinue} title={!nativeAvailable ? "人机续弈仅在桌面运行时可用。" : undefined} />
-              <MenuItem label="人机对局(N)" disabled title="人机对局尚未接入，N 不会新建棋谱。" />
+              <MenuItem label={t("action.game.human-vs-engine")} disabled title={t("reason.n")} />
               <MenuItem label="人机对局(分析模式)" disabled title={later} />
               <MenuItem label="人机对局(Genmove模式)" disabled title={later} />
               <MenuItem label="续弈[AI执黑]" disabled title={later} />
@@ -451,7 +453,7 @@ export function AppChrome(props: Props) {
         </div>
         <span className="menu-div" />
         <div className="menu-cluster">
-          <ChromeMenu label="帮助" open={openMenu === "help"} onToggle={() => setOpenMenu(openMenu === "help" ? null : "help")}>
+          <ChromeMenu label="帮助" open={openMenu === "help"} onBeforeOpen={props.onBeforeFunctionSearch} onToggle={() => setOpenMenu(openMenu === "help" ? null : "help")}>
             <MenuItem label={actionLabelFromRegistry("navigation.function-search", t("search.title"))} onClick={() => run(() => props.onFunctionSearch?.())} />
             <MenuItem label={shortcutReferenceLabel} onClick={() => run(props.onOpenShortcutReference)} />
             <MenuItem label="关于" onClick={() => run(props.onAbout)} />
@@ -523,7 +525,7 @@ export function AppChrome(props: Props) {
       </nav>
 
       <div className="tool-strip" role="toolbar" aria-label="分析工具">
-        <button type="button" className="chrome-btn" data-focus-anchor title={t("search.open")} onClick={props.onFunctionSearch}>{t("search.title")}</button>
+        <button type="button" className="chrome-btn" data-focus-anchor title={t("search.open")} onPointerDown={props.onBeforeFunctionSearch} onKeyDown={props.onBeforeFunctionSearch} onClick={props.onFunctionSearch}>{t("search.title")}</button>
         <div className="icon-group">
           <IconBtn src={toolbarIcons.newFile} label="新建" onClick={props.onNew} disabled={props.busy} />
           <IconBtn src={toolbarIcons.open} label="打开" onClick={props.onOpen} disabled={openDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
@@ -741,10 +743,10 @@ export function BottomBar(props: {
   );
 }
 
-function ChromeMenu({ label, open, onToggle, secondary, children }: { label: string; open: boolean; onToggle: () => void; secondary?: boolean; children: ReactNode }) {
+function ChromeMenu({ label, open, onToggle, onBeforeOpen, secondary, children }: { label: string; open: boolean; onToggle: () => void; onBeforeOpen?: () => void; secondary?: boolean; children: ReactNode }) {
   return (
     <div className="menu">
-      <button type="button" className={`menu-trigger${secondary ? " menu-trigger-secondary" : ""}`} aria-expanded={open} aria-haspopup="menu" onClick={onToggle}>
+      <button type="button" className={`menu-trigger${secondary ? " menu-trigger-secondary" : ""}`} aria-expanded={open} aria-haspopup="menu" onPointerDown={onBeforeOpen} onKeyDown={onBeforeOpen} onClick={onToggle}>
         {label}
       </button>
       {open ? <div className="menu-pop" role="menu">{children}</div> : null}

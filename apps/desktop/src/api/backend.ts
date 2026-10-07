@@ -16,6 +16,7 @@ import type {
   AssetCheckDto,
   CandidateMoveDto,
   CurrentGameResultDto,
+  CurrentGameSaveResultDto,
   ApplicationExitActionDto,
   ApplicationExitOutcomeDto,
   DocumentDepartureActionDto,
@@ -25,6 +26,7 @@ import type {
   EngineProfileRecordDto,
   EngineProfileDto,
   EngineProfilesSettingsDto,
+  EngineProfileOrderRequestDto,
   EngineFailureDto,
   ForegroundEngineSnapshotDto,
   FileActivationDeliveryDto,
@@ -418,15 +420,15 @@ export async function saveCurrentGame(
   path: string | null,
   selectedPath: NodePath,
   defaultFileName = "review.sgf"
-): Promise<CurrentGameResultDto | null> {
+): Promise<CurrentGameSaveResultDto | null> {
   if (!isTauriRuntime()) {
     throw new Error(nativeCurrentGameUnavailable);
   }
 
   if (path) {
-    return invoke<CurrentGameResultDto>("save_current_game", { path, selectedPath });
+    return invoke<CurrentGameSaveResultDto>("save_current_game", { path, selectedPath });
   }
-  return invoke<CurrentGameResultDto | null>("save_current_game_as", { selectedPath, defaultFileName });
+  return invoke<CurrentGameSaveResultDto | null>("save_current_game_as", { selectedPath, defaultFileName });
 }
 
 export async function startKataGoGameAnalysis(input: {
@@ -508,10 +510,38 @@ export async function loadEngineProfilesSettings(): Promise<EngineProfilesSettin
 export async function saveEngineProfilesSettings(settings: EngineProfilesSettingsDto): Promise<EngineProfilesSettingsDto> {
   if (!isTauriRuntime()) {
     const normalized = decodeEngineProfilesSettings(settings, false);
+    const current = loadBrowserEngineProfilesSettings();
+    const records = new Map(normalized.profiles.map((record) => [record.id, record]));
+    const retained: EngineProfileRecordDto[] = [];
+    for (const record of current.profiles) {
+      const saved = records.get(record.id);
+      if (saved) {
+        retained.push(saved);
+        records.delete(record.id);
+      }
+    }
+    normalized.profiles = [...retained, ...records.values()];
     saveBrowserEngineProfilesSettings(normalized);
     return normalized;
   }
   return await invoke<EngineProfilesSettingsDto>("save_engine_profiles_settings", { settings });
+}
+
+export async function reorderEngineProfilesSettings(request: EngineProfileOrderRequestDto): Promise<EngineProfilesSettingsDto> {
+  if (isTauriRuntime()) return await invoke<EngineProfilesSettingsDto>("reorder_engine_profiles_settings", { request });
+  const current = loadBrowserEngineProfilesSettings();
+  const ids = current.profiles.map((record) => record.id);
+  if (ids.length !== request.expected_profile_ids.length || ids.some((id, index) => id !== request.expected_profile_ids[index])) {
+    throw new Error("Engine profile catalog order is stale; reload profiles before reordering.");
+  }
+  const records = new Map(current.profiles.map((record) => [record.id, record]));
+  if (request.profile_ids.length !== ids.length || new Set(request.profile_ids).size !== ids.length || request.profile_ids.some((id) => !records.has(id))) {
+    throw new Error("Engine profile order must contain the complete catalog without unknown or duplicate IDs.");
+  }
+  if (ids.every((id, index) => id === request.profile_ids[index])) return current;
+  const reordered = { ...current, profiles: request.profile_ids.map((id) => records.get(id)!) };
+  saveBrowserEngineProfilesSettings(reordered);
+  return reordered;
 }
 
 export type ForegroundEngineEventHandlers = {

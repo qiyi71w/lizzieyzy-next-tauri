@@ -163,6 +163,21 @@ pub struct FileActivationRejectionDto {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportConfirmationDto {
+    pub title: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderedImageExportOptionsDto {
+    #[serde(default)]
+    pub default_file_name: Option<String>,
+    #[serde(default)]
+    pub png_only: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct NodePath {
     pub indices: Vec<u32>,
@@ -240,6 +255,15 @@ pub struct CurrentGameResultDto {
     pub can_redo: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_path: Option<String>,
+}
+
+/// A durable Save completion, independent of the document currently displayed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CurrentGameSaveResultDto {
+    pub saved_path: String,
+    pub captured_generation: u64,
+    pub captured_snapshot_seq: u64,
+    pub current_game: Option<CurrentGameResultDto>,
 }
 
 /// Session-only projection. Paths and revisions belong to this trial, not the saved game.
@@ -386,6 +410,13 @@ pub struct EngineProfileDto {
     pub working_dir: Option<String>,
     #[serde(flatten)]
     pub adapter: EngineAdapterSettings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineProfileOrderRequestDto {
+    pub expected_profile_ids: Vec<String>,
+    pub profile_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1065,6 +1096,25 @@ mod current_game_wire {
         assert_eq!(json["tree"]["children"][0]["properties"][0]["key"], "W");
         assert!(json["snapshot"].get("generated_information").is_none());
         assert_eq!(decoded, result);
+    }
+
+    #[test]
+    fn captured_save_receipt_survives_without_a_current_document_result() {
+        let receipt = CurrentGameSaveResultDto {
+            saved_path: "protected-sgf-中文.SGF".into(),
+            captured_generation: 7,
+            captured_snapshot_seq: 11,
+            current_game: None,
+        };
+        let json = serde_json::to_value(&receipt).unwrap();
+        assert_eq!(json["saved_path"], "protected-sgf-中文.SGF");
+        assert_eq!(json["captured_generation"], 7);
+        assert_eq!(json["captured_snapshot_seq"], 11);
+        assert!(json["current_game"].is_null());
+        assert_eq!(
+            serde_json::from_value::<CurrentGameSaveResultDto>(json).unwrap(),
+            receipt
+        );
     }
 
     #[test]

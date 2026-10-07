@@ -1,3 +1,6 @@
+export type ExportConfirmationDto = { title: string; message: string };
+export type RenderedImageExportOptionsDto = { defaultFileName?: string; pngOnly?: boolean };
+
 export type WorkspaceSharesDto = { left: number; right: number };
 
 export type WindowGeometryDto = {
@@ -86,6 +89,12 @@ export type CurrentGameResultDto = {
   can_redo: boolean;
   dirty: boolean;
   native_path?: string | null;
+};
+export type CurrentGameSaveResultDto = {
+  saved_path: string;
+  captured_generation: number;
+  captured_snapshot_seq: number;
+  current_game: CurrentGameResultDto | null;
 };
 export type TrialSessionDto = {
   session_id: number;
@@ -176,6 +185,7 @@ export type EngineProfileDto = {
 );
 export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto };
 export type EngineProfilesSettingsDto = { version: number; selected_profile_id: string; autoload_profile_id: string | null; profiles: EngineProfileRecordDto[] };
+export type EngineProfileOrderRequestDto = { expected_profile_ids: string[]; profile_ids: string[] };
 export type AssetCheckDto = { path: string; exists: boolean; required: boolean; label: string };
 export type AppHealthDto = { app: string; architecture: string; rust_backend_ready: boolean; notes: string[] };
 

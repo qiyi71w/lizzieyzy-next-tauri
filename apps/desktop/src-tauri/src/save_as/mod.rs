@@ -1,5 +1,5 @@
 use crate::current_game_state::{CurrentGameSaveSnapshot, CurrentGameState};
-use app_model::CurrentGameResultDto;
+use app_model::CurrentGameSaveResultDto;
 use save_as_dialog::{persist_save_as, SaveAsDialogOutcome};
 use tauri::{AppHandle, Runtime};
 
@@ -10,7 +10,7 @@ pub fn persist_current_game_save_as(
     state: &CurrentGameState,
     outcome: SaveAsDialogOutcome,
     snapshot: CurrentGameSaveSnapshot,
-) -> Result<Option<CurrentGameResultDto>, String> {
+) -> Result<Option<CurrentGameSaveResultDto>, String> {
     persist_save_as(outcome, |path| state.persist_save_snapshot(path, snapshot))
 }
 
