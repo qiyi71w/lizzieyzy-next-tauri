@@ -329,6 +329,30 @@ describe("winrate chart encoding surface", () => {
     expect(chartShell(host).getAttribute("data-gap-count")).toBe("1");
   });
 
+  it("selects an unanalyzed point's exact chosen-branch path without starting analysis or an engine", async () => {
+    activeTree = node([lzop("MainEngine 40.0 100 2.0")], [
+      node([{ key: "B", values: ["dd"] }], [
+        node([{ key: "W", values: ["pp"] }, lz("MainEngine 55.0 80 1.0")]),
+        node([{ key: "W", values: ["pq"] }], [node([{ key: "B", values: ["qq"] }, lz("MainEngine 60.0 80 3.0")])])
+      ])
+    ]);
+    currentGameFixture.mockResolvedValue(gameAt({ indices: [0, 1, 0] }));
+    const host = await renderApp();
+    const before = structuredClone(activeTree);
+    const canvas = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="胜率走势"]');
+    canvas.getBoundingClientRect = () => ({ x: 0, y: 0, left: 0, top: 0, right: 240, bottom: 80, width: 240, height: 80, toJSON: () => ({}) });
+    act(() => canvas.dispatchEvent(new MouseEvent("click", { clientX: 150, clientY: 40, bubbles: true })));
+    await flushLast(backend.selectCurrentGameNode);
+    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [0, 1] }, 1);
+    expect(chartShell(host).getAttribute("data-current-move")).toBe("2");
+    expect(activeTree).toEqual(before);
+    expect(backend.fakeAnalyze).not.toHaveBeenCalled();
+    expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(backend.startKataGoGameAnalysis).not.toHaveBeenCalled();
+    expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  });
+
   it("draws Blunder Bar only for Inaccuracy, Mistake, and Blunder", async () => {
     activeTree = barTree;
     currentGameFixture.mockResolvedValue(gameAt({ indices: [] }));
