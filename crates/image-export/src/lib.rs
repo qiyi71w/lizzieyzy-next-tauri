@@ -52,7 +52,8 @@ pub fn write_rgba_atomic(
     rgba: Vec<u8>,
     format: ImageFormat,
 ) -> Result<(), String> {
-    let bytes = encode_rgba(width, height, rgba, format)?;
+    let bytes = encode_rgba(width, height, rgba, format)
+        .map_err(|error| format!("failed to encode image for {}: {error}", target.display()))?;
     sgf::write_file_atomic(target, &bytes)
 }
 
@@ -90,8 +91,23 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let target = directory.join("protected.png");
         std::fs::write(&target, b"prior target bytes").unwrap();
-        assert!(write_rgba_atomic(&target, 3, 2, vec![0; 4], ImageFormat::Png).is_err());
-        assert_eq!(std::fs::read(&target).unwrap(), b"prior target bytes");
+        let fresh_target = directory.join("fresh.png");
+        for (width, height, rgba, cause) in [
+            (3, 2, vec![0; 4], "rendered image dimensions do not match its pixel bytes"),
+            (0, 2, vec![], "image surface has no rendered pixels"),
+            (3, 0, vec![], "image surface has no rendered pixels"),
+        ] {
+            for destination in [&target, &fresh_target] {
+                let error = write_rgba_atomic(destination, width, height, rgba.clone(), ImageFormat::Png)
+                    .unwrap_err();
+                assert!(error.contains("encode"), "missing failed operation: {error}");
+                assert!(error.contains(&destination.display().to_string()), "missing final target: {error}");
+                assert!(error.contains(cause), "missing source error: {error}");
+                assert_eq!(std::fs::read(&target).unwrap(), b"prior target bytes");
+                assert!(!fresh_target.exists());
+                assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+            }
+        }
         let occupied = directory.join("occupied.png");
         std::fs::create_dir(&occupied).unwrap();
         std::fs::write(occupied.join("prior"), b"protected").unwrap();
