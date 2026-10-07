@@ -55,6 +55,8 @@ const CLAIMED_SHORTCUTS: ShortcutDefinition[] = [
   { id: "file.retry-recent", label: "重试最近记录写入", primary: { key: "r", ctrl: true, shift: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.save", label: "保存", primary: { key: "s", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.save-as", label: "另存为", primary: { key: "s" }, aliases: [], focusRule: "focus-safe" },
+  { id: "file.export-branch", label: "保存当前分支", primary: { key: "s", ctrl: true, alt: true }, aliases: [], focusRule: "focus-safe" },
+  { id: "file.export-board", label: "保存主棋盘截图", primary: { key: "s", alt: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.copy-sgf", label: "复制棋谱", primary: { key: "c", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.paste-sgf", label: "粘贴棋谱", primary: { key: "v", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "game.human-vs-engine", label: t("action.game.human-vs-engine"), primary: { key: "n" }, aliases: [], focusRule: "focus-safe" },

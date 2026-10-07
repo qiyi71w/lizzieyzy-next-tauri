@@ -51,6 +51,8 @@ export type ContinuousAnalysisAction = {
 type Props = {
   onFunctionSearch?: () => void;
   onBeforeFunctionSearch?: () => void;
+  onExportBranch?: () => void;
+  onExportBoard?: () => void;
   windowPin?: MainWindowPinControl;
   sheet: "none" | SheetId;
   onToggleSheet: (sheet: SheetId) => void;
@@ -242,9 +244,8 @@ export function AppChrome(props: Props) {
             <SubMenu label="更多保存">
               <MenuItem label="保存纯净棋谱" disabled title={later} />
               <MenuItem label="保存纯净棋谱(带评论)" disabled title={later} />
-              <MenuItem label="保存纯净分支" disabled title={later} />
-              <MenuItem label="保存主棋盘截图" disabled title={later} />
-              <MenuItem label="保存小棋盘截图" disabled title={later} />
+              <MenuItem label={`${t("action.file.export-branch")} (Ctrl+Alt+S)`} onClick={() => run(() => props.onExportBranch?.())} disabled={!nativeAvailable || props.busy} title={!nativeAvailable ? nativeUnavailable : undefined} />
+              <MenuItem label={`${t("action.file.export-board")} (Alt+S)`} onClick={() => run(() => props.onExportBoard?.())} disabled={!nativeAvailable || props.busy} title={!nativeAvailable ? nativeUnavailable : undefined} />
               <MenuItem label="保存胜率图截图" disabled title={later} />
             </SubMenu>
             <MenuItem label="存档与读档" disabled title={later} />

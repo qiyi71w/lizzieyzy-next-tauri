@@ -13,6 +13,7 @@ import {
 export type OverlayMode = "candidates" | "ownership" | "policy";
 
 type Props = {
+  surfaceRef?: React.MutableRefObject<HTMLCanvasElement | null>;
   position: PositionDto;
   markup?: SgfMarkupDto[];
   analysis?: AnalysisFrameDto;
@@ -44,6 +45,7 @@ function samePreviewScope(
 }
 
 export function BoardCanvas({
+  surfaceRef,
   position,
   markup = [],
   analysis,
@@ -64,7 +66,8 @@ export function BoardCanvas({
   pvPrefixLength,
   replayCandidateIndex
 }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const ownCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const canvasRef = surfaceRef ?? ownCanvasRef;
   const size = useElementSize(canvasRef);
   const [keyboardPoint, setKeyboardPoint] = useState<PointDto | null>(null);
   const [overlayModeLocal, setOverlayModeLocal] = useState<OverlayMode>("candidates");

@@ -19,6 +19,8 @@ mod current_game_departure;
 #[cfg(test)]
 mod current_game_save_write;
 #[cfg(test)]
+mod export_tests;
+#[cfg(test)]
 mod current_game_session_recovery;
 mod departure;
 mod external_sync;
@@ -225,6 +227,15 @@ impl CurrentGameState {
 
     pub fn serialize(&self) -> Result<String, CurrentGameError> {
         self.with_document(|document| document.serialize())
+    }
+
+    pub fn capture_selected_line(&self, generation: u64, selected: &NodePath, leaf: &NodePath) -> Result<String, String> {
+        let holder = self.holder.lock().expect("current game state");
+        if holder.generation != generation || &holder.selected_path != selected || !leaf.indices.starts_with(&selected.indices) {
+            return Err("Selected export line no longer matches the current document.".into());
+        }
+        holder.document.as_ref().ok_or_else(|| no_current_game().to_string())?
+            .serialize_selected_line(leaf).map_err(|error| error.to_string())
     }
 
     #[cfg(test)]

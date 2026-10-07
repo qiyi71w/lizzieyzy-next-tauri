@@ -4,6 +4,8 @@
 
 ### English
 
+- Added standalone selected-line SGF export through File → More Save and Ctrl+Alt+S, preserving source, dirty state, metadata, comments and analysis. Mainboard File/Alt+S image export captures invocation-time rendered pixels, encodes PNG/JPG/JPEG/GIF/BMP, confirms the final target before atomic replacement, and shares one success-only durable image directory.
+- Fixed repeated Windows image exports reopening their remembered directory by adapting canonical filesystem paths to compatible Shell folder names.
 - Save and Save As now atomically replace files from a captured complete SGF tree on a blocking worker. Failure protects existing bytes and the document savepoint; late completion reports its actual target without cleaning later edits or adopting a replacement document.
 - Added offline Function Search shared by Help, the fixed toolbar and registry-owned Ctrl/Command+K. It searches registered actions and exact settings targets with platform shortcuts, visible disabled reasons and original-owner guards, and restores source focus on cancellation.
 - Added activation-fenced exact-target navigation, including initial Komi focus in Game Info and return to the retained search session on Cancel; metadata/history semantics are unchanged.
