@@ -1,4 +1,4 @@
-export type FocusReturn = { component: HTMLElement | null; owner: HTMLElement; anchor: HTMLElement | null };
+export type FocusReturn = { component: HTMLElement | null; owner: HTMLElement; anchor: HTMLElement | null; workspace: HTMLElement };
 let cancelPending: (() => void) | undefined;
 
 export function isFocusable(element: HTMLElement | null): element is HTMLElement {
@@ -11,7 +11,7 @@ export function isFocusable(element: HTMLElement | null): element is HTMLElement
 export function captureFocusReturn(workspace: HTMLElement): FocusReturn {
   const component = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const owner = component?.closest<HTMLElement>('[data-focus-owner], [role="dialog"]') ?? workspace;
-  return { component, owner, anchor: owner.querySelector<HTMLElement>('[data-focus-anchor]') ?? owner };
+  return { component, owner, anchor: owner.querySelector<HTMLElement>('[data-focus-anchor]') ?? owner, workspace };
 }
 
 /** Only the newest live owner may focus, after mounting and native activation. */
@@ -28,9 +28,11 @@ export function scheduleOwnedFocus(owner: HTMLElement, resolve: () => HTMLElemen
   const activate = () => {
     cancelAnimationFrame(frame);
     frame = requestAnimationFrame(() => {
-      if (cancelled || !owner.isConnected || !document.hasFocus()) return;
+      if (cancelled) return;
+      if (!owner.isConnected) { cancel(); return; }
+      if (!document.hasFocus()) return;
       const dialog = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]')).filter((node) => !node.closest("[hidden]" )).at(-1);
-      if (dialog && dialog !== owner && !owner.closest('[role="dialog"]') && !dialog.contains(owner)) { cancel(); return; }
+      if (dialog && dialog !== owner && !dialog.contains(owner)) { cancel(); return; }
       const target = resolve();
       if (isFocusable(target)) target.focus();
       else unavailable?.();
@@ -44,5 +46,5 @@ export function scheduleOwnedFocus(owner: HTMLElement, resolve: () => HTMLElemen
 }
 
 export function restoreOwnedFocus(source: FocusReturn): () => void {
-  return scheduleOwnedFocus(source.owner, () => isFocusable(source.component) ? source.component : isFocusable(source.anchor) ? source.anchor : null);
+  return scheduleOwnedFocus(source.owner, () => isFocusable(source.component) ? source.component : isFocusable(source.anchor) ? source.anchor : isFocusable(source.workspace) ? source.workspace : null);
 }

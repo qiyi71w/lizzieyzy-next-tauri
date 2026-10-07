@@ -1,22 +1,35 @@
 import { useEffect, useRef, useState } from "react";
 import { searchFunctions, type FunctionSearchAction } from "../domain/functionSearch";
 import { t } from "../i18n/resources";
+import { scheduleOwnedFocus } from "../domain/focusNavigation";
 
-type Props = { catalog: readonly FunctionSearchAction[]; onCancel: () => void; onExecute: (action: FunctionSearchAction) => void };
+type SearchSession = { query: string; selectedId: string | null };
+type Props = { catalog: readonly FunctionSearchAction[]; onCancel: () => void; onExecute: (action: FunctionSearchAction) => void; initialSession?: SearchSession; onSessionChange?: (session: SearchSession) => void };
 
-export function FunctionSearchPanel({ catalog, onCancel, onExecute }: Props) {
-  const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+export function FunctionSearchPanel({ catalog, onCancel, onExecute, initialSession, onSessionChange }: Props) {
+  const [query, setQuery] = useState(initialSession?.query ?? "");
+  const [selectedId, setSelectedId] = useState<string | null>(initialSession?.selectedId ?? null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const ownerRef = useRef<HTMLElement>(null);
   const results = searchFunctions(catalog, query);
   const selected = results.findIndex((entry) => entry.id === selectedId);
   const index = selected < 0 ? 0 : selected;
-  useEffect(() => { inputRef.current?.focus(); }, []);
+  useEffect(() => {
+    if (!ownerRef.current) return;
+    return scheduleOwnedFocus(ownerRef.current, () => inputRef.current);
+  }, []);
+  useEffect(() => { onSessionChange?.({ query, selectedId }); }, [query, selectedId, onSessionChange]);
 
   return <div className="shortcut-reference-backdrop" onClick={onCancel}>
-    <section className="new-document-dialog function-search" role="dialog" aria-modal="true" aria-label={t("search.title")}
+    <section ref={ownerRef} className="new-document-dialog function-search" role="dialog" aria-modal="true" aria-label={t("search.title")}
       onClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
+        if (event.key === "Tab") {
+          const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('input, button'));
+          const next = controls.indexOf(document.activeElement as HTMLElement) + (event.shiftKey ? -1 : 1);
+          event.preventDefault();
+          controls[(next + controls.length) % controls.length]?.focus();
+        }
         if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onCancel(); }
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
           event.preventDefault();

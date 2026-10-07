@@ -246,7 +246,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
   }
 
   return (
-    <section className="engine-setup-panel" aria-label="引擎设置">
+    <section className="engine-setup-panel" aria-label="引擎设置" data-focus-owner="engine" tabIndex={-1}>
       <div className="engine-run-row">
         <label>
           <span>配置</span>
@@ -292,14 +292,14 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
         <label>
           <span>模型</span>
           <div className="path-input-row">
-            <input value={modelPath} onChange={(event) => updatePath(setModelPath, event.target.value)} placeholder="/path/to/model.bin.gz" aria-invalid={isKnownMissing(assetChecks, "model")} title={pathCheckTitle(assetChecks, "model")} />
+            <input data-search-target="engine.model-path" value={modelPath} onChange={(event) => updatePath(setModelPath, event.target.value)} placeholder="/path/to/model.bin.gz" aria-invalid={isKnownMissing(assetChecks, "model")} title={pathCheckTitle(assetChecks, "model")} />
             <button type="button" className="path-picker-button" onClick={() => void handlePickPath("模型", modelPath, false, setModelPath)}>浏览</button>
           </div>
         </label>
         <label>
           <span>配置文件</span>
           <div className="path-input-row">
-            <input value={configPath} onChange={(event) => updatePath(setConfigPath, event.target.value)} placeholder="/path/to/analysis.cfg" aria-invalid={isKnownMissing(assetChecks, "config")} title={pathCheckTitle(assetChecks, "config")} />
+            <input data-search-target="engine.config-path" value={configPath} onChange={(event) => updatePath(setConfigPath, event.target.value)} placeholder="/path/to/analysis.cfg" aria-invalid={isKnownMissing(assetChecks, "config")} title={pathCheckTitle(assetChecks, "config")} />
             <button type="button" className="path-picker-button" onClick={() => void handlePickPath("配置文件", configPath, false, setConfigPath)}>浏览</button>
           </div>
         </label>

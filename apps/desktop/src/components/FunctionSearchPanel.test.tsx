@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { FunctionSearchPanel } from "./FunctionSearchPanel";
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const host = document.createElement("div");
 document.body.append(host);
