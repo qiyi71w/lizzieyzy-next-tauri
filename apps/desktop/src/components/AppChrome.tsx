@@ -6,6 +6,7 @@ import type { AppPreferences } from "../domain/preferences";
 import type { ProviderKind } from "../domain/providers";
 import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
 import { claimedShortcutCatalog, formatShortcutChord, actionLabelFromRegistry } from "../domain/shortcuts";
+import { t } from "../i18n/resources";
 import {
   AI_COMMENTARY_LABEL,
   AI_COMMENTARY_UNAVAILABLE,
@@ -48,6 +49,7 @@ export type ContinuousAnalysisAction = {
 
 
 type Props = {
+  onFunctionSearch?: () => void;
   windowPin?: MainWindowPinControl;
   sheet: "none" | SheetId;
   onToggleSheet: (sheet: SheetId) => void;
@@ -450,6 +452,7 @@ export function AppChrome(props: Props) {
         <span className="menu-div" />
         <div className="menu-cluster">
           <ChromeMenu label="帮助" open={openMenu === "help"} onToggle={() => setOpenMenu(openMenu === "help" ? null : "help")}>
+            <MenuItem label={actionLabelFromRegistry("navigation.function-search", t("search.title"))} onClick={() => run(() => props.onFunctionSearch?.())} />
             <MenuItem label={shortcutReferenceLabel} onClick={() => run(props.onOpenShortcutReference)} />
             <MenuItem label="关于" onClick={() => run(props.onAbout)} />
             <MenuItem label="检查更新" disabled title={later} />
@@ -520,6 +523,7 @@ export function AppChrome(props: Props) {
       </nav>
 
       <div className="tool-strip" role="toolbar" aria-label="分析工具">
+        <button type="button" className="chrome-btn" data-focus-anchor title={t("search.open")} onClick={props.onFunctionSearch}>{t("search.title")}</button>
         <div className="icon-group">
           <IconBtn src={toolbarIcons.newFile} label="新建" onClick={props.onNew} disabled={props.busy} />
           <IconBtn src={toolbarIcons.open} label="打开" onClick={props.onOpen} disabled={openDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
