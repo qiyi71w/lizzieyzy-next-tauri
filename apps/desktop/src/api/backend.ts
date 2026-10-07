@@ -16,6 +16,7 @@ import type {
   AssetCheckDto,
   CandidateMoveDto,
   CurrentGameResultDto,
+  CurrentGameSaveResultDto,
   ApplicationExitActionDto,
   ApplicationExitOutcomeDto,
   DocumentDepartureActionDto,
@@ -418,15 +419,15 @@ export async function saveCurrentGame(
   path: string | null,
   selectedPath: NodePath,
   defaultFileName = "review.sgf"
-): Promise<CurrentGameResultDto | null> {
+): Promise<CurrentGameSaveResultDto | null> {
   if (!isTauriRuntime()) {
     throw new Error(nativeCurrentGameUnavailable);
   }
 
   if (path) {
-    return invoke<CurrentGameResultDto>("save_current_game", { path, selectedPath });
+    return invoke<CurrentGameSaveResultDto>("save_current_game", { path, selectedPath });
   }
-  return invoke<CurrentGameResultDto | null>("save_current_game_as", { selectedPath, defaultFileName });
+  return invoke<CurrentGameSaveResultDto | null>("save_current_game_as", { selectedPath, defaultFileName });
 }
 
 export async function startKataGoGameAnalysis(input: {

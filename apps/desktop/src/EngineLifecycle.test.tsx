@@ -648,7 +648,7 @@ describe("foreground engine lifecycle UI", () => {
     });
     backend.saveCurrentGame.mockImplementation(async () => {
       authoritative = { ...authoritative, snapshot_seq: 3, dirty: false, native_path: "/tmp/review.sgf" };
-      return authoritative;
+      return { saved_path: "/tmp/review.sgf", captured_generation: authoritative.generation, captured_snapshot_seq: 2, current_game: authoritative };
     });
     const host = await renderApp();
     await readyEngine(host);

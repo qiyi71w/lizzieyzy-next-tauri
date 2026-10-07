@@ -2469,12 +2469,14 @@ export function App() {
         setMessage("Save cancelled.");
         return;
       }
-      if (!isCurrentGameSnapshot(saved)) return;
-      adoptCurrentGame(saved);
-      setCurrentFilePath(saved.native_path ?? null);
-      setDirty(saved.dirty);
-      setFallbackFileName(saved.native_path ? null : fallbackFileName);
-      setMessage(`Saved ${saved.native_path ? fileNameFromPath(saved.native_path) : saveFileName}.`);
+      const current = saved.current_game;
+      if (current && isCurrentGameSnapshot(current)) {
+        adoptCurrentGame(current);
+        setCurrentFilePath(current.native_path ?? null);
+        setDirty(current.dirty);
+        setFallbackFileName(current.native_path ? null : fallbackFileName);
+      }
+      setMessage(`Saved ${fileNameFromPath(saved.saved_path)}.`);
     } catch (error) {
       setMessage(`Save failed: ${errorMessage(error)}`);
     } finally {

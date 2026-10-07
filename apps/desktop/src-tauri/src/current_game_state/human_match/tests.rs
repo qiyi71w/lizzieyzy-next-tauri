@@ -596,6 +596,8 @@ fn start_is_one_history_unit_and_saved_defaults_never_contain_live_session() {
             rig.directory.join("match.sgf").to_string_lossy().into(),
             NodePath::default(),
         )
+        .unwrap()
+        .current_game
         .unwrap();
     assert!(!saved.dirty);
     let defaults = app_preferences::load_from_path(&rig.path).unwrap().preferences;
@@ -918,6 +920,8 @@ fn continue_from_non_mainline_node_is_independent_mainline_and_one_history_unit(
     assert!(
         !rig.state
             .save_to_path(file.to_string_lossy().into(), redone.selected_path)
+            .unwrap()
+            .current_game
             .unwrap()
             .dirty
     );

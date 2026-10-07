@@ -635,7 +635,7 @@ describe("attached SGF analysis as the active persistence path", () => {
     }));
     backend.saveCurrentGame.mockImplementation(async () => {
       dirty = false;
-      return { ...snapshotAt({ indices: [] }), dirty: false, native_path: "/tmp/snapshot-a.sgf" };
+      return { saved_path: "/tmp/snapshot-a.sgf", captured_generation: 1, captured_snapshot_seq: 1, current_game: { ...snapshotAt({ indices: [] }), dirty: false, native_path: "/tmp/snapshot-a.sgf" } };
     });
 
     const host = await renderApp();
