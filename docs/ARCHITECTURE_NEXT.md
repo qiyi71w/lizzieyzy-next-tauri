@@ -119,6 +119,7 @@ Mainboard image export shares its File menu/Alt+S owner and synchronously reads 
 The same `exportRenderedImage(snapshot, options?)` wrapper and command accept `RenderedImageExportOptionsDto` (`defaultFileName` and `pngOnly`, both omitted for the mainboard). The chart consumer supplies its frozen PNG filename and PNG-only dialog on this shared path; the options do not create another directory or writer.
 
 `AppPreferencesDto.recentImageExportDirectory` is the single durable Recent Image Export Directory for board and chart consumers. The existing `PreferencesState` transaction records it only after complete image replacement and preserves it against stale full-form saves; chooser cancel/refusal and encode/write/replace failures retain the previous directory. A missing or unavailable directory uses native-dialog fallback. Java `filesystem.last-image-folder` maps to this field; Java `filesystem.last-folder` has no current Next schema field, so its missing-field fallback applies. Sub-Board image output and Shift+S retain Ticket27's approved product cut independently of the retained Variation/Raw display.
+On Windows the durable directory stays a canonical filesystem path. Only the native Shell folder boundary uses `dunce::simplified` to supply a compatible parsing name for safe extended-length drive paths, so repeated exports and restart reuse the same directory without changing its stored identity or image-write target.
 
 
 Provider/readboard command contracts in this batch:

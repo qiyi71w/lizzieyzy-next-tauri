@@ -2230,6 +2230,7 @@ dependencies = [
  "app-model",
  "app-preferences",
  "current-game-recovery",
+ "dunce",
  "engine-manager",
  "go-core",
  "gtk",

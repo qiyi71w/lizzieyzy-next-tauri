@@ -70,7 +70,7 @@ unsafe fn pick_com(
         dialog.SetFileName(&HSTRING::from(name))?;
     }
     if let Some(directory) = directory {
-        let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(directory.as_os_str()), None)?;
+        let item = folder_item(directory)?;
         dialog.SetFolder(&item)?;
     }
     if let Err(error) = dialog.Show(None) {
@@ -106,4 +106,47 @@ unsafe fn pick_com(
         path = PathBuf::from(name);
     }
     Ok(Some(path))
+}
+
+unsafe fn folder_item(directory: &Path) -> windows::core::Result<IShellItem> {
+    // Canonical filesystem paths remain authoritative; the Shell needs a compatible parsing name.
+    SHCreateItemFromParsingName(&HSTRING::from(dunce::simplified(directory).as_os_str()), None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_recent_image_directory_is_usable_by_the_shell() {
+        let directory = std::env::temp_dir().join(format!(
+            "r11-export-folder-中文-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let canonical = directory.canonicalize().unwrap();
+        assert!(canonical.as_os_str().as_encoded_bytes().starts_with(b"\\\\?\\"));
+        unsafe {
+            CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap();
+            {
+                let dialog: IFileSaveDialog =
+                    CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER).unwrap();
+                dialog.SetOptions(FOS_FORCEFILESYSTEM).unwrap();
+                for remembered in [&canonical, &directory] {
+                    let item = folder_item(remembered).unwrap();
+                    dialog.SetFolder(&item).unwrap();
+                    let raw = item.GetDisplayName(SIGDN_FILESYSPATH).unwrap();
+                    let display = raw.to_string();
+                    CoTaskMemFree(Some(raw.as_ptr().cast()));
+                    assert_eq!(PathBuf::from(display.unwrap()).canonicalize().unwrap(), canonical);
+                }
+            }
+            CoUninitialize();
+        }
+        std::fs::remove_dir(directory).unwrap();
+    }
 }
