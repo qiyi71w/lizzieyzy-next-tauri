@@ -24,6 +24,7 @@ const sourceKeywords: Readonly<Record<string, readonly string[]>> = {
   "file.open": ["打开", "dakai", "open", "SGF", "GIB"],
   "file.save": ["保存", "baocun", "save"],
   "file.save-as": ["另存", "lingcun", "save as"],
+  "file.export-winrate-chart": ["胜率图", "shenglvtu", "winrate", "chart", "PNG", "export"],
   "game.metadata": ["棋局信息", "qijuxinxi", "game info", "komi", "贴目", "tiemu"],
   "game.root-setup": ["起始局面", "qishijumian", "setup", "handicap"],
   "game.convert-position": ["转换", "zhuanhuan", "convert", "setup"],

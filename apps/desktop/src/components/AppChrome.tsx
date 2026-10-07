@@ -53,6 +53,7 @@ type Props = {
   onBeforeFunctionSearch?: () => void;
   onExportBranch?: () => void;
   onExportBoard?: () => void;
+  onExportChart?: () => void;
   windowPin?: MainWindowPinControl;
   sheet: "none" | SheetId;
   onToggleSheet: (sheet: SheetId) => void;
@@ -246,7 +247,7 @@ export function AppChrome(props: Props) {
               <MenuItem label="保存纯净棋谱(带评论)" disabled title={later} />
               <MenuItem label={`${t("action.file.export-branch")} (Ctrl+Alt+S)`} onClick={() => run(() => props.onExportBranch?.())} disabled={!nativeAvailable || props.busy} title={!nativeAvailable ? nativeUnavailable : undefined} />
               <MenuItem label={`${t("action.file.export-board")} (Alt+S)`} onClick={() => run(() => props.onExportBoard?.())} disabled={!nativeAvailable || props.busy} title={!nativeAvailable ? nativeUnavailable : undefined} />
-              <MenuItem label="保存胜率图截图" disabled title={later} />
+              <MenuItem label={actionLabelFromRegistry("file.export-winrate-chart", t("action.file.export-winrate-chart"))} onClick={() => run(() => props.onExportChart?.())} disabled={!nativeAvailable || props.busy} title={!nativeAvailable ? nativeUnavailable : undefined} />
             </SubMenu>
             <MenuItem label="存档与读档" disabled title={later} />
             <div className="menu-sep" role="separator" />

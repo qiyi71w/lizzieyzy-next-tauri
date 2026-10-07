@@ -7,6 +7,7 @@ import { BoardCanvas } from "./components/BoardCanvas";
 import { captureRenderedSurface, chosenLeaf, exportRenderedImage, exportSelectedLine } from "./api/export";
 import { ScoringControls } from "./components/ScoringControls";
 import { WinrateChart } from "./components/WinrateChart";
+import { captureChartExport, renderChartExport } from "./domain/chartExport";
 import { ReviewTree } from "./components/ReviewTree";
 import { reviewLineProblems, type ReviewProblem } from "./domain/reviewNavigation";
 import { AnalysisPanel } from "./components/AnalysisPanel";
@@ -850,6 +851,7 @@ export function App() {
     });
     shortcutRegistry.bind("file.export-branch", () => void handleExportBranch());
     shortcutRegistry.bind("file.export-board", () => void handleExportBoard());
+    shortcutRegistry.bind("file.export-winrate-chart", () => void handleExportChart());
     shortcutRegistry.bind("file.copy-sgf", () => {
       void handleCopySgf();
     });
@@ -970,6 +972,8 @@ export function App() {
     chosenChildren,
     currentGame,
     trial,
+    chartModel,
+    documentPath,
     trialPending,
     scoring,
     scoringPending,
@@ -1076,6 +1080,7 @@ export function App() {
     if (id === "game.human-vs-engine") return "reason.n";
     if (id === "help.shortcut-reference") return undefined;
     if (id === "file.save" || id === "file.save-as") return !nativeRuntime ? "reason.desktop" : fileFlowBusy || departurePending || matchStarting ? "reason.busy" : id === "file.save" && !documentDirty ? "reason.clean" : undefined;
+    if (id === "file.export-winrate-chart") return !nativeRuntime ? "reason.desktop" : exportPendingRef.current || departurePending ? "reason.busy" : undefined;
     if (id === "file.copy-sgf") return undefined;
     if (id === "file.clear-recent") return documentReason ?? (recentHistoryBusy ? "reason.busy" : preferences.recentGamePaths.length === 0 ? "reason.noTarget" : undefined);
     if (id === "file.retry-recent") return documentReason ?? (recentHistoryBusy ? "reason.busy" : !recentHistoryError ? "reason.noTarget" : undefined);
@@ -2594,6 +2599,19 @@ export function App() {
       setMessage(path ? `${t("export.saved")}${path}` : t("export.cancelled"));
     } catch (error) {
       setMessage(`${t("export.failed")}${errorMessage(error)}`);
+    } finally { exportPendingRef.current = false; }
+  }
+
+  async function handleExportChart() {
+    if (exportPendingRef.current || departurePendingRef.current) return;
+    exportPendingRef.current = true;
+    try {
+      const captured = captureChartExport(chartModel, documentPath);
+      const snapshot = renderChartExport(captured);
+      const path = await exportRenderedImage(snapshot, { defaultFileName: captured.defaultFileName, pngOnly: true });
+      setMessage(path ? `${t("chart.export.saved")}：${path}` : t("chart.export.cancelled"));
+    } catch (error) {
+      setMessage(`${t("chart.export.failed")}：${errorMessage(error)}`);
     } finally { exportPendingRef.current = false; }
   }
 
@@ -4234,6 +4252,7 @@ export function App() {
       onSaveAs={() => void handleSaveSgfDocument(true)}
       onExportBranch={() => void handleExportBranch()}
       onExportBoard={() => void handleExportBoard()}
+      onExportChart={() => void handleExportChart()}
       onLoadSample={() => void loadSample()}
       onParse={() => void handleParseSgf()}
       onFakeAnalyze={() => void handleFakeAnalyze()}

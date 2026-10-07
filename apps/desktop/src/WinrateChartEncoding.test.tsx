@@ -1,10 +1,13 @@
+/// <reference lib="es2024.promise" />
 // @vitest-environment jsdom
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CurrentGameResultDto, GameDto, NodePath, SgfTreeNodeDto } from "./domain/types";
+import type { AnalysisJobEventDto, CurrentGameResultDto, GameDto, NodePath, SgfTreeNodeDto } from "./domain/types";
 import { defaultAppPreferences, type AppPreferences } from "./domain/preferences";
+import type { Mock } from "vitest";
+import type * as ExportApiModule from "./api/export";
 
 const currentGameFixture = vi.hoisted(() => vi.fn());
 const backend = vi.hoisted(() => ({
@@ -96,6 +99,12 @@ vi.mock("./api/preferences", async (importOriginal) => {
   };
 });
 
+const imageApi = vi.hoisted(() => ({ exportRenderedImage: vi.fn() }));
+vi.mock("./api/export", async (importOriginal) => ({
+  ...await importOriginal<typeof ExportApiModule>(),
+  exportRenderedImage: imageApi.exportRenderedImage
+}));
+
 vi.mock("./components/EngineSetupPanel", () => ({ EngineSetupPanel: () => null }));
 vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
 
@@ -158,6 +167,7 @@ const initialProjection: GameDto = {
 
 let root: Root | null = null;
 let activeTree: SgfTreeNodeDto = scoredTree;
+let exportedContexts: Array<{ canvas: HTMLCanvasElement; fillText: Mock }> = [];
 
 function gameAt(path: NodePath): CurrentGameResultDto {
   return {
@@ -186,6 +196,8 @@ function gameAt(path: NodePath): CurrentGameResultDto {
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   activeTree = scoredTree;
+  exportedContexts = [];
+  imageApi.exportRenderedImage.mockResolvedValue("C:\\images\\chart.png");
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
     return canvasContext(this);
   });
@@ -353,6 +365,118 @@ describe("winrate chart encoding surface", () => {
     expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
   });
 
+  it("routes menu and Shift+Alt+S through the same frozen PNG consumer and leaves square on Q", async () => {
+    currentGameFixture.mockResolvedValue({ ...gameAt({ indices: [0] }), native_path: "C:\\games\\source.game.SGF" });
+    const host = await renderApp();
+    act(() => buttonNamed(host, "文件").click());
+    const item = [...host.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]')].find((button) => button.textContent?.startsWith("保存胜率图截图"));
+    expect(item?.textContent).toContain("Alt+Shift+S");
+    expect(item?.disabled).toBe(false);
+    act(() => item!.click());
+    await flushLast(imageApi.exportRenderedImage);
+    expect(imageApi.exportRenderedImage).toHaveBeenCalledWith(expect.objectContaining({ width: 1600, height: 600 }), { defaultFileName: "source.game-winrate-m1.png", pngOnly: true });
+    const first = imageApi.exportRenderedImage.mock.calls[0][0];
+    expect(first.rgba).toHaveLength(1600 * 600 * 4);
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "s", altKey: true, shiftKey: true, bubbles: true })));
+    await flushLast(imageApi.exportRenderedImage);
+    expect(imageApi.exportRenderedImage).toHaveBeenCalledTimes(2);
+    expect(imageApi.exportRenderedImage.mock.calls[1][1]).toEqual(imageApi.exportRenderedImage.mock.calls[0][1]);
+    expect(imageApi.exportRenderedImage.mock.calls[1][0]).toEqual(expect.objectContaining({ width: 1600, height: 600 }));
+    expect(exportedContexts[1].fillText.mock.calls).toEqual(exportedContexts[0].fillText.mock.calls);
+    expect(buttonNamed(host, "方").getAttribute("aria-pressed")).toBe("false");
+    act(() => {
+      const input = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "s", altKey: true, shiftKey: true, bubbles: true }));
+    });
+    expect(imageApi.exportRenderedImage).toHaveBeenCalledTimes(2);
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "q", altKey: true, shiftKey: true, bubbles: true })));
+    expect(buttonNamed(host, "方").getAttribute("aria-pressed")).toBe("true");
+    expect(imageApi.exportRenderedImage).toHaveBeenCalledTimes(2);
+    expect(backend.saveCurrentGame).not.toHaveBeenCalled();
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+    expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+  });
+
+  it("refuses no-data and zero-visit-only selected lines visibly without a writer, fake analysis or engine", async () => {
+    for (const tree of [emptyTree, node([lzop("MainEngine 40.0 0 7.3")])]) {
+      activeTree = tree;
+      currentGameFixture.mockResolvedValue(gameAt({ indices: [] }));
+      const host = await renderApp();
+      act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "s", altKey: true, shiftKey: true, bubbles: true })));
+      expect(host.textContent).toContain("所选线路没有有效分析");
+      expect(imageApi.exportRenderedImage).not.toHaveBeenCalled();
+      expect(backend.fakeAnalyze).not.toHaveBeenCalled();
+      expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
+      expect(backend.startKataGoGameAnalysis).not.toHaveBeenCalled();
+      expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+    }
+  });
+
+  it("retains invocation pixels/name while later navigation and analysis change the live model", async () => {
+    const completion = Promise.withResolvers<string | null>();
+    imageApi.exportRenderedImage.mockReturnValue(completion.promise);
+    currentGameFixture.mockResolvedValue(gameAt({ indices: [] }));
+    const host = await renderApp();
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "s", altKey: true, shiftKey: true, bubbles: true })));
+    expect(imageApi.exportRenderedImage).toHaveBeenCalledTimes(1);
+    expect(imageApi.exportRenderedImage.mock.calls[0][1]).toEqual({ defaultFileName: "untitled-winrate-m0.png", pngOnly: true });
+    const capture = imageApi.exportRenderedImage.mock.calls[0][0];
+    const labels = exportedContexts[0].fillText.mock.calls.map(([text]) => text);
+    expect(labels).toContain("当前 0手 · 60.0% · B+2.0");
+    activeTree = node([lzop("MainEngine 90.0 500 7.3")], scoredTree.children);
+    act(() => buttonNamed(host, "下一变化").click());
+    await flushLast(backend.selectCurrentGameNode);
+    expect(chartShell(host).getAttribute("data-current-move")).toBe("1");
+    expect(exportedContexts[0].fillText.mock.calls.map(([text]) => text)).toEqual(labels);
+    expect(imageApi.exportRenderedImage.mock.calls[0][0]).toBe(capture);
+    await act(async () => { completion.resolve("C:\\images\\frozen.png"); await completion.promise; });
+    expect(host.textContent).toContain("胜率图已保存：C:\\images\\frozen.png");
+    expect(backend.saveCurrentGame).not.toHaveBeenCalled();
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+    expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+  });
+
+  it.each([null, new Error("PNG encoding failed"), new Error("atomic replacement denied")])("reports writer completion %s without mutating the source or settings", async (result) => {
+    if (result instanceof Error) imageApi.exportRenderedImage.mockRejectedValue(result);
+    else imageApi.exportRenderedImage.mockResolvedValue(result);
+    activeTree = node([lzop("MainEngine 40.0 100 7.3")]);
+    currentGameFixture.mockResolvedValue(gameAt({ indices: [] }));
+    const before = structuredClone(activeTree);
+    const host = await renderApp();
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "s", altKey: true, shiftKey: true, bubbles: true })));
+    await act(async () => { await imageApi.exportRenderedImage.mock.results[0].value.catch(() => undefined); });
+    expect(host.textContent).toContain(result instanceof Error ? `胜率图导出失败：${result.message}` : "已取消胜率图导出。");
+    expect(activeTree).toEqual(before);
+    expect(backend.saveCurrentGame).not.toHaveBeenCalled();
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+    expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+  });
+
+  it("does not admit stale-only attached analysis from another document generation for export", async () => {
+    let publishStale: ((event: AnalysisJobEventDto) => void) | undefined;
+    backend.subscribeForegroundEngine.mockImplementation((...callbacks: unknown[]) => {
+      const onJob = callbacks[2];
+      if (typeof onJob === "function") publishStale = (event) => onJob(event);
+      return Promise.resolve(() => undefined);
+    });
+    activeTree = emptyTree;
+    currentGameFixture.mockResolvedValue(gameAt({ indices: [] }));
+    const host = await renderApp();
+    const stale = { ...gameAt({ indices: [] }), tree: scoredTree, generation: 0 };
+    act(() => publishStale?.({ run_id: "old-run", job_id: "old-job", lane: "selected_node", mode: "finite", generation: 0, node_path: { indices: [] }, outcome: "completed", current_game: stale }));
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "s", altKey: true, shiftKey: true, bubbles: true })));
+    expect(host.textContent).toContain("所选线路没有有效分析");
+    expect(chartShell(host).getAttribute("data-gap-count")).toBe("1");
+    expect(imageApi.exportRenderedImage).not.toHaveBeenCalled();
+    expect(exportedContexts).toHaveLength(0);
+    expect(backend.fakeAnalyze).not.toHaveBeenCalled();
+    expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  });
+
   it("draws Blunder Bar only for Inaccuracy, Mistake, and Blunder", async () => {
     activeTree = barTree;
     currentGameFixture.mockResolvedValue(gameAt({ indices: [] }));
@@ -491,6 +615,11 @@ function requiredElement<T extends Element = HTMLElement>(host: HTMLElement, sel
 
 function canvasContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
   const target = { canvas } as CanvasRenderingContext2D;
+  if (canvas.width === 1600 && canvas.height === 600) {
+    const fillText = vi.fn();
+    exportedContexts.push({ canvas, fillText });
+    Object.assign(target, { fillText, getImageData: () => ({ data: new Uint8ClampedArray(1600 * 600 * 4) }) });
+  }
   return new Proxy(target, {
     get(object, property) {
       if (property in object) return Reflect.get(object, property);
