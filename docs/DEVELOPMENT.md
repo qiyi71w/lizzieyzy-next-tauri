@@ -708,6 +708,10 @@ cd apps/desktop && npx vitest run src/domain/moveRank.test.ts src/domain/winrate
 
 Expected result: first-use defaults are Black perspective, both series on, Blunder Bar off, Graph Hover on, and Score Lead Scale 15. The chart encodes the selected root-to-leaf variation with Java Auto Move Rank bars.
 
+R11 chart readability checks use actual black-frame leaders in either whole-series perspective: ±7.3/±4.6, ±0/±0.04 → `0.0`, +0.05 → `B+0.1` and −0.05 → `W+0.1`. Check winrate-only `50%`, score-only `0`, both-series unmarked highlighted baseline and no-metric absence; ordinary grid lines must not duplicate the baseline. Current, hover and endpoint text must remain readable together. The 1600×600 export renderer has fixed perspective/series labels, scales, true gaps, visible bars and current marker, with hover and UI chrome omitted.
+
+For chart export, capture before the chooser, then navigate and publish later analysis while it remains open: the PNG must retain the invocation model and `<sgf-stem>-winrate-m<selectedMove>.png` (literal `untitled` without an SGF source). No valid selected-line data must visibly refuse without a chooser or engine. Windows source-runtime acceptance must separately exercise PNG prefill, overwrite, visible write failure, reopen dimensions/readability and exact unanalyzed branch/path click with fake analysis and engine inactive. Browser renderer snapshots and controlled IPC fixtures do not satisfy those native gates. `EXPORT-03` retains its Shipped Platform installed-production-trust evidence boundary; an unsigned CI artifact is not automatically a Shipped Platform.
+
 ### 11. Next-move Review Marker
 
 - Open a branching SGF with coordinate children, a pass child, and Java `LZ` / `LZOP` on the selected node and its Primary Child.

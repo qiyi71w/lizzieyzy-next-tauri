@@ -46,4 +46,19 @@ describe("offline registered function catalog", () => {
     expect(registry.dispatch(typing)).toBe(false);
     expect(search).not.toHaveBeenCalled();
   });
+  it("finds PNG export independently of translations and keeps chart/square chords exact", () => {
+    const registry = createShortcutRegistry();
+    const exportChart = vi.fn();
+    registry.bind("file.export-winrate-chart", exportChart);
+    const catalog = registeredFunctionCatalog(registry, () => undefined);
+    for (const query of ["PNG", "shenglvtu", "winrate chart"]) {
+      const matches = searchFunctions(catalog, query);
+      expect(matches.map((entry) => entry.id)).toEqual(["file.export-winrate-chart"]);
+      expect(matches[0].shortcut).toBe("Alt+Shift+S");
+    }
+    expect(catalog.find((entry) => entry.id === "markup.square")?.shortcut).toBe("Alt+Shift+Q");
+    expect(exportChart).not.toHaveBeenCalled();
+    searchFunctions(catalog, "PNG")[0].execute();
+    expect(exportChart).toHaveBeenCalledOnce();
+  });
 });

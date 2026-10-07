@@ -931,6 +931,7 @@
 - **功能断言 / 调查停止条件**: 只重建原ANA-11候选/证据tuple并检查未分析节点点击分支identity；停止于可继承窄点击证据+拖动差异表，缺原记录则保持未来原生门，不发明新native通过。
 - **实际阻塞与未来证据门**: 历史图native记录的完整候选/具体条件；新增拖动行为如未支持由06归入具名后继。
 - **唯一批次建议 / 责任**: A；`T03-ANA11-UNANALYZED-SCRUBBING` 拥有此Delta的结果。07/08冻结具体实施合同，06负责同源去重。
+- **R11-06 有界调查结果**: 冻结 `69843b834a5a0e2b087f332073f40feab7dfd5d1` 的 Input → LizzieFrame → WinrateGraph 链同时证明点击与 latest-target 合并的分支内拖动。Next 已有按完整所选线路点序列映射的点击，未分析节点仍提交精确 path；当前消费端没有图拖动。历史 R4 文档 `605803b4b93fca7beadf2ed1aaf2ab9bce9a31c2` 记载检查候选 `602106b53b2d52f7c9d7ee2c534979c824ea69ac` 与合并 Windows 图 smoke，但未给出该手势的分支/path/截图/native 候选 tuple，不能据此新造原生通过。原 ANA-11 Accepted 范围不改；具名 `T03-ANA11-UNANALYZED-SCRUBBING` 保留点击原生门和拖动差异，拖动实施须先有实际复现及批准。
 
 <a id="udx-007"></a>
 ## UDX-007 — 换谱与后台响应性调查

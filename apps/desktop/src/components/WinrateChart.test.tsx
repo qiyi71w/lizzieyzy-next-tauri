@@ -43,6 +43,7 @@ beforeEach(() => {
     lineTo: vi.fn(),
     stroke: vi.fn(),
     arc: markerArc,
+    fillText: vi.fn(),
     fill: vi.fn()
   } as unknown as CanvasRenderingContext2D);
 });
@@ -61,13 +62,13 @@ describe("WinrateChart exact node selection", () => {
     document.body.append(host);
     root = createRoot(host);
     act(() => root?.render(<WinrateChart model={model} onSelectNode={onSelectNode} />));
-    expect(markerArc).toHaveBeenCalledWith(160, 45, 3.5, 0, Math.PI * 2);
+    expect(markerArc).not.toHaveBeenCalled();
 
     const canvas = host.querySelector("canvas");
     if (!canvas) throw new Error("chart canvas missing");
     vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 240, 90));
 
-    for (const clientX of [0, 80, 160, 239]) {
+    for (const clientX of [30, 90, 150, 210]) {
       act(() => canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX })));
     }
     expect(onSelectNode.mock.calls.map(([path]) => path.indices)).toEqual([

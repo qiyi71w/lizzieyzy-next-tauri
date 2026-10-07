@@ -55,6 +55,7 @@ const CLAIMED_SHORTCUTS: ShortcutDefinition[] = [
   { id: "file.retry-recent", label: "重试最近记录写入", primary: { key: "r", ctrl: true, shift: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.save", label: "保存", primary: { key: "s", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.save-as", label: "另存为", primary: { key: "s" }, aliases: [], focusRule: "focus-safe" },
+  { id: "file.export-winrate-chart", label: "保存胜率图截图", primary: { key: "s", alt: true, shift: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.export-branch", label: "保存当前分支", primary: { key: "s", ctrl: true, alt: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.export-board", label: "保存主棋盘截图", primary: { key: "s", alt: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.copy-sgf", label: "复制棋谱", primary: { key: "c", ctrl: true }, aliases: [], focusRule: "focus-safe" },
@@ -78,7 +79,7 @@ const CLAIMED_SHORTCUTS: ShortcutDefinition[] = [
   { id: "edit.swap_colors", label: "交换黑白", primary: { key: "ArrowRight", ctrl: true, alt: true, shift: true }, aliases: [], focusRule: "focus-safe" },
   ...([
     ["label", "文字", "l"], ["letters", "字母", "a"], ["numbers", "数字", "n"],
-    ["circle", "圆", "c"], ["square", "方", "s"], ["cross", "叉", "m"],
+    ["circle", "圆", "c"], ["square", "方", "q"], ["cross", "叉", "m"],
     ["triangle", "三角", "t"], ["erase", "擦除", "e"]
   ] as const).map(([id, label, key]): ShortcutDefinition => ({
     id: `markup.${id}`, label: `标记：${label}`, primary: { key, alt: true, shift: true },

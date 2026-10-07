@@ -145,14 +145,35 @@ export function sessionScoreLeadScale(persistedFloor: number, points: ChartPoint
 
 export function displayedWinrate(point: ChartPoint, perspective: GraphPerspective, selectedToPlay: PlayerColor): number | null {
   const winrate = point.analysis?.winrateBlack;
-  if (winrate == null) return null;
+  if (!validChartAnalysis(point) || winrate == null || !Number.isFinite(winrate) || winrate < 0 || winrate > 1) return null;
   return flipForPerspective(perspective, selectedToPlay) ? 1 - winrate : winrate;
 }
 
 export function displayedScore(point: ChartPoint, perspective: GraphPerspective, selectedToPlay: PlayerColor): number | null {
   const score = point.analysis?.scoreMeanBlack;
-  if (score == null) return null;
+  if (!validChartAnalysis(point) || score == null || !Number.isFinite(score)) return null;
   return flipForPerspective(perspective, selectedToPlay) ? -score : score;
+}
+
+/** Attached SGF analysis is admitted by the authoritative document owner. Invalid
+ * or zero-visit imports must remain gaps, never exportable synthetic values. */
+export function validChartAnalysis(point: ChartPoint): boolean {
+  return point.analysis != null && Number.isFinite(point.analysis.visits) && point.analysis.visits > 0;
+}
+
+export function chartBaseline(model: WinrateChartModel): { visible: boolean; mark: "50%" | "0" | null } {
+  const winrate = model.showWinrate && model.points.some((point) => displayedWinrate(point, model.perspective, model.selectedToPlay) != null);
+  const score = model.showScore && model.points.some((point) => displayedScore(point, model.perspective, model.selectedToPlay) != null);
+  return { visible: winrate || score, mark: winrate === score ? null : winrate ? "50%" : "0" };
+}
+
+/** Recover the actual leader from the encoded, whole-series perspective. */
+export function scoreLeadText(score: number | null, perspective: GraphPerspective, selectedToPlay: PlayerColor, blackPrefix: string, whitePrefix: string): string | null {
+  if (score == null || !Number.isFinite(score)) return null;
+  const blackScore = flipForPerspective(perspective, selectedToPlay) ? -score : score;
+  const rounded = Math.round((Math.abs(blackScore) + Number.EPSILON) * 10) / 10;
+  if (rounded === 0) return "0.0";
+  return `${blackScore > 0 ? blackPrefix : whitePrefix}${rounded.toFixed(1)}`;
 }
 
 export function buildWinrateChartModel(input: {
