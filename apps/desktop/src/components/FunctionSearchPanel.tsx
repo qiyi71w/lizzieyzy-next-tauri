@@ -36,7 +36,7 @@ export function FunctionSearchPanel({ catalog, onCancel, onExecute, initialSessi
           const next = Math.max(0, Math.min(results.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)));
           setSelectedId(results[next]?.id ?? null);
         }
-        if (event.key === "Enter") {
+        if (event.key === "Enter" && event.target === inputRef.current) {
           event.preventDefault();
           const action = results[index];
           if (action && !action.disabledReason) onExecute(action);

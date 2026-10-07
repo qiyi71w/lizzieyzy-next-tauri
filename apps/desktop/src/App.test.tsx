@@ -1524,6 +1524,40 @@ describe("App function search owner", () => {
     expect(host.querySelector('[role="dialog"][aria-label="功能搜索"]')).not.toBeNull();
   });
 
+  it("Enter on the search Close button cancels without opening the selected setting and restores source focus", async () => {
+    const host = await renderApp();
+    const source = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
+    const before = source.value;
+    source.focus();
+    act(() => {
+      const toolbar = buttonNamed(host, "功能搜索");
+      toolbar.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      toolbar.focus();
+      toolbar.click();
+    });
+    const dialog = requiredElement(host, '[role="dialog"][aria-label="功能搜索"]');
+    const input = requiredElement<HTMLInputElement>(dialog, "input");
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "棋盘对比");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.focus();
+    });
+    expect(requiredElement(dialog, '[role="option"]').getAttribute("aria-disabled")).toBe("false");
+    pressKey(input, "Tab", { shiftKey: true });
+    const close = buttonNamed(dialog, "关闭功能搜索");
+    expect(document.activeElement).toBe(close);
+    act(() => {
+      // jsdom does not synthesize the browser's uncancelled Enter-to-click default.
+      if (close.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }))) close.click();
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="功能搜索"]')).toBeNull();
+    expect(host.querySelector('[data-search-target="prefs.board-theme"]')).toBeNull();
+    await vi.waitFor(() => expect(document.activeElement).toBe(source));
+    expect(source.value).toBe(before);
+    expect(backend.setCurrentGameMetadata).not.toHaveBeenCalled();
+    expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+  });
+
   it.each(["game.black-name", "game.white-name"])("focuses explicit metadata target %s without submitting", async (target) => {
     const host = await renderApp();
     act(() => buttonNamed(host, "功能搜索").click());
