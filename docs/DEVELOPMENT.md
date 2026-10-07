@@ -29,6 +29,16 @@ Local development validation is strictly scoped to the **affected surface** of e
   5. *Native gap*: what cannot be proven without native OS/hardware runtime and remains pending.
 - **Evidence Reuse & Ticket Dimensions**: Preserve exact frozen ticket dimensions. Evidence reuse must record provenance and equivalence so that already-verified, unchanged contracts are not re-run redundantly, and final affected smoke does not duplicate existing proofs.
 
+### Function-first Evidence And Planning Checks
+
+The current R11–R17 functional route precedes R18 release acceptance (old, unexecuted R11 Release); see Matrix’s `ITEM::functional` records for exact inherited candidate/platform/service scope. A functional pass is not whole-item Accepted. Failed/unavailable required checks block the affected dependency; native/service acceptance cannot be replaced by repository fixtures or a review verdict. This documentation-only stage revision requires preservation/relationship checks and reader-navigation smoke, not repeated product/native runs. All planning implementation/integration tasks precede one integrated dual-axis review and centralized repair, then required actual acceptance and read-only Closeout; review does not publish the new R11 task group.
+
+For a new runtime consumer, record resource source/version/path/integrity/capability compatibility, Start/Switch failure behavior, and applicable actual engine/service/credential conditions. Use qualified local binaries without requiring a current-repository Release. Native application validation, installed-product validation and upstream engine compilation are separate operations; perform only the one the affected contract requires.
+
+For documentation-only Issue18 planning changes, validate current IDs/status totals, old-ID/status/Accepted-scope retention, complete 139-heading and unfinished-owner routing, intent resolution, functional dependency cycles, all 573 source objects/148 records and source release containment. Cold-read the whole-spec behavior and task contracts separately. For publication, exercise Markdown anchors and JSON routes using tracked repository files alone and compare source-intent, owner, decision and acceptance coverage against the approved local records. Reuse attributable scaffold validation while its product/configuration inputs remain unchanged; product/native/release builds do not prove future functionality. The [R11 plan](R11_PLAN.md), [later-stage plans](MIGRATION_PLAN.md#current-function-first-delivery), [source map](MIGRATION_SOURCE_MAP.md), [source contracts](MIGRATION_CONTRACTS.md) and [owner routes](MIGRATION_ROUTES.json) form the public reading surface. R11’s formal spec and nine tasks are prepared locally. Product implementation is not started and requires separate authorization plus the final Issue18 handoff. Operational Closeout cannot substitute for designated product integration acceptance.
+
+Inherited R10 source-runtime records remain at their original candidates and conditions. In particular Tencent 60+60 is a working-tree production-crate probe, while native pagination is 25/25/10; initial readboard PL failures and later repaired candidates remain separate observations. Installation/network trust remains Not run where recorded.
+
 ### Per-Surface Validation Gates
 
 - **Frontend / Tauri UI changes (`apps/desktop`)**:
