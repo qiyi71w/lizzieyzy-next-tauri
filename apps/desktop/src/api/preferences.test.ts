@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultAppPreferences, normalizeAppPreferences } from "../domain/preferences";
 import {
   loadAppPreferences,
@@ -14,6 +14,23 @@ const unreadableKey = `${storageKey}.unreadable`;
 
 afterEach(() => {
   window.localStorage.clear();
+});
+
+it("persists whole-millisecond review intervals and keeps durable values on invalid or failed saves", async () => {
+  expect((await loadAppPreferences()).preferences.reviewAutoplayIntervalMs).toBe(800);
+  for (const interval of [800, 2000, 2_147_483_647]) {
+    await saveAppPreferences({ ...defaultAppPreferences, reviewAutoplayIntervalMs: interval });
+    expect((await loadAppPreferences()).preferences.reviewAutoplayIntervalMs).toBe(interval);
+  }
+  const durable = window.localStorage.getItem(storageKey);
+  for (const interval of [0, -1, 0.5, NaN, Infinity, 2_147_483_648, Number.MAX_SAFE_INTEGER]) {
+    await expect(saveAppPreferences({ ...defaultAppPreferences, reviewAutoplayIntervalMs: interval })).rejects.toThrow();
+    expect(window.localStorage.getItem(storageKey)).toBe(durable);
+  }
+  const failure = vi.spyOn(Storage.prototype, "setItem").mockImplementationOnce(() => { throw new Error("write failure"); });
+  await expect(saveAppPreferences({ ...defaultAppPreferences, reviewAutoplayIntervalMs: 400 })).rejects.toThrow("write failure");
+  failure.mockRestore();
+  expect(window.localStorage.getItem(storageKey)).toBe(durable);
 });
 
 describe("browser preference storage", () => {

@@ -11,6 +11,9 @@ use crate::{
 };
 use go_core::{Board, RuleError};
 
+#[path = "point_search.rs"]
+mod point_search;
+
 #[derive(Debug, Clone)]
 pub struct CurrentSgfDocument {
     document: SgfDocument,

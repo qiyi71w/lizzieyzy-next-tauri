@@ -183,6 +183,20 @@ pub struct NodePath {
     pub indices: Vec<u32>,
 }
 
+/// Double-click stays on the selected review line; explicit point search includes all branches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PointSearchScopeDto {
+    CurrentLine,
+    AllBranches,
+}
+
+/// Current system mouse timing, read-only and never persisted as an app preference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardGestureTimingDto {
+    pub double_click_interval_ms: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SgfPropertyDto {
     pub key: String,

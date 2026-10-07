@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod continuous_analysis;
+mod gesture_timing;
+use gesture_timing::board_gesture_timing;
 mod external_sync;
 mod provider_network;
 use provider_network::{
@@ -288,6 +290,20 @@ fn select_current_game_node(
 ) -> Result<CurrentGameResultDto, String> {
     state
         .select_path(path, generation)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn find_current_game_recorded_point(
+    state: State<CurrentGameState>,
+    path: NodePath,
+    generation: u64,
+    point: app_model::PointDto,
+    choices: Vec<app_model::AnalysisBranchChoiceDto>,
+    scope: app_model::PointSearchScopeDto,
+) -> Result<Option<NodePath>, String> {
+    state
+        .find_recorded_point(path, generation, point, choices, scope)
         .map_err(|error| error.to_string())
 }
 
@@ -1190,6 +1206,8 @@ pub fn run() {
             save_current_game_as,
             project_current_game_mainline,
             select_current_game_node,
+            find_current_game_recorded_point,
+            board_gesture_timing,
             play_current_game,
             author_current_game,
             set_current_game_personal_comment,

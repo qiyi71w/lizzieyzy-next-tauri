@@ -25,6 +25,8 @@ export type MainWindowPinStatusDto = {
 
 export type PlayerColor = "black" | "white";
 export type PointDto = { x: number; y: number };
+export type PointSearchScopeDto = "current_line" | "all_branches";
+export type BoardGestureTimingDto = { double_click_interval_ms: number };
 export type MoveVertex = { point: PointDto } | "pass";
 export type MoveDto = { color: PlayerColor; vertex: MoveVertex; move_number: number };
 export type StoneDto = PointDto & { color: PlayerColor };

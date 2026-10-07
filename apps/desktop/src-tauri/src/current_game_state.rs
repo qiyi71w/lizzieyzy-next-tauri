@@ -30,6 +30,8 @@ mod external_sync;
 mod external_sync_tests;
 mod game_move;
 pub(crate) mod human_match;
+#[cfg(test)]
+mod point_search_tests;
 pub(crate) mod recovery;
 mod scoring;
 mod trial;
@@ -583,6 +585,29 @@ impl CurrentGameState {
     #[allow(dead_code)]
     pub fn discard_confirmation_required(&self) -> bool {
         self.holder.lock().expect("current game state").dirty
+    }
+
+    pub fn find_recorded_point(
+        &self,
+        path: NodePath,
+        generation: u64,
+        point: app_model::PointDto,
+        choices: Vec<app_model::AnalysisBranchChoiceDto>,
+        scope: app_model::PointSearchScopeDto,
+    ) -> Result<Option<NodePath>, CurrentGameError> {
+        let holder = self.holder.lock().expect("current game state");
+        holder.ensure_review_access()?;
+        if holder.generation != generation || holder.selected_path != path {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::InvalidNodePath,
+                message: "Current game or cursor changed; query the current position.".into(),
+            });
+        }
+        holder
+            .document
+            .as_ref()
+            .ok_or_else(no_current_game)?
+            .find_recorded_point(&path, point, &choices, scope)
     }
 
     pub fn select_path(

@@ -1,3 +1,4 @@
+import { validReviewAutoplayInterval } from "../domain/reviewAutoplay";
 import { invoke } from "@tauri-apps/api/core";
 import { continuousBudgetError, defaultAppPreferences, newGameDefaultsError, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "../domain/preferences";
 import type { WorkspaceSharesDto, WorkspaceVisibilityDto } from "../domain/types";
@@ -35,6 +36,9 @@ export async function loadAppPreferences(): Promise<AppPreferencesLoadResult> {
 }
 
 export async function saveAppPreferences(preferences: AppPreferences): Promise<AppPreferences> {
+  if (!validReviewAutoplayInterval(preferences.reviewAutoplayIntervalMs)) {
+    throw new Error("Review autoplay interval is not safely representable in whole milliseconds.");
+  }
   const error = newGameDefaultsError(preferences)
     ?? continuousBudgetError(preferences)
     ?? taskConditionsError(preferences.taskSingleStageConditions)
