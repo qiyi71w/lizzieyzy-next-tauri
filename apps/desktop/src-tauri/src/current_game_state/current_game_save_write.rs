@@ -69,6 +69,8 @@ fn current_game_save_clears_dirty_without_changing_cursor_or_generation() {
 
     let saved = state
         .save_to_path(path.to_string_lossy().into_owned(), edited.selected_path.clone())
+        .unwrap()
+        .current_game
         .unwrap();
     let written = fs::read_to_string(&path).unwrap();
     let _ = fs::remove_file(&path);
@@ -112,6 +114,8 @@ fn current_game_save_as_updates_path_and_keeps_prior_state_on_failure() {
     let path = std::env::temp_dir().join(format!("lizzieyzy-save-as-{unique}.sgf"));
     let saved = state
         .save_to_path(path.to_string_lossy().into_owned(), edited.selected_path.clone())
+        .unwrap()
+        .current_game
         .unwrap();
     let written = fs::read_to_string(&path).unwrap();
     let _ = fs::remove_file(&path);
@@ -175,6 +179,8 @@ fn savepoint_tracks_history_state_and_independent_analysis_content() {
     let path = std::env::temp_dir().join(format!("lizzieyzy-history-savepoint-{unique}.sgf"));
     let saved = state
         .save_to_path(path.to_string_lossy().into_owned(), edited.selected_path.clone())
+        .unwrap()
+        .current_game
         .unwrap();
     assert!(!saved.dirty);
     assert!(saved.can_undo);
@@ -218,6 +224,8 @@ fn concurrent_analysis_keeps_save_dirty_and_replacement_does_not_adopt_stale_sav
                     .unwrap();
             },
         )
+        .unwrap()
+        .current_game
         .unwrap();
     assert!(saved.dirty);
     assert_eq!(
@@ -237,11 +245,140 @@ fn concurrent_analysis_keeps_save_dirty_and_replacement_does_not_adopt_stale_sav
             },
         )
         .unwrap();
-    assert_eq!(current.native_path.as_deref(), Some("/tmp/replacement.sgf"));
-    assert!(!current.can_undo);
-    assert!(!current.can_redo);
+    assert!(current.current_game.is_none());
+    assert_eq!(current.saved_path, stale_path.to_string_lossy());
+    assert_eq!(current.captured_generation, saved.generation);
+    assert_eq!(current.captured_snapshot_seq, saved.snapshot_seq);
+    assert_eq!(state.native_path().as_deref(), Some("/tmp/replacement.sgf"));
+    assert!(!state.inspect().1);
     let _ = fs::remove_file(analysis_path);
     let _ = fs::remove_file(stale_path);
+}
+
+#[test]
+fn captured_full_tree_keeps_properties_personal_comments_and_valid_analysis_before_late_edit() {
+    let state = CurrentGameState::default();
+    let opened = state.replace(
+        "(;SZ[9]KM[6.5]DT[2020-03,04]RE[W+R]C[root]XY[unknown]AB[aa](;W[bb]C[main];B[])(;PL[B]C[setup]AW[cc];B[dd]C[branch]LB[dd:label]))",
+        Some("source.sgf".into()),
+    ).unwrap();
+    let analyzed = state
+        .attach_primary_analysis(opened.generation, NodePath::default(), analysis_payload(777))
+        .unwrap();
+    let captured_tree = analyzed.tree.clone();
+    let captured = state
+        .capture_save_snapshot(analyzed.selected_path.clone())
+        .unwrap();
+    let later = state
+        .set_personal_comment(NodePath::default(), "later comment".into())
+        .unwrap();
+    let path = std::env::temp_dir().join(format!("lizzieyzy-full-snapshot-{}.sgf", uuid::Uuid::new_v4()));
+    fs::write(&path, b"protected previous bytes").unwrap();
+    let saved = state
+        .persist_save_snapshot(path.to_string_lossy().into_owned(), captured)
+        .unwrap();
+    assert_eq!(saved.captured_generation, analyzed.generation);
+    assert_eq!(saved.captured_snapshot_seq, analyzed.snapshot_seq);
+    let saved = saved.current_game.unwrap();
+    let reopened = CurrentSgfDocument::open(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(reopened.tree().unwrap(), captured_tree);
+    assert_eq!(
+        reopened
+            .snapshot(&NodePath::default())
+            .unwrap()
+            .primary_analysis
+            .unwrap()
+            .visits,
+        777
+    );
+    assert_eq!(reopened.result(), Some("W+R"));
+    assert_eq!(
+        reopened.snapshot(&NodePath::default()).unwrap().personal_comment,
+        "root"
+    );
+    assert_eq!(saved.tree, later.tree);
+    assert!(saved.dirty);
+    assert_eq!(saved.generation, later.generation);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn off_ui_captured_save_allows_new_document_and_returns_only_the_saved_receipt() {
+    let state = std::sync::Arc::new(CurrentGameState::default());
+    let opened = state.replace(BRANCHING, Some("original.sgf".into())).unwrap();
+    let snapshot = state.capture_save_snapshot(opened.selected_path.clone()).unwrap();
+    let worker_state = state.clone();
+    let path = std::env::temp_dir().join(format!("worker-save-{}.SGF", uuid::Uuid::new_v4()));
+    let worker_path = path.clone();
+    let calling_thread = std::thread::current().id();
+    let (entered, entered_rx) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    let worker = tauri::async_runtime::spawn_blocking(move || {
+        entered.send(std::thread::current().id()).unwrap();
+        release_rx.recv().unwrap();
+        worker_state.persist_save_snapshot(worker_path.to_string_lossy().into_owned(), snapshot)
+    });
+    assert_ne!(entered_rx.recv().unwrap(), calling_thread);
+    let new_game = state
+        .replace("(;SZ[9]C[new document])", Some("replacement.sgf".into()))
+        .unwrap();
+    let before = state.inspect();
+    release.send(()).unwrap();
+    let receipt = tauri::async_runtime::block_on(worker).unwrap().unwrap();
+    assert!(receipt.current_game.is_none());
+    assert_eq!(receipt.saved_path, path.to_string_lossy());
+    assert_eq!(receipt.captured_generation, opened.generation);
+    assert_eq!(receipt.captured_snapshot_seq, opened.snapshot_seq);
+    assert_eq!(state.inspect(), before);
+    assert_eq!(new_game.native_path.as_deref(), Some("replacement.sgf"));
+    let reopened = CurrentSgfDocument::open(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(reopened.tree().unwrap(), opened.tree);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn cancelled_save_as_preserves_protected_target_and_uppercase_target_is_written_exactly() {
+    let state = CurrentGameState::default();
+    let opened = state.replace(BRANCHING, Some("original.sgf".into())).unwrap();
+    let edited = state
+        .set_personal_comment(NodePath::default(), "personal edit".into())
+        .unwrap();
+    let directory = std::env::temp_dir().join(format!("save-target-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&directory).unwrap();
+    let target = directory.join("protected-sgf-中文.sgf");
+    fs::write(&target, b"protected\0original bytes").unwrap();
+    let before = state.inspect();
+    let cancel = crate::save_as::persist_current_game_save_as(
+        &state,
+        save_as_dialog::SaveAsDialogOutcome::Cancelled,
+        state.capture_save_snapshot(edited.selected_path.clone()).unwrap(),
+    )
+    .unwrap();
+    assert!(cancel.is_none());
+    assert_eq!(state.inspect(), before);
+    assert_eq!(fs::read(&target).unwrap(), b"protected\0original bytes");
+    let uppercase = directory.join("game.SGF");
+    fs::write(&uppercase, b"previous game").unwrap();
+    let receipt = crate::save_as::persist_current_game_save_as(
+        &state,
+        save_as_dialog::SaveAsDialogOutcome::Chosen(uppercase.to_string_lossy().into_owned()),
+        state.capture_save_snapshot(edited.selected_path).unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(receipt.saved_path, uppercase.to_string_lossy());
+    assert!(!receipt.current_game.unwrap().dirty);
+    assert!(!directory.join("game.SGF.sgf").exists());
+    assert_eq!(
+        CurrentSgfDocument::open(&fs::read_to_string(&uppercase).unwrap())
+            .unwrap()
+            .snapshot(&NodePath::default())
+            .unwrap()
+            .personal_comment,
+        "personal edit"
+    );
+    assert_eq!(opened.native_path.as_deref(), Some("original.sgf"));
+    fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

@@ -890,6 +890,8 @@ fn stop_seals_inflight_publication_preserves_last_good_and_restores_ordinary_edi
             save_path.to_string_lossy().into_owned(),
             current(&state).selected_path,
         )
+        .unwrap()
+        .current_game
         .unwrap();
     assert!(!saved.dirty);
     let reopened = CurrentSgfDocument::open(&fs::read_to_string(&save_path).unwrap()).unwrap();
@@ -914,10 +916,12 @@ fn save_writes_invocation_frame_and_later_sync_frame_remains_dirty_in_same_docum
     let next = schedule_poll(&state, &network);
     let save_path = unique_path("frame-during-save");
     let saved = state
-        .save_to_path_with(save_path.to_string_lossy().into_owned(), path(&[0]), || {
+        .save_to_path_after_hook(save_path.to_string_lossy().into_owned(), path(&[0]), || {
             let update = complete(&state, &network, &next, Ok(imported(ROOM, FINISHED)));
             assert!(update.current.unwrap().dirty);
         })
+        .unwrap()
+        .current_game
         .unwrap();
     assert_eq!(fs::read_to_string(&save_path).unwrap(), invocation);
     assert!(saved.dirty);
@@ -930,6 +934,8 @@ fn save_writes_invocation_frame_and_later_sync_frame_remains_dirty_in_same_docum
     );
     let saved_again = state
         .save_to_path(save_path.to_string_lossy().into_owned(), saved.selected_path)
+        .unwrap()
+        .current_game
         .unwrap();
     assert!(!saved_again.dirty);
     assert_eq!(
@@ -958,6 +964,8 @@ fn save_as_picker_delay_keeps_invocation_frame_and_later_source_dirty() {
         snapshot,
     )
     .unwrap()
+    .unwrap()
+    .current_game
     .unwrap();
     let written = fs::read_to_string(&path).unwrap();
     fs::remove_file(path).unwrap();

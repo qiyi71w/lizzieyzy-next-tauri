@@ -182,6 +182,8 @@ fn admitted_analysis_survives_personal_comment_and_save() {
     let target = unique_sgf("comment-analysis");
     let saved = state
         .save_to_path(target.to_string_lossy().into_owned(), path(&[]))
+        .unwrap()
+        .current_game
         .unwrap();
     assert!(!saved.dirty);
     let reopened = CurrentSgfDocument::open(&fs::read_to_string(&target).unwrap()).unwrap();
@@ -297,6 +299,8 @@ fn save_after_attach_writes_call_time_payloads_and_clears_dirty() {
             path_on_disk.to_string_lossy().into_owned(),
             attached.selected_path.clone(),
         )
+        .unwrap()
+        .current_game
         .unwrap();
     let written = fs::read_to_string(&path_on_disk).unwrap();
     let _ = fs::remove_file(&path_on_disk);
@@ -344,6 +348,8 @@ fn later_attach_after_save_redirties_and_next_save_includes_new_node() {
     let first_path = unique_sgf("snapshot-a");
     let saved = state
         .save_to_path(first_path.to_string_lossy().into_owned(), path(&[]))
+        .unwrap()
+        .current_game
         .unwrap();
     assert!(!saved.dirty);
     let snapshot_a = fs::read_to_string(&first_path).unwrap();
@@ -356,6 +362,8 @@ fn later_attach_after_save_redirties_and_next_save_includes_new_node() {
     let second_path = unique_sgf("snapshot-b");
     let saved_b = state
         .save_to_path(second_path.to_string_lossy().into_owned(), path(&[0]))
+        .unwrap()
+        .current_game
         .unwrap();
     let snapshot_b = fs::read_to_string(&second_path).unwrap();
     let _ = fs::remove_file(&first_path);
@@ -385,6 +393,8 @@ fn save_does_not_clear_dirty_when_a_later_attach_wins_the_epoch() {
                 .attach_primary_analysis(opened.generation, path(&[0]), payload("KataGo", 900, 15, 3))
                 .unwrap();
         })
+        .unwrap()
+        .current_game
         .unwrap();
     let written = fs::read_to_string(&save_path).unwrap();
     let _ = fs::remove_file(&save_path);
@@ -589,6 +599,8 @@ fn continuous_progress_updates_same_node_and_save_reopens_latest_snapshot() {
     let save_path = unique_sgf("continuous-reopen");
     let saved = state
         .save_to_path(save_path.to_string_lossy().into_owned(), selected.clone())
+        .unwrap()
+        .current_game
         .unwrap();
     assert!(!saved.dirty);
     let later = state

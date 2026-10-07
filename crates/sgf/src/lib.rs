@@ -8,6 +8,7 @@ mod analysis;
 mod current_game;
 mod exact_position;
 mod gib;
+mod save;
 pub use analysis::{encode_analysis_payload, parse_analysis_payload, AnalysisSlot, SgfAnalysisPayload};
 pub use current_game::{
     CurrentSgfDocument, DocumentEditOutcome, DocumentHistory, DocumentHistoryOutcome, PreparedSgfEdit,
@@ -16,6 +17,7 @@ pub use current_game::{
 };
 pub use exact_position::ExactPosition;
 pub use gib::{import_gib, GibError};
+pub use save::{save_document_atomic, write_file_atomic};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SgfDocument {
     pub board_width: u8,

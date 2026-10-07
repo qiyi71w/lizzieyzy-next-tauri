@@ -89,6 +89,12 @@ export type CurrentGameResultDto = {
   dirty: boolean;
   native_path?: string | null;
 };
+export type CurrentGameSaveResultDto = {
+  saved_path: string;
+  captured_generation: number;
+  captured_snapshot_seq: number;
+  current_game: CurrentGameResultDto | null;
+};
 export type TrialSessionDto = {
   session_id: number;
   revision: number;
