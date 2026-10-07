@@ -227,21 +227,13 @@ impl CurrentGameState {
         self.with_document(|document| document.serialize())
     }
 
+    #[cfg(test)]
     pub fn save_to_path(
         &self,
         path: String,
         selected_path: NodePath,
     ) -> Result<CurrentGameSaveResultDto, String> {
-        self.save_to_path_with(path, selected_path, || {})
-    }
-
-    fn save_to_path_with(
-        &self,
-        path: String,
-        selected_path: NodePath,
-        after_snapshot: impl FnOnce(),
-    ) -> Result<CurrentGameSaveResultDto, String> {
-        self.save_to_path_allowing_departure(path, selected_path, after_snapshot, false)
+        self.save_to_path_allowing_departure(path, selected_path, || {}, false)
     }
 
     fn save_to_path_allowing_departure(
@@ -1743,7 +1735,7 @@ impl CurrentGameState {
         selected_path: NodePath,
         hook: impl FnOnce(),
     ) -> Result<CurrentGameSaveResultDto, String> {
-        self.save_to_path_with(path, selected_path, hook)
+        self.save_to_path_allowing_departure(path, selected_path, hook, false)
     }
 
     fn inspect(&self) -> (u64, bool, Option<String>, Option<String>) {
