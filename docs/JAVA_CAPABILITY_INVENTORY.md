@@ -524,7 +524,7 @@ Headings not counted: `REL-C12` `REL-C13`
 
 ## Current obligation index — frozen 139 headings
 
-This index preserves the original heading identity and full frozen field source. It is current obligation routing, not a second capability census or status table. Every T01/T02 intent below resolves in the [single delivery map](../.scratch/issue18-function-first/evidence/06-delivery-map.md); 07 owns A, 08 owns B–F/R11, publication approval is pending. The frozen domain rows above are unchanged.
+This index preserves the original heading identity and full frozen field source. It is obligation provenance, not a second capability census or status table. Every T01/T02 intent below still resolves in the [frozen delivery map](../.scratch/issue18-function-first/evidence/06-delivery-map.md). Current routing is A→R11, B→R12/R13 by unique owner intent, C→R14, D→R15, E→R16, F→R17 and old unexecuted R11 Release→R18. Planning 07 details only the [R11 draft group](../.scratch/issue18-function-first/replanned/R11/), pending separate approval; planning 08 retains the [later-stage plans and owner index](../.scratch/issue18-function-first/replanned/stages/index.json), with goals, scope/non-goals, actual prerequisites, acceptance and named unresolved owners. These ignored draft links await materialization in integration; historical draft/source anchors are not active tickets. Mixed source groups follow the intent index, not a blanket phase replacement. The frozen domain rows above are unchanged.
 
 | Frozen heading | Historical mapping | Current retained obligation | Frozen field source |
 | --- | --- | --- | --- |

@@ -37,7 +37,7 @@ Later Java `main` changes do not automatically change this plan. Data, SGF, Go-r
 
 Approved Q1–Q12 remain binding: preserve the frozen Java baseline's reachable user capabilities, primary operation habits, and data semantics by default. A non-equivalent redesign leaves a migration obligation; permanent removal requires item-specific user approval. Historical Abandoned/absorbed decisions record their original scope, not blanket permission to discard the remaining user capability. Swing-only machinery need not be copied. Existing Accepted IDs, scopes, and evidence remain intact; materially new behavior receives a Successor Item.
 
-The current delivery priority is A 常用复盘与操作 → B 引擎与分析 → C 远程与外部棋盘 → D 高级对局 → E 其他业务 → F 功能对等收尾. This is Delivery Order, not a serial dependency chain. R11 retains its historical release number and follows functional migration; the final release repository is undecided. The earlier safety/input → continuous analysis → current-game tasks sequence remains completed history, not today’s next-batch rule.
+The current Delivery Order is R11 常用复盘与操作 → R12 引擎资源与运行管理 → R13 分析任务与展示 → R14 远程与外部棋盘 → R15 高级对局 → R16 其他业务能力 → R17 功能对等收尾 → R18 发行. Stage order is not a serial dependency chain. The old, unexecuted R11 Release is explicitly renumbered R18; R0–R10 results and evidence keep their original attribution. The final release repository is undecided. The earlier safety/input → continuous analysis → current-game tasks sequence remains completed history, not today’s next-stage rule.
 
 Two approved future directions remain obligations: one Direct/System/Manual policy for Next-owned remote HTTP(S)/WebSocket(S), including providers, compute, contribution and updates (excluding browser-owned traffic, local sidecars and SSH); and an explicit whitelist Java settings import for supported engine/display values with preview and atomic confirmation, no Java writes or automatic engine start. Their successor admission is separate from ANA-16; older narrower transport/import dispositions are historical, not the final migration scope.
 
@@ -83,7 +83,7 @@ The existing Tauri implementation is the migration starting point and must be pr
 
 - `UI-02` remains Partial: there is still no evidence that engine events are delivered while a board mutation promise is pending. That residual does not reopen R4.
 - R4 Analysis has exited with all ten owner items plus pulled-forward `PREF-01` and `APP-05` Accepted.
-- R5 has exited on integrated Windows candidate `48db2b2833f9deb45bd7dcd47181f5da77348a0c`. `SGF-08`, `APP-02`, `APP-03`, `APP-04`, and `ANA-15` are Accepted; the `APP-01` R5 semantic gate passed. Final `APP-01` acceptance remains an R11 / `REL-04` installer-association and Canonical Artifact Installed Live Evidence obligation.
+- R5 has exited on integrated Windows candidate `48db2b2833f9deb45bd7dcd47181f5da77348a0c`. `SGF-08`, `APP-02`, `APP-03`, `APP-04`, and `ANA-15` are Accepted; the `APP-01` R5 semantic gate passed. Final `APP-01` acceptance remains an R18 / `REL-04` installer-association and Canonical Artifact Installed Live Evidence obligation.
 - R6 has exited on integrated Windows candidate `be6951bf57afa07c4a1ae6d57075573b308f5dfd`; all thirteen authoring/review owner items are Accepted. R7 and R8 have also exited within their recorded acceptance scopes. R9 GAME-01–05 are Accepted on integrated runtime `93b8410fde3bd0795662470b4d663c8b506cc4e6`; ticket 07 retains evidence closure and handoff, without authorizing a later phase.
 - `LAYOUT-01` session splitters and size/DPR-aware redraw remain Accepted on Windows candidate `7340e00896dfa059f3e054cd46b041c14e931383`. Default rails are `228px`/`260px` above 1180px workspace width and `210px`/`240px` otherwise; visible minima preserve scroll-accessible controls. `LAYOUT-02`/`LAYOUT-03` are now Accepted on the integrated R7 evidence: ratio-only atomic persistence, latest-draft Retry, all-owner exit flush and both reset entries; native whole-preference comparison changes only shares. Earlier `5b52ad8…` / `125e43e…` feature evidence retains its source attribution.
 - `WINDOW-01` is Accepted within the approved R7 scope: serialized physical-origin/logical-client restoration, caption/work-area validation, normal/max/min restart, isolated reset, visible failure/Retry and both exit fences. Exact `baa9747d11ee9e2130904ff057adbe7cfd968153` proves actual negative-monitor restart/removal, system DPI, Explorer replacement and small-work-area recovery. macOS native is user-approved SKIPPED; its unverified AppKit candidate and historical review attribution remain unchanged.
@@ -199,34 +199,35 @@ Image OCR remains unsupported unless an OCR-capable runtime, explicit parity ite
 
 Platform admission is independent. Canonical Artifacts are Windows NSIS and portable, macOS DMG, and Linux AppImage. Extra CI formats stay validation artifacts until a later disposition promotes them.
 
-Installed variants use OS app-data and preserve it by default on removal. Windows portable uses package-local `user-data/`; deleting that directory is destructive. Packages start in No-engine Mode with `app-core` only. Engine Settings acquires signed KataGo backend and default-model components as Managed Installed Components; domain 04 owns the resulting profile and engine-start behavior. A later accepted domain owner may add a separate signed component through `REL-05` without transferring its capability semantics or making that Deferred component an earlier R11 exit; `CONTRIB-01` uses this seam for its Contribution Client Component.
+Installed variants use OS app-data and preserve it by default on removal. Windows portable uses package-local `user-data/`; deleting that directory is destructive. Packages start in No-engine Mode with `app-core` only. Engine Settings acquires signed KataGo backend and default-model components as Managed Installed Components; domain 04 owns the resulting profile and engine-start behavior. A later accepted domain owner may add a separate signed component through `REL-05` without transferring its capability semantics or making that Deferred component an earlier R18 exit; `CONTRIB-01` uses this seam for its Contribution Client Component.
 
 
 ## Current Function-first Delivery
 
-| Batch | User outcome and scope | Gate/owner |
+| Stage / historical source group | User outcome and scope | Gate/owner |
 | --- | --- | --- |
-| A 常用复盘与操作 | Branch/board/chart export; rotate/mirror/color swap; direct stone edits; point search; autoplay interval; ladder continuation; catalog order; legacy entry/shortcut preservation; global search. Internationalization foundations and Java field mapping start with the first affected UI/settings. | Planning 07 creates A tickets, including real shared output decisions and A integration acceptance. Independent exports/order/settings are not chained. |
-| B 引擎与分析 | Batch analysis; thread source/effective/temporary values; performance and startup; focus; adapters; autoload quick analysis; local restore/import/restart correctness; resource identity and diagnostics at their first real consumers. | Planning 08; one engine lifecycle and identity-valid events. Benchmark runner consumes stable profile/config identity; dynamic policy may consume the runner, never the reverse dependency. |
-| C 远程与外部棋盘 | SSH, both remote-compute modes, readboard two-way match with both decision modes; Tencent live protocol and remaining Yike personal/account functions. | Planning 08; named supported-protocol/auth decisions block affected implementation only. Real service/credential/sidecar checks stay required. |
-| D 高级对局 | PK batches/openings/color change/intervention, approved clocks, auto-resign, HumanSL, runtime komi and immutable per-match rule snapshots. | Planning 08; clock and structured rule-storage decisions precede their affected implementation, not unrelated match behavior. |
-| E 其他业务 | Grounded AI teaching, contribution and watcher, LAN publication, contextual guidance. | Planning 08; named service/consent/producer boundaries. Contribution functionality precedes watcher, not signed delivery. |
-| F 功能对等收尾 | Whitelist Java migration, complete locales, retained appearance/layout/entries/defaults/save semantics, UI-02 residuals, cross-function acceptance and appended upstream audit. | Planning 08 owns actual integration acceptance; planning 10 is read-only planning closeout, not this product acceptance. |
-| R11 historical release | Signed components, installers/associations, updater trust/channel, final repository decision and installed support paths. | Planning 08 records later decisions; no release repository selected by this plan. |
+| [R11 常用复盘与操作 — source A](../.scratch/issue18-function-first/replanned/R11/) | Branch/board/chart export; rotate/mirror/color swap; direct stone edits; point search; autoplay settings; ladder continuation; catalog order; legacy entry/shortcut preservation; global search; all other A audit obligations. Internationalization foundations and Java field mapping start with the first affected UI/settings. | Planning 07 owns the complete current-stage function tasks and integration acceptance. Independent exports/order/settings are not chained. New R11 task-list approval is still required before publication or product implementation. |
+| [R12 引擎资源与运行管理 — part of source B](../.scratch/issue18-function-first/replanned/stages/R12.md) | Resources/models, startup and default/preload policy, one engine lifecycle, local restore/import/restart correctness, diagnostics, manual thread source/effective/temporary control and runtime readback. | Planning 08 retains stage scope and named startup/preload decisions. Each runtime owner proves resource identity and actual compatible-engine behavior. Startup performance may consume a scoped R13 benchmark result, without waiting for all R13 or making benchmark depend on dynamic policy. |
+| [R13 分析任务与展示 — part of source B](../.scratch/issue18-function-first/replanned/stages/R13.md) | Batch/current-game tasks, analysis cache/flash and adapters, automatic quick analysis/handback, tracking, granular display/custom grading, focus, Engine Continuation, benchmark and measured performance workflow. | Planning 08 retains analysis/presentation/continuation and saved-policy decisions. One owner per source intent; consumers reference exact results. Review Autoplay, Variation Replay and Engine Continuation are distinct. The benchmark runner consumes stable profile/config identity, never a prerequisite dynamic policy. |
+| [R14 远程与外部棋盘 — source C](../.scratch/issue18-function-first/replanned/stages/R14.md) | SSH, both remote-compute modes, readboard two-way match with Final-decision and Leading-candidate modes; Tencent live protocol, Yike personal/account functions and boundary investigations. | Planning 08 retains supported-protocol/auth decisions and their blocked behavior/decision owners. Real service, credential, disconnect/cancel and sidecar/target confirmation evidence stay required; no credential workaround or automatic account-write retry. |
+| [R15 高级对局 — source D](../.scratch/issue18-function-first/replanned/stages/R15.md) | PK batches/openings/color change/intervention, approved clocks, auto-resign, HumanSL (GAME-08), runtime komi and immutable per-match rule snapshots. | Planning 08 retains clock and structured rule-storage decision owners; those decisions precede affected behavior only. Rules/runtime results owned by R12 are consumed, not duplicated. |
+| [R16 其他业务能力 — source E](../.scratch/issue18-function-first/replanned/stages/R16.md) | Grounded AI teaching, contribution and watcher, LAN publication, contextual guidance. | Planning 08 retains named service/auth/model, consent and guidance-producer boundaries. A passed Contribution Run precedes watching, not signed delivery. Real upload, credentials, policy compatibility and global exclusion remain functional obligations. |
+| [R17 功能对等收尾 — source F](../.scratch/issue18-function-first/replanned/stages/R17.md) | Whitelist Java migration, complete locales, retained appearance/layout/entries/defaults/save semantics, UI-02 residuals, cross-function acceptance and appended upstream audit. | Planning 08 records stage acceptance, not product completion. Each setting owner supplies field mapping; R17 closes whitelist/preview/atomic import with no Java writes or engine autostart and full translation. |
+| [R18 发行 — old unexecuted R11 Release](../.scratch/issue18-function-first/replanned/stages/R18.md) | Signed components, installers/APP-01 associations, updater trust/channel, final repository/credential decisions and installed support paths; all existing release obligations. | Planning 08 retains release decisions and per-platform installed acceptance. Qualified runtime resources and ordinary diagnostics accompany functional consumers and do not wait for this stage. No release repository is selected. |
 
-The [single upstream ledger](UPSTREAM_DELTA.md) groups behavior across all three audited intervals, retains all 573 source objects and maps the 148 original records to final UDX groups. Counts describe provenance, not a feature count. [The delivery map](../.scratch/issue18-function-first/evidence/06-delivery-map.md) owns the allocation of stable task intents to 07/08 until approved publication. Shared prerequisites have one owner at their first real consumer; other batches consume that same result. Unfrozen clock, custom-grade, continuation, legacy N, provider authorization/protocol and other product choices remain named decisions, not silently selected behavior.
+The [single upstream ledger](UPSTREAM_DELTA.md) retains all 573 source objects and maps the 148 original records to final UDX groups. Counts describe provenance, not a feature count. The [frozen delivery map](../.scratch/issue18-function-first/evidence/06-delivery-map.md) retains all source IDs, intent anchors, owner keys and full audit contracts as provenance, not a second active tracker. Historical mapping is A→R11, B→R12/R13, C→R14, D→R15, E→R16, F→R17, old R11 Release→R18. Mixed B/UDX families are not all reassigned to one stage: the intent-level [stage index](../.scratch/issue18-function-first/replanned/stages/index.json) supplies unique owner routes and result consumers; family heritage never overrides that index. Shared prerequisites have one owner at their first real consumer. Unfrozen clock, custom-grade, continuation, legacy N, provider authorization/protocol and other choices retain named decisions, owners and blocked behavior.
 
-Future upstream audits append after `af0e07a7386483f3bfc8a15780de72ffc2f0de4c`; they never move v1 or rewrite this frozen range. `T06-UPSTREAM-FINAL` owns F’s final audit; feature owners assess reachable serious correctness changes when discovered. Every additional source gets publication/containment evidence and a disposition.
+Future upstream audits append after `af0e07a7386483f3bfc8a15780de72ffc2f0de4c`; they never move v1 or rewrite this frozen range. `T06-UPSTREAM-FINAL` owns R17’s final audit; feature owners assess reachable serious correctness changes when discovered. Every additional source gets publication/containment evidence and a disposition.
 ## Dependency Graph
 
-Named batches express delivery priority only. Item Start Prerequisites remain canonical in [PARITY_MATRIX.md](PARITY_MATRIX.md); a dependency may reference a passed `ITEM::functional` record without requiring its unexecuted installed/release obligations. The R3–R11 graph below is historical phase organization, not the current frontier. Independent ready functions may proceed across A–F; reachable data/position/result/protocol correctness risks may be brought forward. No batch number itself is a prerequisite.
+Stages express Delivery Order only. Item Start Prerequisites remain canonical in [PARITY_MATRIX.md](PARITY_MATRIX.md); a dependency may reference a passed `ITEM::functional` record without requiring its unexecuted installed/release obligations. The graph below preserves the historical R3–old-R11 organization: its old R11 Release node now maps to R18. It is a pre-R7 planning snapshot, not today’s frontier; R7–R10 have since completed within their recorded scopes. Independent ready functions may proceed across R11–R17; reachable correctness risks may be brought forward. No stage number itself is a prerequisite.
 
 ### How To Choose The Next Slice
 
-1. Start with the current A batch and its approved, published task contracts. A delivery-map intent is not yet an executable ticket or publication approval.
+1. Start with R11 and its complete function contracts from planning 07. The new R11 task group remains an unpublished draft pending independent cold read and separate user approval; a source intent or phase approval is not an executable ticket or product-implementation authorization.
 2. A task becomes ready only after its actual Matrix prerequisites, named decisions, promotion conditions and required predecessor checks pass on the parent-validated integration tip. A worker report, tracker closure or unvalidated branch is insufficient.
-3. Prefer A–F delivery order while allowing semantically independent work and urgent reachable correctness repairs. Shared lifecycle/state ownership can require serialization even across different files. Release-only prerequisites do not block functional work.
-4. Deferred items retain their status and full admission requirements until their task performs promotion; this plan assigns work and does not promote them. R11 signing, installers, update channels and final release-repository selection remain later obligations.
+3. Prefer R11–R18 Delivery Order while allowing semantically independent work and urgent reachable correctness repairs. Shared lifecycle/state ownership may require serialization even across files. R12–R18 are rolling stage plans, not hundreds of pre-published tickets; detail them before their actual start using validated predecessor results. Release-only prerequisites do not block functional work.
+4. Deferred items retain their status and full admission requirements until explicit promotion. R18 signing, installers, update channels and final release-repository selection remain later obligations. Complete all implementation/integration tasks of the approved spec first, then one integrated Spec/Standards dual-axis review, centralized bounded repair and required actual acceptance, followed by read-only Closeout; no per-ticket full review.
 
 ```mermaid
 flowchart TB
@@ -239,7 +240,7 @@ flowchart TB
   R8[R8 Engine Adapters]
   R9[R9 Game Modes]
   R10[R10 Providers / readboard]
-  R11[R11 Release]
+  R11[Old unexecuted R11 Release - now R18]
 
   R2 --> R3
   R3 --> R4
@@ -257,7 +258,7 @@ flowchart TB
 
 Layout, window, and appearance in R7 wait only for `PREF-01`. `GUIDE-01` is Deferred (Ticket 21) and is not an R7 member or exit.
 
-R4 ran after R3 and pulled only `PREF-01` and `APP-05` forward from R5; both remain Accepted. R5 subsequently accepted `SGF-08`, `APP-02`, `APP-03`, `APP-04`, and `ANA-15`, and passed the `APP-01` semantic gate. Final `APP-01` acceptance remains with R11 / `REL-04`; no R5 sequencing remains open.
+R4 ran after R3 and pulled only `PREF-01` and `APP-05` forward from R5; both remain Accepted. R5 subsequently accepted `SGF-08`, `APP-02`, `APP-03`, `APP-04`, and `ANA-15`, and passed the `APP-01` semantic gate. Final `APP-01` acceptance remains with R18 / `REL-04`; no R5 sequencing remains open.
 
 ### Critical Edges
 
@@ -284,7 +285,7 @@ R4 ran after R3 and pulled only `PREF-01` and `APP-05` forward from R5; both rem
 | `REL-03`, `REL-05`, `APP-03` | `REL-06` | Windows download/apply. |
 | `REL-03` | `REL-07` | macOS/Linux package handoff. |
 | `REL-06` | `REL-08` | Rollback is the failure path of Windows apply. |
-| `APP-01` R5 semantic gate plus `REL-04` Installed Live association | `APP-01` Accepted | Split graph: semantic gate is R5; `REL-04` is the additional R11 final-acceptance gate only. It is not an Item Start Prerequisite for `APP-01` semantic work or `APP-02`. `APP-01` still owns open/replace semantics. |
+| `APP-01` R5 semantic gate plus `REL-04` Installed Live association | `APP-01` Accepted | Split graph: semantic gate is R5; `REL-04` is the additional R18 final-acceptance gate only. It is not an Item Start Prerequisite for `APP-01` semantic work or `APP-02`. `APP-01` still owns open/replace semantics. |
 | `PROV-01::functional` | `PROV-03` | Public locator/center before ongoing Yike sync. |
 | `PROV-01::functional`, `PROV-03::functional` | `PROV-06` | Personal-category discovery reuses the public provider center and hands supported public locators to existing import/sync owners without duplicating them. |
 | `PROV-03::functional`, `GAME-01`, `GAME-05`, `PREF-01`, `APP-03` | `PROV-07` | Authenticated Yike read/play reuses external-authoritative sync, sole Match ownership, SGF/review handoff, non-secret preference storage, and bounded teardown; it never creates a second current-game turn owner. |
@@ -312,7 +313,7 @@ flowchart LR
 ```
 
 - **R5 semantic gate:** cold and warm `.sgf` / `.gib` activation focuses one window and uses `SGF-07`. Save / Discard / Cancel cancellation or failure preserves the current game. This gate may be recorded as passed while `APP-01` is not yet Accepted. `APP-02` one-file drop follows this gate, never final `APP-01` Accepted; multiple files route to deferred `ANA-07` intake and never silently replace the current game.
-- **R11 association gate:** `REL-04` supplies per-artifact file association and installed-app launch evidence. It is the additional final-acceptance gate only. Packaging does not own open/replace semantics.
+- **R18 association gate:** `REL-04` supplies per-artifact file association and installed-app launch evidence. It is the additional final-acceptance gate only. Packaging does not own open/replace semantics.
 - `APP-01` stays unaccepted until both gates pass. R5 may exit with the semantic gate recorded and `APP-01` still unaccepted.
 
 Ordinary launch evidence stays on accepted `UI-01` / `UI-04` plus `REL-04` installed launch. It is not a second shell item.
@@ -323,14 +324,14 @@ R9 must not begin until all of the following are Accepted: `ENG-02`, `ENG-03`, `
 
 Delivery Order inside R9 is `GAME-01` + `GAME-04` + `GAME-05`, then `GAME-02`, then `GAME-03`. It does not make `GAME-02` an Item Start Prerequisite of `GAME-03`.
 
-### R10 / R11 Overlap
+### R10 / R18 Release Overlap (Historical R10 / Old R11)
 
-R10 and R11 numbers are Delivery Order, not a hard edge between them. Either phase may start after its own Migration Phase Gate:
+R10 and R18 (formerly the unexecuted R11 Release) numbers are Delivery Order, not a hard edge. R10’s completed gate remains attributable to its original scope; release work uses its own Migration Phase Gate:
 
 - R10 Migration Phase Gate: `SGF-07`, `PREF-01`, and `APP-03` Accepted.
-- R11 Migration Phase Gate: repository release work may proceed at any time for `REL-01`. End-user apply/handoff requires `APP-03` for `REL-06`. `REL-04` association evidence requires the `APP-01` semantic gate. Trusted feeds require `REL-02`.
+- R18 Migration Phase Gate: repository release work may proceed at any time for `REL-01`. End-user apply/handoff requires `APP-03` for `REL-06`. `REL-04` association evidence requires the `APP-01` semantic gate. Trusted feeds require `REL-02`.
 
-The only product coupling between R10 and R11 is whether domain 06 later accepts a readboard payload into the `REL-05` installed manifest. That decision is not an R10 or R11 exit. Deferred `CONTRIB-01` may likewise add its separate client through the accepted `REL-05` protocol, but remains outside both phase exits until promoted.
+The only product coupling between completed R10 and R18 is whether domain 06 later accepts a readboard payload into the `REL-05` installed manifest. That decision is not an R10 or R18 exit. Deferred `CONTRIB-01` may likewise add its separate client through the accepted `REL-05` protocol, but remains outside both phase exits until promoted.
 
 ### Owner-Routed Settings
 
@@ -368,7 +369,7 @@ The only product coupling between R10 and R11 is whether domain 06 later accepts
 | Match start defaults, Compute Budgets, PK max moves | `GAME-04` | R9 |
 | Provider locators, recents, sync interval, mute-during-sync, non-secret account references | `PROV-01` … `PROV-07`, `READ-02` | R10 / Deferred |
 | Provider Network Policy; no application override or Java-key migration | `PROV-01` … `PROV-07`; `RCOMP-01` when admitted | R10 / Deferred |
-| Update channel and source | `REL-03` | R11 |
+| Update channel and source | `REL-03` | R18 |
 | Complete locale selection | `I18N-01` | Deferred |
 | Contribution account, consent, client component, backend/device, concurrency, and auto-save | `CONTRIB-01` | Deferred |
 | Contribute Open Watch / Close Watch | `GAME-09` | Deferred |
@@ -422,6 +423,8 @@ Nine Ticket 29 boundaries, under designated authorities:
 Every numbered phase has a Migration Phase Gate and an exit. Every Deferred item has an explicit Promotion Gate (`—` means no additional condition). Delivery Order does not duplicate or strengthen Matrix `Depends on`. Semantic settings remain with behavior owners. Repository evidence, native/provider live evidence, Repository Release Evidence, release-environment evidence, and Installed Live Evidence stay non-interchangeable.
 
 ## Roadmap
+
+The R0–R10 sections retain their original organization, completed gates and candidate-specific evidence. Historical present-tense/next labels below are snapshots, not the current frontier. The old unexecuted R11 Release section is renamed R18 without dropping its gates; [Current Function-first Delivery](#current-function-first-delivery) owns the active R11–R18 route.
 
 ### R0 — Baseline And Inventory
 
@@ -806,7 +809,7 @@ Fixture-only backend evidence cannot mark a GAME item Accepted.
 
 `PROV-05`–`PROV-07`, `RCOMP-01`, `PUB-01`, and `GAME-10` do not block this exit. Deferred provider items require no current live evidence and inherit Provider Network Policy when admitted. `PROV-06` promotion first proves guest Personal semantics; `PROV-07` promotion requires its official authorization plus per-family read/write, System Credential Store, sole-Match, and Installed Live Evidence contracts. Deferred `GAME-10` requires no current engine play-back evidence and does not expand `READ-02`; promotion requires its own repository and Installed Live Evidence. Existing Partial plumbing is evidence toward the numbered R10 items, not completion.
 
-### R11 — Release
+### R18 — Release (Renumbered Old Unexecuted R11)
 
 **Goal:** Turn repository builds into independently admitted, updateable, supportable desktop releases.
 
@@ -854,7 +857,7 @@ flowchart LR
 - Signed envelopes and verified payloads on stable/beta feeds. Windows production artifacts are Authenticode-signed and timestamped; macOS artifacts are signed, notarized, and stapled. Unsigned public-validation prereleases are labeled as such and never enter an updater feed.
 - Help-triggered manual discovery: stable/beta, official/GitHub, persisted valid choices, SemVer comparison, OS proxy, and typed no-update/no-package/network/signature failures without mutating the install.
 - Independent Installed Live Evidence for Windows NSIS, Windows portable, macOS DMG, and Linux AppImage, including declared runtime, data location, upgrade, and uninstall/delete. Installed removal preserves app-data by default. Portable launch covers present and absent WebView2.
-- Installed manifest of `app-core` plus acquired KataGo backend/default-model components. No-engine launch works without optional components. Later domain-owned components, including an admitted `CONTRIB-01` client, join only after their owner is Accepted and do not retroactively expand the R11 exit.
+- Installed manifest of `app-core` plus acquired KataGo backend/default-model components. No-engine launch works without optional components. Later domain-owned components, including an admitted `CONTRIB-01` client, join only after their owner is Accepted and do not retroactively expand the R18 exit.
 - Windows NSIS and portable component apply with resume/cancel/fallback, helper elevation when required, shutdown only after successful helper launch, manifest update, and restart without changing user data.
 - macOS/Linux verified full-package download and DMG/folder handoff without overwriting the running tree.
 - Windows reverse rollback, result journal, restored-version restart, and incomplete-restoration repair path. Maintainer GitHub-release withdrawal is not this item.
@@ -872,7 +875,7 @@ Linux may publish an AppImage without a repository/package-manager signature onl
 
 ### Deferred Queue
 
-These 25 historical Deferred IDs retain their status, owner, and admission clauses. Their current A–F allocation is in the frozen delivery map; allocation is not promotion. The numbered-phase wording in historical admissions means a named current functional owner, not a requirement to finish R11. Native/real-service conditions remain mandatory for functionality; signed packaging and installation are separate R11 gates.
+These 25 historical Deferred IDs retain their status, owner and admission clauses. Current R11–R17 responsibility is in the rolling stage index; the frozen A–F delivery map remains source provenance, not active tickets. Allocation is not promotion. Historical numbered-phase admissions mean a named functional owner, not a requirement to finish release. Native/real-service conditions remain functional requirements; signed packaging and installation are separate R18 gates.
 
 | ID | Owner | Promotion Gate | Admission |
 | --- | --- | --- | --- |
@@ -888,23 +891,23 @@ These 25 historical Deferred IDs retain their status, owner, and admission claus
 | `EXPORT-03` | Analysis export | — | At least one identity-valid selected-line point; invocation-time frozen `ANA-11` encoding; deterministic 1600 × 600 PNG with fixed perspective/series labels and no hover or application chrome; File → 更多保存 and registry-owned `Shift+Alt+S`; native default name; shared Recent Image Export Directory updated only on success; confirmed atomic overwrite; cancel/failure preserves target and all application state. |
 | `ENG-08` | Engine catalog | — | User-directed catalog reorder persists identities without changing Settings selection, Autoload Default, active run, pending edits, or job binding. |
 | `SSH-01` | SSH engine execution | — | One shared catalog; non-secret SSH profile fields plus System Credential Store/session-only fallback; every admitted stdio adapter preserves its declared capabilities; explicit Autoload Default marking; standard run, typed failure, explicit Restart, no local fallback or restart recovery; bounded deadlines fixed on promotion; repository and per-Shipped-Platform live evidence. |
-| `CONTRIB-01` | Contribution service | — | Promote only for official `katagotraining.org` with a separate qualified client built from an admitted KataGo tag (signed component delivery remains R11) for Windows/Linux CUDA and macOS Metal. Require versioned consent, System Credential Store/session-only fallback, argv-safe ephemeral config, Contribution Network Policy, curated backend/device and 1–16 games (default 1), one globally exclusive typed run, terminal auth/config/version failures, one cancellable 60-second reconnect window, explicit Retry, 30-second graceful-to-force Stop, no respawn/recovery, explicit component repair, default-off user-directory per-game auto-save, narrow local-data clearing, sanitized repository evidence, and a real production upload plus native lifecycle/component/proxy/credential/save evidence on every admitted functional platform; signed/installed evidence remains separately Not run until R11. Other services, custom commands/SSH, ONNX, `+bs50`, ROCm, OpenCL, raw config, and raw console require a successor or remain excluded. Service actions appear only after acceptance. |
+| `CONTRIB-01` | Contribution service | — | Promote only for official `katagotraining.org` with a separate qualified client built from an admitted KataGo tag (signed component delivery remains R18) for Windows/Linux CUDA and macOS Metal. Require versioned consent, System Credential Store/session-only fallback, argv-safe ephemeral config, Contribution Network Policy, curated backend/device and 1–16 games (default 1), one globally exclusive typed run, terminal auth/config/version failures, one cancellable 60-second reconnect window, explicit Retry, 30-second graceful-to-force Stop, no respawn/recovery, explicit component repair, default-off user-directory per-game auto-save, narrow local-data clearing, sanitized repository evidence, and a real production upload plus native lifecycle/component/proxy/credential/save evidence on every admitted functional platform; signed/installed evidence remains separately Not run until R18. Other services, custom commands/SSH, ONNX, `+bs50`, ROCm, OpenCL, raw config, and raw console require a successor or remain excluded. Service actions appear only after acceptance. |
 | `ANA-07` | Analysis | `APP-02` | Session-only SGF queue. Must not replace or dirty the current game. Queue state is not restored after restart. |
 | `ANA-09` | Engine adapters | Named engine/version product evidence | Named engine/version fixtures into the existing analysis model. Missing fields stay unavailable. Interface existence does not start this item. |
 | `GAME-06` | Game modes | — | Session-only PK batch with durable completed-game output. Restart does not restore an unfinished queue. |
 | `GAME-07` | Game modes | a separately approved clock policy | Application-owned remaining-time model. A Compute Budget timeout is not this item. |
 | `GAME-08` | Game modes | a HumanSL-compatible profile | Independent AI Coach Match Session, not a hidden option of `GAME-02`. |
 | `GAME-09` | Game modes plus contribution service | accepted `GAME-01`, passed `CONTRIB-01::functional` | Promote only as an explicitly opened watcher for an active Contribution Run. A transient tree selects active contributed games, navigates moves, and follows the latest move without replacing or dirtying the authoritative current game. Close Watch restores the exact prior game/cursor while contribution continues; Pause retains an open watcher; Stop Contribution, failure, or exit closes and restores; restart restores neither run nor watcher. Automatic rotation/next-game playback, non-19 filtering, result/rules/console controls, manual batch Save All, and service/network/auto-save ownership stay outside this item. No disabled watcher entry appears before acceptance. Repository fixtures and real-service native evidence on every admitted functional platform; signed/installed evidence remains R11. These checks prove exact preservation, stale-game rejection, navigation, Pause, Close, Stop/failure restoration, and restart. |
-| `GAME-10` | Game modes plus readboard | does not expand the R10 exit | Promote as one External-board Engine Match item only after active external-authoritative sync, target and per-mode engine capabilities, Match ownership, SGF handoff, and teardown have passed their required functional records. Final-decision and Leading-candidate modes share one Armed/Pending lifecycle and authoritative-snapshot commit rule. Promotion fixes bounded deadlines, assigns the item to C without expanding R10, and requires deterministic repository evidence plus real native sidecar/target evidence for both modes on every admitted platform; installation/trust remains R11. |
+| `GAME-10` | Game modes plus readboard | does not expand the R10 exit | Promote as one External-board Engine Match item only after active external-authoritative sync, target and per-mode engine capabilities, Match ownership, SGF handoff, and teardown have passed their required functional records. Final-decision and Leading-candidate modes share one Armed/Pending lifecycle and authoritative-snapshot commit rule. Promotion fixes bounded deadlines, assigns the item to R14 (historical source C) without expanding R10, and requires deterministic repository evidence plus real native sidecar/target evidence for both modes on every admitted platform; installation/trust remains R18. |
 | `PROV-05` | Providers | —; `PROV-04` is an exclusion, not a gate | Non-Yike Tencent/huanle live protocols as a separate item from kifu import. |
 | `PROV-06` | Providers | — | Keep Recommend as default and category/page session-only. Promote only after real guest Personal semantics, pagination/filter/outcome fixtures, and explicit public-locator handoff are proven. If authentication is required, remain Deferred until a later plan revision adds `PROV-07`; never absorb account auth or duplicate import/sync. |
 | `PROV-07` | Providers plus game modes | — | Promote only with one documented provider-supported Yike account authorization, System Credential Store persistence, bounded clearable locator recents, and an explicitly named initial locator-family set. Transactional Start and session switch prove account/side/exact-position/turn admission, visible provider-authoritative clock gating, sole Match ownership, one Pending Provider Move, Move/Pass/non-dismissible-confirmed Resign, exact readback commit, alternate-successor authority, no write retry, bounded read retry, Error/Reconcile reservation, warned Stop/Disconnect, authoritative terminal `RE`, and no live-session recovery. Repository evidence and per-Shipped-Platform live evidence cover every admitted family, credential lifecycle, Provider Network Policy, timeout/auth expiry, conflict, and restart. |
 | `RCOMP-01` | Remote compute providers | — | Separate provider configuration with both Zhizi and Custom `ws/wss` modes; explicit start into a standard run; System Credential Store/session-only fallback; Provider Network Policy; typed failure, explicit Restart, no session rebuild/local fallback/restart recovery; per-mode repository and per-Shipped-Platform live evidence; bounded deadlines fixed on promotion. |
 | `PUB-01` | Providers | — | LAN board publish start/stop and copy-access URL. Trial internals stay excluded. |
 
-## Next Executable Batch
+## Next Executable Stage
 
-The current executable frontier is **A — 常用复盘与操作**, subject to each task’s actual blockers and publication approval. Ticket 07 owns A contracts; ticket 08 owns B–F/R11 allocation. The [frozen delivery map](../.scratch/issue18-function-first/evidence/06-delivery-map.md) supplies named intents, not published tickets. Task publication and final link closure remain planning tickets 07/08 and 09 respectively; no product implementation or #18 closure is claimed here.
+The current planning frontier is **R11 — 常用复盘与操作**; product execution awaits actual task blockers and separate publication approval. Planning 07 owns the complete [R11 draft group](../.scratch/issue18-function-first/replanned/R11/); planning 08 owns [R12–R18 stage plans and intent routes](../.scratch/issue18-function-first/replanned/stages/index.json). The stage files `R12.md` through `R18.md` retain goals, scope/non-goals, actual prerequisites, acceptance/environment obligations, source ownership and named unresolved decisions; they are detailed into runnable tasks only before that stage starts. These ignored local links are pending draft-material integration and are not published tracker tickets. Planning 09 closes approved R11 task links and whole-stage coverage; future-stage task publication is not required now. The frozen delivery map and historical `drafts/` remain provenance, not the active frontier. Neither this stage approval nor these drafts authorize product implementation or #18 closure.
 
 ### Historical completed batches
 
@@ -913,7 +916,7 @@ ANA-16 is complete and Accepted within its recorded eight-ticket scope; the anal
 
 R5 has exited. Integrated candidate `48db2b2833f9deb45bd7dcd47181f5da77348a0c` completed the native activation/drop, graceful-shutdown, recovery-failure, and truthful-analysis evidence; exact unchanged-path reuse for the ten-second teardown cases was paired with affected final-candidate smoke.
 
-`APP-01` remains Missing only for its R11 / `REL-04` production association and Canonical Artifact Installed Live Evidence obligation. `ENG-09`/`ENG-10`, `UI-02` residuals, and other phase gates retain their own scope; R5 exit does not promote them.
+`APP-01` remains Missing only for its R18 / `REL-04` production association and Canonical Artifact Installed Live Evidence obligation. `ENG-09`/`ENG-10`, `UI-02` residuals, and other phase gates retain their own scope; R5 exit does not promote them.
 
 Historical R7 planning record: R6 exited on `be6951bf57afa07c4a1ae6d57075573b308f5dfd`. [R7 Adaptive Workspace](R7_PLAN.md) was based on `5d44760f172867c520adb9c57adcd86678f72c54`. Its original eight-ticket DAG and scope remain historical evidence; they are not today’s next executable batch.
 
@@ -943,7 +946,7 @@ For each slice:
 1. Run the narrowest fixture, crate test, frontend build/type check, or controlled process check that exercises the changed contract.
 2. Run native desktop smoke when the changed behavior depends on Tauri, app data, file dialogs, process lifecycle, or visual interaction.
 3. Run provider or sidecar live smoke only for the R10 modes in that item's acceptance statement, recorded separately from repository evidence.
-4. For R11, record Repository Release Evidence, release-environment evidence, and Installed Live Evidence as distinct rows. Do not promote an item on dry-run or unsigned validation alone.
+4. For R18, record Repository Release Evidence, release-environment evidence, and Installed Live Evidence as distinct rows. Do not promote an item on dry-run or unsigned validation alone.
 5. Update the affected parity rows with the exact evidence and remaining gap.
 6. Broaden to workspace-wide validation only when a shared DTO or command boundary makes scoped checks insufficient; use a full suite at most once as the integration gate for that batch.
 
@@ -955,7 +958,7 @@ python3 scripts/validate_release_assets.py --verbose
 python3 scripts/validate_release_workflow.py --verbose
 ```
 
-Use the scaffold validator when workspace, command, or document structure changes. Use the release validators in R11 or when release-support files change.
+Use the scaffold validator when workspace, command, or document structure changes. Use the release validators in R18 or when release-support files change.
 
 Provider/readboard acceptance must name the concrete Rust package or test filter and confirm that tests executed. Live environment results stay separate and follow `DEVELOPMENT.md`.
 

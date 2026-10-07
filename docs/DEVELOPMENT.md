@@ -31,7 +31,7 @@ Local development validation is strictly scoped to the **affected surface** of e
 
 ### Function-first Evidence And Planning Checks
 
-The current A–F route precedes R11 release acceptance; see Matrix’s `ITEM::functional` records for exact inherited candidate/platform/service scope. A functional pass is not whole-item Accepted. Failed/unavailable required checks block the affected dependency; native/service acceptance cannot be replaced by repository fixtures or a review verdict.
+The current R11–R17 functional route precedes R18 release acceptance (old, unexecuted R11 Release); see Matrix’s `ITEM::functional` records for exact inherited candidate/platform/service scope. A functional pass is not whole-item Accepted. Failed/unavailable required checks block the affected dependency; native/service acceptance cannot be replaced by repository fixtures or a review verdict. This documentation-only stage revision requires preservation/relationship checks and reader-navigation smoke, not repeated product/native runs. All planning implementation/integration tasks precede one integrated dual-axis review and centralized repair, then required actual acceptance and read-only Closeout; review does not publish the new R11 task group.
 
 For a new runtime consumer, record resource source/version/path/integrity/capability compatibility, Start/Switch failure behavior, and applicable actual engine/service/credential conditions. Use qualified local binaries without requiring a current-repository Release. Native application validation, installed-product validation and upstream engine compilation are separate operations; perform only the one the affected contract requires.
 
