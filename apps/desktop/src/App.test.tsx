@@ -49,6 +49,8 @@ const backend = vi.hoisted(() => ({
   applyRootSetup: vi.fn(),
   convertToRootSetup: vi.fn(),
   selectCurrentGameNode: vi.fn(),
+  findCurrentGameRecordedPoint: vi.fn(),
+  getBoardGestureTiming: vi.fn(),
   startSelectedNodeAnalysis: vi.fn(),
   cancelSelectedNodeAnalysis: vi.fn(),
   cancelKataGoAnalysis: vi.fn(),
@@ -360,6 +362,8 @@ beforeEach(() => {
   mainWindowPinApi.loadMainWindowPin.mockReset().mockResolvedValue({ actual: true, durable: true, error: null });
   mainWindowPinApi.setMainWindowPin.mockReset().mockResolvedValue({ actual: true, durable: true, error: null });
   currentGameFixture.mockResolvedValue(initialGame);
+  backend.findCurrentGameRecordedPoint.mockReset().mockResolvedValue(null);
+  backend.getBoardGestureTiming.mockReset().mockResolvedValue({ double_click_interval_ms: 1250 });
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
   backend.foregroundEngineContinuousAction.mockResolvedValue(defaultAppPreferences);
   backend.startForegroundEngine.mockResolvedValue(undefined);
@@ -1014,6 +1018,79 @@ describe("App authoring", () => {
   });
 });
 
+
+describe("App recorded-point review", () => {
+  function pointMenu(host: HTMLElement) {
+    const canvas = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 500, 500);
+    act(() => canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 250, clientY: 250 })));
+    return buttonNamed(host, "按此点找手");
+  }
+  it("uses a non-destructive double-click query and the exact existing selection seam without engine work", async () => {
+    currentGameFixture.mockResolvedValue(branchingGame);
+    backend.findCurrentGameRecordedPoint.mockResolvedValue({ indices: [0] });
+    backend.selectCurrentGameNode.mockResolvedValue({ ...branchingGame, selected_path: { indices: [0] }, snapshot_seq: 2,
+      snapshot: { ...branchingGame.snapshot, path: { indices: [0] }, position: { ...emptyPosition, move_number: 1 } } });
+    const host = await renderApp();
+    const canvas = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 500, 500);
+    await act(async () => { canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 250, clientY: 250, detail: 1 })); await Promise.resolve(); });
+    act(() => canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 250, clientY: 250, detail: 2 })));
+    await flushLast(backend.findCurrentGameRecordedPoint); await flushLast(backend.selectCurrentGameNode);
+    expect(backend.findCurrentGameRecordedPoint).toHaveBeenCalledWith(branchingGame.selected_path, 3, { x: 4, y: 4 }, expect.arrayContaining([{ parent: { indices: [0] }, child: 1 }]), "current_line");
+    expect(backend.selectCurrentGameNode).toHaveBeenCalledWith({ indices: [0] }, 3);
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
+    expect(backend.playCurrentGame).not.toHaveBeenCalled(); expect(backend.authorCurrentGame).not.toHaveBeenCalled();
+    expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled(); expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  });
+  it("keeps an absent match and a repeated exact-current match non-mutating", async () => {
+    currentGameFixture.mockResolvedValue(branchingGame);
+    const host = await renderApp();
+    const first = pointMenu(host); act(() => first.click()); await flushLast(backend.findCurrentGameRecordedPoint);
+    expect(host.textContent).toContain("未找到该点的已记录落子；当前节点保持不变。");
+    backend.findCurrentGameRecordedPoint.mockResolvedValue(branchingGame.selected_path);
+    for (let repeat = 0; repeat < 2; repeat += 1) { const find = pointMenu(host); act(() => find.click()); await flushLast(backend.findCurrentGameRecordedPoint); }
+    expect(backend.findCurrentGameRecordedPoint).toHaveBeenLastCalledWith(branchingGame.selected_path, 3, { x: 4, y: 4 }, expect.any(Array), "all_branches");
+    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    expect(backend.playCurrentGame).not.toHaveBeenCalled(); expect(backend.authorCurrentGame).not.toHaveBeenCalled();
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("2");
+  });
+  it("drops a point-query reply after the actual New owner replaces its captured document", async () => {
+    currentGameFixture.mockResolvedValue(branchingGame);
+    const { promise, resolve } = Promise.withResolvers<NodePath | null>();
+    backend.findCurrentGameRecordedPoint.mockReturnValueOnce(promise);
+    const host = await renderApp();
+    const find = pointMenu(host); act(() => find.click());
+    currentGameFixture.mockResolvedValue({ ...initialGame, generation: 4 });
+    act(() => buttonLabeled(host, "新建").click());
+    await act(async () => { buttonLabeled(host, "创建").click(); await Promise.resolve(); await currentGameFixture.mock.results.at(-1)?.value; });
+    await act(async () => { resolve({ indices: [0] }); await promise; });
+    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("0");
+  });
+  it("retires a point query across New Cancel even when generation and cursor return unchanged", async () => {
+    currentGameFixture.mockResolvedValue(branchingGame);
+    const { promise, resolve } = Promise.withResolvers<NodePath | null>();
+    backend.findCurrentGameRecordedPoint.mockReturnValueOnce(promise);
+    const host = await renderApp();
+    const find = pointMenu(host); act(() => find.click());
+    act(() => buttonLabeled(host, "新建").click());
+    await act(async () => { buttonLabeled(host, "取消").click(); await Promise.resolve(); });
+    await act(async () => { resolve({ indices: [0] }); await promise; });
+    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("2");
+  });
+  it("preserves immediate root-setup routing and does not consult ordinary-review native timing", async () => {
+    const host = await renderApp();
+    act(() => buttonNamed(host, "棋局").click()); act(() => buttonNamed(host, "起始局面设置(Ctrl+Shift+L)").click());
+    const canvas = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 500, 500);
+    act(() => canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 250, clientY: 250, detail: 1 })));
+    expect(backend.getBoardGestureTiming).not.toHaveBeenCalled(); expect(backend.findCurrentGameRecordedPoint).not.toHaveBeenCalled();
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+  });
+});
 
 describe("App root setup editing", () => {
   it("previews the draft without editing the document, cancels, then commits all changes once", async () => {

@@ -5,7 +5,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { ReviewPresentationScope } from "../domain/reviewPresentation";
 import type { AnalysisFrameDto, PointDto, PositionDto, SgfAuthoringActionDto } from "../domain/types";
+import type { PointSearchScopeDto } from "../domain/types";
 import { BoardCanvas } from "./BoardCanvas";
+import * as backend from "../api/backend";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -456,6 +458,47 @@ describe("BoardCanvas authoring gestures", () => {
   });
 });
 
+describe("BoardCanvas recorded-point gestures", () => {
+  it("classifies the ordinary click pair once and requests only current-line search", async () => {
+    vi.spyOn(backend, "getBoardGestureTiming").mockResolvedValue({ double_click_interval_ms: 1250 });
+    const onPointClick = vi.fn(); const onPointSearch = vi.fn();
+    const { canvas } = renderBoard({ onPointClick, onPointSearch, pointSearchEnabled: true, previewScope: initialPreviewScope });
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 500, 500);
+    await act(async () => { canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 159, clientY: 159, detail: 1 })); await Promise.resolve(); });
+    act(() => {
+      canvas.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0, clientX: 159, clientY: 159 }));
+      canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 159, clientY: 159, detail: 2 }));
+    });
+    expect(onPointClick).not.toHaveBeenCalled();
+    expect(onPointSearch).toHaveBeenCalledExactlyOnceWith({ x: 2, y: 2 }, "current_line", initialPreviewScope);
+  });
+  it("uses explicit all-branch search independently of disabled double-click permission", () => {
+    const onPointSearch = vi.fn(); const onPointClick = vi.fn();
+    const { canvas, host } = renderBoard({ onPointClick, onPointSearch, pointSearchEnabled: true, allowDoubleClick: false, previewScope: initialPreviewScope });
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 500, 500);
+    act(() => canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 159, clientY: 159 })));
+    const find = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent === "按此点找手");
+    if (!find) throw new Error("Point search menu item absent");
+    act(() => find.click());
+    expect(onPointSearch).toHaveBeenCalledExactlyOnceWith({ x: 2, y: 2 }, "all_branches", initialPreviewScope);
+    expect(onPointClick).not.toHaveBeenCalled();
+  });
+  it("keeps off-board and stale captured context non-destructive", () => {
+    const onPointSearch = vi.fn(); const onGestureRefused = vi.fn();
+    const { canvas, host, rerender } = renderBoard({ onPointSearch, onGestureRefused, pointSearchEnabled: true, previewScope: initialPreviewScope });
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 500, 500);
+    act(() => canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 700, clientY: 700 })));
+    expect(host.querySelector('[role="menu"]')).toBeNull();
+    act(() => canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 159, clientY: 159 })));
+    rerender(position, { ...initialPreviewScope, generation: 2 });
+    const find = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent === "按此点找手");
+    if (!find) throw new Error("Captured menu absent");
+    act(() => find.click());
+    expect(onPointSearch).not.toHaveBeenCalled();
+    expect(onGestureRefused).toHaveBeenCalled();
+  });
+});
+
 function dispatchKey(canvas: HTMLCanvasElement, key: string) {
   act(() => {
     canvas.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
@@ -471,7 +514,7 @@ function renderBoard({
   nextMoveMode,
   nextMoveMarkers,
   keyboardPlacement,
-  allowDrag, allowDoubleClick, authoringEnabled, onAuthoring, onGestureRefused
+  allowDrag, allowDoubleClick, authoringEnabled, onAuthoring, onGestureRefused, pointSearchEnabled, onPointSearch
 }: {
   onPointClick?: (point: PointDto) => void;
   onCandidatePreview?: (index: number | null) => void;
@@ -484,6 +527,8 @@ function renderBoard({
   keyboardPlacement?: boolean;
   allowDrag?: boolean;
   allowDoubleClick?: boolean;
+  pointSearchEnabled?: boolean;
+  onPointSearch?: (point: PointDto, scope: PointSearchScopeDto, captured: ReviewPresentationScope) => void;
   authoringEnabled?: boolean;
   onAuthoring?: (action: SgfAuthoringActionDto, captured: ReviewPresentationScope) => void;
   onGestureRefused?: (message: string) => void;
@@ -505,6 +550,8 @@ function renderBoard({
         keyboardPlacement={keyboardPlacement}
         allowDrag={allowDrag}
         allowDoubleClick={allowDoubleClick}
+        pointSearchEnabled={pointSearchEnabled}
+        onPointSearch={onPointSearch}
         authoringEnabled={authoringEnabled}
         onAuthoring={onAuthoring}
         onGestureRefused={onGestureRefused}
@@ -555,7 +602,7 @@ it("keeps every context action inside the viewport at the lower-right board edge
   const menu = host.querySelector<HTMLElement>('[role="menu"]');
   expect(menu?.style.left).toBe(`${window.innerWidth - 240}px`);
   expect(menu?.style.top).toBe(`${window.innerHeight - 220}px`);
-  expect(menu?.querySelectorAll('[role="menuitem"]').length).toBe(7);
+  expect(menu?.querySelectorAll('[role="menuitem"]').length).toBe(8);
   bounds.mockRestore();
 });
 

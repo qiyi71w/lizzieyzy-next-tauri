@@ -191,6 +191,12 @@ pub enum PointSearchScopeDto {
     AllBranches,
 }
 
+/// Current system mouse timing, read-only and never persisted as an app preference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoardGestureTimingDto {
+    pub double_click_interval_ms: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SgfPropertyDto {
     pub key: String,

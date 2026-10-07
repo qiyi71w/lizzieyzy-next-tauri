@@ -16,6 +16,7 @@ import type {
   AppHealthDto,
   AssetCheckDto,
   CandidateMoveDto,
+  BoardGestureTimingDto,
   CurrentGameResultDto,
   CurrentGameSaveResultDto,
   ApplicationExitActionDto,
@@ -320,6 +321,11 @@ export async function findCurrentGameRecordedPoint(
 ): Promise<NodePath | null> {
   if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
   return invoke<NodePath | null>("find_current_game_recorded_point", { path, generation, point, choices, scope });
+}
+
+export async function getBoardGestureTiming(): Promise<BoardGestureTimingDto> {
+  if (!isTauriRuntime()) throw new Error("System double-click timing requires the native desktop backend; browser preview cannot classify this gesture.");
+  return invoke<BoardGestureTimingDto>("board_gesture_timing");
 }
 
 export async function playCurrentGame(path: NodePath, vertex: MoveVertex): Promise<CurrentGameResultDto> {

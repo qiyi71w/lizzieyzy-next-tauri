@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod continuous_analysis;
+mod gesture_timing;
+use gesture_timing::board_gesture_timing;
 mod external_sync;
 mod provider_network;
 use provider_network::{
@@ -1205,6 +1207,7 @@ pub fn run() {
             project_current_game_mainline,
             select_current_game_node,
             find_current_game_recorded_point,
+            board_gesture_timing,
             play_current_game,
             author_current_game,
             set_current_game_personal_comment,
