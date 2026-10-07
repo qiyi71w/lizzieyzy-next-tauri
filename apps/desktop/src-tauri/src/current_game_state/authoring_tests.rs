@@ -145,3 +145,68 @@ fn authoring_match_trial_external_sync_and_departure_guards_preserve_document() 
         assert!(!holder.history.can_undo());
     }
 }
+
+#[test]
+fn authoring_history_exchanges_legitimate_analysis_without_resetting_source_or_revisions() {
+    let state = CurrentGameState::default();
+    let opened = state
+        .replace("(;SZ[5];B[aa]C[keep])", Some("source.sgf".into()))
+        .unwrap();
+    let selected = opened.selected_path.clone();
+    let payload = |visits| SgfAnalysisPayload {
+        engine_name: "KataGo".into(),
+        visits,
+        winrate_black: 0.55,
+        score_mean_black: Some(1.5),
+        score_stdev: None,
+        pda: None,
+        candidates: vec![],
+        ownership: None,
+    };
+    let edited = state
+        .author(
+            opened.generation,
+            selected.clone(),
+            Action::Drag {
+                from: point(0, 0),
+                to: point(4, 4),
+            },
+        )
+        .unwrap();
+    let analyzed = state
+        .attach_primary_analysis(edited.generation, selected.clone(), payload(100))
+        .unwrap();
+    assert_eq!(analyzed.generation, edited.generation);
+    assert!(analyzed.snapshot_seq > edited.snapshot_seq);
+    let edited_sgf = state.serialize().unwrap();
+    let undone = state.undo(analyzed.generation).unwrap();
+    assert!(undone.generation > analyzed.generation);
+    assert!(undone.snapshot_seq > analyzed.snapshot_seq);
+    assert_eq!(undone.selected_path, selected);
+    assert_eq!(undone.native_path, opened.native_path);
+    assert_eq!(undone.snapshot.personal_comment, "keep");
+    assert!(undone.snapshot.primary_analysis.is_none());
+    assert!(undone.dirty);
+    assert!(!undone.can_undo);
+    assert!(undone.can_redo);
+    assert_eq!(state.serialize().unwrap(), "(;SZ[5];B[aa]C[keep])");
+    assert!(state
+        .attach_primary_analysis(analyzed.generation, selected.clone(), payload(999))
+        .is_err());
+    let reanalyzed = state
+        .attach_primary_analysis(undone.generation, selected.clone(), payload(200))
+        .unwrap();
+    let original_sgf = state.serialize().unwrap();
+    let redone = state.redo(reanalyzed.generation).unwrap();
+    assert!(redone.generation > reanalyzed.generation);
+    assert_eq!(redone.selected_path, selected);
+    assert_eq!(redone.native_path, opened.native_path);
+    assert_eq!(redone.snapshot.primary_analysis.unwrap().visits, 100);
+    assert!(!redone.can_redo);
+    assert_eq!(state.serialize().unwrap(), edited_sgf);
+    let undone_again = state.undo(redone.generation).unwrap();
+    assert_eq!(undone_again.snapshot.primary_analysis.unwrap().visits, 200);
+    assert_eq!(state.serialize().unwrap(), original_sgf);
+    let reopened = CurrentSgfDocument::open(&original_sgf).unwrap();
+    assert_eq!(reopened.snapshot(&selected).unwrap().primary_analysis.unwrap().visits, 200);
+}

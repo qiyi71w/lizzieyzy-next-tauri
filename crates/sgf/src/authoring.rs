@@ -78,16 +78,15 @@ pub(super) fn restore_properties(node: &mut SgfNode, keys: &[String], properties
     }
 }
 fn clear_analysis(node: &mut SgfNode, path: &mut NodePath, steps: &mut Vec<DocumentReversal>) {
-    if node.properties.iter().any(|p| ANALYSIS.contains(&p.key.as_str())) {
-        let keys: Vec<String> = ANALYSIS.iter().map(|s| (*s).into()).collect();
-        let properties = selected_properties(node, &keys);
-        steps.push(DocumentReversal::AuthorProperties {
-            path: path.clone(),
-            keys,
-            properties,
-        });
-        node.properties.retain(|p| !ANALYSIS.contains(&p.key.as_str()));
-    }
+    // Empty slots are part of the inverse too: later analysis belongs to this edited position.
+    let keys: Vec<String> = ANALYSIS.iter().map(|s| (*s).into()).collect();
+    let properties = selected_properties(node, &keys);
+    steps.push(DocumentReversal::AuthorProperties {
+        path: path.clone(),
+        keys,
+        properties,
+    });
+    node.properties.retain(|p| !ANALYSIS.contains(&p.key.as_str()));
     for (index, child) in node.children.iter_mut().enumerate() {
         path.indices.push(index as u32);
         clear_analysis(child, path, steps);

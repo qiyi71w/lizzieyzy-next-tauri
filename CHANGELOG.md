@@ -4,6 +4,7 @@
 
 ### English
 
+- Fixed authoring Undo/Redo carrying newly attached analysis onto the other board position when its original analysis slots were empty. Drag, whole-tree transforms and insertion now exchange affected payloads with their corresponding positions while preserving later unrelated analysis and SGF Save/reopen semantics.
 - Refined winrate-chart score labels to show the actual leading color with one-decimal rounding, separated current/hover/endpoint labels, and highlighted the baseline only for renderable metrics. Shared live/export rendering preserves selected-line gaps and the fixed whole-series perspective.
 - Added invocation-frozen 1600×600 winrate-chart PNG export through File → More Save, Function Search and Shift+Alt+S, using the shared atomic image writer and success-only image directory. Square marking now uses Shift+Alt+Q across the registry, menus and shortcut reference.
 - Added a Rust-owned recorded-point query with exact current/ancestor/chosen-continuation ordering and optional stable all-branch search; stale or absent matches preserve the current document.
@@ -64,6 +65,7 @@
 
 ### 中文
 
+- 修复原分析槽位为空时，棋谱编辑 Undo/Redo 将后来附着的分析带入另一局面的问题。拖动、全树变换与列表插入按对应局面交换受影响分析，保留无关节点后来的分析及 SGF 保存重开语义。
 - 胜率图目差按实际领先颜色和一位小数显示，当前、悬停及端点标签分区；基准线只对应可绘制指标。实时图与导出共用绘制逻辑，保持所选线路的分析缺口与整条曲线固定视角。
 - 新增调用时冻结的1600×600胜率图PNG导出，文件→更多保存、功能搜索与Shift+Alt+S复用唯一原子图像写入及成功后更新的图像目录。方形标记改用Shift+Alt+Q，菜单、搜索与快捷键参考同步registry。
 - 新增 Rust 权威按点查找已记录落子：精确 current／最近祖先／所选 continuation 顺序，显式全树范围按稳定子序 DFS；过期或无匹配查询保持当前棋谱。
