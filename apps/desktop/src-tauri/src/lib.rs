@@ -291,6 +291,20 @@ fn select_current_game_node(
 }
 
 #[tauri::command]
+fn find_current_game_recorded_point(
+    state: State<CurrentGameState>,
+    path: NodePath,
+    generation: u64,
+    point: app_model::PointDto,
+    choices: Vec<app_model::AnalysisBranchChoiceDto>,
+    scope: app_model::PointSearchScopeDto,
+) -> Result<Option<NodePath>, String> {
+    state
+        .find_recorded_point(path, generation, point, choices, scope)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn play_current_game(
     state: State<CurrentGameState>,
     path: NodePath,
@@ -1175,6 +1189,7 @@ pub fn run() {
             save_current_game_as,
             project_current_game_mainline,
             select_current_game_node,
+            find_current_game_recorded_point,
             play_current_game,
             set_current_game_personal_comment,
             set_current_game_metadata,

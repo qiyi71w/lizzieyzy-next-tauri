@@ -96,6 +96,8 @@ pub struct AppPreferencesDto {
     pub variation_replay_enabled: bool,
     #[serde(default = "default_variation_replay_interval_ms")]
     pub variation_replay_interval_ms: u32,
+    #[serde(default = "default_review_autoplay_interval_ms")]
+    pub review_autoplay_interval_ms: u32,
     #[serde(default = "default_restore_last_session")]
     pub restore_last_session: bool,
     #[serde(default = "default_sound_enabled")]
@@ -188,6 +190,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         sub_board_content_mode: default_sub_board_content_mode(),
         variation_replay_enabled: default_variation_replay_enabled(),
         variation_replay_interval_ms: default_variation_replay_interval_ms(),
+        review_autoplay_interval_ms: default_review_autoplay_interval_ms(),
         restore_last_session: default_restore_last_session(),
         sound_enabled: default_sound_enabled(),
         default_board_width: default_board_width(),
@@ -264,7 +267,8 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
             Ok(preferences)
                 if preferences.continuous_budget.validate().is_ok()
                     && preferences.match_defaults.validate().is_ok()
-                    && preferences.network.validate().is_ok() =>
+                    && preferences.network.validate().is_ok()
+                    && validate_review_autoplay_interval(preferences.review_autoplay_interval_ms).is_ok() =>
             {
                 let preferences = normalize_app_preferences(preferences);
                 let valid = preferences
@@ -310,6 +314,7 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
 }
 
 pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPreferencesDto, String> {
+    validate_review_autoplay_interval(preferences.review_autoplay_interval_ms)?;
     preferences.network.validate()?;
     preferences.match_defaults.validate()?;
     if let Some(shares) = preferences.workspace_shares {
@@ -431,6 +436,18 @@ fn tmp_path(path: &Path) -> PathBuf {
     let mut tmp = path.as_os_str().to_os_string();
     tmp.push(".tmp");
     PathBuf::from(tmp)
+}
+
+fn default_review_autoplay_interval_ms() -> u32 {
+    800
+}
+
+/// Browser timers use a positive signed 32-bit whole-millisecond delay.
+pub fn validate_review_autoplay_interval(milliseconds: u32) -> Result<(), String> {
+    if milliseconds == 0 || milliseconds > i32::MAX as u32 {
+        return Err("Review autoplay interval must be a positive signed 32-bit millisecond delay.".into());
+    }
+    Ok(())
 }
 
 fn default_continuous_analysis_enabled() -> bool {
@@ -660,6 +677,7 @@ mod tests {
             sub_board_content_mode: "raw".to_string(),
             variation_replay_enabled: true,
             variation_replay_interval_ms: 250,
+            review_autoplay_interval_ms: 800,
             restore_last_session: true,
             sound_enabled: true,
             default_board_width: 19,
@@ -668,6 +686,48 @@ mod tests {
             scoring_rule: default_scoring_rule(),
             recent_game_paths: Vec::new(),
         }
+    }
+
+    #[test]
+    fn review_autoplay_interval_roundtrips_default_fractional_and_integer_delays() {
+        let (dir, path) = temp_prefs();
+        assert_eq!(
+            load_from_path(&path)
+                .unwrap()
+                .preferences
+                .review_autoplay_interval_ms,
+            800
+        );
+        for interval in [800, 2000, i32::MAX as u32] {
+            let mut prefs = default_app_preferences();
+            prefs.review_autoplay_interval_ms = interval;
+            save_to_path(&path, prefs).unwrap();
+            assert_eq!(
+                load_from_path(&path)
+                    .unwrap()
+                    .preferences
+                    .review_autoplay_interval_ms,
+                interval
+            );
+        }
+        let durable = fs::read(&path).unwrap();
+        for interval in [0, i32::MAX as u32 + 1, u32::MAX] {
+            let mut prefs = default_app_preferences();
+            prefs.review_autoplay_interval_ms = interval;
+            assert!(save_to_path(&path, prefs).is_err());
+            assert_eq!(fs::read(&path).unwrap(), durable);
+        }
+        let mut legacy = serde_json::to_value(default_app_preferences()).unwrap();
+        legacy.as_object_mut().unwrap().remove("reviewAutoplayIntervalMs");
+        fs::write(&path, legacy.to_string()).unwrap();
+        assert_eq!(
+            load_from_path(&path)
+                .unwrap()
+                .preferences
+                .review_autoplay_interval_ms,
+            800
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

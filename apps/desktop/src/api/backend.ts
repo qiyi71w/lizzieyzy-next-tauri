@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AnalysisFrameDto,
+  AnalysisBranchChoiceDto,
   AnalysisJobEventDto,
   AnalysisJobStartedDto,
   AnalysisScopeDto,
@@ -23,6 +24,8 @@ import type {
   DocumentDepartureAdmissionDto,
   DocumentDepartureOutcomeDto,
   NodePath,
+  PointDto,
+  PointSearchScopeDto,
   EngineProfileRecordDto,
   EngineProfileDto,
   EngineProfilesSettingsDto,
@@ -305,6 +308,17 @@ export async function selectCurrentGameNode(path: NodePath, generation: number):
     throw new Error("Native current-game navigation requires the Tauri desktop backend.");
   }
   return invoke<CurrentGameResultDto>("select_current_game_node", { path, generation });
+}
+
+export async function findCurrentGameRecordedPoint(
+  path: NodePath,
+  generation: number,
+  point: PointDto,
+  choices: AnalysisBranchChoiceDto[],
+  scope: PointSearchScopeDto
+): Promise<NodePath | null> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<NodePath | null>("find_current_game_recorded_point", { path, generation, point, choices, scope });
 }
 
 export async function playCurrentGame(path: NodePath, vertex: MoveVertex): Promise<CurrentGameResultDto> {

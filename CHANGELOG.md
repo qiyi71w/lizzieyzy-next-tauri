@@ -4,6 +4,8 @@
 
 ### English
 
+- Added a Rust-owned recorded-point query with exact current/ancestor/chosen-continuation ordering and optional stable all-branch search; stale or absent matches preserve the current document.
+- Added durable ordinary main-board autoplay intervals with a seconds draft, exact fractional-second persistence, failure-safe Save/Cancel and one Start-captured timer. Active playback keeps its interval until Stop/restart; document or input-scope changes retire old ticks.
 - Save and Save As now atomically replace files from a captured complete SGF tree on a blocking worker. Failure protects existing bytes and the document savepoint; late completion reports its actual target without cleaning later edits or adopting a replacement document.
 - Added offline Function Search shared by Help, the fixed toolbar and registry-owned Ctrl/Command+K. It searches registered actions and exact settings targets with platform shortcuts, visible disabled reasons and original-owner guards, and restores source focus on cancellation.
 - Added activation-fenced exact-target navigation, including initial Komi focus in Game Info and return to the retained search session on Cancel; metadata/history semantics are unchanged.
@@ -56,6 +58,8 @@
 
 ### 中文
 
+- 新增 Rust 权威按点查找已记录落子：精确 current／最近祖先／所选 continuation 顺序，显式全树范围按稳定子序 DFS；过期或无匹配查询保持当前棋谱。
+- 主棋盘普通自动播放新增可保存秒数草稿、精确小数秒持久化与非破坏 Save／Cancel；唯一 timer 仅在 Start 捕获间隔，运行中保存供下次启动使用，棋谱或输入范围变化使旧 tick 失效。
 - Save 与 Save As 在阻塞工作线程保存调用时捕获的完整 SGF 树并原子替换目标；失败保护已有字节与保存点，迟到成功报告实际目标，不清除后续编辑或接管新棋谱。
 - 新增离线功能搜索：帮助菜单、常驻工具栏和 registry-owned Ctrl/Command+K 共用 catalog，注册动作与精确设置目标显示本平台快捷键及禁用理由，调用原 owner，取消恢复合法来源焦点。
 - 新增激活后精确目标聚焦，包括 Game Info 默认贴目输入和取消返回原搜索会话；棋谱元数据及历史合同保持不变。

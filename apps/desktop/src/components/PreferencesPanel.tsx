@@ -3,6 +3,8 @@ import type { MainWindowPinControl } from "../hooks/useMainWindowPin";
 import { useState } from "react";
 import { continuousBudgetError, newGameDefaultsError, type AppPreferences, type BoardTheme, type GraphPerspective, type NextMoveReviewMarkerMode, type ReviewMode, type SubBoardContentMode } from "../domain/preferences";
 import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
+import { parseReviewAutoplaySeconds } from "../domain/reviewAutoplay";
+import { t } from "../i18n/resources";
 
 type Props = {
   windowPin?: MainWindowPinControl;
@@ -134,6 +136,7 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
           disabled={disabled}
           onChange={(checked) => update({ soundEnabled: checked })}
         />
+        <ReviewAutoplayEditor preferences={preferences} disabled={disabled} onChange={onChange} />
         <label>
           <span>默认计算量</span>
           <input
@@ -214,6 +217,32 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
       </fieldset>
     </section>
   );
+}
+
+function ReviewAutoplayEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
+  const [edited, setEdited] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+  const seconds = edited ?? String(preferences.reviewAutoplayIntervalMs / 1000);
+  return <div>
+    <label>
+      <span>{t("review.autoplay.interval")}</span>
+      <input data-search-target="prefs.autoplay-interval" aria-label={t("review.autoplay.interval")}
+        type="text" inputMode="decimal" value={seconds} disabled={disabled}
+        onChange={(event) => { setEdited(event.target.value); setError(false); }} />
+    </label>
+    <small>{t("review.autoplay.hint")}</small>
+    {error ? <p role="alert">{t("review.autoplay.invalid")}</p> : null}
+    <button type="button" disabled={disabled || edited === null} onClick={() => {
+      const milliseconds = parseReviewAutoplaySeconds(seconds);
+      if (milliseconds === null) { setError(true); return; }
+      onChange({ ...preferences, reviewAutoplayIntervalMs: milliseconds });
+      setEdited(null);
+      setError(false);
+    }}>{t("review.autoplay.apply")}</button>
+    <button type="button" disabled={disabled || edited === null} onClick={() => {
+      setEdited(null); setError(false);
+    }}>{t("review.autoplay.cancel")}</button>
+  </div>;
 }
 
 function DisplayPreferencesEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {

@@ -174,6 +174,69 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("validates autoplay drafts and keeps committed intervals after Cancel and write failure", async () => {
+  const host = await renderApp();
+  openPreferences(host);
+  const input = labeledNumber(host, "主棋盘自动播放间隔（秒）");
+  expect(input.value).toBe("0.8");
+  changeBudgetNumber(input, "2");
+  act(() => buttonNamed(host, "取消播放间隔").click());
+  expect(input.value).toBe("0.8");
+  for (const invalid of ["", "0", "-1", "NaN", "Infinity", "1e309", "2147483.648", "0.0001"]) {
+    changeBudgetNumber(input, invalid);
+    act(() => buttonNamed(host, "保存播放间隔").click());
+    expect(host.textContent).toContain("请输入正数秒");
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  }
+  changeBudgetNumber(input, "0.8");
+  await act(async () => buttonNamed(host, "保存播放间隔").click());
+  expect(input.value).toBe("0.8");
+  changeBudgetNumber(input, "1.001");
+  await act(async () => buttonNamed(host, "保存播放间隔").click());
+  expect(preferencesApi.saveAppPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ reviewAutoplayIntervalMs: 1001 }));
+  expect(input.value).toBe("1.001");
+  changeBudgetNumber(input, "0.8");
+  await act(async () => buttonNamed(host, "保存播放间隔").click());
+  changeBudgetNumber(input, "2");
+  preferencesApi.saveAppPreferences.mockRejectedValueOnce(new Error("interval replace failed"));
+  await act(async () => buttonNamed(host, "保存播放间隔").click());
+  expect(input.value).toBe("0.8");
+  expect(preferencesStatus(host)).toContain("interval replace failed");
+  changeBudgetNumber(input, "2");
+  await act(async () => buttonNamed(host, "保存播放间隔").click());
+  expect(preferencesApi.saveAppPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ reviewAutoplayIntervalMs: 2000 }));
+  expect(input.value).toBe("2");
+});
+
+it("captures one ordinary timer at Start, advances chosen nodes, and adopts a saved interval only after restart", async () => {
+  const tree = { properties: [], children: [{ properties: [], children: [] }, { properties: [], children: [{ properties: [], children: [] }] }] };
+  const start = { ...initialGame, tree, selected_path: { indices: [1] }, snapshot: { ...initialGame.snapshot, path: { indices: [1] } } };
+  currentGameFixture.mockResolvedValue(start);
+  backend.selectCurrentGameNode.mockImplementation(async (path) => ({ ...start, selected_path: path,
+    snapshot_seq: 2, snapshot: { ...start.snapshot, path, position: { ...emptyPosition, move_number: 2 } } }));
+  const host = await renderApp();
+  const callbacks: Array<() => void> = [];
+  const interval = vi.spyOn(window, "setInterval").mockImplementation((callback) => { callbacks.push(callback as () => void); return callbacks.length; });
+  const clear = vi.spyOn(window, "clearInterval");
+  act(() => buttonNamed(host, "自动播放").click());
+  expect(interval).toHaveBeenLastCalledWith(expect.any(Function), 800);
+  openPreferences(host);
+  changeBudgetNumber(labeledNumber(host, "主棋盘自动播放间隔（秒）"), "2");
+  await act(async () => buttonNamed(host, "保存播放间隔").click());
+  expect(interval).toHaveBeenCalledTimes(1);
+  await act(async () => callbacks[0]());
+  expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [1, 0] }, 1);
+  expect(interval).toHaveBeenCalledTimes(1);
+  act(() => callbacks[0]());
+  expect(buttonNamed(host, "自动播放").getAttribute("aria-pressed")).toBe("false");
+  expect(clear).toHaveBeenCalledWith(1);
+  act(() => buttonNamed(host, "自动播放").click());
+  expect(interval).toHaveBeenLastCalledWith(expect.any(Function), 2000);
+  const selectedCount = backend.selectCurrentGameNode.mock.calls.length;
+  act(() => callbacks[0]());
+  expect(backend.selectCurrentGameNode).toHaveBeenCalledTimes(selectedCount);
+});
+
 describe("durable preferences surface", () => {
   it("retains an unapplied focused comment across rail hiding until explicit Apply", async () => {
     const host = await renderApp();

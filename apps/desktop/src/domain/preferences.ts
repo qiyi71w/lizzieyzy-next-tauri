@@ -1,6 +1,7 @@
 import type { FoxKifuState, NetworkSettings, ReadboardSyncPreferences, TencentHistory, YikeSyncPreferences } from "./providers";
 import type { NextMoveReviewMarkerMode } from "./nextMoveReviewMarker";
 import type { AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, ContinuousAnalysisBudgetDto, MatchDefaultsDto, PkSideDefaultsDto, WindowGeometryDto, WorkspaceSharesDto } from "./types";
+import { validReviewAutoplayInterval } from "./reviewAutoplay";
 
 export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
@@ -50,6 +51,7 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   subBoardContentMode: SubBoardContentMode;
   variationReplayEnabled: boolean;
   variationReplayIntervalMs: number;
+  reviewAutoplayIntervalMs: number;
   restoreLastSession: boolean;
   soundEnabled: boolean;
   scoringRule: ScoringRule;
@@ -127,6 +129,7 @@ export const defaultAppPreferences: AppPreferences = {
   subBoardContentMode: "variation",
   variationReplayEnabled: false,
   variationReplayIntervalMs: 500,
+  reviewAutoplayIntervalMs: 800,
   restoreLastSession: false,
   soundEnabled: true,
   scoringRule: "area",
@@ -250,6 +253,8 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
       100,
       5000
     ),
+    reviewAutoplayIntervalMs: validReviewAutoplayInterval(value?.reviewAutoplayIntervalMs)
+      ? value.reviewAutoplayIntervalMs : defaultAppPreferences.reviewAutoplayIntervalMs,
     restoreLastSession: booleanValue(value?.restoreLastSession, defaultAppPreferences.restoreLastSession),
     soundEnabled: booleanValue(value?.soundEnabled, defaultAppPreferences.soundEnabled),
     scoringRule: value?.scoringRule === "territory" ? "territory" : "area",

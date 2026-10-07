@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Workspace } from "./workspace/Workspace";
 import { useWorkspace } from "./workspace/useWorkspace";
+import { useReviewAutoplay } from "./hooks/useReviewAutoplay";
 import { acceptedMoveSound } from "./domain/acceptedMoveSound";
 import { playMoveSound } from "./domain/moveSound";
 import { BoardCanvas } from "./components/BoardCanvas";
@@ -995,19 +996,24 @@ export function App() {
     engineSnapshot.lifecycle.state,
   ]);
 
-  useEffect(() => {
-    if (!autoPlaying || rootSetupDraft || conversionPrompt || markupDialog) return;
-    const timer = window.setInterval(() => {
+  useReviewAutoplay({
+    playing: autoPlaying,
+    scope: currentGame ? `review:${currentGame.generation}` : `preview:${game.summary.id}`,
+    blocked: documentFlowBusy || externalBlocked || Boolean(trial) || trialPending || Boolean(scoring) || scoringPending,
+    intervalMs: committedPreferencesRef.current.reviewAutoplayIntervalMs,
+    stop: () => setAutoPlaying(false),
+    step: () => {
+      if (matchOwnsWorkspace() || departurePendingRef.current || fileFlowDepthRef.current !== 0
+        || trialRef.current || trialTransitionRef.current || scoringRef.current || scoringPendingRef.current) {
+        setAutoPlaying(false);
+        return;
+      }
       if (reviewGame) {
+        if (navigatingRef.current || editActionPendingRef.current) return;
         const node = nodeAt(reviewGame.tree, reviewGame.selected_path);
-        if (!node || node.children.length === 0) {
-          setAutoPlaying(false);
-          return;
-        }
-        void selectNode(childPath(
-          reviewGame.selected_path,
-          chosenChildIndex(chosenChildren, reviewGame.selected_path, node.children.length)
-        ), reviewGame.generation, true);
+        if (!node || node.children.length === 0) { setAutoPlaying(false); return; }
+        void selectNode(childPath(reviewGame.selected_path,
+          chosenChildIndex(chosenChildren, reviewGame.selected_path, node.children.length)), reviewGame.generation, true);
         return;
       }
       setCurrentMove((move) => {
@@ -1015,9 +1021,8 @@ export function App() {
         if (next >= Math.max(positions.at(-1)?.move_number ?? 0, 1)) setAutoPlaying(false);
         return next;
       });
-    }, 800);
-    return () => window.clearInterval(timer);
-  }, [autoPlaying, positions, reviewGame, chosenChildren, rootSetupDraft, conversionPrompt, markupDialog]);
+    }
+  });
 
   function toggleSheet(next: SheetId) {
     if (matchOwnsWorkspace() && (next === "sync" || next === "engine" || next === "sgf")) return;
@@ -1102,6 +1107,7 @@ export function App() {
     ...([
       ["prefs.candidate-limit", "target.prefs.candidate-limit", ["候选", "houxuan", "candidate", "limit", "settings"]],
       ["prefs.replay-interval", "target.prefs.replay-interval", ["变化", "bianhua", "variation", "replay", "interval"]],
+      ["prefs.autoplay-interval", "target.prefs.autoplay-interval", ["自动播放", "zidongbofang", "autoplay", "main board", "interval", "seconds"]],
       ["prefs.board-theme", "target.prefs.board-theme", ["棋盘", "qipan", "theme", "contrast"]],
       ["engine.model-path", "target.engine.model-path", ["模型", "moxing", "model", "path"]],
       ["engine.config-path", "target.engine.config-path", ["配置", "peizhi", "config", "path"]],

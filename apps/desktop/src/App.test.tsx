@@ -1090,6 +1090,12 @@ describe("App board intent feedback", () => {
     expect(host.textContent).toContain("missing sound resource");
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
     expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+    backend.selectCurrentGameNode.mockResolvedValueOnce({ ...initialGame, generation: acceptedGame.generation, tree: acceptedGame.tree });
+    await act(async () => { buttonNamed(host, "父节点").click(); await backend.selectCurrentGameNode.mock.results.at(-1)?.value; });
+    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] }, acceptedGame.generation);
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("0");
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
   });
 
   it("plays one sound for an accepted trial pass without changing the original document", async () => {

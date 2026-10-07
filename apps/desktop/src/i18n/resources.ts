@@ -1,5 +1,12 @@
 // Complete compatibility resource. New consumers add their keys here before use.
 export const baseResources = {
+  "review.autoplay.interval": "主棋盘自动播放间隔（秒）",
+  "review.autoplay.apply": "保存播放间隔",
+  "review.autoplay.cancel": "取消播放间隔",
+  "review.autoplay.invalid": "请输入正数秒，且须能精确表示为正的 32 位整数毫秒。",
+  "review.autoplay.hint": "运行中的播放保持启动时的间隔；保存值在下次启动时生效。",
+  "review.point.no-match": "未找到该点的已记录落子；当前节点保持不变。",
+  "review.point.unavailable": "按点找手仅在普通复盘且棋盘输入空闲时可用。",
   "action.file.new": "新建棋谱",
   "action.file.open": "打开棋谱",
   "action.file.save": "保存棋谱",
@@ -104,6 +111,7 @@ export const baseResources = {
   "action.help.about": "关于 LizzieYzy Next",
   "target.prefs.candidate-limit": "设置：显示候选数",
   "target.prefs.replay-interval": "设置：变化回放间隔",
+  "target.prefs.autoplay-interval": "设置：主棋盘自动播放间隔",
   "target.prefs.board-theme": "设置：棋盘对比",
   "target.engine.model-path": "引擎设置：模型路径",
   "target.engine.config-path": "引擎设置：配置路径",
