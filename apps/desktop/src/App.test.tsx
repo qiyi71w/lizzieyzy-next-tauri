@@ -1363,6 +1363,121 @@ describe("App stale review presentation", () => {
   });
 });
 
+describe("App function search owner", () => {
+  beforeEach(() => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([{ width: 10, height: 10 }] as unknown as DOMRectList);
+  });
+
+  it("opens from toolbar and registry, reaches Komi and returns search on Cancel without editing", async () => {
+    const host = await renderApp();
+    const source = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
+    source.focus();
+    act(() => {
+      const toolbar = buttonNamed(host, "功能搜索");
+      toolbar.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      toolbar.focus();
+      toolbar.click();
+    });
+    let input = requiredElement<HTMLInputElement>(host, '[role="dialog"][aria-label="功能搜索"] input');
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "game info");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    pressKey(input, "Enter");
+    const komi = requiredElement<HTMLInputElement>(host, '[data-search-target="game.komi"]');
+    await vi.waitFor(() => expect(document.activeElement).toBe(komi));
+    const metadata = requiredElement(host, '[aria-label="编辑棋局信息"]');
+    act(() => buttonNamed(metadata, "取消").click());
+    input = requiredElement<HTMLInputElement>(host, '[role="dialog"][aria-label="功能搜索"] input');
+    expect(input.value).toBe("game info");
+    await vi.waitFor(() => expect(document.activeElement).toBe(input));
+    expect(backend.setCurrentGameMetadata).not.toHaveBeenCalled();
+    pressKey(input, "Escape");
+    await vi.waitFor(() => expect(document.activeElement).toBe(source));
+    pressKey(source, "n");
+    expect(host.querySelector('[aria-label="新建棋谱"]')).toBeNull();
+    pressKey(buttonNamed(host, "坐标"), "k", { ctrlKey: true });
+    expect(host.querySelector('[role="dialog"][aria-label="功能搜索"]')).not.toBeNull();
+  });
+
+  it.each(["game.black-name", "game.white-name"])("focuses explicit metadata target %s without submitting", async (target) => {
+    const host = await renderApp();
+    act(() => buttonNamed(host, "功能搜索").click());
+    const input = requiredElement<HTMLInputElement>(host, '[aria-label="功能搜索"] input');
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, target);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    pressKey(input, "Enter");
+    await vi.waitFor(() => expect(document.activeElement).toBe(requiredElement(host, `[data-search-target="${target}"]`)));
+    expect(backend.setCurrentGameMetadata).not.toHaveBeenCalled();
+  });
+
+  it("reaches the non-first candidate setting without invoking document or engine actions", async () => {
+    const host = await renderApp();
+    act(() => buttonNamed(host, "功能搜索").click());
+    const input = requiredElement<HTMLInputElement>(host, '[aria-label="功能搜索"] input');
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "houxuan");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    pressKey(input, "Enter");
+    await vi.waitFor(() => expect(document.activeElement).toBe(requiredElement(host, '[data-search-target="prefs.candidate-limit"]')));
+    expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+    expect(backend.setCurrentGameMetadata).not.toHaveBeenCalled();
+  });
+
+  it("uses the real human menu owner and N remains explanatory", async () => {
+    const host = await renderApp();
+    act(() => buttonNamed(host, "棋局").click());
+    expect(buttonNamed(host, "人机新局").disabled).toBe(false);
+    expect(buttonNamed(host, "从当前节点续弈").disabled).toBe(false);
+    expect(buttonNamed(host, "N：提示当前按键状态").disabled).toBe(true);
+    act(() => buttonNamed(host, "人机新局").click());
+    expect(host.querySelector('[role="dialog"][aria-label="人机新局"]')).not.toBeNull();
+    expect(matchApi.humanMatchStart).not.toHaveBeenCalled();
+  });
+
+  it("search New enters the existing draft owner and Cancel preserves the document", async () => {
+    const host = await renderApp();
+    backend.prepareDocumentReplacement.mockClear();
+    backend.resolveDocumentReplacement.mockClear();
+    const before = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value;
+    act(() => buttonNamed(host, "功能搜索").click());
+    const input = requiredElement<HTMLInputElement>(host, '[aria-label="功能搜索"] input');
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "xinjian");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { pressKey(input, "Enter"); await Promise.resolve(); });
+    const draft = requiredElement(host, '[role="dialog"][aria-label="新建棋谱"]');
+    await act(async () => { buttonNamed(draft, "取消").click(); await Promise.resolve(); });
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+    expect(backend.resolveDocumentReplacement).not.toHaveBeenCalled();
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe(before);
+  });
+
+  it("shows real Match occupancy and Enter cannot execute disabled New", async () => {
+    const idle = await matchApi.humanMatchSnapshot();
+    matchApi.humanMatchSnapshot.mockResolvedValue({ current: initialGame, match_state: { ...idle.match_state,
+      phase: "playing", session_id: "owned-match", resources_held: true, to_play: "black", settings: defaultAppPreferences.matchDefaults } });
+    const host = await renderApp();
+    backend.prepareDocumentReplacement.mockClear();
+    act(() => buttonNamed(host, "功能搜索").click());
+    const input = requiredElement<HTMLInputElement>(host, '[aria-label="功能搜索"] input');
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "xinjian");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(requiredElement(host, '[aria-label="功能搜索结果"]').textContent).toContain("对局正在占用工作区。");
+    pressKey(input, "Enter");
+    expect(host.querySelector('[aria-label="新建棋谱"]')).toBeNull();
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+    expect(matchApi.humanMatchStart).not.toHaveBeenCalled();
+  });
+});
+
 describe("App game metadata", () => {
   it("shows root names without an engine and preserves raw long names with a blank fallback", async () => {
     const longName = "甲".repeat(90);
@@ -1824,7 +1939,7 @@ describe("App focus-safe review controls", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(requiredElement(hostKeys, ".nav-message").textContent).toContain("人机对局尚未接入");
+    expect(requiredElement(hostKeys, ".nav-message").textContent).toContain("N 当前仅提示");
     expect(requiredElement<HTMLInputElement>(hostKeys, 'input[aria-label="跳转手数"]').value).toBe("0");
 
     currentGameFixture.mockResolvedValue(branchingGame);
@@ -2187,7 +2302,8 @@ describe("App focus-safe review controls", () => {
     expect(dialog.textContent).toContain("新建");
     expect(dialog.textContent).toContain("Ctrl+Home");
     expect(dialog.textContent).not.toContain("N, Ctrl+Home");
-    expect(dialog.textContent).toContain("人机对局（未接入）");
+    expect(dialog.textContent).toContain("N：提示当前按键状态");
+    expect(dialog.textContent).not.toContain("Ctrl+N");
     expect(dialog.textContent).toContain("Space");
 
     const search = requiredElement<HTMLInputElement>(dialog, 'input[aria-label="搜索快捷键"]');

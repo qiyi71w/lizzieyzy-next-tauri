@@ -15,9 +15,10 @@ import { PreferencesPanel } from "./components/PreferencesPanel";
 import { ShortcutReference } from "./components/ShortcutReference";
 import { DocumentDepartureDialog } from "./components/DocumentDepartureDialog";
 import { FunctionSearchPanel } from "./components/FunctionSearchPanel";
-import type { FunctionSearchAction } from "./domain/functionSearch";
+import { registeredFunctionCatalog, type FunctionSearchAction } from "./domain/functionSearch";
 import { captureFocusReturn, restoreOwnedFocus, scheduleOwnedFocus, type FocusReturn } from "./domain/focusNavigation";
-import { t } from "./i18n/resources";
+import { t, type ResourceKey } from "./i18n/resources";
+import { AboutDialog } from "./components/AboutDialog";
 import { ApplicationTeardownDialog } from "./components/ApplicationTeardownDialog";
 import { CurrentGameRecoveryDialog } from "./components/CurrentGameRecoveryDialog";
 import { AnalysisTaskPanel, type AnalysisScopeDraft } from "./components/AnalysisTaskPanel";
@@ -298,6 +299,8 @@ export function App() {
   const [newDocumentOpen, setNewDocumentOpen] = useState(false);
   const [metadataDraft, setMetadataDraft] = useState<{
     generation: number; blackName: string; whiteName: string; komi: number; handicap: string | null;
+    focusTarget: "game.komi" | "game.black-name" | "game.white-name";
+    returnToSearch: boolean;
   } | null>(null);
   const [engineSnapshot, setEngineSnapshot] = useState<ForegroundEngineSnapshotDto>(() => emptyForegroundEngineSnapshot());
   const [engineProfiles, setEngineProfiles] = useState<EngineProfileRecordDto[]>([]);
@@ -344,8 +347,12 @@ export function App() {
   const [shortcutReferenceOpen, setShortcutReferenceOpen] = useState(false);
   const [functionSearchOpen, setFunctionSearchOpen] = useState(false);
   const searchSourceRef = useRef<FocusReturn | null>(null);
+  const chromeSearchSourceRef = useRef<FocusReturn | null>(null);
   const workspaceRef = useRef<HTMLElement>(null);
-  const settingsFocusRef = useRef<(() => void) | null>(null);
+  const [settingsTarget, setSettingsTarget] = useState<string | null>(null);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const searchSessionRef = useRef({ query: "", selectedId: null as string | null });
+  const metadataSourceRef = useRef<FocusReturn | null>(null);
   const [keyboardPlacement, setKeyboardPlacement] = useState(false);
   const [markupTool, setMarkupTool] = useState<"play" | SgfMarkupToolDto["kind"]>("play");
   const [markupDialog, setMarkupDialog] = useState<{ point: PointDto; path: NodePath; generation: number; text: string } | null>(null);
@@ -809,7 +816,7 @@ export function App() {
       openMetadataEditor();
     });
     shortcutRegistry.bind("game.human-vs-engine", () => {
-      setMessage("人机对局尚未接入，N 不会新建棋谱。");
+      setMessage(t("reason.n"));
     });
     shortcutRegistry.bind("review.try-play", () => {
       if (nativeRuntime && !trialPending) void handleToggleTrial();
@@ -916,9 +923,10 @@ export function App() {
     shortcutRegistry.bind("help.shortcut-reference", () => {
       setShortcutReferenceOpen((value) => !value);
     });
-    shortcutRegistry.bind("navigation.function-search", openFunctionSearch);
+    shortcutRegistry.bind("navigation.function-search", () => openFunctionSearch());
 
     function onKey(event: KeyboardEvent) {
+      if (shortcutRegistry.dispatch(event, "navigation.function-search")) return;
       if (matchOwnsWorkspace() && !departurePrompt) {
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && !matchStartingRef.current) {
           event.preventDefault();
@@ -975,6 +983,7 @@ export function App() {
     departurePrompt,
     keyboardPlacement,
     shortcutRegistry,
+    functionSearchOpen,
     visibleCurrentFrame,
     continuousPhase,
     preferencesLoaded,
@@ -1012,12 +1021,15 @@ export function App() {
 
   function toggleSheet(next: SheetId) {
     if (matchOwnsWorkspace() && (next === "sync" || next === "engine" || next === "sgf")) return;
+    setSettingsTarget(null);
     setSheet((current) => current === next ? "none" : next);
   }
 
-  function openFunctionSearch() {
+  function openFunctionSearch(fromChrome = false) {
     if (document.querySelector('[role="dialog"]') || !workspaceRef.current) return;
-    searchSourceRef.current = captureFocusReturn(workspaceRef.current);
+    searchSourceRef.current = (fromChrome ? chromeSearchSourceRef.current : null) ?? captureFocusReturn(workspaceRef.current);
+    chromeSearchSourceRef.current = null;
+    setSettingsTarget(null);
     setFunctionSearchOpen(true);
   }
 
@@ -1026,19 +1038,86 @@ export function App() {
     if (searchSourceRef.current) restoreOwnedFocus(searchSourceRef.current);
   }
 
+  function openAbout() {
+    if (!functionSearchOpen && workspaceRef.current) searchSourceRef.current = captureFocusReturn(workspaceRef.current);
+    setSettingsTarget(null);
+    setAboutOpen(true);
+  }
+
   function openSearchTarget(target: string) {
-    if (target !== "prefs.candidate-limit") { setMessage(t("search.targetUnavailable")); return; }
-    setSheet("prefs");
-    requestAnimationFrame(() => {
-      const owner = document.querySelector<HTMLElement>('[data-focus-owner="prefs"]');
-      if (!owner) { setMessage(t("search.targetUnavailable")); return; }
-      settingsFocusRef.current = scheduleOwnedFocus(owner, () => owner.querySelector('[data-search-target="prefs.candidate-limit"]'), () => setMessage(t("search.targetUnavailable")));
+    if (["game.komi", "game.black-name", "game.white-name"].includes(target)) {
+      openMetadataEditor(target as "game.komi" | "game.black-name" | "game.white-name", true);
+      return;
+    }
+    const targetSheet = target.startsWith("prefs.") ? "prefs" : target.startsWith("engine.") ? "engine" : null;
+    if (!targetSheet || (targetSheet === "engine" && matchOwnsWorkspace())) { setMessage(t("search.targetUnavailable")); return; }
+    setSheet(targetSheet);
+    setSettingsTarget(target);
+  }
+
+  useEffect(() => {
+    if (!settingsTarget || functionSearchOpen || metadataDraft || aboutOpen || shortcutReferenceOpen || matchDialogOpen) return;
+    const owner = document.querySelector<HTMLElement>(`[data-focus-owner="${sheet}"]`);
+    if (!owner) { setMessage(t("search.targetUnavailable")); return; }
+    return scheduleOwnedFocus(owner, () => owner.querySelector(`[data-search-target="${settingsTarget}"]`), () => {
+      owner.focus();
+      setMessage(t("search.targetUnavailable"));
     });
+  }, [settingsTarget, sheet, functionSearchOpen, metadataDraft, aboutOpen, shortcutReferenceOpen, matchDialogOpen]);
+
+  function searchActionDisabled(id: string): ResourceKey | undefined {
+    const documentReason = !nativeRuntime ? "reason.desktop" : matchBlocked ? "reason.match" : externalBlocked ? "reason.sync" : documentFlowBusy || editActionPending ? "reason.busy" : !currentGame ? "reason.noDocument" : undefined;
+    const editReason = documentReason ?? (trial || trialPending || scoring || scoringPending ? "reason.trial" : undefined);
+    if (id === "game.human-vs-engine") return "reason.n";
+    if (id === "help.shortcut-reference") return undefined;
+    if (id === "file.save" || id === "file.save-as") return !nativeRuntime ? "reason.desktop" : fileFlowBusy || departurePending || matchStarting ? "reason.busy" : id === "file.save" && !documentDirty ? "reason.clean" : undefined;
+    if (id === "file.copy-sgf") return undefined;
+    if (id === "file.clear-recent") return documentReason ?? (recentHistoryBusy ? "reason.busy" : preferences.recentGamePaths.length === 0 ? "reason.noTarget" : undefined);
+    if (id === "file.retry-recent") return documentReason ?? (recentHistoryBusy ? "reason.busy" : !recentHistoryError ? "reason.noTarget" : undefined);
+    if (id.startsWith("file.recent-")) return documentReason ?? (!preferences.recentGamePaths[Number(id.at(-1)) - 1] ? "reason.noTarget" : undefined);
+    if (id.startsWith("file.")) return documentReason;
+    if (id === "game.metadata") return editReason;
+    if (id === "game.root-setup") return editReason ?? (!canRootSetup ? "reason.noTarget" : undefined);
+    if (id === "game.convert-position") return editReason ?? (!canConvertPosition ? "reason.noTarget" : undefined);
+    if (id.startsWith("game.")) return documentReason;
+    if (id === "edit.undo") return documentReason ?? (!canUndo ? "reason.noUndo" : undefined);
+    if (id === "edit.redo") return editReason ?? (!canRedo ? "reason.noRedo" : undefined);
+    if (id.startsWith("markup.")) return editReason;
+    if (id === "analysis.continuous") return continuousAnalysisAction.disabled ? (!continuousEngineReady ? "reason.engine" : "reason.busy") : undefined;
+    if (id.startsWith("analysis.")) return documentReason ?? (!taskEngineReady ? "reason.engine" : wholeGameRunning ? "reason.busy" : undefined);
+    if (id === "review.try-play") return documentReason ?? (trialPending || scoring || scoringPending ? "reason.trial" : undefined);
+    if (id === "review.scoring") return editReason;
+    if (id === "review.pass") return humanTurn ? undefined : documentReason;
+    if (id === "review.remove-variation") return editReason ?? (!canDeleteNode ? "reason.noTarget" : undefined);
+    if (id === "review.promote-main") return editReason ?? (!canPromoteMain ? "reason.noTarget" : undefined);
+    if (id === "review.return-main") return documentReason ?? (!canReturnMain ? "reason.noTarget" : undefined);
+    if (id === "review.select-candidate") return matchBlocked ? "reason.match" : !visibleCurrentFrame?.candidates.length ? "reason.noTarget" : undefined;
+    if (id.startsWith("view.") || id === "review.next-move-marker") return !preferencesLoaded || workspace.frozen ? "reason.busy" : matchBlocked && id === "view.policy-overlay" ? "reason.match" : undefined;
+    return matchBlocked ? "reason.match" : documentFlowBusy ? "reason.busy" : trialPending || scoring || scoringPending ? "reason.trial" : undefined;
   }
 
   const functionCatalog: FunctionSearchAction[] = [
-    { id: "help.shortcut-reference", label: "action.help.shortcut-reference", keywords: ["快捷键", "kuaijiejian", "shortcuts", "reference"], shortcut: "?", execute: () => setShortcutReferenceOpen(true) },
-    { id: "prefs.candidate-limit", label: "target.prefs.candidate-limit", keywords: ["候选", "houxuan", "candidate", "limit", "settings"], disabledReason: !preferencesLoaded || workspace.frozen ? "reason.busy" : undefined, execute: () => openSearchTarget("prefs.candidate-limit") }
+    ...registeredFunctionCatalog(shortcutRegistry, searchActionDisabled),
+    { id: "help.about", label: "action.help.about", keywords: ["关于", "guanyu", "about", "version", "build"], execute: openAbout },
+    ...([
+      ["prefs.candidate-limit", "target.prefs.candidate-limit", ["候选", "houxuan", "candidate", "limit", "settings"]],
+      ["prefs.replay-interval", "target.prefs.replay-interval", ["变化", "bianhua", "variation", "replay", "interval"]],
+      ["prefs.board-theme", "target.prefs.board-theme", ["棋盘", "qipan", "theme", "contrast"]],
+      ["engine.model-path", "target.engine.model-path", ["模型", "moxing", "model", "path"]],
+      ["engine.config-path", "target.engine.config-path", ["配置", "peizhi", "config", "path"]],
+      ["game.komi", "target.game.komi", ["贴目", "tiemu", "komi", "game info"]],
+      ["game.black-name", "target.game.black-name", ["黑方", "heifang", "black", "name"]],
+      ["game.white-name", "target.game.white-name", ["白方", "baifang", "white", "name"]]
+    ] as const).map(([id, label, keywords]): FunctionSearchAction => ({ id, label, keywords,
+      disabledReason: id.startsWith("game.") ? searchActionDisabled("game.metadata") : id.startsWith("engine.") && matchBlocked ? "reason.match" : !preferencesLoaded || workspace.frozen ? "reason.busy" : undefined,
+      execute: () => openSearchTarget(id) })),
+    ...([
+      ["game.human-new", "action.game.human-new", false, "human"],
+      ["game.human-continue", "action.game.human-continue", true, "human"],
+      ["game.pk-new", "action.game.pk-new", false, "pk"],
+      ["game.pk-continue", "action.game.pk-continue", true, "pk"]
+    ] as const).map(([id, label, continuing, mode]): FunctionSearchAction => ({ id, label, keywords: ["人机", "renji", "human", "match", mode, continuing ? "continue" : "new"],
+      disabledReason: searchActionDisabled("game.metadata"), execute: () => openMatchDialog(continuing, mode) }))
   ];
 
   useEffect(() => {
@@ -3882,18 +3961,28 @@ export function App() {
       setEditActionPending(false);
     }
   }
-  function openMetadataEditor() {
+  function openMetadataEditor(focusTarget: "game.komi" | "game.black-name" | "game.white-name" = "game.komi", returnToSearch = functionSearchOpen) {
     if (externalBlocked) return;
     const game = currentGameRef.current;
     if (trialRef.current || trialTransitionRef.current || !nativeRuntime || !game || documentFlowBusy || editActionPendingRef.current || navigatingRef.current) return;
     const value = (key: string) => game.tree.properties.find((property) => property.key === key)?.values[0];
+    if (workspaceRef.current) metadataSourceRef.current = returnToSearch ? searchSourceRef.current : captureFocusReturn(workspaceRef.current);
+    setSettingsTarget(null);
     setMetadataDraft({
       generation: game.generation,
+      focusTarget, returnToSearch,
       blackName: value("PB") ?? "",
       whiteName: value("PW") ?? "",
       komi: Number.isFinite(Number(value("KM"))) && value("KM")?.trim() ? Number(value("KM")) : 7.5,
       handicap: value("HA") ?? null
     });
+  }
+
+  function cancelMetadataEditor() {
+    const returnToSearch = metadataDraft?.returnToSearch;
+    setMetadataDraft(null);
+    if (returnToSearch) setFunctionSearchOpen(true);
+    else if (metadataSourceRef.current) restoreOwnedFocus(metadataSourceRef.current);
   }
 
   async function handleApplyMetadata(generation: number, black: string, white: string, komi: number) {
@@ -3919,6 +4008,7 @@ export function App() {
         await abandonAnalysisSessions();
       }
       setMetadataDraft(null);
+      if (metadataSourceRef.current) restoreOwnedFocus(metadataSourceRef.current);
       const projection = await projectCurrentGameMainline();
       if (isCurrentDocumentGeneration(result.generation)) setGame(projection);
       setMessage("已更新棋局信息。");
@@ -4016,7 +4106,8 @@ export function App() {
   return <main ref={workspaceRef} tabIndex={-1} data-focus-owner="workspace" className={`app-shell${preferences.boardTheme === "high-contrast" ? " theme-high-contrast" : ""}${nativeRuntime ? "" : " has-native-runtime-note"}`}>
     {!nativeRuntime ? <p className="native-runtime-note" role="status">{nativeCurrentGameUnavailable}</p> : null}
     <AppChrome
-      onFunctionSearch={openFunctionSearch}
+      onBeforeFunctionSearch={() => { if (workspaceRef.current) chromeSearchSourceRef.current = captureFocusReturn(workspaceRef.current); }}
+      onFunctionSearch={() => openFunctionSearch(true)}
       windowPin={windowPin}
       saveBusy={fileFlowBusy || departurePending || matchStarting || Boolean(departurePrompt) || Boolean(teardownPrompt)}
       matchBlocked={matchBlocked}
@@ -4116,7 +4207,7 @@ export function App() {
       onFakeAnalyze={() => void handleFakeAnalyze()}
       onCancelSelectedNode={() => void handleCancelSelectedNodeAnalysis()}
       onCancelWholeGame={() => void handleCancelWholeGameAnalysis()}
-      onAbout={() => setMessage("LizzieYzy Next 0.1.0 · 桌面复盘工作区")}
+      onAbout={openAbout}
       onOpenShortcutReference={() => setShortcutReferenceOpen(true)}
       onCopySgf={() => void handleCopySgf()}
       onPasteSgf={() => void handlePasteSgf()}
@@ -4493,8 +4584,9 @@ export function App() {
         whiteName={metadataDraft.whiteName}
         komi={metadataDraft.komi}
         handicap={metadataDraft.handicap}
+        focusTarget={metadataDraft.focusTarget}
         onApply={(black, white, komi) => handleApplyMetadata(metadataDraft.generation, black, white, komi)}
-        onCancel={() => setMetadataDraft(null)}
+        onCancel={cancelMetadataEditor}
       />
     ) : null}
     {markupDialog ? (
@@ -4542,7 +4634,9 @@ export function App() {
         onRetry={recoveryDiscardRetryPending ? () => void handleRetryRecoveryWrite() : null}
       />
     ) : null}
+    {aboutOpen ? <AboutDialog onClose={() => { setAboutOpen(false); if (searchSourceRef.current) restoreOwnedFocus(searchSourceRef.current); }} /> : null}
     {functionSearchOpen ? <FunctionSearchPanel catalog={functionCatalog} onCancel={cancelFunctionSearch}
+      initialSession={searchSessionRef.current} onSessionChange={(session) => { searchSessionRef.current = session; }}
       onExecute={(action) => { setFunctionSearchOpen(false); action.execute(); }} /> : null}
     {shortcutReferenceOpen ? (
       <ShortcutReference

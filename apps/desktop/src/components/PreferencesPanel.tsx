@@ -100,6 +100,7 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
           <span>回放间隔</span>
           <input
             type="number"
+            data-search-target="prefs.replay-interval"
             min={100}
             max={5000}
             step={1}
@@ -156,7 +157,7 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
         <legend>棋盘</legend>
         <label>
           <span>棋盘对比</span>
-          <select value={preferences.boardTheme} disabled={disabled} onChange={(event) => update({ boardTheme: event.target.value as BoardTheme })}>
+          <select data-search-target="prefs.board-theme" value={preferences.boardTheme} disabled={disabled} onChange={(event) => update({ boardTheme: event.target.value as BoardTheme })}>
             <option value="classic">浅色</option>
             <option value="high-contrast">高对比</option>
           </select>
