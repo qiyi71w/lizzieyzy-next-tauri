@@ -4,6 +4,8 @@
 
 ### English
 
+- Fixed Function Search's keyboard Close activation executing the selected result instead of cancelling. Input and result-button Enter keep exact-once execution and disabled guards; cancellation restores legal source focus.
+
 - Refined winrate-chart score labels to show the actual leading color with one-decimal rounding, separated current/hover/endpoint labels, and highlighted the baseline only for renderable metrics. Shared live/export rendering preserves selected-line gaps and the fixed whole-series perspective.
 - Added invocation-frozen 1600×600 winrate-chart PNG export through File → More Save, Function Search and Shift+Alt+S, using the shared atomic image writer and success-only image directory. Square marking now uses Shift+Alt+Q across the registry, menus and shortcut reference.
 - Added a Rust-owned recorded-point query with exact current/ancestor/chosen-continuation ordering and optional stable all-branch search; stale or absent matches preserve the current document.
@@ -63,6 +65,8 @@
 - Boxed desktop engine-command errors and grouped replacement/exit requests for strict workspace lint checks, preserving serialized errors and Save / Discard / Cancel ordering.
 
 ### 中文
+
+- 修复功能搜索中关闭按钮按 Enter 时误执行选中结果：关闭只取消并恢复合法来源焦点，输入框和结果按钮的 Enter 保持一次执行及禁用守卫。
 
 - 胜率图目差按实际领先颜色和一位小数显示，当前、悬停及端点标签分区；基准线只对应可绘制指标。实时图与导出共用绘制逻辑，保持所选线路的分析缺口与整条曲线固定视角。
 - 新增调用时冻结的1600×600胜率图PNG导出，文件→更多保存、功能搜索与Shift+Alt+S复用唯一原子图像写入及成功后更新的图像目录。方形标记改用Shift+Alt+Q，菜单、搜索与快捷键参考同步registry。
