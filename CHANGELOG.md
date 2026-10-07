@@ -11,6 +11,7 @@
 - Added standalone selected-line SGF export through File → More Save and Ctrl+Alt+S, preserving source, dirty state, metadata, comments and analysis. Mainboard File/Alt+S image export captures invocation-time rendered pixels, encodes PNG/JPG/JPEG/GIF/BMP, confirms the final target before atomic replacement, and shares one success-only durable image directory.
 - Added non-destructive current-line double-click review and explicit all-branch point search in the existing board menu. Ordinary review click pairs use current native system timing and captured input identity; higher-priority board modes keep their existing routing.
 - Fixed repeated Windows image exports reopening their remembered directory by adapting canonical filesystem paths to compatible Shell folder names.
+- Image export encoding failures now report the encode operation and exact final target while retaining the original error; existing bytes and the success-only image directory remain protected.
 - Save and Save As now atomically replace files from a captured complete SGF tree on a blocking worker. Failure protects existing bytes and the document savepoint; late completion reports its actual target without cleaning later edits or adopting a replacement document.
 - Added offline Function Search shared by Help, the fixed toolbar and registry-owned Ctrl/Command+K. It searches registered actions and exact settings targets with platform shortcuts, visible disabled reasons and original-owner guards, and restores source focus on cancellation.
 - Added activation-fenced exact-target navigation, including initial Komi focus in Game Info and return to the retained search session on Cancel; metadata/history semantics are unchanged.
@@ -68,6 +69,7 @@
 - 新增调用时冻结的1600×600胜率图PNG导出，文件→更多保存、功能搜索与Shift+Alt+S复用唯一原子图像写入及成功后更新的图像目录。方形标记改用Shift+Alt+Q，菜单、搜索与快捷键参考同步registry。
 - 新增 Rust 权威按点查找已记录落子：精确 current／最近祖先／所选 continuation 顺序，显式全树范围按稳定子序 DFS；过期或无匹配查询保持当前棋谱。
 - 主棋盘普通自动播放新增可保存秒数草稿、精确小数秒持久化与非破坏 Save／Cancel；唯一 timer 仅在 Start 捕获间隔，运行中保存供下次启动使用，棋谱或输入范围变化使旧 tick 失效。
+- 图像导出编码失败现在报告编码操作与准确最终目标，并保留原始错误；已有目标字节与仅成功后更新的图像目录继续受到保护。
 - Save 与 Save As 在阻塞工作线程保存调用时捕获的完整 SGF 树并原子替换目标；失败保护已有字节与保存点，迟到成功报告实际目标，不清除后续编辑或接管新棋谱。
 - 新增离线功能搜索：帮助菜单、常驻工具栏和 registry-owned Ctrl/Command+K 共用 catalog，注册动作与精确设置目标显示本平台快捷键及禁用理由，调用原 owner，取消恢复合法来源焦点。
 - 新增激活后精确目标聚焦，包括 Game Info 默认贴目输入和取消返回原搜索会话；棋谱元数据及历史合同保持不变。
