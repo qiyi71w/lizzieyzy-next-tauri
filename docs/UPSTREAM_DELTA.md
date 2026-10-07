@@ -8,7 +8,7 @@
 - Java主源：[wimi321/lizzieyzy-next](https://github.com/wimi321/lizzieyzy-next)，Migration Baseline v1 `7b4027531c2b26062d0bfc27a040cc550cfbea4d`不移动；本轮终点`af0e07a7386483f3bfc8a15780de72ffc2f0de4c`。
 - 三段可达差集231/197/145互斥，并集573；包含合并支线。90/38/17第一父事件是来源核验数，不是功能数。
 - 148个分片来源记录归40个语义Delta族（UDX）；一族可含多个有实际依赖的任务。相同用户目标只由一个责任意图/后继项承接；来源修复、merge和测试不重复计功能。复合来源中的其他目标由逐记录任务引用交叉归属，不能仅看族标题删去。
-- 每个分片ID保留为源记录锚点；组内原始验收条款共同约束后续任务，不以族摘要替代。T01–T05与[冻结分配表](../.scratch/issue18-function-first/evidence/06-delivery-map.md)保留审计输入、责任键和意图来源；当前[阶段索引](../.scratch/issue18-function-first/replanned/stages/index.json)按 owner_routes 逐意图分配，07只细化[R11草案组](../.scratch/issue18-function-first/replanned/R11/)，08保留R12–R18完整阶段计划。忽略材料尚待集成，新R11票单须另经用户批准；历史草案不是第二套活跃tracker，也不是正式实施票。
+- 每个分片ID保留为源记录锚点；组内原始验收条款共同约束后续任务，不以族摘要替代。T01–T05与[冻结分配表](../.scratch/issue18-function-first/evidence/06-delivery-map.md)保留审计输入、责任键和意图来源；当前[阶段索引](../.scratch/issue18-function-first/replanned/stages/index.json)按 owner_routes 逐意图分配，07只细化[R11草案组](../.scratch/issue18-function-first/replanned/R11/)，08保留R12–R18完整阶段计划。忽略草案材料已实体集成、仍未发布，新R11票单须另经用户批准；历史草案不是第二套活跃tracker，也不是正式实施票。
 - 源记录引用的Java文件均按其完整source commit读取，不采用维护线当前工作区。E/H证据别名见文末；源码支持、仓库测试、受控smoke、原生/真实引擎服务分列，新增目标未取得运行证据即为缺口。
 - 分片原文中的章节号、“06分配”、Txx与A–F/旧R11建议完整保留为来源语境。历史A→R11、B→R12/R13、C→R14、D→R15、E→R16、F→R17、未执行旧R11发行→R18；R0–R10证据不改归属。混合族标题/阶段列只导航，不将整族机械划给R12或R13；唯一责任owner、真实前置和其他阶段消费结果均查意图索引。手动线程/只读PDA-WRN/运行恢复归R12，benchmark/saved-policy/分析任务展示归R13；startup消费者可引用独立benchmark结果，不创建整阶段依赖。没有第二套接受状态。
 
