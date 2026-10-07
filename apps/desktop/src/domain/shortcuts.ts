@@ -44,6 +44,7 @@ export type ShortcutRegistry = {
 };
 
 const CLAIMED_SHORTCUTS: ShortcutDefinition[] = [
+  { id: "navigation.function-search", label: "功能搜索", primary: { key: "k", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.new", label: "新建", primary: { key: "Home", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "file.open", label: "打开棋谱", primary: { key: "o" }, aliases: [], focusRule: "focus-safe" },
   ...[1, 2, 3, 4, 5].map((index): ShortcutDefinition => ({ id: `file.recent-${index}`, label: `最近棋谱 ${index}`, primary: { key: String(index), alt: true }, aliases: [], focusRule: "focus-safe" })),

@@ -14,6 +14,10 @@ import { AppChrome, BottomBar, type ContinuousAnalysisAction, type OverlayMode, 
 import { PreferencesPanel } from "./components/PreferencesPanel";
 import { ShortcutReference } from "./components/ShortcutReference";
 import { DocumentDepartureDialog } from "./components/DocumentDepartureDialog";
+import { FunctionSearchPanel } from "./components/FunctionSearchPanel";
+import type { FunctionSearchAction } from "./domain/functionSearch";
+import { captureFocusReturn, restoreOwnedFocus, scheduleOwnedFocus, type FocusReturn } from "./domain/focusNavigation";
+import { t } from "./i18n/resources";
 import { ApplicationTeardownDialog } from "./components/ApplicationTeardownDialog";
 import { CurrentGameRecoveryDialog } from "./components/CurrentGameRecoveryDialog";
 import { AnalysisTaskPanel, type AnalysisScopeDraft } from "./components/AnalysisTaskPanel";
@@ -338,6 +342,10 @@ export function App() {
   const [overlayMode, setOverlayMode] = useState<OverlayMode>("candidates");
   const [autoPlaying, setAutoPlaying] = useState(false);
   const [shortcutReferenceOpen, setShortcutReferenceOpen] = useState(false);
+  const [functionSearchOpen, setFunctionSearchOpen] = useState(false);
+  const searchSourceRef = useRef<FocusReturn | null>(null);
+  const workspaceRef = useRef<HTMLElement>(null);
+  const settingsFocusRef = useRef<(() => void) | null>(null);
   const [keyboardPlacement, setKeyboardPlacement] = useState(false);
   const [markupTool, setMarkupTool] = useState<"play" | SgfMarkupToolDto["kind"]>("play");
   const [markupDialog, setMarkupDialog] = useState<{ point: PointDto; path: NodePath; generation: number; text: string } | null>(null);
@@ -908,6 +916,7 @@ export function App() {
     shortcutRegistry.bind("help.shortcut-reference", () => {
       setShortcutReferenceOpen((value) => !value);
     });
+    shortcutRegistry.bind("navigation.function-search", openFunctionSearch);
 
     function onKey(event: KeyboardEvent) {
       if (matchOwnsWorkspace() && !departurePrompt) {
@@ -1005,6 +1014,32 @@ export function App() {
     if (matchOwnsWorkspace() && (next === "sync" || next === "engine" || next === "sgf")) return;
     setSheet((current) => current === next ? "none" : next);
   }
+
+  function openFunctionSearch() {
+    if (document.querySelector('[role="dialog"]') || !workspaceRef.current) return;
+    searchSourceRef.current = captureFocusReturn(workspaceRef.current);
+    setFunctionSearchOpen(true);
+  }
+
+  function cancelFunctionSearch() {
+    setFunctionSearchOpen(false);
+    if (searchSourceRef.current) restoreOwnedFocus(searchSourceRef.current);
+  }
+
+  function openSearchTarget(target: string) {
+    if (target !== "prefs.candidate-limit") { setMessage(t("search.targetUnavailable")); return; }
+    setSheet("prefs");
+    requestAnimationFrame(() => {
+      const owner = document.querySelector<HTMLElement>('[data-focus-owner="prefs"]');
+      if (!owner) { setMessage(t("search.targetUnavailable")); return; }
+      settingsFocusRef.current = scheduleOwnedFocus(owner, () => owner.querySelector('[data-search-target="prefs.candidate-limit"]'), () => setMessage(t("search.targetUnavailable")));
+    });
+  }
+
+  const functionCatalog: FunctionSearchAction[] = [
+    { id: "help.shortcut-reference", label: "action.help.shortcut-reference", keywords: ["快捷键", "kuaijiejian", "shortcuts", "reference"], shortcut: "?", execute: () => setShortcutReferenceOpen(true) },
+    { id: "prefs.candidate-limit", label: "target.prefs.candidate-limit", keywords: ["候选", "houxuan", "candidate", "limit", "settings"], disabledReason: !preferencesLoaded || workspace.frozen ? "reason.busy" : undefined, execute: () => openSearchTarget("prefs.candidate-limit") }
+  ];
 
   useEffect(() => {
     let cancelled = false;
@@ -3976,9 +4011,10 @@ export function App() {
     setPublishedScope(null);
   }
 
-  return <main className={`app-shell${preferences.boardTheme === "high-contrast" ? " theme-high-contrast" : ""}${nativeRuntime ? "" : " has-native-runtime-note"}`}>
+  return <main ref={workspaceRef} tabIndex={-1} data-focus-owner="workspace" className={`app-shell${preferences.boardTheme === "high-contrast" ? " theme-high-contrast" : ""}${nativeRuntime ? "" : " has-native-runtime-note"}`}>
     {!nativeRuntime ? <p className="native-runtime-note" role="status">{nativeCurrentGameUnavailable}</p> : null}
     <AppChrome
+      onFunctionSearch={openFunctionSearch}
       windowPin={windowPin}
       saveBusy={fileFlowBusy || departurePending || matchStarting || Boolean(departurePrompt) || Boolean(teardownPrompt)}
       matchBlocked={matchBlocked}
@@ -4504,6 +4540,8 @@ export function App() {
         onRetry={recoveryDiscardRetryPending ? () => void handleRetryRecoveryWrite() : null}
       />
     ) : null}
+    {functionSearchOpen ? <FunctionSearchPanel catalog={functionCatalog} onCancel={cancelFunctionSearch}
+      onExecute={(action) => { setFunctionSearchOpen(false); action.execute(); }} /> : null}
     {shortcutReferenceOpen ? (
       <ShortcutReference
         entries={shortcutRegistry.referenceEntries()}

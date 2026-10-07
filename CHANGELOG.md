@@ -5,6 +5,7 @@
 ### English
 
 - Added a stable-ID engine catalog reorder transaction with complete-set and stale-order validation, atomic persistence, no-op boundaries, and preservation of the latest profile records, Settings selection and Autoload Default.
+- Added an offline Function Search panel shared by Help, the fixed toolbar and registry-owned Ctrl/Command+K, with a real candidate-limit settings target and the Chinese compatibility resource/fallback foundation.
 - Added an independent Tencent kifu center with username/chessId lookup, cancellable previews, cursor continuation across 25-row pages, eight-entry query history, and explicit SGF-07 import. Complete-tree normalization preserves game metadata and effective komi through Save/reopen; requests consume the shared network policy.
 - Preserved accepted Tencent history writes across provider-panel changes and retained failed clear/query intent for visible retry after reopening the center.
 - Added explicit Yike Start sync and Play & Sync with a Rust-owned read-only session, bounded failure pause/Retry, Stop-to-edit, same-count source reconciliation, independent sync preferences and browser handoff. Save As preserves its invocation snapshot while later source frames remain dirty.

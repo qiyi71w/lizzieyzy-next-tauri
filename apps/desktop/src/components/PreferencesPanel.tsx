@@ -26,7 +26,7 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
   }
 
   return (
-    <section className="preferences-panel" aria-label="设置">
+    <section className="preferences-panel" aria-label="设置" data-focus-owner="prefs" tabIndex={-1}>
       <div className="preferences-header">
         <h2>设置</h2>
         <span>{status}</span>
@@ -69,6 +69,7 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
         <label>
           <span>显示候选数</span>
           <input
+            data-search-target="prefs.candidate-limit"
             type="number"
             min={1}
             max={20}
