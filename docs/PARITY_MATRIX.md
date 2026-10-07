@@ -60,7 +60,7 @@ R3 through R6 have exited. R5 accepted `SGF-08`, `APP-02`, `APP-03`, `APP-04`, a
 
 Ticket 10 rebuilt Plan membership, Promotion Gates, Delivery Order, and Phase Gates from this corpus. This map follows Plan membership. Matrix `Depends on` remains the only Item Start Prerequisite set.
 
-Current rolling stage map: R11 common review/operations; R12 engine resources/runtime; R13 analysis tasks/display/performance; R14 remote/external boards; R15 advanced games; R16 other business; R17 parity closure; R18 release. See [Plan stage scopes](MIGRATION_PLAN.md#current-function-first-delivery), the locally published [R11 formal task group](../.scratch/function-first-migration/spec.md), its [intent-to-behavior index](../.scratch/function-first-migration/index.json) and [later-stage owner routes](../.scratch/issue18-function-first/replanned/stages/index.json). The [current navigation overlay](../.scratch/issue18-function-first/evidence/09-current-routes.json) joins stable source intents to formal R11 behavior/acceptance or the owning later-stage section, including scoped consumers of R11 results. Original draft/readiness and stage payloads remain frozen provenance; R12–R18 are plans, not future implementation tickets. Product execution is not started and separately authorized. Historical source-group labels inside preserved acceptance text are provenance; unique owner routes, not whole-family relabeling, resolve mixed B scopes. Completed Accepted rows are unchanged; later-stage plans preserve acceptance and named decision owners without claiming future product acceptance.
+Current rolling stage map: R11 common review/operations; R12 engine resources/runtime; R13 analysis tasks/display/performance; R14 remote/external boards; R15 advanced games; R16 other business; R17 parity closure; R18 release. See [Plan stage scopes](MIGRATION_PLAN.md#current-function-first-delivery), the [R11 behavior and acceptance plan](R11_PLAN.md), [source map](MIGRATION_SOURCE_MAP.md) and [owner routes](MIGRATION_ROUTES.json). Routes join stable source intents to exact R11 behavior/acceptance or the owning later-stage section, including scoped consumers of R11 results. R11’s formal spec and nine tasks are prepared locally; R12–R18 remain stage plans until their actual start. Product execution is not started and requires separate authorization. Historical source-group labels inside preserved acceptance text are provenance; unique owner routes, not whole-family relabeling, resolve mixed B scopes. Completed Accepted rows are unchanged; stage plans preserve acceptance and named decision owners without claiming future product acceptance.
 
 ## Ticket 16 Disposition-To-Item Closure
 
@@ -326,7 +326,7 @@ These Missing items preserve newly identified scope without reopening or expandi
 | AI-01 | Missing | Grounded AI teaching | Audited obligation, [source](UPSTREAM_DELTA.md#udx-005); not implementation proof. | Not run; future owner records required native/engine/service evidence. | Named contract/decision and implementation remain. | Named service/auth/model and grounded-input contract; explicit connection, context freshness, bounded cancellation, protected credentials, and generated output separate from personal C. No unapproved provider or fabricated grounding. | SGF-07 | R16 |
 | REVIEW-10 | Missing | Score display and unanalyzed-node navigation | Audited obligation, [source](UPSTREAM_DELTA.md#udx-006); not implementation proof. | Not run; future owner records required native/engine/service evidence. | Named contract/decision and implementation remain. | Preserve score perspective and absent-data state; navigation to an unanalyzed node never fabricates analysis or starts an engine. Retain single-series chart ADR. | ANA-11, UI-03 | R11 |
 | ANA-17 | Missing | Same-tree focus analysis | Audited obligation, [source](UPSTREAM_DELTA.md#udx-022); not implementation proof. | Not run; future owner records required native/engine/service evidence. | Named contract/decision and implementation remain. | User focus remains in the same authoritative tree, with exact root/target/path identity, bounded task ownership, cancellation and restoration. Readboard-specific integration has its separate C prerequisite, not a gate for local focus. | ANA-06, ANA-16 | R13 |
-| ANA-18 | Missing | Tracking and granular analysis presentation | Audited obligation, [preservation input](../.scratch/issue18-function-first/evidence/06-delivery-map.md); not implementation proof. | Not run; future owner records required native/engine/service evidence. | Named contract/decision and implementation remain. | T02-TRACKING and T02-GRANULAR-DISPLAY first freeze their retained user goals and exact controls; identity-valid results, absent fields remain absent, atomic setting persistence, no extra run or expansion of ANA-04 history. | ANA-04, PREF-01 | R13 |
+| ANA-18 | Missing | Tracking and granular analysis presentation | Audited obligation, [preservation input](MIGRATION_SOURCE_MAP.md); not implementation proof. | Not run; future owner records required native/engine/service evidence. | Named contract/decision and implementation remain. | T02-TRACKING and T02-GRANULAR-DISPLAY first freeze their retained user goals and exact controls; identity-valid results, absent fields remain absent, atomic setting persistence, no extra run or expansion of ANA-04 history. | ANA-04, PREF-01 | R13 |
 | ANA-19 | Missing | Autoload quick analysis and handback | Audited obligation, [source](UPSTREAM_DELTA.md#udx-011); not implementation proof. | Not run; future owner records required native/engine/service evidence. | Named contract/decision and implementation remain. | Explicit quick-analysis start/pause/return contract; exact current-game/run identity, safe handback and local Restart/import recovery. Remote lifecycle is separately C; Review Autoplay and Variation Replay are not substitutes. | ENG-06, ANA-06, ANA-16 | R13 |
 | ANA-20 | Missing | Accessible candidate list | Audited obligation, [source](UPSTREAM_DELTA.md#udx-040); not implementation proof. | Not run; future owner records required native/engine/service evidence. | Named contract/decision and implementation remain. | Candidate rows remain identity-valid, navigable and visible across supported layout; stale/absent results cannot be presented as current. | ANA-04 | R13 |
 | ANA-22 | Missing | Paired PDA/WRN parameter readback | Audited obligation, [source](UPSTREAM_DELTA.md#udx-038); not implementation proof. | Not run; future owner records required native/engine/service evidence. | Named contract/decision and implementation remain. | Admit both readback commands/value domains with actual named engine binary/version evidence and native UI proof. Paired read-only PDA/WRN values bind to the current reader/Run/round/numbered-response; both finite values are required for success, and out-of-order arrivals may complete only that same round. Default unknown; missing-half, error, non-finite, timeout, reconnect or stale responses cannot form a current pair or fabricate zero. Retain last-valid values with visible failed/unknown state and protect unsubmitted edits. Preserve existing editing; no new paired writes, Apply, retry or reapply. | ENG-02, ANA-04 | R12 |
@@ -336,7 +336,7 @@ These Missing items preserve newly identified scope without reopening or expandi
 | UI-07 | Missing | Offline global function search | Audited obligation, [source](UPSTREAM_DELTA.md#udx-018); not implementation proof. | Not run; future owner records required native/engine/service evidence. | Named contract/decision and implementation remain. | Search actual actions/settings with accurate availability, localized names and legacy entry mapping; activation routes to exact owner/focus, Cancel is non-mutating, unavailable commands do not pretend to run. | APP-05 | R11 |
 | UI-08 | Missing | Bounded responsive engine console | Audited obligation, [source](UPSTREAM_DELTA.md#udx-019); not implementation proof. | Not run; future owner records required native/engine/service evidence. | Named contract/decision and implementation remain. | Bounded output, responsive cancel/close and run-fenced publication; secrets sanitized, no lifecycle bypass or unsupported raw command admission. | ENG-02 | R12 |
 | SGF-17 | Missing | Save-target and snapshot safety | Audited obligation, [source](UPSTREAM_DELTA.md#udx-030); not implementation proof. | Not run; future owner records required native/engine/service evidence. | Named contract/decision and implementation remain. | Freeze correct invocation-time document/target identity; atomic confirmed replacement, cancel/failure preserves existing target and current game, delayed completion never saves a different document under the chosen name. | SGF-07, SGF-10 | R11 |
-| PREF-02 | Missing | Whitelist Java settings migration | Audited obligation, [preservation input](../.scratch/issue18-function-first/evidence/06-delivery-map.md); not implementation proof. | Not run; future owner records required native/engine/service evidence. | Named contract/decision and implementation remain. | Field mapping grows with each actual setting; preview and explicit confirmation, atomic apply, unknown/unsupported fields explained, no source config modification or automatic engine start. Full native import closes in F. | PREF-01 | R17 |
+| PREF-02 | Missing | Whitelist Java settings migration | Audited obligation, [preservation input](MIGRATION_SOURCE_MAP.md); not implementation proof. | Not run; future owner records required native/engine/service evidence. | Named contract/decision and implementation remain. | Field mapping grows with each actual setting; preview and explicit confirmation, atomic apply, unknown/unsupported fields explained, no source config modification or automatic engine start. Full native import closes in F. | PREF-01 | R17 |
 ## Item completeness index
 
 Rebuilt from current rows: **132** unique IDs; 69 Accepted, 11 Partial, 27 Missing, 25 Deferred. The 113 historical IDs retain their statuses.
@@ -371,7 +371,7 @@ All records share an invalidation rule: changes to the consumed behavior, DTO/pr
 - Platform/engine/service: Windows native cold SGF/warm GIB, single window, dirty Cancel.
 - Observed evidence classes: Repository activation/replacement and controlled teardown checks; native activation/drop passed.
 - Residual obligation and owner: R18 REL-04/APP-01 association and Canonical Artifact installed evidence remain Not run.
-- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), [01 audited boundary records](../.scratch/issue18-function-first/evidence/01-acceptance-boundaries.md) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
+- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), local audit 01 (retained boundary source record) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
 - Invalidation: the shared rule above applies to this record’s exact scope; dependent executor owns applicability checks and parent-observed revalidation.
 
 <a id="net-01-functional"></a>
@@ -382,7 +382,7 @@ All records share an invalidation rule: changes to the consumed behavior, DTO/pr
 - Platform/engine/service: Windows source runtime, Manual 127.0.0.1:17897; production Yike HTTPS 186031232.
 - Observed evidence classes: Repository policy tests; controlled CONNECT; real provider route; 17898 refusal without fallback.
 - Residual obligation and owner: R18 installed platform trust/enterprise CA; each R14/R16 consumer owns WebSocket/subprocess capability admission.
-- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), [01 audited boundary records](../.scratch/issue18-function-first/evidence/01-acceptance-boundaries.md) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
+- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), local audit 01 (retained boundary source record) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
 - Invalidation: the shared rule above applies to this record’s exact scope; dependent executor owns applicability checks and parent-observed revalidation.
 
 <a id="prov-01-functional"></a>
@@ -393,7 +393,7 @@ All records share an invalidation rule: changes to the consumed behavior, DTO/pr
 - Platform/engine/service: Windows native; production public Yike/unite, 2026-10-05.
 - Observed evidence classes: Provider fixtures and transaction checks; native preview/import/Save/reopen; earlier owner 443c3e322e6d3d2abcedadb76e8901ad778bf4f8.
 - Residual obligation and owner: R18 installed network; R14 PROV-06/07 distinct scopes.
-- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), [01 audited boundary records](../.scratch/issue18-function-first/evidence/01-acceptance-boundaries.md) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
+- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), local audit 01 (retained boundary source record) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
 - Invalidation: the shared rule above applies to this record’s exact scope; dependent executor owns applicability checks and parent-observed revalidation.
 
 <a id="prov-02-functional"></a>
@@ -404,7 +404,7 @@ All records share an invalidation rule: changes to the consumed behavior, DTO/pr
 - Platform/engine/service: Production Fox provider-live crate probe (2026-10-05, Direct, actual `NetworkState` + `provider-fox` + SGF parser, no credentials or engine): nickname 绝艺 → UID 8772065 and UID 3490876 → nickname 姜小二. Windows native source-runtime (Direct, isolated desktop, no engine or credentials) on the original candidate above: nickname 柯洁 and UID 3000000.
 - Observed evidence classes: Typed list/preview/import fixtures; production-crate continuation is provider-live crate evidence, not native UI evidence. Separate Windows native evidence: UID 3000000 end on page 3/3, 158-move preview with unchanged current game, 205-move import and Cancel/Discard.
 - Residual obligation and owner: R18 installed network; R14 explicit nickname/UID boundary evidence.
-- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), [01 audited boundary records](../.scratch/issue18-function-first/evidence/01-acceptance-boundaries.md) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
+- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), local audit 01 (retained boundary source record) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
 - Invalidation: the shared rule above applies to this record’s exact scope; dependent executor owns applicability checks and parent-observed revalidation.
 
 <a id="prov-03-functional"></a>
@@ -415,7 +415,7 @@ All records share an invalidation rule: changes to the consumed behavior, DTO/pr
 - Platform/engine/service: Windows native Yike room 79496703 ended at 129 moves; initial cd8ae4fa50a584589daf1b673aaecf7ce5433a21.
 - Observed evidence classes: Repository reconciliation/identity/save tests; controlled network; native updates/cursor/Save/Error/Retry/Stop/edit and delayed-Save repair.
 - Residual obligation and owner: R18 installed network; R14 supported native authorization/read/write admission remains separate.
-- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), [01 audited boundary records](../.scratch/issue18-function-first/evidence/01-acceptance-boundaries.md) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
+- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), local audit 01 (retained boundary source record) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
 - Invalidation: the shared rule above applies to this record’s exact scope; dependent executor owns applicability checks and parent-observed revalidation.
 
 <a id="prov-04-functional"></a>
@@ -426,7 +426,7 @@ All records share an invalidation rule: changes to the consumed behavior, DTO/pr
 - Platform/engine/service: Windows native Tencent kifu; repair e201634b613e1ea766117e53df99a7a021fdc8a7.
 - Observed evidence classes: Repository provider/UI checks; native 25/25/10 pages, 140/79 import+Save; repair controlled held-CONNECT and real provider. 60+60 belongs to a working-tree production-crate probe.
 - Residual obligation and owner: R18 installed network; R14 PROV-05 protocol decision and live synchronization.
-- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), [01 audited boundary records](../.scratch/issue18-function-first/evidence/01-acceptance-boundaries.md) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
+- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), local audit 01 (retained boundary source record) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
 - Invalidation: the shared rule above applies to this record’s exact scope; dependent executor owns applicability checks and parent-observed revalidation.
 
 <a id="read-01-functional"></a>
@@ -437,7 +437,7 @@ All records share an invalidation rule: changes to the consumed behavior, DTO/pr
 - Platform/engine/service: Windows; readboard cdcc7b382668ea09cb6f1c61bda021f378080eda v3.1.0, wire 220430.
 - Observed evidence classes: Repository/controlled child lifecycle; native Browse/Save/ready/Stop/Restart/exit and reopen.
 - Residual obligation and owner: R18 installed resource paths/trust; R14 capability-specific actual target admission.
-- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), [01 audited boundary records](../.scratch/issue18-function-first/evidence/01-acceptance-boundaries.md) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
+- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), local audit 01 (retained boundary source record) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
 - Invalidation: the shared rule above applies to this record’s exact scope; dependent executor owns applicability checks and parent-observed revalidation.
 
 <a id="read-02-functional"></a>
@@ -448,7 +448,7 @@ All records share an invalidation rule: changes to the consumed behavior, DTO/pr
 - Platform/engine/service: Windows same readboard version; real Fox spectator rooms.
 - Observed evidence classes: Repository SGF/frame/owner fixtures and controlled stream. Initial f75cacf7c21b3b2252a16dfcb5fa833caae79e95 had PL defect; a5a44642de6e235440b6280a2ebd07a8cea157b1 fixed room rebuild but retained Start PL bug; final Start+9 rebuilds observed.
 - Residual obligation and owner: R18 installed evidence; R14 GAME-10 both actual decision modes and exact external confirmation.
-- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), [01 audited boundary records](../.scratch/issue18-function-first/evidence/01-acceptance-boundaries.md) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
+- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), local audit 01 (retained boundary source record) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
 - Invalidation: the shared rule above applies to this record’s exact scope; dependent executor owns applicability checks and parent-observed revalidation.
 
 <a id="rel-05-functional"></a>
@@ -459,7 +459,7 @@ All records share an invalidation rule: changes to the consumed behavior, DTO/pr
 - Platform/engine/service: Repository configured paths only.
 - Observed evidence classes: Configured engine/model/config checks are Partial repository evidence, not source/version/integrity/compatibility completion.
 - Residual obligation and owner: R18 REL-02 signed manifest/acquisition/installed paths; no current Releases-origin gate for qualified local resources.
-- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), [01 audited boundary records](../.scratch/issue18-function-first/evidence/01-acceptance-boundaries.md) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
+- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), local audit 01 (retained boundary source record) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
 - Invalidation: the shared rule above applies to this record’s exact scope; dependent executor owns applicability checks and parent-observed revalidation.
 
 <a id="rel-09-functional"></a>
@@ -470,7 +470,7 @@ All records share an invalidation rule: changes to the consumed behavior, DTO/pr
 - Platform/engine/service: Not run.
 - Observed evidence classes: No diagnostics-export implementation evidence.
 - Residual obligation and owner: R18 installed log/support locations and package smoke.
-- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), [01 audited boundary records](../.scratch/issue18-function-first/evidence/01-acceptance-boundaries.md) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
+- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), local audit 01 (retained boundary source record) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
 - Invalidation: the shared rule above applies to this record’s exact scope; dependent executor owns applicability checks and parent-observed revalidation.
 
 <a id="rel-10-functional"></a>
@@ -481,7 +481,7 @@ All records share an invalidation rule: changes to the consumed behavior, DTO/pr
 - Platform/engine/service: Not run.
 - Observed evidence classes: Static About 0.1.0 and Cargo repository metadata drift are not identity proof.
 - Residual obligation and owner: R18 channel/repository decision and packaged identity; no fabricated updates when unconfigured.
-- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), [01 audited boundary records](../.scratch/issue18-function-first/evidence/01-acceptance-boundaries.md) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
+- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), local audit 01 (retained boundary source record) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
 - Invalidation: the shared rule above applies to this record’s exact scope; dependent executor owns applicability checks and parent-observed revalidation.
 
 <a id="contrib-01-functional"></a>
@@ -492,5 +492,5 @@ All records share an invalidation rule: changes to the consumed behavior, DTO/pr
 - Platform/engine/service: Not run: real katagotraining.org, admitted backend/platform, credential store/fallback.
 - Observed evidence classes: No repository/controlled/native production-upload evidence yet.
 - Residual obligation and owner: R16 contribution owner proves functionality; R18 signed client/component delivery. Qualified local client must pass REL-05::functional first.
-- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), [01 audited boundary records](../.scratch/issue18-function-first/evidence/01-acceptance-boundaries.md) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
+- Evidence provenance: [DEVELOPMENT](DEVELOPMENT.md), local audit 01 (retained boundary source record) and [upstream evidence aliases](UPSTREAM_DELTA.md); no new runtime pass.
 - Invalidation: the shared rule above applies to this record’s exact scope; dependent executor owns applicability checks and parent-observed revalidation.
