@@ -45,6 +45,7 @@ const backend = vi.hoisted(() => ({
   serializeCurrentGame: vi.fn(() => Promise.resolve("(;SZ[9])")),
   projectCurrentGameMainline: vi.fn(),
   playCurrentGame: vi.fn(),
+  authorCurrentGame: vi.fn(),
   applyRootSetup: vi.fn(),
   convertToRootSetup: vi.fn(),
   selectCurrentGameNode: vi.fn(),
@@ -984,6 +985,35 @@ describe("node markup authoring", () => {
   });
 });
 
+describe("App authoring", () => {
+  it("dispatches a forced actual move through the authoring wrapper, never ordinary play", async () => {
+    backend.authorCurrentGame.mockResolvedValue({ ...initialGame, generation:2, snapshot_seq:2, dirty:true, can_undo:true });
+    const host = await renderApp();
+    act(()=>buttonNamed(host,"编辑").click()); act(()=>buttonNamed(host,"添加黑子").click());
+    const canvas=requiredElement<HTMLCanvasElement>(host,'canvas[aria-label="棋盘"]');
+    canvas.getBoundingClientRect=()=>new DOMRect(0,0,500,500);
+    await act(async()=>{ canvas.dispatchEvent(new MouseEvent("click",{bubbles:true,clientX:250,clientY:250})); await Promise.resolve(); });
+    await flushLast(backend.authorCurrentGame);
+    expect(backend.authorCurrentGame).toHaveBeenCalledWith({indices:[]},1,{kind:"add",point:{x:4,y:4},color:"black",insert:false});
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("棋谱编辑已接受。");
+  });
+  it("exposes Rust transform errors and ladder through real menu actions", async () => {
+    backend.authorCurrentGame.mockRejectedValueOnce(new Error("Rotation requires a square board"));
+    const host=await renderApp();
+    act(()=>buttonNamed(host,"编辑").click());
+    act(()=>buttonNamed(host,"向右旋转(Ctrl+Alt+Right)").click());
+    await act(async()=>{ await expect(backend.authorCurrentGame.mock.results.at(-1)?.value).rejects.toThrow("Rotation requires a square board"); });
+    expect(backend.authorCurrentGame).toHaveBeenLastCalledWith({indices:[]},1,{kind:"transform",transform:"rotate_clockwise"});
+    expect(host.textContent).toContain("棋谱编辑失败：Rotation requires a square board");
+    backend.authorCurrentGame.mockRejectedValueOnce(new Error("Ladder continuation requires five coordinate moves"));
+    act(()=>buttonNamed(host,"棋局").click()); act(()=>buttonNamed(host,"继续征子").click());
+    await act(async()=>{ await expect(backend.authorCurrentGame.mock.results.at(-1)?.value).rejects.toThrow("Ladder continuation requires five coordinate moves"); });
+    expect(backend.authorCurrentGame).toHaveBeenLastCalledWith({indices:[]},1,{kind:"continue_ladder"});
+    expect(host.textContent).toContain("Ladder continuation requires five coordinate moves");
+  });
+});
+
 
 describe("App root setup editing", () => {
   it("previews the draft without editing the document, cancels, then commits all changes once", async () => {
@@ -1436,6 +1466,37 @@ describe("App function search owner", () => {
     await vi.waitFor(() => expect(document.activeElement).toBe(requiredElement(host, '[data-search-target="prefs.candidate-limit"]')));
     expect(backend.startForegroundEngine).not.toHaveBeenCalled();
     expect(backend.setCurrentGameMetadata).not.toHaveBeenCalled();
+  });
+
+  it("catalogs new authoring menus and dispatches insertion and ladder to their original owner", async () => {
+    backend.authorCurrentGame.mockResolvedValue({ ...initialGame, generation: 2, snapshot_seq: 2, dirty: true, can_undo: true });
+    const host = await renderApp();
+    function query(text: string) {
+      act(() => buttonNamed(host, "功能搜索").click());
+      const input = requiredElement<HTMLInputElement>(host, '[aria-label="功能搜索"] input');
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, text);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      return input;
+    }
+    for (const label of ["添加黑子", "添加白子", "交替落子", "列表插入黑子", "列表插入白子", "列表交替插入", "继续征子"]) {
+      const input = query(label);
+      expect(requiredElement(host, '[aria-label="功能搜索结果"]').textContent).toContain(label);
+      pressKey(input, "Escape");
+    }
+    expect(backend.authorCurrentGame).not.toHaveBeenCalled();
+    pressKey(query("列表插入白子"), "Enter");
+    const canvas = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 500, 500);
+    await act(async () => { canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 250, clientY: 250 })); await Promise.resolve(); });
+    await flushLast(backend.authorCurrentGame);
+    expect(backend.authorCurrentGame).toHaveBeenLastCalledWith({ indices: [] }, 1, { kind: "add", point: { x: 4, y: 4 }, color: "white", insert: true });
+    const ladderInput = query("继续征子");
+    await act(async () => { pressKey(ladderInput, "Enter"); await Promise.resolve(); });
+    await flushLast(backend.authorCurrentGame);
+    expect(backend.authorCurrentGame).toHaveBeenLastCalledWith({ indices: [] }, 2, { kind: "continue_ladder" });
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
   });
 
   it("uses the real human menu owner and N remains explanatory", async () => {

@@ -78,6 +78,16 @@ enum DocumentReversal {
         properties: Vec<(usize, SgfProperty)>,
         children: Option<Vec<SgfNode>>,
     },
+    SpliceMove {
+        parent: NodePath,
+        properties: Vec<SgfProperty>,
+        inserted: bool,
+    },
+    AuthorProperties {
+        path: NodePath,
+        keys: Vec<String>,
+        properties: Vec<(usize, SgfProperty)>,
+    },
     /// Composite unit: undo applies the steps last-first, and the reversed list redoes them.
     Sequence(Vec<DocumentReversal>),
 }
@@ -121,6 +131,8 @@ pub struct DocumentEditOutcome {
 mod prepared_edit;
 pub use prepared_edit::PreparedSgfEdit;
 
+#[path = "authoring.rs"]
+mod authoring;
 mod external_sync;
 mod readboard_sync;
 pub use readboard_sync::{ReadboardSync, ReadboardSyncOutcome, ReadboardViewPreferences};
@@ -1472,6 +1484,40 @@ impl CurrentSgfDocument {
 
     fn apply_reversal(&mut self, reversal: &mut DocumentReversal) -> Result<bool, CurrentGameError> {
         match reversal {
+            DocumentReversal::SpliceMove {
+                parent,
+                properties,
+                inserted,
+            } => {
+                let node = self.node_mut(parent)?;
+                if *inserted {
+                    if node.children.len() != 1 {
+                        return Err(invalid_history_path());
+                    }
+                    let mut removed = node.children.remove(0);
+                    std::mem::swap(properties, &mut removed.properties);
+                    node.children = removed.children;
+                } else {
+                    node.children = vec![SgfNode {
+                        properties: std::mem::take(properties),
+                        children: std::mem::take(&mut node.children),
+                    }];
+                }
+                *inserted = !*inserted;
+                Ok(true)
+            }
+            DocumentReversal::AuthorProperties {
+                path,
+                keys,
+                properties,
+            } => {
+                let node = self.node_mut(path)?;
+                let inverse = authoring::selected_properties(node, keys);
+                authoring::restore_properties(node, keys, properties);
+                *properties = inverse;
+                self.authoring_refresh_metadata();
+                Ok(true)
+            }
             DocumentReversal::ReplaceDocument { document } => {
                 std::mem::swap(&mut self.document, document);
                 Ok(true)

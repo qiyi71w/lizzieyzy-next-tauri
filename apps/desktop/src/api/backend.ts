@@ -41,6 +41,7 @@ import type {
   PositionDto,
   ProblemMarkerDto,
   SgfMarkupActionDto,
+  SgfAuthoringActionDto,
   RecoveryProtectionDto,
   RecoveryStartupDto,
   StoneDto,
@@ -312,6 +313,11 @@ export async function playCurrentGame(path: NodePath, vertex: MoveVertex): Promi
     throw new Error(nativeCurrentGameUnavailable);
   }
   return invoke<CurrentGameResultDto>("play_current_game", { path, vertex });
+}
+
+export async function authorCurrentGame(path: NodePath, generation: number, action: SgfAuthoringActionDto): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<CurrentGameResultDto>("author_current_game", { path, generation, action });
 }
 
 export async function setCurrentGamePersonalComment(path: NodePath, comment: string): Promise<CurrentGameResultDto> {

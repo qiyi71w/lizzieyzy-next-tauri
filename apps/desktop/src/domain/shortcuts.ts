@@ -71,6 +71,11 @@ const CLAIMED_SHORTCUTS: ShortcutDefinition[] = [
   { id: "analysis.all-positions", label: "All-position analysis", primary: { key: "b", ctrl: true, shift: true }, aliases: [], focusRule: "focus-safe" },
   { id: "edit.undo", label: "撤销", primary: { key: "z", ctrl: true }, aliases: [], focusRule: "focus-safe" },
   { id: "edit.redo", label: "重做", primary: { key: "y", ctrl: true }, aliases: [{ key: "z", ctrl: true, shift: true }], focusRule: "focus-safe" },
+  { id: "edit.rotate_clockwise", label: "向右旋转", primary: { key: "ArrowRight", ctrl: true, alt: true }, aliases: [], focusRule: "focus-safe" },
+  { id: "edit.rotate_counterclockwise", label: "向左旋转", primary: { key: "ArrowLeft", ctrl: true, alt: true }, aliases: [], focusRule: "focus-safe" },
+  { id: "edit.mirror_horizontal", label: "水平翻转", primary: { key: "ArrowUp", ctrl: true, alt: true }, aliases: [], focusRule: "focus-safe" },
+  { id: "edit.mirror_vertical", label: "垂直翻转", primary: { key: "ArrowDown", ctrl: true, alt: true }, aliases: [], focusRule: "focus-safe" },
+  { id: "edit.swap_colors", label: "交换黑白", primary: { key: "ArrowRight", ctrl: true, alt: true, shift: true }, aliases: [], focusRule: "focus-safe" },
   ...([
     ["label", "文字", "l"], ["letters", "字母", "a"], ["numbers", "数字", "n"],
     ["circle", "圆", "c"], ["square", "方", "s"], ["cross", "叉", "m"],

@@ -301,6 +301,18 @@ fn play_current_game(
 }
 
 #[tauri::command]
+fn author_current_game(
+    state: State<CurrentGameState>,
+    generation: u64,
+    path: NodePath,
+    action: app_model::SgfAuthoringActionDto,
+) -> Result<CurrentGameResultDto, String> {
+    state
+        .author(generation, path, action)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn set_current_game_personal_comment(
     state: State<CurrentGameState>,
     path: NodePath,
@@ -1179,6 +1191,7 @@ pub fn run() {
             project_current_game_mainline,
             select_current_game_node,
             play_current_game,
+            author_current_game,
             set_current_game_personal_comment,
             set_current_game_metadata,
             edit_current_game_markup,

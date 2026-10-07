@@ -11,6 +11,8 @@ use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
 #[cfg(test)]
+mod authoring_tests;
+#[cfg(test)]
 mod continuous_intent;
 #[cfg(test)]
 mod current_game_analysis_attach;
@@ -706,6 +708,48 @@ impl CurrentGameState {
         self.note_recovery(&holder);
         self.follow_continuous_position(&mut holder);
         Ok(result)
+    }
+
+    pub fn author(
+        &self,
+        generation: u64,
+        path: NodePath,
+        action: app_model::SgfAuthoringActionDto,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let mut holder = self.holder.lock().expect("current game state");
+        holder.ensure_editable()?;
+        holder.ensure_generation(generation)?;
+        if holder.selected_path != path {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::InvalidNodePath,
+                message: "Authoring requires the exact currently selected node.".into(),
+            });
+        }
+        if matches!(action, app_model::SgfAuthoringActionDto::Drag { .. })
+            && self
+                .analysis_manager
+                .get()
+                .is_some_and(|manager| manager.snapshot().game_move_job.is_some())
+        {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::DepartureBlocked,
+                message: "An engine move owns this position; finish or cancel it before dragging.".into(),
+            });
+        }
+        let outcome = holder
+            .document
+            .as_mut()
+            .ok_or_else(no_current_game)?
+            .author_with_history(&path, action)?;
+        if let Some(edit) = outcome.edit {
+            holder.commit_edit(edit);
+            holder.generation = holder.generation.saturating_add(1);
+            holder.selected_path = outcome.snapshot.path;
+            holder.bump_snapshot();
+            self.note_recovery(&holder);
+            self.follow_continuous_position(&mut holder);
+        }
+        holder.current_result()
     }
 
     pub fn undo(&self, generation: u64) -> Result<CurrentGameResultDto, CurrentGameError> {
