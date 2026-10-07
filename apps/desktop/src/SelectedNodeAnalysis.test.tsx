@@ -583,7 +583,7 @@ describe("authoritative continuous selected-node analysis", () => {
       buttonNamed(host, "应用评论").click();
       await backend.setCurrentGamePersonalComment.mock.results.at(-1)?.value;
     });
-    backend.saveCurrentGame.mockResolvedValue({ ...commented, snapshot_seq: 14, dirty: false, native_path: "/tmp/comment.sgf" });
+    backend.saveCurrentGame.mockResolvedValue({ saved_path: "/tmp/comment.sgf", captured_generation: commented.generation, captured_snapshot_seq: commented.snapshot_seq, current_game: { ...commented, snapshot_seq: 14, dirty: false, native_path: "/tmp/comment.sgf" } });
     await act(async () => {
       (host.querySelector('button[aria-label="保存"]') as HTMLButtonElement).click();
       await backend.saveCurrentGame.mock.results.at(-1)?.value;

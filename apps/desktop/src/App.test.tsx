@@ -4,6 +4,7 @@ import { StrictMode, act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnalysisFrameDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureAdmissionDto, FileActivationDeliveryDto, FileActivationRejectionDto, GameDto, MainWindowPinStatusDto, NodePath, RecoveryProtectionDto, RecoveryStartupDto } from "./domain/types";
+import type { CurrentGameSaveResultDto } from "./domain/types";
 import type { AppPreferences } from "./domain/preferences";
 import type { WorkspaceSharesDto } from "./domain/types";
 import type { WindowGeometryStatusDto } from "./domain/types";
@@ -1455,7 +1456,7 @@ describe("App focus-safe review controls", () => {
         position: { ...branchingGame.snapshot.position, move_number: path.indices.length }
       }
     }));
-    backend.saveCurrentGame.mockResolvedValue({ ...branchingGame, dirty: false });
+    backend.saveCurrentGame.mockResolvedValue({ saved_path: "/tmp/review.sgf", captured_generation: branchingGame.generation, captured_snapshot_seq: branchingGame.snapshot_seq, current_game: { ...branchingGame, dirty: false } });
     backend.openSgfDocument.mockResolvedValue({ format: "sgf", sgf_text: "(;SZ[9])", display_path: "/tmp/opened.sgf", display_name: "opened.sgf", native_path: "/tmp/opened.sgf" });
     backend.playCurrentGame.mockImplementation(async (path: NodePath) => ({
       ...branchingGame,
@@ -2282,6 +2283,53 @@ describe("App document replacement", () => {
         readText: vi.fn(async () => "(;SZ[9])")
       }
     });
+  });
+
+  it("reports the saved captured target after replacement without adopting the old game", async () => {
+    currentGameFixture.mockResolvedValue({ ...initialGame, dirty: true, native_path: "/tmp/original.sgf" });
+    const host = await renderApp();
+    let finish!: (value: CurrentGameSaveResultDto) => void;
+    const pending = new Promise<CurrentGameSaveResultDto>((resolve) => { finish = resolve; });
+    backend.saveCurrentGame.mockReturnValueOnce(pending);
+    await act(async () => {
+      buttonNamed(host, "存档").click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const replacement = { ...initialGame, generation: 4, dirty: true, native_path: "/tmp/replacement.sgf", snapshot: { ...initialGame.snapshot, personal_comment: "new document" } };
+    currentGameFixture.mockResolvedValue(replacement);
+    await act(async () => {
+      pressKey(buttonNamed(host, "坐标"), "v", { ctrlKey: true });
+      await Promise.resolve();
+      await Promise.resolve();
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      finish({ saved_path: "/tmp/captured.SGF", captured_generation: initialGame.generation, captured_snapshot_seq: initialGame.snapshot_seq, current_game: null });
+      await pending;
+    });
+    expect(host.textContent).toContain("Saved captured.SGF.");
+    expect(host.querySelector(".doc-name")?.textContent).toContain("replacement.sgf");
+    expect(host.querySelector(".doc-name")?.textContent).toContain("*");
+    expect(requiredElement<HTMLTextAreaElement>(host, 'textarea[aria-label="个人评论"]').value).toBe("new document");
+  });
+
+  it("keeps a newer same-document edit dirty while reporting the captured Save", async () => {
+    currentGameFixture.mockResolvedValue({ ...initialGame, dirty: true });
+    const host = await renderApp();
+    backend.saveCurrentGame.mockResolvedValueOnce({
+      saved_path: "/tmp/captured.sgf", captured_generation: initialGame.generation, captured_snapshot_seq: initialGame.snapshot_seq,
+      current_game: { ...initialGame, snapshot_seq: initialGame.snapshot_seq + 2, dirty: true, native_path: "/tmp/captured.sgf", snapshot: { ...initialGame.snapshot, personal_comment: "later edit" } }
+    });
+    await act(async () => {
+      buttonNamed(host, "存档").click();
+      await backend.saveCurrentGame.mock.results.at(-1)?.value;
+    });
+    expect(host.textContent).toContain("Saved captured.sgf.");
+    expect(buttonNamed(host, "存档").disabled).toBe(false);
+    expect(requiredElement<HTMLTextAreaElement>(host, 'textarea[aria-label="个人评论"]').value).toBe("later edit");
+    expect(host.querySelector(".doc-name")?.textContent).toContain("*");
   });
 
   it("rejects an invalid candidate before prompting and keeps the current game", async () => {

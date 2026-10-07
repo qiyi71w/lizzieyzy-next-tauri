@@ -5,6 +5,7 @@
 ### English
 
 - Added an offline Function Search panel shared by Help, the fixed toolbar and registry-owned Ctrl/Command+K, with a real candidate-limit settings target and the Chinese compatibility resource/fallback foundation.
+- Save and Save As now atomically replace files from a captured complete SGF tree on a blocking worker. Failure protects existing bytes and the document savepoint; late completion reports its actual target without cleaning later edits or adopting a replacement document.
 - Added an independent Tencent kifu center with username/chessId lookup, cancellable previews, cursor continuation across 25-row pages, eight-entry query history, and explicit SGF-07 import. Complete-tree normalization preserves game metadata and effective komi through Save/reopen; requests consume the shared network policy.
 - Preserved accepted Tencent history writes across provider-panel changes and retained failed clear/query intent for visible retry after reopening the center.
 - Added explicit Yike Start sync and Play & Sync with a Rust-owned read-only session, bounded failure pause/Retry, Stop-to-edit, same-count source reconciliation, independent sync preferences and browser handoff. Save As preserves its invocation snapshot while later source frames remain dirty.
@@ -50,6 +51,8 @@
 - Boxed desktop engine-command errors and grouped replacement/exit requests for strict workspace lint checks, preserving serialized errors and Save / Discard / Cancel ordering.
 
 ### 中文
+
+- Save 与 Save As 在阻塞工作线程保存调用时捕获的完整 SGF 树并原子替换目标；失败保护已有字节与保存点，迟到成功报告实际目标，不清除后续编辑或接管新棋谱。
 
 - 新增独立 Tencent 棋谱中心：username／chessId 查询、可取消预览、25局分页与游标续取、最多8条查询历史及显式 SGF-07 导入。完整树正规化保留棋谱元数据和有效贴目，保存重开一致；远程请求消费共享网络策略。
 - Tencent 查询历史写入跨来源面板切换保持顺序；清除或查询保存失败后，重开中心仍可见并重试原操作。

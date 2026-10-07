@@ -242,6 +242,15 @@ pub struct CurrentGameResultDto {
     pub native_path: Option<String>,
 }
 
+/// A durable Save completion, independent of the document currently displayed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CurrentGameSaveResultDto {
+    pub saved_path: String,
+    pub captured_generation: u64,
+    pub captured_snapshot_seq: u64,
+    pub current_game: Option<CurrentGameResultDto>,
+}
+
 /// Session-only projection. Paths and revisions belong to this trial, not the saved game.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrialSessionDto {
@@ -1065,6 +1074,25 @@ mod current_game_wire {
         assert_eq!(json["tree"]["children"][0]["properties"][0]["key"], "W");
         assert!(json["snapshot"].get("generated_information").is_none());
         assert_eq!(decoded, result);
+    }
+
+    #[test]
+    fn captured_save_receipt_survives_without_a_current_document_result() {
+        let receipt = CurrentGameSaveResultDto {
+            saved_path: "protected-sgf-中文.SGF".into(),
+            captured_generation: 7,
+            captured_snapshot_seq: 11,
+            current_game: None,
+        };
+        let json = serde_json::to_value(&receipt).unwrap();
+        assert_eq!(json["saved_path"], "protected-sgf-中文.SGF");
+        assert_eq!(json["captured_generation"], 7);
+        assert_eq!(json["captured_snapshot_seq"], 11);
+        assert!(json["current_game"].is_null());
+        assert_eq!(
+            serde_json::from_value::<CurrentGameSaveResultDto>(json).unwrap(),
+            receipt
+        );
     }
 
     #[test]

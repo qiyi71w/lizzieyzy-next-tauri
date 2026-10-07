@@ -137,6 +137,44 @@ fn replacement_validates_candidate_before_dirty_prompt() {
 }
 
 #[test]
+fn detached_root_result_and_rejected_public_imports_do_not_mutate_live_document() {
+    let state = CurrentGameState::default();
+    let opened = state
+        .replace(
+            "(;SZ[5]RE[W+R]C[live personal];B[aa])",
+            Some("/tmp/live.sgf".into()),
+        )
+        .unwrap();
+    state.force_dirty();
+    state.select_path(path(&[0]), opened.generation).unwrap();
+    let before = state.inspect();
+    // Fixed ec19f8b source: detached means private parse/history, not non-root RE.
+    let source = "(;SZ[5]RE[B+R]\n;B[aa](;W[bb])(;W[cc]))";
+    let detached = sgf::CurrentSgfDocument::open(source).unwrap();
+    assert_eq!(detached.result(), Some("B+R"));
+    assert_eq!(state.inspect(), before);
+    let reopened = sgf::CurrentSgfDocument::open(&detached.serialize().unwrap()).unwrap();
+    assert_eq!(detached.tree().unwrap(), reopened.tree().unwrap());
+    for candidate in [
+        "(;SZ[5]\\r;B[aa])",
+        "(;SZ[5]\\\\n;B[aa])",
+        "(;SZ[5]K\\nM[6.5];B[aa])",
+        "(;SZ[5];B[aa](;W[bb])",
+        "(;SZ[5]C[truncated)",
+    ] {
+        assert_eq!(
+            state.prepare_replacement(candidate, None).unwrap_err().kind,
+            CurrentGameErrorKind::MalformedSgf
+        );
+        assert_eq!(state.inspect(), before);
+    }
+    let id = departure_id(state.prepare_replacement(source, None).unwrap());
+    assert_eq!(state.inspect(), before);
+    state.cancel_replacement(id).unwrap();
+    assert_eq!(state.inspect(), before);
+}
+
+#[test]
 fn provider_import_rejects_superseded_policy_and_document_without_replacing_current_game() {
     let state = CurrentGameState::default();
     state.replace(BRANCHING, None).unwrap();
@@ -230,6 +268,36 @@ fn duplicate_replacement_is_rejected_and_initial_cancel_does_not_seal_jobs() {
         .unwrap();
     assert!(attached.dirty);
     assert_eq!(attached.snapshot.primary_analysis.unwrap().visits, 400);
+
+    let after_cancel = state.inspect();
+    assert_eq!(
+        state.prepare_replacement("(;SZ[5];B[aa]", None).unwrap_err().kind,
+        CurrentGameErrorKind::MalformedSgf
+    );
+    assert_eq!(state.inspect(), after_cancel);
+    let final_id = departure_id(
+        state
+            .prepare_replacement("(;SZ[5]RE[B+R]C[final personal];B[aa])", None)
+            .unwrap(),
+    );
+    state
+        .begin_protected_commit(final_id, &[started("job-live", opened.generation)])
+        .unwrap();
+    let committed = state.commit_replacement(final_id).unwrap().current.unwrap();
+    assert!(committed.generation > opened.generation);
+    let final_state = state.inspect();
+    assert!(state
+        .attach_from_job_event(&continuous_event(
+            "job-live",
+            AnalysisJobOutcomeDto::Completed,
+            opened.generation,
+            &opened.selected_path.indices,
+            Some(projectable_frame(900, 3, 3)),
+        ))
+        .is_none());
+    assert_eq!(state.inspect(), final_state);
+    assert!(state.serialize().unwrap().contains("C[final personal]"));
+    assert!(committed.snapshot.primary_analysis.is_none());
 }
 
 #[test]
@@ -368,6 +436,8 @@ fn failed_departure_save_restores_editing_and_keeps_late_jobs_rejected() {
             saved_path.to_string_lossy().into_owned(),
             edited.selected_path.clone(),
         )
+        .unwrap()
+        .current_game
         .unwrap();
     let _ = fs::remove_file(&saved_path);
     assert!(!saved.dirty);
@@ -448,6 +518,8 @@ fn ordinary_save_during_analysis_still_uses_invocation_snapshot() {
                 ));
             },
         )
+        .unwrap()
+        .current_game
         .unwrap();
     let written = fs::read_to_string(&saved_path).unwrap();
     let _ = fs::remove_file(&saved_path);

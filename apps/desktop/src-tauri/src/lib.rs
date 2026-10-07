@@ -1,3 +1,4 @@
+use app_model::CurrentGameSaveResultDto;
 use app_model::{
     AnalysisFrameDto, AnalysisJobModeDto, AnalysisJobStartedDto, AppHealthDto, CurrentGameError,
     CurrentGameResultDto, EngineFailureDto, EngineFailureKind, EngineOperationDto, EngineProfileDto,
@@ -238,12 +239,19 @@ fn serialize_current_game(state: State<CurrentGameState>) -> Result<String, Curr
 }
 
 #[tauri::command]
-fn save_current_game(
-    state: State<CurrentGameState>,
+async fn save_current_game(
+    app: AppHandle,
+    state: State<'_, CurrentGameState>,
     path: String,
     selected_path: NodePath,
-) -> Result<CurrentGameResultDto, String> {
-    state.save_to_path(path, selected_path)
+) -> Result<CurrentGameSaveResultDto, String> {
+    let snapshot = state.capture_save_snapshot(selected_path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<CurrentGameState>()
+            .persist_save_snapshot(path, snapshot)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -252,15 +260,15 @@ async fn save_current_game_as(
     state: State<'_, CurrentGameState>,
     selected_path: NodePath,
     default_file_name: Option<String>,
-) -> Result<Option<CurrentGameResultDto>, String> {
+) -> Result<Option<CurrentGameSaveResultDto>, String> {
     let snapshot = state.capture_save_snapshot(selected_path)?;
     let default_file_name = default_file_name.unwrap_or_else(|| "review.sgf".to_string());
-    let app = app.clone();
-    let outcome =
-        tauri::async_runtime::spawn_blocking(move || save_as::pick_save_as_outcome(&app, &default_file_name))
-            .await
-            .map_err(|error| error.to_string())??;
-    save_as::persist_current_game_save_as(&state, outcome, snapshot)
+    tauri::async_runtime::spawn_blocking(move || {
+        let outcome = save_as::pick_save_as_outcome(&app, &default_file_name)?;
+        save_as::persist_current_game_save_as(&app.state::<CurrentGameState>(), outcome, snapshot)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
