@@ -1,4 +1,5 @@
 export type ExportConfirmationDto = { title: string; message: string };
+export type RenderedImageExportOptionsDto = { defaultFileName?: string; pngOnly?: boolean };
 
 export type WorkspaceSharesDto = { left: number; right: number };
 

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ExportConfirmationDto, NodePath, SgfTreeNodeDto } from "../domain/types";
+import type { ExportConfirmationDto, NodePath, RenderedImageExportOptionsDto, SgfTreeNodeDto } from "../domain/types";
 import { isTauriRuntime } from "./backend";
 import { t } from "../i18n/resources";
 
@@ -40,7 +40,7 @@ export async function exportSelectedLine(generation: number, selectedPath: NodeP
 }
 
 /** Shared by the mainboard and chart consumers; Rust alone owns image-directory persistence. */
-export async function exportRenderedImage(snapshot: RenderedImageSnapshot): Promise<string | null> {
+export async function exportRenderedImage(snapshot: RenderedImageSnapshot, options?: RenderedImageExportOptionsDto): Promise<string | null> {
   if (!isTauriRuntime()) throw new Error(t("reason.desktop"));
-  return invoke("export_rendered_image", { ...snapshot, confirmation: exportConfirmation() });
+  return invoke("export_rendered_image", { ...snapshot, options, confirmation: exportConfirmation() });
 }

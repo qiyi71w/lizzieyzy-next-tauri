@@ -169,6 +169,15 @@ pub struct ExportConfirmationDto {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderedImageExportOptionsDto {
+    #[serde(default)]
+    pub default_file_name: Option<String>,
+    #[serde(default)]
+    pub png_only: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct NodePath {
     pub indices: Vec<u32>,
