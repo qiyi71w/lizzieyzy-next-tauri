@@ -221,6 +221,58 @@ pub fn save_engine_profiles(
     Ok(settings)
 }
 
+pub fn prepare_engine_profiles_save(
+    current: &EngineProfilesSettings,
+    settings: EngineProfilesSettings,
+) -> Result<EngineProfilesSettings, String> {
+    let mut settings = normalize_engine_profiles(settings)?;
+    let mut destination = 0;
+    for existing in &current.profiles {
+        if let Some(offset) = settings.profiles[destination..].iter().position(|record| record.id == existing.id) {
+            settings.profiles[destination..=destination + offset].rotate_right(1);
+            destination += 1;
+        }
+    }
+    Ok(settings)
+}
+
+pub fn reorder_engine_profiles(
+    path: &Path,
+    current: EngineProfilesSettings,
+    request: &app_model::EngineProfileOrderRequestDto,
+) -> Result<EngineProfilesSettings, String> {
+    reorder_engine_profiles_with(path, current, request, replace_json_file)
+}
+
+fn reorder_engine_profiles_with(
+    path: &Path,
+    mut current: EngineProfilesSettings,
+    request: &app_model::EngineProfileOrderRequestDto,
+    persist: impl FnOnce(&Path, &EngineProfilesSettings) -> Result<(), String>,
+) -> Result<EngineProfilesSettings, String> {
+    if !current.profiles.iter().map(|record| &record.id).eq(request.expected_profile_ids.iter()) {
+        return Err("engine profile catalog order is stale; reload profiles before reordering".into());
+    }
+    if request.profile_ids.len() != current.profiles.len() {
+        return Err("engine profile order must contain the complete catalog".into());
+    }
+    let mut positions = BTreeMap::new();
+    for (index, id) in request.profile_ids.iter().enumerate() {
+        if positions.insert(id.as_str(), index).is_some() {
+            return Err(format!("duplicate engine profile id: {id}"));
+        }
+    }
+    if current.profiles.iter().any(|record| !positions.contains_key(record.id.as_str())) {
+        return Err("engine profile order contains unknown or missing profile IDs".into());
+    }
+    if request.profile_ids == request.expected_profile_ids {
+        return Ok(current);
+    }
+    current.profiles.sort_unstable_by_key(|record| positions[record.id.as_str()]);
+    persist(path, &current)?;
+    Ok(current)
+}
+
 pub fn normalize_engine_profiles(settings: EngineProfilesSettings) -> Result<EngineProfilesSettings, String> {
     if settings.version != ENGINE_PROFILES_VERSION {
         return Err(format!(
@@ -389,5 +441,30 @@ mod persist_failure_tests {
         assert!(!tmp_path(&path).exists());
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn reordered_catalog_replace_failure_retains_original_order_and_identities() {
+        let (dir, path) = temp_catalog();
+        let mut current = sample_settings();
+        let mut second = default_engine_profile_record();
+        second.id = "second".into();
+        second.profile.name = "Second".into();
+        current.profiles.push(second);
+        save_engine_profiles(&path, current.clone()).unwrap();
+        let before = fs::read(&path).unwrap();
+        let request = app_model::EngineProfileOrderRequestDto {
+            expected_profile_ids: vec!["default".into(), "second".into()],
+            profile_ids: vec!["second".into(), "default".into()],
+        };
+        let error = reorder_engine_profiles_with(&path, current.clone(), &request, |path, next| {
+            let json = serde_json::to_string_pretty(next).unwrap();
+            atomic_replace_file_with(path, &json, |_, _| Err(io::Error::other("rename boom")))
+        }).unwrap_err();
+        assert!(error.contains("replace"));
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(load_engine_profiles(&path).unwrap(), current);
+        assert!(!tmp_path(&path).exists());
+        fs::remove_dir_all(dir).unwrap();
     }
 }
