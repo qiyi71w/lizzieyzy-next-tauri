@@ -11,8 +11,15 @@ import type { WindowGeometryStatusDto } from "./domain/types";
 import type { EngineProfileRecordDto, HumanMatchActionDto, HumanMatchStartDto, MatchAnalysisPolicyDto, MatchTurnDto, MatchUpdateDto } from "./domain/types";
 import * as externalSyncApi from "./api/externalSync";
 import type { ExternalSyncSnapshot } from "./domain/providers";
+import type * as ExportModule from "./api/export";
 
 const currentGameFixture = vi.hoisted(() => vi.fn());
+const exportApi = vi.hoisted(() => ({
+  exportSelectedLine: vi.fn(async (): Promise<string | null> => "/export/branch.sgf"),
+  exportRenderedImage: vi.fn(async (): Promise<string | null> => "/export/board.png"),
+  captureRenderedSurface: vi.fn(() => ({ width: 3, height: 2, rgba: Array(24).fill(25) }))
+}));
+vi.mock("./api/export", async (importOriginal) => ({ ...await importOriginal<typeof ExportModule>(), ...exportApi }));
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
   prepareDocumentReplacement: vi.fn(async () => ({ status: "ready", departure_id: 1 })),
@@ -38,6 +45,7 @@ const backend = vi.hoisted(() => ({
   serializeCurrentGame: vi.fn(() => Promise.resolve("(;SZ[9])")),
   projectCurrentGameMainline: vi.fn(),
   playCurrentGame: vi.fn(),
+  authorCurrentGame: vi.fn(),
   applyRootSetup: vi.fn(),
   convertToRootSetup: vi.fn(),
   selectCurrentGameNode: vi.fn(),
@@ -324,6 +332,9 @@ let root: Root | null = null;
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  exportApi.exportSelectedLine.mockClear();
+  exportApi.exportRenderedImage.mockClear();
+  exportApi.captureRenderedSurface.mockClear();
   matchApi.humanMatchSnapshot.mockReset().mockResolvedValue({ current: null, match_state: { revision: 0, mode: "human", pk_runs: null, committed_moves: 0, pause_pending: false, rebuild_sides: [], resume_pending: false, phase: "idle", session_id: null, turn: 0, to_play: null, settings: null, run_id: null, job: null, end: null, failure: null, failed_side: null, resources_held: false, committed: false, analysis: { supported: false, policy: "off", epoch: 0, frame: null } } });
   matchApi.subscribeHumanMatch.mockReset().mockImplementation(async (listener) => { matchListener = listener; return () => { matchListener = undefined; }; });
   matchApi.humanMatchStart.mockReset();
@@ -974,6 +985,35 @@ describe("node markup authoring", () => {
   });
 });
 
+describe("App authoring", () => {
+  it("dispatches a forced actual move through the authoring wrapper, never ordinary play", async () => {
+    backend.authorCurrentGame.mockResolvedValue({ ...initialGame, generation:2, snapshot_seq:2, dirty:true, can_undo:true });
+    const host = await renderApp();
+    act(()=>buttonNamed(host,"编辑").click()); act(()=>buttonNamed(host,"添加黑子").click());
+    const canvas=requiredElement<HTMLCanvasElement>(host,'canvas[aria-label="棋盘"]');
+    canvas.getBoundingClientRect=()=>new DOMRect(0,0,500,500);
+    await act(async()=>{ canvas.dispatchEvent(new MouseEvent("click",{bubbles:true,clientX:250,clientY:250})); await Promise.resolve(); });
+    await flushLast(backend.authorCurrentGame);
+    expect(backend.authorCurrentGame).toHaveBeenCalledWith({indices:[]},1,{kind:"add",point:{x:4,y:4},color:"black",insert:false});
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("棋谱编辑已接受。");
+  });
+  it("exposes Rust transform errors and ladder through real menu actions", async () => {
+    backend.authorCurrentGame.mockRejectedValueOnce(new Error("Rotation requires a square board"));
+    const host=await renderApp();
+    act(()=>buttonNamed(host,"编辑").click());
+    act(()=>buttonNamed(host,"向右旋转(Ctrl+Alt+Right)").click());
+    await act(async()=>{ await expect(backend.authorCurrentGame.mock.results.at(-1)?.value).rejects.toThrow("Rotation requires a square board"); });
+    expect(backend.authorCurrentGame).toHaveBeenLastCalledWith({indices:[]},1,{kind:"transform",transform:"rotate_clockwise"});
+    expect(host.textContent).toContain("棋谱编辑失败：Rotation requires a square board");
+    backend.authorCurrentGame.mockRejectedValueOnce(new Error("Ladder continuation requires five coordinate moves"));
+    act(()=>buttonNamed(host,"棋局").click()); act(()=>buttonNamed(host,"继续征子").click());
+    await act(async()=>{ await expect(backend.authorCurrentGame.mock.results.at(-1)?.value).rejects.toThrow("Ladder continuation requires five coordinate moves"); });
+    expect(backend.authorCurrentGame).toHaveBeenLastCalledWith({indices:[]},1,{kind:"continue_ladder"});
+    expect(host.textContent).toContain("Ladder continuation requires five coordinate moves");
+  });
+});
+
 
 describe("App root setup editing", () => {
   it("previews the draft without editing the document, cancels, then commits all changes once", async () => {
@@ -1432,6 +1472,37 @@ describe("App function search owner", () => {
     await vi.waitFor(() => expect(document.activeElement).toBe(requiredElement(host, '[data-search-target="prefs.candidate-limit"]')));
     expect(backend.startForegroundEngine).not.toHaveBeenCalled();
     expect(backend.setCurrentGameMetadata).not.toHaveBeenCalled();
+  });
+
+  it("catalogs new authoring menus and dispatches insertion and ladder to their original owner", async () => {
+    backend.authorCurrentGame.mockResolvedValue({ ...initialGame, generation: 2, snapshot_seq: 2, dirty: true, can_undo: true });
+    const host = await renderApp();
+    function query(text: string) {
+      act(() => buttonNamed(host, "功能搜索").click());
+      const input = requiredElement<HTMLInputElement>(host, '[aria-label="功能搜索"] input');
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, text);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      return input;
+    }
+    for (const label of ["添加黑子", "添加白子", "交替落子", "列表插入黑子", "列表插入白子", "列表交替插入", "继续征子"]) {
+      const input = query(label);
+      expect(requiredElement(host, '[aria-label="功能搜索结果"]').textContent).toContain(label);
+      pressKey(input, "Escape");
+    }
+    expect(backend.authorCurrentGame).not.toHaveBeenCalled();
+    pressKey(query("列表插入白子"), "Enter");
+    const canvas = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 500, 500);
+    await act(async () => { canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 250, clientY: 250 })); await Promise.resolve(); });
+    await flushLast(backend.authorCurrentGame);
+    expect(backend.authorCurrentGame).toHaveBeenLastCalledWith({ indices: [] }, 1, { kind: "add", point: { x: 4, y: 4 }, color: "white", insert: true });
+    const ladderInput = query("继续征子");
+    await act(async () => { pressKey(ladderInput, "Enter"); await Promise.resolve(); });
+    await flushLast(backend.authorCurrentGame);
+    expect(backend.authorCurrentGame).toHaveBeenLastCalledWith({ indices: [] }, 2, { kind: "continue_ladder" });
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
   });
 
   it("uses the real human menu owner and N remains explanatory", async () => {
@@ -3818,6 +3889,38 @@ describe("App recent history", () => {
     act(() => buttonNamed(host, "文件").click());
     expect(host.querySelector('button[title="/games/kept.sgf"]')).not.toBeNull();
     expect(host.querySelector(".doc-name")?.textContent).not.toContain("kept.sgf");
+  });
+});
+
+describe("App export entry owners", () => {
+  it("uses the same branch owner from menu and Ctrl+Alt+S without Save or analysis mutation", async () => {
+    currentGameFixture.mockResolvedValue(branchingGame);
+    const host = await renderApp();
+    act(() => buttonNamed(host, "文件").click());
+    const menu = [...host.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]')].find(button => button.textContent?.includes("保存当前分支"));
+    expect(menu).toBeDefined();
+    await act(async () => { menu!.click(); });
+    expect(exportApi.exportSelectedLine).toHaveBeenLastCalledWith(3, { indices: [0, 1] }, { indices: [0, 1] });
+    pressKey(buttonNamed(host, "坐标"), "s", { ctrlKey: true, altKey: true });
+    await flushLast(exportApi.exportSelectedLine);
+    expect(exportApi.exportSelectedLine).toHaveBeenCalledTimes(2);
+    expect(backend.saveCurrentGame).not.toHaveBeenCalled();
+    expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(backend.cancelKataGoAnalysis).not.toHaveBeenCalled();
+  });
+  it("captures the actual mainboard reference and reports cancel or real failure", async () => {
+    const host = await renderApp();
+    exportApi.exportRenderedImage.mockResolvedValueOnce(null);
+    pressKey(buttonNamed(host, "坐标"), "s", { altKey: true });
+    await flushLast(exportApi.exportRenderedImage);
+    expect(exportApi.captureRenderedSurface).toHaveBeenCalledWith(host.querySelector('.board-canvas canvas'));
+    expect(exportApi.exportRenderedImage).toHaveBeenLastCalledWith({ width: 3, height: 2, rgba: Array(24).fill(25) });
+    expect(host.textContent).toContain("导出已取消");
+    exportApi.exportRenderedImage.mockRejectedValueOnce(new Error("failed to replace protected.png"));
+    pressKey(buttonNamed(host, "坐标"), "s", { altKey: true });
+    await act(async () => { await exportApi.exportRenderedImage.mock.results.at(-1)?.value.catch(() => undefined); });
+    expect(host.textContent).toContain("failed to replace protected.png");
+    expect(backend.saveCurrentGame).not.toHaveBeenCalled();
   });
 });
 

@@ -163,6 +163,21 @@ pub struct FileActivationRejectionDto {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportConfirmationDto {
+    pub title: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderedImageExportOptionsDto {
+    #[serde(default)]
+    pub default_file_name: Option<String>,
+    #[serde(default)]
+    pub png_only: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct NodePath {
     pub indices: Vec<u32>,
@@ -215,6 +230,34 @@ pub enum SgfMarkupToolDto {
 pub enum SgfMarkupActionDto {
     Clear,
     Point { point: PointDto, tool: SgfMarkupToolDto },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SgfTransformDto {
+    RotateClockwise,
+    RotateCounterclockwise,
+    MirrorHorizontal,
+    MirrorVertical,
+    SwapColors,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SgfAuthoringActionDto {
+    Add {
+        point: PointDto,
+        color: Option<PlayerColor>,
+        insert: bool,
+    },
+    Drag {
+        from: PointDto,
+        to: PointDto,
+    },
+    Transform {
+        transform: SgfTransformDto,
+    },
+    ContinueLadder,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

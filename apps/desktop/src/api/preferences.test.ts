@@ -34,6 +34,15 @@ it("persists whole-millisecond review intervals and keeps durable values on inva
 });
 
 describe("browser preference storage", () => {
+  it("loads independent Java drag and double-click defaults and persists each permission", async () => {
+    window.localStorage.setItem(storageKey, JSON.stringify({ enableClickReview: true }));
+    const initial = (await loadAppPreferences()).preferences;
+    expect(initial.allowDrag).toBe(false); expect(initial.allowDoubleClick).toBe(true);
+    await saveAppPreferences({ ...initial, allowDrag: true, allowDoubleClick: false });
+    const restarted = (await loadAppPreferences()).preferences;
+    expect(restarted.allowDrag).toBe(true); expect(restarted.allowDoubleClick).toBe(false);
+  });
+
   it("protects rail visibility from stale ordinary saves while retaining other preferences", async () => {
     const stale = (await loadAppPreferences()).preferences;
     await updateWorkspaceVisibility({ left: false });

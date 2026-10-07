@@ -1,3 +1,6 @@
+export type ExportConfirmationDto = { title: string; message: string };
+export type RenderedImageExportOptionsDto = { defaultFileName?: string; pngOnly?: boolean };
+
 export type WorkspaceSharesDto = { left: number; right: number };
 
 export type WindowGeometryDto = {
@@ -65,6 +68,12 @@ export type SgfMarkupToolDto =
 export type SgfMarkupActionDto =
   | { kind: "clear" }
   | { kind: "point"; point: PointDto; tool: SgfMarkupToolDto };
+export type SgfTransformDto = "rotate_clockwise" | "rotate_counterclockwise" | "mirror_horizontal" | "mirror_vertical" | "swap_colors";
+export type SgfAuthoringActionDto =
+  | { kind: "add"; point: PointDto; color: PlayerColor | null; insert: boolean }
+  | { kind: "drag"; from: PointDto; to: PointDto }
+  | { kind: "transform"; transform: SgfTransformDto }
+  | { kind: "continue_ladder" };
 
 export type SelectedNodeSnapshotDto = {
   path: NodePath;

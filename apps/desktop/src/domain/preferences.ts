@@ -26,6 +26,8 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   windowGeometry: WindowGeometryDto | null;
   workspaceVisibility: WorkspaceVisibilityDto;
   mainWindowAlwaysOnTop: boolean;
+  allowDrag: boolean;
+  allowDoubleClick: boolean;
   showCoordinates: boolean;
   showMoveNumbers: boolean;
   showOwnership: boolean;
@@ -60,6 +62,7 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   defaultBoardHeight: number;
   defaultKomi: number;
   recentGamePaths: string[];
+  recentImageExportDirectory: string | null;
 };
 
 export const defaultAppPreferences: AppPreferences = {
@@ -77,6 +80,8 @@ export const defaultAppPreferences: AppPreferences = {
   windowGeometry: null,
   workspaceVisibility: { left: true, right: true },
   mainWindowAlwaysOnTop: false,
+  allowDrag: false,
+  allowDoubleClick: true,
   showCoordinates: true,
   showMoveNumbers: false,
   showOwnership: true,
@@ -135,6 +140,7 @@ export const defaultAppPreferences: AppPreferences = {
   scoringRule: "area",
   continuousAnalysisEnabled: true,
   recentGamePaths: [],
+  recentImageExportDirectory: null,
   continuousTimeLimitEnabled: true,
   continuousTimeLimitSeconds: 600,
   continuousVisitsLimitEnabled: false,
@@ -211,6 +217,8 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
       right: booleanValue(value?.workspaceVisibility?.right, true)
     },
     mainWindowAlwaysOnTop: booleanValue(value?.mainWindowAlwaysOnTop, false),
+    allowDrag: booleanValue(value?.allowDrag, false),
+    allowDoubleClick: booleanValue(value?.allowDoubleClick, true),
     showCoordinates: booleanValue(value?.showCoordinates, defaultAppPreferences.showCoordinates),
     showMoveNumbers: booleanValue(value?.showMoveNumbers, defaultAppPreferences.showMoveNumbers),
     showOwnership: booleanValue(value?.showOwnership, defaultAppPreferences.showOwnership),
@@ -260,6 +268,7 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
     scoringRule: value?.scoringRule === "territory" ? "territory" : "area",
     continuousAnalysisEnabled: booleanValue(value?.continuousAnalysisEnabled, defaultAppPreferences.continuousAnalysisEnabled),
     recentGamePaths: Array.isArray(value?.recentGamePaths) ? value.recentGamePaths : [],
+    recentImageExportDirectory: typeof value?.recentImageExportDirectory === "string" ? value.recentImageExportDirectory : null,
     continuousTimeLimitEnabled: booleanValue(value?.continuousTimeLimitEnabled, defaultAppPreferences.continuousTimeLimitEnabled),
     continuousTimeLimitSeconds: value?.continuousTimeLimitSeconds ?? defaultAppPreferences.continuousTimeLimitSeconds,
     continuousVisitsLimitEnabled: booleanValue(value?.continuousVisitsLimitEnabled, defaultAppPreferences.continuousVisitsLimitEnabled),

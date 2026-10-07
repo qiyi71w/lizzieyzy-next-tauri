@@ -5,6 +5,7 @@ import { useReviewAutoplay } from "./hooks/useReviewAutoplay";
 import { acceptedMoveSound } from "./domain/acceptedMoveSound";
 import { playMoveSound } from "./domain/moveSound";
 import { BoardCanvas } from "./components/BoardCanvas";
+import { captureRenderedSurface, chosenLeaf, exportRenderedImage, exportSelectedLine } from "./api/export";
 import { ScoringControls } from "./components/ScoringControls";
 import { WinrateChart } from "./components/WinrateChart";
 import { ReviewTree } from "./components/ReviewTree";
@@ -36,6 +37,7 @@ import type { HumanMatchActionDto, HumanMatchStartDto, MatchAnalysisPolicyDto, M
 import {
   analysisTaskSnapshot,
   applyRootSetup,
+  authorCurrentGame,
   cancelKataGoAnalysis,
   continueAnalysisTask,
   cancelSelectedNodeAnalysis,
@@ -145,6 +147,7 @@ import {
 import { newDocumentSgf, type NewDocumentParameters } from "./domain/newDocument";
 import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, AnalysisTaskDto, AnalysisTaskStrategyDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, FileActivationDeliveryDto, ForegroundEngineSnapshotDto, GameDto, GameFileImportDto, MoveVertex, NodePath, PlayerColor, PointDto, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, ScoringActionDto, ScoringSessionDto, SelectedNodeSnapshotDto, SgfMarkupActionDto, SgfMarkupToolDto, SgfTreeNodeDto, StoneDto, TrialSessionDto, WindowGeometryStatusDto } from "./domain/types";
 
+import type { SgfAuthoringActionDto, SgfTransformDto } from "./domain/types";
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const demoGame = createDemoGame();
 const emptyChartRoot: SgfTreeNodeDto = { properties: [], children: [] };
@@ -200,6 +203,8 @@ const defaultAnalysisScopeDraft: AnalysisScopeDraft = {
 
 
 export function App() {
+  const mainboardSurfaceRef = useRef<HTMLCanvasElement | null>(null);
+  const exportPendingRef = useRef(false);
   const [health, setHealth] = useState<AppHealthDto | null>(null);
   const [game, setGame] = useState<GameDto>(() => demoGame);
   const [positions, setPositions] = useState<PositionDto[]>(() => replayGamePositions(demoGame));
@@ -356,6 +361,7 @@ export function App() {
   const metadataSourceRef = useRef<FocusReturn | null>(null);
   const [keyboardPlacement, setKeyboardPlacement] = useState(false);
   const [markupTool, setMarkupTool] = useState<"play" | SgfMarkupToolDto["kind"]>("play");
+  const [authorMode, setAuthorMode] = useState<{ color: PlayerColor | null; insert: boolean } | null>(null);
   const [markupDialog, setMarkupDialog] = useState<{ point: PointDto; path: NodePath; generation: number; text: string } | null>(null);
   const [departurePrompt, setDeparturePrompt] = useState<{
     message: string;
@@ -778,6 +784,7 @@ export function App() {
   const saveFileName = documentName.toLowerCase().endsWith(".sgf") ? documentName : `${documentName}.sgf`;
   const documentFlowBusy = matchBlocked || matchDialogOpen || fileFlowBusy || departurePending || Boolean(newDocumentOpen) || Boolean(rootSetupDraft) || Boolean(conversionPrompt) || Boolean(metadataDraft) || Boolean(markupDialog) || Boolean(departurePrompt) || Boolean(teardownPrompt) || Boolean(recoveryPrompt);
   const historyActionBlocked = documentFlowBusy || externalBlocked || editActionPending;
+  const authoringEnabled = nativeRuntime && Boolean(currentGame) && !historyActionBlocked && !trial && !trialPending && !scoring && !scoringPending;
   const canUndo = nativeRuntime && !scoring && !scoringPending && Boolean(trial ? trial.can_undo : currentGame?.can_undo) && !historyActionBlocked && !trialPending;
   const canRedo = nativeRuntime && !scoring && !scoringPending && !trial && Boolean(currentGame?.can_redo) && !historyActionBlocked && !trialPending;
   const canDeleteNode = Boolean(nativeRuntime && !scoring && !scoringPending && !trial && !trialPending && currentGame && !historyActionBlocked);
@@ -846,6 +853,8 @@ export function App() {
     shortcutRegistry.bind("file.save-as", () => {
       if (nativeRuntime && !fileFlowBusy && !departurePending && !matchStarting) void handleSaveSgfDocument(true);
     });
+    shortcutRegistry.bind("file.export-branch", () => void handleExportBranch());
+    shortcutRegistry.bind("file.export-board", () => void handleExportBoard());
     shortcutRegistry.bind("file.copy-sgf", () => {
       void handleCopySgf();
     });
@@ -858,6 +867,9 @@ export function App() {
     shortcutRegistry.bind("edit.redo", () => {
       if (canRedo) void handleHistoryAction("redo");
     });
+    for (const transform of ["swap_colors", "rotate_clockwise", "rotate_counterclockwise", "mirror_horizontal", "mirror_vertical"] as const) {
+      shortcutRegistry.bind(`edit.${transform}`, () => void commitAuthoring({ kind: "transform", transform }));
+    }
     for (const tool of ["label", "letters", "numbers", "circle", "square", "cross", "triangle", "erase"] as const) {
       shortcutRegistry.bind(`markup.${tool}`, () => { if (openEnabled && !trial && !trialPending) setMarkupTool(tool); });
     }
@@ -946,11 +958,15 @@ export function App() {
       if (
         event.key === "Escape"
         && keyboardPlacement
+        && !authorMode
         && !(event.target instanceof Element && event.target.closest('[role="dialog"]'))
       ) {
         event.preventDefault();
         setKeyboardPlacement(false);
         return;
+      }
+      if (event.key === "Escape" && authorMode && !(event.target instanceof Element && event.target.closest('[role="dialog"]'))) {
+        event.preventDefault(); setAuthorMode(null); return;
       }
       shortcutRegistry.dispatch(event);
     }
@@ -983,6 +999,7 @@ export function App() {
     reviewMax,
     departurePrompt,
     keyboardPlacement,
+    authorMode,
     shortcutRegistry,
     functionSearchOpen,
     visibleCurrentFrame,
@@ -1084,6 +1101,7 @@ export function App() {
     if (id === "game.metadata") return editReason;
     if (id === "game.root-setup") return editReason ?? (!canRootSetup ? "reason.noTarget" : undefined);
     if (id === "game.convert-position") return editReason ?? (!canConvertPosition ? "reason.noTarget" : undefined);
+    if (id === "game.continue-ladder" || id.startsWith("authoring.") || ["edit.swap_colors", "edit.rotate_clockwise", "edit.rotate_counterclockwise", "edit.mirror_horizontal", "edit.mirror_vertical"].includes(id)) return editReason;
     if (id.startsWith("game.")) return documentReason;
     if (id === "edit.undo") return documentReason ?? (!canUndo ? "reason.noUndo" : undefined);
     if (id === "edit.redo") return editReason ?? (!canRedo ? "reason.noRedo" : undefined);
@@ -1104,6 +1122,18 @@ export function App() {
   const functionCatalog: FunctionSearchAction[] = [
     ...registeredFunctionCatalog(shortcutRegistry, searchActionDisabled),
     { id: "help.about", label: "action.help.about", keywords: ["关于", "guanyu", "about", "version", "build"], execute: openAbout },
+    ...([
+      ["authoring.black", "authoring.black", "black", false],
+      ["authoring.white", "authoring.white", "white", false],
+      ["authoring.alternate", "authoring.alternate", null, false],
+      ["authoring.insert-black", "authoring.insertBlack", "black", true],
+      ["authoring.insert-white", "authoring.insertWhite", "white", true],
+      ["authoring.insert-alternate", "authoring.insertAlternate", null, true]
+    ] as const).map(([id, label, color, insert]): FunctionSearchAction => ({ id, label,
+      keywords: ["棋子编辑", "qizibianji", "authoring", insert ? "insert" : "add", color ?? "alternate"],
+      disabledReason: searchActionDisabled(id), execute: () => chooseAuthorMode(color, insert) })),
+    { id: "game.continue-ladder", label: "action.game.continue-ladder", keywords: ["征子", "zhengzi", "ladder", "continue"],
+      disabledReason: searchActionDisabled("game.continue-ladder"), execute: () => void commitAuthoring({ kind: "continue_ladder" }) },
     ...([
       ["prefs.candidate-limit", "target.prefs.candidate-limit", ["候选", "houxuan", "candidate", "limit", "settings"]],
       ["prefs.replay-interval", "target.prefs.replay-interval", ["变化", "bianhua", "variation", "replay", "interval"]],
@@ -2573,6 +2603,31 @@ export function App() {
     }
   }
 
+  async function handleExportBranch() {
+    const current = currentGameRef.current;
+    if (!nativeRuntime || !current || exportPendingRef.current || departurePendingRef.current) return;
+    exportPendingRef.current = true;
+    try {
+      const leaf = chosenLeaf(current.tree, current.selected_path, chosenChildren);
+      const path = await exportSelectedLine(current.generation, current.selected_path, leaf);
+      setMessage(path ? `${t("export.saved")}${path}` : t("export.cancelled"));
+    } catch (error) {
+      setMessage(`${t("export.failed")}${errorMessage(error)}`);
+    } finally { exportPendingRef.current = false; }
+  }
+
+  async function handleExportBoard() {
+    if (!nativeRuntime || exportPendingRef.current || departurePendingRef.current) return;
+    exportPendingRef.current = true;
+    try {
+      const snapshot = captureRenderedSurface(mainboardSurfaceRef.current);
+      const path = await exportRenderedImage(snapshot);
+      setMessage(path ? `${t("export.saved")}${path}` : t("export.cancelled"));
+    } catch (error) {
+      setMessage(`${t("export.failed")}${errorMessage(error)}`);
+    } finally { exportPendingRef.current = false; }
+  }
+
   async function handleSaveSgfDocument(saveAs = false) {
     if (!nativeRuntime) {
       setMessage(nativeCurrentGameUnavailable);
@@ -3817,6 +3872,40 @@ export function App() {
     }
   }
 
+  function chooseAuthorMode(color: PlayerColor | null, insert: boolean) {
+    if (!authoringEnabled) return;
+    setMarkupTool("play"); setAuthorMode({ color, insert }); setAutoPlaying(false);
+  }
+
+  async function commitAuthoring(action: SgfAuthoringActionDto, captured?: ReviewPresentationScope) {
+    const before = currentGameRef.current;
+    if (!nativeRuntime || !before || matchOwnsWorkspace() || externalBlocked || documentFlowBusy
+      || trialRef.current || trialTransitionRef.current || scoringRef.current || scoringPendingRef.current
+      || editActionPendingRef.current || navigatingRef.current || queuedSelectionRef.current) return;
+    if (captured && (captured.generation !== before.generation || !samePath({ indices: [...captured.selectedPath] }, before.selected_path))) {
+      setBoardIntentFeedback(t("authoring.stale")); return;
+    }
+    if (action.kind === "drag" && (!preferences.allowDrag || engineSnapshotRef.current.game_move_job)) return;
+    editActionPendingRef.current = true; setEditActionPending(true); setAutoPlaying(false);
+    try {
+      const result = await authorCurrentGame(before.selected_path, before.generation, action);
+      const latest = currentGameRef.current;
+      if (!latest || latest.generation !== before.generation || latest.snapshot_seq > result.snapshot_seq) return;
+      adoptCurrentGame(result); pendingSelectedPathRef.current = result.selected_path;
+      setChosenChildren(chosenFromPath(result.selected_path)); setDirty(result.dirty);
+      setCurrentMove(result.snapshot.position.move_number); setSelectedCandidateIndex(null);
+      setBoardIntentFeedback(null); setMessage(t("authoring.accepted"));
+      if (result.generation !== before.generation) {
+        clearReviewData(); await abandonAnalysisSessions();
+        const artifacts = await artifactsFromCurrentGame();
+        if (isCurrentDocumentGeneration(result.generation)) setGame(artifacts.projection);
+      }
+    } catch (error) {
+      const feedback = `${t("authoring.failed")}${errorMessage(error)}`;
+      setBoardIntentFeedback(feedback); setMessage(feedback);
+    } finally { editActionPendingRef.current = false; setEditActionPending(false); }
+  }
+
   function handleBoardPoint(point: PointDto) {
     if (externalBlocked) return;
     if (matchOwnsWorkspace()) { void handleHumanAction({ kind: "play", vertex: { point } }); return; }
@@ -3834,6 +3923,7 @@ export function App() {
     }
     const before = currentGameRef.current;
     if (markupTool === "play") {
+      if (authorMode) { void commitAuthoring({ kind: "add", point, ...authorMode }); return; }
       void playAt({ point });
       return;
     }
@@ -4114,6 +4204,10 @@ export function App() {
     <AppChrome
       onBeforeFunctionSearch={() => { if (workspaceRef.current) chromeSearchSourceRef.current = captureFocusReturn(workspaceRef.current); }}
       onFunctionSearch={() => openFunctionSearch(true)}
+      authoringEnabled={authoringEnabled}
+      onAuthorMode={chooseAuthorMode}
+      onTransform={(transform: SgfTransformDto) => void commitAuthoring({ kind: "transform", transform })}
+      onContinueLadder={() => void commitAuthoring({ kind: "continue_ladder" })}
       windowPin={windowPin}
       saveBusy={fileFlowBusy || departurePending || matchStarting || Boolean(departurePrompt) || Boolean(teardownPrompt)}
       matchBlocked={matchBlocked}
@@ -4208,6 +4302,8 @@ export function App() {
       nativeUnavailable={nativeCurrentGameUnavailable}
       onSave={() => void handleSaveSgfDocument(false)}
       onSaveAs={() => void handleSaveSgfDocument(true)}
+      onExportBranch={() => void handleExportBranch()}
+      onExportBoard={() => void handleExportBoard()}
       onLoadSample={() => void loadSample()}
       onParse={() => void handleParseSgf()}
       onFakeAnalyze={() => void handleFakeAnalyze()}
@@ -4336,11 +4432,13 @@ export function App() {
           ["play", "落子"], ["label", "文字"], ["letters", "字母"], ["numbers", "数字"],
           ["circle", "圆"], ["square", "方"], ["cross", "叉"], ["triangle", "三角"], ["erase", "擦除"]
         ] as const).map(([tool, label]) => <button key={tool} type="button" aria-pressed={markupTool === tool}
-          disabled={!nativeRuntime || !currentGame || historyActionBlocked || trialPending || scoringPending || Boolean(scoring) || (tool !== "play" && Boolean(trial))} onClick={() => setMarkupTool(tool)}>{label}</button>)}
+          disabled={!nativeRuntime || !currentGame || historyActionBlocked || trialPending || scoringPending || Boolean(scoring) || (tool !== "play" && Boolean(trial))} onClick={() => { setAuthorMode(null); setMarkupTool(tool); }}>{label}</button>)}
+        {authorMode ? <button type="button" onClick={() => setAuthorMode(null)}>{t("authoring.cancel")}</button> : null}
         <button type="button" disabled={!nativeRuntime || !currentGame || historyActionBlocked || trialPending || scoringPending || Boolean(scoring) || Boolean(trial)}
           onClick={() => void commitMarkup({ kind: "clear" })}>清空标记</button>
       </div>
         <BoardCanvas
+          surfaceRef={mainboardSurfaceRef}
           position={rootSetupDraft ? { ...currentPosition, stones: rootSetupDraft.stones, to_play: rootSetupDraft.toPlay, last_move: null, move_number: 0 } : currentPosition}
           markup={reviewGame?.snapshot.markup}
           analysis={rootSetupDraft || scoring ? undefined : visibleCurrentFrame}
@@ -4357,6 +4455,11 @@ export function App() {
           pvPrefixLength={replayPrefix}
           replayCandidateIndex={activeCandidateIndex}
           onPointClick={handleBoardPoint}
+          allowDrag={preferences.allowDrag && authoringEnabled && !engineSnapshot.game_move_job}
+          allowDoubleClick={preferences.allowDoubleClick}
+          authoringEnabled={authoringEnabled}
+          onAuthoring={(action, captured) => void commitAuthoring(action, captured)}
+          onGestureRefused={setBoardIntentFeedback}
           keyboardPlacement={keyboardPlacement}
           nextMoveMode={rootSetupDraft || scoring ? "off" : preferences.nextMoveReviewMarker}
           nextMoveMarkers={rootSetupDraft || scoring ? [] : nextMoveMarkers}

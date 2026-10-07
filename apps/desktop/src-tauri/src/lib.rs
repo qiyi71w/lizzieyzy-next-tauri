@@ -38,6 +38,7 @@ mod file_activation;
 mod human_match;
 mod readboard;
 mod save_as;
+mod export;
 mod session_recovery;
 #[cfg(windows)]
 extern crate windows_core;
@@ -311,6 +312,18 @@ fn play_current_game(
     vertex: MoveVertex,
 ) -> Result<CurrentGameResultDto, String> {
     state.play(path, vertex).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn author_current_game(
+    state: State<CurrentGameState>,
+    generation: u64,
+    path: NodePath,
+    action: app_model::SgfAuthoringActionDto,
+) -> Result<CurrentGameResultDto, String> {
+    state
+        .author(generation, path, action)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1115,6 +1128,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            export::export_selected_line,
+            export::export_rendered_image,
             external_sync::external_sync_snapshot,
             external_sync::load_yike_sync_preferences,
             external_sync::save_yike_sync_preferences,
@@ -1191,6 +1206,7 @@ pub fn run() {
             select_current_game_node,
             find_current_game_recorded_point,
             play_current_game,
+            author_current_game,
             set_current_game_personal_comment,
             set_current_game_metadata,
             edit_current_game_markup,
