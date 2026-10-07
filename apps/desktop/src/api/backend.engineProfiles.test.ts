@@ -140,4 +140,17 @@ describe("browser engine profile persistence", () => {
     expect(await loadEngineProfilesSettings()).toEqual(current);
     expect(localStorage.getItem(key)).toBe(raw);
   });
+
+  it("keeps committed order when a late full editor save carries an older order", async () => {
+    const stale = catalog();
+    await saveEngineProfilesSettings(stale);
+    await reorderEngineProfilesSettings({ expected_profile_ids: ["kata", "gtp"], profile_ids: ["gtp", "kata"] });
+    stale.profiles[0].profile.name = "Late editor save";
+    const extra = { ...stale.profiles[0], id: "new" };
+    stale.profiles.unshift(extra);
+    const saved = await saveEngineProfilesSettings(stale);
+    expect(saved.profiles.map((record) => record.id)).toEqual(["gtp", "kata", "new"]);
+    expect(saved.profiles[1].profile.name).toBe("Late editor save");
+    expect(await loadEngineProfilesSettings()).toEqual(saved);
+  });
 });

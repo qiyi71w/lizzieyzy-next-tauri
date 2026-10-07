@@ -509,6 +509,17 @@ export async function loadEngineProfilesSettings(): Promise<EngineProfilesSettin
 export async function saveEngineProfilesSettings(settings: EngineProfilesSettingsDto): Promise<EngineProfilesSettingsDto> {
   if (!isTauriRuntime()) {
     const normalized = decodeEngineProfilesSettings(settings, false);
+    const current = loadBrowserEngineProfilesSettings();
+    const records = new Map(normalized.profiles.map((record) => [record.id, record]));
+    const retained: EngineProfileRecordDto[] = [];
+    for (const record of current.profiles) {
+      const saved = records.get(record.id);
+      if (saved) {
+        retained.push(saved);
+        records.delete(record.id);
+      }
+    }
+    normalized.profiles = [...retained, ...records.values()];
     saveBrowserEngineProfilesSettings(normalized);
     return normalized;
   }

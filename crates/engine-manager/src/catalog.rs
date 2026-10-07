@@ -221,6 +221,21 @@ pub fn save_engine_profiles(
     Ok(settings)
 }
 
+pub fn prepare_engine_profiles_save(
+    current: &EngineProfilesSettings,
+    settings: EngineProfilesSettings,
+) -> Result<EngineProfilesSettings, String> {
+    let mut settings = normalize_engine_profiles(settings)?;
+    let mut destination = 0;
+    for existing in &current.profiles {
+        if let Some(offset) = settings.profiles[destination..].iter().position(|record| record.id == existing.id) {
+            settings.profiles[destination..=destination + offset].rotate_right(1);
+            destination += 1;
+        }
+    }
+    Ok(settings)
+}
+
 pub fn reorder_engine_profiles(
     path: &Path,
     current: EngineProfilesSettings,

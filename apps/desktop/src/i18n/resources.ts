@@ -31,7 +31,17 @@ export const baseResources = {
   "target.engine.config-path": "引擎设置：配置路径",
   "target.game.komi": "棋局信息：贴目",
   "target.game.black-name": "棋局信息：黑方姓名",
-  "target.game.white-name": "棋局信息：白方姓名"
+  "target.game.white-name": "棋局信息：白方姓名",
+  "engineOrder.title": "已保存档案顺序",
+  "engineOrder.hint": "排序立即保存；不会应用当前草稿或切换引擎。",
+  "engineOrder.top": "置首",
+  "engineOrder.up": "上移",
+  "engineOrder.down": "下移",
+  "engineOrder.bottom": "置尾",
+  "engineOrder.saving": "正在保存档案顺序…",
+  "engineOrder.saved": "档案顺序已保存。",
+  "engineOrder.failed": "排序未保存；保留原顺序。请检查错误，必要时重新加载配置后重试。",
+  "engineOrder.busy": "请等待当前档案操作完成。"
 } as const;
 
 export type ResourceKey = keyof typeof baseResources;

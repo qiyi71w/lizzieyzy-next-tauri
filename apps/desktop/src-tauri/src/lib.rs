@@ -7,7 +7,7 @@ use app_model::{
     ReadboardSidecarSyncSnapshotResult, StoneDto,
 };
 use engine_manager::{
-    build_command_spec, check_assets, default_engine_profiles_settings, normalize_engine_profiles,
+    build_command_spec, check_assets, default_engine_profiles_settings,
     parse_engine_profiles, save_engine_profiles as persist_engine_profiles, AssetCheck, CommandSpec,
     EngineProfileCatalog, EngineProfilesSettings as EngineProfilesSettingsDto, ForegroundEngineConfig,
     ForegroundEngineManager, SavedEngineProfile, SelectedNodeJobRequest, WholeGameWorkItem,
@@ -570,7 +570,7 @@ fn save_engine_profiles_at_path(
     current: &EngineProfilesSettingsDto,
     settings: EngineProfilesSettingsDto,
 ) -> Result<EngineProfilesSettingsDto, String> {
-    let settings = normalize_engine_profiles(settings)?;
+    let settings = engine_manager::prepare_engine_profiles_save(current, settings)?;
     for record in &current.profiles {
         if !settings.profiles.iter().any(|next| next.id == record.id) {
             manager
@@ -1346,6 +1346,30 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), before);
         assert_eq!(engine_manager::load_engine_profiles(&path).unwrap(), reordered);
         assert_eq!(manager.snapshot(), runtime);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn gateway_late_full_save_keeps_committed_order_and_appends_new_profiles() {
+        let directory = std::env::temp_dir().join(format!("profile-late-save-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("catalog.json");
+        let mut stale = default_engine_profiles_settings();
+        let mut second = stale.profiles[0].clone();
+        second.id = "second".into();
+        stale.profiles.push(second);
+        let mut current = stale.clone();
+        current.profiles.reverse();
+        persist_engine_profiles(&path, current.clone()).unwrap();
+        stale.profiles[0].profile.name = "Late editor save".into();
+        let mut new_record = stale.profiles[0].clone();
+        new_record.id = "new".into();
+        stale.profiles.insert(0, new_record);
+        let manager = ForegroundEngineManager::new(std::sync::Arc::new(engine_manager::InMemoryEngineProfileCatalog::new()), ForegroundEngineConfig::for_tests());
+        let saved = save_engine_profiles_at_path(&path, &manager, &current, stale).unwrap();
+        assert_eq!(saved.profiles.iter().map(|record| record.id.as_str()).collect::<Vec<_>>(), ["second", "default", "new"]);
+        assert_eq!(saved.profiles[1].profile.name, "Late editor save");
+        assert_eq!(engine_manager::load_engine_profiles(&path).unwrap(), saved);
         std::fs::remove_dir_all(directory).unwrap();
     }
 

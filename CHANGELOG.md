@@ -4,7 +4,7 @@
 
 ### English
 
-- Added a stable-ID engine catalog reorder transaction with complete-set and stale-order validation, atomic persistence, no-op boundaries, and preservation of the latest profile records, Settings selection and Autoload Default.
+- Added localized first/up/down/last controls for saved engine profiles, backed by stable-ID complete-set/stale-order validation and atomic persistence. Reorder preserves editor drafts, Settings selection, Autoload Default and immutable Run/job identities; failed writes retain the old order and show the full error.
 - Added an offline Function Search panel shared by Help, the fixed toolbar and registry-owned Ctrl/Command+K, with a real candidate-limit settings target and the Chinese compatibility resource/fallback foundation.
 - Added an independent Tencent kifu center with username/chessId lookup, cancellable previews, cursor continuation across 25-row pages, eight-entry query history, and explicit SGF-07 import. Complete-tree normalization preserves game metadata and effective komi through Save/reopen; requests consume the shared network policy.
 - Preserved accepted Tencent history writes across provider-panel changes and retained failed clear/query intent for visible retry after reopening the center.
@@ -52,7 +52,7 @@
 
 ### 中文
 
-- 新增 stable ID 引擎档案顺序事务：校验完整集合和过期顺序，原子持久化、同序不写盘，保留最新档案内容、设置选择和 Autoload Default。
+- 新增引擎档案置首／上移／下移／置尾控件并接入共享本地化资源，以 stable ID 校验完整集合和过期顺序后原子持久化。排序保留编辑草稿、设置选择、Autoload Default 和不可变 Run／Job 身份；写盘失败保留原顺序并完整显示错误。
 - 新增独立 Tencent 棋谱中心：username／chessId 查询、可取消预览、25局分页与游标续取、最多8条查询历史及显式 SGF-07 导入。完整树正规化保留棋谱元数据和有效贴目，保存重开一致；远程请求消费共享网络策略。
 - Tencent 查询历史写入跨来源面板切换保持顺序；清除或查询保存失败后，重开中心仍可见并重试原操作。
 - 新增 Yike Start sync／Play & Sync：Rust 唯一只读会话、有界失败暂停与 Retry、Stop 后恢复编辑、同手数来源修订、独立同步偏好及系统浏览器交接；Save As 保存调用时快照，期间新帧仍保持未保存。
