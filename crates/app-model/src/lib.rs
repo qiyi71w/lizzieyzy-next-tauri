@@ -209,6 +209,34 @@ pub enum SgfMarkupActionDto {
     Point { point: PointDto, tool: SgfMarkupToolDto },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SgfTransformDto {
+    RotateClockwise,
+    RotateCounterclockwise,
+    MirrorHorizontal,
+    MirrorVertical,
+    SwapColors,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SgfAuthoringActionDto {
+    Add {
+        point: PointDto,
+        color: Option<PlayerColor>,
+        insert: bool,
+    },
+    Drag {
+        from: PointDto,
+        to: PointDto,
+    },
+    Transform {
+        transform: SgfTransformDto,
+    },
+    ContinueLadder,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SelectedNodeSnapshotDto {
     pub path: NodePath,

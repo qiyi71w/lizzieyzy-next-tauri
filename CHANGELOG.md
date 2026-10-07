@@ -4,6 +4,7 @@
 
 ### English
 
+- Added Rust-owned real black/white/alternate moves, branch-preserving insertion, recorded/setup-stone drag, whole-tree coordinate/color transforms and source-compatible ladder continuation. Each effective transaction shares one Undo/Redo unit and rejects stale identities or illegal affected descendants before mutation. Drag defaults off and double-click defaults on through the existing atomic preferences owner.
 - Added an offline Function Search panel shared by Help, the fixed toolbar and registry-owned Ctrl/Command+K, with a real candidate-limit settings target and the Chinese compatibility resource/fallback foundation.
 - Added an independent Tencent kifu center with username/chessId lookup, cancellable previews, cursor continuation across 25-row pages, eight-entry query history, and explicit SGF-07 import. Complete-tree normalization preserves game metadata and effective komi through Save/reopen; requests consume the shared network policy.
 - Preserved accepted Tencent history writes across provider-panel changes and retained failed clear/query intent for visible retry after reopening the center.

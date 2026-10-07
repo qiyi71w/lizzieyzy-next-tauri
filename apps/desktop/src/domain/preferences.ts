@@ -25,6 +25,8 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   windowGeometry: WindowGeometryDto | null;
   workspaceVisibility: WorkspaceVisibilityDto;
   mainWindowAlwaysOnTop: boolean;
+  allowDrag: boolean;
+  allowDoubleClick: boolean;
   showCoordinates: boolean;
   showMoveNumbers: boolean;
   showOwnership: boolean;
@@ -75,6 +77,8 @@ export const defaultAppPreferences: AppPreferences = {
   windowGeometry: null,
   workspaceVisibility: { left: true, right: true },
   mainWindowAlwaysOnTop: false,
+  allowDrag: false,
+  allowDoubleClick: true,
   showCoordinates: true,
   showMoveNumbers: false,
   showOwnership: true,
@@ -208,6 +212,8 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
       right: booleanValue(value?.workspaceVisibility?.right, true)
     },
     mainWindowAlwaysOnTop: booleanValue(value?.mainWindowAlwaysOnTop, false),
+    allowDrag: booleanValue(value?.allowDrag, false),
+    allowDoubleClick: booleanValue(value?.allowDoubleClick, true),
     showCoordinates: booleanValue(value?.showCoordinates, defaultAppPreferences.showCoordinates),
     showMoveNumbers: booleanValue(value?.showMoveNumbers, defaultAppPreferences.showMoveNumbers),
     showOwnership: booleanValue(value?.showOwnership, defaultAppPreferences.showOwnership),

@@ -103,6 +103,8 @@ These gaps are tracked individually in `PARITY_MATRIX.md`. Provider, adapter, ga
 
 The wire cutover starts in `crates/app-model`, then updates the TypeScript copies in `apps/desktop/src/domain`. The shared location value is `NodePath`: a zero-based child-index path from the root (`[]`, `[0]`, `[0, 1]`). It is a location in the current tree, not a hash, fingerprint, or permanent node identity.
 
+R11-02 extends the existing history seam with Rust-owned real-move authoring/insertion, origin-preserving recorded and starting-stone drag, complete-tree rotate/mirror/color exchange, and source-compatible ladder continuation. Menu/context intents remain frontend API consumers; rule validation, SGF properties, ordered branches and atomic reversals remain crate-owned. The durable drag/double-click permissions share PREF-01. Candidate Rust and controlled-browser evidence is distinct from the required integrated Windows drag/edit/transform/ladder/Undo/Save-reopen gate.
+
 Required invariants:
 
 - The DTO can represent every child, supported property, setup state, move, comment, and metadata value needed by the UI.

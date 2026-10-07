@@ -42,6 +42,10 @@ pub struct AppPreferencesDto {
     pub workspace_visibility: app_model::WorkspaceVisibilityDto,
     #[serde(default)]
     pub main_window_always_on_top: bool,
+    #[serde(default)]
+    pub allow_drag: bool,
+    #[serde(default = "default_allow_double_click")]
+    pub allow_double_click: bool,
     #[serde(default = "default_continuous_analysis_enabled")]
     pub continuous_analysis_enabled: bool,
     #[serde(flatten)]
@@ -127,6 +131,10 @@ pub struct AppPreferencesLoadResultDto {
     pub recovery: Option<AppPreferencesRecoveryDto>,
 }
 
+fn default_allow_double_click() -> bool {
+    true
+}
+
 fn default_show_coordinates() -> bool {
     true
 }
@@ -161,6 +169,8 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         window_geometry: None,
         workspace_visibility: app_model::WorkspaceVisibilityDto::default(),
         main_window_always_on_top: false,
+        allow_drag: false,
+        allow_double_click: true,
         continuous_analysis_enabled: default_continuous_analysis_enabled(),
         continuous_budget: ContinuousAnalysisBudgetDto::default(),
         show_coordinates: default_show_coordinates(),
@@ -627,6 +637,8 @@ mod tests {
                 right: true,
             },
             main_window_always_on_top: false,
+            allow_drag: false,
+            allow_double_click: true,
             continuous_analysis_enabled: false,
             continuous_budget: ContinuousAnalysisBudgetDto {
                 continuous_time_limit_enabled: false,

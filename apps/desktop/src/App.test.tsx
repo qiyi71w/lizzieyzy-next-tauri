@@ -37,6 +37,7 @@ const backend = vi.hoisted(() => ({
   serializeCurrentGame: vi.fn(() => Promise.resolve("(;SZ[9])")),
   projectCurrentGameMainline: vi.fn(),
   playCurrentGame: vi.fn(),
+  authorCurrentGame: vi.fn(),
   applyRootSetup: vi.fn(),
   convertToRootSetup: vi.fn(),
   selectCurrentGameNode: vi.fn(),
@@ -970,6 +971,35 @@ describe("node markup authoring", () => {
     expect(backend.playCurrentGame).not.toHaveBeenCalled();
     await act(async () => { buttonLabeled(host, "清空标记").click(); await Promise.resolve(); });
     expect(backend.editCurrentGameMarkup).toHaveBeenLastCalledWith({ indices: [] }, 1, { kind: "clear" });
+  });
+});
+
+describe("App authoring", () => {
+  it("dispatches a forced actual move through the authoring wrapper, never ordinary play", async () => {
+    backend.authorCurrentGame.mockResolvedValue({ ...initialGame, generation:2, snapshot_seq:2, dirty:true, can_undo:true });
+    const host = await renderApp();
+    act(()=>buttonNamed(host,"编辑").click()); act(()=>buttonNamed(host,"添加黑子").click());
+    const canvas=requiredElement<HTMLCanvasElement>(host,'canvas[aria-label="棋盘"]');
+    canvas.getBoundingClientRect=()=>new DOMRect(0,0,500,500);
+    await act(async()=>{ canvas.dispatchEvent(new MouseEvent("click",{bubbles:true,clientX:250,clientY:250})); await Promise.resolve(); });
+    await flushLast(backend.authorCurrentGame);
+    expect(backend.authorCurrentGame).toHaveBeenCalledWith({indices:[]},1,{kind:"add",point:{x:4,y:4},color:"black",insert:false});
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("棋谱编辑已接受。");
+  });
+  it("exposes Rust transform errors and ladder through real menu actions", async () => {
+    backend.authorCurrentGame.mockRejectedValueOnce(new Error("Rotation requires a square board"));
+    const host=await renderApp();
+    act(()=>buttonNamed(host,"编辑").click());
+    act(()=>buttonNamed(host,"向右旋转(Ctrl+Alt+Right)").click());
+    await act(async()=>{ await expect(backend.authorCurrentGame.mock.results.at(-1)?.value).rejects.toThrow("Rotation requires a square board"); });
+    expect(backend.authorCurrentGame).toHaveBeenLastCalledWith({indices:[]},1,{kind:"transform",transform:"rotate_clockwise"});
+    expect(host.textContent).toContain("棋谱编辑失败：Rotation requires a square board");
+    backend.authorCurrentGame.mockRejectedValueOnce(new Error("Ladder continuation requires five coordinate moves"));
+    act(()=>buttonNamed(host,"棋局").click()); act(()=>buttonNamed(host,"继续征子").click());
+    await act(async()=>{ await expect(backend.authorCurrentGame.mock.results.at(-1)?.value).rejects.toThrow("Ladder continuation requires five coordinate moves"); });
+    expect(backend.authorCurrentGame).toHaveBeenLastCalledWith({indices:[]},1,{kind:"continue_ladder"});
+    expect(host.textContent).toContain("Ladder continuation requires five coordinate moves");
   });
 });
 
