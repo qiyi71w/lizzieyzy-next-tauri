@@ -14,6 +14,7 @@ pub struct AnalysisQuery {
     pub moves: Vec<KataMove>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub initial_stones: Vec<KataMove>,
+    #[serde(serialize_with = "serialize_analysis_rules")]
     pub rules: String,
     pub komi: f32,
     pub board_x_size: u8,
@@ -30,6 +31,15 @@ pub struct AnalysisQuery {
     pub report_during_search_every: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub override_settings: Option<ContinuousSearchSettings>,
+}
+
+fn serialize_analysis_rules<S: serde::Serializer>(rules: &str, serializer: S) -> Result<S::Ok, S::Error> {
+    // Yike SGFs use RU[cn]; preserve the source and translate only at the engine boundary.
+    serializer.serialize_str(if rules.eq_ignore_ascii_case("cn") {
+        "chinese"
+    } else {
+        rules
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -626,6 +636,27 @@ mod tests {
             max_visits: Some(128),
             include_ownership: Some(true),
             include_policy: Some(false),
+        }
+    }
+
+    #[test]
+    fn rule_encoding_maps_only_the_confirmed_cn_alias() {
+        for (source, expected) in [
+            ("cn", "chinese"),
+            ("CN", "chinese"),
+            ("chinese", "chinese"),
+            ("chinese-kgs", "chinese-kgs"),
+            ("japanese", "japanese"),
+            ("new-zealand", "new-zealand"),
+            ("cn-unknown", "cn-unknown"),
+            ("unknown", "unknown"),
+        ] {
+            let mut options = options(0);
+            options.rules = source.to_string();
+            let query = analysis_query_from_game(&game(vec![]), options).unwrap();
+            let wire: serde_json::Value = serde_json::from_str(&query.to_jsonl().unwrap()).unwrap();
+            assert_eq!(wire["rules"], expected, "source rule: {source}");
+            assert_eq!(query.rules, source);
         }
     }
 

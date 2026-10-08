@@ -188,6 +188,8 @@ SGF parsing, replay, and serialization plus Tygem GIB import. GIB accepts UTF-8 
 
 KataGo analysis JSONL query/response modeling and normalization. Raw engine JSON should remain here or in engine-manager helpers; the UI should receive `AnalysisFrameDto`.
 
+`AnalysisQuery` serialization translates Yike's case-insensitive `cn` alias to KataGo's `chinese` rule name. This is an engine-wire conversion only: the query's source value, SGF `RU`, metadata and personal comments remain intact. Other rule names pass through unchanged so unsupported rules retain the engine's explicit error; this does not broaden exact-position match admission or change local scoring inference.
+
 ### `crates/analysis-core`
 
 Analysis-derived helpers such as candidate sorting and problem marker classification.

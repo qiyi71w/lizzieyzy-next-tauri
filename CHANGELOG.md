@@ -4,6 +4,7 @@
 
 ### English
 
+- Fixed KataGo analysis of Yike games containing `RU[cn]` by encoding the rule as `chinese` at the engine boundary. SGF Save/reopen retains the original rule, metadata and personal comments; unknown rules remain explicit engine errors.
 - Fixed authoring Undo/Redo carrying newly attached analysis onto the other board position when its original analysis slots were empty. Drag, whole-tree transforms and insertion now exchange affected payloads with their corresponding positions while preserving later unrelated analysis and SGF Save/reopen semantics.
 - Fixed Function Search's keyboard Close activation executing the selected result instead of cancelling. Input and result-button Enter keep exact-once execution and disabled guards; cancellation restores legal source focus.
 
@@ -68,6 +69,7 @@
 
 ### 中文
 
+- 修复弈客 `RU[cn]` 棋谱的 KataGo 分析：仅在引擎请求编码时转换为 `chinese`，SGF 保存重开保留原规则、元数据与个人评论，未知规则继续明确报错。
 - 修复原分析槽位为空时，棋谱编辑 Undo/Redo 将后来附着的分析带入另一局面的问题。拖动、全树变换与列表插入按对应局面交换受影响分析，保留无关节点后来的分析及 SGF 保存重开语义。
 - 修复功能搜索中关闭按钮按 Enter 时误执行选中结果：关闭只取消并恢复合法来源焦点，输入框和结果按钮的 Enter 保持一次执行及禁用守卫。
 
