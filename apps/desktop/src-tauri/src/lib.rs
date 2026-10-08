@@ -91,7 +91,7 @@ impl EngineProfileCatalog for DiskEngineCatalog {
     fn autoload_profile_id(&self) -> Option<String> {
         load_engine_profiles_from_disk(&self.handle)
             .ok()
-            .and_then(|settings| settings.autoload_profile_id)
+            .and_then(|settings| settings.startup_profile_id().map(str::to_owned))
     }
 }
 
@@ -1369,7 +1369,7 @@ mod tests {
         second.id = "second".into();
         second.profile.name = "Second".into();
         current.profiles.push(second);
-        current.autoload_profile_id = Some("second".into());
+        current.startup = app_model::EngineStartupPolicyDto::Fixed { profile_id: "second".into() };
         let request = app_model::EngineProfileOrderRequestDto {
             expected_profile_ids: vec!["default".into(), "second".into()],
             profile_ids: vec!["second".into(), "default".into()],
@@ -1386,7 +1386,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(reordered.selected_profile_id, current.selected_profile_id);
-        assert_eq!(reordered.autoload_profile_id, current.autoload_profile_id);
+        assert_eq!(reordered.startup, current.startup);
         assert_eq!(reordered.profiles[1], current.profiles[0]);
         assert_eq!(manager.snapshot(), runtime);
         let before = std::fs::read(&path).unwrap();

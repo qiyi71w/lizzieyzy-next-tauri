@@ -1,4 +1,4 @@
-use app_model::{EngineAdapterSettings, EngineProfileDto, KataGoSettings};
+use app_model::{EngineAdapterSettings, EngineProfileDto, EngineStartupPolicyDto, KataGoSettings};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 pub const DEFAULT_ENGINE_PROFILE_ID: &str = "default";
-pub const ENGINE_PROFILES_VERSION: u32 = 1;
+pub const ENGINE_PROFILES_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SavedEngineProfile {
@@ -27,9 +27,36 @@ pub struct EngineProfileRecord {
 pub struct EngineProfilesSettings {
     pub version: u32,
     pub selected_profile_id: String,
+    pub startup: EngineStartupPolicyDto,
     #[serde(default)]
-    pub autoload_profile_id: Option<String>,
+    pub last_primary_profile_id: Option<String>,
     pub profiles: Vec<EngineProfileRecord>,
+}
+
+impl EngineProfilesSettings {
+    pub fn startup_profile_id(&self) -> Option<&str> {
+        match &self.startup {
+            EngineStartupPolicyDto::Off => None,
+            EngineStartupPolicyDto::Fixed { profile_id } => Some(profile_id),
+            EngineStartupPolicyDto::LastPrimary => self.last_primary_profile_id.as_deref(),
+        }
+    }
+}
+
+fn legacy_startup(profile_id: Option<String>) -> EngineStartupPolicyDto {
+    profile_id.map_or(EngineStartupPolicyDto::Off, |profile_id| {
+        EngineStartupPolicyDto::Fixed { profile_id }
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VersionOneEngineProfilesSettings {
+    version: u32,
+    selected_profile_id: String,
+    #[serde(default)]
+    autoload_profile_id: Option<String>,
+    profiles: Vec<EngineProfileRecord>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -140,7 +167,8 @@ pub fn default_engine_profiles_settings() -> EngineProfilesSettings {
     EngineProfilesSettings {
         version: ENGINE_PROFILES_VERSION,
         selected_profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
-        autoload_profile_id: None,
+        startup: EngineStartupPolicyDto::Off,
+        last_primary_profile_id: None,
         profiles: vec![default_engine_profile_record()],
     }
 }
@@ -174,17 +202,31 @@ pub fn load_engine_profiles(path: &Path) -> Result<EngineProfilesSettings, Strin
 pub fn parse_engine_profiles(contents: &str) -> Result<EngineProfilesSettings, String> {
     let value: serde_json::Value = serde_json::from_str(contents).map_err(|err| err.to_string())?;
     let settings = if let Some(version) = value.get("version") {
-        if version.as_u64() != Some(u64::from(ENGINE_PROFILES_VERSION)) {
-            return Err(format!("unsupported engine profiles version: {version}"));
+        match version.as_u64() {
+            Some(1) => {
+                let old: VersionOneEngineProfilesSettings =
+                    serde_json::from_value(value).map_err(|err| err.to_string())?;
+                debug_assert_eq!(old.version, 1);
+                EngineProfilesSettings {
+                    version: ENGINE_PROFILES_VERSION,
+                    selected_profile_id: old.selected_profile_id,
+                    startup: legacy_startup(old.autoload_profile_id),
+                    last_primary_profile_id: None,
+                    profiles: old.profiles,
+                }
+            }
+            Some(2) => serde_json::from_value::<EngineProfilesSettings>(value)
+                .map_err(|err| err.to_string())?,
+            _ => return Err(format!("unsupported engine profiles version: {version}")),
         }
-        serde_json::from_value::<EngineProfilesSettings>(value).map_err(|err| err.to_string())?
     } else if value.get("profiles").is_some() {
         let legacy =
             serde_json::from_value::<LegacyEngineProfilesSettings>(value).map_err(|err| err.to_string())?;
         EngineProfilesSettings {
             version: ENGINE_PROFILES_VERSION,
             selected_profile_id: legacy.selected_profile_id,
-            autoload_profile_id: legacy.autoload_profile_id,
+            startup: legacy_startup(legacy.autoload_profile_id),
+            last_primary_profile_id: None,
             profiles: legacy
                 .profiles
                 .into_iter()
@@ -202,7 +244,8 @@ pub fn parse_engine_profiles(contents: &str) -> Result<EngineProfilesSettings, S
         EngineProfilesSettings {
             version: ENGINE_PROFILES_VERSION,
             selected_profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
-            autoload_profile_id: None,
+            startup: EngineStartupPolicyDto::Off,
+            last_primary_profile_id: None,
             profiles: vec![EngineProfileRecord {
                 id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
                 profile: legacy.profile.migrate(legacy.max_visits)?,
@@ -221,11 +264,28 @@ pub fn save_engine_profiles(
     Ok(settings)
 }
 
+/// Save only a successfully established primary, after a confirmed graceful departure.
+/// A session that never established a primary leaves the previous durable identity intact.
+pub fn persist_last_primary(
+    path: &Path,
+    mut current: EngineProfilesSettings,
+    primary: Option<String>,
+) -> Result<EngineProfilesSettings, String> {
+    let Some(primary) = primary else { return Ok(current) };
+    if current.last_primary_profile_id.as_ref() == Some(&primary) {
+        return Ok(current);
+    }
+    current.last_primary_profile_id = Some(primary);
+    save_engine_profiles(path, current)
+}
+
 pub fn prepare_engine_profiles_save(
     current: &EngineProfilesSettings,
     settings: EngineProfilesSettings,
 ) -> Result<EngineProfilesSettings, String> {
     let mut settings = normalize_engine_profiles(settings)?;
+    // This identity belongs to graceful exit, never a stale settings form.
+    settings.last_primary_profile_id = current.last_primary_profile_id.clone();
     let mut destination = 0;
     for existing in &current.profiles {
         if let Some(offset) = settings.profiles[destination..]
@@ -310,12 +370,13 @@ pub fn normalize_engine_profiles(settings: EngineProfilesSettings) -> Result<Eng
     if !seen_ids.contains(settings.selected_profile_id.as_str()) {
         return Err("selected engine profile does not exist".to_string());
     }
-    if settings
-        .autoload_profile_id
-        .as_deref()
-        .is_some_and(|id| !seen_ids.contains(id))
-    {
-        return Err("autoload engine profile does not exist".to_string());
+    if let EngineStartupPolicyDto::Fixed { profile_id } = &settings.startup {
+        if profile_id.trim().is_empty() || profile_id.contains('\0') {
+            return Err("fixed startup profile ID is invalid".to_string());
+        }
+    }
+    if settings.last_primary_profile_id.as_deref().is_some_and(|id| id.trim().is_empty() || id.contains('\0')) {
+        return Err("last primary profile ID is invalid".to_string());
     }
     Ok(settings)
 }
@@ -386,7 +447,8 @@ mod persist_failure_tests {
         EngineProfilesSettings {
             version: ENGINE_PROFILES_VERSION,
             selected_profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
-            autoload_profile_id: Some(DEFAULT_ENGINE_PROFILE_ID.to_string()),
+            startup: EngineStartupPolicyDto::Fixed { profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string() },
+            last_primary_profile_id: None,
             profiles: vec![default_engine_profile_record()],
         }
     }
@@ -420,7 +482,7 @@ mod persist_failure_tests {
             let err = save_engine_profiles(
                 &path,
                 EngineProfilesSettings {
-                    autoload_profile_id: None,
+                    startup: EngineStartupPolicyDto::Off,
                     ..sample_settings()
                 },
             );
@@ -432,7 +494,7 @@ mod persist_failure_tests {
 
         let loaded = load_engine_profiles(&path).unwrap();
         assert_eq!(
-            loaded.autoload_profile_id.as_deref(),
+            loaded.startup_profile_id(),
             Some(DEFAULT_ENGINE_PROFILE_ID)
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), before);

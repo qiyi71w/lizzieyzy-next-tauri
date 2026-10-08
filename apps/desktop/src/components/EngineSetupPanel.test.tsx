@@ -186,7 +186,7 @@ describe("engine profile configuration editor", () => {
     const beta = { ...alpha, id: "beta", profile: { ...alpha.profile, name: "Beta" } };
     settings.profiles.push(alpha, beta);
     settings.selected_profile_id = "alpha";
-    settings.autoload_profile_id = "alpha";
+    settings.startup = { mode: "fixed", profile_id: "alpha" };
     await saveEngineProfilesSettings(settings);
     const snapshot: ForegroundEngineSnapshotDto = {
       revision: 17, lifecycle: { state: "ready", run: { run_id: "immutable-run", profile_id: "default", adapter_kind: "kata_go_analysis", profile_snapshot: structuredClone(settings.profiles[0].profile) } },
@@ -210,10 +210,10 @@ describe("engine profile configuration editor", () => {
       expect(field("参数 1").value).toBe("unsaved argv");
       const saved = await loadEngineProfilesSettings();
       expect(saved.selected_profile_id).toBe("alpha");
-      expect(saved.autoload_profile_id).toBe("alpha");
+      expect(saved.startup).toEqual({ mode: "fixed", profile_id: "alpha" });
       expect(saved.profiles.find((record) => record.id === "alpha")).toEqual(alpha);
       expect(snapshot).toEqual(original);
-      expect((host.querySelector('[aria-label="Autoload Default"]') as HTMLInputElement).checked).toBe(true);
+      expect((host.querySelector('[aria-label="启动方式"]') as HTMLSelectElement).value).toBe("fixed");
     };
     await move("beta", "置首"); expect(order()).toEqual(["beta", "default", "alpha"]);
     await move("alpha", "上移"); expect(order()).toEqual(["beta", "alpha", "default"]);

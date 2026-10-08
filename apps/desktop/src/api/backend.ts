@@ -537,6 +537,7 @@ export async function saveEngineProfilesSettings(settings: EngineProfilesSetting
   if (!isTauriRuntime()) {
     const normalized = decodeEngineProfilesSettings(settings, false);
     const current = loadBrowserEngineProfilesSettings();
+    normalized.last_primary_profile_id = current.last_primary_profile_id;
     const records = new Map(normalized.profiles.map((record) => [record.id, record]));
     const retained: EngineProfileRecordDto[] = [];
     for (const record of current.profiles) {
@@ -814,7 +815,7 @@ function decodeLegacyEngineProfile(value: unknown, maxVisits: unknown): EnginePr
 function decodeEngineProfilesSettings(value: unknown, allowLegacy: boolean): EngineProfilesSettingsDto {
   const input = profileObject(value, "Profile catalog");
   const legacy = !("version" in input);
-  if ((!legacy && input.version !== 1) || (legacy && !allowLegacy)) throw new Error("Unsupported profile catalog version.");
+  if (input.version !== 2 && !(allowLegacy && (legacy || input.version === 1))) throw new Error("Unsupported profile catalog version.");
   const single = legacy && !("profiles" in input);
   const records = single ? [{ id: defaultEngineProfileId, profile: input.profile, max_visits: input.max_visits }] : input.profiles;
   if (!Array.isArray(records) || records.length === 0) throw new Error("Profile catalog must contain at least one profile.");
@@ -829,16 +830,30 @@ function decodeEngineProfilesSettings(value: unknown, allowLegacy: boolean): Eng
   const ids = new Set(profiles.map((record) => record.id));
   if (ids.size !== profiles.length) throw new Error("Duplicate profile ID.");
   const selected = single ? defaultEngineProfileId : profileString(input.selected_profile_id, "Selected profile ID", true);
-  const autoload = single ? null : profileOptionalPath(input.autoload_profile_id, "Autoload profile ID");
-  if (!ids.has(selected) || (autoload !== null && !ids.has(autoload))) throw new Error("Selected/Autoload profile ID is not in the catalog.");
-  return { version: 1, selected_profile_id: selected, autoload_profile_id: autoload, profiles };
+  if (!ids.has(selected)) throw new Error("Selected profile ID is not in the catalog.");
+  let startup: EngineProfilesSettingsDto["startup"];
+  if (input.version !== 2) {
+    const autoload = single ? null : profileOptionalPath(input.autoload_profile_id, "Autoload profile ID");
+    startup = autoload === null ? { mode: "off" } : { mode: "fixed", profile_id: autoload };
+  } else {
+    const policy = profileObject(input.startup, "Startup policy");
+    if (Object.keys(policy).some((key) => key !== "mode" && !(policy.mode === "fixed" && key === "profile_id"))) throw new Error("Unknown startup policy field.");
+    if (policy.mode === "fixed") startup = { mode: "fixed", profile_id: profileString(policy.profile_id, "Fixed profile ID", true) };
+    else if (policy.mode === "off" || policy.mode === "last_primary") startup = { mode: policy.mode };
+    else throw new Error("Unknown startup policy.");
+    if ("autoload_profile_id" in input) throw new Error("Obsolete startup field in version 2 catalog.");
+  }
+  const lastPrimary = input.version === 2 ? profileOptionalPath(input.last_primary_profile_id, "Last primary profile ID") : null;
+  if (lastPrimary !== null && !lastPrimary.trim()) throw new Error("Last primary profile ID is invalid.");
+  return { version: 2, selected_profile_id: selected, startup, last_primary_profile_id: lastPrimary, profiles };
 }
 
 function defaultBrowserEngineProfilesSettings(): EngineProfilesSettingsDto {
   return {
-    version: 1,
+    version: 2,
     selected_profile_id: defaultEngineProfileId,
-    autoload_profile_id: null,
+    startup: { mode: "off" },
+    last_primary_profile_id: null,
     profiles: [{
       id: defaultEngineProfileId,
       profile: {

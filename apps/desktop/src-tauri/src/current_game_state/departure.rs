@@ -323,6 +323,7 @@ impl CurrentGameState {
                 disposition
             };
         holder.exit_disposition = Some(disposition);
+        holder.graceful_exit_completed = completed;
         let current = holder.result_dto(selected_path.clone())?;
         if completed || exit_anyway {
             holder.departure = None;
@@ -349,6 +350,10 @@ impl CurrentGameState {
             teardown: Some(attempt),
             recovery_persist_error: None,
         })
+    }
+
+    pub fn graceful_exit_completed(&self) -> bool {
+        self.holder.lock().expect("current game state").graceful_exit_completed
     }
 
     #[cfg(test)]
@@ -405,6 +410,7 @@ impl CurrentGameState {
         ) {
             return Err(departure_blocked());
         }
+        holder.graceful_exit_completed = false;
         holder.next_departure_id = holder.next_departure_id.saturating_add(1);
         let departure_id = holder.next_departure_id;
         let dirty = holder.dirty;

@@ -260,9 +260,9 @@ beforeEach(() => {
   currentGameFixture.mockResolvedValue(initialGame);
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
   backend.loadEngineProfilesSettings.mockResolvedValue({
-    version: 1,
+    version: 2,
     selected_profile_id: "profile-1",
-    autoload_profile_id: null,
+    startup: { mode: "off" as const }, last_primary_profile_id: null,
     profiles: [savedProfile, savedProfileB]
   });
   backend.saveEngineProfilesSettings.mockImplementation(async (settings) => settings);
@@ -378,7 +378,7 @@ describe("foreground engine lifecycle UI", () => {
     const generic = { id: "generic", profile: {
       name: "Saved generic", program: "/bin/gtp", argv: [], working_dir: null, adapter_kind: "generic_gtp" as const, settings: {}
     } };
-    const catalog = { version: 1, selected_profile_id: "profile-1", autoload_profile_id: null, profiles: [savedProfile, generic] };
+    const catalog = { version: 2, selected_profile_id: "profile-1", startup: { mode: "off" as const }, last_primary_profile_id: null, profiles: [savedProfile, generic] };
     backend.loadEngineProfilesSettings.mockResolvedValue(catalog);
     const host = await renderApp();
     if (withPrimary) await readyEngine(host);
@@ -1732,9 +1732,9 @@ describe("foreground engine lifecycle UI", () => {
 
   it("lets a later switch win and ignores a superseded B failure", async () => {
     backend.loadEngineProfilesSettings.mockResolvedValue({
-      version: 1,
+      version: 2,
       selected_profile_id: "profile-1",
-      autoload_profile_id: null,
+      startup: { mode: "off" as const }, last_primary_profile_id: null,
       profiles: [savedProfile, savedProfileB, savedProfileC]
     });
     const host = await renderApp();
@@ -1960,43 +1960,45 @@ describe("foreground engine lifecycle UI", () => {
     expect(host.querySelector(".engine-failure")).toBeNull();
   });
 
-  it("saves Autoload Default from Engine Settings without changing the current Run", async () => {
+  it("saves fixed startup from Engine Settings without changing the current Run", async () => {
     const host = await renderApp();
     await readyEngine(host);
     const panel = await openEngineSettings(host);
-    const checkbox = panel.querySelector('input[aria-label="Autoload Default"]') as HTMLInputElement;
-    expect(checkbox.checked).toBe(false);
+    const mode = panel.querySelector('select[aria-label="启动方式"]') as HTMLSelectElement;
+    expect(mode.value).toBe("off");
     backend.startForegroundEngine.mockClear();
     backend.stopForegroundEngine.mockClear();
     backend.restartForegroundEngine.mockClear();
     await act(async () => {
-      checkbox.click();
+      mode.value = "fixed";
+      mode.dispatchEvent(new Event("change", { bubbles: true }));
       await backend.saveEngineProfilesSettings.mock.results.at(-1)?.value;
     });
     expect(backend.saveEngineProfilesSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ autoload_profile_id: "profile-1", selected_profile_id: "profile-1" })
+      expect.objectContaining({ startup: { mode: "fixed", profile_id: "profile-1" }, selected_profile_id: "profile-1" })
     );
     expect(backend.startForegroundEngine).not.toHaveBeenCalled();
     expect(backend.stopForegroundEngine).not.toHaveBeenCalled();
     expect(backend.restartForegroundEngine).not.toHaveBeenCalled();
     expect(host.querySelector(".engine-chip-label")?.textContent).toBe("Local KataGo");
-    expect(checkbox.checked).toBe(true);
+    expect(mode.value).toBe("fixed");
   });
 
-  it("rolls back Autoload Default when persistence fails and leaves the current Run unchanged", async () => {
+  it("retains off when startup persistence fails and leaves the current Run unchanged", async () => {
     const host = await renderApp();
     await readyEngine(host);
     const panel = await openEngineSettings(host);
-    const checkbox = panel.querySelector('input[aria-label="Autoload Default"]') as HTMLInputElement;
+    const mode = panel.querySelector('select[aria-label="启动方式"]') as HTMLSelectElement;
     backend.saveEngineProfilesSettings.mockRejectedValueOnce(new Error("disk full"));
     backend.startForegroundEngine.mockClear();
     backend.stopForegroundEngine.mockClear();
     backend.restartForegroundEngine.mockClear();
     await act(async () => {
-      checkbox.click();
+      mode.value = "last_primary";
+      mode.dispatchEvent(new Event("change", { bubbles: true }));
       await Promise.resolve();
     });
-    expect(checkbox.checked).toBe(false);
+    expect(mode.value).toBe("off");
     expect(panel.textContent).toContain("disk full");
     expect(backend.startForegroundEngine).not.toHaveBeenCalled();
     expect(backend.stopForegroundEngine).not.toHaveBeenCalled();
@@ -2121,9 +2123,9 @@ describe("foreground engine lifecycle UI", () => {
 
   it("rejects deleting the Error profile until Stop", async () => {
     backend.loadEngineProfilesSettings.mockResolvedValue({
-      version: 1,
+      version: 2,
       selected_profile_id: "profile-1",
-      autoload_profile_id: null,
+      startup: { mode: "off" as const }, last_primary_profile_id: null,
       profiles: [savedProfile, savedProfileB]
     });
     backend.saveEngineProfilesSettings.mockImplementation(async (settings) => {
