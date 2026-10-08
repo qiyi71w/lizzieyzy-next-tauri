@@ -712,6 +712,31 @@ fn foreground_engine_start_selected_node(
 }
 
 #[tauri::command]
+async fn foreground_engine_confirm_rules(
+    manager: State<'_, ForegroundEngineManager>,
+    current_game: State<'_, CurrentGameState>,
+    request: app_model::OrdinaryRulesRequestDto,
+) -> EngineCommandResult<app_model::OrdinaryRulesSnapshotDto> {
+    let run_id = request.run_id.clone();
+    let handle = current_game.start_ordinary_rules(&manager, request)?;
+    let result = tauri::async_runtime::spawn_blocking(move || handle.wait().map_err(Box::new))
+        .await
+        .map_err(|_| {
+            Box::new(EngineFailureDto {
+                operation: EngineOperationDto::Job,
+                run_id: Some(run_id),
+                job_id: None,
+                switch_id: None,
+                profile_id: None,
+                kind: EngineFailureKind::Protocol,
+                message: "Rules confirmation worker failed".into(),
+                diagnostic_summary: None,
+            })
+        })??;
+    current_game.publish_ordinary_rules(&manager, result)
+}
+
+#[tauri::command]
 async fn foreground_engine_game_move(
     manager: State<'_, ForegroundEngineManager>,
     current_game: State<'_, CurrentGameState>,
@@ -1258,6 +1283,7 @@ pub fn run() {
             foreground_engine_switch,
             foreground_engine_start_selected_node,
             foreground_engine_game_move,
+            foreground_engine_confirm_rules,
             human_match::human_match_snapshot,
             human_match::human_match_start,
             human_match::human_match_action,

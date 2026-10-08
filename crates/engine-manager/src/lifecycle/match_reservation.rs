@@ -587,7 +587,9 @@ impl ForegroundEngineManager {
         for (run, stdout_rx) in readers {
             let inner = self.inner.clone();
             thread::spawn(move || match run.adapter_kind {
-                EngineBackend::GenericGtp => inner.pump_gtp_stdout(run.run_id, stdout_rx),
+                EngineBackend::GenericGtp | EngineBackend::KataGoGtp => {
+                    inner.pump_gtp_stdout(run.run_id, stdout_rx)
+                }
                 EngineBackend::KataGoAnalysis => inner.pump_stdout(operation, run.run_id, stdout_rx),
             });
         }
@@ -826,7 +828,9 @@ impl ForegroundEngineManager {
                 if let Some(stdout_rx) = stdout_rx {
                     let inner = self.inner.clone();
                     thread::spawn(move || match run.adapter_kind {
-                        EngineBackend::GenericGtp => inner.pump_gtp_stdout(run.run_id, stdout_rx),
+                        EngineBackend::GenericGtp | EngineBackend::KataGoGtp => {
+                            inner.pump_gtp_stdout(run.run_id, stdout_rx)
+                        }
                         EngineBackend::KataGoAnalysis => inner.pump_stdout(operation, run.run_id, stdout_rx),
                     });
                 }

@@ -39,6 +39,8 @@ import type {
   GameDto,
   GameMoveRequestDto,
   GameMoveResultDto,
+  OrdinaryRulesRequestDto,
+  OrdinaryRulesSnapshotDto,
   MoveDto,
   MoveVertex,
   PlayerColor,
@@ -600,6 +602,11 @@ export async function computeGameMove(request: GameMoveRequestDto): Promise<Game
   return invoke<GameMoveResultDto>("foreground_engine_game_move", { request });
 }
 
+export async function confirmOrdinaryRules(request: OrdinaryRulesRequestDto): Promise<OrdinaryRulesSnapshotDto> {
+  if (!isTauriRuntime()) throw new Error("Rules confirmation requires the native desktop and an actual KataGo GTP Run.");
+  return invoke<OrdinaryRulesSnapshotDto>("foreground_engine_confirm_rules", { request });
+}
+
 export async function cancelGameMove(input: { runId: string; jobId: string }): Promise<void> {
   if (!isTauriRuntime()) return;
   await invoke<void>("foreground_engine_cancel_game_move", input);
@@ -774,7 +781,7 @@ function decodeEngineProfile(value: unknown): EngineProfileDto {
     if (Object.keys(settings).length) throw new Error("GenericGtp settings must be empty.");
     return { ...common, adapter_kind: "generic_gtp", settings: {} };
   }
-  if (profile.adapter_kind !== "kata_go_analysis") throw new Error("Unknown engine adapter.");
+  if (profile.adapter_kind !== "kata_go_analysis" && profile.adapter_kind !== "kata_go_gtp") throw new Error("Unknown engine adapter.");
   if (Object.keys(settings).some((key) => !["model_path", "config_path", "max_visits"].includes(key))) {
     throw new Error("Unknown KataGo setting.");
   }
@@ -789,7 +796,7 @@ function decodeEngineProfile(value: unknown): EngineProfileDto {
   }
   return {
     ...common,
-    adapter_kind: "kata_go_analysis",
+    adapter_kind: profile.adapter_kind,
     settings: {
       model_path: profileOptionalPath(settings.model_path, "Model path"),
       config_path: profileOptionalPath(settings.config_path, "Config path"),

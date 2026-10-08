@@ -27,7 +27,7 @@ pub use catalog::{
 };
 pub use lifecycle::{
     AnalysisJobCancel, AnalysisJobEventDto, AnalysisJobLane, ContinuousPrimaryAction, ForegroundEngineConfig,
-    ForegroundEngineManager, GameMoveHandle, GameMoveRequest, SelectedNodeJobRequest,
+    ForegroundEngineManager, GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle, SelectedNodeJobRequest,
     SwingAnalysisTaskRequest, WholeGameJobRequest, WholeGameWorkItem,
 };
 
@@ -383,7 +383,9 @@ pub fn validate_engine_profile(profile: &EngineProfileDto) -> Result<(), String>
             return Err(format!("engine {label} must not contain NUL"));
         }
     }
-    if let EngineAdapterSettings::KataGoAnalysis(settings) = &profile.adapter {
+    if let EngineAdapterSettings::KataGoAnalysis(settings) | EngineAdapterSettings::KataGoGtp(settings) =
+        &profile.adapter
+    {
         if settings.max_visits == 0 {
             return Err("max_visits must be greater than 0".to_string());
         }
@@ -444,7 +446,7 @@ pub fn build_command_spec(profile: &EngineProfileDto) -> Result<CommandSpec, Eng
     }
     let program = resolve_program_path(&profile.program, working_dir.as_deref());
     match &profile.adapter {
-        EngineAdapterSettings::KataGoAnalysis(settings) => {
+        EngineAdapterSettings::KataGoAnalysis(settings) | EngineAdapterSettings::KataGoGtp(settings) => {
             let model = settings
                 .model_path
                 .as_ref()
@@ -464,7 +466,11 @@ pub fn build_command_spec(profile: &EngineProfileDto) -> Result<CommandSpec, Eng
                 return Err(EngineManagerError::ConfigPathNotFound { path: config });
             }
             let mut args = vec![
-                "analysis".into(),
+                if profile.adapter_kind() == app_model::EngineBackend::KataGoGtp {
+                    "gtp".into()
+                } else {
+                    "analysis".into()
+                },
                 "-config".into(),
                 config,
                 "-model".into(),
@@ -504,7 +510,9 @@ pub fn check_assets(profile: &EngineProfileDto) -> Vec<AssetCheck> {
             label: "working directory".into(),
         });
     }
-    if let EngineAdapterSettings::KataGoAnalysis(settings) = &profile.adapter {
+    if let EngineAdapterSettings::KataGoAnalysis(settings) | EngineAdapterSettings::KataGoGtp(settings) =
+        &profile.adapter
+    {
         let model = settings.model_path.as_deref().unwrap_or("");
         let resolved_model = resolve_asset_path(model, working_dir.as_deref());
         checks.push(AssetCheck {

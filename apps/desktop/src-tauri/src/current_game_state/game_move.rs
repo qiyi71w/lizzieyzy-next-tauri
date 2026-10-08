@@ -21,6 +21,72 @@ fn failure(run_id: &str, kind: EngineFailureKind, message: String) -> Box<Engine
 }
 
 impl CurrentGameState {
+    pub fn start_ordinary_rules(
+        &self,
+        manager: &ForegroundEngineManager,
+        request: app_model::OrdinaryRulesRequestDto,
+    ) -> crate::EngineCommandResult<engine_manager::OrdinaryRulesHandle> {
+        let holder = self.holder.lock().expect("current game state");
+        if holder.departure.is_some()
+            || holder.human_match.blocks()
+            || !matches!(holder.trial_mode, trial::TrialMode::Review)
+            || holder.generation != request.generation
+            || holder.selected_path != request.node_path
+        {
+            return Err(failure(
+                &request.run_id,
+                EngineFailureKind::InvalidState,
+                "Rules confirmation requires the current review position outside departure or Match".into(),
+            ));
+        }
+        let document = holder.document.as_ref().ok_or_else(|| {
+            failure(
+                &request.run_id,
+                EngineFailureKind::InvalidState,
+                "Rules confirmation requires a current game".into(),
+            )
+        })?;
+        let position = document
+            .exact_position(&request.node_path)
+            .map_err(|message| failure(&request.run_id, EngineFailureKind::UnsupportedCapability, message))?;
+        manager
+            .start_ordinary_rules(GameMoveRequest {
+                identity: GameMoveRequestDto {
+                    run_id: request.run_id,
+                    generation: request.generation,
+                    node_path: request.node_path,
+                    budget: app_model::ComputeBudgetDto {
+                        deadline_ms: 30000,
+                        max_visits: None,
+                    },
+                },
+                position,
+            })
+            .map_err(Box::new)
+    }
+
+    pub fn publish_ordinary_rules(
+        &self,
+        manager: &ForegroundEngineManager,
+        result: app_model::OrdinaryRulesSnapshotDto,
+    ) -> crate::EngineCommandResult<app_model::OrdinaryRulesSnapshotDto> {
+        let holder = self.holder.lock().expect("current game state");
+        if holder.departure.is_some()
+            || holder.human_match.blocks()
+            || !matches!(holder.trial_mode, trial::TrialMode::Review)
+            || holder.generation != result.identity.generation
+            || holder.selected_path != result.identity.node_path
+        {
+            return Err(failure(
+                &result.identity.run_id,
+                EngineFailureKind::Cancellation,
+                "Rules confirmation belongs to a retired position".into(),
+            ));
+        }
+        manager.claim_ordinary_rules(&result).map_err(Box::new)?;
+        Ok(result)
+    }
+
     pub fn start_game_move(
         &self,
         manager: &ForegroundEngineManager,

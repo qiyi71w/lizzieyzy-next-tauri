@@ -67,6 +67,12 @@ fn read_stdout_line(reader: &mut impl BufRead) -> io::Result<Option<String>> {
     }
 }
 
+/// Stream records never enter a numbered response decoder. The analysis consumer
+/// owns their meaning and completion; a command ID alone is not analysis output.
+pub(crate) fn is_analysis_stream_record(line: &str) -> bool {
+    line.starts_with("info ") || line.starts_with("play ")
+}
+
 pub(crate) struct GtpResponse {
     pub(crate) success: bool,
     pub(crate) body: String,

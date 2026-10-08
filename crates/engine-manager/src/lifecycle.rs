@@ -30,7 +30,8 @@ pub use app_model::AnalysisJobLaneDto as AnalysisJobLane;
 
 mod game_move;
 mod match_reservation;
-pub use game_move::{GameMoveHandle, GameMoveRequest};
+mod ordinary_rules;
+pub use game_move::{GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle};
 
 pub trait AnalysisJobCancel: Send + Sync {
     fn cancel(&self);
@@ -2043,7 +2044,7 @@ impl Inner {
                 None,
             )
         })?;
-        let generic = run.adapter_kind == EngineBackend::GenericGtp;
+        let generic = run.adapter_kind != EngineBackend::KataGoAnalysis;
         let stdout_rx = if generic {
             gtp::spawn_stdout_reader(stdout)
         } else {
@@ -2381,6 +2382,23 @@ impl Inner {
                 ));
             }
         }
+        if run.adapter_kind == EngineBackend::KataGoGtp
+            && (name.trim() != "KataGo"
+                || !version.trim().split('+').next().is_some_and(|v| v == "1.18.2")
+                || [
+                    "loadsgf",
+                    "showboard",
+                    "printsgf",
+                    "kata-get-rules",
+                    "kata-set-rules",
+                    "get_komi",
+                ]
+                .iter()
+                .any(|required| !commands.iter().any(|command| command == required)))
+        {
+            return Err(fail(EngineFailureKind::UnsupportedCapability,
+                "KataGo GTP rules confirmation requires the qualified 1.18.2 protocol and exact-position commands".into()));
+        }
         Ok(Some(EngineGtpFactsDto {
             protocol_version: 2,
             name,
@@ -2538,7 +2556,7 @@ impl Inner {
         if let Some(stdout_rx) = stdout_rx {
             let inner = self.clone();
             let run_id = run.run_id.clone();
-            let generic = run.adapter_kind == EngineBackend::GenericGtp;
+            let generic = run.adapter_kind != EngineBackend::KataGoAnalysis;
             thread::spawn(move || {
                 if generic {
                     inner.pump_gtp_stdout(run_id, stdout_rx)
@@ -2601,7 +2619,7 @@ impl Inner {
             if let Some(stdout_rx) = stdout_rx {
                 let inner = self.clone();
                 let run_id = run.run_id.clone();
-                let generic = run.adapter_kind == EngineBackend::GenericGtp;
+                let generic = run.adapter_kind != EngineBackend::KataGoAnalysis;
                 thread::spawn(move || {
                     if generic {
                         inner.pump_gtp_stdout(run_id, stdout_rx)
@@ -2875,7 +2893,7 @@ impl Inner {
     fn enter_primary_error(&self, state: &mut ManagerState, run: EngineRunDto, exit_code: Option<i32>) {
         let published = failure(
             EngineOperationDto::UnexpectedExit,
-            if run.adapter_kind == EngineBackend::GenericGtp {
+            if run.adapter_kind != EngineBackend::KataGoAnalysis {
                 EngineFailureKind::ProcessExit
             } else {
                 EngineFailureKind::NonzeroExit

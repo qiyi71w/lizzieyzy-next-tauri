@@ -21,6 +21,27 @@ pub struct ExactPositionDto {
     pub moves: Vec<MoveDto>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrdinaryRulesRequestDto {
+    pub run_id: String,
+    pub generation: u64,
+    pub node_path: NodePath,
+}
+
+/// An immutable observation, not authority to reuse it after a Run or position change.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OrdinaryRulesSnapshotDto {
+    pub identity: GameMoveJobDto,
+    /// Each Run owns exactly one spawned process and stdout reader.
+    pub reader_id: String,
+    pub profile_revision: String,
+    pub position: ExactPositionDto,
+    /// Canonical actual rules JSON, including every engine-provided field.
+    pub confirmed_rules: String,
+    pub stones: Vec<StoneDto>,
+    pub true_final_move: Option<MoveDto>,
+}
+
 /// A wall-clock ceiling for the entire operation; never a match clock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ComputeBudgetDto {

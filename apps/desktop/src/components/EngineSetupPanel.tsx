@@ -77,10 +77,10 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engi
     setEnginePath(record.profile.program);
     setAdapterKind(record.profile.adapter_kind);
     setArgv([...record.profile.argv]);
-    setModelPath(record.profile.adapter_kind === "kata_go_analysis" ? record.profile.settings.model_path ?? "" : "");
-    setConfigPath(record.profile.adapter_kind === "kata_go_analysis" ? record.profile.settings.config_path ?? "" : "");
+    setModelPath(record.profile.adapter_kind !== "generic_gtp" ? record.profile.settings.model_path ?? "" : "");
+    setConfigPath(record.profile.adapter_kind !== "generic_gtp" ? record.profile.settings.config_path ?? "" : "");
     setWorkingDir(record.profile.working_dir ?? "");
-    setMaxVisits(record.profile.adapter_kind === "kata_go_analysis" ? String(record.profile.settings.max_visits) : "800");
+    setMaxVisits(record.profile.adapter_kind !== "generic_gtp" ? String(record.profile.settings.max_visits) : "800");
     setAssetChecks([]);
   }
 
@@ -90,10 +90,10 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engi
     return adapterKind === "generic_gtp"
       ? { ...common, adapter_kind: "generic_gtp", settings: {} }
       : {
-        ...common, adapter_kind: "kata_go_analysis",
+        ...common, adapter_kind: adapterKind,
         settings: {
-          model_path: optionalPath(modelPath, previous?.adapter_kind === "kata_go_analysis" ? previous.settings.model_path : null),
-          config_path: optionalPath(configPath, previous?.adapter_kind === "kata_go_analysis" ? previous.settings.config_path : null),
+          model_path: optionalPath(modelPath, previous && previous.adapter_kind !== "generic_gtp" ? previous.settings.model_path : null),
+          config_path: optionalPath(configPath, previous && previous.adapter_kind !== "generic_gtp" ? previous.settings.config_path : null),
           max_visits: visits
         }
       };
@@ -341,6 +341,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engi
           <span>适配器</span>
           <select value={adapterKind} onChange={(event) => { setAdapterKind(event.target.value as EngineBackendDto); setAssetChecks([]); }}>
             <option value="kata_go_analysis">KataGoAnalysis</option>
+            <option value="kata_go_gtp">{t("engineRules.protocol")}</option>
             <option value="generic_gtp">GenericGtp</option>
           </select>
         </label>
@@ -351,7 +352,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engi
             <button type="button" className="path-picker-button" onClick={() => void handlePickPath("引擎", enginePath, false, setEnginePath)}>浏览</button>
           </div>
         </label>
-        {adapterKind === "kata_go_analysis" ? <>
+        {adapterKind !== "generic_gtp" ? <>
         <label>
           <span>模型</span>
           <div className="path-input-row">
@@ -391,6 +392,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engi
       <p className="message">已保存配置与当前草稿的能力均待 run 验证。保存只更新目录；不会改变当前 run 的已验证能力。</p>
       <p className="message">{adapterKind === "generic_gtp"
         ? "静态 adapter 上限：GenericGtp 不提供 rich-analysis；落子是否可用及精确局面范围以当前 run 的资格验证为准。"
+        : adapterKind === "kata_go_gtp" ? t("engineRules.boundary")
         : "静态 adapter 上限：KataGoAnalysis 可提供单点、连续、整谱/task、候选/PV、胜率/分数、ownership/policy、visits 限制与协议取消；实际能力以当前 run 验证结果为准。"}</p>
       {adapterKind === "generic_gtp" ? <p className="message" role="status">启动后验证 GTP v2、引擎名称、版本与命令列表；保存配置不会验证协议或改变当前 run。</p> : null}
       <p className="message" aria-label="当前 run 能力">{verifiedEngineCapabilitiesLabel(snapshot)}</p>

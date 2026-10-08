@@ -492,6 +492,15 @@ Approved on 2026-10-08 as a coordinated R12/R13 planning boundary, not current r
 
 The executable planning boundaries and evidence owners are in [R12 coordination](R12_PLAN.md#gtp-main-analysis-coordination), [R13 delivery](R13_PLAN.md#gtp-main-analysis) and [MIGRATION_ROUTES.json](MIGRATION_ROUTES.json). Existing runtime and acceptance claims elsewhere in this document remain unchanged.
 
+### Explicit GTP ordinary rules confirmation
+
+The `kata_go_gtp` profile uses the existing foreground manager and resource qualification, with an actual KataGo 1.18.2 identity and command handshake. JSONL profiles and generic GNU Go move-only qualification retain their meanings. Engine settings expose an explicit confirmation action; Ready alone grants neither confirmed rules nor main analysis, runtime threads or paired parameter readback.
+
+`start_ordinary_rules` occupies the existing identity-fenced GTP operation slot. Its immutable `OrdinaryRulesSnapshotDto` records Run/reader, profile revision, request, generation/node, requested exact position, actual full rules, stones and true final move. Successful writes and numbered responses are both required; `kata-get-rules`, `get_komi`, `showboard` and `printsgf` must agree with the strict SGF projection. The current-game gateway claims the receipt once against the still-current position. Navigation, cancellation, replacement and failed synchronization retire publication; unsupported white/mixed/intermediate setup is rejected before protocol mutation.
+
+KataGo 1.18.2 does not interpret quoted `loadsgf` filenames as shell paths. The adapter creates a unique private ASCII basename in the captured process working directory, verifies readability and sends only that basename. Explicit cleanup follows the load response; failure and cancellation also remove the owned file. JSONL and generic move replay remain path-free. `info`/`play` stream records cannot satisfy numbered control requests; ticket 10 owns the analysis-stream consumer and complete main-analysis admission. Fixtures and a real Eigen/b20 manager smoke cover this boundary; native surface and composed R12/R13 acceptance remain separate gates.
+
+
 ## Provider And Sidecar Readiness
 
 | Area | Repository-Level Evidence | Requires External Environment |

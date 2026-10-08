@@ -1,5 +1,17 @@
 // Complete compatibility resource. New consumers add their keys here before use.
 export const baseResources = {
+  "engineRules.protocol": "KataGo GTP（显式选择）",
+  "engineRules.title": "当前局面的引擎规则确认",
+  "engineRules.confirm": "确认规则与精确局面",
+  "engineRules.pending": "正在向当前实例同步并读取实际规则与局面；尚未确认。",
+  "engineRules.unconfirmed": "尚未确认当前实例与所选局面。发送成功不等于确认。",
+  "engineRules.confirmed": "已确认：实际规则、贴目、棋子、轮次与真实最后一手一致。",
+  "engineRules.rejected": "规则／局面确认被拒绝",
+  "engineRules.unavailable": "需要原生桌面、当前棋谱及 Ready 的显式 KataGo GTP 实例；不自动切换协议。",
+  "engineRules.boundary": "KataGo GTP 1.18.2：可显式确认 Chinese / Chinese-KGS、方形 2–19 路及当前支持的精确局面。主分析、动态线程与参数回读尚未准入，Ready 不会开启这些能力。",
+  "engineRules.identity": "确认身份（Run／请求／局面）",
+  "engineRules.rules": "引擎实际规则",
+  "engineRules.position": "贴目／行棋方／真实手数",
   "engineResource.title": "当前运行实例的资源资格",
   "engineResource.run": "运行实例",
   "engineResource.profile": "配置档案",
