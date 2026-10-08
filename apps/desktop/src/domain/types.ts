@@ -538,3 +538,24 @@ export type RecoveryStartupDto =
   | { status: "abnormal"; envelope: RecoveryEnvelopeDto }
   | { status: "normal"; envelope: RecoveryEnvelopeDto }
   | { status: "unreadable"; message: string };
+
+export type ModelInspectionStatusDto = "unchecked" | "header_recognized" | "unknown" | "corrupt" | "unavailable" | "limit_exceeded" | "changed";
+export type ModelInspectionDto = {
+  status: ModelInspectionStatusDto;
+  sha256: string | null;
+  size_bytes: number | null;
+  format: string | null;
+  model_name: string | null;
+  format_version: number | null;
+};
+export type ModelOriginDto = { kind: "unknown" } | { kind: "custom" }
+  | { kind: "managed"; catalog_id: string; installed_sha256: string };
+export type InstalledModelDto = {
+  id: string;
+  path: string;
+  origin: ModelOriginDto;
+  inspection: ModelInspectionDto;
+};
+export type ModelInventoryDto = { revision: string; models: InstalledModelDto[] };
+export type ModelPathDto = { path: string; working_dir: string | null };
+export type ModelSelectionRequestDto = { revision: string; model_id: string; sha256: string };

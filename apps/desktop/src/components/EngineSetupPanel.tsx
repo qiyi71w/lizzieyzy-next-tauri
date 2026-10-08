@@ -4,6 +4,7 @@ import { checkEngineAssets, loadEngineProfilesSettings, reorderEngineProfilesSet
 import type { AssetCheckDto, EngineBackendDto, EngineProfileDto, EngineProfileRecordDto, ForegroundEngineSnapshotDto } from "../domain/types";
 import { profileHasPendingChanges, runFromSnapshot, verifiedEngineCapabilitiesLabel } from "../domain/foregroundEngine";
 import { t } from "../i18n/resources";
+import { ModelInventoryPanel } from "./ModelInventoryPanel";
 
 type Props = {
   disabled?: boolean;
@@ -28,6 +29,21 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
   const [catalogBusy, setCatalogBusy] = useState(false);
   const catalogWritePending = useRef(false);
   const [orderStatus, setOrderStatus] = useState("");
+  const modelOperation = useRef(false);
+  const [modelBusy, setModelBusy] = useState(false);
+  const editingProfile = profiles.find((record) => record.id === selectedProfileId)?.profile;
+
+  function beginModelOperation() {
+    if (disabled || catalogWritePending.current || modelOperation.current) return false;
+    modelOperation.current = true;
+    setModelBusy(true);
+    return true;
+  }
+
+  function endModelOperation() {
+    modelOperation.current = false;
+    setModelBusy(false);
+  }
 
   const visits = Number(maxVisits);
   const canSave = profiles.length > 0 && profileName.trim().length > 0
@@ -120,7 +136,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
     autoloadId: string | null,
     successMessage: string
   ) {
-    if (catalogWritePending.current) throw new Error(t("engineOrder.busy"));
+    if (catalogWritePending.current || modelOperation.current) throw new Error(t("engineOrder.busy"));
     catalogWritePending.current = true;
     setCatalogBusy(true);
     try {
@@ -144,7 +160,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
   }
 
   async function handleReorder(profileId: string, direction: "top" | "up" | "down" | "bottom") {
-    if (disabled || catalogWritePending.current) return;
+    if (disabled || catalogWritePending.current || modelOperation.current) return;
     const index = profiles.findIndex((record) => record.id === profileId);
     if (index < 0) return;
     const destination = direction === "top" ? 0 : direction === "bottom" ? profiles.length - 1
@@ -227,6 +243,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
   }
 
   async function handlePickPath(label: string, currentValue: string, directory: boolean, setter: (value: string) => void) {
+    if (modelOperation.current) return;
     try {
       const selected = await open({
         title: `Select ${label}`,
@@ -235,6 +252,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
         defaultPath: currentValue.trim() || undefined
       });
       const selectedPath = Array.isArray(selected) ? selected[0] : selected;
+      if (modelOperation.current) return;
       if (!selectedPath) {
         setProfileStatus(`${label} selection canceled.`);
         return;
@@ -270,7 +288,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
   }
 
   async function handleReloadProfiles() {
-    if (catalogWritePending.current) return;
+    if (catalogWritePending.current || modelOperation.current) return;
     catalogWritePending.current = true;
     setCatalogBusy(true);
     try {
@@ -292,6 +310,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
 
   return (
     <section className="engine-setup-panel" aria-label="引擎设置" data-focus-owner="engine" tabIndex={-1}>
+      <fieldset disabled={disabled || modelBusy} style={{ border: 0, padding: 0, minWidth: 0 }}>
       <div className="engine-run-row">
         <label>
           <span>配置</span>
@@ -373,6 +392,11 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
           </div>
         </label>
       </div>
+      {adapterKind === "kata_go_analysis" && <ModelInventoryPanel key={selectedProfileId}
+        modelPath={modelPath} workingDir={workingDir}
+        savedModelPath={editingProfile?.adapter_kind === "kata_go_analysis" ? editingProfile.settings.model_path ?? "" : ""}
+        disabled={disabled || catalogBusy} beginOperation={beginModelOperation} endOperation={endModelOperation}
+        onSelect={(path) => updatePath(setModelPath, path)} />}
       <div className="engine-grid" aria-label="启动参数">
         {argv.map((argument, index) => (
           <label key={index}>
@@ -410,6 +434,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
           {assetChecks.map((check) => `${check.exists ? "有" : "缺"} ${check.label}${check.path ? `: ${check.path}` : ""}`).join(" | ")}
         </p>
       )}
+      </fieldset>
     </section>
   );
 }

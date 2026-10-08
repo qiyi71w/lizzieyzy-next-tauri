@@ -974,10 +974,12 @@ name = "engine-manager"
 version = "0.1.0"
 dependencies = [
  "app-model",
+ "flate2",
  "katago-protocol",
  "serde",
  "serde_json",
  "sgf",
+ "sha2",
  "thiserror 1.0.69",
  "uuid",
 ]

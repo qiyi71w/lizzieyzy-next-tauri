@@ -7,6 +7,8 @@ import { EngineSetupPanel } from "./EngineSetupPanel";
 import { loadEngineProfilesSettings, saveEngineProfilesSettings } from "../api/backend";
 import * as backend from "../api/backend";
 import type { ForegroundEngineSnapshotDto } from "../domain/types";
+import * as models from "../api/models";
+import type { ModelInventoryDto } from "../domain/types";
 
 let root: Root | null = null;
 let host: HTMLDivElement;
@@ -281,5 +283,72 @@ describe("engine profile configuration editor", () => {
     expect(field("配置").value).toBe("default");
     expect(localStorage.getItem("lizzieyzy-next-engine-profile")).toBe(newerBytes);
     expect(Array.from(host.querySelectorAll<HTMLElement>("[data-profile-order-id]")).map((row) => row.dataset.profileOrderId)).toEqual(["default", "second"]);
+  });
+});
+
+function modelInventory(): ModelInventoryDto {
+  return { revision: "inventory-1", models: ["b11-11750M", "b10"].map((name) => ({
+    id: name, path: `/models/${name}.bin.gz`, origin: { kind: "managed", catalog_id: name, installed_sha256: name },
+    inspection: { status: "header_recognized", model_name: `actual-${name}`, format_version: 17,
+      format: "katago_binary_gzip", sha256: name, size_bytes: 100 }
+  })) };
+}
+
+describe("retained local model selection", () => {
+  it("keeps B11 available through B10, save, rename and manual argv without implicit selection", async () => {
+    const inventory = modelInventory();
+    vi.spyOn(models, "loadModelInventory").mockResolvedValue(inventory);
+    vi.spyOn(models, "refreshModelInventory").mockResolvedValue(inventory);
+    vi.spyOn(models, "selectInstalledModel").mockImplementation(async (request) => inventory.models.find((model) => model.id === request.model_id)!.path);
+    const settings = await loadEngineProfilesSettings();
+    const profile = settings.profiles[0].profile;
+    if (profile.adapter_kind !== "kata_go_analysis") throw new Error("KataGo expected");
+    profile.settings.model_path = inventory.models[0].path;
+    profile.argv = ["-override-config", "numSearchThreads=2"];
+    await saveEngineProfilesSettings(settings);
+    await render();
+    await click("保留当前路径并刷新模型");
+    expect(field("模型").value).toBe(inventory.models[0].path);
+    const useModel = async (index: number) => {
+      const button = host.querySelector<HTMLButtonElement>(`button[aria-label="使用此模型路径 ${inventory.models[index].path}"]`)!;
+      await act(async () => { button.click(); });
+    };
+    await useModel(1);
+    expect(field("模型").value).toBe(inventory.models[1].path);
+    expect((await loadEngineProfilesSettings()).profiles[0].profile).toEqual(profile);
+    await change(field("名称"), "renamed custom command");
+    await change(field("参数 2"), "numSearchThreads=3");
+    await click("保存配置");
+    await click("重新加载配置");
+    expect(host.textContent).toContain("actual-b11-11750M");
+    expect(host.textContent).toContain("受管安装记录");
+    await useModel(0);
+    await click("保存配置");
+    const restored = (await loadEngineProfilesSettings()).profiles[0].profile;
+    expect(restored.name).toBe("renamed custom command");
+    expect(restored.argv).toEqual(["-override-config", "numSearchThreads=3"]);
+    expect(restored.adapter_kind === "kata_go_analysis" && restored.settings.model_path).toBe(inventory.models[0].path);
+  });
+
+  it("disables conflicting actions while refreshing and rejects late or failed snapshots without changing drafts", async () => {
+    let loaded!: (result: ModelInventoryDto) => void;
+    vi.spyOn(models, "loadModelInventory").mockReturnValue(new Promise((resolve) => { loaded = resolve; }));
+    let refreshed!: (result: ModelInventoryDto) => void;
+    const refresh = vi.spyOn(models, "refreshModelInventory").mockReturnValue(new Promise((resolve) => { refreshed = resolve; }));
+    await render();
+    await change(field("模型"), "/custom/current.gz");
+    await click("保留当前路径并刷新模型");
+    expect(field("模型").matches(":disabled")).toBe(true);
+    await click("保存配置");
+    expect((await loadEngineProfilesSettings()).profiles[0].profile.adapter_kind === "kata_go_analysis").toBe(true);
+    await act(async () => { refreshed(modelInventory()); });
+    await act(async () => { loaded({ revision: "late", models: [] }); });
+    expect(host.textContent).toContain("actual-b11-11750M");
+    expect(field("模型").value).toBe("/custom/current.gz");
+    refresh.mockRejectedValue(new Error("read failed"));
+    await click("保留当前路径并刷新模型");
+    expect(host.textContent).toContain("模型快照已失效");
+    expect(field("模型").value).toBe("/custom/current.gz");
+    expect(Array.from(host.querySelectorAll<HTMLButtonElement>('button[aria-label^="使用此模型路径"]')).every((button) => button.disabled)).toBe(true);
   });
 });
