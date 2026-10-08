@@ -10,7 +10,10 @@ export type ChartExportSnapshot = {
 /** Freeze at invocation, before any destination selection or asynchronous work.
  * Only the document's attached selected-line model enters this read-only path. */
 export function captureChartExport(model: WinrateChartModel, sourceSgfPath: string | null): ChartExportSnapshot {
-  if (!model.points.some((point) => displayedWinrate(point, model.perspective, model.selectedToPlay) != null || displayedScore(point, model.perspective, model.selectedToPlay) != null)) {
+  if (!model.points.some((point) =>
+    (model.showWinrate && displayedWinrate(point, model.perspective, model.selectedToPlay) != null) ||
+    (model.showScore && displayedScore(point, model.perspective, model.selectedToPlay) != null)
+  )) {
     throw new Error(t("chart.export.noData"));
   }
   const basename = sourceSgfPath?.split(/[\\/]/).at(-1);

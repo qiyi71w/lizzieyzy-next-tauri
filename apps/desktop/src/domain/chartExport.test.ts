@@ -59,6 +59,27 @@ describe("invocation-time chart export", () => {
       expect(() => captureChartExport({ ...model, points: [{ ...model.points[0], analysis }] }, null)).toThrow("所选线路没有有效分析");
     }
   });
+  it.each([
+    { showWinrate: true, showScore: false, winrateBlack: -0.5, scoreMeanBlack: 7.3 },
+    { showWinrate: false, showScore: true, winrateBlack: 0.6, scoreMeanBlack: undefined },
+    { showWinrate: false, showScore: false, winrateBlack: 0.6, scoreMeanBlack: 7.3 }
+  ])("refuses data available only in hidden metrics: %j", ({ showWinrate, showScore, ...metrics }) => {
+    const source = {
+      ...model, showWinrate, showScore,
+      points: [{ ...model.points[0], analysis: { visits: 100, ...metrics } }]
+    };
+    expect(() => captureChartExport(source, null)).toThrow(Error);
+  });
+  it.each([
+    { showWinrate: true, showScore: false, winrateBlack: 0.6, scoreMeanBlack: undefined },
+    { showWinrate: false, showScore: true, winrateBlack: -0.5, scoreMeanBlack: 7.3 }
+  ])("admits an isolated valid enabled metric: %j", ({ showWinrate, showScore, ...metrics }) => {
+    const source = {
+      ...model, showWinrate, showScore,
+      points: [{ ...model.points[0], analysis: { visits: 100, ...metrics } }]
+    };
+    expect(captureChartExport(source, null).model).toEqual({ ...source, hoverEnabled: false });
+  });
 });
 
 it("renders actual frozen layers, gap islands and separated fixed labels with no synthesized gap marker", () => {

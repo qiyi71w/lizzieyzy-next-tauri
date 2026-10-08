@@ -918,7 +918,11 @@ impl CurrentSgfDocument {
             for property in &node.properties {
                 if depth == 0 && property.key == "SZ" {
                     has_size = true;
-                    crate::push_property(&mut output, "SZ", &crate::serialize_board_dimensions(self.board_width(), self.board_height()));
+                    crate::push_property(
+                        &mut output,
+                        "SZ",
+                        &crate::serialize_board_dimensions(self.board_width(), self.board_height()),
+                    );
                 } else {
                     output.push_str(&property.key);
                     for value in &property.values {
@@ -929,13 +933,20 @@ impl CurrentSgfDocument {
                 }
             }
             if depth == 0 && !has_size {
-                crate::push_property(&mut output, "SZ", &crate::serialize_board_dimensions(self.board_width(), self.board_height()));
+                crate::push_property(
+                    &mut output,
+                    "SZ",
+                    &crate::serialize_board_dimensions(self.board_width(), self.board_height()),
+                );
             }
             if let Some(index) = leaf.indices.get(depth) {
-                node = node.children.get(*index as usize).ok_or_else(|| CurrentGameError {
-                    kind: CurrentGameErrorKind::InvalidNodePath,
-                    message: "invalid node path".into(),
-                })?;
+                node = node
+                    .children
+                    .get(*index as usize)
+                    .ok_or_else(|| CurrentGameError {
+                        kind: CurrentGameErrorKind::InvalidNodePath,
+                        message: "invalid node path".into(),
+                    })?;
             }
         }
         output.push(')');

@@ -178,6 +178,15 @@ impl CurrentSgfDocument {
             }
         }
         let color = color.unwrap_or(self.snapshot(&anchor)?.position.to_play);
+        if !insert {
+            if let Some(index) = self.existing_child_index(&anchor, color, &MoveVertex::Point(point))? {
+                anchor.indices.push(index);
+                return Ok(DocumentEditOutcome {
+                    snapshot: self.snapshot(&anchor)?,
+                    edit: None,
+                });
+            }
+        }
         let mut board = self.strict_board(&anchor)?;
         let mut node = move_node(color, point);
         apply_node(

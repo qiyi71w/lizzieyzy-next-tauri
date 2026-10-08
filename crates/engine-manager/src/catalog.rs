@@ -228,7 +228,10 @@ pub fn prepare_engine_profiles_save(
     let mut settings = normalize_engine_profiles(settings)?;
     let mut destination = 0;
     for existing in &current.profiles {
-        if let Some(offset) = settings.profiles[destination..].iter().position(|record| record.id == existing.id) {
+        if let Some(offset) = settings.profiles[destination..]
+            .iter()
+            .position(|record| record.id == existing.id)
+        {
             settings.profiles[destination..=destination + offset].rotate_right(1);
             destination += 1;
         }
@@ -250,7 +253,12 @@ fn reorder_engine_profiles_with(
     request: &app_model::EngineProfileOrderRequestDto,
     persist: impl FnOnce(&Path, &EngineProfilesSettings) -> Result<(), String>,
 ) -> Result<EngineProfilesSettings, String> {
-    if !current.profiles.iter().map(|record| &record.id).eq(request.expected_profile_ids.iter()) {
+    if !current
+        .profiles
+        .iter()
+        .map(|record| &record.id)
+        .eq(request.expected_profile_ids.iter())
+    {
         return Err("engine profile catalog order is stale; reload profiles before reordering".into());
     }
     if request.profile_ids.len() != current.profiles.len() {
@@ -262,13 +270,19 @@ fn reorder_engine_profiles_with(
             return Err(format!("duplicate engine profile id: {id}"));
         }
     }
-    if current.profiles.iter().any(|record| !positions.contains_key(record.id.as_str())) {
+    if current
+        .profiles
+        .iter()
+        .any(|record| !positions.contains_key(record.id.as_str()))
+    {
         return Err("engine profile order contains unknown or missing profile IDs".into());
     }
     if request.profile_ids == request.expected_profile_ids {
         return Ok(current);
     }
-    current.profiles.sort_unstable_by_key(|record| positions[record.id.as_str()]);
+    current
+        .profiles
+        .sort_unstable_by_key(|record| positions[record.id.as_str()]);
     persist(path, &current)?;
     Ok(current)
 }
@@ -460,7 +474,8 @@ mod persist_failure_tests {
         let error = reorder_engine_profiles_with(&path, current.clone(), &request, |path, next| {
             let json = serde_json::to_string_pretty(next).unwrap();
             atomic_replace_file_with(path, &json, |_, _| Err(io::Error::other("rename boom")))
-        }).unwrap_err();
+        })
+        .unwrap_err();
         assert!(error.contains("replace"));
         assert_eq!(fs::read(&path).unwrap(), before);
         assert_eq!(load_engine_profiles(&path).unwrap(), current);

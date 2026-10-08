@@ -21,10 +21,10 @@ mod current_game_departure;
 #[cfg(test)]
 mod current_game_save_write;
 #[cfg(test)]
-mod export_tests;
-#[cfg(test)]
 mod current_game_session_recovery;
 mod departure;
+#[cfg(test)]
+mod export_tests;
 mod external_sync;
 #[cfg(test)]
 mod external_sync_tests;
@@ -233,13 +233,25 @@ impl CurrentGameState {
         self.with_document(|document| document.serialize())
     }
 
-    pub fn capture_selected_line(&self, generation: u64, selected: &NodePath, leaf: &NodePath) -> Result<String, String> {
+    pub fn capture_selected_line(
+        &self,
+        generation: u64,
+        selected: &NodePath,
+        leaf: &NodePath,
+    ) -> Result<String, String> {
         let holder = self.holder.lock().expect("current game state");
-        if holder.generation != generation || &holder.selected_path != selected || !leaf.indices.starts_with(&selected.indices) {
+        if holder.generation != generation
+            || &holder.selected_path != selected
+            || !leaf.indices.starts_with(&selected.indices)
+        {
             return Err("Selected export line no longer matches the current document.".into());
         }
-        holder.document.as_ref().ok_or_else(|| no_current_game().to_string())?
-            .serialize_selected_line(leaf).map_err(|error| error.to_string())
+        holder
+            .document
+            .as_ref()
+            .ok_or_else(|| no_current_game().to_string())?
+            .serialize_selected_line(leaf)
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(test)]
@@ -766,9 +778,12 @@ impl CurrentGameState {
             .as_mut()
             .ok_or_else(no_current_game)?
             .author_with_history(&path, action)?;
+        let changed = outcome.edit.is_some() || holder.selected_path != outcome.snapshot.path;
         if let Some(edit) = outcome.edit {
             holder.commit_edit(edit);
             holder.generation = holder.generation.saturating_add(1);
+        }
+        if changed {
             holder.selected_path = outcome.snapshot.path;
             holder.bump_snapshot();
             self.note_recovery(&holder);

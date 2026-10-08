@@ -93,7 +93,12 @@ mod tests {
         std::fs::write(&target, b"prior target bytes").unwrap();
         let fresh_target = directory.join("fresh.png");
         for (width, height, rgba, cause) in [
-            (3, 2, vec![0; 4], "rendered image dimensions do not match its pixel bytes"),
+            (
+                3,
+                2,
+                vec![0; 4],
+                "rendered image dimensions do not match its pixel bytes",
+            ),
             (0, 2, vec![], "image surface has no rendered pixels"),
             (3, 0, vec![], "image surface has no rendered pixels"),
         ] {
@@ -101,7 +106,10 @@ mod tests {
                 let error = write_rgba_atomic(destination, width, height, rgba.clone(), ImageFormat::Png)
                     .unwrap_err();
                 assert!(error.contains("encode"), "missing failed operation: {error}");
-                assert!(error.contains(&destination.display().to_string()), "missing final target: {error}");
+                assert!(
+                    error.contains(&destination.display().to_string()),
+                    "missing final target: {error}"
+                );
                 assert!(error.contains(cause), "missing source error: {error}");
                 assert_eq!(std::fs::read(&target).unwrap(), b"prior target bytes");
                 assert!(!fresh_target.exists());

@@ -8,10 +8,10 @@ use app_model::{
     ReadboardSidecarSyncSnapshotResult, StoneDto,
 };
 use engine_manager::{
-    build_command_spec, check_assets, default_engine_profiles_settings,
-    parse_engine_profiles, save_engine_profiles as persist_engine_profiles, AssetCheck, CommandSpec,
-    EngineProfileCatalog, EngineProfilesSettings as EngineProfilesSettingsDto, ForegroundEngineConfig,
-    ForegroundEngineManager, SavedEngineProfile, SelectedNodeJobRequest, WholeGameWorkItem,
+    build_command_spec, check_assets, default_engine_profiles_settings, parse_engine_profiles,
+    save_engine_profiles as persist_engine_profiles, AssetCheck, CommandSpec, EngineProfileCatalog,
+    EngineProfilesSettings as EngineProfilesSettingsDto, ForegroundEngineConfig, ForegroundEngineManager,
+    SavedEngineProfile, SelectedNodeJobRequest, WholeGameWorkItem,
 };
 use katago_protocol::{analysis_query_from_position, AnalysisQueryOptions};
 use std::fs;
@@ -36,11 +36,11 @@ mod main_window_pin;
 use main_window_pin::{main_window_pin_status, set_main_window_pin, MainWindowPin};
 mod current_game_state;
 mod document_departure;
+mod export;
 mod file_activation;
 mod human_match;
 mod readboard;
 mod save_as;
-mod export;
 mod session_recovery;
 #[cfg(windows)]
 extern crate windows_core;
@@ -595,7 +595,9 @@ fn save_engine_profiles_settings(
     manager: State<'_, ForegroundEngineManager>,
     settings: EngineProfilesSettingsDto,
 ) -> Result<EngineProfilesSettingsDto, String> {
-    let _transaction = ENGINE_CATALOG_WRITES.lock().map_err(|_| "engine catalog lock poisoned")?;
+    let _transaction = ENGINE_CATALOG_WRITES
+        .lock()
+        .map_err(|_| "engine catalog lock poisoned")?;
     let current = load_engine_profiles_from_disk(&app_handle)?;
     let path = engine_profile_path(&app_handle)?;
     save_engine_profiles_at_path(&path, &manager, &current, settings)
@@ -623,7 +625,9 @@ fn reorder_engine_profiles_settings(
     app_handle: AppHandle,
     request: app_model::EngineProfileOrderRequestDto,
 ) -> Result<EngineProfilesSettingsDto, String> {
-    let _transaction = ENGINE_CATALOG_WRITES.lock().map_err(|_| "engine catalog lock poisoned")?;
+    let _transaction = ENGINE_CATALOG_WRITES
+        .lock()
+        .map_err(|_| "engine catalog lock poisoned")?;
     let current = load_engine_profiles_from_disk(&app_handle)?;
     let path = engine_profile_path(&app_handle)?;
     reorder_engine_profiles_at_path(&path, current, &request)
@@ -1375,15 +1379,27 @@ mod tests {
         let catalog = std::sync::Arc::new(engine_manager::InMemoryEngineProfileCatalog::new());
         let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
         let runtime = manager.snapshot();
-        let reordered = reorder_engine_profiles_at_path(&path, engine_manager::load_engine_profiles(&path).unwrap(), &request).unwrap();
+        let reordered = reorder_engine_profiles_at_path(
+            &path,
+            engine_manager::load_engine_profiles(&path).unwrap(),
+            &request,
+        )
+        .unwrap();
         assert_eq!(reordered.selected_profile_id, current.selected_profile_id);
         assert_eq!(reordered.autoload_profile_id, current.autoload_profile_id);
         assert_eq!(reordered.profiles[1], current.profiles[0]);
         assert_eq!(manager.snapshot(), runtime);
         let before = std::fs::read(&path).unwrap();
-        assert!(reorder_engine_profiles_at_path(&path, reordered.clone(), &request).unwrap_err().contains("stale"));
+        assert!(
+            reorder_engine_profiles_at_path(&path, reordered.clone(), &request)
+                .unwrap_err()
+                .contains("stale")
+        );
         std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
-        let reverse = app_model::EngineProfileOrderRequestDto { expected_profile_ids: request.profile_ids, profile_ids: request.expected_profile_ids };
+        let reverse = app_model::EngineProfileOrderRequestDto {
+            expected_profile_ids: request.profile_ids,
+            profile_ids: request.expected_profile_ids,
+        };
         assert!(reorder_engine_profiles_at_path(&path, reordered.clone(), &reverse).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), before);
         assert_eq!(engine_manager::load_engine_profiles(&path).unwrap(), reordered);
@@ -1407,9 +1423,19 @@ mod tests {
         let mut new_record = stale.profiles[0].clone();
         new_record.id = "new".into();
         stale.profiles.insert(0, new_record);
-        let manager = ForegroundEngineManager::new(std::sync::Arc::new(engine_manager::InMemoryEngineProfileCatalog::new()), ForegroundEngineConfig::for_tests());
+        let manager = ForegroundEngineManager::new(
+            std::sync::Arc::new(engine_manager::InMemoryEngineProfileCatalog::new()),
+            ForegroundEngineConfig::for_tests(),
+        );
         let saved = save_engine_profiles_at_path(&path, &manager, &current, stale).unwrap();
-        assert_eq!(saved.profiles.iter().map(|record| record.id.as_str()).collect::<Vec<_>>(), ["second", "default", "new"]);
+        assert_eq!(
+            saved
+                .profiles
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            ["second", "default", "new"]
+        );
         assert_eq!(saved.profiles[1].profile.name, "Late editor save");
         assert_eq!(engine_manager::load_engine_profiles(&path).unwrap(), saved);
         std::fs::remove_dir_all(directory).unwrap();

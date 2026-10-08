@@ -6,6 +6,139 @@ fn point(x: u8, y: u8) -> PointDto {
 }
 
 #[test]
+fn authoring_add_reuse_navigates_without_editing_and_preserves_undo_redo() {
+    use engine_manager::{ForegroundEngineConfig, ForegroundEngineManager, InMemoryEngineProfileCatalog};
+    use std::sync::Arc;
+
+    let source = "(;SZ[9](;B[aa]C[other])(;B[cc]C[keep]XX[value];W[dd]C[descendant]))";
+    for color in [Some(PlayerColor::Black), None] {
+        for history_state in ["clean", "undo", "redo"] {
+            let manager = ForegroundEngineManager::new(
+                Arc::new(InMemoryEngineProfileCatalog::new()),
+                ForegroundEngineConfig::for_tests(),
+            );
+            let mut state = CurrentGameState::default();
+            state.connect_analysis_manager(manager);
+            let opened = state.replace(source, Some("source.sgf".into())).unwrap();
+            let mut before = state.select_path(NodePath::default(), opened.generation).unwrap();
+            if history_state != "clean" {
+                before = state
+                    .set_personal_comment(NodePath::default(), "root edit".into())
+                    .unwrap();
+                if history_state == "redo" {
+                    before = state.undo(before.generation).unwrap();
+                }
+            }
+            let serialized = state.serialize().unwrap();
+            let identity = state.document_identity();
+            let revisions = {
+                let holder = state.holder.get_mut().expect("exclusive fixture");
+                (
+                    holder.undo_revisions.clone(),
+                    holder.redo_revisions.clone(),
+                    holder.next_edit_revision,
+                    holder.edit_revision,
+                    holder.nonhistory_revision,
+                )
+            };
+            let pending = state.take_due_recovery_write(u64::MAX).unwrap();
+            state.finish_recovery_write(pending, Ok(()));
+            let reused = state
+                .author(
+                    before.generation,
+                    before.selected_path.clone(),
+                    Action::Add {
+                        point: point(2, 2),
+                        color,
+                        insert: false,
+                    },
+                )
+                .unwrap();
+            assert_eq!(reused.selected_path.indices, vec![1]);
+            assert_eq!(reused.snapshot.path, reused.selected_path);
+            assert_eq!(reused.snapshot.personal_comment, "keep");
+            assert_eq!(reused.generation, before.generation);
+            assert!(reused.snapshot_seq > before.snapshot_seq);
+            assert_eq!(state.document_identity(), identity);
+            assert_eq!(reused.dirty, before.dirty);
+            assert_eq!(reused.can_undo, before.can_undo);
+            assert_eq!(reused.can_redo, before.can_redo);
+            assert_eq!(reused.native_path, before.native_path);
+            assert_eq!(state.serialize().unwrap(), serialized);
+            {
+                let holder = state.holder.get_mut().expect("exclusive fixture");
+                assert_eq!(
+                    (
+                        holder.undo_revisions.clone(),
+                        holder.redo_revisions.clone(),
+                        holder.next_edit_revision,
+                        holder.edit_revision,
+                        holder.nonhistory_revision,
+                    ),
+                    revisions
+                );
+                assert_eq!(
+                    holder.analysis_target,
+                    Some((reused.generation, reused.selected_path.clone()))
+                );
+            }
+            assert_eq!(
+                state
+                    .select_path(reused.selected_path.clone(), reused.generation)
+                    .unwrap(),
+                reused
+            );
+            let recovery = state.take_due_recovery_write(u64::MAX).expect("cursor recovery");
+            assert_eq!(recovery.selected_path, reused.selected_path);
+            assert_eq!(recovery.sgf_text, serialized);
+            assert_eq!(recovery.dirty, before.dirty);
+            match history_state {
+                "undo" => {
+                    let undone = state.undo(reused.generation).unwrap();
+                    assert_eq!(undone.selected_path, NodePath::default());
+                    assert!(!undone.dirty);
+                    assert!(!undone.can_undo);
+                    assert!(undone.can_redo);
+                    assert_eq!(state.serialize().unwrap(), source);
+                }
+                "redo" => {
+                    let redone = state.redo(reused.generation).unwrap();
+                    assert_eq!(redone.selected_path, NodePath::default());
+                    assert!(redone.dirty);
+                    assert!(redone.can_undo);
+                    assert!(!redone.can_redo);
+                    assert_eq!(redone.snapshot.personal_comment, "root edit");
+                }
+                "clean" => {}
+                _ => unreachable!(),
+            }
+        }
+    }
+}
+
+#[test]
+fn authoring_same_path_noop_does_not_advance_snapshot_or_schedule_recovery() {
+    let state = CurrentGameState::default();
+    let before = state.replace("(;SZ[9];B[cc]C[keep])", None).unwrap();
+    let serialized = state.serialize().unwrap();
+    let pending = state.take_due_recovery_write(u64::MAX).unwrap();
+    state.finish_recovery_write(pending, Ok(()));
+    let after = state
+        .author(
+            before.generation,
+            before.selected_path.clone(),
+            Action::Drag {
+                from: point(2, 2),
+                to: point(2, 2),
+            },
+        )
+        .unwrap();
+    assert_eq!(after, before);
+    assert_eq!(state.serialize().unwrap(), serialized);
+    assert!(state.take_due_recovery_write(u64::MAX).is_none());
+}
+
+#[test]
 fn authoring_stale_cursor_and_reversible_history_are_nondestructive() {
     let state = CurrentGameState::default();
     let before = state
@@ -208,5 +341,13 @@ fn authoring_history_exchanges_legitimate_analysis_without_resetting_source_or_r
     assert_eq!(undone_again.snapshot.primary_analysis.unwrap().visits, 200);
     assert_eq!(state.serialize().unwrap(), original_sgf);
     let reopened = CurrentSgfDocument::open(&original_sgf).unwrap();
-    assert_eq!(reopened.snapshot(&selected).unwrap().primary_analysis.unwrap().visits, 200);
+    assert_eq!(
+        reopened
+            .snapshot(&selected)
+            .unwrap()
+            .primary_analysis
+            .unwrap()
+            .visits,
+        200
+    );
 }

@@ -91,6 +91,101 @@ fn forced_black_white_and_alternate_are_actual_moves_not_setup_or_pl() {
 }
 
 #[test]
+fn add_reuses_exact_child_for_forced_colors_and_alternate_without_changing_content() {
+    for (before, selected, child, color) in [
+        (
+            "(;SZ[9];B[cc]C[keep]XX[value]LZ[opaque];W[dd]C[descendant]LZ2[child])",
+            vec![],
+            vec![0],
+            Some(PlayerColor::Black),
+        ),
+        (
+            "(;SZ[9];B[cc]C[keep]XX[value]LZ[opaque];W[dd]C[descendant]LZ2[child])",
+            vec![],
+            vec![0],
+            None,
+        ),
+        (
+            "(;SZ[9];B[aa](;B[cc]C[other color])(;W[cc]C[keep]XX[value]LZ[opaque];B[dd]C[descendant]LZ2[child]))",
+            vec![0],
+            vec![0, 1],
+            Some(PlayerColor::White),
+        ),
+        (
+            "(;SZ[9];B[aa](;B[cc]C[other color])(;W[cc]C[keep]XX[value]LZ[opaque];B[dd]C[descendant]LZ2[child]))",
+            vec![0],
+            vec![0, 1],
+            None,
+        ),
+    ] {
+        let mut doc = CurrentSgfDocument::open(before).unwrap();
+        let child = path(&child);
+        doc.replace_primary_analysis(&child, &analysis(100)).unwrap();
+        let mut descendant = child.clone();
+        descendant.indices.push(0);
+        doc.replace_primary_analysis(&descendant, &analysis(200)).unwrap();
+        let serialized = doc.serialize().unwrap();
+        let expected = doc.snapshot(&child).unwrap();
+        let expected_descendant = doc.snapshot(&descendant).unwrap();
+        let outcome = doc
+            .author_with_history(
+                &path(&selected),
+                SgfAuthoringActionDto::Add {
+                    point: point(2, 2),
+                    color,
+                    insert: false,
+                },
+            )
+            .unwrap();
+        assert!(outcome.edit.is_none());
+        assert_eq!(outcome.snapshot, expected);
+        assert_eq!(outcome.snapshot.personal_comment, "keep");
+        assert_eq!(outcome.snapshot.primary_analysis.unwrap().visits, 100);
+        assert_eq!(doc.snapshot(&descendant).unwrap(), expected_descendant);
+        assert_eq!(doc.serialize().unwrap(), serialized);
+    }
+}
+
+#[test]
+fn add_different_color_or_point_creates_a_reversible_new_child() {
+    for (color, point, after) in [
+        (PlayerColor::White, point(2, 2), "(;SZ[9](;B[cc]C[keep])(;W[cc]))"),
+        (PlayerColor::Black, point(3, 3), "(;SZ[9](;B[cc]C[keep])(;B[dd]))"),
+    ] {
+        roundtrip(
+            "(;SZ[9];B[cc]C[keep])",
+            &[],
+            SgfAuthoringActionDto::Add {
+                point,
+                color: Some(color),
+                insert: false,
+            },
+            after,
+            &[1],
+        );
+    }
+}
+
+#[test]
+fn insertion_does_not_navigate_to_an_exact_child() {
+    let before = "(;SZ[9];B[aa];W[cc]C[keep])";
+    for color in [Some(PlayerColor::White), None] {
+        let mut doc = CurrentSgfDocument::open(before).unwrap();
+        assert!(doc
+            .author_with_history(
+                &path(&[0]),
+                SgfAuthoringActionDto::Add {
+                    point: point(2, 2),
+                    color,
+                    insert: true,
+                },
+            )
+            .is_err());
+        assert_eq!(doc.serialize().unwrap(), before);
+    }
+}
+
+#[test]
 fn source_root_pass_and_approved_nonmove_insertion_anchors_are_preserved() {
     for (before, selected, after, cursor, color, p) in [
         (
@@ -466,7 +561,8 @@ fn analysis_history_cycle(
             .unwrap();
     }
     for indices in unaffected {
-        doc.replace_primary_analysis(&path(indices), &analysis(900)).unwrap();
+        doc.replace_primary_analysis(&path(indices), &analysis(900))
+            .unwrap();
     }
     let analyzed_edit = doc.serialize().unwrap();
     assert_eq!(history.undo(&mut doc).unwrap().unwrap().selected_path, selected);
@@ -474,13 +570,16 @@ fn analysis_history_cycle(
     // The original gains only legitimate later analysis on unaffected positions.
     let mut original = CurrentSgfDocument::open(&before).unwrap();
     for indices in unaffected {
-        original.replace_primary_analysis(&path(indices), &analysis(900)).unwrap();
+        original
+            .replace_primary_analysis(&path(indices), &analysis(900))
+            .unwrap();
     }
     assert_eq!(doc.serialize().unwrap(), original.serialize().unwrap());
     for (index, indices) in affected.iter().enumerate() {
         let node = path(indices);
         assert_analysis_roundtrip(&doc, &node, (node == existing).then_some(50));
-        doc.replace_primary_analysis(&node, &analysis(200 + index as u32)).unwrap();
+        doc.replace_primary_analysis(&node, &analysis(200 + index as u32))
+            .unwrap();
     }
     let analyzed_original = doc.serialize().unwrap();
     assert_eq!(history.redo(&mut doc).unwrap().unwrap().selected_path, selected);
@@ -515,7 +614,13 @@ fn drag_analysis_inverse_covers_empty_descendants_but_keeps_later_unrelated_anal
 #[test]
 fn every_transform_exchanges_root_and_all_branch_analysis_in_both_directions() {
     use app_model::SgfTransformDto::*;
-    for transform in [RotateClockwise, RotateCounterclockwise, MirrorHorizontal, MirrorVertical, SwapColors] {
+    for transform in [
+        RotateClockwise,
+        RotateCounterclockwise,
+        MirrorHorizontal,
+        MirrorVertical,
+        SwapColors,
+    ] {
         analysis_history_cycle(
             SgfAuthoringActionDto::Transform { transform },
             &[0, 1],
@@ -557,7 +662,8 @@ fn insertion_exchanges_analysis_at_rebased_descendant_paths_and_retains_new_node
         "(;SZ[5]XX[root];B[aa]C[keep](;W[bb];B[cc]XX[leaf]LZ2[secondary])(;W[dd]C[sibling]))",
     )
     .unwrap();
-    doc.replace_primary_analysis(&path(&[0, 0, 0]), &analysis(50)).unwrap();
+    doc.replace_primary_analysis(&path(&[0, 0, 0]), &analysis(50))
+        .unwrap();
     let before = doc.serialize().unwrap();
     let edit = doc
         .author_with_history(
@@ -578,17 +684,21 @@ fn insertion_exchanges_analysis_at_rebased_descendant_paths_and_retains_new_node
     let original: &[&[u32]] = &[&[0, 0], &[0, 0, 0], &[0, 1]];
     doc.replace_primary_analysis(&inserted, &analysis(700)).unwrap();
     for (index, indices) in rebased.iter().enumerate() {
-        doc.replace_primary_analysis(&path(indices), &analysis(100 + index as u32)).unwrap();
+        doc.replace_primary_analysis(&path(indices), &analysis(100 + index as u32))
+            .unwrap();
     }
     let analyzed_edit = doc.serialize().unwrap();
     assert_eq!(history.undo(&mut doc).unwrap().unwrap().selected_path, selected);
     assert!(!history.can_undo());
     let mut expected = CurrentSgfDocument::open(&before).unwrap();
-    expected.replace_primary_analysis(&selected, &analysis(900)).unwrap();
+    expected
+        .replace_primary_analysis(&selected, &analysis(900))
+        .unwrap();
     assert_eq!(doc.serialize().unwrap(), expected.serialize().unwrap());
     for (index, indices) in original.iter().enumerate() {
         assert_analysis_roundtrip(&doc, &path(indices), (index == 1).then_some(50));
-        doc.replace_primary_analysis(&path(indices), &analysis(200 + index as u32)).unwrap();
+        doc.replace_primary_analysis(&path(indices), &analysis(200 + index as u32))
+            .unwrap();
     }
     let analyzed_original = doc.serialize().unwrap();
     assert_eq!(history.redo(&mut doc).unwrap().unwrap().selected_path, inserted);

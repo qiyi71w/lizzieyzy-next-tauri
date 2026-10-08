@@ -437,9 +437,15 @@ fn generic_settings_roundtrip_preserves_unrestricted_argv() {
 fn reorder_persists_stable_ids_without_changing_catalog_identities_or_records() {
     let temp = TestTempDir::new("reorder");
     let path = temp.catalog_path();
-    let current = settings("beta", Some("alpha"), vec![
-        profile("alpha", "Alpha"), profile("beta", "Beta"), profile("gamma", "Gamma"),
-    ]);
+    let current = settings(
+        "beta",
+        Some("alpha"),
+        vec![
+            profile("alpha", "Alpha"),
+            profile("beta", "Beta"),
+            profile("gamma", "Gamma"),
+        ],
+    );
     save_engine_profiles(&path, current.clone()).unwrap();
     let request = app_model::EngineProfileOrderRequestDto {
         expected_profile_ids: vec!["alpha".into(), "beta".into(), "gamma".into()],
@@ -448,7 +454,14 @@ fn reorder_persists_stable_ids_without_changing_catalog_identities_or_records() 
     let reordered = engine_manager::reorder_engine_profiles(&path, current.clone(), &request).unwrap();
     assert_eq!(reordered.selected_profile_id, "beta");
     assert_eq!(reordered.autoload_profile_id.as_deref(), Some("alpha"));
-    assert_eq!(reordered.profiles, vec![current.profiles[2].clone(), current.profiles[0].clone(), current.profiles[1].clone()]);
+    assert_eq!(
+        reordered.profiles,
+        vec![
+            current.profiles[2].clone(),
+            current.profiles[0].clone(),
+            current.profiles[1].clone()
+        ]
+    );
     assert_eq!(load_engine_profiles(&path).unwrap(), reordered);
 }
 
@@ -456,7 +469,11 @@ fn reorder_persists_stable_ids_without_changing_catalog_identities_or_records() 
 fn stale_invalid_and_boundary_orders_never_replace_durable_catalog() {
     let temp = TestTempDir::new("invalid-orders");
     let path = temp.catalog_path();
-    let current = settings("beta", Some("alpha"), vec![profile("alpha", "Alpha"), profile("beta", "Beta")]);
+    let current = settings(
+        "beta",
+        Some("alpha"),
+        vec![profile("alpha", "Alpha"), profile("beta", "Beta")],
+    );
     save_engine_profiles(&path, current.clone()).unwrap();
     let before = std::fs::read(&path).unwrap();
     for (expected, ordered) in [
@@ -480,9 +497,19 @@ fn stale_invalid_and_boundary_orders_never_replace_durable_catalog() {
         expected_profile_ids: vec!["alpha".into(), "beta".into()],
         profile_ids: vec!["alpha".into(), "beta".into()],
     };
-    assert_eq!(engine_manager::reorder_engine_profiles(&path, current.clone(), &no_op).unwrap(), current);
-    let reverse = app_model::EngineProfileOrderRequestDto { profile_ids: vec!["beta".into(), "alpha".into()], ..no_op };
-    assert!(engine_manager::reorder_engine_profiles(&path, current.clone(), &reverse).unwrap_err().contains("write"));
+    assert_eq!(
+        engine_manager::reorder_engine_profiles(&path, current.clone(), &no_op).unwrap(),
+        current
+    );
+    let reverse = app_model::EngineProfileOrderRequestDto {
+        profile_ids: vec!["beta".into(), "alpha".into()],
+        ..no_op
+    };
+    assert!(
+        engine_manager::reorder_engine_profiles(&path, current.clone(), &reverse)
+            .unwrap_err()
+            .contains("write")
+    );
     assert_eq!(std::fs::read(&path).unwrap(), before);
     assert_eq!(load_engine_profiles(&path).unwrap(), current);
 }
