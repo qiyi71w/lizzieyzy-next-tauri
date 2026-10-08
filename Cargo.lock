@@ -974,6 +974,7 @@ name = "engine-manager"
 version = "0.1.0"
 dependencies = [
  "app-model",
+ "flate2",
  "katago-protocol",
  "regex",
  "serde",

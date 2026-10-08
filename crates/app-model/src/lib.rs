@@ -444,6 +444,67 @@ pub enum ProblemSeverity {
     Blunder,
 }
 
+/// Header inspection is descriptive, never runtime or managed-resource admission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelInspectionDto {
+    pub status: ModelInspectionStatusDto,
+    pub sha256: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub format: Option<String>,
+    pub model_name: Option<String>,
+    pub format_version: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelInspectionStatusDto {
+    Unchecked,
+    HeaderRecognized,
+    Unknown,
+    Corrupt,
+    Unavailable,
+    LimitExceeded,
+    Changed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ModelOriginDto {
+    Unknown,
+    Custom,
+    /// A retained installation receipt, not a claim of current qualification.
+    Managed { catalog_id: String, installed_sha256: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledModelDto {
+    pub id: String,
+    pub path: String,
+    pub origin: ModelOriginDto,
+    pub inspection: ModelInspectionDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelInventoryDto {
+    pub revision: String,
+    pub models: Vec<InstalledModelDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelPathDto {
+    pub path: String,
+    pub working_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelSelectionRequestDto {
+    pub revision: String,
+    pub model_id: String,
+    pub sha256: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineProfileDto {
     pub name: String,

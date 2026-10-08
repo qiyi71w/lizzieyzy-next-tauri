@@ -16,3 +16,4 @@ thiserror.workspace = true
 uuid.workspace = true
 sha2 = "0.10"
 regex.workspace = true
+flate2 = "1"

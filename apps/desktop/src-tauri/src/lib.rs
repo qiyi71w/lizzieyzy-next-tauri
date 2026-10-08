@@ -42,6 +42,7 @@ mod human_match;
 mod readboard;
 mod save_as;
 mod session_recovery;
+mod models;
 #[cfg(windows)]
 extern crate windows_core;
 #[cfg(test)]
@@ -600,6 +601,9 @@ fn save_engine_profiles_settings(
         .map_err(|_| "engine catalog lock poisoned")?;
     let current = load_engine_profiles_from_disk(&app_handle)?;
     let path = engine_profile_path(&app_handle)?;
+    let mut retained = models::saved_paths(&current);
+    retained.extend(models::saved_paths(&settings));
+    app_handle.state::<engine_manager::models::ModelInventory>().remember_saved(&retained)?;
     save_engine_profiles_at_path(&path, &manager, &current, settings)
 }
 
@@ -1074,6 +1078,9 @@ pub fn run() {
             app.manage(Mutex::new(FileRecoveryStore::new(recovery_path)));
             spawn_recovery_writer(app.handle().clone());
             let _ = load_engine_profiles_from_disk(app.handle());
+            app.manage(engine_manager::models::ModelInventory::new(
+                app.path().app_data_dir()?.join("lizzieyzy-next-model-inventory.json"),
+            ));
             let catalog = std::sync::Arc::new(DiskEngineCatalog {
                 handle: app.handle().clone(),
             });
@@ -1244,6 +1251,9 @@ pub fn run() {
             load_engine_profiles_settings,
             save_engine_profiles_settings,
             reorder_engine_profiles_settings,
+            models::model_inventory_snapshot,
+            models::refresh_model_inventory,
+            models::select_installed_model,
             katago_start_analyze_game,
             preview_analysis_scope,
             start_analysis_task,
