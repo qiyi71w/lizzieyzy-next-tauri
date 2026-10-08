@@ -17,7 +17,7 @@ export function ModelInventoryPanel(props: Props) {
   const [inventory, setInventory] = useState<ModelInventoryDto | null>(null);
   const [busy, setBusy] = useState(false);
   const [stale, setStale] = useState(false);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState<"selected" | "failed" | null>(null);
   const epoch = useRef(0);
   const pending = useRef(false);
   const latest = useRef(props);
@@ -28,7 +28,7 @@ export function ModelInventoryPanel(props: Props) {
     void loadModelInventory().then((result) => {
       if (epoch.current === request) setInventory(result);
     }).catch(() => {
-      if (epoch.current === request) { setStale(true); setMessage(t("models.failed")); }
+      if (epoch.current === request) { setStale(true); setMessage("failed"); }
     });
     return () => {
       ++epoch.current;
@@ -40,7 +40,7 @@ export function ModelInventoryPanel(props: Props) {
     if (pending.current || latest.current.disabled || !latest.current.beginOperation()) return;
     pending.current = true;
     setBusy(true);
-    setMessage("");
+    setMessage(null);
     const request = ++epoch.current;
     const captured = latest.current;
     try {
@@ -53,7 +53,7 @@ export function ModelInventoryPanel(props: Props) {
           return;
         }
         latest.current.onSelect(path);
-        setMessage(t("models.selected"));
+        setMessage("selected");
       } else {
         setStale(true);
         const result = await refreshModelInventory(captured.modelPath.length > 0
@@ -63,7 +63,7 @@ export function ModelInventoryPanel(props: Props) {
         setStale(false);
       }
     } catch {
-      if (epoch.current === request) { setStale(true); setMessage(t("models.failed")); }
+      if (epoch.current === request) { setStale(true); setMessage("failed"); }
     } finally {
       if (epoch.current === request) {
         pending.current = false;
@@ -84,7 +84,7 @@ export function ModelInventoryPanel(props: Props) {
     {browser && <p role="status">{t("models.native")}</p>}
     {busy && <p role="status">{t("models.busy")}</p>}
     {stale && <p role="status">{t("models.stale")}</p>}
-    {message && <p role="status">{message}</p>}
+    {message && (message !== "selected" || props.modelPath !== props.savedModelPath) && <p role="status">{t(`models.${message}`)}</p>}
     <ul>
       {inventory?.models.map((model) => <li key={model.id} style={{ overflowWrap: "anywhere" }}>
         <p>{t("models.name")}: {model.inspection.model_name ?? t("models.status.unknown")}</p>
