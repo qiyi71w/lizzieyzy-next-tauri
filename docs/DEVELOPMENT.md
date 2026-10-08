@@ -39,6 +39,10 @@ For documentation-only Issue18 planning changes, validate current IDs/status tot
 
 Inherited R10 source-runtime records remain at their original candidates and conditions. In particular Tencent 60+60 is a working-tree production-crate probe, while native pagination is 25/25/10; initial readboard PL failures and later repaired candidates remain separate observations. Installation/network trust remains Not run where recorded.
 
+Yike analysis-rule compatibility was verified on Windows source candidate `5c2fc5b5f5ed0c99154a3e9d1ed1f8cceb2fc5e3` in an isolated native Tauri session with the qualified KataGo CPU engine and b20 model. Both the preserved public-room 196315 SGF and a fresh Direct-network sync of that room produced real analysis at path `[0, 0]` from `RU[cn]`. Saving sync preferences retained the active Run/Job identity; Stop restored editing and remained idle beyond the prior polling interval. Native Save As/reopen retained raw `RU[cn]`, player metadata, personal comments and analysis. `RU[cn-unknown]` still produced `Could not parse rules: cn-unknown` with no attached analysis. The room was already ended (365 moves): this proves current public fetch/sync/settings/analysis composition, not newly arriving moves or queue latency. It does not extend installed-network, macOS, readboard or release acceptance.
+
+Focused regression: `cargo test -p katago-protocol -p engine-manager --lib --test analysis_rules` passed 46 tests; the pre-existing ignored exact-match engine smoke is a separate path. `cargo clippy -p katago-protocol -p engine-manager --all-targets -- -D warnings` passed. The rule conversion is confined to analysis JSONL; exact-position match admission and local scoring inference retain their existing contracts.
+
 ### Per-Surface Validation Gates
 
 - **Frontend / Tauri UI changes (`apps/desktop`)**:
