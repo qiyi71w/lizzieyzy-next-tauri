@@ -233,6 +233,8 @@ investigation/decision 先交付可判定结论和所需批准；feature 只等�
 
 当前公开合同：[R12 / resources](R12_PLAN.md#resources)。
 
+2026-10-08 Q4 已批准冻结端点目录与 B11-12002M 新装默认，保留既有/自定义选择及15来源，见 [B02 当前合同](R12_PLAN.md#r12-gate-b02)。下方原来源保留；实际资源资格与维护验收仍未完成。
+
 唯一责任意图 `T01-RESOURCE`；性质 feature。历史来源 grouping/context：B首个资源消费者；跨批共享合同。
 
 合格本地资源身份/完整性/兼容与可见失败；保留Ready A；取得真实引擎证据，正式组件分发另验。
@@ -494,6 +496,8 @@ Java 200 ms + delay dialog / manual reveal / SGF-03-ADJ-HOVER-DELAY | `UI-03` 12
 
 当前公开合同：[R12 / startup](R12_PLAN.md#startup)。
 
+当前决定（2026-10-08 用户批准）：三模式启动、正常退出保存稳定主引擎 ID、旧配置行为保留、新安装不自动启动及失败不 fallback，见 [R12 / B13 已批准合同](R12_PLAN.md#r12-gate-b13)。以下处置调查文字保留历史来源；不再代表缺少这项产品批准，也不代表实现或验收完成。
+
 唯一责任意图 `T02-H17`；性质 decision。历史来源 grouping/context：B。
 
 Last-engine autoload / CAP-04-ENG-03 | `ENG-06` Autoload Default；[固定来源](https://github.com/qiyi71w/lizzieyzy-next-tauri/blob/55795fab49b80a681a9fa544950e18f5f2da4cc6/docs/JAVA_CAPABILITY_INVENTORY.md#L442) | 保留未等价用户目标；核对原对应处置票及逐项批准来源，产出保留功能合同或经批准非等价理由；未决不能删除或自动实施新语义。
@@ -502,6 +506,8 @@ Last-engine autoload / CAP-04-ENG-03 | `ENG-06` Autoload Default；[固定来源
 ### T02-H18
 
 当前公开合同：[R12 / startup](R12_PLAN.md#startup)。
+
+当前决定（2026-10-08 用户批准）：按配置 opt-in 后台预加载、默认关闭并持久化、单 manager 管理与显式前台提升，见 [R12 / B15 已批准合同](R12_PLAN.md#r12-gate-b15)。以下处置调查文字保留历史来源；实际资源/协议与取消/清理证据仍由后继能力提供。
 
 唯一责任意图 `T02-H18`；性质 decision。历史来源 grouping/context：B。
 
@@ -953,6 +959,8 @@ CAP-06-YIKE-LIVE-CENTER | 取得guest Personal分类真实pagination/filter/outc
 
 当前公开合同：[R13 / adapters](R13_PLAN.md#adapters)。
 
+2026-10-08 已批准显式 KataGo GTP 主分析与 R12 联合安排，保留 JSONL；本 owner 负责具名版本/字段/流取证，`T02-ANA-09` 交付主分析，见 [R13 联合合同](R13_PLAN.md#gtp-main-analysis)。运行管理、线程和 pair 仍归 R12；本次决定不证明适配器已完成。
+
 唯一责任意图 `T02-ADAPTER-EVIDENCE`；性质 investigation/decision。历史来源 grouping/context：B。
 
 CAP-04-ENG-01 | ANA-09先具名engine/version产品证据及协议fixture，不以空接口拉起；missingfields unavailable；SSH后续adapters另补兼容证据。
@@ -1074,6 +1082,8 @@ SGF-03-ADJ-AUTOPLAY / Ticket28 | 两个Engine Continuation目标（leaf-only/eve
 ### T03-RESOURCE-TRT-REPAIR-INVESTIGATION
 
 当前公开合同：[R12 / resources](R12_PLAN.md#resources)。
+
+2026-10-08 Q5 已批准应用内对已准入原 TRT 目标的显式受管修复，见 [B04 当前合同](R12_PLAN.md#r12-gate-b04)。逐目标所有权/可修复性、实际 GPU 资格与失败/Cancel/last-good 验收仍须取得，历史调查断言不删除。
 
 唯一责任意图 `T03-RESOURCE-TRT-REPAIR-INVESTIGATION`；性质 investigation。历史来源 grouping/context：B。
 
@@ -1702,6 +1712,8 @@ UD-03-029具名决定拥有generated details保存/共享表示、字段归属�
 
 当前公开合同：[R12 / resources](R12_PLAN.md#resources)。
 
+本来源的默认型号采纳已由 2026-10-08 Q4 确定为 B11-12002M；保留历史 11750M 来源、已安装和自定义选择，见 [B02 当前合同](R12_PLAN.md#r12-gate-b02)。TensorRT 显式修复责任见 [B04](R12_PLAN.md#r12-gate-b04)；以下为保留的来源断言，不代表未更新的产品默认或已获运行资格。
+
 唯一责任意图 `T01-RESOURCE`；性质 功能增量（复用T01-RESOURCE；不复制别名）。历史来源 grouping/context：B首个资源消费者；跨批共享合同。
 
 - **kind**: 功能增量（复用T01-RESOURCE；不复制别名）
@@ -1740,6 +1752,8 @@ UD-03-029具名决定拥有generated details保存/共享表示、字段归属�
 ### T04-STARTUP-PERFORMANCE
 
 当前公开合同：[R12 / startup](R12_PLAN.md#startup)。
+
+当前决定（2026-10-08 用户批准）：保留显式评估及默认关闭的启动评估开关，用户分析/对局优先，不自动应用线程建议，见 [R12 / B47 已批准合同](R12_PLAN.md#r12-gate-b47)。以下“缺少批准”是冻结来源时的事实；当前剩余为 R13 独立 runner 的已验证 scoped result、后继实施和实际验收，不扩大到整阶段 R13。
 
 唯一责任意图 `T04-STARTUP-PERFORMANCE`；性质 产品决策（未批准非等价）。历史来源 grouping/context：B；未分配后继；与T04-MEASURED-TUNING及T02-H18/preload目标去重，不取代原意图。。
 
@@ -2015,6 +2029,8 @@ Chinese、Japanese/Korean、AGA/BGA、New Zealand、Tromp-Taylor均按exact sema
 
 当前公开合同：[R12 / manual-threads](R12_PLAN.md#manual-threads)。
 
+2026-10-08 Q6 已批准显式 KataGo GTP Run 的动态线程确认，并将 GTP 主分析纳入 [R12/R13 联合交付](R12_PLAN.md#gtp-main-analysis-coordination)；保留 JSONL，不把静态 argv 或单查询覆盖当作实际回读。参数准入与组合验收仍未完成。
+
 唯一责任意图 `T04-THREAD-CONTROL`；性质 有界来源/政策决策，随后功能后继。历史来源 grouping/context：B；静态argvH-STATIC-THREAD保留；dynamic来源/有效值/临时覆盖是未分配新scope。。
 
 - **kind**: 有界来源/政策决策，随后功能后继
@@ -2253,6 +2269,8 @@ saved config、source policy、effective launch override各有明确precedence�
 ### T05-PARAMETER-READBACK
 
 当前公开合同：[R12 / runtime-readback](R12_PLAN.md#runtime-readback)。
+
+2026-10-08 Q6 已批准同一 KataGo GTP 主分析 Run 的成对回读，见 [B67 当前合同](R12_PLAN.md#r12-gate-b67)及 [R13 主分析交付](R13_PLAN.md#gtp-main-analysis)。独立 binary 回读证据不代替 Next reader/round 与真实 UI 验收。
 
 唯一责任意图 `T05-PARAMETER-READBACK`；性质 see-source-disposition。历史来源 grouping/context：B。
 

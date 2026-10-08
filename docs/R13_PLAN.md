@@ -1,6 +1,6 @@
 # R13 — 分析任务与展示
 
-Status: 滚动阶段计划；产品能力验收尚未完成。
+Status: 滚动阶段计划；2026-10-08 已按用户批准将显式 KataGo GTP 主分析纳入与 R12 的联合安排，其他本阶段决定仍按具名门滚动细化；产品能力验收尚未完成。
 
 ## 目标、完整范围与非目标
 
@@ -61,6 +61,8 @@ session-only有序多SGF intake、各file admission/state/conditions/budget/停�
 ## 具名丰富分析适配与缺字段显示
 
 富分析以具名engine/version/capability及真实协议样本准入；缺字段显示unavailable不能fake0。generic GTP或已accepted基本分析不证明丰富能力。
+
+2026-10-08 用户确认 R12 Q6，并要求主分析的 GTP 接入与本阶段共同安排。保留现有 JSONL，新增可显式选择的 KataGo GTP 主分析；不是只准入 move-only 或参数控件。交付与验收见[联合合同](#gtp-main-analysis)。本节 owner 不接管 R12 的进程、规则、线程和回读权威。
 
 唯一能力责任：`T02-ADAPTER-EVIDENCE`, `T02-ANA-09`。本节设置/技术调查与后续实现是同一完整能力；跨节消费不改变来源owner。
 
@@ -157,6 +159,33 @@ local same-tree focus包含054a/b/c/e/f：compatible binary真实probe、普通o
 
 最小验收面与用户断言：上述全文的 Acceptance/Concrete acceptance 和 Frozen source/Canonical Delta 条款全部保留；本节 owner 用实际 changed domain/owner/protocol/persistence/UI 面证明成功、失败/Cancel、身份失效、适用 defaults/save/reopen；只读调查以有来源的可判定结论结束，不能宣称功能已完成。每个受影响设置 map 归该消费者。
 
+<a id="gtp-main-analysis"></a>
+## R12/R13 联合合同：KataGo GTP 主分析
+
+本节继承 [R12 本轮基线与批准记录](R12_PLAN.md#refinement-20261008)：仓库 `qiyi71w/lizzieyzy-next-tauri`，调查基线 `9d2ccf3ba6881c755013b82948e5da1a01f7fcd4`。此处仅细化被明确要求的 GTP 主分析协调，不替其他 R13 产品决定作答，不提前发布实施票。
+
+| 责任与交付 | 所需结果及消费边界 |
+| --- | --- |
+| R12 资源与运行管理原 owner | 合格 binary/model/config/profile、单 manager 下的显式 Start/Switch/Restart、同 Run 的 rules/position 确认、reader/command retirement、取消/失败隔离与诊断。GTP 基础运行资格不以 R13 主分析完成为前置。 |
+| R13 `T02-ADAPTER-EVIDENCE`（B28） | 具名 KataGo binary/version 的真实分析流与控制响应样本；逐项声明 candidates、winrate、PV、ownership、streaming、selected-node、whole-game 能力及 absent/error/terminal/cancel 行为。运行版本尚未获证时保持资格门，不从旧 CPU 参数探测推定主分析资格。 |
+| R13 `T02-ANA-09`（B29） | 从真实 GTP 分析流到既有分析模型、DTO/API 和主界面的完整接入；通过 R12 的同一 Run/reader 调度与身份边界。交付 `katago-gtp-main-analysis`，保留 JSONL 当前行为，不建立第二套 current-game/分析发布权威。 |
+| R12 线程/回读 owner 与集成验收 owner | 线程 Apply＋确认、PDA/WRN pair 绑定上述同一 GTP 主分析 Run；消费 R13 scoped result，在集成候选完成运行控制与分析共同工作的验收。R13 分析 owner 负责字段和展示断言，R12 集成 owner 负责最终组合出口。 |
+
+### 顺序与阻塞边界
+
+1. B28 协议/能力取证与 R12 资源/参数取证可分别推进；共享 profile/Run/reader 合同先对齐，由具名串行集成负责人落地，不能同时建立互不兼容的 reader 或命令调度权威。
+2. R12 提供已验证的对应本地资源、普通规则/局面与 Run 边界；R13 B29 消费后完成可用主分析。B29 的基础分析成功不依赖 R12 参数面板先完成，参数局部验证也不等待全部分析 UI。
+3. R12 集成消费 `katago-gtp-main-analysis` 后验证组合场景。反向消费仅是组合验收依赖，不把 R12 全阶段完成设为 R13 开工门；R13 的 batch、tracking、自动快析、focus、benchmark 与建议保存不因此成为主分析的整体前置。
+4. 切换模式由用户明确选择与启动；既有 JSONL profile 不自动转换，配置浏览/保存不触发切换。GTP 必需能力未通过时可见拒绝，不退回 JSONL 或另启隐藏 companion engine 冒充成功。
+
+### 交付证据与验收
+
+- 在真实具名 KataGo GTP Run 对当前所选局面持续分析，候选、胜率和 PV 来自有效当前结果；ownership 等其他字段按逐项准入映射，缺失显示 unavailable 而非零。与现有主分析逐项比较：局面/颜色/规则/KM、流式更新、Pause/Continue、节点和分支切换、已有结果保留；必需能力缺失不能用“可选字段”规避，协议差异须明确说明并按原门处理。
+- 同一 reader 上分析流与编号线程/参数响应交错时，控制结果不能被当作分析，分析输出不能满足控制 ACK。线程确认/pair 按 Run/round 失效；用户 Pause、导航、Restart、Switch 和失败恢复后的旧输出不能回写新局面或恢复旧请求。
+- 在实际 UI 验证 JSONL→GTP→JSONL 的显式切换及失败保留健康 A；同一个 GTP 主分析进程完成线程 Apply/确认和 PDA/WRN 成对回读。只读 pair 不扩成配对写入，线程临时值不自动跨 Run reapply。
+- scoped result 记录完整应用提交、binary/model/config/resource 身份、平台和具体能力；仓库受控协议、真实引擎、原生 UI 分栏。R12 与 R13 消费同一集成候选的证据或明确 unchanged-boundary 继承，两个分别通过的孤立候选不能充当组合通过。
+- `katago-gtp-main-analysis` 未获证时，R12 其他能力可推进，但其主分析联合要求及完整完成声明保持未完成；不改变 R13 其他来源 owner/合同、既有 Accepted 范围或未验资格状态。
+
 ## 真实 scoped prerequisites 与跨阶段消费
 
 阶段编号是 Delivery Order，不是 whole-stage hard dependency。原来源中已经 Accepted 的所需功能直接按原 evidence tuple 消费；ledger-only 汇总不是等待门。未来 source 的 required/conditional/field scope 在 [公开路由](MIGRATION_ROUTES.json) 和 [来源合同](MIGRATION_CONTRACTS.md) 中保留，不能扁平化成全票或全阶段开工门。
@@ -167,6 +196,8 @@ local same-tree focus包含054a/b/c/e/f：compatible binary真实probe、普通o
 - 本阶段唯一交付 `automatic-load-quick-handoff`（`T02-AUTOLOAD-QUICK`）：Passed automatic-task admission/owner/handoff for successful-load consumer。其他消费者只取其通过scope；不接管本owner。
 - 本阶段唯一交付 `local-focus-result`（`T03-ANALYSIS-SAME-TREE-MOVE-FOCUS`）：Passed 054a-c local ordinary/focus/root-slot identity and compatible binary result。其他消费者只取其通过scope；不接管本owner。
 - 消费 `first-ui-locale-foundation`（[R11](R11_PLAN.md#behavior-a01) / `T02-I18N-FOUNDATION`）：Actual new UI integration only; settings owner adds Java field map。前置仅该已验证结果及适用条件。
+- 消费 `ordinary-rules-snapshot`（R12 / `T03-MATCH-RULES-LIFECYCLE`）：仅同一 KataGo GTP 主分析 Run 的普通规则确认，不等待 Match 存储或整 R12。
+- 本阶段唯一交付 `katago-gtp-main-analysis`（`T02-ANA-09`）：[显式 GTP 主分析的完整 scoped result](#gtp-main-analysis)；R12 只消费用于同实例运行控制与分析组合验收，不迁移本阶段来源归属。
 
 ## 具名待决事项、事实输入与受阻行为
 
@@ -253,6 +284,7 @@ local same-tree focus包含054a/b/c/e/f：compatible binary真实probe、普通o
 ### B28 来源问题（非新任务）
 
 - Owner：R13 / 具名丰富分析适配与缺字段显示 owner（T02-ADAPTER-EVIDENCE）；阶段细化负责人具名落实实际执行人。
+- 已决定（2026-10-08）：用户要求显式 KataGo GTP 主分析与 R12 共同安排，保留现有 JSONL；[联合合同](#gtp-main-analysis)为当前范围。B28 仍须取得具名版本与逐字段协议证据，产品方向批准不等于 B29 或实际主分析验收通过。
 - 待决定/取得证据：Which named engine/version rich-analysis capabilities and protocol samples are actually admitted?
 - 受阻行为：Named rich-analysis adapters and absent-field handling
 - 所需结果：具来源/实际能力证据的可执行合同；涉及非等价处置保留逐项批准。
