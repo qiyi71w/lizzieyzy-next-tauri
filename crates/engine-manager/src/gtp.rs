@@ -1,5 +1,4 @@
 use std::io::{self, BufRead, BufReader, Read};
-use std::process::{ChildStderr, ChildStdout};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
@@ -9,7 +8,7 @@ const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_RESPONSE_LINES: usize = 1024;
 const MAX_STDERR_BYTES: usize = 8 * 1024;
 
-pub(crate) fn spawn_stdout_reader(stdout: ChildStdout) -> Receiver<io::Result<Option<String>>> {
+pub(crate) fn spawn_stdout_reader(stdout: impl Read + Send + 'static) -> Receiver<io::Result<Option<String>>> {
     let (sender, receiver) = mpsc::sync_channel(MAX_QUEUED_LINES);
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
@@ -68,7 +67,7 @@ fn read_stdout_line(reader: &mut impl BufRead) -> io::Result<Option<String>> {
     }
 }
 
-pub(crate) fn spawn_stderr_reader(mut stderr: ChildStderr) -> Receiver<io::Result<String>> {
+pub(crate) fn spawn_stderr_reader(mut stderr: impl Read + Send + 'static) -> Receiver<io::Result<String>> {
     let (sender, receiver) = mpsc::sync_channel(1);
     thread::spawn(move || {
         let mut retained = Vec::with_capacity(MAX_STDERR_BYTES);

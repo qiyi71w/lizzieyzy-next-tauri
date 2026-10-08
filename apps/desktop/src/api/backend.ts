@@ -32,6 +32,7 @@ import type {
   EngineProfilesSettingsDto,
   EngineProfileOrderRequestDto,
   EngineFailureDto,
+  EngineDiagnosticSnapshotDto,
   ForegroundEngineSnapshotDto,
   FileActivationDeliveryDto,
   FileActivationRejectionDto,
@@ -615,6 +616,17 @@ export async function getForegroundEngineSnapshot(): Promise<ForegroundEngineSna
   if (!isTauriRuntime()) return emptyForegroundEngineSnapshot();
   return await invoke<ForegroundEngineSnapshotDto>("foreground_engine_snapshot");
 }
+
+export async function getEngineDiagnostics(): Promise<EngineDiagnosticSnapshotDto[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke("engine_diagnostic_snapshots");
+}
+
+export async function setEngineDiagnosticTrace(attemptId: string, enabled: boolean): Promise<void> {
+  if (!isTauriRuntime()) throw new Error("Native diagnostics unavailable");
+  return invoke("set_engine_diagnostic_trace", { attemptId, enabled });
+}
+
 
 export async function startForegroundEngine(profileId: string): Promise<void> {
   if (!isTauriRuntime()) {

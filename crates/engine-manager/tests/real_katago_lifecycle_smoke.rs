@@ -487,3 +487,35 @@ fn real_katago_failed_start_failed_switch_crash_and_autoload() {
         matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. })
     });
 }
+
+#[test]
+#[ignore = "requires real KataGoAnalysis assets; run with LIZZIEYZY_REAL_KATAGO=1 --ignored"]
+fn real_katago_bounded_live_diagnostics() {
+    require_real_katago();
+    let profile = real_profile("Real diagnostics");
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile { profile_id: "diagnostics-real".into(), profile: profile.clone() });
+    let (manager, events) = manager_with(catalog);
+    manager.start("diagnostics-real").unwrap();
+    let ready = wait_current(&manager, Duration::from_secs(300), |state| matches!(state, ForegroundEngineLifecycleDto::Ready { .. }));
+    let run = run_from_ready(&ready.lifecycle);
+    let job = manager.start_selected_node_job(selected_request(&run.run_id, 1, 2)).unwrap();
+    wait_job(&events, Duration::from_secs(120), |event| event.job_id == job.job_id && event.outcome == app_model::AnalysisJobOutcomeDto::Completed);
+    let frozen = manager.diagnostic_snapshots().pop().unwrap();
+    assert_eq!(frozen.run_id, run.run_id);
+    assert!(!frozen.process_exited);
+    assert!(!frozen.full_trace);
+    assert!(frozen.records.iter().any(|record| record.source == "startup-probe-stderr"));
+    assert!(frozen.records.iter().any(|record| record.source == "stdout"));
+    assert!(frozen.retained_bytes <= 64 * 1024 && frozen.records.len() <= 256);
+    let encoded = serde_json::to_string(&frozen).unwrap();
+    assert!(!encoded.contains(&profile.program));
+    if let EngineAdapterSettings::KataGoAnalysis(settings) = &profile.adapter {
+        assert!(!encoded.contains(settings.model_path.as_ref().unwrap()));
+        assert!(!encoded.contains(settings.config_path.as_ref().unwrap()));
+    }
+    manager.stop().unwrap();
+    wait_current(&manager, Duration::from_secs(20), |state| matches!(state, ForegroundEngineLifecycleDto::NoEngine { .. }));
+    assert_eq!(serde_json::to_string(&frozen).unwrap(), encoded);
+    eprintln!("real diagnostics: attempt={} records={} bytes={} frozen=true live-stdout=true startup-stderr=true", frozen.run_id, frozen.records.len(), frozen.retained_bytes);
+}

@@ -6693,3 +6693,88 @@ fn gtp_stop_during_handshake_cannot_publish_late_ready() {
     std::thread::sleep(Duration::from_millis(850));
     assert!(events.try_iter().all(|e| !matches!(e, ForegroundEngineEventDto::Snapshot { snapshot } if matches!(snapshot.lifecycle, ForegroundEngineLifecycleDto::Ready { .. }))));
 }
+
+#[cfg(unix)]
+#[test]
+fn diagnostics_capture_live_burst_without_waiting_for_exit_and_keep_frozen_identity() {
+    let temp = TestTempDir::new("diagnostics-burst");
+    let release = temp.path().join("release");
+    let script = format!(r#"exec python3 -u -c '
+import json,sys,time,pathlib
+q=json.loads(sys.stdin.readline())
+print(json.dumps(dict(id=q["id"],turnNumber=0,isDuringSearch=False,rootInfo=dict(visits=4,winrate=0.6,scoreMean=1.25),moveInfos=[])),flush=True)
+while not pathlib.Path("{}").exists(): time.sleep(0.005)
+for i in range(3000): print("WARN burst " + str(i) + " " + "x"*1000,file=sys.stderr)
+print("token=FAKE-secret with spaces",file=sys.stderr)
+print("roomId=424242",file=sys.stderr)
+print("http://fake.invalid/private?token=FAKE-url",file=sys.stderr)
+print("/home/fake-user/private/model.bin",file=sys.stderr)
+print("diagnostic-barrier",file=sys.stderr,flush=True)
+while True: time.sleep(1)
+'"#, release.display());
+    let (manager, _, _, first_run) = ready_manager(&temp, &script);
+    let before = manager.diagnostic_snapshots().pop().unwrap();
+    assert_eq!(before.run_id, first_run);
+    assert!(!before.full_trace);
+    assert!(before.records.iter().any(|record| record.source == "startup-probe-stdout"));
+    std::fs::write(release, "go").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let captured = loop {
+        let snapshot = manager.diagnostic_snapshots().pop().unwrap();
+        if snapshot.records.iter().any(|record| record.text == "diagnostic-barrier") { break snapshot; }
+        assert!(Instant::now() < deadline, "live stderr was not observed");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(captured.dropped_records > 0);
+    assert!(captured.retained_bytes <= 64 * 1024);
+    assert!(captured.records.len() <= 256);
+    let encoded = serde_json::to_string(&captured).unwrap();
+    for private in ["FAKE-secret", "424242", "fake.invalid", "fake-user"] { assert!(!encoded.contains(private), "leaked {private}"); }
+    assert!(captured.records.windows(2).all(|records| records[0].sequence < records[1].sequence));
+    assert!(captured.metrics.iter().any(|metric| metric.name == "resident-memory" && metric.value.is_some_and(|value| value > 0.0)));
+    manager.stop().unwrap();
+    wait_lifecycle(&manager, Duration::from_secs(3), |state| matches!(state, ForegroundEngineLifecycleDto::NoEngine { .. }));
+    assert_eq!(captured.run_id, first_run);
+    assert_eq!(serde_json::to_string(&captured).unwrap(), encoded);
+}
+
+#[cfg(unix)]
+#[test]
+fn diagnostics_preserve_healthy_primary_through_failed_attempts_and_cancel_burst() {
+    let temp = TestTempDir::new("diagnostics-retention");
+    let release = temp.path().join("release");
+    let script = format!(r#"exec python3 -u -c '
+import json,sys,time,pathlib
+q=json.loads(sys.stdin.readline())
+print(json.dumps(dict(id=q["id"],turnNumber=0,isDuringSearch=False,rootInfo=dict(visits=4,winrate=0.6,scoreMean=1.25),moveInfos=[])),flush=True)
+while not pathlib.Path("{}").exists(): time.sleep(0.005)
+while True: print("WARN continuous " + "x"*1000,file=sys.stderr,flush=True)
+'"#, release.display());
+    let (manager, catalog, events, primary) = ready_manager(&temp, &script);
+    for index in 0..6 {
+        let id = format!("missing-{index}");
+        catalog.upsert(SavedEngineProfile { profile_id: id.clone(), profile: missing_assets_profile(&id, &temp) });
+        manager.switch_to(&id).unwrap();
+        wait_failure(&events, Duration::from_secs(2), |failure| failure.profile_id.as_deref() == Some(id.as_str()));
+        assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, primary);
+    }
+    let snapshots = manager.diagnostic_snapshots();
+    assert_eq!(snapshots.len(), 4);
+    assert_eq!(snapshots[0].run_id, primary);
+    assert!(snapshots.iter().skip(1).all(|snapshot| snapshot.failure.is_some() && snapshot.run_id != primary));
+    std::fs::write(release, "go").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while manager.diagnostic_snapshots()[0].dropped_records == 0 {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    manager.stop().unwrap();
+    wait_lifecycle(&manager, Duration::from_secs(3), |state| matches!(state, ForegroundEngineLifecycleDto::NoEngine { .. }));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = manager.diagnostic_snapshots().remove(0);
+        if snapshot.process_exited && snapshot.stderr_complete && snapshot.stdout_complete { break; }
+        assert!(Instant::now() < deadline, "burst readers did not retire");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}

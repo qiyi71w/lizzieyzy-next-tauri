@@ -975,11 +975,14 @@ version = "0.1.0"
 dependencies = [
  "app-model",
  "katago-protocol",
+ "libc",
+ "parking_lot",
  "serde",
  "serde_json",
  "sgf",
  "thiserror 1.0.69",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

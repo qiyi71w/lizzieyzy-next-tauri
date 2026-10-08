@@ -832,6 +832,7 @@ impl CurrentGameState {
 
     pub fn attach_from_job_event(&self, event: &AnalysisJobEventDto) -> Option<CurrentGameResultDto> {
         if !admits_analysis_attachment(event) {
+            self.trace_adoption(event, "rejected-invalid-identity-or-result", None);
             return None;
         }
         let frame = event.frame.as_ref()?;
@@ -851,6 +852,7 @@ impl CurrentGameState {
                             | app_model::AnalysisTaskStateDto::Completed
                     )
                 {
+                    self.trace_adoption(event, "rejected-invalid-task-identity", None);
                     return None;
                 }
             }
@@ -858,11 +860,13 @@ impl CurrentGameState {
         let payload = SgfAnalysisPayload::from_frame(frame, "KataGo");
         let mut holder = self.holder.lock().expect("current game state");
         if holder.human_match.blocks() || !matches!(holder.trial_mode, trial::TrialMode::Review) {
+            self.trace_adoption(event, "rejected-owner-reservation", None);
             return None;
         }
         if holder.rejects_job(&event.run_id, &event.job_id)
             || (event.mode == AnalysisJobModeDto::Continuous && holder.selected_path != event.node_path)
         {
+            self.trace_adoption(event, "rejected-invalid-identity", None);
             return None;
         }
         if event.mode == AnalysisJobModeDto::Continuous {
@@ -875,19 +879,51 @@ impl CurrentGameState {
                             && job.state != app_model::AnalysisJobStateDto::Stopping
                     })
                 {
+                    self.trace_adoption(event, "rejected-retired-continuous-owner", None);
                     return None;
                 }
             }
         }
-        let mut result = holder
-            .attach_primary_analysis(event.generation, event.node_path.clone(), payload)
-            .ok()?;
+        let cached = self.analysis_manager.get().filter(|manager| manager.diagnostic_trace_enabled(&event.run_id))
+            .and_then(|_| holder.document.as_ref())
+            .and_then(|document| document.snapshot(&event.node_path).ok())
+            .and_then(|snapshot| snapshot.primary_analysis);
+        let result = holder.attach_primary_analysis(event.generation, event.node_path.clone(), payload);
+        let mut result = match result {
+            Ok(result) => result,
+            Err(_) => {
+                self.trace_adoption(event, "rejected-invalid-identity-or-position", cached.as_ref());
+                return None;
+            }
+        };
+        if self.analysis_manager.get().is_some_and(|manager| manager.diagnostic_trace_enabled(&event.run_id)) {
+            let reason = match cached.as_ref() {
+                None => "accepted-empty-slot",
+                Some(old) if old.visits < frame.visits => "accepted-stronger",
+                Some(old) if old.visits > frame.visits => "accepted-weaker-replacement",
+                Some(old) if old.ownership != frame.ownership => "accepted-ownership-update",
+                Some(old) if result.snapshot.primary_analysis.as_ref() == Some(old) => "unchanged-canonical-result",
+                Some(_) => "accepted-equal-visits-update",
+            };
+            self.trace_adoption(event, reason, cached.as_ref());
+        }
         if let Some(analysis) = result.snapshot.primary_analysis.as_mut() {
             // Global policy is a live search output; Java LZ stores candidates and ownership.
             analysis.policy = frame.policy.clone();
         }
         self.note_recovery(&holder);
         Some(result)
+    }
+
+    fn trace_adoption(&self, event: &AnalysisJobEventDto, reason: &'static str, cached: Option<&app_model::AnalysisFrameDto>) {
+        if let Some(manager) = self.analysis_manager.get() {
+            manager.trace_analysis_adoption(&event.run_id, || format!(
+                "{reason} job={} generation={} node={:?} incoming-visits={:?} cached-visits={:?} incoming-winrate={:?} incoming-score={:?}",
+                event.job_id, event.generation, event.node_path.indices,
+                event.frame.as_ref().map(|frame| frame.visits), cached.map(|frame| frame.visits),
+                event.frame.as_ref().map(|frame| frame.winrate_black), event.frame.as_ref().and_then(|frame| frame.score_mean_black),
+            ));
+        }
     }
 
     pub fn seal_job(&self, job: &AnalysisJobStartedDto) {

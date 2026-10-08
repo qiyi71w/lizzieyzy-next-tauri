@@ -4,6 +4,7 @@ import { checkEngineAssets, loadEngineProfilesSettings, reorderEngineProfilesSet
 import type { AssetCheckDto, EngineBackendDto, EngineProfileDto, EngineProfileRecordDto, ForegroundEngineSnapshotDto } from "../domain/types";
 import { profileHasPendingChanges, runFromSnapshot, verifiedEngineCapabilitiesLabel } from "../domain/foregroundEngine";
 import { t } from "../i18n/resources";
+import { EngineDiagnosticsPanel } from "./EngineDiagnosticsPanel";
 
 type Props = {
   disabled?: boolean;
@@ -292,6 +293,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
 
   return (
     <section className="engine-setup-panel" aria-label="引擎设置" data-focus-owner="engine" tabIndex={-1}>
+      <EngineDiagnosticsPanel engineSnapshot={snapshot} disabled={disabled} />
       <div className="engine-run-row">
         <label>
           <span>配置</span>

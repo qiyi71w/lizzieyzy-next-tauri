@@ -222,6 +222,14 @@ export type EngineFailureKind =
   | "occupied"
   | "profile_not_found"
   | "profile_in_use";
+export type EngineDiagnosticRecordDto = { sequence: number; at_ms: number; source: string; text: string };
+export type EngineDiagnosticMetricDto = { role: string; name: string; unit: string; at_ms: number; value: number | null; missing: string | null };
+export type EngineDiagnosticSnapshotDto = {
+  attempt_id: string; run_id: string; profile_id: string; captured_at_ms: number; full_trace: boolean;
+  command: string; failure: string | null; stdout_complete: boolean; stderr_complete: boolean; process_exited: boolean; exit_code: number | null;
+  records: EngineDiagnosticRecordDto[]; dropped_records: number; retained_bytes: number; metrics: EngineDiagnosticMetricDto[];
+};
+
 export type EngineFailureDto = {
   operation: EngineOperationDto;
   run_id?: string | null;

@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 mod catalog;
+pub mod diagnostics;
 mod game_move_protocol;
 mod gtp;
 mod lifecycle;
@@ -824,16 +825,22 @@ fn spawn_stdout_reader(stdout: std::process::ChildStdout) -> Receiver<io::Result
 }
 
 pub(crate) fn spawn_stdout_lines_reader(
-    stdout: std::process::ChildStdout,
+    stdout: impl Read + Send + 'static,
 ) -> Receiver<io::Result<Option<String>>> {
-    let (tx, rx) = mpsc::channel();
+    // Eight complete 4 MiB records bound queued protocol data to 32 MiB.
+    // Oversize input fails explicitly; diagnostics never trim parser bytes.
+    let (tx, rx) = mpsc::sync_channel(8);
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
         loop {
             let mut line = String::new();
-            match reader.read_line(&mut line) {
+            match (&mut reader).take(4 * 1024 * 1024 + 1).read_line(&mut line) {
                 Ok(0) => {
                     let _ = tx.send(Ok(None));
+                    break;
+                }
+                Ok(length) if length > 4 * 1024 * 1024 => {
+                    let _ = tx.send(Err(io::Error::new(io::ErrorKind::InvalidData, "JSONL stdout record exceeds 4 MiB")));
                     break;
                 }
                 Ok(_) => {
@@ -851,12 +858,26 @@ pub(crate) fn spawn_stdout_lines_reader(
     rx
 }
 
-pub(crate) fn spawn_stderr_reader(stderr: std::process::ChildStderr) -> Receiver<io::Result<String>> {
+pub(crate) fn spawn_stderr_reader(stderr: impl Read + Send + 'static) -> Receiver<io::Result<String>> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let mut reader = BufReader::new(stderr);
-        let mut output = String::new();
-        let result = reader.read_to_string(&mut output).map(|_| output);
+        let mut reader = stderr;
+        let mut retained = Vec::with_capacity(16 * 1024);
+        let mut chunk = [0u8; 4096];
+        let result = loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break Ok(String::from_utf8_lossy(&retained).into_owned()),
+                Ok(length) => {
+                    if retained.len() + length > 16 * 1024 {
+                        let remove = retained.len() + length - 16 * 1024;
+                        retained.drain(..remove);
+                    }
+                    retained.extend_from_slice(&chunk[..length]);
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => break Err(error),
+            }
+        };
         let _ = tx.send(result);
     });
     rx
