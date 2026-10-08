@@ -4289,7 +4289,9 @@ export function App() {
           ?? (engineSnapshot.lifecycle.state === "no_engine" ? "" : ""),
         canStop: !matchBlocked && canStopForegroundEngine(engineSnapshot),
         canRestart: !matchBlocked && canRestartForegroundEngine(engineSnapshot),
-        failureMessage: visibleEngineFailure?.message ?? null,
+        failureMessage: visibleEngineFailure
+          ? [visibleEngineFailure.message, visibleEngineFailure.diagnostic_summary].filter(Boolean).join(" · ")
+          : null,
         failureKind: visibleEngineFailure?.kind ?? null,
         failureOperation: visibleEngineFailure?.operation ?? null,
         onSelectProfile: (profileId) => void handleSelectSwitcherProfile(profileId),
@@ -4690,6 +4692,7 @@ export function App() {
         <EngineSetupPanel
           disabled={matchBlocked}
           engineSnapshot={engineSnapshot}
+          engineFailure={visibleEngineFailure}
           onProfilesChange={setEngineProfiles}
         />
       </div>

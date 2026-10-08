@@ -283,3 +283,34 @@ describe("engine profile configuration editor", () => {
     expect(Array.from(host.querySelectorAll<HTMLElement>("[data-profile-order-id]")).map((row) => row.dataset.profileOrderId)).toEqual(["default", "second"]);
   });
 });
+
+it("keeps resource identity on the healthy primary while showing the failed candidate component", async () => {
+  const settings = await loadEngineProfilesSettings();
+  const profile = settings.profiles[0].profile;
+  const run = {
+    run_id: "healthy-run-a", profile_id: "default", adapter_kind: profile.adapter_kind,
+    profile_snapshot: profile,
+    qualified_resource: {
+      profile_revision: "saved-content-a", origin: "local_unknown", version: "1.18.2",
+      backend: "Eigen", source_commit: null, static_zlib_exemption: false,
+      resources: [{ component: "model", resolved_path: "<path:123>/model.bin.gz", sha256: "actual-model-digest-a", bytes: 123 }]
+    }
+  };
+  const snapshot: ForegroundEngineSnapshotDto = { revision: 5, lifecycle: { state: "ready", run }, continuous: { enabled: null, phase: "off" } };
+  root = createRoot(host);
+  await act(async () => root!.render(<EngineSetupPanel engineSnapshot={snapshot} engineFailure={{
+    operation: "switch", profile_id: "candidate-b", run_id: "failed-run-b", switch_id: "2", kind: "nvrtc",
+    message: "candidate executable cannot load NVRTC", diagnostic_summary: "nvrtc64.dll missing; <redacted>"
+  }} />));
+  const details = host.querySelector("details")!;
+  await act(async () => details.querySelector("summary")!.click());
+  expect(details.open).toBe(true);
+  expect(details.textContent).toContain("healthy-run-a");
+  expect(details.textContent).toContain("actual-model-digest-a");
+  expect(details.textContent).not.toContain("failed-run-b");
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("nvrtc64.dll missing");
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("failed-run-b");
+  await change(field("名称"), "Unsent new draft");
+  expect(details.textContent).toContain("saved-content-a");
+  expect((await loadEngineProfilesSettings()).profiles[0].profile.name).toBe(profile.name);
+});

@@ -975,9 +975,11 @@ version = "0.1.0"
 dependencies = [
  "app-model",
  "katago-protocol",
+ "regex",
  "serde",
  "serde_json",
  "sgf",
+ "sha2",
  "thiserror 1.0.69",
  "uuid",
 ]

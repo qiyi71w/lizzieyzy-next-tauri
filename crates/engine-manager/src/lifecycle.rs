@@ -1,9 +1,10 @@
 #![allow(clippy::result_large_err)]
 use crate::catalog::{EngineProfileCatalog, SavedEngineProfile};
 use crate::gtp::{self, ResponseDecoder};
+use crate::resources::{ResourceSnapshot, StartupOutput};
 use crate::{
-    build_command_spec, build_process_command, check_assets, kill_timed_out_child, spawn_stderr_reader,
-    spawn_stdout_lines_reader, write_jsonl, AnalysisCancelToken,
+    build_command_spec, build_process_command, check_assets, kill_timed_out_child, spawn_stdout_lines_reader,
+    write_jsonl, AnalysisCancelToken,
 };
 use app_model::{
     AnalysisJobLaneDto, AnalysisJobModeDto, AnalysisJobOutcomeDto, AnalysisJobStartedDto,
@@ -191,8 +192,7 @@ struct LiveEngine {
     child: Child,
     stdin: Arc<Mutex<Option<ChildStdin>>>,
     stdout_rx: Option<Receiver<io::Result<Option<String>>>>,
-    #[allow(dead_code)]
-    stderr_rx: Receiver<io::Result<String>>,
+    startup_output: Arc<Mutex<StartupOutput>>,
     run_id: String,
     process_id: u32,
 }
@@ -1926,7 +1926,8 @@ impl Inner {
         if self.current_operation() != operation {
             return;
         }
-        if let Err(published) = self.start_resident(operation, &run, false) {
+        if let Err(mut published) = self.start_resident(operation, &run, false) {
+            identify_failed_executable(&run, &mut published);
             self.fail_attempt(operation, published);
         }
     }
@@ -1935,7 +1936,8 @@ impl Inner {
         if self.current_operation() != operation {
             return;
         }
-        if let Err(published) = self.start_resident(operation, &run, true) {
+        if let Err(mut published) = self.start_resident(operation, &run, true) {
+            identify_failed_executable(&run, &mut published);
             self.fail_switch_candidate(operation, &run, &switch_id, published);
         }
     }
@@ -1986,6 +1988,21 @@ impl Inner {
                 None,
             )
         })?;
+        let resource_deadline = Instant::now() + Duration::from_secs(30);
+        let resources =
+            ResourceSnapshot::capture(run, &spec, resource_deadline).map_err(|(cause, message)| {
+                failure(
+                    kind,
+                    cause,
+                    message,
+                    Some(&run.run_id),
+                    Some(&run.profile_id),
+                    None,
+                )
+            })?;
+        if self.current_operation() != operation {
+            return Ok(());
+        }
         let mut child = build_process_command(&spec).spawn().map_err(|error| {
             failure(
                 kind,
@@ -2032,11 +2049,7 @@ impl Inner {
         } else {
             spawn_stdout_lines_reader(stdout)
         };
-        let stderr_rx = if generic {
-            gtp::spawn_stderr_reader(stderr)
-        } else {
-            spawn_stderr_reader(stderr)
-        };
+        let startup_output = StartupOutput::capture(stderr);
         {
             let mut state = self.lock();
             let process_id = child.id();
@@ -2044,7 +2057,7 @@ impl Inner {
                 child,
                 stdin: Arc::new(Mutex::new(Some(stdin))),
                 stdout_rx: Some(stdout_rx),
-                stderr_rx,
+                startup_output: startup_output.clone(),
                 run_id: run.run_id.clone(),
                 process_id,
             };
@@ -2137,6 +2150,46 @@ impl Inner {
             }),
             gtp,
         };
+        resources
+            .revalidate(Instant::now() + Duration::from_secs(30))
+            .map_err(|(cause, message)| {
+                failure(
+                    kind,
+                    cause,
+                    message,
+                    Some(&run.run_id),
+                    Some(&run.profile_id),
+                    None,
+                )
+            })?;
+        // Match resume intentionally uses the reservation's immutable launch snapshot.
+        if self.lock().match_reservation.is_none()
+            && !self
+                .catalog
+                .get(&run.profile_id)
+                .is_some_and(|saved| saved.profile == run.profile_snapshot)
+        {
+            return Err(failure(
+                kind,
+                EngineFailureKind::ResourceChanged,
+                "Saved profile changed during qualification; Start again explicitly".into(),
+                Some(&run.run_id),
+                Some(&run.profile_id),
+                None,
+            ));
+        }
+        let (version, backend) = startup_output
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .identity();
+        let version = capabilities
+            .gtp
+            .as_ref()
+            .map(|facts| facts.version.clone())
+            .or(version);
+        let mut qualified_run = run.clone();
+        qualified_run.qualified_resource = Some(resources.qualified(version, backend));
+        let run = &qualified_run;
         if as_candidate {
             let mut state = self.lock();
             if state.match_reservation.is_some() {
@@ -2149,6 +2202,7 @@ impl Inner {
                                 .find(|ready| ready.run_id == run.run_id)
                             {
                                 ready.capability_snapshot = Some(capabilities);
+                                ready.qualified_resource = run.qualified_resource.clone();
                                 reservation.ready = reservation
                                     .runs
                                     .iter()
@@ -2159,7 +2213,7 @@ impl Inner {
                 }
             } else {
                 drop(state);
-                self.promote_candidate(operation, run, capabilities);
+                self.promote_candidate(operation, run, capabilities)?;
             }
         } else {
             self.admit_ready(operation, run, capabilities);
@@ -2500,11 +2554,11 @@ impl Inner {
         operation: u64,
         run: &EngineRunDto,
         capabilities: EngineCapabilitySnapshotDto,
-    ) {
+    ) -> Result<(), EngineFailureDto> {
         let retiring = {
             let mut state = self.lock();
             if state.operation != operation {
-                return;
+                return Ok(());
             }
             let Phase::Switching {
                 primary,
@@ -2512,12 +2566,23 @@ impl Inner {
                 switch_id: _,
             } = &state.phase
             else {
-                return;
+                return Ok(());
             };
             if candidate.run_id != run.run_id {
-                return;
+                return Ok(());
             }
             let primary_run_id = primary.run_id.clone();
+            if !state.live.as_mut().is_some_and(|live| {
+                live.run_id == primary_run_id && matches!(live.child.try_wait(), Ok(None))
+            }) || !state
+                .candidate
+                .as_mut()
+                .is_some_and(|live| live.run_id == run.run_id && matches!(live.child.try_wait(), Ok(None)))
+            {
+                return Err(failure(EngineOperationDto::Switch, EngineFailureKind::ProcessExit,
+                    "The captured primary or candidate exited before promotion; no alternate engine was selected".into(),
+                    Some(&run.run_id), Some(&run.profile_id), None));
+            }
             let mut ready = run.clone();
             ready.capability_snapshot = Some(capabilities);
             invalidate_analysis_task_locked(
@@ -2557,6 +2622,7 @@ impl Inner {
             close_live_stdin(&live);
             let _ = kill_timed_out_child(&mut live.child);
         }
+        Ok(())
     }
 
     fn fail_switch_candidate(
@@ -2599,16 +2665,19 @@ impl Inner {
                 );
                 return;
             }
-            if run.adapter_kind == EngineBackend::GenericGtp {
-                published.diagnostic_summary = live
-                    .stderr_rx
-                    .recv_timeout(Duration::from_millis(25))
-                    .ok()
-                    .and_then(Result::ok);
-            }
+            attach_startup_failure(&mut published, &live.startup_output);
             state.candidate = None;
         }
-        state.phase = Phase::Ready(primary);
+        state.phase =
+            if state.live.as_mut().is_some_and(|live| {
+                live.run_id == primary.run_id && matches!(live.child.try_wait(), Ok(None))
+            }) {
+                Phase::Ready(primary)
+            } else {
+                Phase::NoEngine {
+                    failure: Some(published.clone()),
+                }
+            };
         publish_snapshot(&mut state);
         publish_event(
             &mut state,
@@ -2621,25 +2690,13 @@ impl Inner {
         if state.operation != operation {
             return;
         }
-        let failed_run = match &state.phase {
-            Phase::Starting(run) if run.adapter_kind == EngineBackend::GenericGtp && state.live.is_some() => {
-                Some(run.clone())
-            }
-            _ => None,
-        };
         let deadline = Instant::now() + self.config.stop_drain_timeout;
         let ManagerState { live, candidate, .. } = &mut *state;
         for slot in [live, candidate] {
             if let Some(process) = slot.as_mut() {
                 match terminate_process(process, deadline) {
                     Ok(()) => {
-                        if failed_run.is_some() {
-                            published.diagnostic_summary = process
-                                .stderr_rx
-                                .recv_timeout(Duration::from_millis(25))
-                                .ok()
-                                .and_then(Result::ok);
-                        }
+                        attach_startup_failure(&mut published, &process.startup_output);
                         *slot = None;
                     }
                     Err(error) => published
@@ -2650,14 +2707,8 @@ impl Inner {
         }
         cancel_jobs_for_current(&mut state);
         state.jobs.clear();
-        state.phase = match failed_run {
-            Some(run) => Phase::Error {
-                run,
-                failure: published.clone(),
-            },
-            None => Phase::NoEngine {
-                failure: Some(published.clone()),
-            },
+        state.phase = Phase::NoEngine {
+            failure: Some(published.clone()),
         };
         publish_snapshot(&mut state);
         publish_event(
@@ -4672,6 +4723,7 @@ fn starting_run(saved: &SavedEngineProfile) -> EngineRunDto {
         adapter_kind: saved.profile.adapter_kind(),
         profile_snapshot: saved.profile.clone(),
         capability_snapshot: None,
+        qualified_resource: None,
     }
 }
 
@@ -4714,6 +4766,36 @@ fn single_stage_conditions(total_visits: u32) -> AnalysisStageConditionsDto {
     }
 }
 
+fn identify_failed_executable(run: &EngineRunDto, failure: &mut EngineFailureDto) {
+    let path = std::path::Path::new(&run.profile_snapshot.program);
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    failure.message = format!(
+        "executable {}: {}",
+        crate::resources::redact(&name),
+        failure.message
+    );
+}
+
+fn attach_startup_failure(failure: &mut EngineFailureDto, output: &Arc<Mutex<StartupOutput>>) {
+    let output = output.lock().unwrap_or_else(|e| e.into_inner());
+    if matches!(
+        failure.kind,
+        EngineFailureKind::Start
+            | EngineFailureKind::Readiness
+            | EngineFailureKind::ProcessExit
+            | EngineFailureKind::NonzeroExit
+    ) {
+        if let Some(kind) = output.failure_kind() {
+            failure.kind = kind;
+        }
+    }
+    let summary = output.summary();
+    if !summary.is_empty() {
+        failure.diagnostic_summary = Some(summary);
+    }
+    failure.message = crate::resources::redact(&failure.message);
+}
+
 fn failure(
     operation: EngineOperationDto,
     kind: EngineFailureKind,
@@ -4729,8 +4811,8 @@ fn failure(
         job_id: None,
         profile_id: profile_id.map(str::to_string),
         kind,
-        message,
-        diagnostic_summary,
+        message: crate::resources::redact(&message),
+        diagnostic_summary: diagnostic_summary.map(|text| crate::resources::redact(&text)),
     }
 }
 

@@ -1,17 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { checkEngineAssets, loadEngineProfilesSettings, reorderEngineProfilesSettings, saveEngineProfilesSettings } from "../api/backend";
-import type { AssetCheckDto, EngineBackendDto, EngineProfileDto, EngineProfileRecordDto, ForegroundEngineSnapshotDto } from "../domain/types";
+import type { AssetCheckDto, EngineBackendDto, EngineFailureDto, EngineProfileDto, EngineProfileRecordDto, ForegroundEngineSnapshotDto } from "../domain/types";
 import { profileHasPendingChanges, runFromSnapshot, verifiedEngineCapabilitiesLabel } from "../domain/foregroundEngine";
 import { t } from "../i18n/resources";
+import { EngineResourceDetails } from "./EngineResourceDetails";
 
 type Props = {
   disabled?: boolean;
   engineSnapshot?: ForegroundEngineSnapshotDto | null;
+  engineFailure?: EngineFailureDto | null;
   onProfilesChange?: (profiles: EngineProfileRecordDto[]) => void;
 };
 
-export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onProfilesChange }: Props) {
+export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engineFailure = null, onProfilesChange }: Props) {
   const [profiles, setProfiles] = useState<EngineProfileRecordDto[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState("default");
   const [profileName, setProfileName] = useState("Local KataGo");
@@ -392,6 +394,14 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
         : "静态 adapter 上限：KataGoAnalysis 可提供单点、连续、整谱/task、候选/PV、胜率/分数、ownership/policy、visits 限制与协议取消；实际能力以当前 run 验证结果为准。"}</p>
       {adapterKind === "generic_gtp" ? <p className="message" role="status">启动后验证 GTP v2、引擎名称、版本与命令列表；保存配置不会验证协议或改变当前 run。</p> : null}
       <p className="message" aria-label="当前 run 能力">{verifiedEngineCapabilitiesLabel(snapshot)}</p>
+      <EngineResourceDetails run={run} />
+      {engineFailure && <section role="alert" className="message" style={{ overflowWrap: "anywhere" }}>
+        <h4>{t("engineResource.failure")}: {engineFailure.kind}</h4>
+        <p>{t("engineResource.profile")}: {engineFailure.profile_id} · {t("engineResource.run")}: {engineFailure.run_id}</p>
+        <p>{engineFailure.message}</p>
+        {engineFailure.diagnostic_summary && <p>{engineFailure.diagnostic_summary}</p>}
+        <p>{t("engineResource.repair")}</p>
+      </section>}
       <div className="engine-run-row">
         {adapterKind === "kata_go_analysis" ?
         <label>

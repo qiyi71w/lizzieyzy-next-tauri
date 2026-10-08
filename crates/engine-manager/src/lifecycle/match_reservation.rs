@@ -747,6 +747,7 @@ impl ForegroundEngineManager {
                             adapter_kind: old.adapter_kind,
                             profile_snapshot: old.profile_snapshot.clone(),
                             capability_snapshot: None,
+                            qualified_resource: None,
                         },
                     )
                 })

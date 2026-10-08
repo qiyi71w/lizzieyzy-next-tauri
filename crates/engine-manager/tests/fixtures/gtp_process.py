@@ -57,7 +57,8 @@ for line in sys.stdin:
         sys.stdout.write(response)
         sys.stdout.flush()
     if command == 'list_commands' and mode in ('eof', 'unsolicited'):
-        time.sleep(0.15)
+        while not pathlib.Path(trace + '.idle-release').exists():
+            time.sleep(0.005)
         if mode == 'eof':
             os.close(1)
         else:

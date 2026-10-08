@@ -527,6 +527,15 @@ pub enum EngineFailureKind {
     Occupied,
     ProfileNotFound,
     ProfileInUse,
+    ResourceChanged,
+    Executable,
+    Model,
+    Config,
+    Cuda,
+    Cudnn,
+    Nvrtc,
+    TensorRtParser,
+    Zlib,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -589,6 +598,27 @@ pub struct EngineAnalysisCapabilitiesDto {
     pub protocol_cancel: bool,
 }
 
+/// Content identity is independent of origin trust and runtime capability.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineResourceIdentityDto {
+    pub component: String,
+    pub resolved_path: String,
+    pub sha256: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QualifiedLocalResourceDto {
+    pub profile_revision: String,
+    pub resources: Vec<EngineResourceIdentityDto>,
+    /// Local files have no authenticated publisher receipt.
+    pub origin: String,
+    pub version: Option<String>,
+    pub source_commit: Option<String>,
+    pub backend: Option<String>,
+    pub static_zlib_exemption: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineRunDto {
     pub run_id: String,
@@ -597,6 +627,8 @@ pub struct EngineRunDto {
     pub profile_snapshot: EngineProfileDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability_snapshot: Option<EngineCapabilitySnapshotDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualified_resource: Option<QualifiedLocalResourceDto>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1221,6 +1253,7 @@ mod foreground_engine_wire {
                     profile_id: "profile-1".into(),
                     adapter_kind: EngineBackend::KataGoAnalysis,
                     profile_snapshot: sample_profile(),
+                    qualified_resource: None,
                     capability_snapshot: Some(EngineCapabilitySnapshotDto {
                         adapter_kind: EngineBackend::KataGoAnalysis,
                         game_move: true,
@@ -1321,6 +1354,7 @@ mod foreground_engine_wire {
             adapter_kind: EngineBackend::KataGoAnalysis,
             profile_snapshot: sample_profile(),
             capability_snapshot: None,
+            qualified_resource: None,
         };
         let snapshot = ForegroundEngineSnapshotDto {
             revision: 1,

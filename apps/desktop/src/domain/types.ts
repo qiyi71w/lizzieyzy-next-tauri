@@ -221,7 +221,9 @@ export type EngineFailureKind =
   | "invalid_state"
   | "occupied"
   | "profile_not_found"
-  | "profile_in_use";
+  | "profile_in_use"
+  | "resource_changed" | "executable" | "model" | "config"
+  | "cuda" | "cudnn" | "nvrtc" | "tensor_rt_parser" | "zlib";
 export type EngineFailureDto = {
   operation: EngineOperationDto;
   run_id?: string | null;
@@ -257,12 +259,28 @@ export type EngineAnalysisCapabilitiesDto = {
   visits_limit: boolean;
   protocol_cancel: boolean;
 };
+export type EngineResourceIdentityDto = {
+  component: string;
+  resolved_path: string;
+  sha256: string;
+  bytes: number;
+};
+export type QualifiedLocalResourceDto = {
+  profile_revision: string;
+  resources: EngineResourceIdentityDto[];
+  origin: string;
+  version: string | null;
+  source_commit: string | null;
+  backend: string | null;
+  static_zlib_exemption: boolean;
+};
 export type EngineRunDto = {
   run_id: string;
   profile_id: string;
   adapter_kind: EngineBackendDto;
   profile_snapshot: EngineProfileDto;
   capability_snapshot?: EngineCapabilitySnapshotDto | null;
+  qualified_resource?: QualifiedLocalResourceDto | null;
 };
 export type ExactRulesDto = "chinese" | "chinese_kgs";
 export type ExactPositionDto = {

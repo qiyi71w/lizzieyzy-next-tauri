@@ -4557,7 +4557,7 @@ fn switch_asset_failure_keeps_ready_a_and_publishes_switch_scoped_failure() {
 
 #[cfg(unix)]
 #[test]
-fn switch_spawn_failure_keeps_ready_a_with_start_kind() {
+fn switch_non_file_executable_keeps_ready_a_with_component_kind() {
     let temp = TestTempDir::new("switch-spawn");
     let (manager, catalog, events, run_a) =
         ready_two_profiles(&temp, &resident_echo_script(), &resident_echo_script());
@@ -4577,7 +4577,7 @@ fn switch_spawn_failure_keeps_ready_a_with_start_kind() {
         panic!("expected switching snapshot");
     };
     let failure = wait_failure(&events, Duration::from_secs(2), |failure| {
-        failure.kind == EngineFailureKind::Start
+        failure.kind == EngineFailureKind::Executable
     });
     assert_eq!(failure.operation, EngineOperationDto::Switch);
     assert_eq!(failure.profile_id.as_deref(), Some("profile-b"));
@@ -4923,7 +4923,7 @@ impl AnalysisJobCancel for FileCancel {
 
 #[cfg(unix)]
 #[test]
-fn spawn_failure_stays_no_engine_with_start_kind() {
+fn non_file_executable_stays_no_engine_with_component_kind() {
     let temp = TestTempDir::new("spawn-start");
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     let mut profile = setup_profile(&temp, &resident_echo_script());
@@ -4938,7 +4938,7 @@ fn spawn_failure_stays_no_engine_with_start_kind() {
     let events = manager.subscribe();
     manager.start("profile-1").unwrap();
     let failure = wait_failure(&events, Duration::from_secs(2), |failure| {
-        failure.kind == EngineFailureKind::Start
+        failure.kind == EngineFailureKind::Executable
     });
     assert_eq!(failure.operation, EngineOperationDto::Start);
     assert_eq!(failure.profile_id.as_deref(), Some("profile-1"));
@@ -6574,7 +6574,7 @@ fn gtp_typed_failures_have_total_deadline_and_reap_children() {
         assert!(
             matches!(
                 manager.snapshot().lifecycle,
-                ForegroundEngineLifecycleDto::Error { .. }
+                ForegroundEngineLifecycleDto::NoEngine { failure: Some(_) }
             ),
             "{mode} must require explicit recovery"
         );
@@ -6597,6 +6597,7 @@ fn gtp_idle_eof_or_unsolicited_response_seals_run_until_manual_restart() {
             matches!(s, ForegroundEngineLifecycleDto::Ready { .. })
         });
         let old_id = run_from_ready(&ready.lifecycle).run_id.clone();
+        std::fs::write(temp.path().join(format!("{mode}.idle-release")), "release").unwrap();
         let error = wait_lifecycle(&manager, Duration::from_secs(2), |s| {
             matches!(s, ForegroundEngineLifecycleDto::Error { .. })
         });
@@ -6692,4 +6693,109 @@ fn gtp_stop_during_handshake_cannot_publish_late_ready() {
     assert_gtp_reaped(&temp, "slow");
     std::thread::sleep(Duration::from_millis(850));
     assert!(events.try_iter().all(|e| !matches!(e, ForegroundEngineEventDto::Snapshot { snapshot } if matches!(snapshot.lifecycle, ForegroundEngineLifecycleDto::Ready { .. }))));
+}
+
+#[cfg(unix)]
+#[test]
+fn local_qualification_binds_actual_content_to_the_run_without_managed_trust() {
+    let temp = TestTempDir::new("resource-identity");
+    let (manager, _, _, _) = ready_manager(&temp, &resident_echo_script());
+    let snapshot = manager.snapshot();
+    let run = run_from_ready(&snapshot.lifecycle);
+    let identity = run.qualified_resource.as_ref().expect("qualified resource");
+    assert_eq!(identity.origin, "local_unknown");
+    assert!(!identity.static_zlib_exemption);
+    assert_eq!(identity.profile_revision.len(), 64);
+    let model = identity
+        .resources
+        .iter()
+        .find(|resource| resource.component == "model")
+        .unwrap();
+    assert_eq!(
+        model.sha256,
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    assert_eq!(model.bytes, 0);
+    assert!(!model
+        .resolved_path
+        .contains(&temp.path().to_string_lossy().to_string()));
+    assert!(model.resolved_path.ends_with("model.bin"));
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn resource_replacement_and_saved_revision_changes_cannot_promote_a_late_candidate() {
+    for change in ["model", "config", "executable", "profile"] {
+        let temp = TestTempDir::new(change);
+        let release = temp.path().join("release-resource");
+        let entered = temp.path().join("entered-resource");
+        let script = format!(
+            "touch '{}'\n{}",
+            entered.display(),
+            hold_probe_until_release_script(&release)
+        );
+        let (manager, catalog, events, run_a) = ready_two_profiles(&temp, &resident_echo_script(), &script);
+        let before = manager.snapshot();
+        manager.switch_to("profile-b").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !entered.exists() {
+            assert!(Instant::now() < deadline, "candidate did not enter probe");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        match change {
+            "model" => std::fs::write(temp.path().join("engine-b.bin"), b"replacement model").unwrap(),
+            "config" => std::fs::write(temp.path().join("engine-b.cfg"), b"numSearchThreads=3").unwrap(),
+            "executable" => {
+                let replacement = temp.path().join("replacement.sh");
+                write_executable(&replacement, &resident_echo_script());
+                std::fs::rename(replacement, temp.path().join("engine-b.sh")).unwrap();
+            }
+            _ => {
+                let mut saved = catalog.get("profile-b").unwrap();
+                saved.profile.name = "new saved revision".into();
+                catalog.upsert(saved);
+            }
+        }
+        std::fs::write(&release, "release").unwrap();
+        let failure = wait_failure(&events, Duration::from_secs(3), |failure| {
+            failure.operation == EngineOperationDto::Switch
+        });
+        assert_eq!(failure.kind, EngineFailureKind::ResourceChanged, "{failure:?}");
+        assert_eq!(failure.profile_id.as_deref(), Some("profile-b"));
+        assert_ready_a(
+            &manager.snapshot().lifecycle,
+            &run_a,
+            run_from_ready(&before.lifecycle),
+        );
+        manager.teardown().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn startup_dependency_failures_are_bounded_redacted_and_never_replace_ready_a() {
+    for (component, expected) in [
+        ("nvonnxparser.dll missing", EngineFailureKind::TensorRtParser),
+        ("cudnn64_9.dll missing", EngineFailureKind::Cudnn),
+        ("nvrtc64.dll missing", EngineFailureKind::Nvrtc),
+        ("CUDA driver error", EngineFailureKind::Cuda),
+        ("zlib1.dll missing", EngineFailureKind::Zlib),
+    ] {
+        let temp = TestTempDir::new("dependency-redaction");
+        let script = format!("printf '%s\\n' '{component} token=fake-secret session_id=fake-session https://example.test/private /home/alice/private-model' >&2\nexit 7");
+        let (manager, _, events, run_a) = ready_two_profiles(&temp, &resident_echo_script(), &script);
+        manager.switch_to("profile-b").unwrap();
+        let failure = wait_failure(&events, Duration::from_secs(3), |failure| {
+            failure.operation == EngineOperationDto::Switch
+        });
+        assert_eq!(failure.kind, expected, "{failure:?}");
+        let summary = failure.diagnostic_summary.unwrap();
+        assert!(summary.len() <= 8192);
+        for secret in ["fake-secret", "fake-session", "example.test", "/home/alice", "\n"] {
+            assert!(!summary.contains(secret), "{summary}");
+        }
+        assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, run_a);
+        manager.teardown().unwrap();
+    }
 }

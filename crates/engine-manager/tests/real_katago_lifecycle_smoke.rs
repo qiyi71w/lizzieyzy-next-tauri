@@ -487,3 +487,90 @@ fn real_katago_failed_start_failed_switch_crash_and_autoload() {
         matches!(lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. })
     });
 }
+
+#[test]
+#[ignore = "requires named real KataGo assets; LIZZIEYZY_REAL_KATAGO=1"]
+fn real_local_resource_qualification_start_switch_and_corrupt_model_preserve_primary() {
+    require_real_katago();
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    for id in ["qualified-a", "qualified-b"] {
+        catalog.upsert(SavedEngineProfile {
+            profile_id: id.into(),
+            profile: real_profile(id),
+        });
+    }
+    let corrupt = std::path::PathBuf::from(env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap())
+        .join(format!("corrupt-model-{}.bin.gz", uuid::Uuid::new_v4()));
+    std::fs::write(&corrupt, "not a KataGo model").unwrap();
+    let mut invalid = real_profile("invalid-model");
+    if let EngineAdapterSettings::KataGoAnalysis(settings) = &mut invalid.adapter {
+        settings.model_path = Some(corrupt.to_string_lossy().into_owned());
+    }
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "invalid".into(),
+        profile: invalid,
+    });
+    let manager = ForegroundEngineManager::new(
+        catalog,
+        ForegroundEngineConfig {
+            readiness_timeout: Duration::from_secs(90),
+            stop_drain_timeout: Duration::from_secs(2),
+            job_timeout: Duration::from_secs(30),
+            admit_whole_game_analysis: true,
+        },
+    );
+    let events = manager.subscribe();
+    manager.start("invalid").unwrap();
+    let invalid_start = wait_failure(&events, Duration::from_secs(90), |_| true);
+    eprintln!("resource-invalid-start={invalid_start:?}");
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine { .. }
+    ));
+    manager.start("qualified-a").unwrap();
+    let ready = wait_snapshot(&events, Duration::from_secs(90), |s| {
+        matches!(s, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    let run_a = run_from_ready(&ready.lifecycle);
+    let qualification = run_a.qualified_resource.as_ref().expect("real resource identity");
+    assert_eq!(qualification.origin, "local_unknown");
+    assert!(
+        qualification
+            .version
+            .as_deref()
+            .is_some_and(|version| !version.is_empty()),
+        "real KataGo must report its version"
+    );
+    assert!(!qualification.static_zlib_exemption);
+    assert_eq!(qualification.resources.len(), 3);
+    assert!(qualification
+        .resources
+        .iter()
+        .all(|resource| resource.sha256.len() == 64 && resource.bytes > 0));
+    eprintln!(
+        "resource-qualified-a={}",
+        serde_json::to_string(qualification).unwrap()
+    );
+    manager.switch_to("qualified-b").unwrap();
+    let ready = wait_snapshot(
+        &events,
+        Duration::from_secs(90),
+        |s| matches!(s, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "qualified-b"),
+    );
+    let before = run_from_ready(&ready.lifecycle).clone();
+    assert_ne!(before.run_id, run_a.run_id);
+    manager.switch_to("invalid").unwrap();
+    let invalid_switch = wait_failure(&events, Duration::from_secs(90), |f| {
+        f.operation == EngineOperationDto::Switch
+    });
+    eprintln!("resource-invalid-switch={invalid_switch:?}");
+    assert_eq!(run_from_ready(&manager.snapshot().lifecycle), &before);
+    let job = manager
+        .start_selected_node_job(selected_request(&before.run_id, 1, 2))
+        .unwrap();
+    wait_job(&events, Duration::from_secs(30), |event| {
+        event.job_id == job.job_id && event.outcome == app_model::AnalysisJobOutcomeDto::Completed
+    });
+    manager.teardown().unwrap();
+    std::fs::remove_file(corrupt).unwrap();
+}
