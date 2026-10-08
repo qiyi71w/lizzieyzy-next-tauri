@@ -6,6 +6,8 @@ import type { AppPreferences } from "../domain/preferences";
 import type { ProviderKind } from "../domain/providers";
 import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
 import { claimedShortcutCatalog, formatShortcutChord, actionLabelFromRegistry } from "../domain/shortcuts";
+import { t } from "../i18n/resources";
+import type { PlayerColor, SgfTransformDto } from "../domain/types";
 import {
   AI_COMMENTARY_LABEL,
   AI_COMMENTARY_UNAVAILABLE,
@@ -48,6 +50,15 @@ export type ContinuousAnalysisAction = {
 
 
 type Props = {
+  authoringEnabled?: boolean;
+  onAuthorMode?: (color: PlayerColor | null, insert: boolean) => void;
+  onTransform?: (transform: SgfTransformDto) => void;
+  onContinueLadder?: () => void;
+  onFunctionSearch?: () => void;
+  onBeforeFunctionSearch?: () => void;
+  onExportBranch?: () => void;
+  onExportBoard?: () => void;
+  onExportChart?: () => void;
   windowPin?: MainWindowPinControl;
   sheet: "none" | SheetId;
   onToggleSheet: (sheet: SheetId) => void;
@@ -239,10 +250,9 @@ export function AppChrome(props: Props) {
             <SubMenu label="更多保存">
               <MenuItem label="保存纯净棋谱" disabled title={later} />
               <MenuItem label="保存纯净棋谱(带评论)" disabled title={later} />
-              <MenuItem label="保存纯净分支" disabled title={later} />
-              <MenuItem label="保存主棋盘截图" disabled title={later} />
-              <MenuItem label="保存小棋盘截图" disabled title={later} />
-              <MenuItem label="保存胜率图截图" disabled title={later} />
+              <MenuItem label={`${t("action.file.export-branch")} (Ctrl+Alt+S)`} onClick={() => run(() => props.onExportBranch?.())} disabled={!nativeAvailable || props.busy} title={!nativeAvailable ? nativeUnavailable : undefined} />
+              <MenuItem label={`${t("action.file.export-board")} (Alt+S)`} onClick={() => run(() => props.onExportBoard?.())} disabled={!nativeAvailable || props.busy} title={!nativeAvailable ? nativeUnavailable : undefined} />
+              <MenuItem label={actionLabelFromRegistry("file.export-winrate-chart", t("action.file.export-winrate-chart"))} onClick={() => run(() => props.onExportChart?.())} disabled={!nativeAvailable || props.busy} title={!nativeAvailable ? nativeUnavailable : undefined} />
             </SubMenu>
             <MenuItem label="存档与读档" disabled title={later} />
             <div className="menu-sep" role="separator" />
@@ -375,7 +385,7 @@ export function AppChrome(props: Props) {
             <MenuItem label={actionLabelFromRegistry("review.scoring", props.scoringActive ? "计分中" : "本地计分")} onClick={() => run(() => props.onEnterScoring?.())} disabled={!nativeAvailable || props.busy || props.trialActive || props.trialPending || props.scoringActive || props.scoringPending || !props.onEnterScoring} />
             <SubMenu label="人机续弈">
               <MenuItem label="从当前节点续弈" onClick={() => run(() => props.onHumanContinue?.())} disabled={props.busy || !nativeAvailable || !props.onHumanContinue} title={!nativeAvailable ? "人机续弈仅在桌面运行时可用。" : undefined} />
-              <MenuItem label="人机对局(N)" disabled title="人机对局尚未接入，N 不会新建棋谱。" />
+              <MenuItem label={t("action.game.human-vs-engine")} disabled title={t("reason.n")} />
               <MenuItem label="人机对局(分析模式)" disabled title={later} />
               <MenuItem label="人机对局(Genmove模式)" disabled title={later} />
               <MenuItem label="续弈[AI执黑]" disabled title={later} />
@@ -387,6 +397,7 @@ export function AppChrome(props: Props) {
             </SubMenu>
             <MenuItem label={actionLabelFromRegistry("game.root-setup", "起始局面设置")} onClick={() => run(props.onRootSetup)} disabled={!props.canRootSetup} title={!props.canRootSetup ? "仅无后续的根节点可直接设置起始局面" : undefined} />
             <MenuItem label={actionLabelFromRegistry("game.convert-position", "转换为起始局面")} onClick={() => run(props.onConvertPosition)} disabled={!props.canConvertPosition} title="确认后丢弃原着手树；可撤销" />
+            <MenuItem label={t("action.game.continue-ladder")} onClick={() => run(() => props.onContinueLadder?.())} disabled={!props.authoringEnabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
             <MenuItem label="清空棋盘(Ctrl+Home)" onClick={() => run(props.onClearBoard)} disabled={props.busy} />
             <MenuItem label="棋谱原文" onClick={() => run(() => props.onToggleSheet("sgf"))} />
             <MenuItem label="解析棋谱" onClick={() => run(props.onParse)} disabled={props.busy} />
@@ -419,9 +430,16 @@ export function AppChrome(props: Props) {
             <MenuItem label={actionLabelFromRegistry("edit.undo", "撤销")} onClick={() => run(props.onUndo)} disabled={!props.canUndo} />
             <MenuItem label={actionLabelFromRegistry("edit.redo", "重做")} onClick={() => run(props.onRedo)} disabled={!props.canRedo} />
             <div className="menu-sep" role="separator" />
-            <MenuItem label="添加黑子" disabled title={later} />
-            <MenuItem label="添加白子" disabled title={later} />
-            <MenuItem label="交替落子" disabled title={later} />
+            <MenuItem label={t("authoring.black")} onClick={() => run(() => props.onAuthorMode?.("black", false))} disabled={!props.authoringEnabled} />
+            <MenuItem label={t("authoring.white")} onClick={() => run(() => props.onAuthorMode?.("white", false))} disabled={!props.authoringEnabled} />
+            <MenuItem label={t("authoring.alternate")} onClick={() => run(() => props.onAuthorMode?.(null, false))} disabled={!props.authoringEnabled} />
+            <SubMenu label={t("authoring.context")}>
+              <MenuItem label={t("authoring.insertBlack")} onClick={() => run(() => props.onAuthorMode?.("black", true))} disabled={!props.authoringEnabled} />
+              <MenuItem label={t("authoring.insertWhite")} onClick={() => run(() => props.onAuthorMode?.("white", true))} disabled={!props.authoringEnabled} />
+              <MenuItem label={t("authoring.insertAlternate")} onClick={() => run(() => props.onAuthorMode?.(null, true))} disabled={!props.authoringEnabled} />
+              <MenuCheck label={t("authoring.allowDrag")} checked={props.preferences.allowDrag} onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, allowDrag: !props.preferences.allowDrag }))} disabled={props.busy} />
+              <MenuCheck label={t("authoring.allowDoubleClick")} checked={props.preferences.allowDoubleClick} onClick={() => run(() => props.onPreferencesChange({ ...props.preferences, allowDoubleClick: !props.preferences.allowDoubleClick }))} disabled={props.busy} />
+            </SubMenu>
             <MenuItem label={actionLabelFromRegistry("review.pass", "停一手")} onClick={() => run(() => props.onPass?.())} disabled={(props.busy && !props.humanTurn) || !nativeAvailable || !props.onPass} title={!nativeAvailable ? nativeUnavailable : undefined} />
             <div className="menu-sep" role="separator" />
             <MenuItem label={actionLabelFromRegistry("review.promote-main", "设为主分支")} onClick={() => run(() => props.onPromoteMain?.())} disabled={!props.canPromoteMain} />
@@ -430,11 +448,9 @@ export function AppChrome(props: Props) {
             <MenuItem label={actionLabelFromRegistry("review.remove-variation", "删除当前节点")} onClick={() => run(() => props.onRemoveVariation?.())} disabled={!props.canDeleteNode} title={!nativeAvailable ? nativeUnavailable : undefined} />
             <div className="menu-sep" role="separator" />
             <MenuItem label="编辑棋谱原文" onClick={() => run(() => props.onToggleSheet("sgf"))} disabled={props.matchBlocked} />
-            <MenuItem label="交换黑白" disabled title={later} />
-            <MenuItem label="向右旋转" disabled title={later} />
-            <MenuItem label="向左旋转" disabled title={later} />
-            <MenuItem label="水平翻转" disabled title={later} />
-            <MenuItem label="垂直翻转" disabled title={later} />
+            {(["swap_colors", "rotate_clockwise", "rotate_counterclockwise", "mirror_horizontal", "mirror_vertical"] as const).map((transform) => <MenuItem key={transform}
+              label={actionLabelFromRegistry(`edit.${transform}`, t(`action.edit.${transform}`))}
+              onClick={() => run(() => props.onTransform?.(transform))} disabled={!props.authoringEnabled} title={!nativeAvailable ? nativeUnavailable : undefined} />)}
           </ChromeMenu>
           <ChromeMenu label="同步" open={openMenu === "sync"} onToggle={() => setOpenMenu(openMenu === "sync" ? null : "sync")}>
             <MenuItem label="网络设置 / provider / readboard" onClick={() => run(() => props.onToggleSheet("sync"))} disabled={props.matchBlocked} />
@@ -449,7 +465,8 @@ export function AppChrome(props: Props) {
         </div>
         <span className="menu-div" />
         <div className="menu-cluster">
-          <ChromeMenu label="帮助" open={openMenu === "help"} onToggle={() => setOpenMenu(openMenu === "help" ? null : "help")}>
+          <ChromeMenu label="帮助" open={openMenu === "help"} onBeforeOpen={props.onBeforeFunctionSearch} onToggle={() => setOpenMenu(openMenu === "help" ? null : "help")}>
+            <MenuItem label={actionLabelFromRegistry("navigation.function-search", t("search.title"))} onClick={() => run(() => props.onFunctionSearch?.())} />
             <MenuItem label={shortcutReferenceLabel} onClick={() => run(props.onOpenShortcutReference)} />
             <MenuItem label="关于" onClick={() => run(props.onAbout)} />
             <MenuItem label="检查更新" disabled title={later} />
@@ -520,6 +537,7 @@ export function AppChrome(props: Props) {
       </nav>
 
       <div className="tool-strip" role="toolbar" aria-label="分析工具">
+        <button type="button" className="chrome-btn" data-focus-anchor title={t("search.open")} onPointerDown={props.onBeforeFunctionSearch} onKeyDown={props.onBeforeFunctionSearch} onClick={props.onFunctionSearch}>{t("search.title")}</button>
         <div className="icon-group">
           <IconBtn src={toolbarIcons.newFile} label="新建" onClick={props.onNew} disabled={props.busy} />
           <IconBtn src={toolbarIcons.open} label="打开" onClick={props.onOpen} disabled={openDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />
@@ -539,9 +557,9 @@ export function AppChrome(props: Props) {
           <IconBtn src={toolbarIcons.backmain} label="返回主分支" disabled title={later} />
           <IconBtn src={toolbarIcons.control} label="控制面板" onClick={() => props.onToggleSheet("engine")} />
           <IconBtn src={toolbarIcons.mark1} label="标记工具" disabled title={later} />
-          <IconBtn src={toolbarIcons.smallblack1} label="添加黑子" disabled title={later} />
-          <IconBtn src={toolbarIcons.smallwhite} label="添加白子" disabled title={later} />
-          <IconBtn src={toolbarIcons.hb} label="交替落子" disabled title={later} />
+          <IconBtn src={toolbarIcons.smallblack1} label={t("authoring.black")} disabled={!props.authoringEnabled} onClick={() => props.onAuthorMode?.("black", false)} />
+          <IconBtn src={toolbarIcons.smallwhite} label={t("authoring.white")} disabled={!props.authoringEnabled} onClick={() => props.onAuthorMode?.("white", false)} />
+          <IconBtn src={toolbarIcons.hb} label={t("authoring.alternate")} disabled={!props.authoringEnabled} onClick={() => props.onAuthorMode?.(null, false)} />
           <IconBtn
             src={toolbarIcons.playpass}
             label="虚手"
@@ -737,10 +755,10 @@ export function BottomBar(props: {
   );
 }
 
-function ChromeMenu({ label, open, onToggle, secondary, children }: { label: string; open: boolean; onToggle: () => void; secondary?: boolean; children: ReactNode }) {
+function ChromeMenu({ label, open, onToggle, onBeforeOpen, secondary, children }: { label: string; open: boolean; onToggle: () => void; onBeforeOpen?: () => void; secondary?: boolean; children: ReactNode }) {
   return (
     <div className="menu">
-      <button type="button" className={`menu-trigger${secondary ? " menu-trigger-secondary" : ""}`} aria-expanded={open} aria-haspopup="menu" onClick={onToggle}>
+      <button type="button" className={`menu-trigger${secondary ? " menu-trigger-secondary" : ""}`} aria-expanded={open} aria-haspopup="menu" onPointerDown={onBeforeOpen} onKeyDown={onBeforeOpen} onClick={onToggle}>
         {label}
       </button>
       {open ? <div className="menu-pop" role="menu">{children}</div> : null}

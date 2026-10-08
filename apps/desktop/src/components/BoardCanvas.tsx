@@ -1,7 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { useElementSize } from "../workspace/useElementSize";
-import type { AnalysisFrameDto, MoveDto, PointDto, PositionDto, ScoringSessionDto, SgfMarkupDto } from "../domain/types";
+import { useBoardClickClassification } from "../hooks/useBoardClickClassification";
+import type { AnalysisFrameDto, MoveDto, PointDto, PointSearchScopeDto, PositionDto, ScoringSessionDto, SgfMarkupDto } from "../domain/types";
+import type { SgfAuthoringActionDto } from "../domain/types";
+import { t } from "../i18n/resources";
 import { isPoint } from "../domain/board";
 import type { NextMoveReviewMarker, NextMoveReviewMarkerMode } from "../domain/nextMoveReviewMarker";
 import { variationReplayPointSteps } from "../domain/variationReplay";
@@ -13,6 +16,7 @@ import {
 export type OverlayMode = "candidates" | "ownership" | "policy";
 
 type Props = {
+  surfaceRef?: React.MutableRefObject<HTMLCanvasElement | null>;
   position: PositionDto;
   markup?: SgfMarkupDto[];
   analysis?: AnalysisFrameDto;
@@ -24,6 +28,13 @@ type Props = {
   onOverlayModeChange?: (mode: OverlayMode) => void;
   hideCandidates?: boolean;
   onPointClick?: (point: PointDto) => void;
+  allowDrag?: boolean;
+  allowDoubleClick?: boolean;
+  pointSearchEnabled?: boolean;
+  onPointSearch?: (point: PointDto, scope: PointSearchScopeDto, captured: ReviewPresentationScope) => void;
+  authoringEnabled?: boolean;
+  onAuthoring?: (action: SgfAuthoringActionDto, captured: ReviewPresentationScope) => void;
+  onGestureRefused?: (message: string) => void;
   keyboardPlacement?: boolean;
   scoring?: ScoringSessionDto | null;
   onCandidatePreview?: (index: number | null) => void;
@@ -44,6 +55,7 @@ function samePreviewScope(
 }
 
 export function BoardCanvas({
+  surfaceRef,
   position,
   markup = [],
   analysis,
@@ -55,6 +67,13 @@ export function BoardCanvas({
   onOverlayModeChange,
   hideCandidates = false,
   onPointClick,
+  allowDrag = false,
+  allowDoubleClick = true,
+  pointSearchEnabled = false,
+  onPointSearch,
+  authoringEnabled = false,
+  onAuthoring,
+  onGestureRefused,
   keyboardPlacement = false,
   onCandidatePreview,
   scoring,
@@ -64,8 +83,53 @@ export function BoardCanvas({
   pvPrefixLength,
   replayCandidateIndex
 }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const ownCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const canvasRef = surfaceRef ?? ownCanvasRef;
   const size = useElementSize(canvasRef);
+  const dragRef = useRef<{ from: PointDto; scope: ReviewPresentationScope; pointer: number } | null>(null);
+  const suppressClickRef = useRef(false);
+  const [context, setContext] = useState<{ point: PointDto; scope: ReviewPresentationScope; left: number; top: number } | null>(null);
+  const contextRef = useRef<HTMLDivElement | null>(null);
+  const clickClassification = useBoardClickClassification({
+    enabled: pointSearchEnabled && Boolean(onPointSearch),
+    allowDoubleClick,
+    scope: previewScope,
+    single: (point) => onPointClick?.(point),
+    double: (point, captured) => onPointSearch?.(point, "current_line", captured),
+    refuse: (message) => onGestureRefused?.(`${t("review.point.timing-failed")}${message}`)
+  });
+  useLayoutEffect(() => {
+    const menu = contextRef.current;
+    if (!context || !menu) return;
+    const bounds = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(0, Math.min(context.left, window.innerWidth - bounds.width))}px`;
+    menu.style.top = `${Math.max(0, Math.min(context.top, window.innerHeight - bounds.height))}px`;
+  }, [context]);
+  function pointerPoint(event: { clientX: number; clientY: number; currentTarget: HTMLCanvasElement }): PointDto | null {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const { grid, offsetX, offsetY } = boardGeometry(rect.width, rect.height, position.board_width, position.board_height);
+    const x = Math.round((event.clientX - rect.left - offsetX) / grid);
+    const y = Math.round((event.clientY - rect.top - offsetY) / grid);
+    return x < 0 || y < 0 || x >= position.board_width || y >= position.board_height ? null : { x, y };
+  }
+  function cancelDrag() {
+    if (dragRef.current) { suppressClickRef.current = true; clickClassification.cancel(); }
+    dragRef.current = null;
+  }
+  useEffect(() => {
+    function dismiss(event: globalThis.PointerEvent) {
+      if (!contextRef.current?.contains(event.target as Node)) setContext(null);
+    }
+    function releaseOutside(event: globalThis.PointerEvent) {
+      if (event.target !== canvasRef.current) clickClassification.cancel();
+    }
+    function cancel(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") { clickClassification.cancel(); cancelDrag(); setContext(null); }
+    }
+    window.addEventListener("pointerdown", dismiss); window.addEventListener("keydown", cancel);
+    window.addEventListener("pointerup", releaseOutside);
+    return () => { window.removeEventListener("pointerdown", dismiss); window.removeEventListener("keydown", cancel); window.removeEventListener("pointerup", releaseOutside); };
+  }, []);
   const [keyboardPoint, setKeyboardPoint] = useState<PointDto | null>(null);
   const [overlayModeLocal, setOverlayModeLocal] = useState<OverlayMode>("candidates");
   const previewTimerRef = useRef<number | undefined>(undefined);
@@ -448,19 +512,66 @@ export function BoardCanvas({
       role="application"
       tabIndex={0}
       onKeyDown={handleKeyDown}
+      onPointerDown={(event) => {
+        if (event.button === 0) clickClassification.pointerDown();
+        else clickClassification.cancel();
+        suppressClickRef.current = false;
+        if (event.button !== 0 || !allowDrag || !previewScope || !onAuthoring) return;
+        const from = pointerPoint(event);
+        if (!from || !position.stones.some((s) => s.x === from.x && s.y === from.y)) return;
+        cancelCandidatePreview();
+        dragRef.current = { from, scope: previewScope, pointer: event.pointerId };
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }}
+      onPointerUp={(event) => {
+        const drag = dragRef.current;
+        if (!drag || drag.pointer !== event.pointerId) return;
+        dragRef.current = null;
+        const to = pointerPoint(event);
+        if (!allowDrag || !samePreviewScope(previewScope, drag.scope)) {
+          suppressClickRef.current = true; clickClassification.cancel(); onGestureRefused?.(t("authoring.stale")); return;
+        }
+        if (!to) { suppressClickRef.current = true; clickClassification.cancel(); onGestureRefused?.(t("authoring.offboard")); return; }
+        if (to.x !== drag.from.x || to.y !== drag.from.y) {
+          suppressClickRef.current = true; clickClassification.cancel();
+          onAuthoring?.({ kind: "drag", from: drag.from, to }, drag.scope);
+        }
+      }}
+      onPointerCancel={() => { clickClassification.cancel(); cancelDrag(); }}
+      onLostPointerCapture={cancelDrag}
+      onContextMenu={(event) => {
+        if ((!authoringEnabled || !onAuthoring) && (!pointSearchEnabled || !onPointSearch)) return;
+        if (!previewScope) return;
+        event.preventDefault(); clickClassification.cancel(); cancelDrag(); cancelCandidatePreview();
+        const point = pointerPoint(event);
+        if (point) setContext({ point, scope: previewScope, left: event.clientX, top: event.clientY });
+      }}
       onPointerMove={handleCandidatePointerMove}
       onPointerLeave={cancelCandidatePreview}
       onClick={(event) => {
         cancelCandidatePreview();
-        if (!onPointClick) return;
-        const rect = event.currentTarget.getBoundingClientRect();
-        const { grid, offsetX, offsetY } = boardGeometry(rect.width, rect.height, position.board_width, position.board_height);
-        const x = Math.round((event.clientX - rect.left - offsetX) / grid);
-        const y = Math.round((event.clientY - rect.top - offsetY) / grid);
-        if (x < 0 || y < 0 || x >= position.board_width || y >= position.board_height) return;
-        onPointClick({ x, y });
+        if (suppressClickRef.current) { suppressClickRef.current = false; return; }
+        const point = pointerPoint(event);
+        if (point) clickClassification.click(point, event.detail);
+        else clickClassification.cancel();
       }}
     />
+    {context ? <div ref={contextRef} role="menu" aria-label={t("authoring.context")} className="menu-pop" style={{ position: "fixed", left: context.left, top: context.top, maxHeight: "100vh", overflowY: "auto", zIndex: 1000 }}>
+      <button type="button" role="menuitem" className="menu-item" disabled={!pointSearchEnabled} title={!pointSearchEnabled ? t("review.point.unavailable") : undefined} onClick={() => {
+        const captured = context; setContext(null);
+        if (!samePreviewScope(previewScope, captured.scope)) { onGestureRefused?.(t("authoring.stale")); return; }
+        onPointSearch?.(captured.point, "all_branches", captured.scope);
+      }}>{t("review.point.search")}</button>
+      {([
+        ["authoring.black", "black", false], ["authoring.white", "white", false], ["authoring.alternate", null, false],
+        ["authoring.insertBlack", "black", true], ["authoring.insertWhite", "white", true], ["authoring.insertAlternate", null, true]
+      ] as const).map(([key, color, insert]) => <button type="button" role="menuitem" className="menu-item" key={key} disabled={!authoringEnabled} onClick={() => {
+        const captured = context; setContext(null);
+        if (!samePreviewScope(previewScope, captured.scope)) { onGestureRefused?.(t("authoring.stale")); return; }
+        onAuthoring?.({ kind: "add", point: captured.point, color, insert }, captured.scope);
+      }}>{t(key)}</button>)}
+      <button type="button" role="menuitem" className="menu-item" onClick={() => setContext(null)}>{t("authoring.cancel")}</button>
+    </div> : null}
     {layerHost ? createPortal(overlays, layerHost) : overlays}
   </div>;
 }

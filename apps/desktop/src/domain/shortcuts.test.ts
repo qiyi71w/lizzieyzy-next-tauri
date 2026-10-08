@@ -11,6 +11,29 @@ import {
 
 describe("shortcut registry catalog", () => {
 
+  it("gives chart Shift+Alt+S and square Shift+Alt+Q with no fallback or alias", () => {
+    const registry = createShortcutRegistry();
+    const chart = vi.fn();
+    const square = vi.fn();
+    registry.bind("file.export-winrate-chart", chart);
+    registry.bind("markup.square", square);
+    const board = document.createElement("canvas");
+    const chord = (key: string, target: HTMLElement) => {
+      const event = new KeyboardEvent("keydown", { key, altKey: true, shiftKey: true, cancelable: true });
+      Object.defineProperty(event, "target", { value: target });
+      return registry.dispatch(event);
+    };
+    expect(chord("s", board)).toBe(true);
+    expect(chart).toHaveBeenCalledTimes(1);
+    expect(square).not.toHaveBeenCalled();
+    expect(chord("q", board)).toBe(true);
+    expect(square).toHaveBeenCalledTimes(1);
+    expect(chord("s", document.createElement("textarea"))).toBe(false);
+    expect(chart).toHaveBeenCalledTimes(1);
+    expect(registry.get("markup.square").aliases).toEqual([]);
+    expect(registry.referenceEntries()).toContainEqual({ id: "markup.square", label: "标记：方", keys: "Alt+Shift+Q" });
+    expect(actionLabelFromRegistry("file.export-winrate-chart", "保存胜率图截图")).toBe("保存胜率图截图(Alt+Shift+S)");
+  });
   it("rejects a duplicate primary key or alias with a deterministic conflict", () => {
     const duplicatePrimary = [
       { id: "file.open", label: "打开棋谱", primary: { key: "o" }, aliases: [], focusRule: "focus-safe" as const },

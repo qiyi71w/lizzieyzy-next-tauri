@@ -29,6 +29,7 @@ go-core = { path = "../../../crates/go-core" }
 readboard-sidecar = { path = "../../../crates/readboard-sidecar" }
 sgf = { path = "../../../crates/sgf" }
 save-as-dialog = { path = "../../../crates/save-as-dialog" }
+image-export = { path = "../../../crates/image-export" }
 url = "2"
 serde.workspace = true
 serde_json.workspace = true
@@ -39,9 +40,11 @@ tauri-plugin-single-instance.workspace = true
 uuid.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+dunce = "=1.0.5"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Com",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
@@ -52,4 +55,4 @@ windows-core = "0.61"
 gtk = "0.18.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSWindow", "NSButton", "NSView", "NSControl", "NSResponder"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSWindow", "NSButton", "NSView", "NSControl", "NSResponder", "NSEvent"] }

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadEngineProfilesSettings, saveEngineProfilesSettings } from "./backend";
+import { loadEngineProfilesSettings, reorderEngineProfilesSettings, saveEngineProfilesSettings } from "./backend";
 import type { EngineProfilesSettingsDto } from "../domain/types";
 
 const key = "lizzieyzy-next-engine-profile";
@@ -110,5 +110,47 @@ describe("browser engine profile persistence", () => {
     await expect(loadEngineProfilesSettings()).rejects.toThrow("storage denied");
     reading.mockRestore();
     expect(await loadEngineProfilesSettings()).toEqual(settings);
+  });
+
+  it("reorders only IDs, preserves late profile edits and identities, and rejects stale consumers", async () => {
+    const current = catalog();
+    await saveEngineProfilesSettings(current);
+    const request = { expected_profile_ids: ["kata", "gtp"], profile_ids: ["gtp", "kata"] };
+    current.profiles[0].profile.name = "Late edit";
+    await saveEngineProfilesSettings(current);
+    const result = await reorderEngineProfilesSettings(request);
+    expect(result).toEqual({ ...current, profiles: [current.profiles[1], current.profiles[0]] });
+    expect(await loadEngineProfilesSettings()).toEqual(result);
+    const raw = localStorage.getItem(key);
+    await expect(reorderEngineProfilesSettings(request)).rejects.toThrow("stale");
+    expect(localStorage.getItem(key)).toBe(raw);
+  });
+
+  it("rejects invalid complete sets and retains durable order on storage failure", async () => {
+    const current = catalog();
+    await saveEngineProfilesSettings(current);
+    const raw = localStorage.getItem(key);
+    for (const ids of [["kata"], ["gtp", "gtp"], ["gtp", "missing"], ["kata", "gtp", "extra"]]) {
+      await expect(reorderEngineProfilesSettings({ expected_profile_ids: ["kata", "gtp"], profile_ids: ids })).rejects.toThrow();
+      expect(localStorage.getItem(key)).toBe(raw);
+    }
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("quota exhausted"); });
+    expect(await reorderEngineProfilesSettings({ expected_profile_ids: ["kata", "gtp"], profile_ids: ["kata", "gtp"] })).toEqual(current);
+    await expect(reorderEngineProfilesSettings({ expected_profile_ids: ["kata", "gtp"], profile_ids: ["gtp", "kata"] })).rejects.toThrow("quota exhausted");
+    expect(await loadEngineProfilesSettings()).toEqual(current);
+    expect(localStorage.getItem(key)).toBe(raw);
+  });
+
+  it("keeps committed order when a late full editor save carries an older order", async () => {
+    const stale = catalog();
+    await saveEngineProfilesSettings(stale);
+    await reorderEngineProfilesSettings({ expected_profile_ids: ["kata", "gtp"], profile_ids: ["gtp", "kata"] });
+    stale.profiles[0].profile.name = "Late editor save";
+    const extra = { ...stale.profiles[0], id: "new" };
+    stale.profiles.unshift(extra);
+    const saved = await saveEngineProfilesSettings(stale);
+    expect(saved.profiles.map((record) => record.id)).toEqual(["gtp", "kata", "new"]);
+    expect(saved.profiles[1].profile.name).toBe("Late editor save");
+    expect(await loadEngineProfilesSettings()).toEqual(saved);
   });
 });

@@ -11,6 +11,9 @@ use crate::{
 };
 use go_core::{Board, RuleError};
 
+#[path = "point_search.rs"]
+mod point_search;
+
 #[derive(Debug, Clone)]
 pub struct CurrentSgfDocument {
     document: SgfDocument,
@@ -78,6 +81,16 @@ enum DocumentReversal {
         properties: Vec<(usize, SgfProperty)>,
         children: Option<Vec<SgfNode>>,
     },
+    SpliceMove {
+        parent: NodePath,
+        properties: Vec<SgfProperty>,
+        inserted: bool,
+    },
+    AuthorProperties {
+        path: NodePath,
+        keys: Vec<String>,
+        properties: Vec<(usize, SgfProperty)>,
+    },
     /// Composite unit: undo applies the steps last-first, and the reversed list redoes them.
     Sequence(Vec<DocumentReversal>),
 }
@@ -121,6 +134,8 @@ pub struct DocumentEditOutcome {
 mod prepared_edit;
 pub use prepared_edit::PreparedSgfEdit;
 
+#[path = "authoring.rs"]
+mod authoring;
 mod external_sync;
 mod readboard_sync;
 pub use readboard_sync::{ReadboardSync, ReadboardSyncOutcome, ReadboardViewPreferences};
@@ -893,6 +908,51 @@ impl CurrentSgfDocument {
         Ok(serialize_sgf_document(&self.document)?)
     }
 
+    /// Serialize one frozen root-to-leaf route without promoting or copying its siblings.
+    pub fn serialize_selected_line(&self, leaf: &NodePath) -> Result<String, CurrentGameError> {
+        let mut node = self.root()?;
+        let mut output = String::from("(");
+        for depth in 0..=leaf.indices.len() {
+            output.push(';');
+            let mut has_size = false;
+            for property in &node.properties {
+                if depth == 0 && property.key == "SZ" {
+                    has_size = true;
+                    crate::push_property(
+                        &mut output,
+                        "SZ",
+                        &crate::serialize_board_dimensions(self.board_width(), self.board_height()),
+                    );
+                } else {
+                    output.push_str(&property.key);
+                    for value in &property.values {
+                        output.push('[');
+                        output.push_str(&crate::escape_sgf_value(value));
+                        output.push(']');
+                    }
+                }
+            }
+            if depth == 0 && !has_size {
+                crate::push_property(
+                    &mut output,
+                    "SZ",
+                    &crate::serialize_board_dimensions(self.board_width(), self.board_height()),
+                );
+            }
+            if let Some(index) = leaf.indices.get(depth) {
+                node = node
+                    .children
+                    .get(*index as usize)
+                    .ok_or_else(|| CurrentGameError {
+                        kind: CurrentGameErrorKind::InvalidNodePath,
+                        message: "invalid node path".into(),
+                    })?;
+            }
+        }
+        output.push(')');
+        Ok(output)
+    }
+
     pub fn mainline_projection(&self) -> GameDto {
         to_game_dto(self.document.clone())
     }
@@ -1438,6 +1498,40 @@ impl CurrentSgfDocument {
 
     fn apply_reversal(&mut self, reversal: &mut DocumentReversal) -> Result<bool, CurrentGameError> {
         match reversal {
+            DocumentReversal::SpliceMove {
+                parent,
+                properties,
+                inserted,
+            } => {
+                let node = self.node_mut(parent)?;
+                if *inserted {
+                    if node.children.len() != 1 {
+                        return Err(invalid_history_path());
+                    }
+                    let mut removed = node.children.remove(0);
+                    std::mem::swap(properties, &mut removed.properties);
+                    node.children = removed.children;
+                } else {
+                    node.children = vec![SgfNode {
+                        properties: std::mem::take(properties),
+                        children: std::mem::take(&mut node.children),
+                    }];
+                }
+                *inserted = !*inserted;
+                Ok(true)
+            }
+            DocumentReversal::AuthorProperties {
+                path,
+                keys,
+                properties,
+            } => {
+                let node = self.node_mut(path)?;
+                let inverse = authoring::selected_properties(node, keys);
+                authoring::restore_properties(node, keys, properties);
+                *properties = inverse;
+                self.authoring_refresh_metadata();
+                Ok(true)
+            }
             DocumentReversal::ReplaceDocument { document } => {
                 std::mem::swap(&mut self.document, document);
                 Ok(true)

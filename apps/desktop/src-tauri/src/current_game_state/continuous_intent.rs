@@ -363,6 +363,8 @@ fn analysis_task_pause_continue_controllable_engine_smoke() {
     let saved_path = engine.directory.join("paused.sgf").to_string_lossy().into_owned();
     let saved = state
         .save_to_path(saved_path.clone(), NodePath::default())
+        .unwrap()
+        .current_game
         .unwrap();
     assert!(!saved.dirty);
     assert_eq!(saved.generation, task.generation);
@@ -1222,6 +1224,8 @@ fn whole_game_comment_save_controllable_engine_smoke() {
                 target.to_string_lossy().into_owned(),
                 opened.selected_path.clone()
             )
+            .unwrap()
+            .current_game
             .unwrap()
             .dirty
     );

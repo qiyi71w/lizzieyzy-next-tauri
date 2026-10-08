@@ -1,3 +1,6 @@
+export type ExportConfirmationDto = { title: string; message: string };
+export type RenderedImageExportOptionsDto = { defaultFileName?: string; pngOnly?: boolean };
+
 export type WorkspaceSharesDto = { left: number; right: number };
 
 export type WindowGeometryDto = {
@@ -22,6 +25,8 @@ export type MainWindowPinStatusDto = {
 
 export type PlayerColor = "black" | "white";
 export type PointDto = { x: number; y: number };
+export type PointSearchScopeDto = "current_line" | "all_branches";
+export type BoardGestureTimingDto = { double_click_interval_ms: number };
 export type MoveVertex = { point: PointDto } | "pass";
 export type MoveDto = { color: PlayerColor; vertex: MoveVertex; move_number: number };
 export type StoneDto = PointDto & { color: PlayerColor };
@@ -64,6 +69,12 @@ export type SgfMarkupToolDto =
 export type SgfMarkupActionDto =
   | { kind: "clear" }
   | { kind: "point"; point: PointDto; tool: SgfMarkupToolDto };
+export type SgfTransformDto = "rotate_clockwise" | "rotate_counterclockwise" | "mirror_horizontal" | "mirror_vertical" | "swap_colors";
+export type SgfAuthoringActionDto =
+  | { kind: "add"; point: PointDto; color: PlayerColor | null; insert: boolean }
+  | { kind: "drag"; from: PointDto; to: PointDto }
+  | { kind: "transform"; transform: SgfTransformDto }
+  | { kind: "continue_ladder" };
 
 export type SelectedNodeSnapshotDto = {
   path: NodePath;
@@ -86,6 +97,12 @@ export type CurrentGameResultDto = {
   can_redo: boolean;
   dirty: boolean;
   native_path?: string | null;
+};
+export type CurrentGameSaveResultDto = {
+  saved_path: string;
+  captured_generation: number;
+  captured_snapshot_seq: number;
+  current_game: CurrentGameResultDto | null;
 };
 export type TrialSessionDto = {
   session_id: number;
@@ -176,6 +193,7 @@ export type EngineProfileDto = {
 );
 export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto };
 export type EngineProfilesSettingsDto = { version: number; selected_profile_id: string; autoload_profile_id: string | null; profiles: EngineProfileRecordDto[] };
+export type EngineProfileOrderRequestDto = { expected_profile_ids: string[]; profile_ids: string[] };
 export type AssetCheckDto = { path: string; exists: boolean; required: boolean; label: string };
 export type AppHealthDto = { app: string; architecture: string; rust_backend_ready: boolean; notes: string[] };
 

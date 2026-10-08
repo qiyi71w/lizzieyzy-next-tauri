@@ -4,14 +4,22 @@ import { StrictMode, act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnalysisFrameDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureAdmissionDto, FileActivationDeliveryDto, FileActivationRejectionDto, GameDto, MainWindowPinStatusDto, NodePath, RecoveryProtectionDto, RecoveryStartupDto } from "./domain/types";
+import type { CurrentGameSaveResultDto } from "./domain/types";
 import type { AppPreferences } from "./domain/preferences";
 import type { WorkspaceSharesDto } from "./domain/types";
 import type { WindowGeometryStatusDto } from "./domain/types";
 import type { EngineProfileRecordDto, HumanMatchActionDto, HumanMatchStartDto, MatchAnalysisPolicyDto, MatchTurnDto, MatchUpdateDto } from "./domain/types";
 import * as externalSyncApi from "./api/externalSync";
 import type { ExternalSyncSnapshot } from "./domain/providers";
+import type * as ExportModule from "./api/export";
 
 const currentGameFixture = vi.hoisted(() => vi.fn());
+const exportApi = vi.hoisted(() => ({
+  exportSelectedLine: vi.fn(async (): Promise<string | null> => "/export/branch.sgf"),
+  exportRenderedImage: vi.fn(async (): Promise<string | null> => "/export/board.png"),
+  captureRenderedSurface: vi.fn(() => ({ width: 3, height: 2, rgba: Array(24).fill(25) }))
+}));
+vi.mock("./api/export", async (importOriginal) => ({ ...await importOriginal<typeof ExportModule>(), ...exportApi }));
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
   prepareDocumentReplacement: vi.fn(async () => ({ status: "ready", departure_id: 1 })),
@@ -37,9 +45,12 @@ const backend = vi.hoisted(() => ({
   serializeCurrentGame: vi.fn(() => Promise.resolve("(;SZ[9])")),
   projectCurrentGameMainline: vi.fn(),
   playCurrentGame: vi.fn(),
+  authorCurrentGame: vi.fn(),
   applyRootSetup: vi.fn(),
   convertToRootSetup: vi.fn(),
   selectCurrentGameNode: vi.fn(),
+  findCurrentGameRecordedPoint: vi.fn(),
+  getBoardGestureTiming: vi.fn(),
   startSelectedNodeAnalysis: vi.fn(),
   cancelSelectedNodeAnalysis: vi.fn(),
   cancelKataGoAnalysis: vi.fn(),
@@ -323,6 +334,9 @@ let root: Root | null = null;
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  exportApi.exportSelectedLine.mockClear();
+  exportApi.exportRenderedImage.mockClear();
+  exportApi.captureRenderedSurface.mockClear();
   matchApi.humanMatchSnapshot.mockReset().mockResolvedValue({ current: null, match_state: { revision: 0, mode: "human", pk_runs: null, committed_moves: 0, pause_pending: false, rebuild_sides: [], resume_pending: false, phase: "idle", session_id: null, turn: 0, to_play: null, settings: null, run_id: null, job: null, end: null, failure: null, failed_side: null, resources_held: false, committed: false, analysis: { supported: false, policy: "off", epoch: 0, frame: null } } });
   matchApi.subscribeHumanMatch.mockReset().mockImplementation(async (listener) => { matchListener = listener; return () => { matchListener = undefined; }; });
   matchApi.humanMatchStart.mockReset();
@@ -348,6 +362,8 @@ beforeEach(() => {
   mainWindowPinApi.loadMainWindowPin.mockReset().mockResolvedValue({ actual: true, durable: true, error: null });
   mainWindowPinApi.setMainWindowPin.mockReset().mockResolvedValue({ actual: true, durable: true, error: null });
   currentGameFixture.mockResolvedValue(initialGame);
+  backend.findCurrentGameRecordedPoint.mockReset().mockResolvedValue(null);
+  backend.getBoardGestureTiming.mockReset().mockResolvedValue({ double_click_interval_ms: 1250 });
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
   backend.foregroundEngineContinuousAction.mockResolvedValue(defaultAppPreferences);
   backend.startForegroundEngine.mockResolvedValue(undefined);
@@ -973,6 +989,108 @@ describe("node markup authoring", () => {
   });
 });
 
+describe("App authoring", () => {
+  it("dispatches a forced actual move through the authoring wrapper, never ordinary play", async () => {
+    backend.authorCurrentGame.mockResolvedValue({ ...initialGame, generation:2, snapshot_seq:2, dirty:true, can_undo:true });
+    const host = await renderApp();
+    act(()=>buttonNamed(host,"编辑").click()); act(()=>buttonNamed(host,"添加黑子").click());
+    const canvas=requiredElement<HTMLCanvasElement>(host,'canvas[aria-label="棋盘"]');
+    canvas.getBoundingClientRect=()=>new DOMRect(0,0,500,500);
+    await act(async()=>{ canvas.dispatchEvent(new MouseEvent("click",{bubbles:true,clientX:250,clientY:250})); await Promise.resolve(); });
+    await flushLast(backend.authorCurrentGame);
+    expect(backend.authorCurrentGame).toHaveBeenCalledWith({indices:[]},1,{kind:"add",point:{x:4,y:4},color:"black",insert:false});
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("棋谱编辑已接受。");
+  });
+  it("exposes Rust transform errors and ladder through real menu actions", async () => {
+    backend.authorCurrentGame.mockRejectedValueOnce(new Error("Rotation requires a square board"));
+    const host=await renderApp();
+    act(()=>buttonNamed(host,"编辑").click());
+    act(()=>buttonNamed(host,"向右旋转(Ctrl+Alt+Right)").click());
+    await act(async()=>{ await expect(backend.authorCurrentGame.mock.results.at(-1)?.value).rejects.toThrow("Rotation requires a square board"); });
+    expect(backend.authorCurrentGame).toHaveBeenLastCalledWith({indices:[]},1,{kind:"transform",transform:"rotate_clockwise"});
+    expect(host.textContent).toContain("棋谱编辑失败：Rotation requires a square board");
+    backend.authorCurrentGame.mockRejectedValueOnce(new Error("Ladder continuation requires five coordinate moves"));
+    act(()=>buttonNamed(host,"棋局").click()); act(()=>buttonNamed(host,"继续征子").click());
+    await act(async()=>{ await expect(backend.authorCurrentGame.mock.results.at(-1)?.value).rejects.toThrow("Ladder continuation requires five coordinate moves"); });
+    expect(backend.authorCurrentGame).toHaveBeenLastCalledWith({indices:[]},1,{kind:"continue_ladder"});
+    expect(host.textContent).toContain("Ladder continuation requires five coordinate moves");
+  });
+});
+
+
+describe("App recorded-point review", () => {
+  function pointMenu(host: HTMLElement) {
+    const canvas = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 500, 500);
+    act(() => canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 250, clientY: 250 })));
+    return buttonNamed(host, "按此点找手");
+  }
+  it("uses a non-destructive double-click query and the exact existing selection seam without engine work", async () => {
+    currentGameFixture.mockResolvedValue(branchingGame);
+    backend.findCurrentGameRecordedPoint.mockResolvedValue({ indices: [0] });
+    backend.selectCurrentGameNode.mockResolvedValue({ ...branchingGame, selected_path: { indices: [0] }, snapshot_seq: 2,
+      snapshot: { ...branchingGame.snapshot, path: { indices: [0] }, position: { ...emptyPosition, move_number: 1 } } });
+    const host = await renderApp();
+    const canvas = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 500, 500);
+    await act(async () => { canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 250, clientY: 250, detail: 1 })); await Promise.resolve(); });
+    act(() => canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 250, clientY: 250, detail: 2 })));
+    await flushLast(backend.findCurrentGameRecordedPoint); await flushLast(backend.selectCurrentGameNode);
+    expect(backend.findCurrentGameRecordedPoint).toHaveBeenCalledWith(branchingGame.selected_path, 3, { x: 4, y: 4 }, expect.arrayContaining([{ parent: { indices: [0] }, child: 1 }]), "current_line");
+    expect(backend.selectCurrentGameNode).toHaveBeenCalledWith({ indices: [0] }, 3);
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
+    expect(backend.playCurrentGame).not.toHaveBeenCalled(); expect(backend.authorCurrentGame).not.toHaveBeenCalled();
+    expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled(); expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  });
+  it("keeps an absent match and a repeated exact-current match non-mutating", async () => {
+    currentGameFixture.mockResolvedValue(branchingGame);
+    const host = await renderApp();
+    const first = pointMenu(host); act(() => first.click()); await flushLast(backend.findCurrentGameRecordedPoint);
+    expect(host.textContent).toContain("未找到该点的已记录落子；当前节点保持不变。");
+    backend.findCurrentGameRecordedPoint.mockResolvedValue(branchingGame.selected_path);
+    for (let repeat = 0; repeat < 2; repeat += 1) { const find = pointMenu(host); act(() => find.click()); await flushLast(backend.findCurrentGameRecordedPoint); }
+    expect(backend.findCurrentGameRecordedPoint).toHaveBeenLastCalledWith(branchingGame.selected_path, 3, { x: 4, y: 4 }, expect.any(Array), "all_branches");
+    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    expect(backend.playCurrentGame).not.toHaveBeenCalled(); expect(backend.authorCurrentGame).not.toHaveBeenCalled();
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("2");
+  });
+  it("drops a point-query reply after the actual New owner replaces its captured document", async () => {
+    currentGameFixture.mockResolvedValue(branchingGame);
+    const { promise, resolve } = Promise.withResolvers<NodePath | null>();
+    backend.findCurrentGameRecordedPoint.mockReturnValueOnce(promise);
+    const host = await renderApp();
+    const find = pointMenu(host); act(() => find.click());
+    currentGameFixture.mockResolvedValue({ ...initialGame, generation: 4 });
+    act(() => buttonLabeled(host, "新建").click());
+    await act(async () => { buttonLabeled(host, "创建").click(); await Promise.resolve(); await currentGameFixture.mock.results.at(-1)?.value; });
+    await act(async () => { resolve({ indices: [0] }); await promise; });
+    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("0");
+  });
+  it("retires a point query across New Cancel even when generation and cursor return unchanged", async () => {
+    currentGameFixture.mockResolvedValue(branchingGame);
+    const { promise, resolve } = Promise.withResolvers<NodePath | null>();
+    backend.findCurrentGameRecordedPoint.mockReturnValueOnce(promise);
+    const host = await renderApp();
+    const find = pointMenu(host); act(() => find.click());
+    act(() => buttonLabeled(host, "新建").click());
+    await act(async () => { buttonLabeled(host, "取消").click(); await Promise.resolve(); });
+    await act(async () => { resolve({ indices: [0] }); await promise; });
+    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("2");
+  });
+  it("preserves immediate root-setup routing and does not consult ordinary-review native timing", async () => {
+    const host = await renderApp();
+    act(() => buttonNamed(host, "棋局").click()); act(() => buttonNamed(host, "起始局面设置(Ctrl+Shift+L)").click());
+    const canvas = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 500, 500);
+    act(() => canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 250, clientY: 250, detail: 1 })));
+    expect(backend.getBoardGestureTiming).not.toHaveBeenCalled(); expect(backend.findCurrentGameRecordedPoint).not.toHaveBeenCalled();
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+  });
+});
 
 describe("App root setup editing", () => {
   it("previews the draft without editing the document, cancels, then commits all changes once", async () => {
@@ -1088,6 +1206,12 @@ describe("App board intent feedback", () => {
     await flushLast(backend.playCurrentGame);
     expect(host.textContent).toContain("missing sound resource");
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("1");
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+    backend.selectCurrentGameNode.mockResolvedValueOnce({ ...initialGame, generation: acceptedGame.generation, tree: acceptedGame.tree });
+    await act(async () => { buttonNamed(host, "父节点").click(); await backend.selectCurrentGameNode.mock.results.at(-1)?.value; });
+    expect(backend.selectCurrentGameNode).toHaveBeenLastCalledWith({ indices: [] }, acceptedGame.generation);
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("0");
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
     expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
   });
 
@@ -1362,6 +1486,186 @@ describe("App stale review presentation", () => {
   });
 });
 
+describe("App function search owner", () => {
+  beforeEach(() => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([{ width: 10, height: 10 }] as unknown as DOMRectList);
+  });
+
+  it("opens from toolbar and registry, reaches Komi and returns search on Cancel without editing", async () => {
+    const host = await renderApp();
+    const source = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
+    source.focus();
+    act(() => {
+      const toolbar = buttonNamed(host, "功能搜索");
+      toolbar.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      toolbar.focus();
+      toolbar.click();
+    });
+    let input = requiredElement<HTMLInputElement>(host, '[role="dialog"][aria-label="功能搜索"] input');
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "game info");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    pressKey(input, "Enter");
+    const komi = requiredElement<HTMLInputElement>(host, '[data-search-target="game.komi"]');
+    await vi.waitFor(() => expect(document.activeElement).toBe(komi));
+    const metadata = requiredElement(host, '[aria-label="编辑棋局信息"]');
+    act(() => buttonNamed(metadata, "取消").click());
+    input = requiredElement<HTMLInputElement>(host, '[role="dialog"][aria-label="功能搜索"] input');
+    expect(input.value).toBe("game info");
+    await vi.waitFor(() => expect(document.activeElement).toBe(input));
+    expect(backend.setCurrentGameMetadata).not.toHaveBeenCalled();
+    pressKey(input, "Escape");
+    await vi.waitFor(() => expect(document.activeElement).toBe(source));
+    pressKey(source, "n");
+    expect(host.querySelector('[aria-label="新建棋谱"]')).toBeNull();
+    pressKey(buttonNamed(host, "坐标"), "k", { ctrlKey: true });
+    expect(host.querySelector('[role="dialog"][aria-label="功能搜索"]')).not.toBeNull();
+  });
+
+  it("Enter on the search Close button cancels without opening the selected setting and restores source focus", async () => {
+    const host = await renderApp();
+    const source = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]');
+    const before = source.value;
+    source.focus();
+    act(() => {
+      const toolbar = buttonNamed(host, "功能搜索");
+      toolbar.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      toolbar.focus();
+      toolbar.click();
+    });
+    const dialog = requiredElement(host, '[role="dialog"][aria-label="功能搜索"]');
+    const input = requiredElement<HTMLInputElement>(dialog, "input");
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "棋盘对比");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.focus();
+    });
+    expect(requiredElement(dialog, '[role="option"]').getAttribute("aria-disabled")).toBe("false");
+    pressKey(input, "Tab", { shiftKey: true });
+    const close = buttonNamed(dialog, "关闭功能搜索");
+    expect(document.activeElement).toBe(close);
+    act(() => {
+      // jsdom does not synthesize the browser's uncancelled Enter-to-click default.
+      if (close.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }))) close.click();
+    });
+    expect(host.querySelector('[role="dialog"][aria-label="功能搜索"]')).toBeNull();
+    expect(host.querySelector('[data-search-target="prefs.board-theme"]')).toBeNull();
+    await vi.waitFor(() => expect(document.activeElement).toBe(source));
+    expect(source.value).toBe(before);
+    expect(backend.setCurrentGameMetadata).not.toHaveBeenCalled();
+    expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+  });
+
+  it.each(["game.black-name", "game.white-name"])("focuses explicit metadata target %s without submitting", async (target) => {
+    const host = await renderApp();
+    act(() => buttonNamed(host, "功能搜索").click());
+    const input = requiredElement<HTMLInputElement>(host, '[aria-label="功能搜索"] input');
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, target);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    pressKey(input, "Enter");
+    await vi.waitFor(() => expect(document.activeElement).toBe(requiredElement(host, `[data-search-target="${target}"]`)));
+    expect(backend.setCurrentGameMetadata).not.toHaveBeenCalled();
+  });
+
+  it("reaches the non-first candidate setting without invoking document or engine actions", async () => {
+    const host = await renderApp();
+    act(() => buttonNamed(host, "功能搜索").click());
+    const input = requiredElement<HTMLInputElement>(host, '[aria-label="功能搜索"] input');
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "houxuan");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    pressKey(input, "Enter");
+    await vi.waitFor(() => expect(document.activeElement).toBe(requiredElement(host, '[data-search-target="prefs.candidate-limit"]')));
+    expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+    expect(backend.setCurrentGameMetadata).not.toHaveBeenCalled();
+  });
+
+  it("catalogs new authoring menus and dispatches insertion and ladder to their original owner", async () => {
+    backend.authorCurrentGame.mockResolvedValue({ ...initialGame, generation: 2, snapshot_seq: 2, dirty: true, can_undo: true });
+    const host = await renderApp();
+    function query(text: string) {
+      act(() => buttonNamed(host, "功能搜索").click());
+      const input = requiredElement<HTMLInputElement>(host, '[aria-label="功能搜索"] input');
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, text);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      return input;
+    }
+    for (const label of ["添加黑子", "添加白子", "交替落子", "列表插入黑子", "列表插入白子", "列表交替插入", "继续征子"]) {
+      const input = query(label);
+      expect(requiredElement(host, '[aria-label="功能搜索结果"]').textContent).toContain(label);
+      pressKey(input, "Escape");
+    }
+    expect(backend.authorCurrentGame).not.toHaveBeenCalled();
+    pressKey(query("列表插入白子"), "Enter");
+    const canvas = requiredElement<HTMLCanvasElement>(host, 'canvas[aria-label="棋盘"]');
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 500, 500);
+    await act(async () => { canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 250, clientY: 250 })); await Promise.resolve(); });
+    await flushLast(backend.authorCurrentGame);
+    expect(backend.authorCurrentGame).toHaveBeenLastCalledWith({ indices: [] }, 1, { kind: "add", point: { x: 4, y: 4 }, color: "white", insert: true });
+    const ladderInput = query("继续征子");
+    await act(async () => { pressKey(ladderInput, "Enter"); await Promise.resolve(); });
+    await flushLast(backend.authorCurrentGame);
+    expect(backend.authorCurrentGame).toHaveBeenLastCalledWith({ indices: [] }, 2, { kind: "continue_ladder" });
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+  });
+
+  it("uses the real human menu owner and N remains explanatory", async () => {
+    const host = await renderApp();
+    act(() => buttonNamed(host, "棋局").click());
+    expect(buttonNamed(host, "人机新局").disabled).toBe(false);
+    expect(buttonNamed(host, "从当前节点续弈").disabled).toBe(false);
+    expect(buttonNamed(host, "N：提示当前按键状态").disabled).toBe(true);
+    act(() => buttonNamed(host, "人机新局").click());
+    expect(host.querySelector('[role="dialog"][aria-label="人机新局"]')).not.toBeNull();
+    expect(matchApi.humanMatchStart).not.toHaveBeenCalled();
+  });
+
+  it("search New enters the existing draft owner and Cancel preserves the document", async () => {
+    const host = await renderApp();
+    backend.prepareDocumentReplacement.mockClear();
+    backend.resolveDocumentReplacement.mockClear();
+    const before = requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value;
+    act(() => buttonNamed(host, "功能搜索").click());
+    const input = requiredElement<HTMLInputElement>(host, '[aria-label="功能搜索"] input');
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "xinjian");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { pressKey(input, "Enter"); await Promise.resolve(); });
+    const draft = requiredElement(host, '[role="dialog"][aria-label="新建棋谱"]');
+    await act(async () => { buttonNamed(draft, "取消").click(); await Promise.resolve(); });
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+    expect(backend.resolveDocumentReplacement).not.toHaveBeenCalled();
+    expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe(before);
+  });
+
+  it("shows real Match occupancy and Enter cannot execute disabled New", async () => {
+    const idle = await matchApi.humanMatchSnapshot();
+    matchApi.humanMatchSnapshot.mockResolvedValue({ current: initialGame, match_state: { ...idle.match_state,
+      phase: "playing", session_id: "owned-match", resources_held: true, to_play: "black", settings: defaultAppPreferences.matchDefaults } });
+    const host = await renderApp();
+    backend.prepareDocumentReplacement.mockClear();
+    act(() => buttonNamed(host, "功能搜索").click());
+    const input = requiredElement<HTMLInputElement>(host, '[aria-label="功能搜索"] input');
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "xinjian");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(requiredElement(host, '[aria-label="功能搜索结果"]').textContent).toContain("对局正在占用工作区。");
+    pressKey(input, "Enter");
+    expect(host.querySelector('[aria-label="新建棋谱"]')).toBeNull();
+    expect(backend.prepareDocumentReplacement).not.toHaveBeenCalled();
+    expect(matchApi.humanMatchStart).not.toHaveBeenCalled();
+  });
+});
+
 describe("App game metadata", () => {
   it("shows root names without an engine and preserves raw long names with a blank fallback", async () => {
     const longName = "甲".repeat(90);
@@ -1455,7 +1759,7 @@ describe("App focus-safe review controls", () => {
         position: { ...branchingGame.snapshot.position, move_number: path.indices.length }
       }
     }));
-    backend.saveCurrentGame.mockResolvedValue({ ...branchingGame, dirty: false });
+    backend.saveCurrentGame.mockResolvedValue({ saved_path: "/tmp/review.sgf", captured_generation: branchingGame.generation, captured_snapshot_seq: branchingGame.snapshot_seq, current_game: { ...branchingGame, dirty: false } });
     backend.openSgfDocument.mockResolvedValue({ format: "sgf", sgf_text: "(;SZ[9])", display_path: "/tmp/opened.sgf", display_name: "opened.sgf", native_path: "/tmp/opened.sgf" });
     backend.playCurrentGame.mockImplementation(async (path: NodePath) => ({
       ...branchingGame,
@@ -1823,7 +2127,7 @@ describe("App focus-safe review controls", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(requiredElement(hostKeys, ".nav-message").textContent).toContain("人机对局尚未接入");
+    expect(requiredElement(hostKeys, ".nav-message").textContent).toContain("N 当前仅提示");
     expect(requiredElement<HTMLInputElement>(hostKeys, 'input[aria-label="跳转手数"]').value).toBe("0");
 
     currentGameFixture.mockResolvedValue(branchingGame);
@@ -2186,7 +2490,8 @@ describe("App focus-safe review controls", () => {
     expect(dialog.textContent).toContain("新建");
     expect(dialog.textContent).toContain("Ctrl+Home");
     expect(dialog.textContent).not.toContain("N, Ctrl+Home");
-    expect(dialog.textContent).toContain("人机对局（未接入）");
+    expect(dialog.textContent).toContain("N：提示当前按键状态");
+    expect(dialog.textContent).not.toContain("Ctrl+N");
     expect(dialog.textContent).toContain("Space");
 
     const search = requiredElement<HTMLInputElement>(dialog, 'input[aria-label="搜索快捷键"]');
@@ -2282,6 +2587,53 @@ describe("App document replacement", () => {
         readText: vi.fn(async () => "(;SZ[9])")
       }
     });
+  });
+
+  it("reports the saved captured target after replacement without adopting the old game", async () => {
+    currentGameFixture.mockResolvedValue({ ...initialGame, dirty: true, native_path: "/tmp/original.sgf" });
+    const host = await renderApp();
+    let finish!: (value: CurrentGameSaveResultDto) => void;
+    const pending = new Promise<CurrentGameSaveResultDto>((resolve) => { finish = resolve; });
+    backend.saveCurrentGame.mockReturnValueOnce(pending);
+    await act(async () => {
+      buttonNamed(host, "存档").click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const replacement = { ...initialGame, generation: 4, dirty: true, native_path: "/tmp/replacement.sgf", snapshot: { ...initialGame.snapshot, personal_comment: "new document" } };
+    currentGameFixture.mockResolvedValue(replacement);
+    await act(async () => {
+      pressKey(buttonNamed(host, "坐标"), "v", { ctrlKey: true });
+      await Promise.resolve();
+      await Promise.resolve();
+      await backend.resolveDocumentReplacement.mock.results.at(-1)?.value;
+      await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      finish({ saved_path: "/tmp/captured.SGF", captured_generation: initialGame.generation, captured_snapshot_seq: initialGame.snapshot_seq, current_game: null });
+      await pending;
+    });
+    expect(host.textContent).toContain("Saved captured.SGF.");
+    expect(host.querySelector(".doc-name")?.textContent).toContain("replacement.sgf");
+    expect(host.querySelector(".doc-name")?.textContent).toContain("*");
+    expect(requiredElement<HTMLTextAreaElement>(host, 'textarea[aria-label="个人评论"]').value).toBe("new document");
+  });
+
+  it("keeps a newer same-document edit dirty while reporting the captured Save", async () => {
+    currentGameFixture.mockResolvedValue({ ...initialGame, dirty: true });
+    const host = await renderApp();
+    backend.saveCurrentGame.mockResolvedValueOnce({
+      saved_path: "/tmp/captured.sgf", captured_generation: initialGame.generation, captured_snapshot_seq: initialGame.snapshot_seq,
+      current_game: { ...initialGame, snapshot_seq: initialGame.snapshot_seq + 2, dirty: true, native_path: "/tmp/captured.sgf", snapshot: { ...initialGame.snapshot, personal_comment: "later edit" } }
+    });
+    await act(async () => {
+      buttonNamed(host, "存档").click();
+      await backend.saveCurrentGame.mock.results.at(-1)?.value;
+    });
+    expect(host.textContent).toContain("Saved captured.sgf.");
+    expect(buttonNamed(host, "存档").disabled).toBe(false);
+    expect(requiredElement<HTMLTextAreaElement>(host, 'textarea[aria-label="个人评论"]').value).toBe("later edit");
+    expect(host.querySelector(".doc-name")?.textContent).toContain("*");
   });
 
   it("rejects an invalid candidate before prompting and keeps the current game", async () => {
@@ -3648,6 +4000,38 @@ describe("App recent history", () => {
     act(() => buttonNamed(host, "文件").click());
     expect(host.querySelector('button[title="/games/kept.sgf"]')).not.toBeNull();
     expect(host.querySelector(".doc-name")?.textContent).not.toContain("kept.sgf");
+  });
+});
+
+describe("App export entry owners", () => {
+  it("uses the same branch owner from menu and Ctrl+Alt+S without Save or analysis mutation", async () => {
+    currentGameFixture.mockResolvedValue(branchingGame);
+    const host = await renderApp();
+    act(() => buttonNamed(host, "文件").click());
+    const menu = [...host.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]')].find(button => button.textContent?.includes("保存当前分支"));
+    expect(menu).toBeDefined();
+    await act(async () => { menu!.click(); });
+    expect(exportApi.exportSelectedLine).toHaveBeenLastCalledWith(3, { indices: [0, 1] }, { indices: [0, 1] });
+    pressKey(buttonNamed(host, "坐标"), "s", { ctrlKey: true, altKey: true });
+    await flushLast(exportApi.exportSelectedLine);
+    expect(exportApi.exportSelectedLine).toHaveBeenCalledTimes(2);
+    expect(backend.saveCurrentGame).not.toHaveBeenCalled();
+    expect(backend.cancelSelectedNodeAnalysis).not.toHaveBeenCalled();
+    expect(backend.cancelKataGoAnalysis).not.toHaveBeenCalled();
+  });
+  it("captures the actual mainboard reference and reports cancel or real failure", async () => {
+    const host = await renderApp();
+    exportApi.exportRenderedImage.mockResolvedValueOnce(null);
+    pressKey(buttonNamed(host, "坐标"), "s", { altKey: true });
+    await flushLast(exportApi.exportRenderedImage);
+    expect(exportApi.captureRenderedSurface).toHaveBeenCalledWith(host.querySelector('.board-canvas canvas'));
+    expect(exportApi.exportRenderedImage).toHaveBeenLastCalledWith({ width: 3, height: 2, rgba: Array(24).fill(25) });
+    expect(host.textContent).toContain("导出已取消");
+    exportApi.exportRenderedImage.mockRejectedValueOnce(new Error("failed to replace protected.png"));
+    pressKey(buttonNamed(host, "坐标"), "s", { altKey: true });
+    await act(async () => { await exportApi.exportRenderedImage.mock.results.at(-1)?.value.catch(() => undefined); });
+    expect(host.textContent).toContain("failed to replace protected.png");
+    expect(backend.saveCurrentGame).not.toHaveBeenCalled();
   });
 });
 

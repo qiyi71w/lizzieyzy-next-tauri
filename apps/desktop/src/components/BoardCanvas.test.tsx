@@ -4,8 +4,10 @@ import { act, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { ReviewPresentationScope } from "../domain/reviewPresentation";
-import type { AnalysisFrameDto, PointDto, PositionDto } from "../domain/types";
+import type { AnalysisFrameDto, PointDto, PositionDto, SgfAuthoringActionDto } from "../domain/types";
+import type { PointSearchScopeDto } from "../domain/types";
 import { BoardCanvas } from "./BoardCanvas";
+import * as backend from "../api/backend";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -395,6 +397,108 @@ describe("BoardCanvas next-move review markers", () => {
   });
 });
 
+describe("BoardCanvas authoring gestures", () => {
+  function authorBoard(allowDrag = true) {
+    const onAuthoring = vi.fn(); const onPointClick = vi.fn(); const onGestureRefused = vi.fn();
+    const rendered = renderBoard({ initialPosition: { ...position, stones: [{ x: 0, y: 0, color: "black" }] }, previewScope: initialPreviewScope,
+      allowDrag, authoringEnabled: true, onAuthoring, onPointClick, onGestureRefused });
+    rendered.canvas.getBoundingClientRect = () => new DOMRect(0, 0, 500, 500);
+    rendered.canvas.setPointerCapture = vi.fn();
+    return { ...rendered, onAuthoring, onPointClick, onGestureRefused };
+  }
+  function pointer(canvas: HTMLCanvasElement, type: string, x: number, y: number) {
+    const event = new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0 });
+    Object.defineProperty(event, "pointerId", { value: 1 });
+    act(() => canvas.dispatchEvent(event));
+  }
+  it("emits one recorded-stone drag with the start identity and suppresses ordinary play", () => {
+    const { canvas, onAuthoring, onPointClick } = authorBoard();
+    pointer(canvas,"pointerdown",68,68); pointer(canvas,"pointerup",159,159); pointer(canvas,"click",159,159);
+    expect(onAuthoring).toHaveBeenCalledExactlyOnceWith({ kind: "drag", from: { x:0,y:0 }, to: {x:2,y:2} },initialPreviewScope);
+    expect(onPointClick).not.toHaveBeenCalled();
+  });
+  it("does not admit drag without the independent permission", () => {
+    const { canvas, onAuthoring } = authorBoard(false);
+    pointer(canvas,"pointerdown",68,68); pointer(canvas,"pointerup",159,159);
+    expect(onAuthoring).not.toHaveBeenCalled();
+  });
+  it("cancels Escape, pointercancel and lost capture without authoring or ordinary-play fallthrough", () => {
+    const { canvas, onAuthoring, onPointClick } = authorBoard();
+    for (const type of ["Escape", "pointercancel", "lostpointercapture"]) {
+      pointer(canvas,"pointerdown",68,68);
+      if (type === "Escape") dispatchKey(canvas,"Escape"); else pointer(canvas,type,159,159);
+      pointer(canvas,"pointerup",159,159); pointer(canvas,"click",159,159);
+    }
+    expect(onAuthoring).not.toHaveBeenCalled(); expect(onPointClick).not.toHaveBeenCalled();
+  });
+  it("rejects changed cursor identity and off-board release visibly", () => {
+    const { canvas, rerender, onAuthoring, onGestureRefused } = authorBoard();
+    pointer(canvas,"pointerdown",68,68);
+    rerender({ ...position, stones: [{ x:0,y:0,color:"black" }] },{ ...initialPreviewScope, selectedPath:[1] });
+    pointer(canvas,"pointerup",159,159);
+    expect(onAuthoring).not.toHaveBeenCalled(); expect(onGestureRefused).toHaveBeenLastCalledWith("棋谱或所选节点已变化；本次手势未提交。");
+    pointer(canvas,"pointerdown",68,68); pointer(canvas,"pointerup",700,700);
+    expect(onAuthoring).not.toHaveBeenCalled(); expect(onGestureRefused).toHaveBeenLastCalledWith("拖动目标超出棋盘；原谱未更改。");
+  });
+  it("runs context insertion on its captured point and Cancel never edits", () => {
+    const { canvas, host, onAuthoring } = authorBoard();
+    pointer(canvas,"contextmenu",159,159);
+    const white = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(b=>b.textContent==="列表插入白子");
+    act(()=>white?.click());
+    expect(onAuthoring).toHaveBeenCalledExactlyOnceWith({ kind:"add",point:{x:2,y:2},color:"white",insert:true },initialPreviewScope);
+    pointer(canvas,"contextmenu",159,159);
+    act(()=>[...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(b=>b.textContent==="取消棋子编辑")?.click());
+    expect(onAuthoring).toHaveBeenCalledTimes(1);
+  });
+  it("keeps double-click permission independent of ordinary click and drag", () => {
+    const onPointClick=vi.fn(); const {canvas}=renderBoard({onPointClick,allowDoubleClick:false});
+    canvas.getBoundingClientRect=()=>new DOMRect(0,0,500,500);
+    for (const detail of [1,2]) act(()=>canvas.dispatchEvent(new MouseEvent("click",{bubbles:true,clientX:159,clientY:159,detail})));
+    expect(onPointClick).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("BoardCanvas recorded-point gestures", () => {
+  it("classifies the ordinary click pair once and requests only current-line search", async () => {
+    vi.spyOn(backend, "getBoardGestureTiming").mockResolvedValue({ double_click_interval_ms: 1250 });
+    const onPointClick = vi.fn(); const onPointSearch = vi.fn();
+    const { canvas } = renderBoard({ onPointClick, onPointSearch, pointSearchEnabled: true, previewScope: initialPreviewScope });
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 500, 500);
+    await act(async () => { canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 159, clientY: 159, detail: 1 })); await Promise.resolve(); });
+    act(() => {
+      canvas.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0, clientX: 159, clientY: 159 }));
+      canvas.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 159, clientY: 159, detail: 2 }));
+    });
+    expect(onPointClick).not.toHaveBeenCalled();
+    expect(onPointSearch).toHaveBeenCalledExactlyOnceWith({ x: 2, y: 2 }, "current_line", initialPreviewScope);
+  });
+  it("uses explicit all-branch search independently of disabled double-click permission", () => {
+    const onPointSearch = vi.fn(); const onPointClick = vi.fn();
+    const { canvas, host } = renderBoard({ onPointClick, onPointSearch, pointSearchEnabled: true, allowDoubleClick: false, previewScope: initialPreviewScope });
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 500, 500);
+    act(() => canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 159, clientY: 159 })));
+    const find = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent === "按此点找手");
+    if (!find) throw new Error("Point search menu item absent");
+    act(() => find.click());
+    expect(onPointSearch).toHaveBeenCalledExactlyOnceWith({ x: 2, y: 2 }, "all_branches", initialPreviewScope);
+    expect(onPointClick).not.toHaveBeenCalled();
+  });
+  it("keeps off-board and stale captured context non-destructive", () => {
+    const onPointSearch = vi.fn(); const onGestureRefused = vi.fn();
+    const { canvas, host, rerender } = renderBoard({ onPointSearch, onGestureRefused, pointSearchEnabled: true, previewScope: initialPreviewScope });
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 500, 500);
+    act(() => canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 700, clientY: 700 })));
+    expect(host.querySelector('[role="menu"]')).toBeNull();
+    act(() => canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 159, clientY: 159 })));
+    rerender(position, { ...initialPreviewScope, generation: 2 });
+    const find = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent === "按此点找手");
+    if (!find) throw new Error("Captured menu absent");
+    act(() => find.click());
+    expect(onPointSearch).not.toHaveBeenCalled();
+    expect(onGestureRefused).toHaveBeenCalled();
+  });
+});
+
 function dispatchKey(canvas: HTMLCanvasElement, key: string) {
   act(() => {
     canvas.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
@@ -409,7 +513,8 @@ function renderBoard({
   overlayMode,
   nextMoveMode,
   nextMoveMarkers,
-  keyboardPlacement
+  keyboardPlacement,
+  allowDrag, allowDoubleClick, authoringEnabled, onAuthoring, onGestureRefused, pointSearchEnabled, onPointSearch
 }: {
   onPointClick?: (point: PointDto) => void;
   onCandidatePreview?: (index: number | null) => void;
@@ -420,6 +525,13 @@ function renderBoard({
   nextMoveMode?: "off" | "variations" | "graded";
   nextMoveMarkers?: Array<{ point: { x: number; y: number }; primary: boolean; rank: "best" | "good" | "normal" | "inaccuracy" | "mistake" | "blunder" | null }>;
   keyboardPlacement?: boolean;
+  allowDrag?: boolean;
+  allowDoubleClick?: boolean;
+  pointSearchEnabled?: boolean;
+  onPointSearch?: (point: PointDto, scope: PointSearchScopeDto, captured: ReviewPresentationScope) => void;
+  authoringEnabled?: boolean;
+  onAuthoring?: (action: SgfAuthoringActionDto, captured: ReviewPresentationScope) => void;
+  onGestureRefused?: (message: string) => void;
 }) {
   const host = document.createElement("div");
   document.body.append(host);
@@ -436,6 +548,13 @@ function renderBoard({
         nextMoveMode={nextMoveMode}
         nextMoveMarkers={nextMoveMarkers}
         keyboardPlacement={keyboardPlacement}
+        allowDrag={allowDrag}
+        allowDoubleClick={allowDoubleClick}
+        pointSearchEnabled={pointSearchEnabled}
+        onPointSearch={onPointSearch}
+        authoringEnabled={authoringEnabled}
+        onAuthoring={onAuthoring}
+        onGestureRefused={onGestureRefused}
       />
     ));
   };
@@ -474,6 +593,19 @@ function ScopeTransitionBoard({
     />
   );
 }
+it("keeps every context action inside the viewport at the lower-right board edge", () => {
+  const scope: ReviewPresentationScope = { generation: 1, requestToken: "edge-menu", selectedPath: [] };
+  const { canvas, host } = renderBoard({ authoringEnabled: true, previewScope: scope, onAuthoring: vi.fn() });
+  canvas.getBoundingClientRect = () => new DOMRect(window.innerWidth - 100, window.innerHeight - 100, 100, 100);
+  const bounds = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 240, 220));
+  act(() => canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: window.innerWidth - 50, clientY: window.innerHeight - 50 })));
+  const menu = host.querySelector<HTMLElement>('[role="menu"]');
+  expect(menu?.style.left).toBe(`${window.innerWidth - 240}px`);
+  expect(menu?.style.top).toBe(`${window.innerHeight - 220}px`);
+  expect(menu?.querySelectorAll('[role="menuitem"]').length).toBe(8);
+  bounds.mockRestore();
+});
+
 function setCanvasBounds(canvas: HTMLCanvasElement) {
   canvas.getBoundingClientRect = () => new DOMRect(0, 0, 100, 100);
 }

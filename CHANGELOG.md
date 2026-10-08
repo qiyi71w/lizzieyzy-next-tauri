@@ -4,6 +4,25 @@
 
 ### English
 
+- Fixed KataGo analysis of Yike games containing `RU[cn]` by encoding the rule as `chinese` at the engine boundary. SGF Save/reopen retains the original rule, metadata and personal comments; unknown rules remain explicit engine errors.
+- Fixed authoring Undo/Redo carrying newly attached analysis onto the other board position when its original analysis slots were empty. Drag, whole-tree transforms and insertion now exchange affected payloads with their corresponding positions while preserving later unrelated analysis and SGF Save/reopen semantics.
+- Fixed Function Search's keyboard Close activation executing the selected result instead of cancelling. Input and result-button Enter keep exact-once execution and disabled guards; cancellation restores legal source focus.
+
+- Refined winrate-chart score labels to show the actual leading color with one-decimal rounding, separated current/hover/endpoint labels, and highlighted the baseline only for renderable metrics. Shared live/export rendering preserves selected-line gaps and the fixed whole-series perspective.
+- Added invocation-frozen 1600×600 winrate-chart PNG export through File → More Save, Function Search and Shift+Alt+S, using the shared atomic image writer and success-only image directory. Square marking now uses Shift+Alt+Q across the registry, menus and shortcut reference.
+- Added a Rust-owned recorded-point query with exact current/ancestor/chosen-continuation ordering and optional stable all-branch search; stale or absent matches preserve the current document.
+- Added durable ordinary main-board autoplay intervals with a seconds draft, exact fractional-second persistence, failure-safe Save/Cancel and one Start-captured timer. Active playback keeps its interval until Stop/restart; document or input-scope changes retire old ticks.
+- Added standalone selected-line SGF export through File → More Save and Ctrl+Alt+S, preserving source, dirty state, metadata, comments and analysis. Mainboard File/Alt+S image export captures invocation-time rendered pixels, encodes PNG/JPG/JPEG/GIF/BMP, confirms the final target before atomic replacement, and shares one success-only durable image directory.
+- Added non-destructive current-line double-click review and explicit all-branch point search in the existing board menu. Ordinary review click pairs use current native system timing and captured input identity; higher-priority board modes keep their existing routing.
+- Fixed repeated Windows image exports reopening their remembered directory by adapting canonical filesystem paths to compatible Shell folder names.
+- Image export encoding failures now report the encode operation and exact final target while retaining the original error; existing bytes and the success-only image directory remain protected.
+- Save and Save As now atomically replace files from a captured complete SGF tree on a blocking worker. Failure protects existing bytes and the document savepoint; late completion reports its actual target without cleaning later edits or adopting a replacement document.
+- Added offline Function Search shared by Help, the fixed toolbar and registry-owned Ctrl/Command+K. It searches registered actions and exact settings targets with platform shortcuts, visible disabled reasons and original-owner guards, and restores source focus on cancellation.
+- Added activation-fenced exact-target navigation, including initial Komi focus in Game Info and return to the retained search session on Cancel; metadata/history semantics are unchanged.
+- Added current-build About identity and centralized source/Issues/Help addresses; unconfigured release/update/support channels remain unavailable. Corrected Cargo's source repository without changing product or app-data identity.
+- Corrected N's explanatory state while preserving Ctrl+Home New, no Ctrl+N, and the existing Human New/Continue menu owners. Search resources use the complete Chinese compatibility bundle and deterministic per-key locale fallback; no final language list or persistence was introduced.
+- Added localized first/up/down/last controls for saved engine profiles, backed by stable-ID complete-set/stale-order validation and atomic persistence. Reorder preserves editor drafts, Settings selection, Autoload Default and immutable Run/job identities; failed writes retain the old order and show the full error.
+- Added Rust-owned real black/white/alternate moves, branch-preserving insertion, recorded/setup-stone drag, whole-tree coordinate/color transforms and source-compatible ladder continuation. Each effective transaction shares one Undo/Redo unit and rejects stale identities or illegal affected descendants before mutation. Drag defaults off and double-click defaults on through the existing atomic preferences owner.
 - Added an independent Tencent kifu center with username/chessId lookup, cancellable previews, cursor continuation across 25-row pages, eight-entry query history, and explicit SGF-07 import. Complete-tree normalization preserves game metadata and effective komi through Save/reopen; requests consume the shared network policy.
 - Preserved accepted Tencent history writes across provider-panel changes and retained failed clear/query intent for visible retry after reopening the center.
 - Added explicit Yike Start sync and Play & Sync with a Rust-owned read-only session, bounded failure pause/Retry, Stop-to-edit, same-count source reconciliation, independent sync preferences and browser handoff. Save As preserves its invocation snapshot while later source frames remain dirty.
@@ -50,6 +69,21 @@
 
 ### 中文
 
+- 修复弈客 `RU[cn]` 棋谱的 KataGo 分析：仅在引擎请求编码时转换为 `chinese`，SGF 保存重开保留原规则、元数据与个人评论，未知规则继续明确报错。
+- 修复原分析槽位为空时，棋谱编辑 Undo/Redo 将后来附着的分析带入另一局面的问题。拖动、全树变换与列表插入按对应局面交换受影响分析，保留无关节点后来的分析及 SGF 保存重开语义。
+- 修复功能搜索中关闭按钮按 Enter 时误执行选中结果：关闭只取消并恢复合法来源焦点，输入框和结果按钮的 Enter 保持一次执行及禁用守卫。
+
+- 胜率图目差按实际领先颜色和一位小数显示，当前、悬停及端点标签分区；基准线只对应可绘制指标。实时图与导出共用绘制逻辑，保持所选线路的分析缺口与整条曲线固定视角。
+- 新增调用时冻结的1600×600胜率图PNG导出，文件→更多保存、功能搜索与Shift+Alt+S复用唯一原子图像写入及成功后更新的图像目录。方形标记改用Shift+Alt+Q，菜单、搜索与快捷键参考同步registry。
+- 新增 Rust 权威按点查找已记录落子：精确 current／最近祖先／所选 continuation 顺序，显式全树范围按稳定子序 DFS；过期或无匹配查询保持当前棋谱。
+- 主棋盘普通自动播放新增可保存秒数草稿、精确小数秒持久化与非破坏 Save／Cancel；唯一 timer 仅在 Start 捕获间隔，运行中保存供下次启动使用，棋谱或输入范围变化使旧 tick 失效。
+- 图像导出编码失败现在报告编码操作与准确最终目标，并保留原始错误；已有目标字节与仅成功后更新的图像目录继续受到保护。
+- Save 与 Save As 在阻塞工作线程保存调用时捕获的完整 SGF 树并原子替换目标；失败保护已有字节与保存点，迟到成功报告实际目标，不清除后续编辑或接管新棋谱。
+- 新增离线功能搜索：帮助菜单、常驻工具栏和 registry-owned Ctrl/Command+K 共用 catalog，注册动作与精确设置目标显示本平台快捷键及禁用理由，调用原 owner，取消恢复合法来源焦点。
+- 新增激活后精确目标聚焦，包括 Game Info 默认贴目输入和取消返回原搜索会话；棋谱元数据及历史合同保持不变。
+- About 读取当前构建身份，集中配置源码／Issues／Help 地址；未配置发行／更新／支持渠道不可执行。Cargo repository 改为 Next 源码仓库，产品及 app-data identity 不变。
+- 校正 N 的提示状态，保留 Ctrl+Home New、无 Ctrl+N 和真实人机新局／续弈 owner。搜索首消费者使用完整中文基础资源与确定性逐键 locale fallback，不新增最终语言名单或语言持久化。
+- 新增引擎档案置首／上移／下移／置尾控件并接入共享本地化资源，以 stable ID 校验完整集合和过期顺序后原子持久化。排序保留编辑草稿、设置选择、Autoload Default 和不可变 Run／Job 身份；写盘失败保留原顺序并完整显示错误。
 - 新增独立 Tencent 棋谱中心：username／chessId 查询、可取消预览、25局分页与游标续取、最多8条查询历史及显式 SGF-07 导入。完整树正规化保留棋谱元数据和有效贴目，保存重开一致；远程请求消费共享网络策略。
 - Tencent 查询历史写入跨来源面板切换保持顺序；清除或查询保存失败后，重开中心仍可见并重试原操作。
 - 新增 Yike Start sync／Play & Sync：Rust 唯一只读会话、有界失败暂停与 Retry、Stop 后恢复编辑、同手数来源修订、独立同步偏好及系统浏览器交接；Save As 保存调用时快照，期间新帧仍保持未保存。

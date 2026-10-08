@@ -4029,6 +4029,83 @@ fn selecting_current_primary_does_not_switch_or_restart() {
     assert!(events.try_recv().is_err());
 }
 
+#[cfg(unix)]
+#[test]
+fn durable_reorder_and_failure_preserve_ready_run_launch_and_job_bindings() {
+    struct DiskCatalog(PathBuf);
+    impl EngineProfileCatalog for DiskCatalog {
+        fn get(&self, id: &str) -> Option<SavedEngineProfile> {
+            engine_manager::load_engine_profiles(&self.0)
+                .ok()?
+                .profiles
+                .into_iter()
+                .find(|record| record.id == id)
+                .map(|record| SavedEngineProfile {
+                    profile_id: record.id,
+                    profile: record.profile,
+                })
+        }
+        fn autoload_profile_id(&self) -> Option<String> {
+            engine_manager::load_engine_profiles(&self.0)
+                .ok()?
+                .autoload_profile_id
+        }
+    }
+    let temp = TestTempDir::new("order-ready-job");
+    let path = temp.path().join("catalog.json");
+    let current = engine_manager::EngineProfilesSettings {
+        version: 1,
+        selected_profile_id: "profile-b".into(),
+        autoload_profile_id: Some("profile-a".into()),
+        profiles: vec![
+            engine_manager::EngineProfileRecord {
+                id: "profile-a".into(),
+                profile: setup_named_profile(&temp, "a", &hold_after_probe_script()),
+            },
+            engine_manager::EngineProfileRecord {
+                id: "profile-b".into(),
+                profile: setup_named_profile(&temp, "b", &resident_echo_script()),
+            },
+        ],
+    };
+    engine_manager::save_engine_profiles(&path, current.clone()).unwrap();
+    let manager = ForegroundEngineManager::new(
+        Arc::new(DiskCatalog(path.clone())),
+        ForegroundEngineConfig::for_tests(),
+    );
+    let events = manager.subscribe();
+    manager.start("profile-a").unwrap();
+    let ready = wait_snapshot(&events, Duration::from_secs(3), |phase| {
+        matches!(phase, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    let run = run_from_ready(&ready.lifecycle);
+    let job = manager
+        .start_selected_node_job(selected_request(&run.run_id, 17, vec![0]))
+        .unwrap();
+    let before = manager.snapshot();
+    assert_eq!(before.selected_node_job.as_ref().unwrap().job_id, job.job_id);
+    let request = app_model::EngineProfileOrderRequestDto {
+        expected_profile_ids: vec!["profile-a".into(), "profile-b".into()],
+        profile_ids: vec!["profile-b".into(), "profile-a".into()],
+    };
+    let reordered = engine_manager::reorder_engine_profiles(&path, current.clone(), &request).unwrap();
+    assert_eq!(engine_manager::load_engine_profiles(&path).unwrap(), reordered);
+    assert_eq!(reordered.selected_profile_id, "profile-b");
+    assert_eq!(reordered.autoload_profile_id.as_deref(), Some("profile-a"));
+    assert_eq!(manager.snapshot(), before);
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
+    let reverse = app_model::EngineProfileOrderRequestDto {
+        expected_profile_ids: request.profile_ids,
+        profile_ids: request.expected_profile_ids,
+    };
+    assert!(engine_manager::reorder_engine_profiles(&path, reordered.clone(), &reverse).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert_eq!(engine_manager::load_engine_profiles(&path).unwrap(), reordered);
+    assert_eq!(manager.snapshot(), before);
+    manager.stop().unwrap();
+}
+
 #[test]
 fn apply_autoload_without_mark_stays_no_engine() {
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());

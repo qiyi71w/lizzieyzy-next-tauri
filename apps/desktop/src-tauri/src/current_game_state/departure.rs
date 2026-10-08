@@ -253,7 +253,9 @@ impl CurrentGameState {
                 _ => return Err(departure_blocked().to_string()),
             }
         }
-        self.save_to_path_allowing_departure(path, selected_path, || {}, true)
+        self.save_to_path_allowing_departure(path, selected_path, || {}, true)?
+            .current_game
+            .ok_or_else(|| departure_blocked().to_string())
     }
 
     pub fn begin_application_teardown(

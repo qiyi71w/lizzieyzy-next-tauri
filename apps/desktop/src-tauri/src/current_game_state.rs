@@ -1,4 +1,5 @@
 use ::current_game_recovery::RecoveryCoordinator;
+use app_model::CurrentGameSaveResultDto;
 use app_model::{
     admits_analysis_attachment, AnalysisJobEventDto, AnalysisJobModeDto, AnalysisJobStartedDto,
     ApplicationExitDispositionDto, CurrentGameError, CurrentGameErrorKind, CurrentGameResultDto, GameDto,
@@ -10,6 +11,8 @@ use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
 #[cfg(test)]
+mod authoring_tests;
+#[cfg(test)]
 mod continuous_intent;
 #[cfg(test)]
 mod current_game_analysis_attach;
@@ -20,11 +23,15 @@ mod current_game_save_write;
 #[cfg(test)]
 mod current_game_session_recovery;
 mod departure;
+#[cfg(test)]
+mod export_tests;
 mod external_sync;
 #[cfg(test)]
 mod external_sync_tests;
 mod game_move;
 pub(crate) mod human_match;
+#[cfg(test)]
+mod point_search_tests;
 pub(crate) mod recovery;
 mod scoring;
 mod trial;
@@ -49,9 +56,11 @@ struct ContentVersion {
     nonhistory: u64,
 }
 pub(crate) struct CurrentGameSaveSnapshot {
-    serialized: String,
+    document: CurrentSgfDocument,
     version: ContentVersion,
     document_identity: u64,
+    generation: u64,
+    snapshot_seq: u64,
 }
 
 #[derive(Default)]
@@ -224,21 +233,34 @@ impl CurrentGameState {
         self.with_document(|document| document.serialize())
     }
 
+    pub fn capture_selected_line(
+        &self,
+        generation: u64,
+        selected: &NodePath,
+        leaf: &NodePath,
+    ) -> Result<String, String> {
+        let holder = self.holder.lock().expect("current game state");
+        if holder.generation != generation
+            || &holder.selected_path != selected
+            || !leaf.indices.starts_with(&selected.indices)
+        {
+            return Err("Selected export line no longer matches the current document.".into());
+        }
+        holder
+            .document
+            .as_ref()
+            .ok_or_else(|| no_current_game().to_string())?
+            .serialize_selected_line(leaf)
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(test)]
     pub fn save_to_path(
         &self,
         path: String,
         selected_path: NodePath,
-    ) -> Result<CurrentGameResultDto, String> {
-        self.save_to_path_with(path, selected_path, || {})
-    }
-
-    fn save_to_path_with(
-        &self,
-        path: String,
-        selected_path: NodePath,
-        after_snapshot: impl FnOnce(),
-    ) -> Result<CurrentGameResultDto, String> {
-        self.save_to_path_allowing_departure(path, selected_path, after_snapshot, false)
+    ) -> Result<CurrentGameSaveResultDto, String> {
+        self.save_to_path_allowing_departure(path, selected_path, || {}, false)
     }
 
     fn save_to_path_allowing_departure(
@@ -247,7 +269,7 @@ impl CurrentGameState {
         selected_path: NodePath,
         after_snapshot: impl FnOnce(),
         allow_departure: bool,
-    ) -> Result<CurrentGameResultDto, String> {
+    ) -> Result<CurrentGameSaveResultDto, String> {
         let snapshot = self.capture_save_snapshot_allowing_departure(selected_path, allow_departure)?;
         after_snapshot();
         self.persist_save_snapshot(path, snapshot)
@@ -277,9 +299,11 @@ impl CurrentGameState {
             .snapshot(&selected_path)
             .map_err(|error| error.to_string())?;
         Ok(CurrentGameSaveSnapshot {
-            serialized: document.serialize().map_err(|error| error.to_string())?,
+            document: document.clone(),
             version: holder.content_version(),
             document_identity: holder.document_identity,
+            generation: holder.generation,
+            snapshot_seq: holder.snapshot_seq,
         })
     }
 
@@ -287,29 +311,37 @@ impl CurrentGameState {
         &self,
         path: String,
         snapshot: CurrentGameSaveSnapshot,
-    ) -> Result<CurrentGameResultDto, String> {
+    ) -> Result<CurrentGameSaveResultDto, String> {
         let trimmed = path.trim();
         if trimmed.is_empty() {
             return Err("path must not be empty".to_string());
         }
         let target = std::path::PathBuf::from(trimmed);
         let CurrentGameSaveSnapshot {
-            serialized,
+            document,
             version,
             document_identity,
+            generation,
+            snapshot_seq,
         } = snapshot;
-        std::fs::write(&target, &serialized)
-            .map_err(|err| format!("failed to write SGF file {}: {err}", target.display()))?;
+        sgf::save_document_atomic(&document, &target)?;
         let mut holder = self.holder.lock().expect("current game state");
-        if holder.document_identity != document_identity {
-            return holder.current_result().map_err(|error| error.to_string());
-        }
-        holder.native_path = Some(trimmed.to_string());
-        holder.saved_version = version;
-        holder.refresh_dirty();
-        holder.bump_snapshot();
-        self.note_recovery(&holder);
-        holder.current_result().map_err(|error| error.to_string())
+        let current_game = if holder.document_identity == document_identity {
+            holder.native_path = Some(trimmed.to_string());
+            holder.saved_version = version;
+            holder.refresh_dirty();
+            holder.bump_snapshot();
+            self.note_recovery(&holder);
+            Some(holder.current_result().map_err(|error| error.to_string())?)
+        } else {
+            None
+        };
+        Ok(CurrentGameSaveResultDto {
+            saved_path: trimmed.to_string(),
+            captured_generation: generation,
+            captured_snapshot_seq: snapshot_seq,
+            current_game,
+        })
     }
 
     pub fn mainline_projection(&self) -> Result<GameDto, CurrentGameError> {
@@ -567,6 +599,29 @@ impl CurrentGameState {
         self.holder.lock().expect("current game state").dirty
     }
 
+    pub fn find_recorded_point(
+        &self,
+        path: NodePath,
+        generation: u64,
+        point: app_model::PointDto,
+        choices: Vec<app_model::AnalysisBranchChoiceDto>,
+        scope: app_model::PointSearchScopeDto,
+    ) -> Result<Option<NodePath>, CurrentGameError> {
+        let holder = self.holder.lock().expect("current game state");
+        holder.ensure_review_access()?;
+        if holder.generation != generation || holder.selected_path != path {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::InvalidNodePath,
+                message: "Current game or cursor changed; query the current position.".into(),
+            });
+        }
+        holder
+            .document
+            .as_ref()
+            .ok_or_else(no_current_game)?
+            .find_recorded_point(&path, point, &choices, scope)
+    }
+
     pub fn select_path(
         &self,
         path: NodePath,
@@ -690,6 +745,51 @@ impl CurrentGameState {
         self.note_recovery(&holder);
         self.follow_continuous_position(&mut holder);
         Ok(result)
+    }
+
+    pub fn author(
+        &self,
+        generation: u64,
+        path: NodePath,
+        action: app_model::SgfAuthoringActionDto,
+    ) -> Result<CurrentGameResultDto, CurrentGameError> {
+        let mut holder = self.holder.lock().expect("current game state");
+        holder.ensure_editable()?;
+        holder.ensure_generation(generation)?;
+        if holder.selected_path != path {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::InvalidNodePath,
+                message: "Authoring requires the exact currently selected node.".into(),
+            });
+        }
+        if matches!(action, app_model::SgfAuthoringActionDto::Drag { .. })
+            && self
+                .analysis_manager
+                .get()
+                .is_some_and(|manager| manager.snapshot().game_move_job.is_some())
+        {
+            return Err(CurrentGameError {
+                kind: CurrentGameErrorKind::DepartureBlocked,
+                message: "An engine move owns this position; finish or cancel it before dragging.".into(),
+            });
+        }
+        let outcome = holder
+            .document
+            .as_mut()
+            .ok_or_else(no_current_game)?
+            .author_with_history(&path, action)?;
+        let changed = outcome.edit.is_some() || holder.selected_path != outcome.snapshot.path;
+        if let Some(edit) = outcome.edit {
+            holder.commit_edit(edit);
+            holder.generation = holder.generation.saturating_add(1);
+        }
+        if changed {
+            holder.selected_path = outcome.snapshot.path;
+            holder.bump_snapshot();
+            self.note_recovery(&holder);
+            self.follow_continuous_position(&mut holder);
+        }
+        holder.current_result()
     }
 
     pub fn undo(&self, generation: u64) -> Result<CurrentGameResultDto, CurrentGameError> {
@@ -1729,8 +1829,8 @@ impl CurrentGameState {
         path: String,
         selected_path: NodePath,
         hook: impl FnOnce(),
-    ) -> Result<CurrentGameResultDto, String> {
-        self.save_to_path_with(path, selected_path, hook)
+    ) -> Result<CurrentGameSaveResultDto, String> {
+        self.save_to_path_allowing_departure(path, selected_path, hook, false)
     }
 
     fn inspect(&self) -> (u64, bool, Option<String>, Option<String>) {

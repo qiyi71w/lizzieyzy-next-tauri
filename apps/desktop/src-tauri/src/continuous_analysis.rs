@@ -51,6 +51,7 @@ impl PreferencesState {
             .ok_or("Preferences must finish loading before saving.")?
             .preferences;
         preferences.recent_game_paths = latest.recent_game_paths.clone();
+        preferences.recent_image_export_directory = latest.recent_image_export_directory.clone();
         preferences.workspace_shares = latest.workspace_shares;
         preferences.window_geometry = latest.window_geometry;
         preferences.workspace_visibility = latest.workspace_visibility;
@@ -457,6 +458,38 @@ impl PreferencesState {
         Ok(())
     }
 
+    pub fn image_export_directory(&self) -> Result<Option<std::path::PathBuf>, String> {
+        let committed = self.0.lock().expect("preferences transaction");
+        let value = committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before image export.")?
+            .preferences
+            .recent_image_export_directory
+            .as_deref();
+        Ok(value.map(std::path::PathBuf::from).filter(|path| path.is_dir()))
+    }
+
+    pub fn record_image_export(&self, path: &Path, target: &Path) -> Result<(), String> {
+        let directory = target
+            .parent()
+            .ok_or("Image target has no parent directory.")?
+            .canonicalize()
+            .map_err(|error| format!("failed to resolve image export directory: {error}"))?;
+        let mut committed = self.0.lock().expect("preferences transaction");
+        let loaded = committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before image export.")?;
+        let mut preferences = loaded.preferences.clone();
+        preferences.recent_image_export_directory = Some(directory.to_string_lossy().into_owned());
+        let recovery = loaded.recovery.clone();
+        let saved = app_preferences::save_to_path(path, preferences)?;
+        *committed = Some(AppPreferencesLoadResultDto {
+            preferences: saved,
+            recovery,
+        });
+        Ok(())
+    }
+
     pub fn primary(
         &self,
         path: &Path,
@@ -553,6 +586,38 @@ mod tests {
     use app_model::{ContinuousAnalysisPhaseDto, ForegroundEngineLifecycleDto};
     use engine_manager::{ForegroundEngineConfig, InMemoryEngineProfileCatalog};
     use std::sync::Arc;
+
+    #[test]
+    fn image_export_directory_survives_stale_form_failure_and_restart() {
+        let directory = std::env::temp_dir().join(format!("image-export-prefs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("preferences.json");
+        let manager = ForegroundEngineManager::new(
+            Arc::new(InMemoryEngineProfileCatalog::new()),
+            ForegroundEngineConfig::for_tests(),
+        );
+        let state = PreferencesState::default();
+        let mut stale = state.load(&path, &manager).unwrap().preferences;
+        assert_eq!(state.image_export_directory().unwrap(), None);
+        state
+            .record_image_export(&path, &directory.join("board.png"))
+            .unwrap();
+        stale.show_coordinates = false;
+        state.save(&path, &manager, stale).unwrap();
+        let expected = directory.canonicalize().unwrap();
+        assert_eq!(state.image_export_directory().unwrap(), Some(expected.clone()));
+        let durable = std::fs::read(&path).unwrap();
+        assert!(state
+            .record_image_export(&directory, &std::env::temp_dir().join("other.png"))
+            .is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), durable);
+        assert_eq!(state.image_export_directory().unwrap(), Some(expected.clone()));
+        let restarted = PreferencesState::default();
+        restarted.load(&path, &manager).unwrap();
+        assert_eq!(restarted.image_export_directory().unwrap(), Some(expected));
+        std::fs::remove_dir_all(&directory).unwrap();
+        assert_eq!(restarted.image_export_directory().unwrap(), None);
+    }
 
     #[test]
     fn readboard_path_survives_stale_save_restart_and_failed_write() {

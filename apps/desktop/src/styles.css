@@ -564,13 +564,9 @@ button[aria-pressed="true"] {
 }
 
 .winrate-chart-hover {
-  position: absolute;
-  left: 8px;
-  bottom: 6px;
-  z-index: 1;
+  min-height: 16px;
   padding: 2px 6px;
-  border-radius: 3px;
-  background: rgba(23, 24, 27, 0.88);
+  background: #17181b;
   color: #fff;
   font-size: 11px;
   pointer-events: none;
@@ -1274,6 +1270,45 @@ textarea {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+.engine-profile-order h3 {
+  margin: 8px 0 4px;
+  font-size: 12px;
+}
+
+.engine-profile-order .message {
+  white-space: normal;
+  overflow: visible;
+  max-width: none;
+  overflow-wrap: anywhere;
+}
+
+.engine-profile-order ul {
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.engine-profile-order li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.engine-profile-order li strong {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.engine-profile-order-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .provider-panel label,

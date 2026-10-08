@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AnalysisFrameDto,
+  AnalysisBranchChoiceDto,
   AnalysisJobEventDto,
   AnalysisJobStartedDto,
   AnalysisScopeDto,
@@ -15,16 +16,21 @@ import type {
   AppHealthDto,
   AssetCheckDto,
   CandidateMoveDto,
+  BoardGestureTimingDto,
   CurrentGameResultDto,
+  CurrentGameSaveResultDto,
   ApplicationExitActionDto,
   ApplicationExitOutcomeDto,
   DocumentDepartureActionDto,
   DocumentDepartureAdmissionDto,
   DocumentDepartureOutcomeDto,
   NodePath,
+  PointDto,
+  PointSearchScopeDto,
   EngineProfileRecordDto,
   EngineProfileDto,
   EngineProfilesSettingsDto,
+  EngineProfileOrderRequestDto,
   EngineFailureDto,
   ForegroundEngineSnapshotDto,
   FileActivationDeliveryDto,
@@ -39,6 +45,7 @@ import type {
   PositionDto,
   ProblemMarkerDto,
   SgfMarkupActionDto,
+  SgfAuthoringActionDto,
   RecoveryProtectionDto,
   RecoveryStartupDto,
   StoneDto,
@@ -305,11 +312,32 @@ export async function selectCurrentGameNode(path: NodePath, generation: number):
   return invoke<CurrentGameResultDto>("select_current_game_node", { path, generation });
 }
 
+export async function findCurrentGameRecordedPoint(
+  path: NodePath,
+  generation: number,
+  point: PointDto,
+  choices: AnalysisBranchChoiceDto[],
+  scope: PointSearchScopeDto
+): Promise<NodePath | null> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<NodePath | null>("find_current_game_recorded_point", { path, generation, point, choices, scope });
+}
+
+export async function getBoardGestureTiming(): Promise<BoardGestureTimingDto> {
+  if (!isTauriRuntime()) throw new Error("System double-click timing requires the native desktop backend; browser preview cannot classify this gesture.");
+  return invoke<BoardGestureTimingDto>("board_gesture_timing");
+}
+
 export async function playCurrentGame(path: NodePath, vertex: MoveVertex): Promise<CurrentGameResultDto> {
   if (!isTauriRuntime()) {
     throw new Error(nativeCurrentGameUnavailable);
   }
   return invoke<CurrentGameResultDto>("play_current_game", { path, vertex });
+}
+
+export async function authorCurrentGame(path: NodePath, generation: number, action: SgfAuthoringActionDto): Promise<CurrentGameResultDto> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  return invoke<CurrentGameResultDto>("author_current_game", { path, generation, action });
 }
 
 export async function setCurrentGamePersonalComment(path: NodePath, comment: string): Promise<CurrentGameResultDto> {
@@ -418,15 +446,15 @@ export async function saveCurrentGame(
   path: string | null,
   selectedPath: NodePath,
   defaultFileName = "review.sgf"
-): Promise<CurrentGameResultDto | null> {
+): Promise<CurrentGameSaveResultDto | null> {
   if (!isTauriRuntime()) {
     throw new Error(nativeCurrentGameUnavailable);
   }
 
   if (path) {
-    return invoke<CurrentGameResultDto>("save_current_game", { path, selectedPath });
+    return invoke<CurrentGameSaveResultDto>("save_current_game", { path, selectedPath });
   }
-  return invoke<CurrentGameResultDto | null>("save_current_game_as", { selectedPath, defaultFileName });
+  return invoke<CurrentGameSaveResultDto | null>("save_current_game_as", { selectedPath, defaultFileName });
 }
 
 export async function startKataGoGameAnalysis(input: {
@@ -508,10 +536,38 @@ export async function loadEngineProfilesSettings(): Promise<EngineProfilesSettin
 export async function saveEngineProfilesSettings(settings: EngineProfilesSettingsDto): Promise<EngineProfilesSettingsDto> {
   if (!isTauriRuntime()) {
     const normalized = decodeEngineProfilesSettings(settings, false);
+    const current = loadBrowserEngineProfilesSettings();
+    const records = new Map(normalized.profiles.map((record) => [record.id, record]));
+    const retained: EngineProfileRecordDto[] = [];
+    for (const record of current.profiles) {
+      const saved = records.get(record.id);
+      if (saved) {
+        retained.push(saved);
+        records.delete(record.id);
+      }
+    }
+    normalized.profiles = [...retained, ...records.values()];
     saveBrowserEngineProfilesSettings(normalized);
     return normalized;
   }
   return await invoke<EngineProfilesSettingsDto>("save_engine_profiles_settings", { settings });
+}
+
+export async function reorderEngineProfilesSettings(request: EngineProfileOrderRequestDto): Promise<EngineProfilesSettingsDto> {
+  if (isTauriRuntime()) return await invoke<EngineProfilesSettingsDto>("reorder_engine_profiles_settings", { request });
+  const current = loadBrowserEngineProfilesSettings();
+  const ids = current.profiles.map((record) => record.id);
+  if (ids.length !== request.expected_profile_ids.length || ids.some((id, index) => id !== request.expected_profile_ids[index])) {
+    throw new Error("Engine profile catalog order is stale; reload profiles before reordering.");
+  }
+  const records = new Map(current.profiles.map((record) => [record.id, record]));
+  if (request.profile_ids.length !== ids.length || new Set(request.profile_ids).size !== ids.length || request.profile_ids.some((id) => !records.has(id))) {
+    throw new Error("Engine profile order must contain the complete catalog without unknown or duplicate IDs.");
+  }
+  if (ids.every((id, index) => id === request.profile_ids[index])) return current;
+  const reordered = { ...current, profiles: request.profile_ids.map((id) => records.get(id)!) };
+  saveBrowserEngineProfilesSettings(reordered);
+  return reordered;
 }
 
 export type ForegroundEngineEventHandlers = {

@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { checkEngineAssets, loadEngineProfilesSettings, saveEngineProfilesSettings } from "../api/backend";
+import { checkEngineAssets, loadEngineProfilesSettings, reorderEngineProfilesSettings, saveEngineProfilesSettings } from "../api/backend";
 import type { AssetCheckDto, EngineBackendDto, EngineProfileDto, EngineProfileRecordDto, ForegroundEngineSnapshotDto } from "../domain/types";
 import { profileHasPendingChanges, runFromSnapshot, verifiedEngineCapabilitiesLabel } from "../domain/foregroundEngine";
+import { t } from "../i18n/resources";
 
 type Props = {
   disabled?: boolean;
@@ -24,6 +25,9 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
   const [profileStatus, setProfileStatus] = useState("Loading profile...");
   const [assetChecks, setAssetChecks] = useState<AssetCheckDto[]>([]);
   const [autoloadProfileId, setAutoloadProfileId] = useState<string | null>(null);
+  const [catalogBusy, setCatalogBusy] = useState(false);
+  const catalogWritePending = useRef(false);
+  const [orderStatus, setOrderStatus] = useState("");
 
   const visits = Number(maxVisits);
   const canSave = profiles.length > 0 && profileName.trim().length > 0
@@ -116,19 +120,54 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
     autoloadId: string | null,
     successMessage: string
   ) {
-    const saved = await saveEngineProfilesSettings({
-      version: 1,
-      selected_profile_id: selectedId,
-      autoload_profile_id: autoloadId,
-      profiles: nextProfiles
-    });
-    const selected = saved.profiles.find((profile) => profile.id === saved.selected_profile_id) ?? saved.profiles[0];
-    setProfiles(saved.profiles);
-    onProfilesChange?.(saved.profiles);
-    setSelectedProfileId(saved.selected_profile_id);
-    setAutoloadProfileId(saved.autoload_profile_id ?? null);
-    if (selected) applyProfileRecord(selected);
-    setProfileStatus(successMessage);
+    if (catalogWritePending.current) throw new Error(t("engineOrder.busy"));
+    catalogWritePending.current = true;
+    setCatalogBusy(true);
+    try {
+      const saved = await saveEngineProfilesSettings({
+        version: 1,
+        selected_profile_id: selectedId,
+        autoload_profile_id: autoloadId,
+        profiles: nextProfiles
+      });
+      const selected = saved.profiles.find((profile) => profile.id === saved.selected_profile_id) ?? saved.profiles[0];
+      setProfiles(saved.profiles);
+      onProfilesChange?.(saved.profiles);
+      setSelectedProfileId(saved.selected_profile_id);
+      setAutoloadProfileId(saved.autoload_profile_id ?? null);
+      if (selected) applyProfileRecord(selected);
+      setProfileStatus(successMessage);
+    } finally {
+      catalogWritePending.current = false;
+      setCatalogBusy(false);
+    }
+  }
+
+  async function handleReorder(profileId: string, direction: "top" | "up" | "down" | "bottom") {
+    if (disabled || catalogWritePending.current) return;
+    const index = profiles.findIndex((record) => record.id === profileId);
+    if (index < 0) return;
+    const destination = direction === "top" ? 0 : direction === "bottom" ? profiles.length - 1
+      : direction === "up" ? Math.max(0, index - 1) : Math.min(profiles.length - 1, index + 1);
+    if (index === destination) return;
+    const ids = profiles.map((record) => record.id);
+    const ordered = [...ids];
+    ordered.splice(index, 1);
+    ordered.splice(destination, 0, profileId);
+    catalogWritePending.current = true;
+    setCatalogBusy(true);
+    setOrderStatus(t("engineOrder.saving"));
+    try {
+      const saved = await reorderEngineProfilesSettings({ expected_profile_ids: ids, profile_ids: ordered });
+      setProfiles(saved.profiles);
+      onProfilesChange?.(saved.profiles);
+      setOrderStatus(t("engineOrder.saved"));
+    } catch (error) {
+      setOrderStatus(`${t("engineOrder.failed")} ${errorMessage(error)}`);
+    } finally {
+      catalogWritePending.current = false;
+      setCatalogBusy(false);
+    }
   }
 
   async function handleSelectProfile(profileId: string) {
@@ -231,6 +270,9 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
   }
 
   async function handleReloadProfiles() {
+    if (catalogWritePending.current) return;
+    catalogWritePending.current = true;
+    setCatalogBusy(true);
     try {
       const settings = await loadEngineProfilesSettings();
       const selected = settings.profiles.find((profile) => profile.id === settings.selected_profile_id);
@@ -242,15 +284,18 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
       setProfileStatus("Profiles reloaded.");
     } catch (error) {
       setProfileStatus(`Reload failed: ${errorMessage(error)}`);
+    } finally {
+      catalogWritePending.current = false;
+      setCatalogBusy(false);
     }
   }
 
   return (
-    <section className="engine-setup-panel" aria-label="引擎设置">
+    <section className="engine-setup-panel" aria-label="引擎设置" data-focus-owner="engine" tabIndex={-1}>
       <div className="engine-run-row">
         <label>
           <span>配置</span>
-          <select value={selectedProfileId} onChange={(event) => void handleSelectProfile(event.target.value)}>
+          <select value={selectedProfileId} disabled={catalogBusy} onChange={(event) => void handleSelectProfile(event.target.value)}>
             {profiles.map((profile) => (
               <option key={profile.id} value={profile.id}>{profile.profile.name}</option>
             ))}
@@ -260,18 +305,34 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
           <span>名称</span>
           <input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="本地 KataGo" />
         </label>
-        <button type="button" onClick={() => void handleAddProfile()} disabled={!canSave}>新增</button>
-        <button type="button" onClick={() => void handleDeleteProfile()} disabled={!canDeleteProfile}>删除</button>
+        <button type="button" onClick={() => void handleAddProfile()} disabled={!canSave || catalogBusy}>新增</button>
+        <button type="button" onClick={() => void handleDeleteProfile()} disabled={!canDeleteProfile || catalogBusy}>删除</button>
         <label>
           <input
             type="checkbox"
             aria-label="Autoload Default"
             checked={autoloadProfileId === selectedProfileId}
-            disabled={profiles.length === 0}
+            disabled={profiles.length === 0 || catalogBusy}
             onChange={(event) => void handleAutoloadToggle(event.target.checked)}
           />
           <span>启动时自动加载</span>
         </label>
+      </div>
+      <div className="engine-profile-order" aria-busy={catalogBusy}>
+        <h3>{t("engineOrder.title")}</h3>
+        <p className="message">{t("engineOrder.hint")}</p>
+        <ul aria-label={t("engineOrder.title")}>
+          {profiles.map((record, index) => <li key={record.id} data-profile-order-id={record.id}>
+            <strong>{record.profile.name}</strong>
+            <div className="engine-profile-order-actions">
+              {(["top", "up", "down", "bottom"] as const).map((direction) => <button key={direction} type="button"
+                aria-label={`${t(`engineOrder.${direction}`)} ${record.profile.name}`}
+                disabled={disabled || catalogBusy || ((direction === "top" || direction === "up") ? index === 0 : index === profiles.length - 1)}
+                onClick={() => void handleReorder(record.id, direction)}>{t(`engineOrder.${direction}`)}</button>)}
+            </div>
+          </li>)}
+        </ul>
+        {orderStatus ? <p className="message" role="status">{orderStatus}</p> : null}
       </div>
       <div className="engine-grid">
         <label>
@@ -292,14 +353,14 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
         <label>
           <span>模型</span>
           <div className="path-input-row">
-            <input value={modelPath} onChange={(event) => updatePath(setModelPath, event.target.value)} placeholder="/path/to/model.bin.gz" aria-invalid={isKnownMissing(assetChecks, "model")} title={pathCheckTitle(assetChecks, "model")} />
+            <input data-search-target="engine.model-path" value={modelPath} onChange={(event) => updatePath(setModelPath, event.target.value)} placeholder="/path/to/model.bin.gz" aria-invalid={isKnownMissing(assetChecks, "model")} title={pathCheckTitle(assetChecks, "model")} />
             <button type="button" className="path-picker-button" onClick={() => void handlePickPath("模型", modelPath, false, setModelPath)}>浏览</button>
           </div>
         </label>
         <label>
           <span>配置文件</span>
           <div className="path-input-row">
-            <input value={configPath} onChange={(event) => updatePath(setConfigPath, event.target.value)} placeholder="/path/to/analysis.cfg" aria-invalid={isKnownMissing(assetChecks, "config")} title={pathCheckTitle(assetChecks, "config")} />
+            <input data-search-target="engine.config-path" value={configPath} onChange={(event) => updatePath(setConfigPath, event.target.value)} placeholder="/path/to/analysis.cfg" aria-invalid={isKnownMissing(assetChecks, "config")} title={pathCheckTitle(assetChecks, "config")} />
             <button type="button" className="path-picker-button" onClick={() => void handlePickPath("配置文件", configPath, false, setConfigPath)}>浏览</button>
           </div>
         </label>
@@ -338,8 +399,8 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, onPr
           <input type="number" min={1} step={1} value={maxVisits} onChange={(event) => setMaxVisits(event.target.value)} />
         </label>
         : null}
-        <button onClick={() => void handleSaveProfile()} disabled={!canSave}>保存配置</button>
-        <button type="button" onClick={() => void handleReloadProfiles()}>重新加载配置</button>
+        <button onClick={() => void handleSaveProfile()} disabled={!canSave || catalogBusy}>保存配置</button>
+        <button type="button" onClick={() => void handleReloadProfiles()} disabled={catalogBusy}>重新加载配置</button>
         <button onClick={() => void handleCheckAssets()} disabled={disabled}>检查资源</button>
       </div>
       {pendingChanges ? <p className="message" role="status">存在待应用更改。只有显式 Restart 才会替换当前 Foreground Engine Run。</p> : null}
