@@ -657,6 +657,32 @@ pub struct EngineDiagnosticMetricDto {
     pub missing: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticExportPhaseDto {
+    Idle, Estimating, EstimateObsolete, Ready, Collecting, Archiving, Syncing,
+    Publishing, Cancelling, Cancelled, Completed, Failed, Closed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticExportStatusDto {
+    pub generation: u64,
+    pub attempt_id: Option<String>,
+    pub captured_at_ms: Option<u64>,
+    pub phase: DiagnosticExportPhaseDto,
+    pub source_bytes: Option<u64>,
+    pub entries: Option<u32>,
+    pub completed_entries: u32,
+    pub failed_stage: Option<DiagnosticExportPhaseDto>,
+    pub message: Option<String>,
+    pub file_name: Option<String>,
+    pub cleanup_pending: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticFolderOutcomeDto { Opened, Failed, TimedOut }
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineFailureDto {
     pub operation: EngineOperationDto,

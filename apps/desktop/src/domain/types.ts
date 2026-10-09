@@ -255,6 +255,15 @@ export type EngineDiagnosticSnapshotDto = {
   records: EngineDiagnosticRecordDto[]; dropped_records: number; retained_bytes: number; metrics: EngineDiagnosticMetricDto[];
 };
 
+export type DiagnosticExportPhaseDto = "idle" | "estimating" | "estimate_obsolete" | "ready" | "collecting" | "archiving" | "syncing" | "publishing" | "cancelling" | "cancelled" | "completed" | "failed" | "closed";
+export type DiagnosticExportStatusDto = {
+  generation: number; attempt_id: string | null; captured_at_ms: number | null;
+  phase: DiagnosticExportPhaseDto; source_bytes: number | null; entries: number | null;
+  completed_entries: number; failed_stage: DiagnosticExportPhaseDto | null;
+  message: string | null; file_name: string | null; cleanup_pending: boolean;
+};
+export type DiagnosticFolderOutcomeDto = "opened" | "failed" | "timed_out";
+
 export type EngineFailureDto = {
   operation: EngineOperationDto;
   run_id?: string | null;
