@@ -7,6 +7,7 @@ import { t } from "../i18n/resources";
 import { EngineResourceDetails } from "./EngineResourceDetails";
 import { ModelInventoryPanel } from "./ModelInventoryPanel";
 import { EngineDiagnosticsPanel } from "./EngineDiagnosticsPanel";
+import { ManagedResourcesPanel } from "./ManagedResourcesPanel";
 
 type Props = {
   disabled?: boolean;
@@ -449,6 +450,16 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engi
         </p>
       )}
       </fieldset>
+      <ManagedResourcesPanel profileId={selectedProfileId} profile={editingProfile}
+        disabled={disabled || catalogBusy} beginOperation={beginModelOperation} endOperation={endModelOperation}
+        onUse={(installation) => {
+          if (disabled || catalogWritePending.current || modelOperation.current) return;
+          setEnginePath(installation.program);
+          setModelPath(installation.model_path);
+          setConfigPath(installation.config_path);
+          setAssetChecks([]);
+          setProfileStatus(t("managed.hint"));
+        }} />
     </section>
   );
 }

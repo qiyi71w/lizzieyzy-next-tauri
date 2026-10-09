@@ -16,6 +16,7 @@ pub(crate) struct ResourceSnapshot {
     entries: Vec<(PathBuf, EngineResourceIdentityDto)>,
     revision: String,
     diagnostics: AttemptCapture,
+    managed: Option<(crate::managed::trust::ManagedIdentity, PathBuf, PathBuf)>,
 }
 
 pub(crate) type ResourceError = (EngineFailureKind, String);
@@ -26,6 +27,7 @@ impl ResourceSnapshot {
         spec: &crate::CommandSpec,
         deadline: Instant,
         diagnostics: AttemptCapture,
+        managed_root: Option<&Path>,
     ) -> Result<Self, ResourceError> {
         let revision = format!(
             "{:x}",
@@ -36,8 +38,9 @@ impl ResourceSnapshot {
             entries: Vec::new(),
             revision,
             diagnostics,
+            managed: None,
         };
-        snapshot.add(executable, "executable", deadline)?;
+        snapshot.add(executable.clone(), "executable", deadline)?;
         if let app_model::EngineAdapterSettings::KataGoAnalysis(_)
         | app_model::EngineAdapterSettings::KataGoGtp(_) = &run.profile_snapshot.adapter
         {
@@ -52,6 +55,13 @@ impl ResourceSnapshot {
             let path = Path::new(spec.working_dir.as_deref().unwrap_or(".")).join(value);
             if path.is_file() {
                 snapshot.add(path, "launch_argument", deadline)?;
+            }
+        }
+        if let Some(root) = managed_root {
+            if let Some(identity) = crate::managed::trust::qualify(root, &executable)
+                .map_err(|message| (EngineFailureKind::ResourceChanged, message))? {
+                for path in &identity.receipt_paths { snapshot.add(path.clone(), "managed_receipt", deadline)?; }
+                snapshot.managed = Some((identity, root.to_path_buf(), executable));
             }
         }
         Ok(snapshot)
@@ -116,6 +126,11 @@ impl ResourceSnapshot {
     }
 
     pub(crate) fn revalidate(&self, deadline: Instant) -> Result<(), ResourceError> {
+        if let Some((_, root, executable)) = &self.managed {
+            crate::managed::trust::qualify(root, executable)
+                .map_err(|message| (EngineFailureKind::ResourceChanged, message))?
+                .ok_or_else(|| (EngineFailureKind::ResourceChanged, "managed identity retired".into()))?;
+        }
         for (path, expected) in &self.entries {
             let actual = identify(path, &expected.component, deadline, &self.diagnostics).map_err(|_| {
                 (
@@ -147,12 +162,11 @@ impl ResourceSnapshot {
         QualifiedLocalResourceDto {
             profile_revision: self.revision,
             resources: self.entries.into_iter().map(|(_, identity)| identity).collect(),
-            origin: "local_unknown".into(),
+            origin: if self.managed.is_some() { "project-source-build" } else { "local_unknown" }.into(),
             version,
-            source_commit: None,
+            source_commit: self.managed.as_ref().map(|(identity, _, _)| identity.source_commit.clone()),
             backend,
-            // No managed trust is inferred from a pathname or a local manifest.
-            static_zlib_exemption: false,
+            static_zlib_exemption: self.managed.as_ref().is_some_and(|(identity, _, _)| identity.static_zlib),
         }
     }
 }

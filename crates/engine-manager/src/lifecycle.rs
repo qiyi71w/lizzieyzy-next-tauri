@@ -50,6 +50,7 @@ pub struct ForegroundEngineConfig {
     pub stop_drain_timeout: Duration,
     pub job_timeout: Duration,
     pub admit_whole_game_analysis: bool,
+    pub managed_resources_root: Option<std::path::PathBuf>,
 }
 
 impl Default for ForegroundEngineConfig {
@@ -59,6 +60,7 @@ impl Default for ForegroundEngineConfig {
             stop_drain_timeout: Duration::from_secs(2),
             job_timeout: Duration::from_secs(60),
             admit_whole_game_analysis: true,
+            managed_resources_root: None,
         }
     }
 }
@@ -70,6 +72,7 @@ impl ForegroundEngineConfig {
             stop_drain_timeout: Duration::from_millis(400),
             job_timeout: Duration::from_millis(800),
             admit_whole_game_analysis: true,
+            managed_resources_root: None,
         }
     }
 }
@@ -2038,7 +2041,7 @@ impl Inner {
         })?;
         let resource_deadline = Instant::now() + Duration::from_secs(30);
         let resources =
-            ResourceSnapshot::capture(run, &spec, resource_deadline, capture.clone()).map_err(|(cause, message)| {
+            ResourceSnapshot::capture(run, &spec, resource_deadline, capture.clone(), self.config.managed_resources_root.as_deref()).map_err(|(cause, message)| {
                 failure(
                     kind,
                     cause,

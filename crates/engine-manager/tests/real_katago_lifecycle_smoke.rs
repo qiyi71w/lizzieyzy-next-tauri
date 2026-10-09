@@ -135,6 +135,7 @@ fn manager_with(
             stop_drain_timeout: Duration::from_secs(15),
             job_timeout: Duration::from_secs(120),
             admit_whole_game_analysis: true,
+            managed_resources_root: None,
         },
     );
     let events = manager.subscribe();
@@ -616,6 +617,7 @@ fn real_local_resource_qualification_start_switch_and_corrupt_model_preserve_pri
             stop_drain_timeout: Duration::from_secs(2),
             job_timeout: Duration::from_secs(30),
             admit_whole_game_analysis: true,
+            managed_resources_root: None,
         },
     );
     let events = manager.subscribe();
