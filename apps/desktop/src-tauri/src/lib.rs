@@ -1124,6 +1124,18 @@ async fn engine_runtime_threads(manager: State<'_, ForegroundEngineManager>, req
 }
 
 #[tauri::command]
+fn engine_runtime_parameters_snapshot(manager: State<'_, ForegroundEngineManager>) -> app_model::RuntimeParametersSnapshotDto {
+    manager.runtime_parameters_snapshot()
+}
+
+#[tauri::command]
+async fn engine_runtime_parameters_read(manager: State<'_, ForegroundEngineManager>, identity: app_model::RuntimeControlIdentityDto) -> Result<app_model::RuntimeParametersSnapshotDto, String> {
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || manager.read_runtime_parameters(identity))
+        .await.map_err(|_| "runtime parameter worker failed".to_owned())?
+}
+
+#[tauri::command]
 fn engine_evaluation_snapshot(manager: State<'_, ForegroundEngineManager>) -> app_model::EvaluationSnapshotDto {
     manager.evaluation_snapshot()
 }
@@ -1439,6 +1451,8 @@ pub fn run() {
             set_engine_diagnostic_trace,
             engine_runtime_threads_snapshot,
             engine_runtime_threads,
+            engine_runtime_parameters_snapshot,
+            engine_runtime_parameters_read,
             engine_evaluation_snapshot,
             engine_evaluation_start,
             engine_evaluation_cancel,

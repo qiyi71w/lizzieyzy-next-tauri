@@ -155,3 +155,96 @@ fn real_runtime_threads_same_pid_analysis_pause_reset_and_expiry() {
     assert_eq!(std::fs::read_to_string(&layer).unwrap(), "numSearchThreads=2\n");
     std::fs::remove_file(layer).unwrap();
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+#[ignore = "requires frozen real KataGo 1.18.2 resources and private config/cwd"]
+fn real_runtime_pair_same_pid_analysis_threads_pause_and_expiry() {
+    assert_eq!(std::env::var("LIZZIEYZY_REAL_KATAGO").unwrap(), "1");
+    let engine = std::env::var("LIZZIEYZY_KATAGO_ENGINE").unwrap();
+    let config = std::env::var("LIZZIEYZY_KATAGO_CONFIG").unwrap();
+    let config_bytes = std::fs::read(&config).unwrap();
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile { profile_id: "pair".into(), profile: EngineProfileDto {
+        name: "read-only GTP pair".into(), program: engine.clone(), argv: vec![],
+        working_dir: Some(std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap()),
+        adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings { model_path: Some(std::env::var("LIZZIEYZY_KATAGO_MODEL").unwrap()), config_path: Some(config.clone()), max_visits: 4 }),
+    }});
+    let owner = OwnedManager(ForegroundEngineManager::new(catalog.clone(), ForegroundEngineConfig::default()));
+    let manager = &owner.0;
+    manager.start("pair").unwrap();
+    let run = ready(manager);
+    let pid = owned_engine_identity(&engine);
+    println!("REAL_PAIR_RUN {} pid={pid:?}", serde_json::to_string(&run).unwrap());
+    let identity = || {
+        let state = manager.runtime_parameters_snapshot();
+        RuntimeControlIdentityDto { run_id: state.run_id.unwrap(), profile_revision: state.profile_revision.unwrap(), request_id: uuid::Uuid::new_v4().to_string() }
+    };
+    assert_eq!(manager.runtime_parameters_snapshot().status, RuntimeParametersStatusDto::Unknown);
+    assert_eq!(manager.runtime_parameters_snapshot().last_valid, None);
+    let first = manager.read_runtime_parameters(identity()).unwrap();
+    assert_eq!(first.status, RuntimeParametersStatusDto::Confirmed);
+    assert_eq!(first.last_valid, Some(RuntimeParameterPairDto { playout_doubling_advantage: 0.0, analysis_wide_root_noise: 0.04 }));
+    println!("REAL_PAIR_INITIAL {}", serde_json::to_string(&first).unwrap());
+    let document = sgf::CurrentSgfDocument::open("(;SZ[9]RU[Chinese]KM[7.5]C[personal];B[dd])").unwrap();
+    let before = document.serialize().unwrap();
+    let node_path = NodePath { indices: vec![0] };
+    let position = document.snapshot(&node_path).unwrap();
+    let selected = SelectedNodeJobRequest { run_id: run.run_id.clone(), generation: 12, node_path: node_path.clone(),
+        mode: AnalysisJobModeDto::Continuous, board_width: 9, board_height: 9, position_empty: false,
+        exact_position: Ok(document.exact_position(&node_path).unwrap()),
+        query: katago_protocol::analysis_query_from_position(9, 9, 7.5, &position.position.stones, PlayerColor::White,
+            katago_protocol::AnalysisQueryOptions { id: "pending".into(), rules: "chinese".into(), turn: 1, max_visits: None, include_ownership: Some(true), include_policy: Some(false) }).unwrap(),
+    };
+    let events = manager.subscribe();
+    let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };
+    manager.set_continuous_preferences(true, budget).unwrap();
+    manager.follow_continuous_position(selected);
+    let searching = progress(&events, None);
+    let pair = manager.read_runtime_parameters(identity()).unwrap();
+    assert_eq!(pair.status, RuntimeParametersStatusDto::Confirmed);
+    assert_eq!(pair.last_valid, first.last_valid);
+    println!("REAL_PAIR_ANALYSIS {}", serde_json::to_string(&pair).unwrap());
+    let resumed = progress(&events, Some(&searching.job_id));
+    assert_eq!(resumed.run_id, run.run_id);
+    assert_eq!(resumed.generation, 12);
+    assert_eq!(resumed.node_path, node_path);
+    assert_eq!(owned_engine_identity(&engine), pid);
+    let threads = manager.runtime_threads(request(manager, RuntimeThreadsActionDto::Apply, Some(2))).unwrap();
+    assert_eq!(threads.status, RuntimeThreadsStatusDto::Confirmed);
+    assert_eq!(threads.actual, Some(2));
+    let after_threads = manager.read_runtime_parameters(identity()).unwrap();
+    assert_eq!(after_threads.status, RuntimeParametersStatusDto::Confirmed);
+    assert_eq!(after_threads.last_valid, first.last_valid);
+    assert_eq!(manager.runtime_threads_snapshot(), threads);
+    manager.set_continuous_preferences(false, budget).unwrap();
+    let paused = manager.read_runtime_parameters(identity()).unwrap();
+    assert_eq!(paused.status, RuntimeParametersStatusDto::Confirmed);
+    assert_eq!(manager.snapshot().continuous.enabled, Some(false));
+    assert!(manager.snapshot().selected_node_job.is_none());
+    assert_eq!(owned_engine_identity(&engine), pid);
+    assert_eq!(document.serialize().unwrap(), before);
+    assert_eq!(std::fs::read(&config).unwrap(), config_bytes);
+    let stale = identity();
+    manager.restart().unwrap();
+    let restarted = ready(manager);
+    assert_ne!(restarted.run_id, run.run_id);
+    assert_eq!(restarted.qualified_resource.as_ref().unwrap().resources, run.qualified_resource.as_ref().unwrap().resources);
+    assert!(manager.read_runtime_parameters(stale).is_err());
+    assert_eq!(manager.runtime_parameters_snapshot().last_valid, None);
+    assert_eq!(manager.runtime_parameters_snapshot().status, RuntimeParametersStatusDto::Unknown);
+    assert_eq!(manager.snapshot().continuous.enabled, Some(false));
+    assert!(manager.snapshot().selected_node_job.is_none());
+    let mut other = catalog.get("pair").unwrap(); other.profile_id = "other".into(); catalog.upsert(other);
+    manager.switch_to("other").unwrap();
+    let switched = ready(manager);
+    assert_ne!(switched.run_id, restarted.run_id);
+    assert_eq!(manager.runtime_parameters_snapshot().last_valid, None);
+    let final_pair = manager.read_runtime_parameters(identity()).unwrap();
+    assert_eq!(final_pair.last_valid, first.last_valid);
+    println!("REAL_PAIR_NEW_RUN {}", serde_json::to_string(&final_pair).unwrap());
+    manager.teardown().unwrap();
+    assert_eq!(manager.runtime_parameters_snapshot().run_id, None);
+    assert_eq!(manager.runtime_parameters_snapshot().last_valid, None);
+    assert_eq!(std::fs::read(&config).unwrap(), config_bytes);
+}
