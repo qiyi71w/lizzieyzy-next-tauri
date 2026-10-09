@@ -477,7 +477,10 @@ pub enum ModelOriginDto {
     Unknown,
     Custom,
     /// A retained installation receipt, not a claim of current qualification.
-    Managed { catalog_id: String, installed_sha256: String },
+    Managed {
+        catalog_id: String,
+        installed_sha256: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -678,6 +681,22 @@ impl std::fmt::Display for EngineFailureDto {
 }
 
 impl std::error::Error for EngineFailureDto {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnginePreloadPhaseDto {
+    Preparing,
+    Ready,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnginePreloadDto {
+    pub run: EngineRunDto,
+    pub phase: EnginePreloadPhaseDto,
+    pub failure: Option<EngineFailureDto>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineCapabilitySnapshotDto {

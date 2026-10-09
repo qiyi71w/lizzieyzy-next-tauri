@@ -213,7 +213,7 @@ export type EngineProfileDto = {
   | { adapter_kind: "kata_go_analysis" | "kata_go_gtp"; settings: KataGoSettingsDto }
   | { adapter_kind: "generic_gtp"; settings: Record<string, never> }
 );
-export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto };
+export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto; preload: boolean };
 export type EngineStartupPolicyDto = { mode: "off" } | { mode: "fixed"; profile_id: string } | { mode: "last_primary" };
 export type EngineProfilesSettingsDto = { version: number; selected_profile_id: string; startup: EngineStartupPolicyDto; last_primary_profile_id: string | null; profiles: EngineProfileRecordDto[] };
 export type EngineProfileOrderRequestDto = { expected_profile_ids: string[]; profile_ids: string[] };
@@ -312,6 +312,11 @@ export type EngineRunDto = {
   profile_snapshot: EngineProfileDto;
   capability_snapshot?: EngineCapabilitySnapshotDto | null;
   qualified_resource?: QualifiedLocalResourceDto | null;
+};
+export type EnginePreloadDto = {
+  run: EngineRunDto;
+  phase: "preparing" | "ready" | "failed" | "cancelled";
+  failure: EngineFailureDto | null;
 };
 export type ExactRulesDto = "chinese" | "chinese_kgs";
 export type ExactPositionDto = {

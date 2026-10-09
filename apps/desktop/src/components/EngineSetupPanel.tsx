@@ -9,6 +9,7 @@ import { ModelInventoryPanel } from "./ModelInventoryPanel";
 import { EngineDiagnosticsPanel } from "./EngineDiagnosticsPanel";
 import { ManagedResourcesPanel } from "./ManagedResourcesPanel";
 import { EngineEvaluationPanel } from "./EngineEvaluationPanel";
+import { EnginePreloadPanel } from "./EnginePreloadPanel";
 
 type Props = {
   disabled?: boolean;
@@ -33,6 +34,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
   const [assetChecks, setAssetChecks] = useState<AssetCheckDto[]>([]);
   const [startup, setStartup] = useState<EngineStartupPolicyDto>({ mode: "off" });
   const [lastPrimaryProfileId, setLastPrimaryProfileId] = useState<string | null>(null);
+  const [preload, setPreload] = useState(false);
   const [catalogBusy, setCatalogBusy] = useState(false);
   const catalogWritePending = useRef(false);
   const [orderStatus, setOrderStatus] = useState("");
@@ -95,6 +97,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
   }, [onProfilesChange]);
 
   function applyProfileRecord(record: EngineProfileRecordDto) {
+    setPreload(record.preload ?? false);
     setProfileName(record.profile.name);
     setEnginePath(record.profile.program);
     setAdapterKind(record.profile.adapter_kind);
@@ -124,6 +127,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
   function buildProfileRecord(id = selectedProfileId): EngineProfileRecordDto {
     return {
       id,
+      preload,
       profile: buildProfile()
     };
   }
@@ -210,6 +214,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
     const id = `profile-${Date.now().toString(36)}`;
     const nextProfile: EngineProfileRecordDto = {
       ...buildProfileRecord(id),
+      preload: false,
       profile: {
         ...buildProfile(),
         name: nextProfileName(profiles)
@@ -353,6 +358,11 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
         </label>}
         <p className="message">{t("engineStartup.hint")}</p>
         {startup.mode === "last_primary" && <p className="message">{t("engineStartup.remembered")}: {profiles.find((record) => record.id === lastPrimaryProfileId)?.profile.name ?? t("engineStartup.missing")}</p>}
+        <label>
+          <input type="checkbox" checked={preload} disabled={catalogBusy}
+            onChange={(event) => setPreload(event.target.checked)} />
+          <span>{t("enginePreload.optIn")}</span>
+        </label>
       </div>
       <div className="engine-profile-order" aria-busy={catalogBusy}>
         <h3>{t("engineOrder.title")}</h3>
@@ -473,6 +483,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
           setAssetChecks([]);
           setProfileStatus(t("managed.hint"));
         }} />
+      <EnginePreloadPanel profiles={profiles} disabled={disabled || catalogBusy} />
     </section>
   );
 }

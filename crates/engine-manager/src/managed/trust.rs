@@ -5,6 +5,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
+#[derive(Clone)]
 pub(crate) struct ManagedIdentity {
     pub source_commit: String,
     pub static_zlib: bool,

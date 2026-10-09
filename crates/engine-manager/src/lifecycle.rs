@@ -33,6 +33,7 @@ mod game_move;
 mod evaluation;
 mod match_reservation;
 mod ordinary_rules;
+mod preload;
 pub use game_move::{GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle};
 
 pub trait AnalysisJobCancel: Send + Sync {
@@ -231,6 +232,8 @@ struct ManagerState {
     live: Option<LiveEngine>,
     candidate: Option<LiveEngine>,
     match_residents: Vec<LiveEngine>,
+    preloads: Vec<preload::PreloadSlot>,
+    preload_shutdown: bool,
     switch_seq: u64,
     last_activity: Instant,
     jobs: Vec<RegisteredJob>,
@@ -283,6 +286,8 @@ impl ForegroundEngineManager {
                     live: None,
                     candidate: None,
                     match_residents: Vec::new(),
+                    preloads: Vec::new(),
+                    preload_shutdown: false,
                     switch_seq: 0,
                     jobs: Vec::new(),
                     analysis_task: None,
@@ -646,6 +651,7 @@ impl ForegroundEngineManager {
                     None,
                 ));
             }
+            self.yield_preloads_locked(&mut state);
             state.operation += 1;
             state.operation_kind = operation_kind;
             let run = starting_run(&saved);
@@ -676,6 +682,7 @@ impl ForegroundEngineManager {
             let mut state = self.lock();
             evaluation::close(&mut state)?;
         }
+        self.cancel_all_preloads(true)?;
         if let Some(owner) = self.match_reservation_owner() {
             self.stop_reserved_match(&owner)?;
         }
@@ -715,6 +722,7 @@ impl ForegroundEngineManager {
                     None,
                 )
             })?;
+            self.yield_preloads_locked(&mut state);
             state.operation += 1;
             let profile_id = run.profile_id.clone();
             state.phase = Phase::Stopping(run);
@@ -745,6 +753,9 @@ impl ForegroundEngineManager {
 
     pub fn switch_to(&self, profile_id: &str) -> Result<(), EngineFailureDto> {
         match_reservation::require_unreserved(&self.lock())?;
+        if self.switch_preload(profile_id)? {
+            return Ok(());
+        }
         let saved = self.inner.catalog.get(profile_id).ok_or_else(|| {
             failure(
                 EngineOperationDto::Switch,
@@ -783,6 +794,7 @@ impl ForegroundEngineManager {
                 close_live_stdin(&previous);
                 let _ = kill_timed_out_child(&mut previous.child);
             }
+            self.yield_preloads_locked(&mut state);
             state.operation += 1;
             state.operation_kind = EngineOperationDto::Switch;
             state.switch_seq += 1;
@@ -829,6 +841,7 @@ impl ForegroundEngineManager {
         }
         evaluation::yield_to_foreground(&mut state)?;
         let job_id = Uuid::new_v4().to_string();
+        self.yield_preloads_locked(&mut state);
         state.jobs.push(RegisteredJob {
             job_id: job_id.clone(),
             query_id: job_id.clone(),
@@ -966,6 +979,7 @@ impl ForegroundEngineManager {
             )
             .with_job_id(&started.job_id)
         })?;
+        self.yield_preloads_locked(state);
         state.jobs.push(RegisteredJob {
             query_id: job_id.clone(),
             job_id,
@@ -1256,6 +1270,7 @@ impl ForegroundEngineManager {
                 reason: None,
             };
             let expected = request.work_items.len();
+            self.yield_preloads_locked(&mut state);
             state.jobs.push(RegisteredJob {
                 job_id: job_id.clone(),
                 query_id,
@@ -1942,6 +1957,7 @@ impl ForegroundEngineManager {
     fn begin_stop(&self, _operation_kind: EngineOperationDto) -> Result<Option<u64>, EngineFailureDto> {
         let mut state = self.lock();
         match_reservation::require_unreserved(&state)?;
+        self.yield_preloads_locked(&mut state);
         let run = match &state.phase {
             Phase::NoEngine { .. } => return Ok(None),
             Phase::Starting(run) | Phase::Ready(run) | Phase::Stopping(run) => run.clone(),
@@ -1977,7 +1993,7 @@ impl Inner {
         if self.current_operation() != operation {
             return;
         }
-        if let Err(mut published) = self.start_resident(operation, &run, false) {
+        if let Err(mut published) = self.start_resident(operation, &run, false, false) {
             identify_failed_executable(&run, &mut published);
             self.fail_attempt(operation, published);
         }
@@ -1987,7 +2003,7 @@ impl Inner {
         if self.current_operation() != operation {
             return;
         }
-        if let Err(mut published) = self.start_resident(operation, &run, true) {
+        if let Err(mut published) = self.start_resident(operation, &run, true, false) {
             identify_failed_executable(&run, &mut published);
             self.fail_switch_candidate(operation, &run, &switch_id, published);
         }
@@ -2005,8 +2021,9 @@ impl Inner {
         operation: u64,
         run: &EngineRunDto,
         as_candidate: bool,
+        background: bool,
     ) -> Result<(), EngineFailureDto> {
-        let kind = self.lock().operation_kind;
+        let kind = if background { EngineOperationDto::Start } else { self.lock().operation_kind };
         let capture = AttemptCapture::new(run);
         let protected_run = match &self.lock().phase {
             Phase::Ready(run) | Phase::Switching { primary: run, .. } => Some(run.run_id.clone()),
@@ -2045,7 +2062,7 @@ impl Inner {
                 Some(summary),
             ));
         }
-        if self.current_operation() != operation {
+        if !self.preparation_current(operation, run, background) {
             return Ok(());
         }
 
@@ -2071,7 +2088,7 @@ impl Inner {
                     None,
                 )
             })?;
-        if self.current_operation() != operation {
+        if !self.preparation_current(operation, run, background) {
             return Ok(());
         }
         capture.command(&spec);
@@ -2136,7 +2153,7 @@ impl Inner {
                 process_id,
                 capture: capture.clone(),
             };
-            if state.operation != operation {
+            if state.operation != operation || (background && !preload::preparing(&state, &run.run_id)) {
                 // Keep even a late-spawned child manager-owned until its exit is confirmed.
                 state.retiring.push((run.clone(), Arc::new(Mutex::new(engine))));
                 drop(state);
@@ -2148,7 +2165,14 @@ impl Inner {
                 });
                 return Ok(());
             }
-            if as_candidate {
+            if background {
+                state
+                    .preloads
+                    .iter_mut()
+                    .find(|slot| slot.dto.run.run_id == run.run_id)
+                    .expect("admitted preload")
+                    .live = Some(engine);
+            } else if as_candidate {
                 state.candidate = Some(engine);
             } else {
                 state.live = Some(engine);
@@ -2196,12 +2220,12 @@ impl Inner {
         }
 
         let gtp = if generic {
-            let Some(facts) = self.await_gtp_readiness(operation, run, as_candidate)? else {
+            let Some(facts) = self.await_gtp_readiness(operation, run, kind)? else {
                 return Ok(());
             };
             Some(facts)
         } else {
-            self.await_readiness(operation, run, &probe_id, as_candidate)?;
+            self.await_readiness(operation, run, &probe_id, kind)?;
             None
         };
         capture.readiness_confirmed();
@@ -2264,8 +2288,17 @@ impl Inner {
             .map(|facts| facts.version.clone())
             .or(version);
         let mut qualified_run = run.clone();
+        let preload_resources = background.then(|| resources.clone());
         qualified_run.qualified_resource = Some(resources.qualified(version, backend));
         let run = &qualified_run;
+        if background {
+            return self.finish_preload(
+                operation,
+                qualified_run,
+                capabilities,
+                preload_resources.expect("background resources"),
+            );
+        }
         if as_candidate {
             let mut state = self.lock();
             if state.match_reservation.is_some() {
@@ -2307,9 +2340,8 @@ impl Inner {
         &self,
         operation: u64,
         run: &EngineRunDto,
-        as_candidate: bool,
+        kind: EngineOperationDto,
     ) -> Result<Option<EngineGtpFactsDto>, EngineFailureDto> {
-        let kind = self.lock().operation_kind;
         let fail = |failure_kind, message| {
             failure(
                 kind,
@@ -2333,12 +2365,7 @@ impl Inner {
                 if state.operation != operation {
                     return Ok(None);
                 }
-                let slot = if as_candidate {
-                    &mut state.candidate
-                } else {
-                    &mut state.live
-                };
-                let Some(live) = slot.as_mut().filter(|live| live.run_id == run.run_id) else {
+                let Some(live) = owned_live_mut(&mut state, &run.run_id) else {
                     return Ok(None);
                 };
                 let mut guard = live.stdin.lock().expect("engine stdin lock");
@@ -2366,12 +2393,7 @@ impl Inner {
                     if state.operation != operation {
                         return Ok(None);
                     }
-                    let slot = if as_candidate {
-                        &mut state.candidate
-                    } else {
-                        &mut state.live
-                    };
-                    let Some(live) = slot.as_mut().filter(|live| live.run_id == run.run_id) else {
+                    let Some(live) = owned_live_mut(&mut state, &run.run_id) else {
                         return Ok(None);
                     };
                     if let Some(status) = live.child.try_wait().map_err(|error| {
@@ -2487,9 +2509,8 @@ impl Inner {
         operation: u64,
         run: &EngineRunDto,
         probe_id: &str,
-        as_candidate: bool,
+        kind: EngineOperationDto,
     ) -> Result<(), EngineFailureDto> {
-        let kind = self.lock().operation_kind;
         let deadline = Instant::now() + self.config.readiness_timeout;
         loop {
             if self.current_operation() != operation {
@@ -2508,11 +2529,7 @@ impl Inner {
             }
             let line = {
                 let state = self.lock();
-                let live = if as_candidate {
-                    state.candidate.as_ref()
-                } else {
-                    state.live.as_ref()
-                };
+                let live = owned_live(&state, &run.run_id);
                 let Some(live) = live else {
                     return Err(failure(
                         kind,
@@ -4670,6 +4687,7 @@ fn owned_live<'a>(state: &'a ManagerState, run_id: &str) -> Option<&'a LiveEngin
         .iter()
         .chain(state.candidate.iter())
         .chain(state.match_residents.iter())
+        .chain(state.preloads.iter().filter_map(|slot| slot.live.as_ref()))
         .find(|live| live.run_id == run_id)
 }
 
@@ -4679,6 +4697,7 @@ fn owned_live_mut<'a>(state: &'a mut ManagerState, run_id: &str) -> Option<&'a m
         .iter_mut()
         .chain(state.candidate.iter_mut())
         .chain(state.match_residents.iter_mut())
+        .chain(state.preloads.iter_mut().filter_map(|slot| slot.live.as_mut()))
         .find(|live| live.run_id == run_id)
 }
 

@@ -742,8 +742,8 @@ fn real_katago_startup_modes_reopen_durable_catalog() {
         startup: app_model::EngineStartupPolicyDto::Off,
         last_primary_profile_id: None,
         profiles: vec![
-            engine_manager::EngineProfileRecord { id: "a".into(), profile: profile.clone() },
-            engine_manager::EngineProfileRecord { id: "b".into(), profile: EngineProfileDto { name: "Startup B".into(), ..profile } },
+            engine_manager::EngineProfileRecord { id: "a".into(), profile: profile.clone(), preload: false },
+            engine_manager::EngineProfileRecord { id: "b".into(), profile: EngineProfileDto { name: "Startup B".into(), ..profile }, preload: false },
         ],
     };
     let new_manager = || ForegroundEngineManager::new(Arc::new(DiskCatalog(path.clone())), ForegroundEngineConfig {
@@ -798,4 +798,121 @@ fn real_katago_startup_modes_reopen_durable_catalog() {
     assert_eq!(missing.last_primary_profile_id(), None);
     eprintln!("startup smoke: off, fixed B, last-primary B/new Run, unsaved A retains durable B, deleted identity has no fallback");
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires explicit real KataGo CPU assets and isolated cwd"]
+fn real_preload_promotion_cancellation_and_memory_pressure_preserve_primary() {
+    use app_model::EnginePreloadPhaseDto as Phase;
+    require_real_katago();
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    for id in ["preload-a", "preload-b", "preload-pressure"] {
+        catalog.upsert(SavedEngineProfile {
+            profile_id: id.into(),
+            profile: real_profile(id),
+        });
+        catalog.set_preload(id, id == "preload-b");
+    }
+    let directory = std::path::PathBuf::from(env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap());
+    let wrapper = directory.join("limited-engine.sh");
+    std::fs::write(
+        &wrapper,
+        "#!/bin/sh\nexec /usr/bin/prlimit --as=268435456 -- \"$LIZZIEYZY_KATAGO_ENGINE\" \"$@\"\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut pressure = catalog.get("preload-pressure").unwrap();
+    pressure.profile.program = wrapper.to_string_lossy().into_owned();
+    catalog.upsert(pressure);
+    catalog.set_autoload_profile_id(Some("preload-a".into()));
+    let manager = ForegroundEngineManager::new(
+        catalog.clone(),
+        ForegroundEngineConfig {
+            readiness_timeout: Duration::from_secs(90),
+            stop_drain_timeout: Duration::from_millis(400),
+            job_timeout: Duration::from_secs(30),
+            admit_whole_game_analysis: true,
+            managed_resources_root: None,
+        },
+    );
+    let events = manager.subscribe();
+    let wait = |phase| {
+        let deadline = Instant::now() + Duration::from_secs(100);
+        loop {
+            let slots = manager.preload_snapshot();
+            if let Some(slot) = slots.iter().find(|slot| slot.phase == phase) {
+                return slot.clone();
+            }
+            assert!(Instant::now() < deadline, "real preload timeout: {slots:?}");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    };
+    assert_eq!(manager.last_primary_profile_id(), None);
+    manager.apply_autoload().unwrap();
+    manager.schedule_startup_preloads();
+    let ready = wait_current(&manager, Duration::from_secs(100), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    let a = run_from_ready(&ready.lifecycle).clone();
+    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("preload-a"));
+    let b = wait(Phase::Ready);
+    eprintln!(
+        "real-preload-a={} background-b={}",
+        serde_json::to_string(&a).unwrap(),
+        serde_json::to_string(&b).unwrap()
+    );
+    assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, a.run_id);
+    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("preload-a"));
+    manager.switch_to("preload-b").unwrap();
+    assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, b.run.run_id);
+    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("preload-b"));
+    catalog.set_preload("preload-a", true);
+    manager.prepare_preload("preload-a").unwrap();
+    wait(Phase::Ready);
+    manager.cancel_preload("preload-a").unwrap();
+    assert_eq!(wait(Phase::Cancelled).run.profile_id, "preload-a");
+    catalog.set_preload("preload-pressure", true);
+    manager.prepare_preload("preload-pressure").unwrap();
+    let failed = wait(Phase::Failed);
+    eprintln!(
+        "real-preload-pressure={}",
+        serde_json::to_string(&failed).unwrap()
+    );
+    assert!(
+        failed
+            .failure
+            .as_ref()
+            .unwrap()
+            .diagnostic_summary
+            .as_ref()
+            .is_some_and(|text| text.contains("alloc")
+                || text.contains("memory")
+                || text.contains("resource")),
+        "{failed:?}"
+    );
+    assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, b.run.run_id);
+    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("preload-b"));
+    manager.prepare_preload("preload-a").unwrap();
+    wait(Phase::Ready);
+    let evaluation = manager.start_evaluation("preload-a").unwrap();
+    assert!(evaluation.evaluation_id.is_some());
+    assert_eq!(wait(Phase::Ready).run.profile_id, "preload-a");
+    let job = manager
+        .start_selected_node_job(selected_request(&b.run.run_id, 1, 2))
+        .unwrap();
+    assert_eq!(manager.evaluation_snapshot().phase, app_model::EvaluationPhaseDto::Yielded);
+    assert_eq!(manager.evaluation_snapshot().process_id, None);
+    assert_eq!(wait(Phase::Cancelled).run.profile_id, "preload-a");
+    wait_job(&events, Duration::from_secs(30), |event| {
+        event.job_id == job.job_id && event.outcome == app_model::AnalysisJobOutcomeDto::Completed
+    });
+    manager.teardown().unwrap();
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine { .. }
+    ));
+    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("preload-b"));
+    std::fs::remove_file(wrapper).unwrap();
 }

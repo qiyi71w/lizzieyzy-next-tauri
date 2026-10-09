@@ -105,7 +105,7 @@ describe("engine profile configuration editor", () => {
     await change(field("引擎"), "/gnu go/gnugo");
     await click("保存配置");
     const saved = await loadEngineProfilesSettings();
-    expect(saved.profiles).toEqual([kata, { id: gtpId, profile: { name: "GNU Go 中文", program: "/gnu go/gnugo", argv: ["two words", "中文 参数", ""], working_dir: "/中文 工作目录", adapter_kind: "generic_gtp", settings: {} } }]);
+    expect(saved.profiles).toEqual([kata, { id: gtpId, preload: false, profile: { name: "GNU Go 中文", program: "/gnu go/gnugo", argv: ["two words", "中文 参数", ""], working_dir: "/中文 工作目录", adapter_kind: "generic_gtp", settings: {} } }]);
     await change(field("名称"), "unsaved edit");
     await change(field("参数 1"), "not saved");
     await click("重新加载配置");
@@ -425,4 +425,17 @@ it("closing the retained settings sheet cancels its isolated benchmark", async (
   expect(cancel).toHaveBeenCalledWith("visible-benchmark");
   expect(host.querySelector('section[aria-label="本地性能评估 Benchmark"]')).toBeNull();
   expect(host.querySelector('section[aria-label="引擎设置"]')).not.toBeNull();
+});
+it("saves preload opt-in explicitly and keeps browser preparation unavailable", async () => {
+  await render();
+  const toggle = field("允许此配置后台预加载（保存后生效）") as HTMLInputElement;
+  expect(toggle.checked).toBe(false);
+  await act(async () => { toggle.click(); });
+  expect((await loadEngineProfilesSettings()).profiles[0].preload).toBe(false);
+  await click("保存配置");
+  expect((await loadEngineProfilesSettings()).profiles[0].preload).toBe(true);
+  const prepare = [...host.querySelectorAll("button")].find((button) => button.textContent === "准备")!;
+  expect(prepare.disabled).toBe(true);
+  await click("重新加载配置");
+  expect((field("允许此配置后台预加载（保存后生效）") as HTMLInputElement).checked).toBe(true);
 });

@@ -44,6 +44,7 @@ impl Drop for TestTempDir {
 fn profile(id: &str, name: &str) -> EngineProfileRecord {
     EngineProfileRecord {
         id: id.to_string(),
+        preload: false,
         profile: EngineProfileDto {
             name: name.to_string(),
             program: format!("/bin/{id}"),
@@ -573,4 +574,27 @@ fn missing_deleted_and_corrupt_last_primary_never_select_the_editor() {
         value["last_primary_profile_id"] = invalid;
         assert!(parse_engine_profiles(&value.to_string()).is_err());
     }
+}
+
+#[test]
+fn preload_opt_in_defaults_off_round_trips_and_failed_save_retains_bytes() {
+    let temp = TestTempDir::new("preload");
+    let path = temp.catalog_path();
+    let mut value = serde_json::to_value(settings("a", None, vec![profile("a", "A")])).unwrap();
+    value["profiles"][0].as_object_mut().unwrap().remove("preload");
+    let mut catalog = parse_engine_profiles(&value.to_string()).unwrap();
+    assert!(!catalog.profiles[0].preload);
+    catalog.profiles[0].preload = true;
+    catalog.startup = EngineStartupPolicyDto::LastPrimary;
+    catalog.last_primary_profile_id = Some("remembered-not-editor".into());
+    save_engine_profiles(&path, catalog.clone()).unwrap();
+    assert!(load_engine_profiles(&path).unwrap().profiles[0].preload);
+    assert_eq!(load_engine_profiles(&path).unwrap(), catalog);
+    let before = std::fs::read(&path).unwrap();
+    std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
+    catalog.profiles[0].preload = false;
+    assert!(save_engine_profiles(&path, catalog).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    value["profiles"][0]["preload"] = serde_json::json!("true");
+    assert!(parse_engine_profiles(&value.to_string()).is_err());
 }

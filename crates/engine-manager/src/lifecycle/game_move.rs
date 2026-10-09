@@ -457,6 +457,7 @@ impl ForegroundEngineManager {
             } else {
                 None
             };
+            self.yield_preloads_locked(&mut state);
             state.game_move_publication = None;
             state.game_move = Some(MoveSlot {
                 identity: identity.clone(),

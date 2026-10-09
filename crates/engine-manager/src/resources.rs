@@ -12,6 +12,7 @@ const CONFIG_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Private paths never cross the diagnostics boundary. The wire identity carries a
 /// stable path pseudonym and content digest, not the user's home directory.
+#[derive(Clone)]
 pub(crate) struct ResourceSnapshot {
     entries: Vec<(PathBuf, EngineResourceIdentityDto)>,
     revision: String,

@@ -9,7 +9,7 @@ import { t } from "../i18n/resources";
 
 const idle: EvaluationSnapshotDto = { evaluation_id: null, target_id: null, input_revision: null, phase: "idle", process_id: null, exit_code: null, output: [], output_truncated: false, message: null, result: null };
 const running: EvaluationSnapshotDto = { ...idle, evaluation_id: "one", target_id: "saved", input_revision: "revision", phase: "running", process_id: 123 };
-const profiles: EngineProfileRecordDto[] = [{ id: "saved", profile: { name: "Saved local", program: "katago", argv: [], working_dir: null, adapter_kind: "generic_gtp", settings: {} } }];
+const profiles: EngineProfileRecordDto[] = [{ id: "saved", preload: false, profile: { name: "Saved local", program: "katago", argv: [], working_dir: null, adapter_kind: "generic_gtp", settings: {} } }];
 let host: HTMLDivElement;
 let root: Root | null;
 beforeEach(() => {

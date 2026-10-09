@@ -39,10 +39,10 @@ mod document_departure;
 mod export;
 mod file_activation;
 mod human_match;
+mod models;
 mod readboard;
 mod save_as;
 mod session_recovery;
-mod models;
 mod managed_resources;
 #[cfg(windows)]
 extern crate windows_core;
@@ -78,6 +78,22 @@ struct DiskEngineCatalog {
 }
 
 impl EngineProfileCatalog for DiskEngineCatalog {
+    fn preload_profiles(&self) -> Vec<SavedEngineProfile> {
+        load_engine_profiles_from_disk(&self.handle)
+            .map(|settings| {
+                settings
+                    .profiles
+                    .into_iter()
+                    .filter(|record| record.preload)
+                    .map(|record| SavedEngineProfile {
+                        profile_id: record.id,
+                        profile: record.profile,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn get(&self, profile_id: &str) -> Option<SavedEngineProfile> {
         let settings = load_engine_profiles_from_disk(&self.handle).ok()?;
         settings
@@ -604,7 +620,9 @@ fn save_engine_profiles_settings(
     let path = engine_profile_path(&app_handle)?;
     let mut retained = models::saved_paths(&current);
     retained.extend(models::saved_paths(&settings));
-    app_handle.state::<engine_manager::models::ModelInventory>().remember_saved(&retained)?;
+    app_handle
+        .state::<engine_manager::models::ModelInventory>()
+        .remember_saved(&retained)?;
     save_engine_profiles_at_path(&path, &manager, &current, settings)
 }
 
@@ -624,6 +642,15 @@ fn save_engine_profiles_at_path(
     }
     let saved = persist_engine_profiles(path, settings)?;
     manager.evaluation_snapshot();
+    for previous in &current.profiles {
+        if !saved
+            .profiles
+            .iter()
+            .any(|next| next.id == previous.id && next.preload && next.profile == previous.profile)
+        {
+            manager.invalidate_preload(&previous.id);
+        }
+    }
     Ok(saved)
 }
 
@@ -1092,6 +1119,41 @@ fn engine_evaluation_cancel(manager: State<'_, ForegroundEngineManager>, evaluat
 }
 
 #[tauri::command]
+fn engine_preload_snapshot(manager: State<'_, ForegroundEngineManager>) -> Vec<app_model::EnginePreloadDto> {
+    manager.preload_snapshot()
+}
+
+#[tauri::command]
+fn engine_preload_prepare(
+    manager: State<'_, ForegroundEngineManager>,
+    profile_id: String,
+) -> EngineCommandResult<()> {
+    manager.prepare_preload(&profile_id).map_err(Box::new)
+}
+
+#[tauri::command]
+async fn engine_preload_cancel(
+    manager: State<'_, ForegroundEngineManager>,
+    profile_id: String,
+) -> EngineCommandResult<()> {
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || manager.cancel_preload(&profile_id).map_err(Box::new))
+        .await
+        .map_err(|_| {
+            Box::new(EngineFailureDto {
+                operation: EngineOperationDto::Stop,
+                run_id: None,
+                switch_id: None,
+                job_id: None,
+                profile_id: None,
+                kind: EngineFailureKind::Cancellation,
+                message: "Background cancellation worker failed".into(),
+                diagnostic_summary: None,
+            })
+        })?
+}
+
+#[tauri::command]
 fn foreground_engine_start(
     manager: State<'_, ForegroundEngineManager>,
     profile_id: String,
@@ -1110,11 +1172,25 @@ fn foreground_engine_restart(manager: State<'_, ForegroundEngineManager>) -> Eng
 }
 
 #[tauri::command]
-fn foreground_engine_switch(
+async fn foreground_engine_switch(
     manager: State<'_, ForegroundEngineManager>,
     profile_id: String,
 ) -> EngineCommandResult<()> {
-    manager.switch_to(&profile_id).map_err(Box::new)
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || manager.switch_to(&profile_id).map_err(Box::new))
+        .await
+        .map_err(|_| {
+            Box::new(EngineFailureDto {
+                operation: EngineOperationDto::Switch,
+                run_id: None,
+                switch_id: None,
+                job_id: None,
+                profile_id: None,
+                kind: EngineFailureKind::InvalidState,
+                message: "Engine switch worker failed".into(),
+                diagnostic_summary: None,
+            })
+        })?
 }
 
 pub fn run() {
@@ -1132,7 +1208,9 @@ pub fn run() {
             spawn_recovery_writer(app.handle().clone());
             let _ = load_engine_profiles_from_disk(app.handle());
             app.manage(engine_manager::models::ModelInventory::new(
-                app.path().app_data_dir()?.join("lizzieyzy-next-model-inventory.json"),
+                app.path()
+                    .app_data_dir()?
+                    .join("lizzieyzy-next-model-inventory.json"),
             ));
             let managed_root = app.path().app_data_dir()?.join("managed-resources");
             app.manage(engine_manager::managed::ManagedResources::new(managed_root.clone()));
@@ -1176,6 +1254,7 @@ pub fn run() {
                 }
             });
             let _ = manager.apply_autoload();
+            manager.schedule_startup_preloads();
             app.manage(manager);
             let preferences = app.state::<PreferencesState>();
             // The frontend load command owns recovery/error reporting. A failed
@@ -1328,6 +1407,9 @@ pub fn run() {
             engine_evaluation_snapshot,
             engine_evaluation_start,
             engine_evaluation_cancel,
+            engine_preload_snapshot,
+            engine_preload_prepare,
+            engine_preload_cancel,
             foreground_engine_start,
             foreground_engine_stop,
             foreground_engine_restart,
