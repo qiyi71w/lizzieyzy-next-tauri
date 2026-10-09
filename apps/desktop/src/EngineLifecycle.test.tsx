@@ -262,7 +262,7 @@ beforeEach(() => {
   backend.loadEngineProfilesSettings.mockResolvedValue({
     version: 2,
     selected_profile_id: "profile-1",
-    startup: { mode: "off" as const }, last_primary_profile_id: null,
+    startup: { mode: "off" as const }, startup_evaluation: { enabled: false, target_profile_id: null }, last_primary_profile_id: null,
     profiles: [savedProfile, savedProfileB]
   });
   backend.saveEngineProfilesSettings.mockImplementation(async (settings) => settings);
@@ -378,7 +378,7 @@ describe("foreground engine lifecycle UI", () => {
     const generic = { id: "generic", profile: {
       name: "Saved generic", program: "/bin/gtp", argv: [], working_dir: null, adapter_kind: "generic_gtp" as const, settings: {}
     } };
-    const catalog = { version: 2, selected_profile_id: "profile-1", startup: { mode: "off" as const }, last_primary_profile_id: null, profiles: [savedProfile, generic] };
+    const catalog = { version: 2, selected_profile_id: "profile-1", startup: { mode: "off" as const }, startup_evaluation: { enabled: false, target_profile_id: null }, last_primary_profile_id: null, profiles: [savedProfile, generic] };
     backend.loadEngineProfilesSettings.mockResolvedValue(catalog);
     const host = await renderApp();
     if (withPrimary) await readyEngine(host);
@@ -1734,7 +1734,7 @@ describe("foreground engine lifecycle UI", () => {
     backend.loadEngineProfilesSettings.mockResolvedValue({
       version: 2,
       selected_profile_id: "profile-1",
-      startup: { mode: "off" as const }, last_primary_profile_id: null,
+      startup: { mode: "off" as const }, startup_evaluation: { enabled: false, target_profile_id: null }, last_primary_profile_id: null,
       profiles: [savedProfile, savedProfileB, savedProfileC]
     });
     const host = await renderApp();
@@ -2125,7 +2125,7 @@ describe("foreground engine lifecycle UI", () => {
     backend.loadEngineProfilesSettings.mockResolvedValue({
       version: 2,
       selected_profile_id: "profile-1",
-      startup: { mode: "off" as const }, last_primary_profile_id: null,
+      startup: { mode: "off" as const }, startup_evaluation: { enabled: false, target_profile_id: null }, last_primary_profile_id: null,
       profiles: [savedProfile, savedProfileB]
     });
     backend.saveEngineProfilesSettings.mockImplementation(async (settings) => {

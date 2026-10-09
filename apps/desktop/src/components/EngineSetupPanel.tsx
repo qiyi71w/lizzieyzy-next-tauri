@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { checkEngineAssets, loadEngineProfilesSettings, reorderEngineProfilesSettings, saveEngineProfilesSettings } from "../api/backend";
-import type { AssetCheckDto, EngineBackendDto, EngineFailureDto, EngineProfileDto, EngineProfileRecordDto, EngineStartupPolicyDto, ForegroundEngineSnapshotDto } from "../domain/types";
+import type { AssetCheckDto, EngineBackendDto, EngineFailureDto, EngineProfileDto, EngineProfileRecordDto, EngineStartupPolicyDto, StartupEvaluationSettingsDto, ForegroundEngineSnapshotDto } from "../domain/types";
 import { profileHasPendingChanges, runFromSnapshot, verifiedEngineCapabilitiesLabel } from "../domain/foregroundEngine";
 import { t } from "../i18n/resources";
 import { EngineResourceDetails } from "./EngineResourceDetails";
@@ -33,6 +33,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
   const [assetChecks, setAssetChecks] = useState<AssetCheckDto[]>([]);
   const [startup, setStartup] = useState<EngineStartupPolicyDto>({ mode: "off" });
   const [lastPrimaryProfileId, setLastPrimaryProfileId] = useState<string | null>(null);
+  const [startupEvaluation, setStartupEvaluation] = useState<StartupEvaluationSettingsDto>({ enabled: false, target_profile_id: null });
   const [catalogBusy, setCatalogBusy] = useState(false);
   const catalogWritePending = useRef(false);
   const [orderStatus, setOrderStatus] = useState("");
@@ -79,6 +80,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
         setSelectedProfileId(selected?.id ?? "default");
         setStartup(settings.startup);
         setLastPrimaryProfileId(settings.last_primary_profile_id);
+        setStartupEvaluation(settings.startup_evaluation);
         if (!selected) {
           setProfileStatus("No configured profile.");
           return;
@@ -153,6 +155,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
         selected_profile_id: selectedId,
         startup: nextStartup,
         last_primary_profile_id: lastPrimaryProfileId,
+        startup_evaluation: startupEvaluation,
         profiles: nextProfiles
       });
       const selected = saved.profiles.find((profile) => profile.id === saved.selected_profile_id) ?? saved.profiles[0];
@@ -161,6 +164,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
       setSelectedProfileId(saved.selected_profile_id);
       setStartup(saved.startup);
       setLastPrimaryProfileId(saved.last_primary_profile_id);
+      setStartupEvaluation(saved.startup_evaluation);
       if (selected) applyProfileRecord(selected);
       setProfileStatus(successMessage);
     } finally {
@@ -242,6 +246,23 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
     }
   }
 
+  async function handleEvaluationPolicy(next: StartupEvaluationSettingsDto) {
+    if (disabled || !profiles.length || catalogWritePending.current || modelOperation.current) return;
+    catalogWritePending.current = true;
+    setCatalogBusy(true);
+    try {
+      const saved = await saveEngineProfilesSettings({ version: 2, selected_profile_id: selectedProfileId,
+        startup, last_primary_profile_id: lastPrimaryProfileId, startup_evaluation: next, profiles });
+      setStartupEvaluation(saved.startup_evaluation);
+      setProfileStatus(t("evaluation.policySaved"));
+    } catch (error) {
+      setProfileStatus(`${t("evaluation.policyFailed")} ${errorMessage(error)}`);
+    } finally {
+      catalogWritePending.current = false;
+      setCatalogBusy(false);
+    }
+  }
+
   async function handlePickPath(label: string, currentValue: string, directory: boolean, setter: (value: string) => void) {
     if (modelOperation.current) return;
     try {
@@ -299,6 +320,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
       setSelectedProfileId(settings.selected_profile_id);
       setStartup(settings.startup);
       setLastPrimaryProfileId(settings.last_primary_profile_id);
+      setStartupEvaluation(settings.startup_evaluation);
       if (selected) applyProfileRecord(selected);
       setProfileStatus("Profiles reloaded.");
     } catch (error) {
@@ -456,6 +478,20 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
       </div>
       {pendingChanges ? <p className="message" role="status">存在待应用更改。只有显式 Restart 才会替换当前 Foreground Engine Run。</p> : null}
       <p className="message">{profileStatus}</p>
+      <div className="engine-run-row">
+        <label><input type="checkbox" checked={startupEvaluation.enabled} disabled={catalogBusy || !profiles.length}
+          onChange={(event) => void handleEvaluationPolicy({ ...startupEvaluation, enabled: event.target.checked })} />{t("evaluation.startup")}</label>
+        <label>{t("evaluation.startupTarget")}
+          <select value={startupEvaluation.target_profile_id ?? ""} disabled={catalogBusy || !profiles.length}
+            onChange={(event) => void handleEvaluationPolicy({ ...startupEvaluation, target_profile_id: event.target.value || null })}>
+            <option value="">{t("evaluation.unavailable")}</option>
+            {startupEvaluation.target_profile_id && !profiles.some((record) => record.id === startupEvaluation.target_profile_id)
+              && <option value={startupEvaluation.target_profile_id}>{t("evaluation.unavailable")}</option>}
+            {profiles.map((record) => <option key={record.id} value={record.id}>{record.profile.name} ({record.id})</option>)}
+          </select>
+        </label>
+        <p>{t("evaluation.startupHint")}</p>
+      </div>
       {visible && <EngineEvaluationPanel profiles={profiles} disabled={disabled || catalogBusy} />}
       {assetChecks.length > 0 && (
         <p className="message">

@@ -741,6 +741,7 @@ fn real_katago_startup_modes_reopen_durable_catalog() {
         version: 2, selected_profile_id: "a".into(),
         startup: app_model::EngineStartupPolicyDto::Off,
         last_primary_profile_id: None,
+        startup_evaluation: Default::default(),
         profiles: vec![
             engine_manager::EngineProfileRecord { id: "a".into(), profile: profile.clone() },
             engine_manager::EngineProfileRecord { id: "b".into(), profile: EngineProfileDto { name: "Startup B".into(), ..profile } },

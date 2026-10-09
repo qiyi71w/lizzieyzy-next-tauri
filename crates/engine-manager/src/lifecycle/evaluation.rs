@@ -101,6 +101,7 @@ pub(super) fn yield_to_foreground(state: &mut ManagerState) -> Result<(), Engine
 }
 
 pub(super) fn close(state: &mut ManagerState) -> Result<(), EngineFailureDto> {
+    state.startup_evaluation = None;
     if let Some(slot) = state.evaluation.as_mut() {
         slot.retire(
             PhaseDto::Cancelled,
@@ -120,6 +121,26 @@ fn busy(state: &ManagerState) -> bool {
 }
 
 impl ForegroundEngineManager {
+    /// Consumes only authorization captured at manager construction, never a later save.
+    pub fn apply_startup_evaluation(&self) {
+        let request = self.lock().startup_evaluation.take();
+        let result = match request {
+            None | Some(Ok(None)) => return,
+            Some(Err(message)) => Err(eval_failure(&message)),
+            Some(Ok(Some(saved))) => self.start_saved_evaluation(Ok(saved), true),
+        };
+        if let Err(error) = result {
+            let mut state = self.lock();
+            if state.evaluation.is_none() {
+                state.evaluation_notice = EvaluationSnapshotDto {
+                    phase: if busy(&state) { PhaseDto::Yielded } else { PhaseDto::Unavailable },
+                    message: Some(error.message),
+                    ..Default::default()
+                };
+            }
+        }
+    }
+
     pub fn evaluation_snapshot(&self) -> EvaluationSnapshotDto {
         let mut state = self.lock();
         if let Some(slot) = state.evaluation.as_mut() {
@@ -128,7 +149,7 @@ impl ForegroundEngineManager {
             }
             return slot.snapshot.clone();
         }
-        EvaluationSnapshotDto::default()
+        state.evaluation_notice.clone()
     }
 
     pub fn cancel_evaluation(&self, evaluation_id: &str) -> Result<EvaluationSnapshotDto, EngineFailureDto> {
@@ -148,6 +169,13 @@ impl ForegroundEngineManager {
     }
 
     pub fn start_evaluation(&self, profile_id: &str) -> Result<EvaluationSnapshotDto, EngineFailureDto> {
+        self.lock().startup_evaluation = None;
+        let saved = self.inner.catalog.get(profile_id)
+            .ok_or_else(|| eval_failure("Select an existing saved local profile to benchmark"));
+        self.start_saved_evaluation(saved, false)
+    }
+
+    fn start_saved_evaluation(&self, saved: Result<SavedEngineProfile, EngineFailureDto>, startup: bool) -> Result<EvaluationSnapshotDto, EngineFailureDto> {
         {
             let mut state = self.lock();
             if let Some(old) = state.evaluation.as_mut() {
@@ -168,11 +196,10 @@ impl ForegroundEngineManager {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| eval_failure("Another benchmark admission is in progress"))?;
         let worker = EvaluationWorker(Arc::clone(&self.inner.evaluation_worker));
-        let saved = self
-            .inner
-            .catalog
-            .get(profile_id)
-            .ok_or_else(|| eval_failure("Select an existing saved local profile to benchmark"))?;
+        let saved = saved?;
+        if self.inner.catalog.get(&saved.profile_id).as_ref() != Some(&saved) {
+            return Err(eval_failure("Startup evaluation unavailable: captured saved target changed or was deleted"));
+        }
         let mut spec = build_command_spec(&saved.profile)
             .map_err(|_| eval_failure("Benchmark target has invalid or missing local resources"))?;
         // Only the explicit KataGo subcommand changes. All user argv, ordering,
@@ -203,14 +230,18 @@ impl ForegroundEngineManager {
         let id = Uuid::new_v4().to_string();
         let snapshot = EvaluationSnapshotDto {
             evaluation_id: Some(id.clone()),
-            target_id: Some(profile_id.into()),
+            target_id: Some(saved.profile_id.clone()),
             input_revision: Some(revision),
             phase: PhaseDto::Qualifying,
             ..EvaluationSnapshotDto::default()
         };
-        {
+        let autoload_run = {
             let mut state = self.lock();
-            if busy(&state) {
+            let autoload_run = match &state.phase {
+                Phase::Starting(run) if startup && state.operation_kind == EngineOperationDto::Autoload => Some(run.run_id.clone()),
+                _ => None,
+            };
+            if busy(&state) && autoload_run.is_none() {
                 return Err(eval_failure(
                     "Foreground analysis or Match has priority; benchmark is unavailable while busy",
                 ));
@@ -221,11 +252,13 @@ impl ForegroundEngineManager {
                 child: None,
                 sanitizer: crate::diagnostics::DiagnosticSanitizer::default(),
             });
-        }
+            autoload_run
+        };
         let weak = Arc::downgrade(&self.inner);
         thread::spawn(move || {
             let _worker = worker;
-            let result = execute(&weak, &id, &saved, &mut spec);
+            let result = wait_for_startup(&weak, &id, autoload_run.as_deref())
+                .and_then(|()| execute(&weak, &id, &saved, &mut spec));
             if let Err(message) = result {
                 if let Some(inner) = weak.upgrade() {
                     let mut state = inner.lock();
@@ -236,6 +269,28 @@ impl ForegroundEngineManager {
             }
         });
         Ok(snapshot)
+    }
+}
+
+fn wait_for_startup(weak: &Weak<Inner>, id: &str, autoload_run: Option<&str>) -> Result<(), String> {
+    let Some(run_id) = autoload_run else { return Ok(()) };
+    let deadline = Instant::now() + weak.upgrade().ok_or("Benchmark manager closed")?.config.readiness_timeout;
+    loop {
+        let inner = weak.upgrade().ok_or("Benchmark manager closed")?;
+        let mut state = inner.lock();
+        if current(&mut state, id).is_none() { return Err("Benchmark retired".into()); }
+        match &state.phase {
+            Phase::Starting(run) if run.run_id == run_id && Instant::now() < deadline => {},
+            Phase::Ready(run) if run.run_id == run_id => return Ok(()),
+            Phase::NoEngine { .. } => return Ok(()),
+            _ => {
+                yield_to_foreground(&mut state).map_err(|error| error.message)?;
+                return Err("Startup benchmark yielded during foreground transition".into());
+            }
+        }
+        drop(state);
+        drop(inner);
+        thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -414,6 +469,7 @@ fn run_process(
         let inner = weak.upgrade().ok_or("Benchmark manager closed")?;
         let mut state = inner.lock();
         if busy(&state) {
+            yield_to_foreground(&mut state).map_err(|error| error.message)?;
             return Err("Foreground work has priority".into());
         }
         let slot = current(&mut state, id).ok_or("Benchmark retired")?;

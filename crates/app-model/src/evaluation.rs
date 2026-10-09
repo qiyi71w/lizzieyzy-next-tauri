@@ -1,10 +1,21 @@
 use crate::QualifiedLocalResourceDto;
 use serde::{Deserialize, Serialize};
 
+/// Startup authorization only; neither execution nor a measured recommendation.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartupEvaluationSettingsDto {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub target_profile_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvaluationPhaseDto {
     Idle,
+    Unavailable,
     Qualifying,
     Running,
     Completed,

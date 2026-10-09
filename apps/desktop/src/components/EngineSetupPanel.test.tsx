@@ -59,6 +59,37 @@ async function render(snapshot: ForegroundEngineSnapshotDto | null = null) {
 }
 
 describe("engine profile configuration editor", () => {
+  it("persists startup evaluation independently, preserving drafts and failed-save bytes without running", async () => {
+    const start = vi.spyOn(backend, "startEngineEvaluation");
+    const initial = await loadEngineProfilesSettings();
+    initial.profiles.push({ id: "benchmark", profile: { ...initial.profiles[0].profile, name: "Benchmark target" } });
+    await saveEngineProfilesSettings(initial);
+    await render();
+    await change(field("名称"), "unsaved editor draft");
+    const policyTarget = Array.from(host.querySelectorAll("label")).find((label) => label.textContent?.startsWith("启动评估的已保存目标"))!.querySelector("select")!;
+    await change(policyTarget, "benchmark");
+    const checkbox = host.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(checkbox.checked).toBe(false);
+    await act(async () => { checkbox.click(); });
+    const durable = await loadEngineProfilesSettings();
+    expect(durable.startup_evaluation).toEqual({ enabled: true, target_profile_id: "benchmark" });
+    expect(durable.selected_profile_id).toBe("default");
+    expect(durable.startup).toEqual({ mode: "off" });
+    expect(durable.profiles).toEqual(initial.profiles);
+    expect(field("名称").value).toBe("unsaved editor draft");
+    expect(start).not.toHaveBeenCalled();
+    const before = localStorage.getItem("lizzieyzy-next-engine-profile");
+    vi.spyOn(Storage.prototype, "setItem").mockImplementationOnce(() => { throw new Error("disk full"); });
+    await act(async () => { checkbox.click(); });
+    expect(checkbox.checked).toBe(true);
+    expect(host.textContent).toContain("disk full");
+    expect(localStorage.getItem("lizzieyzy-next-engine-profile")).toBe(before);
+    await click("重新加载配置");
+    expect(checkbox.checked).toBe(true);
+    expect(policyTarget.value).toBe("benchmark");
+    expect(start).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("浏览器预览不可测量性能");
+  });
   it("saves and reloads explicit KataGo GTP without converting other profiles or losing resources", async () => {
     await render();
     await change(field("模型"), "/模型/gtp.bin");

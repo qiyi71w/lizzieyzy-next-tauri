@@ -102,6 +102,144 @@ impl Drop for Fixture {
     }
 }
 
+struct DiskStartupCatalog(PathBuf);
+impl EngineProfileCatalog for DiskStartupCatalog {
+    fn get(&self, id: &str) -> Option<SavedEngineProfile> {
+        engine_manager::load_engine_profiles(&self.0).ok()?.profiles.into_iter()
+            .find(|record| record.id == id)
+            .map(|record| SavedEngineProfile { profile_id: record.id, profile: record.profile })
+    }
+    fn autoload_profile_id(&self) -> Option<String> {
+        engine_manager::load_engine_profiles(&self.0).ok()?.startup_profile_id().map(str::to_owned)
+    }
+    fn startup_evaluation_target(&self) -> Result<Option<SavedEngineProfile>, String> {
+        engine_manager::load_engine_profiles(&self.0)
+            .map_err(|_| "Startup evaluation unavailable: saved settings could not be loaded".to_string())?
+            .startup_evaluation_target()
+    }
+}
+
+impl Fixture {
+    fn install_startup(&mut self, enabled: bool, target: Option<&str>) -> PathBuf {
+        let mut settings = engine_manager::default_engine_profiles_settings();
+        let saved = self.catalog.get("target").unwrap();
+        settings.profiles.push(engine_manager::EngineProfileRecord { id: saved.profile_id, profile: saved.profile });
+        settings.startup_evaluation = app_model::StartupEvaluationSettingsDto {
+            enabled, target_profile_id: target.map(str::to_owned),
+        };
+        let path = self.dir.join("catalog.json");
+        engine_manager::save_engine_profiles(&path, settings).unwrap();
+        self.fresh_startup(&path);
+        path
+    }
+    fn fresh_startup(&mut self, path: &std::path::Path) {
+        self.manager.teardown().unwrap();
+        self.manager = ForegroundEngineManager::new(Arc::new(DiskStartupCatalog(path.into())),
+            ForegroundEngineConfig { readiness_timeout: self.wait_timeout, ..ForegroundEngineConfig::default() });
+    }
+}
+
+#[test]
+fn startup_authorization_is_frozen_one_shot_and_not_editor_selection() {
+    let mut f = Fixture::new("success");
+    let path = f.install_startup(false, Some("target"));
+    let mut settings = engine_manager::load_engine_profiles(&path).unwrap();
+    settings.startup_evaluation.enabled = true;
+    engine_manager::save_engine_profiles(&path, settings).unwrap();
+    f.manager.apply_startup_evaluation();
+    assert_eq!(f.manager.evaluation_snapshot().phase, Phase::Idle);
+    assert!(!f.dir.join("observed.json").exists());
+    f.fresh_startup(&path);
+    let bytes = std::fs::read(&path).unwrap();
+    let foreground = f.manager.snapshot();
+    f.manager.apply_startup_evaluation();
+    let result = f.wait(|s| s.phase == Phase::Completed);
+    assert_eq!(result.target_id.as_deref(), Some("target"));
+    assert_eq!(result.result.as_ref().unwrap().search_visits_per_second, Some(123.5));
+    f.manager.apply_startup_evaluation();
+    assert_eq!(f.manager.evaluation_snapshot(), result);
+    assert_eq!(f.manager.snapshot(), foreground);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    f.manager.cancel_evaluation(result.evaluation_id.as_ref().unwrap()).unwrap();
+    f.manager.apply_startup_evaluation();
+    assert_eq!(f.manager.evaluation_snapshot().phase, Phase::Cancelled);
+}
+
+#[test]
+fn startup_missing_corrupt_deleted_and_changed_targets_never_fall_back() {
+    let mut f = Fixture::new("success");
+    for target in [None, Some("missing")] {
+        f.install_startup(true, target);
+        f.manager.apply_startup_evaluation();
+        assert_eq!(f.manager.evaluation_snapshot().phase, Phase::Unavailable);
+        assert!(!f.dir.join("observed.json").exists());
+    }
+    for delete in [false, true] {
+        let path = f.install_startup(true, Some("target"));
+        let mut settings = engine_manager::load_engine_profiles(&path).unwrap();
+        if delete { settings.profiles.pop(); } else { settings.profiles[1].profile.name = "later revision".into(); }
+        engine_manager::save_engine_profiles(&path, settings).unwrap();
+        f.manager.apply_startup_evaluation();
+        assert_eq!(f.manager.evaluation_snapshot().phase, Phase::Unavailable);
+        assert!(!f.dir.join("observed.json").exists());
+    }
+    let path = f.dir.join("catalog.json");
+    std::fs::write(&path, "{corrupt").unwrap();
+    f.fresh_startup(&path);
+    f.manager.apply_startup_evaluation();
+    assert_eq!(f.manager.evaluation_snapshot().phase, Phase::Unavailable);
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "{corrupt");
+}
+
+#[test]
+fn startup_yields_to_match_and_never_reactivates_after_handback() {
+    let mut f = Fixture::new("hold");
+    let path = f.install_startup(true, Some("target"));
+    let bytes = std::fs::read(&path).unwrap();
+    f.manager.apply_startup_evaluation();
+    let running = f.wait(|s| s.phase == Phase::Running && !s.output.is_empty());
+    f.manager.reserve_match("startup-priority").unwrap();
+    let yielded = f.manager.evaluation_snapshot();
+    assert_eq!(yielded.phase, Phase::Yielded);
+    assert_eq!(yielded.evaluation_id, running.evaluation_id);
+    assert!(yielded.process_id.is_none() && yielded.result.is_none());
+    f.manager.stop_reserved_match("startup-priority").unwrap();
+    f.manager.apply_startup_evaluation();
+    assert_eq!(f.manager.evaluation_snapshot(), yielded);
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+}
+
+#[test]
+fn startup_q1_modes_do_not_retarget_evaluation_and_wait_only_for_autoload() {
+    for startup in [app_model::EngineStartupPolicyDto::Off,
+        app_model::EngineStartupPolicyDto::Fixed { profile_id: "primary".into() },
+        app_model::EngineStartupPolicyDto::LastPrimary] {
+        let mut f = Fixture::new("success");
+        let path = f.install_startup(true, Some("target"));
+        let mut settings = engine_manager::load_engine_profiles(&path).unwrap();
+        let mut primary = settings.profiles[1].clone();
+        primary.id = "primary".into();
+        primary.profile.argv = vec!["-override-config".into(), "testMode=hold".into()];
+        primary.profile.adapter = EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+            model_path: Some("model.bin".into()), config_path: Some("config.cfg".into()), max_visits: 10,
+        });
+        settings.profiles.push(primary);
+        settings.last_primary_profile_id = Some("primary".into());
+        settings.startup = startup.clone();
+        engine_manager::save_engine_profiles(&path, settings).unwrap();
+        f.fresh_startup(&path);
+        f.manager.apply_autoload().unwrap();
+        f.manager.apply_startup_evaluation();
+        let result = f.wait(|s| s.phase == Phase::Completed);
+        assert_eq!(result.target_id.as_deref(), Some("target"));
+        if startup == app_model::EngineStartupPolicyDto::Off {
+            assert!(matches!(f.manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. }));
+        } else {
+            assert!(matches!(f.manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "primary"));
+        }
+    }
+}
+
 #[test]
 fn saved_target_preserves_argv_all_configs_workdir_and_returns_real_result() {
     let f = Fixture::new("success");
@@ -452,8 +590,8 @@ fn exit_zero_without_measurement_and_changed_resource_cannot_publish_results() {
 }
 
 #[test]
-fn task_start_and_explicit_continue_preempt_benchmark_without_releasing_pause() {
-    let f = Fixture::new("hold");
+fn startup_task_start_and_explicit_continue_preempt_benchmark_without_releasing_pause() {
+    let mut f = Fixture::new("hold");
     {
         let mut catalog = f.catalog.0.lock();
         let profile = &mut catalog.as_mut().unwrap().profile;
@@ -464,6 +602,7 @@ fn task_start_and_explicit_continue_preempt_benchmark_without_releasing_pause() 
             max_visits: 10,
         });
     }
+    f.install_startup(true, Some("target"));
     f.manager.start("target").unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     let run = loop {
@@ -473,7 +612,8 @@ fn task_start_and_explicit_continue_preempt_benchmark_without_releasing_pause() 
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(10));
     };
-    f.running();
+    f.manager.apply_startup_evaluation();
+    f.wait(|s| s.phase == Phase::Running && !s.output.is_empty());
     f.manager
         .start_whole_game_analysis(engine_manager::WholeGameJobRequest {
             run_id: run.run_id.clone(),
@@ -570,4 +710,105 @@ fn real_managed_evaluation_qualifies_both_adapters_without_primary_authority() {
     assert!(failed.message.as_deref().unwrap().contains("managed_content_changed"));
     assert_eq!(f.manager.last_primary_profile_id(), None);
     println!("REAL_MANAGED_REJECTION {}", serde_json::to_string(&failed).unwrap());
+}
+
+#[test]
+fn startup_failure_cancel_and_preexisting_match_preserve_durable_policy() {
+    for mode in ["failure", "hold"] {
+        let mut f = Fixture::new(mode);
+        let path = f.install_startup(true, Some("target"));
+        let bytes = std::fs::read(&path).unwrap();
+        f.manager.apply_startup_evaluation();
+        if mode == "failure" {
+            f.wait(|s| s.phase == Phase::Failed);
+        } else {
+            let running = f.wait(|s| s.phase == Phase::Running && !s.output.is_empty());
+            f.manager.cancel_evaluation(running.evaluation_id.as_ref().unwrap()).unwrap();
+            std::fs::write(f.dir.join("release"), "late completion").unwrap();
+            f.manager.apply_startup_evaluation();
+            assert_eq!(f.manager.evaluation_snapshot().phase, Phase::Cancelled);
+            assert!(f.manager.evaluation_snapshot().process_id.is_none());
+        }
+        assert!(f.manager.evaluation_snapshot().result.is_none());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        f.fresh_startup(&path);
+        f.manager.reserve_match("already-active").unwrap();
+        f.manager.apply_startup_evaluation();
+        assert_eq!(f.manager.evaluation_snapshot().phase, Phase::Yielded);
+        f.manager.stop_reserved_match("already-active").unwrap();
+        f.manager.apply_startup_evaluation();
+        assert_eq!(f.manager.evaluation_snapshot().phase, Phase::Yielded);
+    }
+}
+
+#[test]
+#[ignore = "requires actual frozen KataGo/model/private config; fresh manager startup and real analysis handoff"]
+fn real_startup_evaluation_result_and_autoload_analysis_handoff() {
+    let engine = std::env::var("LIZZIEYZY_KATAGO_ENGINE").unwrap();
+    let model = std::env::var("LIZZIEYZY_KATAGO_MODEL").unwrap();
+    let config = std::env::var("LIZZIEYZY_KATAGO_CONFIG").unwrap();
+    let workdir = std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap();
+    let config_bytes = std::fs::read(&config).unwrap();
+    let mut f = Fixture::new("success");
+    f.wait_timeout = Duration::from_secs(120);
+    f.catalog.0.lock().as_mut().unwrap().profile = EngineProfileDto {
+        name: "Actual startup benchmark".into(), program: engine,
+        argv: vec!["gtp".into(), "-config".into(), config.clone(), "-model".into(), model.clone(),
+            "-t".into(), "1".into(), "-v".into(), "2".into(), "-n".into(), "1".into()],
+        working_dir: Some(workdir), adapter: EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings::default()),
+    };
+    let path = f.install_startup(true, Some("target"));
+    let before = std::fs::read(&path).unwrap();
+    f.manager.apply_autoload().unwrap();
+    f.manager.apply_startup_evaluation();
+    let done = f.wait(|s| matches!(s.phase, Phase::Completed | Phase::Failed));
+    assert_eq!(done.phase, Phase::Completed, "{done:?}");
+    assert!(done.result.as_ref().unwrap().search_visits_per_second.unwrap() > 0.0);
+    assert_eq!(done.target_id.as_deref(), Some("target"));
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    println!("REAL_STARTUP_RESULT {}", serde_json::to_string(&done).unwrap());
+    let mut settings = engine_manager::load_engine_profiles(&path).unwrap();
+    let mut primary = settings.profiles[1].clone();
+    primary.id = "primary".into();
+    primary.profile.argv.clear();
+    primary.profile.adapter = EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+        model_path: Some(model), config_path: Some(config.clone()), max_visits: 2,
+    });
+    settings.profiles[1].profile.argv[8] = "100000".into();
+    settings.profiles.push(primary);
+    settings.startup = app_model::EngineStartupPolicyDto::Fixed { profile_id: "primary".into() };
+    engine_manager::save_engine_profiles(&path, settings).unwrap();
+    f.fresh_startup(&path);
+    let before = std::fs::read(&path).unwrap();
+    f.manager.set_continuous_preferences(false, app_model::ContinuousAnalysisBudgetDto::default()).unwrap();
+    f.manager.apply_autoload().unwrap();
+    f.manager.apply_startup_evaluation();
+    f.wait(|s| s.phase == Phase::Running && !s.output.is_empty());
+    let ForegroundEngineLifecycleDto::Ready { run } = f.manager.snapshot().lifecycle else { panic!("autoload not ready") };
+    assert_eq!(run.profile_id, "primary");
+    let events = f.manager.subscribe();
+    let job = f.manager.start_selected_node_job(engine_manager::SelectedNodeJobRequest {
+        run_id: run.run_id.clone(), mode: app_model::AnalysisJobModeDto::Finite, generation: 1,
+        node_path: app_model::NodePath { indices: vec![] }, board_width: 9, board_height: 9, position_empty: true,
+        query: katago_protocol::AnalysisQuery { id: "startup-handoff".into(), moves: vec![], initial_stones: vec![],
+            rules: "chinese".into(), komi: 7.5, board_x_size: 9, board_y_size: 9, analyze_turns: Some(vec![0]),
+            max_visits: Some(2), include_ownership: None, include_policy: None, report_during_search_every: None, override_settings: None },
+    }).unwrap();
+    let yielded = f.manager.evaluation_snapshot();
+    assert_eq!(yielded.phase, Phase::Yielded);
+    assert!(yielded.process_id.is_none() && yielded.result.is_none());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let event = events.recv_timeout(deadline.saturating_duration_since(Instant::now())).unwrap();
+        if let app_model::ForegroundEngineEventDto::Job { job: observed } = event {
+            if observed.job_id == job.job_id && observed.outcome == app_model::AnalysisJobOutcomeDto::Completed { break; }
+        }
+    }
+    f.manager.apply_startup_evaluation();
+    assert_eq!(f.manager.evaluation_snapshot(), yielded);
+    assert!(matches!(f.manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::Ready { run: current } if current.run_id == run.run_id));
+    assert_eq!(f.manager.snapshot().continuous.enabled, Some(false));
+    assert_eq!(std::fs::read(path).unwrap(), before);
+    assert_eq!(std::fs::read(config).unwrap(), config_bytes);
+    println!("REAL_STARTUP_HANDOFF {}", serde_json::to_string(&yielded).unwrap());
 }

@@ -1,5 +1,5 @@
 import type { NetworkRoute } from "./providers";
-export type EvaluationPhaseDto = "idle" | "qualifying" | "running" | "completed" | "failed" | "cancelled" | "yielded" | "retired";
+export type EvaluationPhaseDto = "idle" | "unavailable" | "qualifying" | "running" | "completed" | "failed" | "cancelled" | "yielded" | "retired";
 export type EvaluationResultDto = {
   target_id: string;
   input_revision: string;
@@ -215,7 +215,8 @@ export type EngineProfileDto = {
 );
 export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto };
 export type EngineStartupPolicyDto = { mode: "off" } | { mode: "fixed"; profile_id: string } | { mode: "last_primary" };
-export type EngineProfilesSettingsDto = { version: number; selected_profile_id: string; startup: EngineStartupPolicyDto; last_primary_profile_id: string | null; profiles: EngineProfileRecordDto[] };
+export type StartupEvaluationSettingsDto = { enabled: boolean; target_profile_id: string | null };
+export type EngineProfilesSettingsDto = { version: number; selected_profile_id: string; startup: EngineStartupPolicyDto; last_primary_profile_id: string | null; startup_evaluation: StartupEvaluationSettingsDto; profiles: EngineProfileRecordDto[] };
 export type EngineProfileOrderRequestDto = { expected_profile_ids: string[]; profile_ids: string[] };
 export type AssetCheckDto = { path: string; exists: boolean; required: boolean; label: string };
 export type AppHealthDto = { app: string; architecture: string; rust_backend_ready: boolean; notes: string[] };
