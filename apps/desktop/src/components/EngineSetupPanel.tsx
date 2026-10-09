@@ -397,9 +397,9 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engi
           </div>
         </label>
       </div>
-      {adapterKind === "kata_go_analysis" && <ModelInventoryPanel key={selectedProfileId}
+      {adapterKind !== "generic_gtp" && <ModelInventoryPanel key={selectedProfileId}
         modelPath={modelPath} workingDir={workingDir}
-        savedModelPath={editingProfile?.adapter_kind === "kata_go_analysis" ? editingProfile.settings.model_path ?? "" : ""}
+        savedModelPath={editingProfile && editingProfile.adapter_kind !== "generic_gtp" ? editingProfile.settings.model_path ?? "" : ""}
         disabled={disabled || catalogBusy} beginOperation={beginModelOperation} endOperation={endModelOperation}
         onSelect={(path) => updatePath(setModelPath, path)} />}
       <div className="engine-grid" aria-label="启动参数">

@@ -346,14 +346,16 @@ function modelInventory(): ModelInventoryDto {
 }
 
 describe("retained local model selection", () => {
-  it("keeps B11 available through B10, save, rename and manual argv without implicit selection", async () => {
+  it.each(["kata_go_analysis", "kata_go_gtp"] as const)("keeps B11 available through B10, save, rename and manual argv for %s", async (adapterKind) => {
     const inventory = modelInventory();
     vi.spyOn(models, "loadModelInventory").mockResolvedValue(inventory);
     vi.spyOn(models, "refreshModelInventory").mockResolvedValue(inventory);
     vi.spyOn(models, "selectInstalledModel").mockImplementation(async (request) => inventory.models.find((model) => model.id === request.model_id)!.path);
     const settings = await loadEngineProfilesSettings();
-    const profile = settings.profiles[0].profile;
-    if (profile.adapter_kind !== "kata_go_analysis") throw new Error("KataGo expected");
+    const initial = settings.profiles[0].profile;
+    if (initial.adapter_kind !== "kata_go_analysis") throw new Error("KataGo expected");
+    const profile = { ...initial, adapter_kind: adapterKind };
+    settings.profiles[0].profile = profile;
     profile.settings.model_path = inventory.models[0].path;
     profile.argv = ["-override-config", "numSearchThreads=2"];
     await saveEngineProfilesSettings(settings);
@@ -381,7 +383,8 @@ describe("retained local model selection", () => {
     const restored = (await loadEngineProfilesSettings()).profiles[0].profile;
     expect(restored.name).toBe("renamed custom command");
     expect(restored.argv).toEqual(["-override-config", "numSearchThreads=3"]);
-    expect(restored.adapter_kind === "kata_go_analysis" && restored.settings.model_path).toBe(inventory.models[0].path);
+    expect(restored.adapter_kind).toBe(adapterKind);
+    expect(restored.adapter_kind !== "generic_gtp" && restored.settings.model_path).toBe(inventory.models[0].path);
   });
 
   it("disables conflicting actions while refreshing and rejects late or failed snapshots without changing drafts", async () => {

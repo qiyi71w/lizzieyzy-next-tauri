@@ -7,7 +7,8 @@ pub fn saved_paths(settings: &engine_manager::EngineProfilesSettings) -> Vec<Mod
         .profiles
         .iter()
         .filter_map(|record| match &record.profile.adapter {
-            EngineAdapterSettings::KataGoAnalysis(settings) => settings
+            EngineAdapterSettings::KataGoAnalysis(settings)
+            | EngineAdapterSettings::KataGoGtp(settings) => settings
                 .model_path
                 .as_ref()
                 .filter(|path| !path.is_empty())
@@ -50,4 +51,37 @@ pub async fn select_installed_model(
     tauri::async_runtime::spawn_blocking(move || app.state::<ModelInventory>().select(&request))
         .await
         .map_err(|_| "model_inventory_worker_failed".to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn both_katago_protocols_retain_saved_models_without_changing_profiles() {
+        let directory = std::env::temp_dir().join(format!("gtp-model-retention-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let settings: engine_manager::EngineProfilesSettings = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "selected_profile_id": "gtp",
+            "profiles": ["kata_go_analysis", "kata_go_gtp"].map(|adapter| serde_json::json!({
+                "id": if adapter == "kata_go_gtp" { "gtp" } else { "jsonl" },
+                "profile": { "name": adapter, "program": "katago", "argv": [],
+                    "working_dir": directory.to_string_lossy(), "adapter_kind": adapter,
+                    "settings": { "model_path": format!("{adapter}.bin.gz"), "config_path": null, "max_visits": 4 }
+                }
+            }))
+        })).unwrap();
+        let before = serde_json::to_vec(&settings).unwrap();
+        let inventory = ModelInventory::new(directory.join("inventory.json"));
+        inventory.remember_saved(&saved_paths(&settings)).unwrap();
+        let retained = inventory.snapshot().unwrap();
+        assert_eq!(retained.models.len(), 2);
+        assert!(retained.models.iter().any(|model| model.path.ends_with("kata_go_gtp.bin.gz")));
+        assert!(retained.models.iter().any(|model| model.path.ends_with("kata_go_analysis.bin.gz")));
+        assert_eq!(serde_json::to_vec(&settings).unwrap(), before);
+        let reopened = ModelInventory::new(directory.join("inventory.json")).snapshot().unwrap();
+        assert_eq!(reopened.models, retained.models);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }
