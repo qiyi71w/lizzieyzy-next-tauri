@@ -9,7 +9,7 @@ export const baseResources = {
   "engineRules.confirmed": "已确认：实际规则、贴目、棋子、轮次与真实最后一手一致。",
   "engineRules.rejected": "规则／局面确认被拒绝",
   "engineRules.unavailable": "需要原生桌面、当前棋谱及 Ready 的显式 KataGo GTP 实例；不自动切换协议。",
-  "engineRules.boundary": "KataGo GTP 1.18.2：Chinese / Chinese-KGS、方形 2–19 路及受支持的精确局面可在同一实例主分析，提供候选点、黑方胜率、PV 与可用的目数／所有权。策略、全谱分析、动态线程与参数回读尚未准入。",
+  "engineRules.boundary": "KataGo GTP 1.18.2：Chinese / Chinese-KGS、方形 2–19 路及受支持的精确局面可在同一实例主分析，提供候选点、黑方胜率、PV 与可用的目数／所有权。运行线程可在合格实例上显式应用并读回确认。策略、全谱分析及其他参数回读尚未准入。",
   "engineRules.identity": "确认身份（Run／请求／局面）",
   "engineRules.rules": "引擎实际规则",
   "engineRules.position": "贴目／行棋方／真实手数",
