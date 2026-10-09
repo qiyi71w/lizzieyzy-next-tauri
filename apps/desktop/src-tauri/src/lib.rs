@@ -43,6 +43,7 @@ mod readboard;
 mod save_as;
 mod session_recovery;
 mod models;
+mod managed_resources;
 #[cfg(windows)]
 extern crate windows_core;
 #[cfg(test)]
@@ -1081,10 +1082,15 @@ pub fn run() {
             app.manage(engine_manager::models::ModelInventory::new(
                 app.path().app_data_dir()?.join("lizzieyzy-next-model-inventory.json"),
             ));
+            let managed_root = app.path().app_data_dir()?.join("managed-resources");
+            app.manage(engine_manager::managed::ManagedResources::new(managed_root.clone()));
             let catalog = std::sync::Arc::new(DiskEngineCatalog {
                 handle: app.handle().clone(),
             });
-            let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::default());
+            let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig {
+                managed_resources_root: Some(managed_root),
+                ..ForegroundEngineConfig::default()
+            });
             app.state::<CurrentGameState>()
                 .connect_analysis_manager(manager.clone());
             let events = manager.subscribe();
@@ -1254,6 +1260,9 @@ pub fn run() {
             models::model_inventory_snapshot,
             models::refresh_model_inventory,
             models::select_installed_model,
+            managed_resources::managed_resources_snapshot,
+            managed_resources::acquire_managed_resources,
+            managed_resources::cancel_managed_resources,
             katago_start_analyze_game,
             preview_analysis_scope,
             start_analysis_task,

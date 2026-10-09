@@ -13,6 +13,8 @@ mod game_move;
 pub use game_move::*;
 mod match_session;
 pub use match_session::*;
+mod managed_resources;
+pub use managed_resources::*;
 
 mod analysis_job;
 pub use analysis_job::{

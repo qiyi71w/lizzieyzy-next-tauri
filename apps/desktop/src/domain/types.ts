@@ -1,3 +1,5 @@
+import type { NetworkRoute } from "./providers";
+
 export type ExportConfirmationDto = { title: string; message: string };
 export type RenderedImageExportOptionsDto = { defaultFileName?: string; pngOnly?: boolean };
 
@@ -577,3 +579,27 @@ export type InstalledModelDto = {
 export type ModelInventoryDto = { revision: string; models: InstalledModelDto[] };
 export type ModelPathDto = { path: string; working_dir: string | null };
 export type ModelSelectionRequestDto = { revision: string; model_id: string; sha256: string };
+
+export type ManagedTargetDto = {
+  id: string; platform: string; backend: string; archive: string; size_bytes: number;
+  sha256: string; executable_sha256: string; source_availability: string;
+  artifact_availability: string; hardware_qualification: string; runtime_acceptance: string;
+  acquisition_allowed: boolean;
+};
+export type ManagedModelDto = { id: string; file_name: string; sha256: string; size_bytes: number; minimum_katago_version: string };
+export type ManagedCatalogDto = {
+  schema_version: number; source_commit: string; katago_source_commit: string; katago_version: string;
+  engine_repository: string; engine_tag: string; model_tag: string; default_model_id: string;
+  targets: ManagedTargetDto[]; models: ManagedModelDto[];
+};
+export type ManagedAcquireRequestDto = {
+  profile_id: string; profile: EngineProfileDto; target_id: string; model_id: string; policy_revision: number;
+};
+export type ManagedPhaseDto = "starting" | "downloading_engine" | "verifying_engine" | "downloading_model" | "verifying_model" | "publishing" | "succeeded" | "failed" | "cancelled";
+export type ManagedInstallationDto = { target_id: string; model_id: string; program: string; model_path: string; config_path: string; manifest_sha256: string };
+export type ManagedOperationDto = {
+  operation_id: string; profile_id: string; target_id: string; model_id: string; phase: ManagedPhaseDto;
+  transferred_bytes: number; total_bytes: number; message: string | null; installation: ManagedInstallationDto | null;
+  routes: NetworkRoute[];
+};
+export type ManagedResourcesDto = { catalog: ManagedCatalogDto; operation: ManagedOperationDto | null };

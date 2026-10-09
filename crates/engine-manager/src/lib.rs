@@ -18,6 +18,7 @@ mod gtp;
 mod lifecycle;
 mod resources;
 pub mod models;
+pub mod managed;
 
 pub use catalog::{
     default_engine_profile_record, default_engine_profiles_settings, load_engine_profiles,
