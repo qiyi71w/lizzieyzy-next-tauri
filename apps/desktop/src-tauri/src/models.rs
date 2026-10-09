@@ -64,13 +64,13 @@ mod tests {
         let settings: engine_manager::EngineProfilesSettings = serde_json::from_value(serde_json::json!({
             "version": 1,
             "selected_profile_id": "gtp",
-            "profiles": ["kata_go_analysis", "kata_go_gtp"].map(|adapter| serde_json::json!({
+            "profiles": (["kata_go_analysis", "kata_go_gtp"].map(|adapter| serde_json::json!({
                 "id": if adapter == "kata_go_gtp" { "gtp" } else { "jsonl" },
                 "profile": { "name": adapter, "program": "katago", "argv": [],
                     "working_dir": directory.to_string_lossy(), "adapter_kind": adapter,
                     "settings": { "model_path": format!("{adapter}.bin.gz"), "config_path": null, "max_visits": 4 }
                 }
-            }))
+            })))
         })).unwrap();
         let before = serde_json::to_vec(&settings).unwrap();
         let inventory = ModelInventory::new(directory.join("inventory.json"));
