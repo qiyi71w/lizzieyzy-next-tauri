@@ -36,6 +36,8 @@ mod ordinary_rules;
 mod preload;
 mod gtp_control;
 mod gtp_analysis;
+mod runtime_control;
+mod runtime_threads;
 pub use game_move::{GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle};
 
 pub trait AnalysisJobCancel: Send + Sync {
@@ -263,6 +265,8 @@ struct ManagerState {
     match_reservation: Option<match_reservation::MatchReservation>,
     retiring: Vec<(EngineRunDto, Arc<Mutex<LiveEngine>>)>,
     evaluation: Option<evaluation::EvaluationSlot>,
+    runtime_control: Option<runtime_control::Slot>,
+    runtime_threads: Option<app_model::RuntimeThreadsSnapshotDto>,
 }
 
 struct Inner {
@@ -271,6 +275,7 @@ struct Inner {
     state: Mutex<ManagerState>,
     diagnostics: Mutex<std::collections::VecDeque<AttemptCapture>>,
     evaluation_worker: Arc<std::sync::atomic::AtomicBool>,
+    runtime_control_writer: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -286,6 +291,7 @@ impl ForegroundEngineManager {
                 config,
                 diagnostics: Mutex::new(std::collections::VecDeque::new()),
                 evaluation_worker: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                runtime_control_writer: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 state: Mutex::new(ManagerState {
                     revision: 0,
                     phase: Phase::NoEngine { failure: None },
@@ -318,6 +324,8 @@ impl ForegroundEngineManager {
                     match_reservation: None,
                     retiring: Vec::new(),
                     evaluation: None,
+                    runtime_control: None,
+                    runtime_threads: None,
                 }),
             }),
         }
@@ -832,6 +840,7 @@ impl ForegroundEngineManager {
         let mut state = self.lock();
         match_reservation::require_unreserved(&state)?;
         game_move::require_idle_move(&state)?;
+        runtime_control::require_idle(&state)?;
         let run = admitting_run(&state.phase, run_id).ok_or_else(|| {
             continuous_invalid_state(
                 &state,
@@ -1190,6 +1199,7 @@ impl ForegroundEngineManager {
             let mut state = self.lock();
             match_reservation::require_unreserved(&state)?;
             game_move::require_idle_move(&state)?;
+            runtime_control::require_idle(&state)?;
             let run = match admitting_run(&state.phase, &request.run_id) {
                 Some(run) => run,
                 None => {
@@ -1858,6 +1868,7 @@ impl ForegroundEngineManager {
             if state.continuous_departing
                 || state.finite_admission_pending
                 || state.game_move.is_some()
+                || state.runtime_control.is_some()
                 || state.continuous_target.is_none()
             {
                 return;
@@ -3861,6 +3872,7 @@ fn cancel_jobs_for_current(state: &mut ManagerState) {
 
 fn cancel_jobs_for_run(state: &mut ManagerState, run_id: &str) {
     game_move::seal_move_for_run(state, run_id);
+    runtime_control::retire(state, run_id);
     let query_ids: Vec<String> = state
         .jobs
         .iter()
@@ -4552,6 +4564,7 @@ fn validate_selected_admission(
 ) -> Result<EngineRunDto, EngineFailureDto> {
     match_reservation::require_unreserved(state)?;
     game_move::require_idle_move(state)?;
+    runtime_control::require_idle(state)?;
     let run_id = request.run_id.as_str();
     if state.continuous_departing {
         return Err(continuous_invalid_state(

@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
+  RuntimeThreadsRequestDto,
+  RuntimeThreadsSnapshotDto,
   EvaluationSnapshotDto,
   AnalysisFrameDto,
   AnalysisBranchChoiceDto,
@@ -72,6 +74,16 @@ declare global {
 }
 
 export const isTauriRuntime = () => typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
+
+export async function getRuntimeThreads(): Promise<RuntimeThreadsSnapshotDto> {
+  if (!isTauriRuntime()) throw new Error("Runtime threads require the native qualified GTP Run.");
+  return invoke<RuntimeThreadsSnapshotDto>("engine_runtime_threads_snapshot");
+}
+
+export async function requestRuntimeThreads(request: RuntimeThreadsRequestDto): Promise<RuntimeThreadsSnapshotDto> {
+  if (!isTauriRuntime()) throw new Error("Runtime threads require the native qualified GTP Run.");
+  return invoke<RuntimeThreadsSnapshotDto>("engine_runtime_threads", { request });
+}
 
 export async function getEngineEvaluation(): Promise<EvaluationSnapshotDto> {
   if (!isTauriRuntime()) throw new Error("Benchmark requires the native desktop and a qualified direct-local KataGo binary.");

@@ -2,13 +2,12 @@ use crate::diagnostics::AttemptCapture;
 use app_model::{EngineFailureKind, EngineResourceIdentityDto, EngineRunDto, QualifiedLocalResourceDto};
 use sha2::{Digest, Sha256};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 const OUTPUT_BYTES: usize = 8192;
-const CONFIG_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Private paths never cross the diagnostics boundary. The wire identity carries a
 /// stable path pseudonym and content digest, not the user's home directory.
@@ -18,6 +17,7 @@ pub(crate) struct ResourceSnapshot {
     revision: String,
     diagnostics: AttemptCapture,
     managed: Option<(crate::managed::trust::ManagedIdentity, PathBuf, PathBuf)>,
+    thread_sources: Option<app_model::ThreadSourcesDto>,
 }
 
 pub(crate) type ResourceError = (EngineFailureKind, String);
@@ -40,13 +40,17 @@ impl ResourceSnapshot {
             revision,
             diagnostics,
             managed: None,
+            thread_sources: None,
         };
         snapshot.add(executable.clone(), "executable", deadline)?;
         if let app_model::EngineAdapterSettings::KataGoAnalysis(_)
         | app_model::EngineAdapterSettings::KataGoGtp(_) = &run.profile_snapshot.adapter
         {
             snapshot.add(PathBuf::from(&spec.args[4]), "model", deadline)?;
-            snapshot.config(PathBuf::from(&spec.args[2]), deadline, 0)?;
+            let configuration = crate::katago_config::Configuration::from_command(spec, deadline)
+                .map_err(|error| (EngineFailureKind::Config, error.diagnostic(&snapshot.diagnostics)))?;
+            snapshot.thread_sources = Some(configuration.thread_sources(run.adapter_kind, &snapshot.diagnostics));
+            snapshot.capture_configuration(configuration, deadline)?;
         }
         for argument in &run.profile_snapshot.argv {
             let value = argument
@@ -74,6 +78,7 @@ impl ResourceSnapshot {
             revision: format!("{:x}", Sha256::digest(serde_json::to_vec(&run.profile_snapshot).expect("profile serialization"))),
             diagnostics,
             managed: None,
+            thread_sources: None,
         };
         let executable = resolve_executable(&spec.program)?;
         snapshot.add(executable.clone(), "executable", deadline)?;
@@ -141,44 +146,23 @@ impl ResourceSnapshot {
         Ok(path)
     }
 
-    fn config(&mut self, path: PathBuf, deadline: Instant, depth: usize) -> Result<(), ResourceError> {
-        if depth >= 32 || self.entries.len() >= 128 {
-            return Err((
-                EngineFailureKind::Config,
-                "config include graph exceeds 32 levels or 128 resources".into(),
-            ));
-        }
-        let canonical = path.canonicalize().map_err(|_| {
-            (
-                EngineFailureKind::Config,
-                format!("config is missing ({})", self.diagnostics.alias(&path.to_string_lossy())),
-            )
-        })?;
-        if self
-            .entries
-            .iter()
-            .any(|(p, _)| p.canonicalize().ok().as_ref() == Some(&canonical))
-        {
-            return Ok(());
-        }
-        let path = self.add(path, "config", deadline)?;
-        let file =
-            File::open(&path).map_err(|_| (EngineFailureKind::Config, "config cannot be read".into()))?;
-        if file.metadata().map(|m| m.len()).unwrap_or(u64::MAX) > CONFIG_BYTES {
-            return Err((EngineFailureKind::Config, "config exceeds 4 MiB".into()));
-        }
-        for line in BufReader::new(file.take(CONFIG_BYTES + 1)).lines() {
-            let line =
-                line.map_err(|_| (EngineFailureKind::Config, "config is not readable UTF-8".into()))?;
-            let line = line.split('#').next().unwrap_or("").trim();
-            if let Some(include) = line.strip_prefix("@include ") {
-                let include = include.trim().trim_matches('"');
-                self.config(
-                    path.parent().unwrap_or(Path::new(".")).join(include),
-                    deadline,
-                    depth + 1,
-                )?;
+    fn config(&mut self, path: PathBuf, deadline: Instant, _depth: usize) -> Result<(), ResourceError> {
+        let configuration = crate::katago_config::Configuration::from_file(&path, deadline)
+            .map_err(|error| (EngineFailureKind::Config, error.diagnostic(&self.diagnostics)))?;
+        self.capture_configuration(configuration, deadline)?;
+        Ok(())
+    }
+
+    fn capture_configuration(&mut self, configuration: crate::katago_config::Configuration, deadline: Instant) -> Result<(), ResourceError> {
+        for (path, digest) in configuration.files.into_iter().zip(configuration.file_digests) {
+            if self.entries.len() >= 128 {
+                return Err((EngineFailureKind::Config, "Configuration exceeds 128 resource files".into()));
             }
+            let identity = identify(&path, "config", deadline, &self.diagnostics)?;
+            if identity.sha256 != digest {
+                return Err((EngineFailureKind::ResourceChanged, "Configuration changed after its source values were captured".into()));
+            }
+            self.entries.push((path, identity));
         }
         Ok(())
     }
@@ -225,6 +209,7 @@ impl ResourceSnapshot {
             source_commit: self.managed.as_ref().map(|(identity, _, _)| identity.source_commit.clone()),
             backend,
             static_zlib_exemption: self.managed.as_ref().is_some_and(|(identity, _, _)| identity.static_zlib),
+            thread_sources: self.thread_sources,
         }
     }
 }
