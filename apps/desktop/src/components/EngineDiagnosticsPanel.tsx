@@ -3,6 +3,7 @@ import { getEngineDiagnostics, setEngineDiagnosticTrace, stopForegroundEngine } 
 import type { EngineDiagnosticSnapshotDto, ForegroundEngineSnapshotDto } from "../domain/types";
 import { runFromSnapshot } from "../domain/foregroundEngine";
 import { t } from "../i18n/resources";
+import { DiagnosticExportPanel } from "./DiagnosticExportPanel";
 
 export function EngineDiagnosticsPanel({ engineSnapshot, disabled = false }: {
   engineSnapshot: ForegroundEngineSnapshotDto; disabled?: boolean;
@@ -70,6 +71,7 @@ export function EngineDiagnosticsPanel({ engineSnapshot, disabled = false }: {
         <button type="button" onClick={() => setPinned(pinned ? null : displayed)}>{t(pinned ? "diagnostics.resume" : "diagnostics.freeze")}</button>
         <button type="button" disabled={disabled || busy || !currentRun || currentRun.run_id !== displayed.run_id} onClick={() => void stop()}>{t("diagnostics.stop")}</button>
       </div>
+      <DiagnosticExportPanel displayed={displayed} freeze={setPinned} disabled={disabled} />
       <label><input type="checkbox" checked={displayed.full_trace} disabled={disabled || busy || Boolean(pinned)} onChange={(event) => void trace(event.target.checked)} />{t("diagnostics.trace")}</label>
       <label>{t("diagnostics.filter")}<input value={filter} maxLength={128} onChange={(event) => setFilter(event.target.value)} /></label>
       <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{t("diagnostics.command")}: {displayed.command}</pre>

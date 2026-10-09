@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod continuous_analysis;
+mod diagnostic_export;
 mod gesture_timing;
 use gesture_timing::board_gesture_timing;
 mod external_sync;
@@ -1082,6 +1083,7 @@ pub fn run() {
         .manage(CurrentGameState::default())
         .manage(PreferencesState::default())
         .manage(MainWindowPin::default())
+        .manage(diagnostic_export::FolderOpener::default())
         .manage(provider_yike::sync::YikeSyncRuntime::default())
         .setup(|app| {
             readboard::install(app.handle());
@@ -1091,6 +1093,9 @@ pub fn run() {
             let _ = load_engine_profiles_from_disk(app.handle());
             app.manage(engine_manager::models::ModelInventory::new(
                 app.path().app_data_dir()?.join("lizzieyzy-next-model-inventory.json"),
+            ));
+            app.manage(engine_manager::diagnostic_export::DiagnosticExport::new(
+                app.path().app_data_dir()?.join("diagnostic-exports"),
             ));
             let catalog = std::sync::Arc::new(DiskEngineCatalog {
                 handle: app.handle().clone(),
@@ -1274,6 +1279,11 @@ pub fn run() {
             katago_cancel_analysis,
             foreground_engine_snapshot,
             engine_diagnostic_snapshots,
+            diagnostic_export::estimate_diagnostic_export,
+            diagnostic_export::diagnostic_export_status,
+            diagnostic_export::start_diagnostic_export,
+            diagnostic_export::cancel_diagnostic_export,
+            diagnostic_export::open_diagnostic_export_folder,
             set_engine_diagnostic_trace,
             foreground_engine_start,
             foreground_engine_stop,

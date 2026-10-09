@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as backend from "../api/backend";
+import * as exportApi from "../api/diagnosticExport";
 import type { EngineDiagnosticSnapshotDto, ForegroundEngineSnapshotDto } from "../domain/types";
 import { EngineDiagnosticsPanel } from "./EngineDiagnosticsPanel";
 import { t } from "../i18n/resources";
@@ -56,4 +57,44 @@ it("keeps editable focus during admitted bursts and copies the pinned attempt af
   expect(button(t("diagnostics.stop")).disabled).toBe(true);
   await act(async () => button(t("diagnostics.resume")).click());
   expect(host.querySelector("select")?.value).toBe("new-run");
+});
+
+it("exports the displayed capture after Retry and keeps export success when opening its folder fails", async () => {
+  vi.spyOn(backend, "isTauriRuntime").mockReturnValue(true);
+  const old = attempt("failed-a");
+  const collect = vi.spyOn(backend, "getEngineDiagnostics").mockResolvedValue([old]);
+  const estimate = vi.spyOn(exportApi, "estimateDiagnosticExport").mockResolvedValue(7);
+  const status = { generation: 7, attempt_id: "failed-a", captured_at_ms: 1234, phase: "ready" as const, source_bytes: 123456, entries: 4, completed_entries: 0, failed_stage: null, message: null, file_name: null, cleanup_pending: false };
+  const poll = vi.spyOn(exportApi, "diagnosticExportStatus").mockResolvedValue({ ...status, phase: "idle" });
+  const start = vi.spyOn(exportApi, "startDiagnosticExport").mockResolvedValue(undefined);
+  vi.spyOn(exportApi, "openDiagnosticExportFolder").mockResolvedValue("failed");
+  await act(async () => root.render(<EngineDiagnosticsPanel engineSnapshot={snapshot} />));
+  poll.mockResolvedValue(status);
+  await act(async () => button(t("diagnostics.export.estimate")).click());
+  expect(estimate).toHaveBeenCalledWith(old);
+  collect.mockResolvedValue([attempt("retry-b")]);
+  await act(async () => button(t("diagnostics.resume")).click());
+  await act(async () => vi.advanceTimersByTimeAsync(500));
+  expect(host.querySelector("select")?.value).toBe("retry-b");
+  await act(async () => button(t("diagnostics.export.start")).click());
+  expect(start).toHaveBeenCalledWith(7);
+  poll.mockResolvedValue({ ...status, phase: "completed", completed_entries: 4, file_name: "diagnostics-test.zip" });
+  await act(async () => vi.advanceTimersByTimeAsync(150));
+  await act(async () => button(t("diagnostics.export.folder")).click());
+  expect(host.textContent).toContain(t("diagnostics.export.phase.completed"));
+  expect(host.textContent).toContain(t("diagnostics.export.folderFailed"));
+  expect(host.textContent).toContain("failed-a");
+  expect(host.textContent).toContain("diagnostics-test.zip");
+});
+
+it("does not re-enable an older estimate after the displayed replacement is rejected", async () => {
+  vi.spyOn(backend, "isTauriRuntime").mockReturnValue(true);
+  vi.spyOn(backend, "getEngineDiagnostics").mockResolvedValue([attempt("new-displayed")]);
+  vi.spyOn(exportApi, "estimateDiagnosticExport").mockRejectedValue(new Error("source budget"));
+  vi.spyOn(exportApi, "diagnosticExportStatus").mockResolvedValue({ generation: 2, attempt_id: "old-target", captured_at_ms: 1, phase: "ready", source_bytes: 12, entries: 4, completed_entries: 0, failed_stage: null, message: null, file_name: null, cleanup_pending: false });
+  await act(async () => root.render(<EngineDiagnosticsPanel engineSnapshot={snapshot} />));
+  await act(async () => button(t("diagnostics.export.estimate")).click());
+  await act(async () => vi.advanceTimersByTimeAsync(300));
+  expect(button(t("diagnostics.export.start")).disabled).toBe(true);
+  expect(host.textContent).toContain(t("diagnostics.export.failed"));
 });

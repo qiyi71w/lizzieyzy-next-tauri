@@ -14,6 +14,7 @@ use thiserror::Error;
 
 mod catalog;
 pub mod diagnostics;
+pub mod diagnostic_export;
 mod game_move_protocol;
 mod gtp;
 mod lifecycle;

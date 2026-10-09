@@ -713,4 +713,35 @@ fn real_katago_bounded_live_diagnostics() {
     wait_current(&manager, Duration::from_secs(20), |state| matches!(state, ForegroundEngineLifecycleDto::NoEngine { .. }));
     assert_eq!(serde_json::to_string(&frozen).unwrap(), encoded);
     eprintln!("real diagnostics: attempt={} records={} bytes={} frozen=true live-stdout=true startup-stderr=true", frozen.run_id, frozen.records.len(), frozen.retained_bytes);
+    let directory = std::env::temp_dir().join(format!("real-diagnostic-export-{}", uuid::Uuid::new_v4()));
+    let export = engine_manager::diagnostic_export::DiagnosticExport::new(directory.clone());
+    let generation = export.estimate(frozen.clone()).unwrap();
+    let wait_export = |phase| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let status = export.status();
+            if status.phase == phase { break status; }
+            assert!(Instant::now() < deadline, "export status: {status:?}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    wait_export(app_model::DiagnosticExportPhaseDto::Ready);
+    export.export(generation).unwrap();
+    let completed = wait_export(app_model::DiagnosticExportPhaseDto::Completed);
+    let path = directory.join(completed.file_name.as_ref().unwrap());
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+    assert_eq!(archive.len(), 4);
+    let restored: app_model::EngineDiagnosticSnapshotDto = serde_json::from_reader(archive.by_name("snapshot.json").unwrap()).unwrap();
+    assert_eq!(restored, frozen);
+    let records: Vec<app_model::EngineDiagnosticRecordDto> = {
+        use std::io::{BufRead, BufReader};
+        BufReader::new(archive.by_name("records.jsonl").unwrap()).lines()
+            .map(|line| serde_json::from_str(&line.unwrap()).unwrap()).collect()
+    };
+    assert_eq!(records, frozen.records);
+    assert!(matches!(manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. }));
+    eprintln!("real export: {} zip_bytes={} source_exact=true records_exact=true entries=4 no_run_resurrection=true", serde_json::to_string(&completed).unwrap(), std::fs::metadata(&path).unwrap().len());
+    assert!(export.shutdown(Duration::from_millis(500)));
+    drop(archive);
+    std::fs::remove_dir_all(directory).unwrap();
 }

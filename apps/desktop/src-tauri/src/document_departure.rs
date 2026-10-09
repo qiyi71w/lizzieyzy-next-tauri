@@ -207,6 +207,11 @@ fn stop_application_resources(
     let drained = network.shutdown(deadline.saturating_duration_since(Instant::now()));
     let mut outstanding =
         stop_foreground_resources(manager, deadline.saturating_duration_since(Instant::now()));
+    let export_drained = app.state::<engine_manager::diagnostic_export::DiagnosticExport>()
+        .shutdown(deadline.saturating_duration_since(Instant::now()).min(Duration::from_millis(500)));
+    if !export_drained {
+        outstanding.push("diagnostic export staging/cleanup".to_string());
+    }
     if !sync_drained {
         outstanding.push("Yike sync worker/timer".to_string());
     }
