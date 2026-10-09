@@ -267,6 +267,7 @@ fn real_import_restart_recovery(gtp: bool) {
     let old = wait_job(&events, Duration::from_secs(30), |job| job.outcome == AnalysisJobOutcomeDto::Progress);
     kill_owned_katago(&first.profile_snapshot);
     wait_current(&manager, Duration::from_secs(30), |phase| matches!(phase, ForegroundEngineLifecycleDto::Error { .. }));
+    assert!(manager.snapshot().selected_node_job.is_none(), "failed Run must retire its active job before document departure");
     manager.begin_continuous_departure();
     manager.clear_continuous_position();
     manager.follow_continuous_position(make_request(&document, vec![0, 0], 2, &first.run_id));

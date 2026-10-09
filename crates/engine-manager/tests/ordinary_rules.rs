@@ -505,6 +505,33 @@ mod controlled {
     }
 
     #[test]
+    fn active_gtp_reader_failure_retires_job_before_document_departure() {
+        let rig = Rig::new("analysis_closed_stdout");
+        let events = rig.manager.subscribe();
+        rig.manager.set_continuous_preferences(true, ContinuousAnalysisBudgetDto {
+            continuous_time_limit_enabled: false, ..Default::default()
+        }).unwrap();
+        rig.manager.follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        let first = event(&events, AnalysisJobOutcomeDto::Progress);
+        rig.held();
+        std::fs::write(rig.dir.join("release"), "").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let snapshot = rig.manager.snapshot();
+            if let ForegroundEngineLifecycleDto::Error { run, .. } = snapshot.lifecycle {
+                assert_eq!(run.run_id, first.run_id);
+                assert!(snapshot.selected_node_job.is_none(), "failed reader left a live departure job");
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let failed = event(&events, AnalysisJobOutcomeDto::Failed);
+        assert_eq!(failed.job_id, first.job_id);
+        assert_eq!(failed.run_id, first.run_id);
+    }
+
+    #[test]
     fn invalid_stream_requires_explicit_continue_after_restart_and_new_document() {
         let mut rig = Rig::new("analysis_invalid");
         let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };

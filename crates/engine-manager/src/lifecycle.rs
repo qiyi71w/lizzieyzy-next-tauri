@@ -3090,10 +3090,19 @@ impl Inner {
             );
             game_move::fail_move_for_run(&mut state, &published);
             state.continuous_safety_hold = true;
+            fail_analysis_task_locked(&mut state, None, &published.message);
+            let jobs: Vec<_> = state.jobs.iter()
+                .filter(|job| job.run_id == run_id && !job.terminal)
+                .map(started_from)
+                .collect();
+            for started in jobs {
+                finish_failed_job(&mut state, &started, published.clone().with_job_id(&started.job_id));
+            }
             let deadline = Instant::now() + self.config.stop_drain_timeout;
-            let ManagerState { live, candidate, .. } = &mut *state;
+            let ManagerState { live, candidate, gtp_dispatch, .. } = &mut *state;
             for slot in [live, candidate] {
                 if let Some(process) = slot.as_mut() {
+                    gtp_dispatch.retire_run(&process.run_id);
                     match terminate_process(process, deadline) {
                         Ok(()) => *slot = None,
                         Err(error) => published.message.push_str(&format!("; cleanup failed: {error}")),

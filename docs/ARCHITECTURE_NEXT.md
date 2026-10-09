@@ -204,6 +204,8 @@ Engine profile catalog, startup policy, asset checks, and the manager-owned Fore
 
 Local recovery retains an explicit analysis safety hold after a primary process/reader failure or failed analysis cleanup. Importing another document clears only position-local limits and paused-job identity; it cannot clear failure/safety authorization. Explicit Restart replaces the process and reader, but does not authorize analysis. KataGo GTP reconfirms the imported rules, komi, stones, player and true move tail through the existing exact-position transaction; only the user's subsequent Continue releases the hold. JSONL retains its in-band selected-position request contract rather than claiming a GTP rules receipt. Ordinary healthy document replacement still follows enabled continuous intent, and an explicit Pause remains off.
 
+An active GTP reader failure terminally fails its Run's analysis jobs and retires that Run's numbered-control registry before publishing Error. Native document departure therefore sees no surviving job requiring a stop command on the dead reader; it does not bypass a failed cancellation or weaken the existing cleanup fence. The imported document and explicit Restart still retain the safety hold until Continue.
+
 The bounded lifecycle applicability review distinguishes these supported paths:
 
 | Path / adapter | Ownership and retirement boundary | Residual |
