@@ -20,6 +20,8 @@ pub struct SavedEngineProfile {
 pub struct EngineProfileRecord {
     pub id: String,
     pub profile: EngineProfileDto,
+    #[serde(default)]
+    pub preload: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +90,9 @@ impl LegacyEngineProfile {
 
 pub trait EngineProfileCatalog: Send + Sync {
     fn get(&self, profile_id: &str) -> Option<SavedEngineProfile>;
+    fn preload_profiles(&self) -> Vec<SavedEngineProfile> {
+        Vec::new()
+    }
     fn autoload_profile_id(&self) -> Option<String> {
         None
     }
@@ -97,6 +102,7 @@ pub trait EngineProfileCatalog: Send + Sync {
 pub struct InMemoryEngineProfileCatalog {
     profiles: Arc<Mutex<BTreeMap<String, SavedEngineProfile>>>,
     autoload_profile_id: Arc<Mutex<Option<String>>>,
+    preload_ids: Arc<Mutex<HashSet<String>>>,
 }
 
 impl InMemoryEngineProfileCatalog {
@@ -111,6 +117,15 @@ impl InMemoryEngineProfileCatalog {
             .insert(profile.profile_id.clone(), profile);
     }
 
+    pub fn set_preload(&self, profile_id: &str, enabled: bool) {
+        let mut ids = self.preload_ids.lock().expect("engine preload catalog lock");
+        if enabled {
+            ids.insert(profile_id.to_owned());
+        } else {
+            ids.remove(profile_id);
+        }
+    }
+
     pub fn set_autoload_profile_id(&self, profile_id: Option<String>) {
         *self
             .autoload_profile_id
@@ -120,6 +135,12 @@ impl InMemoryEngineProfileCatalog {
 }
 
 impl EngineProfileCatalog for InMemoryEngineProfileCatalog {
+    fn preload_profiles(&self) -> Vec<SavedEngineProfile> {
+        let ids = self.preload_ids.lock().expect("engine preload catalog lock");
+        let profiles = self.profiles.lock().expect("engine profile catalog lock");
+        ids.iter().filter_map(|id| profiles.get(id).cloned()).collect()
+    }
+
     fn get(&self, profile_id: &str) -> Option<SavedEngineProfile> {
         self.profiles
             .lock()
@@ -148,6 +169,7 @@ pub fn default_engine_profiles_settings() -> EngineProfilesSettings {
 pub fn default_engine_profile_record() -> EngineProfileRecord {
     EngineProfileRecord {
         id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
+        preload: false,
         profile: EngineProfileDto {
             name: "Local KataGo".to_string(),
             program: String::new(),
@@ -191,6 +213,7 @@ pub fn parse_engine_profiles(contents: &str) -> Result<EngineProfilesSettings, S
                 .map(|record| {
                     Ok(EngineProfileRecord {
                         id: record.id,
+                        preload: false,
                         profile: record.profile.migrate(record.max_visits)?,
                     })
                 })
@@ -205,6 +228,7 @@ pub fn parse_engine_profiles(contents: &str) -> Result<EngineProfilesSettings, S
             autoload_profile_id: None,
             profiles: vec![EngineProfileRecord {
                 id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
+                preload: false,
                 profile: legacy.profile.migrate(legacy.max_visits)?,
             }],
         }

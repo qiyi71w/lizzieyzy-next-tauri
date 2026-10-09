@@ -4060,10 +4060,12 @@ fn durable_reorder_and_failure_preserve_ready_run_launch_and_job_bindings() {
         profiles: vec![
             engine_manager::EngineProfileRecord {
                 id: "profile-a".into(),
+                preload: false,
                 profile: setup_named_profile(&temp, "a", &hold_after_probe_script()),
             },
             engine_manager::EngineProfileRecord {
                 id: "profile-b".into(),
+                preload: false,
                 profile: setup_named_profile(&temp, "b", &resident_echo_script()),
             },
         ],
@@ -6798,4 +6800,185 @@ fn startup_dependency_failures_are_bounded_redacted_and_never_replace_ready_a() 
         assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, run_a);
         manager.teardown().unwrap();
     }
+}
+
+#[cfg(unix)]
+fn wait_preload(
+    manager: &ForegroundEngineManager,
+    phase: app_model::EnginePreloadPhaseDto,
+) -> app_model::EnginePreloadDto {
+    let deadline = Instant::now() + Duration::from_secs(4);
+    loop {
+        let slots = manager.preload_snapshot();
+        if let Some(slot) = slots.iter().find(|slot| slot.phase == phase) {
+            return slot.clone();
+        }
+        assert!(Instant::now() < deadline, "preload timeout: {slots:?}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn preload_requires_opt_in_and_only_explicit_switch_promotes_same_child() {
+    use app_model::EnginePreloadPhaseDto as Phase;
+    let temp = TestTempDir::new("preload-promotion");
+    let (manager, catalog, _, a) =
+        ready_two_profiles(&temp, &resident_echo_script(), &resident_echo_script());
+    assert!(manager.prepare_preload("profile-b").is_err());
+    catalog.set_preload("profile-b", true);
+    manager.prepare_preload("profile-b").unwrap();
+    let prepared = wait_preload(&manager, Phase::Ready);
+    assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, a);
+    assert!(manager
+        .start_selected_node_job(selected_request(&prepared.run.run_id, 1, vec![]))
+        .is_err());
+    assert_eq!(manager.preload_snapshot()[0].phase, Phase::Ready);
+    manager.switch_to("profile-b").unwrap();
+    assert_eq!(
+        run_from_ready(&manager.snapshot().lifecycle).run_id,
+        prepared.run.run_id
+    );
+    assert!(manager.preload_snapshot().is_empty());
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn preload_changed_resource_or_profile_cannot_replace_healthy_primary() {
+    use app_model::EnginePreloadPhaseDto as Phase;
+    for change_profile in [false, true] {
+        let temp = TestTempDir::new("preload-stale");
+        let (manager, catalog, _, a) =
+            ready_two_profiles(&temp, &resident_echo_script(), &resident_echo_script());
+        catalog.set_preload("profile-b", true);
+        manager.prepare_preload("profile-b").unwrap();
+        wait_preload(&manager, Phase::Ready);
+        if change_profile {
+            let mut saved = catalog.get("profile-b").unwrap();
+            saved.profile.name = "changed revision".into();
+            catalog.upsert(saved);
+        } else {
+            std::fs::write(temp.path().join("engine-b.bin"), "replacement").unwrap();
+        }
+        assert!(manager.switch_to("profile-b").is_err());
+        assert_eq!(wait_preload(&manager, Phase::Failed).run.profile_id, "profile-b");
+        assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, a);
+        manager.teardown().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn preload_cancel_and_foreground_admission_retire_late_preparation() {
+    use app_model::EnginePreloadPhaseDto as Phase;
+    for foreground in [false, true] {
+        let temp = TestTempDir::new("preload-cancel");
+        let release = temp.path().join("release");
+        let started = temp.path().join("started");
+        let script = format!(
+            "echo $$ > '{}'\n{}",
+            started.display(),
+            hold_probe_until_release_script(&release)
+        );
+        let (manager, catalog, _, a) = ready_two_profiles(&temp, &resident_echo_script(), &script);
+        catalog.set_preload("profile-b", true);
+        manager.prepare_preload("profile-b").unwrap();
+        wait_preload(&manager, Phase::Preparing);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !started.exists() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let pid = std::fs::read_to_string(&started).unwrap();
+        if foreground {
+            manager
+                .start_selected_node_job(selected_request(&a, 1, vec![]))
+                .unwrap();
+        } else {
+            manager.cancel_preload("profile-b").unwrap();
+        }
+        std::fs::write(&release, "release").unwrap();
+        wait_preload(&manager, Phase::Cancelled);
+        manager.cancel_preload("profile-b").unwrap();
+        #[cfg(target_os = "linux")]
+        assert!(
+            !Path::new(&format!("/proc/{}", pid.trim())).exists(),
+            "owned preparation child must be reaped"
+        );
+        assert_eq!(manager.preload_snapshot()[0].phase, Phase::Cancelled);
+        assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, a);
+        manager.teardown().unwrap();
+        assert!(manager.prepare_preload("profile-b").is_err());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn preload_resource_failure_preserves_primary() {
+    use app_model::EnginePreloadPhaseDto as Phase;
+    let temp = TestTempDir::new("preload-failure");
+    let (manager, catalog, _, a) = ready_two_profiles(
+        &temp,
+        &resident_echo_script(),
+        "echo 'model allocation failed' >&2; exit 1",
+    );
+    catalog.set_preload("profile-b", true);
+    manager.prepare_preload("profile-b").unwrap();
+    assert!(wait_preload(&manager, Phase::Failed).failure.is_some());
+    assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, a);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn preload_ready_yields_to_match_reservation_without_taking_role() {
+    use app_model::EnginePreloadPhaseDto as Phase;
+    let temp = TestTempDir::new("preload-match");
+    let (manager, catalog, _, a) =
+        ready_two_profiles(&temp, &resident_echo_script(), &resident_echo_script());
+    catalog.set_preload("profile-b", true);
+    manager.prepare_preload("profile-b").unwrap();
+    wait_preload(&manager, Phase::Ready);
+    manager.reserve_match("match-owner").unwrap();
+    assert_eq!(manager.preload_snapshot()[0].phase, Phase::Cancelled);
+    assert_eq!(manager.match_reservation_owner().as_deref(), Some("match-owner"));
+    assert!(manager.prepare_preload("profile-b").is_err());
+    assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, a);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn preload_gtp_readiness_keeps_foreground_authority_until_same_run_promotion() {
+    let temp = TestTempDir::new("preload-gtp");
+    let (manager, catalog) = gtp_manager(&temp, "fragment");
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "background".into(),
+        profile: gtp_profile(&temp, "stderr"),
+    });
+    catalog.set_preload("background", true);
+    manager.start("gtp").unwrap();
+    let ready = wait_lifecycle(&manager, Duration::from_secs(3), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    let a = run_from_ready(&ready.lifecycle).run_id.clone();
+    manager.prepare_preload("background").unwrap();
+    let background = wait_preload(&manager, app_model::EnginePreloadPhaseDto::Ready);
+    assert!(background
+        .run
+        .capability_snapshot
+        .as_ref()
+        .unwrap()
+        .analysis
+        .is_none());
+    assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, a);
+    manager.switch_to("background").unwrap();
+    assert_eq!(
+        run_from_ready(&manager.snapshot().lifecycle).run_id,
+        background.run.run_id
+    );
+    manager.teardown().unwrap();
+    assert_gtp_reaped(&temp, "fragment");
+    assert_gtp_reaped(&temp, "stderr");
 }

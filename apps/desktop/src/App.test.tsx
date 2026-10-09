@@ -195,6 +195,7 @@ const initialProjection: GameDto = {
 
 const savedProfile = {
   id: "profile-1",
+  preload: false,
   profile: {
     name: "Local KataGo",
     program: "/bin/katago", argv: [],

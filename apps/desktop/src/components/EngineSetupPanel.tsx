@@ -6,6 +6,7 @@ import { profileHasPendingChanges, runFromSnapshot, verifiedEngineCapabilitiesLa
 import { t } from "../i18n/resources";
 import { EngineResourceDetails } from "./EngineResourceDetails";
 import { ModelInventoryPanel } from "./ModelInventoryPanel";
+import { EnginePreloadPanel } from "./EnginePreloadPanel";
 
 type Props = {
   disabled?: boolean;
@@ -28,6 +29,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engi
   const [profileStatus, setProfileStatus] = useState("Loading profile...");
   const [assetChecks, setAssetChecks] = useState<AssetCheckDto[]>([]);
   const [autoloadProfileId, setAutoloadProfileId] = useState<string | null>(null);
+  const [preload, setPreload] = useState(false);
   const [catalogBusy, setCatalogBusy] = useState(false);
   const catalogWritePending = useRef(false);
   const [orderStatus, setOrderStatus] = useState("");
@@ -89,6 +91,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engi
   }, [onProfilesChange]);
 
   function applyProfileRecord(record: EngineProfileRecordDto) {
+    setPreload(record.preload ?? false);
     setProfileName(record.profile.name);
     setEnginePath(record.profile.program);
     setAdapterKind(record.profile.adapter_kind);
@@ -118,6 +121,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engi
   function buildProfileRecord(id = selectedProfileId): EngineProfileRecordDto {
     return {
       id,
+      preload,
       profile: buildProfile()
     };
   }
@@ -202,6 +206,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engi
     const id = `profile-${Date.now().toString(36)}`;
     const nextProfile: EngineProfileRecordDto = {
       ...buildProfileRecord(id),
+      preload: false,
       profile: {
         ...buildProfile(),
         name: nextProfileName(profiles)
@@ -338,6 +343,11 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engi
           />
           <span>启动时自动加载</span>
         </label>
+        <label>
+          <input type="checkbox" checked={preload} disabled={catalogBusy}
+            onChange={(event) => setPreload(event.target.checked)} />
+          <span>{t("enginePreload.optIn")}</span>
+        </label>
       </div>
       <div className="engine-profile-order" aria-busy={catalogBusy}>
         <h3>{t("engineOrder.title")}</h3>
@@ -445,6 +455,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engi
         </p>
       )}
       </fieldset>
+      <EnginePreloadPanel profiles={profiles} disabled={disabled || catalogBusy} />
     </section>
   );
 }

@@ -240,6 +240,7 @@ impl ForegroundEngineManager {
                 "Match reservation requires a nonempty session and a stable Ready or unloaded foreground.",
             ));
         }
+        self.yield_preloads_locked(&mut state);
         state.match_reservation = Some(MatchReservation {
             owner: owner.into(),
             runs: Vec::new(),
@@ -369,7 +370,7 @@ impl ForegroundEngineManager {
             self.drain_reserved_analysis(owner)?;
             for (index, candidate) in candidates.iter().enumerate() {
                 *failed_side = index;
-                self.inner.start_resident(operation, candidate, true)?;
+                self.inner.start_resident(operation, candidate, true, false)?;
                 let mut state = self.lock();
                 let reservation = require_owner(&state, owner)?;
                 if let Some(error) = &reservation.failure {
@@ -783,7 +784,7 @@ impl ForegroundEngineManager {
         let rebuilt = (|| {
             for (index, candidate) in &rebuild {
                 failed = *index;
-                self.inner.start_resident(operation, candidate, true)?;
+                self.inner.start_resident(operation, candidate, true, false)?;
                 let mut state = self.lock();
                 let reservation = require_owner(&state, owner)?;
                 if let Some(error) = &reservation.failure {

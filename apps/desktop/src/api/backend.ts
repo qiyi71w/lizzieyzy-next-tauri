@@ -821,8 +821,12 @@ function decodeEngineProfilesSettings(value: unknown, allowLegacy: boolean): Eng
   const profiles: EngineProfileRecordDto[] = records.map((value) => {
     const record = profileObject(value, "Profile record");
     if (!legacy && "max_visits" in record) throw new Error("Version 1 max_visits belongs in KataGo settings.");
+    if (!legacy && record.preload !== undefined && typeof record.preload !== "boolean") {
+      throw new Error("Background preload must be a boolean.");
+    }
     return {
       id: profileString(record.id, "Profile ID", true),
+      preload: !legacy && record.preload === true,
       profile: legacy ? decodeLegacyEngineProfile(record.profile, record.max_visits) : decodeEngineProfile(record.profile)
     };
   });
@@ -841,6 +845,7 @@ function defaultBrowserEngineProfilesSettings(): EngineProfilesSettingsDto {
     autoload_profile_id: null,
     profiles: [{
       id: defaultEngineProfileId,
+      preload: false,
       profile: {
         name: "Local KataGo", program: "", argv: [], working_dir: null,
         adapter_kind: "kata_go_analysis", settings: { model_path: null, config_path: null, max_visits: 800 }

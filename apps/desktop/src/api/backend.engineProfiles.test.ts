@@ -14,8 +14,8 @@ function catalog(): EngineProfilesSettingsDto {
   return {
     version: 1, selected_profile_id: "gtp", autoload_profile_id: "kata",
     profiles: [
-      { id: "kata", profile: { name: "KataGo", program: "/with spaces/katago", argv: ["-override-config", "reportAnalysisWinratesAs=BLACK", "中文 参数", ""], working_dir: "/中文 工作目录", adapter_kind: "kata_go_analysis", settings: { model_path: "/模型", config_path: "/配置", max_visits: 1234 } } },
-      { id: "gtp", profile: { name: "GNU Go", program: "/program with spaces/gnugo", argv: ["--mode", "gtp", "two words", "中文", ""], working_dir: null, adapter_kind: "generic_gtp", settings: {} } }
+      { id: "kata", preload: false, profile: { name: "KataGo", program: "/with spaces/katago", argv: ["-override-config", "reportAnalysisWinratesAs=BLACK", "中文 参数", ""], working_dir: "/中文 工作目录", adapter_kind: "kata_go_analysis", settings: { model_path: "/模型", config_path: "/配置", max_visits: 1234 } } },
+      { id: "gtp", preload: false, profile: { name: "GNU Go", program: "/program with spaces/gnugo", argv: ["--mode", "gtp", "two words", "中文", ""], working_dir: null, adapter_kind: "generic_gtp", settings: {} } }
     ]
   };
 }
@@ -29,7 +29,7 @@ afterEach(() => { vi.restoreAllMocks(); localStorage.clear(); });
 describe("browser engine profile persistence", () => {
   it("loads an unconfigured default without writing storage or claiming a live run", async () => {
     const result = await loadEngineProfilesSettings();
-    expect(result).toEqual({ version: 1, selected_profile_id: "default", autoload_profile_id: null, profiles: [{ id: "default", profile: { name: "Local KataGo", program: "", argv: [], working_dir: null, adapter_kind: "kata_go_analysis", settings: { model_path: null, config_path: null, max_visits: 800 } } }] });
+    expect(result).toEqual({ version: 1, selected_profile_id: "default", autoload_profile_id: null, profiles: [{ id: "default", preload: false, profile: { name: "Local KataGo", program: "", argv: [], working_dir: null, adapter_kind: "kata_go_analysis", settings: { model_path: null, config_path: null, max_visits: 800 } } }] });
     expect(localStorage.getItem(key)).toBeNull();
   });
 
@@ -38,7 +38,7 @@ describe("browser engine profile persistence", () => {
     const raw = JSON.stringify(legacy);
     localStorage.setItem(key, raw);
     const loaded = await loadEngineProfilesSettings();
-    expect(loaded).toEqual({ version: 1, selected_profile_id: "second", autoload_profile_id: "first", profiles: [{ id: "first", profile: { name: legacyProfile.name, program: legacyProfile.engine_path, argv: [], working_dir: legacyProfile.working_dir, adapter_kind: "kata_go_analysis", settings: { model_path: legacyProfile.model_path, config_path: legacyProfile.config_path, max_visits: 17 } } }, { id: "second", profile: { name: "Second", program: legacyProfile.engine_path, argv: [], working_dir: null, adapter_kind: "kata_go_analysis", settings: { model_path: legacyProfile.model_path, config_path: legacyProfile.config_path, max_visits: 4321 } } }] });
+    expect(loaded).toEqual({ version: 1, selected_profile_id: "second", autoload_profile_id: "first", profiles: [{ id: "first", preload: false, profile: { name: legacyProfile.name, program: legacyProfile.engine_path, argv: [], working_dir: legacyProfile.working_dir, adapter_kind: "kata_go_analysis", settings: { model_path: legacyProfile.model_path, config_path: legacyProfile.config_path, max_visits: 17 } } }, { id: "second", preload: false, profile: { name: "Second", program: legacyProfile.engine_path, argv: [], working_dir: null, adapter_kind: "kata_go_analysis", settings: { model_path: legacyProfile.model_path, config_path: legacyProfile.config_path, max_visits: 4321 } } }] });
     expect(localStorage.getItem(key)).toBe(raw);
     await saveEngineProfilesSettings(loaded);
     expect(JSON.parse(localStorage.getItem(key)!)).toEqual(loaded);
@@ -50,7 +50,7 @@ describe("browser engine profile persistence", () => {
     const loaded = await loadEngineProfilesSettings();
     expect(loaded.selected_profile_id).toBe("default");
     expect(loaded.autoload_profile_id).toBeNull();
-    expect(loaded.profiles[0]).toEqual({ id: "default", profile: { name: legacyProfile.name, program: legacyProfile.engine_path, argv: [], working_dir: legacyProfile.working_dir, adapter_kind: "kata_go_analysis", settings: { model_path: legacyProfile.model_path, config_path: legacyProfile.config_path, max_visits: 987 } } });
+    expect(loaded.profiles[0]).toEqual({ id: "default", preload: false, profile: { name: legacyProfile.name, program: legacyProfile.engine_path, argv: [], working_dir: legacyProfile.working_dir, adapter_kind: "kata_go_analysis", settings: { model_path: legacyProfile.model_path, config_path: legacyProfile.config_path, max_visits: 987 } } });
     expect(localStorage.getItem(key)).toBe(raw);
   });
 
@@ -153,4 +153,20 @@ describe("browser engine profile persistence", () => {
     expect(saved.profiles[1].profile.name).toBe("Late editor save");
     expect(await loadEngineProfilesSettings()).toEqual(saved);
   });
+});
+
+it("persists preload opt-in and rejects corrupt values without replacing storage", async () => {
+  const settings = catalog();
+  settings.profiles[1].preload = true;
+  await saveEngineProfilesSettings(settings);
+  expect((await loadEngineProfilesSettings()).profiles[1].preload).toBe(true);
+  const before = localStorage.getItem(key);
+  const corrupt = JSON.parse(before!);
+  corrupt.profiles[1].preload = "true";
+  await expect(saveEngineProfilesSettings(corrupt)).rejects.toThrow("boolean");
+  expect(localStorage.getItem(key)).toBe(before);
+  vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("disk full"); });
+  settings.profiles[1].preload = false;
+  await expect(saveEngineProfilesSettings(settings)).rejects.toThrow("disk full");
+  expect(localStorage.getItem(key)).toBe(before);
 });

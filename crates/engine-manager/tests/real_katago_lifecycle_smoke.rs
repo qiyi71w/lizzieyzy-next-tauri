@@ -574,3 +574,102 @@ fn real_local_resource_qualification_start_switch_and_corrupt_model_preserve_pri
     manager.teardown().unwrap();
     std::fs::remove_file(corrupt).unwrap();
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires explicit real KataGo CPU assets and isolated cwd"]
+fn real_preload_promotion_cancellation_and_memory_pressure_preserve_primary() {
+    use app_model::EnginePreloadPhaseDto as Phase;
+    require_real_katago();
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    for id in ["preload-a", "preload-b", "preload-pressure"] {
+        catalog.upsert(SavedEngineProfile {
+            profile_id: id.into(),
+            profile: real_profile(id),
+        });
+        catalog.set_preload(id, true);
+    }
+    let directory = std::path::PathBuf::from(env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap());
+    let wrapper = directory.join("limited-engine.sh");
+    std::fs::write(
+        &wrapper,
+        "#!/bin/sh\nexec /usr/bin/prlimit --as=268435456 -- \"$LIZZIEYZY_KATAGO_ENGINE\" \"$@\"\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut pressure = catalog.get("preload-pressure").unwrap();
+    pressure.profile.program = wrapper.to_string_lossy().into_owned();
+    catalog.upsert(pressure);
+    let manager = ForegroundEngineManager::new(
+        catalog,
+        ForegroundEngineConfig {
+            readiness_timeout: Duration::from_secs(90),
+            stop_drain_timeout: Duration::from_millis(400),
+            job_timeout: Duration::from_secs(30),
+            admit_whole_game_analysis: true,
+        },
+    );
+    let events = manager.subscribe();
+    let wait = |phase| {
+        let deadline = Instant::now() + Duration::from_secs(100);
+        loop {
+            let slots = manager.preload_snapshot();
+            if let Some(slot) = slots.iter().find(|slot| slot.phase == phase) {
+                return slot.clone();
+            }
+            assert!(Instant::now() < deadline, "real preload timeout: {slots:?}");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    };
+    manager.start("preload-a").unwrap();
+    let ready = wait_current(&manager, Duration::from_secs(100), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    let a = run_from_ready(&ready.lifecycle).clone();
+    manager.prepare_preload("preload-b").unwrap();
+    let b = wait(Phase::Ready);
+    eprintln!(
+        "real-preload-a={} background-b={}",
+        serde_json::to_string(&a).unwrap(),
+        serde_json::to_string(&b).unwrap()
+    );
+    assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, a.run_id);
+    manager.switch_to("preload-b").unwrap();
+    assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, b.run.run_id);
+    manager.prepare_preload("preload-a").unwrap();
+    wait(Phase::Ready);
+    manager.cancel_preload("preload-a").unwrap();
+    assert_eq!(wait(Phase::Cancelled).run.profile_id, "preload-a");
+    manager.prepare_preload("preload-pressure").unwrap();
+    let failed = wait(Phase::Failed);
+    eprintln!(
+        "real-preload-pressure={}",
+        serde_json::to_string(&failed).unwrap()
+    );
+    assert!(
+        failed
+            .failure
+            .as_ref()
+            .unwrap()
+            .diagnostic_summary
+            .as_ref()
+            .is_some_and(|text| text.contains("alloc")
+                || text.contains("memory")
+                || text.contains("resource")),
+        "{failed:?}"
+    );
+    assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, b.run.run_id);
+    let job = manager
+        .start_selected_node_job(selected_request(&b.run.run_id, 1, 2))
+        .unwrap();
+    wait_job(&events, Duration::from_secs(30), |event| {
+        event.job_id == job.job_id && event.outcome == app_model::AnalysisJobOutcomeDto::Completed
+    });
+    manager.teardown().unwrap();
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine { .. }
+    ));
+    std::fs::remove_file(wrapper).unwrap();
+}

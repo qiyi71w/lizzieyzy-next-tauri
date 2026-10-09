@@ -357,6 +357,7 @@ impl ForegroundEngineManager {
             let stdin = engine_stdin(&state, &run.run_id)
                 .ok_or_else(|| fail(EngineFailureKind::InvalidState, "engine stdin unavailable"))?;
             let deadline = Instant::now() + Duration::from_millis(u64::from(budget.deadline_ms));
+            self.yield_preloads_locked(&mut state);
             state.game_move_publication = None;
             state.game_move = Some(MoveSlot {
                 identity: identity.clone(),
