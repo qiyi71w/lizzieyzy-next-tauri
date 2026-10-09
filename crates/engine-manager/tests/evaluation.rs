@@ -354,6 +354,9 @@ fn cancel_new_target_edit_delete_and_close_retire_process_and_late_output() {
     let f = Fixture::new("hold");
     f.running();
     f.manager.teardown().unwrap();
+    let closed = f.manager.evaluation_snapshot().message.unwrap();
+    assert!(closed.contains("closed") && closed.contains("output and result retired"));
+    assert!(!closed.contains("[private-"));
     std::fs::write(f.dir.join("release"), "late").unwrap();
     assert!(f.manager.evaluation_snapshot().result.is_none());
     assert_eq!(f.manager.evaluation_snapshot().process_id, None);

@@ -25,7 +25,7 @@ fn busy(state: &ManagerState) -> bool {
         || !matches!(state.phase, Phase::NoEngine { .. } | Phase::Ready(_))
 }
 
-fn invalid(profile_id: &str, message: &str) -> EngineFailureDto {
+fn invalid(profile_id: &str, message: &'static str) -> EngineFailureDto {
     failure(
         EngineOperationDto::Start,
         EngineFailureKind::InvalidState,
@@ -114,7 +114,7 @@ impl ForegroundEngineManager {
         let inner = self.inner.clone();
         thread::spawn(move || {
             if let Err(mut error) = inner.start_resident(operation, &run, false, true) {
-                identify_failed_executable(&run, &mut error);
+                identify_failed_executable(&run, &mut error, &inner);
                 inner.fail_preload(&run.run_id, error);
             } else if preparing(&inner.lock(), &run.run_id) {
                 inner.fail_preload(
@@ -293,7 +293,7 @@ impl ForegroundEngineManager {
                     failure(
                         EngineOperationDto::Switch,
                         kind,
-                        message,
+                        self.inner.diagnostic_text(&run.run_id, &message),
                         Some(&run.run_id),
                         Some(profile_id),
                         None,

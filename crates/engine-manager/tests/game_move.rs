@@ -1703,6 +1703,9 @@ fn pk_unconfirmed_pause_preserves_occupancy_until_stop() {
     assert_eq!(error.run_id.as_deref(), Some(runs[1].run_id.as_str()));
     assert_eq!(error.profile_id.as_deref(), Some("engine"));
     assert!(error.job_id.is_some());
+    assert!(error.message.contains("cancellation/drain"));
+    assert!(error.message.contains("cannot be resumed") || error.message.contains("Stop the match"));
+    assert!(!error.message.contains("[private-"));
     assert!(handle.wait().is_err());
     assert_eq!(rig.manager.match_reservation_owner().as_deref(), Some("pk"));
     assert!(rig.manager.start_reserved_game_move("pk", request).is_err());

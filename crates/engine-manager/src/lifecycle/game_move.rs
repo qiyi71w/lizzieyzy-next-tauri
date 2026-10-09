@@ -186,7 +186,7 @@ enum MoveMode {
     ConfirmRules,
 }
 
-fn move_failure(identity: &GameMoveJobDto, kind: EngineFailureKind, message: &str) -> EngineFailureDto {
+fn move_failure(identity: &GameMoveJobDto, kind: EngineFailureKind, message: &'static str) -> EngineFailureDto {
     failure(
         EngineOperationDto::Job,
         kind,
@@ -264,7 +264,7 @@ pub(super) fn validate_move_position(
         failure(
             EngineOperationDto::Job,
             EngineFailureKind::UnsupportedCapability,
-            message.into(),
+            FailureText::unscoped(message),
             Some(&run.run_id),
             Some(&run.profile_id),
             None,
@@ -387,7 +387,10 @@ impl ForegroundEngineManager {
             generation: request.identity.generation,
             node_path: request.identity.node_path.clone(),
         };
-        let fail = |kind, message: &str| move_failure(&identity, kind, message);
+        let fail = |kind, message: &str| failure(
+            EngineOperationDto::Job, kind, self.inner.diagnostic_text(&identity.run_id, message),
+            Some(&identity.run_id), None, None,
+        ).with_job_id(&identity.job_id);
         let (events_tx, events) = mpsc::sync_channel(64);
         let (writes, writes_rx) = mpsc::channel::<String>();
         let (completed, completion) = mpsc::channel();
@@ -818,7 +821,10 @@ impl Inner {
 
 impl MoveWorker {
     fn error(&self, kind: EngineFailureKind, message: &str) -> EngineFailureDto {
-        let mut error = move_failure(&self.identity, kind, message);
+        let mut error = failure(
+            EngineOperationDto::Job, kind, self.manager.inner.diagnostic_text(&self.identity.run_id, message),
+            Some(&self.identity.run_id), None, None,
+        ).with_job_id(&self.identity.job_id);
         error.profile_id = Some(self.run.profile_id.clone());
         error
     }
@@ -1206,7 +1212,8 @@ impl MoveWorker {
             if let Some(Err(cleanup)) = cleanup {
                 error
                     .message
-                    .push_str(&format!("; process cleanup failed: {cleanup}"));
+                    .push_str(&self.manager.inner.diagnostic_text(&self.identity.run_id,
+                        &format!("; process cleanup failed: {cleanup}")).into_string());
                 error.kind = EngineFailureKind::Timeout;
             } else if self.run.adapter_kind == EngineBackend::KataGoAnalysis
                 && state
