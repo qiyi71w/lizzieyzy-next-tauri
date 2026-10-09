@@ -1119,7 +1119,7 @@ pub fn run() {
                 app.path().app_data_dir()?.join("lizzieyzy-next-model-inventory.json"),
             ));
             let managed_root = app.path().app_data_dir()?.join("managed-resources");
-            app.manage(engine_manager::managed::ManagedResources::new(managed_root.clone()));
+            app.manage(engine_manager::managed::ManagedResources::new(managed_root.clone(), app.path().app_data_dir()?.join("trt")));
             let catalog = std::sync::Arc::new(DiskEngineCatalog {
                 handle: app.handle().clone(),
             });

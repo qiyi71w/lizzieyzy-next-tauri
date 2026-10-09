@@ -22,6 +22,7 @@ struct Operation {
 }
 pub struct ManagedResources {
     root: PathBuf,
+    cache_root: PathBuf,
     operation: Mutex<Option<Operation>>,
     artifact_availability: Mutex<BTreeMap<String, String>>,
     repair_preview: Mutex<(u64, Option<ManagedRepairPreviewDto>)>,
@@ -43,13 +44,21 @@ pub(crate) struct InstalledManifest {
 pub struct PreparedAcquisition {
     operation_id: String,
     directory: PathBuf,
+    cache_staging: Option<PathBuf>,
     manifest: InstalledManifest,
 }
 impl Drop for PreparedAcquisition {
-    fn drop(&mut self) { let _ = fs::remove_dir_all(&self.directory); }
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.directory);
+        if let Some(cache) = &self.cache_staging { let _ = fs::remove_dir_all(cache); }
+    }
 }
 impl ManagedResources {
-    pub fn new(root: PathBuf) -> Self { Self { root, operation: Mutex::new(None), artifact_availability: Mutex::new(BTreeMap::new()), repair_preview: Mutex::new((0, None)) } }
+    pub fn new(root: PathBuf, cache_root: PathBuf) -> Self { Self { root, cache_root, operation: Mutex::new(None), artifact_availability: Mutex::new(BTreeMap::new()), repair_preview: Mutex::new((0, None)) } }
+    fn cache_path(&self, id: &str, pending: bool) -> PathBuf {
+        // Keep all 128 identity bits, without the four cosmetic UUID separators.
+        self.cache_root.join(format!("{}{}", if pending { "p" } else { "i" }, id.replace('-', "")))
+    }
     pub fn inspect_repair(&self, request: ManagedAcquireRequestDto) -> Result<ManagedRepairPreviewDto, String> {
         if request.target_id != trt::TARGET { return Err("managed_trt_target_required".into()); }
         let asset = &catalog::frozen().assets[trt::TARGET];
@@ -154,7 +163,7 @@ impl ManagedResources {
         if let Some(op) = state.as_mut().filter(|op| op.view.operation_id == id && !op.view.phase.terminal()) {
             op.view.phase = if op.network.lease().check().is_err() { ManagedPhaseDto::Cancelled } else { ManagedPhaseDto::Failed };
             op.view.message = Some(crate::diagnostics::DiagnosticSanitizer::default()
-                .sanitize(message).chars().take(256).collect());
+                .sanitize(message).chars().take(if op.view.repair_hardware.is_some() { 4096 } else { 256 }).collect());
             op.preparing = false;
         }
     }
@@ -188,13 +197,20 @@ impl ManagedResources {
         let asset = &catalog.assets[&request.target_id];
         let model = &catalog.models[&request.model_id];
         let mut prepared = PreparedAcquisition {
-            operation_id: id.into(), directory,
+            operation_id: id.into(), directory, cache_staging: None,
             manifest: InstalledManifest {
                 schema_version: 2, source_commit: catalog::SOURCE_COMMIT.into(), katago_source_commit: catalog::KATAGO_SOURCE.into(),
                 engine_repository: catalog.engine_release_repository.clone(), engine_tag: catalog::ENGINE_TAG.into(), origin: catalog.origin.clone(),
                 target_id: request.target_id.clone(), model_id: request.model_id.clone(), archive_sha256: asset.sha256.clone(), files: BTreeMap::new(),
             },
         };
+        if repair_hardware.is_some() {
+            let cache = self.cache_path(id, true);
+            trt::validate_cache_capacity(&cache, "")?;
+            fs::create_dir_all(&self.cache_root).map_err(|_| "managed_cache_storage_failed")?;
+            fs::create_dir(&cache).map_err(|_| "managed_cache_storage_failed")?;
+            prepared.cache_staging = Some(cache);
+        }
         let archive = prepared.directory.join("download.zip");
         self.phase(id, ManagedPhaseDto::DownloadingEngine, 0);
         network.download(&catalog::asset_url(asset), &archive, asset.size_bytes, catalog::ORIGINS,
@@ -236,7 +252,9 @@ impl ManagedResources {
         }
         if let Some(hardware) = repair_hardware.as_ref() {
             self.phase(id, ManagedPhaseDto::QualifyingRuntime, asset.size_bytes + runtime_bytes + model.size_bytes);
-            trt::qualify(&contents, &prepared.directory, &model.file_name, hardware, &network)?;
+            let cache = prepared.cache_staging.as_ref().ok_or("managed_cache_missing")?;
+            trt::validate_cache_capacity(cache, inspection.model_name.as_deref().ok_or("managed_model_invalid")?)?;
+            trt::qualify(&contents, cache, &model.file_name, hardware, &network)?;
             package::verify_file(&model_path, model.size_bytes, &model.sha256, &network)?;
         }
         prepared.manifest.files = package::content_hashes(&contents, &network)?;
@@ -271,9 +289,9 @@ impl ManagedResources {
         if hardware.as_ref().is_some_and(|expected| trt::hardware() != *expected) { return Err("managed_gpu_changed".into()); }
         self.phase(&prepared.operation_id, ManagedPhaseDto::Publishing, total);
         let destination = self.root.join("installed").join(&prepared.operation_id);
-        let cache = self.root.join("cache").join(&prepared.operation_id);
+        let cache = self.cache_path(&prepared.operation_id, false);
         if let Some(hardware) = &hardware {
-            trt::write_cache_defaults(&prepared.directory.join("qualification"), &cache, &prepared.operation_id, hardware)?;
+            trt::write_cache_defaults(prepared.cache_staging.as_ref().ok_or("managed_cache_missing")?, &cache, &prepared.operation_id, hardware)?;
         }
         let model = &catalog::frozen().models[&prepared.manifest.model_id];
         let executable = if prepared.manifest.target_id.starts_with("windows-") { "katago.exe" } else { "katago" };
@@ -290,7 +308,7 @@ impl ManagedResources {
             fs::create_dir_all(destination.parent().expect("installed parent")).map_err(|_| "managed_storage_unavailable".to_string())?;
             if hardware.is_some() {
                 fs::create_dir_all(cache.parent().expect("cache parent")).map_err(|_| "managed_storage_unavailable".to_string())?;
-                fs::rename(prepared.directory.join("qualification"), &cache).map_err(|_| "managed_cache_publish_failed".to_string())?;
+                fs::rename(prepared.cache_staging.as_ref().ok_or("managed_cache_missing")?, &cache).map_err(|_| "managed_cache_publish_failed".to_string())?;
             }
             if fs::rename(&contents, &destination).is_err() {
                 if hardware.is_some() { let _ = fs::remove_dir_all(&cache); }
@@ -319,7 +337,7 @@ impl ManagedResources {
             let op = state.as_ref().filter(|op| op.view.operation_id == id && op.view.phase == ManagedPhaseDto::Succeeded && op.view.repair_hardware.is_some()).ok_or("managed_stale")?;
             (op.request.clone(), op.view.installation.clone().ok_or("managed_stale")?)
         };
-        let cache = self.root.join("cache").join(id);
+        let cache = self.cache_path(id, false);
         trt::adoption_profile(request.profile, &installation, &cache)
     }
 }
@@ -329,11 +347,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn abandoned_preparation_removes_only_its_pending_cache() {
+        let root = std::env::temp_dir().join(format!("repair-rollback-{}", Uuid::new_v4()));
+        let resources = ManagedResources::new(root.join("resources"), root.join("trt"));
+        let id = Uuid::new_v4().to_string();
+        let pending = resources.cache_path(&id, true);
+        let last_good = resources.cache_path(&Uuid::new_v4().to_string(), false);
+        let directory = root.join("stage");
+        fs::create_dir_all(&pending).unwrap();
+        fs::create_dir_all(&last_good).unwrap();
+        fs::create_dir(&directory).unwrap();
+        fs::write(last_good.join("plan"), b"last-good").unwrap();
+        drop(PreparedAcquisition {
+            operation_id: id, directory: directory.clone(), cache_staging: Some(pending.clone()),
+            manifest: InstalledManifest { schema_version: 2, source_commit: String::new(), katago_source_commit: String::new(), engine_repository: String::new(), engine_tag: String::new(), origin: String::new(), target_id: trt::TARGET.into(), model_id: String::new(), archive_sha256: String::new(), files: BTreeMap::new() },
+        });
+        assert!(!pending.exists());
+        assert!(!directory.exists());
+        assert_eq!(fs::read(last_good.join("plan")).unwrap(), b"last-good");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn repair_cancel_keeps_original_target_and_last_good_resources() {
         let root = std::env::temp_dir().join(format!("repair-{}", Uuid::new_v4()));
         fs::create_dir_all(root.join("installed/last-good")).unwrap();
         fs::write(root.join("installed/last-good/katago.exe"), b"last-good").unwrap();
-        let resources = ManagedResources::new(root.clone());
+        let resources = ManagedResources::new(root.clone(), root.join("trt"));
         let network = NetworkState::default();
         let request = ManagedAcquireRequestDto {
             profile_id: "original-trt".into(), profile: crate::default_engine_profiles_settings().profiles[0].profile.clone(),
@@ -359,7 +399,7 @@ mod tests {
 
     #[test]
     fn replaced_preview_token_cannot_admit_or_retarget_an_operation() {
-        let resources = ManagedResources::new(std::env::temp_dir());
+        let resources = ManagedResources::new(std::env::temp_dir(), std::env::temp_dir().join("trt"));
         let request = ManagedAcquireRequestDto {
             profile_id: "original".into(), profile: crate::default_engine_profiles_settings().profiles[0].profile.clone(),
             target_id: trt::TARGET.into(), model_id: "b11-flagship".into(), policy_revision: 0,

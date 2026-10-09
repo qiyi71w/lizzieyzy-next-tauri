@@ -31,6 +31,37 @@ pub(super) fn runtime_hashes() -> BTreeMap<String, String> {
     FILES.iter().map(|f| (f.file.clone(), f.sha256.clone())).collect()
 }
 
+fn cache_path_units(cache: &Path, model_name: &str) -> usize {
+    // Frozen trtbackend.cpp:1487 builds this ONNX plan key; :55 adds a uint64 random
+    // hex suffix and a counter. This single-thread, one-model probe writes at most two caches.
+    // Count the terminating NUL too: this frozen Windows build uses legacy file streams.
+    let file = format!("trtcache/trt-100900_gpu-ffffffff_net-{model_name}_s9_onnxnh_mx19x19_b1_fp32.tmp_ffffffffffffffff_1");
+    cache.join(file).as_os_str().to_string_lossy().encode_utf16().count() + 1
+}
+
+pub(super) fn validate_cache_capacity(cache: &Path, model_name: &str) -> Result<(), String> {
+    if cfg!(windows) && cache_path_units(cache, model_name) > 260 {
+        return Err("managed_cache_path_too_long_for_frozen_runtime".into());
+    }
+    Ok(())
+}
+
+fn qualification_error(error: crate::EngineManagerError) -> String {
+    use crate::EngineManagerError;
+    let (kind, exit_code, stderr) = match error {
+        EngineManagerError::NonZeroExit { exit_code, stderr, .. } => ("process_failed", exit_code, stderr),
+        EngineManagerError::MissingStdout { exit_code, stderr } => ("no_response", exit_code, stderr),
+        EngineManagerError::InsufficientStdout { exit_code, stderr, .. } => ("incomplete_response", exit_code, stderr),
+        EngineManagerError::Timeout { exit_code, stderr, .. } => ("timeout", exit_code, stderr),
+        EngineManagerError::Cancelled { exit_code, stderr, .. } => ("cancelled", exit_code, stderr),
+        other => return format!("managed_runtime_probe_failed\n{other}"),
+    };
+    let start = stderr.char_indices().rev().nth(2047).map_or(0, |(index, _)| index);
+    // The existing operation boundary remains the sole privacy sanitizer. Preserve the actual
+    // terminal reason, not only the startup config preamble; explicitly mark omitted output.
+    format!("managed_runtime_{kind} exit_code={exit_code:?}\n{}{}", if start > 0 { "[earlier stderr omitted]\n" } else { "" }, &stderr[start..])
+}
+
 fn cache_defaults(cache: &Path) -> Result<String, String> {
     let path = cache.to_str().ok_or("managed_cache_path_invalid")?;
     if path.len() > 4096 || path.chars().any(char::is_control) { return Err("managed_cache_path_invalid".into()); }
@@ -227,10 +258,8 @@ pub(super) fn available_disk(path: &Path) -> Option<u64> {
     #[cfg(not(any(windows, unix)))] { None }
 }
 
-pub(super) fn qualify(contents: &Path, staging: &Path, model: &str, expected: &ManagedHardwareDto, network: &NetworkOperation) -> Result<(), String> {
+pub(super) fn qualify(contents: &Path, scratch: &Path, model: &str, expected: &ManagedHardwareDto, network: &NetworkOperation) -> Result<(), String> {
     if hardware() != *expected { return Err("managed_gpu_changed".into()); }
-    let scratch = staging.join("qualification");
-    fs::create_dir(&scratch).map_err(|_| "managed_qualification_storage_failed")?;
     let cancel = crate::AnalysisCancelToken::new();
     // The established bounded analysis runner owns and reaps this explicit maintenance probe.
     // It never promotes a Run, touches the current game, or serves foreground parameter reads.
@@ -256,7 +285,7 @@ pub(super) fn qualify(contents: &Path, staging: &Path, model: &str, expected: &M
             crate::AnalysisBatchRunOptions { expected_responses: 1, timeout: Duration::from_secs(900), cancel_token: Some(&cancel), on_progress: None });
         done.store(true, std::sync::atomic::Ordering::Release);
         result
-    }).map_err(|error| format!("katago.exe / TensorRT: {error}"))?;
+    }).map_err(qualification_error)?;
     network.lease().check().map_err(|_| "managed_cancelled")?;
     let response: serde_json::Value = serde_json::from_str(result.response_jsonl_lines.first().ok_or("managed_runtime_no_response")?).map_err(|_| "managed_runtime_invalid_response")?;
     validate_inference(&response)?;
@@ -280,6 +309,29 @@ fn validate_inference(response: &serde_json::Value) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn frozen_native_cache_path_regression_preserves_full_installation_identity() {
+        let app = Path::new("C:/Users/admin/AppData/Roaming/org.lizzieyzy.next.acceptance.refae8b9a56eb4e739dd454047760fc20");
+        let id = "a5366b1c-1df7-472f-af45-508a9257f1ec";
+        let model = "kata1-tf3-b11c768-s12002M-d6304M";
+        let old = app.join("managed-resources").join(format!("staging-{id}")).join("qualification");
+        assert!(cache_path_units(&old, model) > 260);
+        for prefix in ["p", "i"] {
+            let corrected = app.join("trt").join(format!("{prefix}{}", id.replace('-', "")));
+            assert!(cache_path_units(&corrected, model) <= 260);
+        }
+    }
+
+    #[test]
+    fn qualification_failure_retains_bounded_terminal_reason() {
+        let stderr = format!("{}\nERROR: cache temporary file write failed", "startup config\n".repeat(500));
+        let error = qualification_error(crate::EngineManagerError::NonZeroExit { exit_code: Some(-1073740791), stdout: None, stderr });
+        assert!(error.starts_with("managed_runtime_process_failed exit_code=Some(-1073740791)"));
+        assert!(error.contains("[earlier stderr omitted]"));
+        assert!(error.ends_with("ERROR: cache temporary file write failed"));
+        assert!(error.chars().count() < 2200);
+    }
+
     #[test]
     fn one_visit_root_inference_is_qualified_without_child_expansion() {
         let mut response = serde_json::json!({ "id": "managed-trt-qualification", "moveInfos": [], "rootInfo": { "visits": 1, "winrate": 0.336831525, "scoreLead": -0.773554206 }});
