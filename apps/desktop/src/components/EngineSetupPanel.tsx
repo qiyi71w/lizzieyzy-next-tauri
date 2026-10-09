@@ -462,11 +462,16 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engi
       </fieldset>
       <ManagedResourcesPanel profileId={selectedProfileId} profile={editingProfile}
         disabled={disabled || catalogBusy} beginOperation={beginModelOperation} endOperation={endModelOperation}
-        onUse={(installation) => {
+        onUse={(installation, repairProfile) => {
           if (disabled || catalogWritePending.current || modelOperation.current) return;
           setEnginePath(installation.program);
           setModelPath(installation.model_path);
-          setConfigPath(installation.config_path);
+          if (repairProfile && repairProfile.adapter_kind !== "generic_gtp") {
+            setConfigPath(repairProfile.settings.config_path ?? "");
+            setArgv([...repairProfile.argv]);
+          } else {
+            setConfigPath(installation.config_path);
+          }
           setAssetChecks([]);
           setProfileStatus(t("managed.hint"));
         }} />

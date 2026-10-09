@@ -14,7 +14,7 @@ pub(super) fn safe_name(name: &str) -> bool {
         && name != "." && name != ".." && !name.ends_with(['.', ' '])
         && !matches!(name.split('.').next().unwrap_or("").to_ascii_uppercase().as_str(), "CON" | "PRN" | "AUX" | "NUL" | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9" | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9")
 }
-fn safe_path(name: &str) -> bool {
+pub(super) fn safe_path(name: &str) -> bool {
     name.len() <= 1024 && name.split('/').all(safe_name)
 }
 pub(super) fn hash_file(path: &Path, network: &NetworkOperation) -> Result<(u64, String), String> {

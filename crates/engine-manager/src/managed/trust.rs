@@ -53,6 +53,11 @@ pub(crate) fn qualify(root: &Path, executable: &Path) -> Result<Option<ManagedId
         }
         if hashes.get(entry.name()) != Some(&format!("{:x}", hasher.finalize())) { return Err("managed_archive_content_changed".into()); }
     }
+    if manifest.target_id == super::trt::TARGET {
+        let runtime = super::trt::runtime_hashes();
+        if runtime.iter().any(|(name, digest)| hashes.get(name) != Some(digest)) { return Err("managed_runtime_content_changed".into()); }
+        file_count += runtime.len();
+    }
     if hashes.len() != file_count { return Err("managed_unlisted_content".into()); }
     package::verify_package(directory, &manifest.target_id, asset, &network)?;
     Ok(Some(ManagedIdentity {

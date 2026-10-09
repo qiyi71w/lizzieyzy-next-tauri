@@ -45,6 +45,28 @@ pub struct ManagedAcquireRequestDto {
     pub model_id: String,
     pub policy_revision: u64,
 }
+/// An opaque admission belongs to one saved profile revision, target, model and hardware probe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManagedRepairPreviewDto {
+    pub admission_id: String,
+    pub request: ManagedAcquireRequestDto,
+    pub hardware: ManagedHardwareDto,
+    pub runtime_version: String,
+    pub download_bytes: u64,
+    pub additional_disk_bytes: u64,
+    pub available_disk_bytes: Option<u64>,
+    pub repair_allowed: bool,
+    pub reason: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManagedHardwareDto {
+    pub status: String,
+    pub gpu_name: Option<String>,
+    pub gpu_uuid: Option<String>,
+    pub driver_version: Option<String>,
+    pub compute_capability: Option<String>,
+    pub reason: String,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ManagedPhaseDto {
@@ -53,6 +75,8 @@ pub enum ManagedPhaseDto {
     VerifyingEngine,
     DownloadingModel,
     VerifyingModel,
+    DownloadingRuntime,
+    QualifyingRuntime,
     Publishing,
     Succeeded,
     Failed,
@@ -69,6 +93,7 @@ pub struct ManagedInstallationDto {
     pub model_path: String,
     pub config_path: String,
     pub manifest_sha256: String,
+    pub repair_config_path: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManagedOperationDto {
@@ -82,6 +107,7 @@ pub struct ManagedOperationDto {
     pub message: Option<String>,
     pub installation: Option<ManagedInstallationDto>,
     pub routes: Vec<crate::NetworkRouteDto>,
+    pub repair_hardware: Option<ManagedHardwareDto>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManagedResourcesDto {

@@ -401,7 +401,15 @@ pub fn validate_engine_profile(profile: &EngineProfileDto) -> Result<(), String>
                 return Err("engine model/config path must not contain NUL".to_string());
             }
         }
-        for arg in &profile.argv {
+        for (index, arg) in profile.argv.iter().enumerate() {
+            // Frozen KataGo accepts repeated -config files in order, before CLI overrides.
+            // Keep inline/alternate spellings reserved until actually qualified.
+            if arg == "-config" {
+                if profile.argv.get(index + 1).is_none_or(|path| path.trim().is_empty() || path.starts_with('-')) {
+                    return Err("KataGo -config requires a readable file argument at Start".into());
+                }
+                continue;
+            }
             let token = arg.split_once('=').map_or(arg.as_str(), |(flag, _)| flag);
             if matches!(
                 token,

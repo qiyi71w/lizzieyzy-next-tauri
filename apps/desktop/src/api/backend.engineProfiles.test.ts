@@ -98,6 +98,17 @@ describe("browser engine profile persistence", () => {
     expect(localStorage.getItem(key)).toBeNull();
   });
 
+  it("preserves ordered KataGo config layers and custom CLI policy", async () => {
+    const settings = catalog();
+    settings.profiles[0].profile.argv = ["-config", "配置, space.cfg", "-config", "second.cfg", "-override-config", "homeDataDir=custom"];
+    await saveEngineProfilesSettings(settings);
+    expect(await loadEngineProfilesSettings()).toEqual(settings);
+    const raw = localStorage.getItem(key);
+    settings.profiles[0].profile.argv = ["-config"];
+    await expect(saveEngineProfilesSettings(settings)).rejects.toThrow("file argument");
+    expect(localStorage.getItem(key)).toBe(raw);
+  });
+
   it("surfaces storage read and write failures while preserving the previously stored catalog", async () => {
     const settings = catalog();
     await saveEngineProfilesSettings(settings);

@@ -47,12 +47,18 @@ impl ResourceSnapshot {
             snapshot.add(PathBuf::from(&spec.args[4]), "model", deadline)?;
             snapshot.config(PathBuf::from(&spec.args[2]), deadline, 0)?;
         }
-        for argument in &run.profile_snapshot.argv {
+        for (index, argument) in run.profile_snapshot.argv.iter().enumerate() {
             let value = argument
                 .split_once('=')
                 .filter(|(flag, _)| flag.starts_with('-'))
                 .map_or(argument.as_str(), |(_, value)| value);
             let path = Path::new(spec.working_dir.as_deref().unwrap_or(".")).join(value);
+            let layered_config = argument.starts_with("-config=") || argument.starts_with("--config=")
+                || index.checked_sub(1).and_then(|previous| run.profile_snapshot.argv.get(previous)).is_some_and(|flag| flag == "-config" || flag == "--config");
+            if layered_config && !matches!(run.profile_snapshot.adapter, app_model::EngineAdapterSettings::GenericGtp(_)) {
+                snapshot.config(path, deadline, 0)?;
+                continue;
+            }
             if path.is_file() {
                 snapshot.add(path, "launch_argument", deadline)?;
             }
@@ -84,43 +90,12 @@ impl ResourceSnapshot {
     }
 
     fn config(&mut self, path: PathBuf, deadline: Instant, depth: usize) -> Result<(), ResourceError> {
-        if depth >= 32 || self.entries.len() >= 128 {
-            return Err((
-                EngineFailureKind::Config,
-                "config include graph exceeds 32 levels or 128 resources".into(),
-            ));
-        }
-        let canonical = path.canonicalize().map_err(|_| {
-            (
-                EngineFailureKind::Config,
-                format!("config is missing ({})", self.diagnostics.alias(&path.to_string_lossy())),
-            )
-        })?;
-        if self
-            .entries
-            .iter()
-            .any(|(p, _)| p.canonicalize().ok().as_ref() == Some(&canonical))
-        {
-            return Ok(());
-        }
-        let path = self.add(path, "config", deadline)?;
-        let file =
-            File::open(&path).map_err(|_| (EngineFailureKind::Config, "config cannot be read".into()))?;
-        if file.metadata().map(|m| m.len()).unwrap_or(u64::MAX) > CONFIG_BYTES {
-            return Err((EngineFailureKind::Config, "config exceeds 4 MiB".into()));
-        }
-        for line in BufReader::new(file.take(CONFIG_BYTES + 1)).lines() {
-            let line =
-                line.map_err(|_| (EngineFailureKind::Config, "config is not readable UTF-8".into()))?;
-            let line = line.split('#').next().unwrap_or("").trim();
-            if let Some(include) = line.strip_prefix("@include ") {
-                let include = include.trim().trim_matches('"');
-                self.config(
-                    path.parent().unwrap_or(Path::new(".")).join(include),
-                    deadline,
-                    depth + 1,
-                )?;
+        for path in configuration_files(&path, deadline, depth).map_err(|message| (EngineFailureKind::Config, message))? {
+            if self.entries.iter().any(|(existing, _)| existing == &path) { continue; }
+            if self.entries.len() >= 128 {
+                return Err((EngineFailureKind::Config, "config include graph exceeds 128 resources".into()));
             }
+            self.add(path, "config", deadline)?;
         }
         Ok(())
     }
@@ -169,6 +144,36 @@ impl ResourceSnapshot {
             static_zlib_exemption: self.managed.as_ref().is_some_and(|(identity, _, _)| identity.static_zlib),
         }
     }
+}
+
+/// Shared bounded include traversal for Run identity and explicit managed-resource adoption.
+/// This inventories sources; it does not interpret or replace their configuration precedence.
+pub(crate) fn configuration_files(path: &Path, deadline: Instant, depth: usize) -> Result<Vec<PathBuf>, String> {
+    fn visit(path: &Path, deadline: Instant, depth: usize, files: &mut Vec<PathBuf>) -> Result<(), String> {
+        if Instant::now() >= deadline { return Err("config inspection timed out".into()); }
+        if depth >= 32 || files.len() >= 128 { return Err("config include graph exceeds 32 levels or 128 resources".into()); }
+        let canonical = path.canonicalize().map_err(|_| "config is missing or inaccessible")?;
+        if files.contains(&canonical) { return Ok(()); }
+        let file = File::open(&canonical).map_err(|_| "config cannot be read")?;
+        if file.metadata().map(|m| m.len()).unwrap_or(u64::MAX) > CONFIG_BYTES { return Err("config exceeds 4 MiB".into()); }
+        files.push(canonical);
+        for line in BufReader::new(file.take(CONFIG_BYTES + 1)).lines() {
+            let line = line.map_err(|_| "config is not readable UTF-8")?;
+            let line = line.split('#').next().unwrap_or("").trim();
+            if line.starts_with('@') {
+                let separator = line.find(|c: char| c.is_ascii_whitespace() || c == '=').ok_or("config directive lacks a value")?;
+                if &line[..separator] != "@include" { return Err("unsupported config directive".into()); }
+                let include = line[separator..].trim_start_matches(|c: char| c.is_ascii_whitespace() || c == '=')
+                    .trim().trim_matches('\'').trim_matches('"');
+                if include.is_empty() { return Err("config include lacks a path".into()); }
+                visit(&path.parent().unwrap_or(Path::new(".")).join(include), deadline, depth + 1, files)?;
+            }
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    visit(path, deadline, depth, &mut files)?;
+    Ok(files)
 }
 
 fn component_kind(component: &str) -> EngineFailureKind {
