@@ -4691,6 +4691,7 @@ export function App() {
       </> : null}
       <div hidden={sheet !== "engine"}>
         <EngineSetupPanel
+          visible={sheet === "engine"}
           disabled={matchBlocked}
           engineSnapshot={engineSnapshot}
           engineFailure={visibleEngineFailure}

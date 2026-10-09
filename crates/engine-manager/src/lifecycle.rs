@@ -30,6 +30,7 @@ pub use app_model::AnalysisJobEventDto;
 pub use app_model::AnalysisJobLaneDto as AnalysisJobLane;
 
 mod game_move;
+mod evaluation;
 mod match_reservation;
 mod ordinary_rules;
 pub use game_move::{GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle};
@@ -249,6 +250,7 @@ struct ManagerState {
     gtp_command_seq: u32,
     match_reservation: Option<match_reservation::MatchReservation>,
     retiring: Vec<(EngineRunDto, Arc<Mutex<LiveEngine>>)>,
+    evaluation: Option<evaluation::EvaluationSlot>,
 }
 
 struct Inner {
@@ -256,6 +258,7 @@ struct Inner {
     config: ForegroundEngineConfig,
     state: Mutex<ManagerState>,
     diagnostics: Mutex<std::collections::VecDeque<AttemptCapture>>,
+    evaluation_worker: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -270,6 +273,7 @@ impl ForegroundEngineManager {
                 catalog,
                 config,
                 diagnostics: Mutex::new(std::collections::VecDeque::new()),
+                evaluation_worker: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 state: Mutex::new(ManagerState {
                     revision: 0,
                     phase: Phase::NoEngine { failure: None },
@@ -298,6 +302,7 @@ impl ForegroundEngineManager {
                     gtp_command_seq: 100,
                     match_reservation: None,
                     retiring: Vec::new(),
+                    evaluation: None,
                 }),
             }),
         }
@@ -667,6 +672,10 @@ impl ForegroundEngineManager {
     }
 
     pub fn teardown(&self) -> Result<(), EngineFailureDto> {
+        {
+            let mut state = self.lock();
+            evaluation::close(&mut state)?;
+        }
         if let Some(owner) = self.match_reservation_owner() {
             self.stop_reserved_match(&owner)?;
         }
@@ -818,6 +827,7 @@ impl ForegroundEngineManager {
                 require_capability(&run, capabilities.whole_game_analysis, "whole-game analysis")?
             }
         }
+        evaluation::yield_to_foreground(&mut state)?;
         let job_id = Uuid::new_v4().to_string();
         state.jobs.push(RegisteredJob {
             job_id: job_id.clone(),
@@ -925,6 +935,7 @@ impl ForegroundEngineManager {
         mut request: SelectedNodeJobRequest,
     ) -> Result<SelectedSubmission, EngineFailureDto> {
         validate_selected_admission(state, &request)?;
+        evaluation::yield_to_foreground(state)?;
         state
             .jobs
             .retain(|job| !(job.lane == AnalysisJobLane::SelectedNode && job.terminal));
@@ -1201,6 +1212,7 @@ impl ForegroundEngineManager {
             let first_board_width = request.work_items[0].board_width;
             let first_board_height = request.work_items[0].board_height;
             let bound_query = bound_work_item_query(&request.work_items[0], &query_id, &job_id)?;
+            evaluation::yield_to_foreground(&mut state)?;
             let started = AnalysisJobStartedDto {
                 run_id: request.run_id.clone(),
                 job_id: job_id.clone(),
@@ -1370,6 +1382,7 @@ impl ForegroundEngineManager {
             for item in &state.jobs[index].work_items[state.jobs[index].current_index..] {
                 validate_query_capabilities(&run, &item.query, false)?;
             }
+            evaluation::yield_to_foreground(&mut state)?;
             let job_id = Uuid::new_v4().to_string();
             let query_id = target_query_id(&job_id);
             let job = &mut state.jobs[index];

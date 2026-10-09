@@ -57,14 +57,71 @@ impl ResourceSnapshot {
                 snapshot.add(path, "launch_argument", deadline)?;
             }
         }
-        if let Some(root) = managed_root {
-            if let Some(identity) = crate::managed::trust::qualify(root, &executable)
-                .map_err(|message| (EngineFailureKind::ResourceChanged, message))? {
-                for path in &identity.receipt_paths { snapshot.add(path.clone(), "managed_receipt", deadline)?; }
-                snapshot.managed = Some((identity, root.to_path_buf(), executable));
+        snapshot.capture_managed(managed_root, executable, deadline)?;
+        Ok(snapshot)
+    }
+
+    pub(crate) fn capture_evaluation(
+        run: &EngineRunDto,
+        spec: &crate::CommandSpec,
+        deadline: Instant,
+        diagnostics: AttemptCapture,
+        managed_root: Option<&Path>,
+    ) -> Result<Self, ResourceError> {
+        let mut snapshot = Self {
+            entries: Vec::new(),
+            revision: format!("{:x}", Sha256::digest(serde_json::to_vec(&run.profile_snapshot).expect("profile serialization"))),
+            diagnostics,
+            managed: None,
+        };
+        let executable = resolve_executable(&spec.program)?;
+        snapshot.add(executable.clone(), "executable", deadline)?;
+        let mut model = false;
+        let mut config = false;
+        let mut args = spec.args.iter().skip(1);
+        while let Some(arg) = args.next() {
+            let (flag, inline) = arg.split_once('=').map_or((arg.as_str(), None), |(flag, value)| (flag, Some(value)));
+            if flag == "-config" || flag == "-model" {
+                let value = inline.or_else(|| args.next().map(String::as_str)).ok_or_else(|| (
+                    EngineFailureKind::Config, "Missing benchmark resource argument".into()
+                ))?;
+                let path = Path::new(spec.working_dir.as_deref().unwrap_or(".")).join(value);
+                if flag == "-config" {
+                    config = true;
+                    snapshot.config(path, deadline, 0)?;
+                } else {
+                    model = true;
+                    snapshot.add(path, "model", deadline)?;
+                }
             }
         }
+        if !model || !config {
+            return Err((EngineFailureKind::Config,
+                "Benchmark requires explicit model and all config layers; implicit defaults are unsupported".into()));
+        }
+        for argument in &spec.args[1..] {
+            let value = argument.split_once('=').map_or(argument.as_str(), |(_, value)| value);
+            let path = Path::new(spec.working_dir.as_deref().unwrap_or(".")).join(value);
+            if path.is_file() && !snapshot.entries.iter().any(|(known, _)| known == &path) {
+                if snapshot.entries.len() >= 128 {
+                    return Err((EngineFailureKind::Config, "Benchmark exceeds 128 resource files".into()));
+                }
+                snapshot.add(path, "launch_argument", deadline)?;
+            }
+        }
+        snapshot.capture_managed(managed_root, executable, deadline)?;
         Ok(snapshot)
+    }
+
+    fn capture_managed(&mut self, root: Option<&Path>, executable: PathBuf, deadline: Instant) -> Result<(), ResourceError> {
+        if let Some(root) = root {
+            if let Some(identity) = crate::managed::trust::qualify(root, &executable)
+                .map_err(|message| (EngineFailureKind::ResourceChanged, message))? {
+                for path in &identity.receipt_paths { self.add(path.clone(), "managed_receipt", deadline)?; }
+                self.managed = Some((identity, root.to_path_buf(), executable));
+            }
+        }
+        Ok(())
     }
 
     fn add(&mut self, path: PathBuf, component: &str, deadline: Instant) -> Result<PathBuf, ResourceError> {

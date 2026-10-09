@@ -15,6 +15,8 @@ mod match_session;
 pub use match_session::*;
 mod managed_resources;
 pub use managed_resources::*;
+mod evaluation;
+pub use evaluation::*;
 
 mod analysis_job;
 pub use analysis_job::{

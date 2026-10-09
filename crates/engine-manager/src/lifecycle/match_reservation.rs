@@ -240,6 +240,7 @@ impl ForegroundEngineManager {
                 "Match reservation requires a nonempty session and a stable Ready or unloaded foreground.",
             ));
         }
+        evaluation::yield_to_foreground(&mut state)?;
         state.match_reservation = Some(MatchReservation {
             owner: owner.into(),
             runs: Vec::new(),
