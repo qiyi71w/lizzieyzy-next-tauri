@@ -11,6 +11,7 @@ import { ManagedResourcesPanel } from "./ManagedResourcesPanel";
 import { EngineEvaluationPanel } from "./EngineEvaluationPanel";
 import { EnginePreloadPanel } from "./EnginePreloadPanel";
 import { RuntimeThreadsPanel } from "./RuntimeThreadsPanel";
+import { RuntimeParametersPanel } from "./RuntimeParametersPanel";
 
 type Props = {
   disabled?: boolean;
@@ -505,6 +506,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
       </div>
       {visible && <EngineEvaluationPanel profiles={profiles} disabled={disabled || catalogBusy} />}
       {visible && <RuntimeThreadsPanel runId={run?.run_id ?? null} disabled={disabled || snapshot.lifecycle.state !== "ready"} />}
+      {visible && <RuntimeParametersPanel runId={run?.run_id ?? null} disabled={disabled || snapshot.lifecycle.state !== "ready"} />}
       {assetChecks.length > 0 && (
         <p className="message">
           {assetChecks.map((check) => `${check.exists ? "有" : "缺"} ${check.label}${check.path ? `: ${check.path}` : ""}`).join(" | ")}

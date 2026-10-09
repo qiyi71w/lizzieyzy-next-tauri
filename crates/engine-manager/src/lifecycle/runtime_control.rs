@@ -95,6 +95,19 @@ impl Transaction {
 
     /// Register before writing and require both successful write and complete own-ID reply.
     pub(super) fn command(&self, body: &str) -> Result<String, String> {
+        let (id, response) = self.send(body)?;
+        self.receive(id, response)
+    }
+
+    /// Both commands are issued before awaiting either reply; the sole dispatcher
+    /// retains own-ID responses in either arrival order for this one lease.
+    pub(super) fn parameter_pair(&self) -> Result<(String, String), String> {
+        let (pda_id, pda) = self.send("kata-get-param playoutDoublingAdvantage")?;
+        let (wrn_id, wrn) = self.send("kata-get-param analysisWideRootNoise")?;
+        Ok((self.receive(pda_id, pda)?, self.receive(wrn_id, wrn)?))
+    }
+
+    fn send(&self, body: &str) -> Result<(u32, mpsc::Receiver<String>), String> {
         let (id, response, stdin) = {
             let mut state = self.manager.lock();
             self.current(&state)?;
@@ -129,8 +142,12 @@ impl Transaction {
         });
         written.recv_timeout(self.deadline.saturating_duration_since(Instant::now()))
             .map_err(|_| "runtime control write timed out")??;
+        Ok((id, response))
+    }
+
+    fn receive(&self, id: u32, response: mpsc::Receiver<String>) -> Result<String, String> {
         let mut decoder = ResponseDecoder::new(id);
-        loop {
+        let result = (|| loop {
             self.current(&self.manager.lock())?;
             match response.recv_timeout(Duration::from_millis(20)) {
                 Ok(line) => if let Some(reply) = decoder.push(&line)? {
@@ -141,7 +158,13 @@ impl Transaction {
                 Err(RecvTimeoutError::Timeout) => continue,
                 Err(RecvTimeoutError::Disconnected) => return Err("runtime control reader retired".into()),
             }
+        })();
+        // A failed first half can leave the other reply in flight. Retire both
+        // registrations before dropping either receiver, not later in Drop.
+        if result.is_err() {
+            self.manager.lock().gtp_dispatch.retire(&self.identity.run_id, &self.identity.request_id);
         }
+        result
     }
 }
 

@@ -14,6 +14,7 @@ stream_count = 0
 def analysis_frame(winrate):
     return f"info move D4 visits 32 winrate {winrate} order 0 pv D4 E5 rootInfo visits 32 winrate {winrate}"
 text = ""
+pair_first = None
 for raw in sys.stdin:
     with open("trace", "a") as trace:
         trace.write(raw)
@@ -31,6 +32,37 @@ for raw in sys.stdin:
         if value < 1 or value > 4096: marker, body = "?", "invalid threads"
         else: threads = value
     elif name == "kata-get-param":
+        parameter = command.split()[1]
+        if parameter in ("playoutDoublingAdvantage", "analysisWideRootNoise"):
+            behavior = pathlib.Path("pair-mode").read_text() if pathlib.Path("pair-mode").exists() else "forward"
+            if parameter == "playoutDoublingAdvantage":
+                pair_first = number
+                continue
+            pda, wrn = "-0.5", "0.04"
+            if behavior == "nan": pda = "NaN"
+            if behavior == "infinity": wrn = "inf"
+            if behavior == "pda_domain": pda = "3.1"
+            if behavior == "wrn_domain": wrn = "-0.01"
+            if behavior == "extra_value": wrn = "0.04 0.05"
+            if behavior == "wrong_order":
+                print(f"={pair_first} {pda}\n={number} {wrn}\n", flush=True)
+                continue
+            if behavior == "stream_only":
+                print("info move D4 visits 1 winrate 0.5", flush=True)
+                continue
+            replies = [(pair_first, pda, "?" if behavior == "error_first" else "="),
+                       (number, wrn, "?" if behavior == "error_second" else "=")]
+            if behavior in ("hold", "timeout"):
+                print(f"={pair_first} 1.5\n", flush=True)
+                pathlib.Path("pair-held").write_text(number)
+                while not pathlib.Path("pair-release").exists(): time.sleep(0.005)
+                replies = [(number, "0.25", "=")]
+            if behavior == "missing": replies = replies[:1]
+            if behavior == "reverse": replies.reverse()
+            for response_id, value, reply_marker in replies:
+                if behavior == "old_ids": response_id = str(int(response_id) - 2)
+                print(f"{reply_marker}{response_id} {value}\n", flush=True)
+            continue
         behavior = pathlib.Path("thread-mode").read_text() if pathlib.Path("thread-mode").exists() else "valid"
         if behavior in ("hold", "timeout"):
             pathlib.Path("thread-held").write_text(number)

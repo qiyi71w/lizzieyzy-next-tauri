@@ -5,6 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type {
   RuntimeThreadsRequestDto,
   RuntimeThreadsSnapshotDto,
+  RuntimeParametersSnapshotDto,
   EvaluationSnapshotDto,
   AnalysisFrameDto,
   AnalysisBranchChoiceDto,
@@ -83,6 +84,16 @@ export async function getRuntimeThreads(): Promise<RuntimeThreadsSnapshotDto> {
 export async function requestRuntimeThreads(request: RuntimeThreadsRequestDto): Promise<RuntimeThreadsSnapshotDto> {
   if (!isTauriRuntime()) throw new Error("Runtime threads require the native qualified GTP Run.");
   return invoke<RuntimeThreadsSnapshotDto>("engine_runtime_threads", { request });
+}
+
+export async function getRuntimeParameters(): Promise<RuntimeParametersSnapshotDto> {
+  if (!isTauriRuntime()) throw new Error("Parameter readback requires the native qualified GTP Run.");
+  return invoke<RuntimeParametersSnapshotDto>("engine_runtime_parameters_snapshot");
+}
+
+export async function readRuntimeParameters(identity: RuntimeThreadsRequestDto["identity"]): Promise<RuntimeParametersSnapshotDto> {
+  if (!isTauriRuntime()) throw new Error("Parameter readback requires the native qualified GTP Run.");
+  return invoke<RuntimeParametersSnapshotDto>("engine_runtime_parameters_read", { identity });
 }
 
 export async function getEngineEvaluation(): Promise<EvaluationSnapshotDto> {

@@ -334,6 +334,16 @@ export type RuntimeThreadsSnapshotDto = {
   status: "unknown" | "pending" | "confirmed" | "failed";
   failure: string | null;
 };
+export type RuntimeParametersSnapshotDto = {
+  run_id: string | null;
+  profile_revision: string | null;
+  supported: boolean;
+  reason: string | null;
+  request_id: string | null;
+  last_valid: { playout_doubling_advantage: number; analysis_wide_root_noise: number } | null;
+  status: "unknown" | "pending" | "confirmed" | "failed";
+  failure: string | null;
+};
 export type QualifiedLocalResourceDto = {
   profile_revision: string;
   resources: EngineResourceIdentityDto[];

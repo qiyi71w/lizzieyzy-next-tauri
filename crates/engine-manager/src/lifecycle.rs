@@ -38,6 +38,7 @@ mod gtp_control;
 mod gtp_analysis;
 mod runtime_control;
 mod runtime_threads;
+mod runtime_parameters;
 pub use game_move::{GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle};
 
 pub trait AnalysisJobCancel: Send + Sync {
@@ -269,6 +270,7 @@ struct ManagerState {
     evaluation_notice: app_model::EvaluationSnapshotDto,
     runtime_control: Option<runtime_control::Slot>,
     runtime_threads: Option<app_model::RuntimeThreadsSnapshotDto>,
+    runtime_parameters: Option<app_model::RuntimeParametersSnapshotDto>,
 }
 
 struct Inner {
@@ -331,6 +333,7 @@ impl ForegroundEngineManager {
                     evaluation_notice: Default::default(),
                     runtime_control: None,
                     runtime_threads: None,
+                    runtime_parameters: None,
                 }),
             }),
         }
