@@ -1,3 +1,24 @@
+export type EvaluationPhaseDto = "idle" | "qualifying" | "running" | "completed" | "failed" | "cancelled" | "yielded" | "retired";
+export type EvaluationResultDto = {
+  target_id: string;
+  input_revision: string;
+  qualified_resource: QualifiedLocalResourceDto;
+  elapsed_ms: number;
+  search_visits_per_second: number | null;
+};
+export type EvaluationSnapshotDto = {
+  evaluation_id: string | null;
+  target_id: string | null;
+  input_revision: string | null;
+  phase: EvaluationPhaseDto;
+  process_id: number | null;
+  exit_code: number | null;
+  output: string[];
+  output_truncated: boolean;
+  message: string | null;
+  result: EvaluationResultDto | null;
+};
+
 export type ExportConfirmationDto = { title: string; message: string };
 export type RenderedImageExportOptionsDto = { defaultFileName?: string; pngOnly?: boolean };
 

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
+  EvaluationSnapshotDto,
   AnalysisFrameDto,
   AnalysisBranchChoiceDto,
   AnalysisJobEventDto,
@@ -68,6 +69,21 @@ declare global {
 }
 
 export const isTauriRuntime = () => typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
+
+export async function getEngineEvaluation(): Promise<EvaluationSnapshotDto> {
+  if (!isTauriRuntime()) throw new Error("Benchmark requires the native desktop and a qualified direct-local KataGo binary.");
+  return invoke<EvaluationSnapshotDto>("engine_evaluation_snapshot");
+}
+
+export async function startEngineEvaluation(profileId: string): Promise<EvaluationSnapshotDto> {
+  if (!isTauriRuntime()) throw new Error("Benchmark requires the native desktop and a qualified direct-local KataGo binary.");
+  return invoke<EvaluationSnapshotDto>("engine_evaluation_start", { profileId });
+}
+
+export async function cancelEngineEvaluation(evaluationId: string): Promise<EvaluationSnapshotDto> {
+  if (!isTauriRuntime()) throw new Error("Benchmark requires the native desktop.");
+  return invoke<EvaluationSnapshotDto>("engine_evaluation_cancel", { evaluationId });
+}
 
 export async function getHealth(): Promise<AppHealthDto> {
   if (!isTauriRuntime()) {

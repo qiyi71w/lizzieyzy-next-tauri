@@ -5,15 +5,17 @@ import type { AssetCheckDto, EngineBackendDto, EngineFailureDto, EngineProfileDt
 import { profileHasPendingChanges, runFromSnapshot, verifiedEngineCapabilitiesLabel } from "../domain/foregroundEngine";
 import { t } from "../i18n/resources";
 import { EngineResourceDetails } from "./EngineResourceDetails";
+import { EngineEvaluationPanel } from "./EngineEvaluationPanel";
 
 type Props = {
   disabled?: boolean;
+  visible?: boolean;
   engineSnapshot?: ForegroundEngineSnapshotDto | null;
   engineFailure?: EngineFailureDto | null;
   onProfilesChange?: (profiles: EngineProfileRecordDto[]) => void;
 };
 
-export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engineFailure = null, onProfilesChange }: Props) {
+export function EngineSetupPanel({ disabled = false, visible = true, engineSnapshot = null, engineFailure = null, onProfilesChange }: Props) {
   const [profiles, setProfiles] = useState<EngineProfileRecordDto[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState("default");
   const [profileName, setProfileName] = useState("Local KataGo");
@@ -415,6 +417,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engi
       </div>
       {pendingChanges ? <p className="message" role="status">存在待应用更改。只有显式 Restart 才会替换当前 Foreground Engine Run。</p> : null}
       <p className="message">{profileStatus}</p>
+      {visible && <EngineEvaluationPanel profiles={profiles} disabled={disabled || catalogBusy} />}
       {assetChecks.length > 0 && (
         <p className="message">
           {assetChecks.map((check) => `${check.exists ? "有" : "缺"} ${check.label}${check.path ? `: ${check.path}` : ""}`).join(" | ")}

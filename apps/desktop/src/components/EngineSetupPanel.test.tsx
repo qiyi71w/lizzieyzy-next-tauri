@@ -314,3 +314,20 @@ it("keeps resource identity on the healthy primary while showing the failed cand
   expect(details.textContent).toContain("saved-content-a");
   expect((await loadEngineProfilesSettings()).profiles[0].profile.name).toBe(profile.name);
 });
+
+it("closing the retained settings sheet cancels its isolated benchmark", async () => {
+  vi.spyOn(backend, "isTauriRuntime").mockReturnValue(true);
+  vi.spyOn(backend, "getEngineEvaluation").mockResolvedValue({
+    evaluation_id: "visible-benchmark", target_id: "default", input_revision: "revision", phase: "running",
+    process_id: 123, exit_code: null, output: [], output_truncated: false, message: null, result: null
+  });
+  const cancel = vi.spyOn(backend, "cancelEngineEvaluation").mockResolvedValue({
+    evaluation_id: "visible-benchmark", target_id: "default", input_revision: "revision", phase: "cancelled",
+    process_id: null, exit_code: null, output: [], output_truncated: false, message: null, result: null
+  });
+  await render();
+  await act(async () => root!.render(<EngineSetupPanel visible={false} />));
+  expect(cancel).toHaveBeenCalledWith("visible-benchmark");
+  expect(host.querySelector('section[aria-label="本地性能评估 Benchmark"]')).toBeNull();
+  expect(host.querySelector('section[aria-label="引擎设置"]')).not.toBeNull();
+});

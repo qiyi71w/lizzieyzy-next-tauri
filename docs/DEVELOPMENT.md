@@ -43,6 +43,25 @@ Yike analysis-rule compatibility was verified on Windows source candidate `5c2fc
 
 Focused regression: `cargo test -p katago-protocol -p engine-manager --lib --test analysis_rules` passed 46 tests; the pre-existing ignored exact-match engine smoke is a separate path. `cargo clippy -p katago-protocol -p engine-manager --all-targets -- -D warnings` passed. The rule conversion is confined to analysis JSONL; exact-position match admission and local scoring inference retain their existing contracts.
 
+### Manual isolated Benchmark
+
+Engine Settings → 本地性能评估 Benchmark selects a saved target independently of the profile editor. Browser preview displays unavailable; actual measurement requires native IPC and a directly executed, qualified KataGo 1.18.2. Benchmark preserves the saved command's arguments/config layers/workdir while selecting the benchmark subcommand. Engine-specific incompatible arguments fail visibly rather than being dropped. A saved custom `benchmark` command may supply explicit `-t`, `-v`, and `-n` limits; ordinary benchmark defaults still have the declared 120-second application deadline. Results are session-only measurements, not saved thread recommendations.
+
+Focused checks:
+
+```bash
+cargo test -p engine-manager --test evaluation
+cargo test -p lizzieyzy-next-desktop --lib saved_benchmark_edit_retires_only_evaluation_and_preserves_game_and_catalog_on_failure
+cd apps/desktop
+npm exec vitest -- run src/components/EngineEvaluationPanel.test.tsx src/components/EngineSetupPanel.test.tsx
+npm run build
+```
+
+The controlled process cases cover original argv and all config layers, bounded streamed output, genuine completion versus exit-only/no metric, failure/privacy, Cancel/new request/target edit/delete, same-path resource replacement, Match priority, and task Pause/Continue retirement. The gateway case observes actual catalog bytes and unchanged SGF/current-game ownership. Rendered cases cover explicit saved-target selection, actual versus unavailable result, close-before-start-completion, cancellation, and browser refusal.
+
+Real production-manager smoke is opt-in: set `LIZZIEYZY_KATAGO_ENGINE`, `LIZZIEYZY_KATAGO_MODEL`, `LIZZIEYZY_KATAGO_CONFIG` and `LIZZIEYZY_KATAGO_WORKDIR` to isolated compatible resources, then run `cargo test -p engine-manager --test evaluation real_katago_measurement_failure_cancel_and_foreground_handoff -- --ignored --nocapture`. It records the actual measurement receipt and checks process success, nonzero failure, cancellation, Match yield and handoff to a real foreground JSONL query while preserving Pause and config bytes. Version/resource probes alone are not a measurement. Required Windows native entry/result/cancel and the exact candidate/resource tuple are recorded separately in the R12 ticket13 acceptance record; repository or Linux evidence does not satisfy that native gate. This manual result does not enable startup evaluation by itself.
+
+
 ### Per-Surface Validation Gates
 
 - **Frontend / Tauri UI changes (`apps/desktop`)**:

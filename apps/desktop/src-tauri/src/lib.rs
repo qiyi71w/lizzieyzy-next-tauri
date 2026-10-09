@@ -617,7 +617,9 @@ fn save_engine_profiles_at_path(
                 .map_err(map_engine_failure)?;
         }
     }
-    persist_engine_profiles(path, settings)
+    let saved = persist_engine_profiles(path, settings)?;
+    manager.evaluation_snapshot();
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -1035,6 +1037,21 @@ fn foreground_engine_snapshot(manager: State<'_, ForegroundEngineManager>) -> Fo
 }
 
 #[tauri::command]
+fn engine_evaluation_snapshot(manager: State<'_, ForegroundEngineManager>) -> app_model::EvaluationSnapshotDto {
+    manager.evaluation_snapshot()
+}
+
+#[tauri::command]
+fn engine_evaluation_start(manager: State<'_, ForegroundEngineManager>, profile_id: String) -> EngineCommandResult<app_model::EvaluationSnapshotDto> {
+    manager.start_evaluation(&profile_id).map_err(Box::new)
+}
+
+#[tauri::command]
+fn engine_evaluation_cancel(manager: State<'_, ForegroundEngineManager>, evaluation_id: String) -> EngineCommandResult<app_model::EvaluationSnapshotDto> {
+    manager.cancel_evaluation(&evaluation_id).map_err(Box::new)
+}
+
+#[tauri::command]
 fn foreground_engine_start(
     manager: State<'_, ForegroundEngineManager>,
     profile_id: String,
@@ -1252,6 +1269,9 @@ pub fn run() {
             continue_analysis_task,
             katago_cancel_analysis,
             foreground_engine_snapshot,
+            engine_evaluation_snapshot,
+            engine_evaluation_start,
+            engine_evaluation_cancel,
             foreground_engine_start,
             foreground_engine_stop,
             foreground_engine_restart,
@@ -1313,6 +1333,62 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn saved_benchmark_edit_retires_only_evaluation_and_preserves_game_and_catalog_on_failure() {
+        struct Catalog(PathBuf);
+        impl EngineProfileCatalog for Catalog {
+            fn get(&self, id: &str) -> Option<SavedEngineProfile> {
+                engine_manager::load_engine_profiles(&self.0).ok()?.profiles.into_iter()
+                    .find(|record| record.id == id)
+                    .map(|record| SavedEngineProfile { profile_id: record.id, profile: record.profile })
+            }
+        }
+        let directory = std::env::temp_dir().join(format!("benchmark-gateway-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("model.bin"), "model").unwrap();
+        std::fs::write(directory.join("config.cfg"), "numSearchThreads=1").unwrap();
+        let path = directory.join("profiles.json");
+        let mut settings = default_engine_profiles_settings();
+        settings.profiles[0].profile = EngineProfileDto {
+            name: "Saved benchmark".into(),
+            program: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../crates/engine-manager/tests/fixtures/evaluation_process.py").to_string_lossy().into(),
+            argv: vec!["gtp".into(), "-config".into(), "config.cfg".into(), "-model".into(), "model.bin".into(), "-override-config".into(), "testMode=hold".into()],
+            working_dir: Some(directory.to_string_lossy().into()),
+            adapter: app_model::EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings::default()),
+        };
+        persist_engine_profiles(&path, settings.clone()).unwrap();
+        let manager = ForegroundEngineManager::new(std::sync::Arc::new(Catalog(path.clone())), ForegroundEngineConfig::for_tests());
+        let game = CurrentGameState::default();
+        game.connect_analysis_manager(manager.clone());
+        game.replace("(;SZ[9]C[Personal comment];B[dd])", None).unwrap();
+        let sgf = game.serialize().unwrap();
+        let foreground = manager.snapshot();
+        manager.start_evaluation("default").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if manager.evaluation_snapshot().phase == app_model::EvaluationPhaseDto::Running { break; }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        let mut invalid = settings.clone();
+        invalid.profiles[0].profile.name.clear();
+        assert!(save_engine_profiles_at_path(&path, &manager, &settings, invalid).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(manager.evaluation_snapshot().phase, app_model::EvaluationPhaseDto::Running);
+        let mut edited = settings.clone();
+        edited.profiles[0].profile.name = "Edited target".into();
+        save_engine_profiles_at_path(&path, &manager, &settings, edited).unwrap();
+        let retired = manager.evaluation_snapshot();
+        assert_eq!(retired.phase, app_model::EvaluationPhaseDto::Retired);
+        assert!(retired.process_id.is_none() && retired.result.is_none() && retired.output.is_empty());
+        assert_eq!(manager.snapshot(), foreground);
+        assert_eq!(game.serialize().unwrap(), sgf);
+        manager.teardown().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn legacy_gateway_read_preserves_file_and_surfaces_corruption() {

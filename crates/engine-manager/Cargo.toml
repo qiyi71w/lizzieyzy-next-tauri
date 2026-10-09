@@ -16,3 +16,6 @@ thiserror.workspace = true
 uuid.workspace = true
 sha2 = "0.10"
 regex.workspace = true
+
+[dev-dependencies]
+parking_lot = "0.12"

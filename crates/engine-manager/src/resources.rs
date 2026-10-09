@@ -51,6 +51,52 @@ impl ResourceSnapshot {
         Ok(snapshot)
     }
 
+    pub(crate) fn capture_evaluation(
+        run: &EngineRunDto,
+        spec: &crate::CommandSpec,
+        deadline: Instant,
+    ) -> Result<Self, ResourceError> {
+        let mut snapshot = Self {
+            entries: Vec::new(),
+            revision: format!("{:x}", Sha256::digest(serde_json::to_vec(&run.profile_snapshot).expect("profile serialization"))),
+        };
+        snapshot.add(resolve_executable(&spec.program)?, "executable", deadline)?;
+        let mut model = false;
+        let mut config = false;
+        let mut args = spec.args.iter().skip(1);
+        while let Some(arg) = args.next() {
+            let (flag, inline) = arg.split_once('=').map_or((arg.as_str(), None), |(flag, value)| (flag, Some(value)));
+            if flag == "-config" || flag == "-model" {
+                let value = inline.or_else(|| args.next().map(String::as_str)).ok_or_else(|| (
+                    EngineFailureKind::Config, "Missing benchmark resource argument".into()
+                ))?;
+                let path = Path::new(spec.working_dir.as_deref().unwrap_or(".")).join(value);
+                if flag == "-config" {
+                    config = true;
+                    snapshot.config(path, deadline, 0)?;
+                } else {
+                    model = true;
+                    snapshot.add(path, "model", deadline)?;
+                }
+            }
+        }
+        if !model || !config {
+            return Err((EngineFailureKind::Config,
+                "Benchmark requires explicit model and all config layers; implicit defaults are unsupported".into()));
+        }
+        for argument in &spec.args[1..] {
+            let value = argument.split_once('=').map_or(argument.as_str(), |(_, value)| value);
+            let path = Path::new(spec.working_dir.as_deref().unwrap_or(".")).join(value);
+            if path.is_file() && !snapshot.entries.iter().any(|(known, _)| known == &path) {
+                if snapshot.entries.len() >= 128 {
+                    return Err((EngineFailureKind::Config, "Benchmark exceeds 128 resource files".into()));
+                }
+                snapshot.add(path, "launch_argument", deadline)?;
+            }
+        }
+        Ok(snapshot)
+    }
+
     fn add(&mut self, path: PathBuf, component: &str, deadline: Instant) -> Result<PathBuf, ResourceError> {
         let kind = component_kind(component);
         path.canonicalize().map_err(|_| {
