@@ -395,7 +395,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engi
       {adapterKind === "generic_gtp" ? <p className="message" role="status">启动后验证 GTP v2、引擎名称、版本与命令列表；保存配置不会验证协议或改变当前 run。</p> : null}
       <p className="message" aria-label="当前 run 能力">{verifiedEngineCapabilitiesLabel(snapshot)}</p>
       <EngineResourceDetails run={run} />
-      {engineFailure && <section role="alert" className="message" style={{ overflowWrap: "anywhere" }}>
+      {engineFailure && <section role="alert" className="message engine-resource-message">
         <h4>{t("engineResource.failure")}: {engineFailure.kind}</h4>
         <p>{t("engineResource.profile")}: {engineFailure.profile_id} · {t("engineResource.run")}: {engineFailure.run_id}</p>
         <p>{engineFailure.message}</p>
