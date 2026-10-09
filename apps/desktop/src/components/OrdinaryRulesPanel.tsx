@@ -46,7 +46,7 @@ export function OrdinaryRulesPanel({ run, generation, nodePath, native, disabled
       if (round.current === requestRound && current.current === captured) setPending(false);
     }
   }
-  return <section aria-label={t("engineRules.title")} className="message" style={{ overflowWrap: "anywhere" }}>
+  return <section aria-label={t("engineRules.title")} className="message ordinary-rules-panel">
     <h3>{t("engineRules.title")}</h3>
     <p>{t("engineRules.boundary")}</p>
     <button type="button" disabled={!available || disabled || pending} onClick={() => void confirm()}>{t("engineRules.confirm")}</button>
