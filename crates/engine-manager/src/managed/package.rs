@@ -100,6 +100,7 @@ struct Manifest {
 struct ManifestFile { file: String, size_bytes: u64, sha256: String }
 pub(super) fn verify_package(directory: &Path, target: &str, asset: &Asset, network: &NetworkOperation) -> Result<(), String> {
     for name in ["source-package.json", "source-release.json"] {
+        network.lease().check().map_err(|_| "managed_cancelled")?;
         let path = directory.join(name);
         if fs::metadata(&path).map_err(|_| "managed_manifest_missing")?.len() > 1024 * 1024 { return Err("managed_manifest_limit".into()); }
         let manifest: Manifest = serde_json::from_slice(&fs::read(path).map_err(|_| "managed_manifest_unreadable")?).map_err(|_| "managed_manifest_invalid")?;
@@ -130,7 +131,9 @@ pub(super) fn content_hashes(directory: &Path, network: &NetworkOperation) -> Re
     let mut result = BTreeMap::new();
     let mut pending = vec![directory.to_path_buf()];
     while let Some(path) = pending.pop() {
+        network.lease().check().map_err(|_| "managed_cancelled")?;
         for entry in fs::read_dir(path).map_err(|_| "managed_file_unreadable")? {
+            network.lease().check().map_err(|_| "managed_cancelled")?;
             let entry = entry.map_err(|_| "managed_file_unreadable")?;
             let path = entry.path();
             let name = path.strip_prefix(directory).map_err(|_| "managed_path_invalid")?.to_string_lossy().replace('\\', "/");

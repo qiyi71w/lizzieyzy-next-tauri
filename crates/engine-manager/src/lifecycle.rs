@@ -2048,7 +2048,7 @@ impl Inner {
         })?;
         let resource_deadline = Instant::now() + Duration::from_secs(30);
         let resources =
-            ResourceSnapshot::capture(run, &spec, resource_deadline, capture.clone(), self.config.managed_resources_root.as_deref()).map_err(|(cause, message)| {
+            ResourceSnapshot::capture(run, &spec, resource_deadline, capture.clone(), self.config.managed_resources_root.as_deref(), &|| self.current_operation() != operation).map_err(|(cause, message)| {
                 failure(
                     kind,
                     cause,
@@ -2214,7 +2214,7 @@ impl Inner {
             gtp,
         };
         resources
-            .revalidate(Instant::now() + Duration::from_secs(30))
+            .revalidate(Instant::now() + Duration::from_secs(30), &|| self.current_operation() != operation)
             .map_err(|(cause, message)| {
                 failure(
                     kind,

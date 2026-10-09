@@ -21,13 +21,31 @@ pub(crate) struct ResourceSnapshot {
 
 pub(crate) type ResourceError = (EngineFailureKind, String);
 
+fn managed_authentication_stage<T>(deadline: &mut Instant, verify: impl FnOnce() -> Result<T, String>) -> Result<T, ResourceError> {
+    let started = Instant::now();
+    if started >= *deadline { return Err((EngineFailureKind::Timeout, "local resource qualification timed out before managed authentication".into())); }
+    let result = verify();
+    // Managed authentication has its own finite whole-stage/per-file limits and retirement lease.
+    // Preserve the unspent local budget: a multi-gigabyte package scan is not local receipt I/O.
+    *deadline += started.elapsed();
+    result.map_err(|message| {
+        let kind = match message.as_str() {
+            "managed_verification_timeout" => EngineFailureKind::Timeout,
+            "managed_verification_retired" => EngineFailureKind::Cancellation,
+            _ => EngineFailureKind::ResourceChanged,
+        };
+        (kind, message)
+    })
+}
+
 impl ResourceSnapshot {
     pub(crate) fn capture(
         run: &EngineRunDto,
         spec: &crate::CommandSpec,
-        deadline: Instant,
+        mut deadline: Instant,
         diagnostics: AttemptCapture,
         managed_root: Option<&Path>,
+        is_retired: &(dyn Fn() -> bool + Sync),
     ) -> Result<Self, ResourceError> {
         let revision = format!(
             "{:x}",
@@ -64,8 +82,7 @@ impl ResourceSnapshot {
             }
         }
         if let Some(root) = managed_root {
-            if let Some(identity) = crate::managed::trust::qualify(root, &executable)
-                .map_err(|message| (EngineFailureKind::ResourceChanged, message))? {
+            if let Some(identity) = managed_authentication_stage(&mut deadline, || crate::managed::trust::qualify(root, &executable, is_retired))? {
                 for path in &identity.receipt_paths { snapshot.add(path.clone(), "managed_receipt", deadline)?; }
                 snapshot.managed = Some((identity, root.to_path_buf(), executable));
             }
@@ -100,10 +117,9 @@ impl ResourceSnapshot {
         Ok(())
     }
 
-    pub(crate) fn revalidate(&self, deadline: Instant) -> Result<(), ResourceError> {
+    pub(crate) fn revalidate(&self, mut deadline: Instant, is_retired: &(dyn Fn() -> bool + Sync)) -> Result<(), ResourceError> {
         if let Some((_, root, executable)) = &self.managed {
-            crate::managed::trust::qualify(root, executable)
-                .map_err(|message| (EngineFailureKind::ResourceChanged, message))?
+            managed_authentication_stage(&mut deadline, || crate::managed::trust::qualify(root, executable, is_retired))?
                 .ok_or_else(|| (EngineFailureKind::ResourceChanged, "managed identity retired".into()))?;
         }
         for (path, expected) in &self.entries {
@@ -353,6 +369,44 @@ impl StartupOutput {
             Some(EngineFailureKind::Config)
         } else {
             None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn managed_stage_preserves_only_unspent_local_budget() {
+        let remaining = Duration::from_secs(20);
+        let original = Instant::now() + remaining;
+        let mut deadline = original;
+        assert_eq!(managed_authentication_stage(&mut deadline, || {
+            std::thread::sleep(Duration::from_millis(5));
+            Ok(7)
+        }).unwrap(), 7);
+        assert!(deadline.duration_since(original) >= Duration::from_millis(5));
+        assert!(deadline.saturating_duration_since(Instant::now()) <= remaining);
+    }
+
+    #[test]
+    fn exhausted_local_budget_cannot_enter_managed_stage() {
+        let mut deadline = Instant::now() - Duration::from_secs(1);
+        let error = managed_authentication_stage::<()>(&mut deadline, || panic!("expired local admission invoked verifier")).unwrap_err();
+        assert_eq!(error.0, EngineFailureKind::Timeout);
+    }
+
+    #[test]
+    fn managed_stage_preserves_failure_and_retirement_causes() {
+        for (message, kind) in [
+            ("managed_digest_mismatch", EngineFailureKind::ResourceChanged),
+            ("managed_verification_timeout", EngineFailureKind::Timeout),
+            ("managed_verification_retired", EngineFailureKind::Cancellation),
+        ] {
+            let mut deadline = Instant::now() + Duration::from_secs(30);
+            assert_eq!(managed_authentication_stage::<()>(&mut deadline, || Err(message.into())).unwrap_err(), (kind, message.into()));
         }
     }
 }
