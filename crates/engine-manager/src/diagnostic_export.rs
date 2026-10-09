@@ -19,6 +19,8 @@ const COLLECTION_BUDGET: Duration = Duration::from_secs(2);
 const ARCHIVE_BUDGET: Duration = Duration::from_secs(5);
 const LOCK_BUDGET: Duration = Duration::from_millis(25);
 type Bundle = Vec<(&'static str, Vec<u8>)>;
+#[cfg(test)]
+type Checkpoint = dyn Fn(Phase) -> Result<(), String> + Send + Sync;
 
 #[derive(Clone)]
 pub struct DiagnosticExport {
@@ -31,7 +33,7 @@ struct Inner {
     publication: Mutex<()>,
     closing: AtomicBool,
     #[cfg(test)]
-    checkpoint: Option<Arc<dyn Fn(Phase) -> Result<(), String> + Send + Sync>>,
+    checkpoint: Option<Arc<Checkpoint>>,
 }
 struct State {
     status: DiagnosticExportStatusDto,

@@ -31,8 +31,8 @@ fn resource_download_streams_binary_and_policy_change_retires_its_lease() {
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let server = std::thread::spawn(move || {
         let mut stream = accept_timeout(&listener, Duration::from_secs(3)).unwrap();
-        let mut request = [0; 1024];
-        stream.read(&mut request).unwrap();
+        let mut request = [0; 1];
+        stream.read_exact(&mut request).unwrap();
         stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n\0\xffab").unwrap();
     });
     let state = NetworkState::default();

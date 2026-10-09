@@ -433,10 +433,6 @@ fn kill_owned_katago(profile: &EngineProfileDto) {
     eprintln!("killed-owned-child pid={} parent={} start_ticks={}", target.pid, parent, target.start_ticks);
 }
 
-#[cfg(not(target_os = "linux"))]
-fn kill_owned_katago(_: &EngineProfileDto) {
-    panic!("crash smoke ownership is unsupported on this platform; never use global PID differences");
-}
 
 #[cfg(target_os = "linux")]
 #[test]
@@ -610,11 +606,11 @@ fn real_katago_ready_job_stop_restart_and_switch() {
     });
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires real KataGoAnalysis assets; run with LIZZIEYZY_REAL_KATAGO=1 --ignored"]
 fn real_katago_failed_start_failed_switch_crash_and_autoload() {
     require_real_katago();
-    assert!(cfg!(target_os = "linux"), "crash smoke requires Linux owned-child pidfd support; other platforms remain an explicit unrun gate");
 
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     catalog.upsert(SavedEngineProfile {

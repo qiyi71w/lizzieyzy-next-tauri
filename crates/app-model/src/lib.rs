@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
 mod workspace;
@@ -795,7 +796,7 @@ pub struct EngineRunDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability_snapshot: Option<EngineCapabilitySnapshotDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub qualified_resource: Option<QualifiedLocalResourceDto>,
+    pub qualified_resource: Option<Arc<QualifiedLocalResourceDto>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1420,7 +1421,16 @@ mod foreground_engine_wire {
                     profile_id: "profile-1".into(),
                     adapter_kind: EngineBackend::KataGoAnalysis,
                     profile_snapshot: sample_profile(),
-                    qualified_resource: None,
+                    qualified_resource: Some(Arc::new(QualifiedLocalResourceDto {
+                        profile_revision: "resource-revision".into(),
+                        resources: vec![],
+                        origin: "local_unknown".into(),
+                        version: Some("1.18.2".into()),
+                        source_commit: None,
+                        backend: None,
+                        static_zlib_exemption: false,
+                        thread_sources: None,
+                    })),
                     capability_snapshot: Some(EngineCapabilitySnapshotDto {
                         adapter_kind: EngineBackend::KataGoAnalysis,
                         game_move: true,
@@ -1486,6 +1496,10 @@ mod foreground_engine_wire {
         assert_eq!(snapshot_json["whole_game_job"]["job_id"], "job-whole");
         assert_eq!(snapshot_json["lifecycle"]["run"]["run_id"], "run-1");
         assert_eq!(snapshot_json["lifecycle"]["run"]["profile_id"], "profile-1");
+        assert_eq!(
+            snapshot_json["lifecycle"]["run"]["qualified_resource"]["profile_revision"],
+            "resource-revision"
+        );
         assert_eq!(
             snapshot_json["lifecycle"]["run"]["adapter_kind"],
             "kata_go_analysis"

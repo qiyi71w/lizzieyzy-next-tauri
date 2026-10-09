@@ -136,7 +136,7 @@ struct SelectedSubmission {
 
 enum SelectedCommand {
     Jsonl(String),
-    Gtp(SelectedNodeJobRequest),
+    Gtp(Box<SelectedNodeJobRequest>),
 }
 
 enum ContinuousReconcileWork {
@@ -996,39 +996,42 @@ impl ForegroundEngineManager {
             generation: request.generation,
             node_path: request.node_path.clone(),
         };
-        let command = if run.adapter_kind == EngineBackend::KataGoGtp {
-            SelectedCommand::Gtp(request.clone())
+        let board_width = request.board_width;
+        let board_height = request.board_height;
+        let (command, run_id, node_path) = if run.adapter_kind == EngineBackend::KataGoGtp {
+            (SelectedCommand::Gtp(Box::new(request)), started.run_id.clone(), started.node_path.clone())
         } else {
-            SelectedCommand::Jsonl(request.query.to_jsonl().map_err(|error| {
-            failure(
-                EngineOperationDto::Job,
-                EngineFailureKind::Protocol,
-                format!("failed to serialize selected-node query: {error}"),
-                Some(started.run_id.as_str()),
-                None,
-                None,
-            )
-            .with_job_id(&started.job_id)
-            })?)
+            let jsonl = request.query.to_jsonl().map_err(|error| {
+                failure(
+                    EngineOperationDto::Job,
+                    EngineFailureKind::Protocol,
+                    format!("failed to serialize selected-node query: {error}"),
+                    Some(started.run_id.as_str()),
+                    None,
+                    None,
+                )
+                .with_job_id(&started.job_id)
+            })?;
+            (SelectedCommand::Jsonl(jsonl), request.run_id, request.node_path)
         };
         self.yield_preloads_locked(state);
         state.jobs.push(RegisteredJob {
             query_id: job_id.clone(),
             job_id,
-            run_id: request.run_id,
+            run_id,
             lane: AnalysisJobLane::SelectedNode,
-            mode: request.mode,
-            continuous_budget: (request.mode == AnalysisJobModeDto::Continuous)
+            mode: started.mode,
+            continuous_budget: (started.mode == AnalysisJobModeDto::Continuous)
                 .then_some(state.continuous_budget),
             state: AnalysisJobStateDto::Queued,
             cancel_deadline: None,
             cleanup_deadline: None,
             submitted: false,
             submitted_at: Instant::now(),
-            generation: request.generation,
-            node_path: request.node_path,
-            board_width: request.board_width,
-            board_height: request.board_height,
+            generation: started.generation,
+            node_path,
+            board_width,
+            board_height,
             cancel: Arc::new(AnalysisCancelToken::new()),
             disposition: JobDisposition::Running,
             expected: Some(1),
@@ -1056,7 +1059,7 @@ impl ForegroundEngineManager {
     ) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
         let jsonl = match submission.command {
             SelectedCommand::Gtp(request) => {
-                self.spawn_gtp_analysis(submission.started.clone(), request);
+                self.spawn_gtp_analysis(submission.started.clone(), *request);
                 return Ok(submission.started);
             }
             SelectedCommand::Jsonl(jsonl) => jsonl,
@@ -2334,7 +2337,7 @@ impl Inner {
             .or(version);
         let mut qualified_run = run.clone();
         let preload_resources = background.then(|| resources.clone());
-        qualified_run.qualified_resource = Some(resources.qualified(version, backend));
+        qualified_run.qualified_resource = Some(Arc::new(resources.qualified(version, backend)));
         let run = &qualified_run;
         if background {
             return self.finish_preload(

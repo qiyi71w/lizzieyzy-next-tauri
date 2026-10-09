@@ -12,7 +12,7 @@ fn vertex(value: &str, width: u8, height: u8) -> Result<MoveVertex, String> {
         return Err("invalid GTP analysis vertex".into());
     }
     let column = bytes[0].to_ascii_uppercase();
-    if !(b'A'..=b'Z').contains(&column) || column == b'I' {
+    if !column.is_ascii_uppercase() || column == b'I' {
         return Err("invalid GTP analysis column".into());
     }
     let x = column - b'A' - u8::from(column > b'I');
@@ -145,7 +145,7 @@ pub fn parse_gtp_analysis(
         let block = &tokens[start..i];
         match kind {
             "info" => {
-                if candidates.len() >= usize::from(width) * usize::from(height) + 1 {
+                if candidates.len() > usize::from(width) * usize::from(height) {
                     return Err("too many GTP candidates".into());
                 }
                 let m = metric_block(block, width, height)?;

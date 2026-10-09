@@ -247,7 +247,7 @@ pub(super) fn available_disk(path: &Path) -> Option<u64> {
         let mut status = std::mem::MaybeUninit::<libc::statvfs>::uninit();
         if unsafe { libc::statvfs(path.as_ptr(), status.as_mut_ptr()) } != 0 { return None; }
         let status = unsafe { status.assume_init() };
-        Some(status.f_bavail as u64 * status.f_frsize as u64)
+        Some(status.f_bavail * status.f_frsize)
     }
     #[cfg(not(any(windows, unix)))] { None }
 }
