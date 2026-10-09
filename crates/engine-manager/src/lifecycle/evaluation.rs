@@ -421,6 +421,7 @@ fn run_process(
         slot.child = Some(child);
         if measurement {
             slot.snapshot.phase = PhaseDto::Running;
+            slot.snapshot.exit_code = None;
             slot.snapshot.output.clear();
         }
     }

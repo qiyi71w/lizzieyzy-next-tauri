@@ -88,9 +88,11 @@ impl Fixture {
     }
     fn running(&self) -> EvaluationSnapshotDto {
         self.manager.start_evaluation("target").unwrap();
-        self.wait(|s| {
+        let running = self.wait(|s| {
             s.phase == Phase::Running && s.output.iter().any(|line| line.contains("benchmark started"))
-        })
+        });
+        assert_eq!(running.exit_code, None, "probe exit is not measurement exit");
+        running
     }
 }
 impl Drop for Fixture {
