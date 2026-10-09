@@ -4,7 +4,7 @@ import { t } from "../i18n/resources";
 export function EngineResourceDetails({ run }: { run: EngineRunDto | null }) {
   const identity = run?.qualified_resource;
   const unknown = t("engineResource.unknown");
-  return <details className="message" style={{ overflowWrap: "anywhere" }}>
+  return <details className="message engine-resource-message">
     <summary>{t("engineResource.title")}</summary>
     {!identity ? <p>{t("engineResource.unverified")}</p> : <>
       <p>{t("engineResource.qualified")}</p>

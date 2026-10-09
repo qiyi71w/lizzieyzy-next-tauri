@@ -1149,7 +1149,8 @@ button[aria-pressed="true"] {
   max-width: 320px;
 }
 
-.human-match-dialog .message {
+.human-match-dialog .message,
+.engine-resource-message {
   white-space: normal;
   overflow: visible;
   max-width: none;
