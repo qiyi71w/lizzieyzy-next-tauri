@@ -18,7 +18,7 @@ fn real_katago_gtp_rules_and_exact_selected_positions() {
         profile: EngineProfileDto {
             name: "explicit KataGo GTP".into(),
             program: std::env::var("LIZZIEYZY_KATAGO_ENGINE").unwrap(),
-            argv: vec!["-config".into(), layer.to_string_lossy().into_owned(),
+            argv: vec!["-config".into(), layer.file_name().unwrap().to_string_lossy().into_owned(),
                 "-override-config".into(), "numSearchThreads=1".into()],
             working_dir: Some(std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap()),
             adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings {

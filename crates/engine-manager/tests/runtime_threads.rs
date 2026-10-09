@@ -66,7 +66,7 @@ fn real_runtime_threads_same_pid_analysis_pause_reset_and_expiry() {
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     catalog.upsert(SavedEngineProfile { profile_id: "threads".into(), profile: EngineProfileDto {
         name: "manual GTP threads".into(), program: engine.clone(),
-        argv: vec!["-config".into(), layer.to_string_lossy().into_owned(), "-override-config".into(), "numSearchThreads=1".into()],
+        argv: vec!["-config".into(), layer.file_name().unwrap().to_string_lossy().into_owned(), "-override-config".into(), "numSearchThreads=1".into()],
         working_dir: Some(std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap()),
         adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings { model_path: Some(std::env::var("LIZZIEYZY_KATAGO_MODEL").unwrap()), config_path: Some(config.clone()), max_visits: 4 }),
     }});
