@@ -528,6 +528,7 @@ KataGo 1.18.2 does not interpret quoted `loadsgf` filenames as shell paths. The 
 Explicit KataGo GTP profiles admit selected-node and continuous analysis through the existing selected-node lane, current-game gateway and main UI. Each request carries the immutable strict SGF position, not a board reconstructed from current stones alone. Before `kata-analyze`, the same Run performs the ordinary-rules restore/readback transaction above. Another positioning transaction cannot interrupt it. Unsupported projection is refused before writing; there is no protocol conversion, fallback or companion process. JSONL retains its original queries and independent whole-game lane.
 
 When the qualified GTP reader becomes ready, it reconciles an already selected position with existing continuous intent. This uses the same Pause, safety-hold and admission gates as later navigation; a position selected before Start does not wait for another user action or an unsolicited engine response.
+Finite analysis uses the captured active KataGo profile's max-visits setting for either protocol; editing or saving another profile leaves that Run's budget unchanged. The GTP profile editor exposes this same saved field.
 
 | Capability | GTP provider behavior |
 | --- | --- |

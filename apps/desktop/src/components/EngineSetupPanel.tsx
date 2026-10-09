@@ -431,7 +431,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engi
         <p>{t("engineResource.repair")}</p>
       </section>}
       <div className="engine-run-row">
-        {adapterKind === "kata_go_analysis" ?
+        {adapterKind !== "generic_gtp" ?
         <label>
           <span>最大计算量</span>
           <input type="number" min={1} step={1} value={maxVisits} onChange={(event) => setMaxVisits(event.target.value)} />

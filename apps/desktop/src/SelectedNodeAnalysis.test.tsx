@@ -239,7 +239,8 @@ async function renderApp() {
   return host;
 }
 
-async function readyEngine(host: HTMLElement) {
+async function readyEngine(host: HTMLElement, gtp = false) {
+  const adapterKind = gtp ? "kata_go_gtp" : "kata_go_analysis";
   const switcher = host.querySelector('select[aria-label="Foreground Engine Profile"]') as HTMLSelectElement;
   await act(async () => {
     switcher.value = "profile-1";
@@ -254,10 +255,11 @@ async function readyEngine(host: HTMLElement) {
         run: {
           run_id: "run-1",
           profile_id: "profile-1",
-          adapter_kind: "kata_go_analysis",
-          profile_snapshot: savedProfile.profile,
+          adapter_kind: adapterKind,
+          profile_snapshot: { ...savedProfile.profile, adapter_kind: adapterKind,
+            settings: { ...savedProfile.profile.settings, max_visits: gtp ? 37 : 800 } },
           capability_snapshot: {
-            adapter_kind: "kata_go_analysis",
+            adapter_kind: adapterKind,
             analysis: {
               selected_node_analysis: true,
               continuous_analysis: true,
@@ -265,9 +267,9 @@ async function readyEngine(host: HTMLElement) {
               pv: true,
               winrate: true,
               ownership: true,
-              policy: true,
+              policy: !gtp,
               visits_limit: true,
-              whole_game_analysis: true,
+              whole_game_analysis: !gtp,
               root_score: true,
               protocol_cancel: true
             }
@@ -284,6 +286,18 @@ function buttonNamed(host: HTMLElement, label: string) {
 }
 
 describe("selected-node analysis presentation", () => {
+  it("uses the active GTP Run's captured finite visit limit", async () => {
+    const host = await renderApp();
+    await readyEngine(host, true);
+    await act(async () => {
+      buttonNamed(host, "分析当前节点").click();
+      await backend.startSelectedNodeAnalysis.mock.results[0]?.value;
+    });
+    expect(backend.startSelectedNodeAnalysis).toHaveBeenCalledWith({
+      runId: "run-1", generation: 1, nodePath: { indices: [] }, maxVisits: 37
+    });
+  });
+
   it("publishes matching selected-node candidates, PV, ownership, policy, and score", async () => {
     const host = await renderApp();
     await readyEngine(host);

@@ -67,16 +67,17 @@ describe("engine profile configuration editor", () => {
     const original = (await loadEngineProfilesSettings()).profiles[0];
     await click("新增");
     await change(field("适配器"), "kata_go_gtp");
+    await change(field("最大计算量"), "37");
     await click("保存配置");
     const saved = await loadEngineProfilesSettings();
     expect(saved.profiles[0]).toEqual(original);
     expect(saved.profiles[1].profile.adapter_kind).toBe("kata_go_gtp");
-    expect(saved.profiles[1].profile.settings).toEqual(original.profile.settings);
+    expect(saved.profiles[1].profile.settings).toEqual({ ...original.profile.settings, max_visits: 37 });
     await click("重新加载配置");
     expect(field("适配器").value).toBe("kata_go_gtp");
     expect(field("模型").value).toBe("/模型/gtp.bin");
     expect(field("配置文件").value).toBe("/配置/gtp.cfg");
-    expect(host.textContent).toContain("主分析、动态线程与参数回读尚未准入");
+    expect(field("最大计算量").value).toBe("37");
   });
   it("creates, edits, saves and reloads both adapters with verbatim per-item argv", async () => {
     await render();

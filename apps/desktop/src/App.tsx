@@ -1258,7 +1258,7 @@ export function App() {
       setMessage("当前 run 未验证所需的分析能力。历史分析仍可查看。");
       return;
     }
-    const maxVisits = run.profile_snapshot.adapter_kind === "kata_go_analysis" ? run.profile_snapshot.settings.max_visits : 800;
+    const maxVisits = run.profile_snapshot.adapter_kind !== "generic_gtp" ? run.profile_snapshot.settings.max_visits : 800;
     if (kind === "once") void handleRunKataGo(run.profile_snapshot, maxVisits);
     else void handleAnalyzeKataGoGame(run.run_id, maxVisits);
   }
