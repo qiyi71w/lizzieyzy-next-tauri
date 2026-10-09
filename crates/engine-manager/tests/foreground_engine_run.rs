@@ -6777,7 +6777,7 @@ while True: time.sleep(1)
 #[cfg(unix)]
 #[test]
 fn resource_replacement_and_saved_revision_changes_cannot_promote_a_late_candidate() {
-    for change in ["model", "config", "executable", "profile"] {
+    for change in ["model", "config", "layered_include", "executable", "profile"] {
         let temp = TestTempDir::new(change);
         let release = temp.path().join("release-resource");
         let entered = temp.path().join("entered-resource");
@@ -6787,6 +6787,13 @@ fn resource_replacement_and_saved_revision_changes_cannot_promote_a_late_candida
             hold_probe_until_release_script(&release)
         );
         let (manager, catalog, events, run_a) = ready_two_profiles(&temp, &resident_echo_script(), &script);
+        if change == "layered_include" {
+            std::fs::write(temp.path().join("cache-defaults.cfg"), "@include='custom-cache.cfg'\n").unwrap();
+            std::fs::write(temp.path().join("custom-cache.cfg"), "homeDataDir = original\n").unwrap();
+            let mut saved = catalog.get("profile-b").unwrap();
+            saved.profile.argv.extend(["-config".into(), temp.path().join("cache-defaults.cfg").to_string_lossy().into_owned()]);
+            catalog.upsert(saved);
+        }
         let before = manager.snapshot();
         manager.switch_to("profile-b").unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -6797,6 +6804,7 @@ fn resource_replacement_and_saved_revision_changes_cannot_promote_a_late_candida
         match change {
             "model" => std::fs::write(temp.path().join("engine-b.bin"), b"replacement model").unwrap(),
             "config" => std::fs::write(temp.path().join("engine-b.cfg"), b"numSearchThreads=3").unwrap(),
+            "layered_include" => std::fs::write(temp.path().join("custom-cache.cfg"), "homeDataDir = replacement\n").unwrap(),
             "executable" => {
                 let replacement = temp.path().join("replacement.sh");
                 write_executable(&replacement, &resident_echo_script());

@@ -312,12 +312,18 @@ fn execute(
     evaluation_run.run_id = id.into();
     // This capture belongs only to the evaluation; it is not a Foreground Run attempt.
     let diagnostics = crate::diagnostics::AttemptCapture::new(&evaluation_run);
+    let is_retired = || {
+        let Some(inner) = weak.upgrade() else { return true; };
+        current(&mut inner.lock(), id).is_none()
+            || inner.catalog.get(&saved.profile_id).as_ref() != Some(saved)
+    };
     let resources = ResourceSnapshot::capture_evaluation(
         &evaluation_run,
         spec,
         Instant::now() + Duration::from_secs(30),
         diagnostics,
         managed_root.as_deref(),
+        &is_retired,
     )
     .map_err(|(_, message)| message)?;
     let probe = crate::CommandSpec {
@@ -340,7 +346,7 @@ fn execute(
         .find(|line| line.starts_with("Using ") && line.ends_with(" backend"))
         .cloned();
     resources
-        .revalidate(Instant::now() + Duration::from_secs(30))
+        .revalidate(Instant::now() + Duration::from_secs(30), &is_retired)
         .map_err(|(_, message)| message)?;
     spec.args[0] = "benchmark".into();
     let (exit_code, output, elapsed) = run_process(weak, id, spec, MEASUREMENT_TIMEOUT, true)?;
@@ -354,7 +360,7 @@ fn execute(
         return Err("Benchmark exited without a completed measurement; result unavailable".into());
     }
     resources
-        .revalidate(Instant::now() + Duration::from_secs(30))
+        .revalidate(Instant::now() + Duration::from_secs(30), &is_retired)
         .map_err(|(_, message)| message)?;
     let qualified = resources.qualified(Some(version), backend);
     let inner = weak.upgrade().ok_or("Benchmark manager closed")?;

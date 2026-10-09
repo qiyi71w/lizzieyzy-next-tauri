@@ -5,7 +5,7 @@ use app_model::{ManagedAcquireRequestDto, ManagedPhaseDto};
 #[test]
 fn explicit_operation_is_nonreentrant_and_cancel_has_one_terminal_without_installing() {
     let root = std::env::temp_dir().join(format!("managed-{}", uuid::Uuid::new_v4()));
-    let resources = ManagedResources::new(root.clone());
+    let resources = ManagedResources::new(root.clone(), root.join("trt"));
     let network = NetworkState::default();
     let profile = engine_manager::default_engine_profiles_settings().profiles[0].profile.clone();
     let request = ManagedAcquireRequestDto {
@@ -26,7 +26,7 @@ fn explicit_operation_is_nonreentrant_and_cancel_has_one_terminal_without_instal
 #[test]
 fn failed_operation_uses_canonical_bounded_diagnostics() {
     let root = std::env::temp_dir().join(format!("managed-{}", uuid::Uuid::new_v4()));
-    let resources = ManagedResources::new(root.clone());
+    let resources = ManagedResources::new(root.clone(), root.join("trt"));
     let request = ManagedAcquireRequestDto {
         profile_id: "default".into(),
         profile: engine_manager::default_engine_profiles_settings().profiles[0].profile.clone(),
@@ -53,7 +53,7 @@ fn real_public_acquisition_preserves_selection_and_qualifies_only_on_explicit_st
     use std::{sync::Arc, time::{Duration, Instant}};
     let root = std::path::PathBuf::from(std::env::var("LIZZIEYZY_ACQUISITION_ROOT").unwrap());
     std::fs::create_dir_all(&root).unwrap();
-    let resources = ManagedResources::new(root.join("resources"));
+    let resources = ManagedResources::new(root.join("resources"), root.join("trt"));
     let inventory = ModelInventory::new(root.join("inventory.json"));
     inventory.remember_saved(&[ModelPathDto { path: root.join("preserved-custom.bin.gz").to_string_lossy().into_owned(), working_dir: None }]).unwrap();
     let original = engine_manager::default_engine_profiles_settings();

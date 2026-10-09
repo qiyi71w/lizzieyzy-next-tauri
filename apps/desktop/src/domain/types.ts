@@ -678,11 +678,21 @@ export type ManagedCatalogDto = {
 export type ManagedAcquireRequestDto = {
   profile_id: string; profile: EngineProfileDto; target_id: string; model_id: string; policy_revision: number;
 };
-export type ManagedPhaseDto = "starting" | "downloading_engine" | "verifying_engine" | "downloading_model" | "verifying_model" | "publishing" | "succeeded" | "failed" | "cancelled";
-export type ManagedInstallationDto = { target_id: string; model_id: string; program: string; model_path: string; config_path: string; manifest_sha256: string };
+export type ManagedHardwareDto = {
+  status: string; gpu_name: string | null; gpu_uuid: string | null;
+  driver_version: string | null; compute_capability: string | null; reason: string;
+};
+export type ManagedRepairPreviewDto = {
+  admission_id: string; request: ManagedAcquireRequestDto; hardware: ManagedHardwareDto;
+  runtime_version: string; download_bytes: number; additional_disk_bytes: number;
+  available_disk_bytes: number | null; repair_allowed: boolean; reason: string;
+};
+export type ManagedPhaseDto = "starting" | "downloading_engine" | "verifying_engine" | "downloading_model" | "verifying_model" | "downloading_runtime" | "qualifying_runtime" | "publishing" | "succeeded" | "failed" | "cancelled";
+export type ManagedInstallationDto = { target_id: string; model_id: string; program: string; model_path: string; config_path: string; manifest_sha256: string; repair_config_path: string | null };
 export type ManagedOperationDto = {
   operation_id: string; profile_id: string; target_id: string; model_id: string; phase: ManagedPhaseDto;
   transferred_bytes: number; total_bytes: number; message: string | null; installation: ManagedInstallationDto | null;
   routes: NetworkRoute[];
+  repair_hardware: ManagedHardwareDto | null;
 };
 export type ManagedResourcesDto = { catalog: ManagedCatalogDto; operation: ManagedOperationDto | null };

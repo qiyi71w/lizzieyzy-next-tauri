@@ -451,6 +451,16 @@ fn generic_settings_roundtrip_preserves_unrestricted_argv() {
 }
 
 #[test]
+fn katago_layered_config_arguments_roundtrip_in_source_order() {
+    let temp = TestTempDir::new("layered-config-roundtrip");
+    let mut record = profile("layered", "Layered KataGo");
+    record.profile.argv = vec!["-config".into(), "配置, space.cfg".into(), "-config".into(), "second.cfg".into(), "-override-config".into(), "homeDataDir=custom".into()];
+    let catalog = settings("layered", Some("layered"), vec![record]);
+    save_engine_profiles(&temp.catalog_path(), catalog.clone()).unwrap();
+    assert_eq!(load_engine_profiles(&temp.catalog_path()).unwrap(), catalog);
+}
+
+#[test]
 fn reorder_persists_stable_ids_without_changing_catalog_identities_or_records() {
     let temp = TestTempDir::new("reorder");
     let path = temp.catalog_path();

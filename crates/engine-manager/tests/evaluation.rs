@@ -694,7 +694,16 @@ fn real_managed_evaluation_qualifies_both_adapters_without_primary_authority() {
             working_dir: Some(f.dir.to_string_lossy().into_owned()), adapter,
         }};
         *f.catalog.0.lock() = Some(saved.clone());
+        let qualifying = f.manager.start_evaluation("target").unwrap();
+        assert_eq!(qualifying.phase, Phase::Qualifying);
+        let cancelled = f.manager.cancel_evaluation(qualifying.evaluation_id.as_deref().unwrap()).unwrap();
+        assert_eq!(cancelled.phase, Phase::Cancelled);
+        assert!(cancelled.result.is_none());
+        assert!(cancelled.process_id.is_none());
+        // Re-admission waits for the actual retired qualification worker, not only its DTO.
+        let restart = Instant::now();
         f.manager.start_evaluation("target").unwrap();
+        assert!(restart.elapsed() < Duration::from_secs(3));
         let terminal = f.wait(|s| matches!(s.phase, Phase::Completed | Phase::Failed));
         assert_eq!(terminal.phase, Phase::Completed, "{terminal:?}");
         let result = terminal.result.as_ref().unwrap();

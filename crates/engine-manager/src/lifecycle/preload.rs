@@ -279,7 +279,16 @@ impl ForegroundEngineManager {
                 ));
             }
             resources
-                .revalidate(Instant::now() + Duration::from_secs(30))
+                .revalidate(Instant::now() + Duration::from_secs(30), &|| {
+                    let state = self.lock();
+                    state.operation != operation
+                        || busy(&state)
+                        || !matches!(&state.phase, Phase::Ready(current) if current.run_id == primary.run_id)
+                        || !state.preloads.iter().any(|slot| {
+                            slot.dto.run.run_id == run.run_id
+                                && slot.dto.phase == EnginePreloadPhaseDto::Ready
+                        })
+                })
                 .map_err(|(kind, message)| {
                     failure(
                         EngineOperationDto::Switch,

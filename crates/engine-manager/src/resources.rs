@@ -22,13 +22,31 @@ pub(crate) struct ResourceSnapshot {
 
 pub(crate) type ResourceError = (EngineFailureKind, String);
 
+fn managed_authentication_stage<T>(deadline: &mut Instant, verify: impl FnOnce() -> Result<T, String>) -> Result<T, ResourceError> {
+    let started = Instant::now();
+    if started >= *deadline { return Err((EngineFailureKind::Timeout, "local resource qualification timed out before managed authentication".into())); }
+    let result = verify();
+    // Managed authentication has its own finite whole-stage/per-file limits and retirement lease.
+    // Preserve the unspent local budget: a multi-gigabyte package scan is not local receipt I/O.
+    *deadline += started.elapsed();
+    result.map_err(|message| {
+        let kind = match message.as_str() {
+            "managed_verification_timeout" => EngineFailureKind::Timeout,
+            "managed_verification_retired" => EngineFailureKind::Cancellation,
+            _ => EngineFailureKind::ResourceChanged,
+        };
+        (kind, message)
+    })
+}
+
 impl ResourceSnapshot {
     pub(crate) fn capture(
         run: &EngineRunDto,
         spec: &crate::CommandSpec,
-        deadline: Instant,
+        mut deadline: Instant,
         diagnostics: AttemptCapture,
         managed_root: Option<&Path>,
+        is_retired: &(dyn Fn() -> bool + Sync),
     ) -> Result<Self, ResourceError> {
         let revision = format!(
             "{:x}",
@@ -42,36 +60,42 @@ impl ResourceSnapshot {
             managed: None,
             thread_sources: None,
         };
-        snapshot.add(executable.clone(), "executable", deadline)?;
+        snapshot.add(executable.clone(), "executable", deadline, is_retired)?;
         if let app_model::EngineAdapterSettings::KataGoAnalysis(_)
         | app_model::EngineAdapterSettings::KataGoGtp(_) = &run.profile_snapshot.adapter
         {
-            snapshot.add(PathBuf::from(&spec.args[4]), "model", deadline)?;
+            snapshot.add(PathBuf::from(&spec.args[4]), "model", deadline, is_retired)?;
             let configuration = crate::katago_config::Configuration::from_command(spec, deadline)
                 .map_err(|error| (EngineFailureKind::Config, error.diagnostic(&snapshot.diagnostics)))?;
             snapshot.thread_sources = Some(configuration.thread_sources(run.adapter_kind, &snapshot.diagnostics));
-            snapshot.capture_configuration(configuration, deadline)?;
+            snapshot.capture_configuration(configuration, deadline, is_retired)?;
         }
-        for argument in &run.profile_snapshot.argv {
+        for (index, argument) in run.profile_snapshot.argv.iter().enumerate() {
             let value = argument
                 .split_once('=')
                 .filter(|(flag, _)| flag.starts_with('-'))
                 .map_or(argument.as_str(), |(_, value)| value);
             let path = Path::new(spec.working_dir.as_deref().unwrap_or(".")).join(value);
+            let layered_config = argument.starts_with("-config=") || argument.starts_with("--config=")
+                || index.checked_sub(1).and_then(|previous| run.profile_snapshot.argv.get(previous)).is_some_and(|flag| flag == "-config" || flag == "--config");
+            if layered_config && !matches!(run.profile_snapshot.adapter, app_model::EngineAdapterSettings::GenericGtp(_)) {
+                continue;
+            }
             if path.is_file() {
-                snapshot.add(path, "launch_argument", deadline)?;
+                snapshot.add(path, "launch_argument", deadline, is_retired)?;
             }
         }
-        snapshot.capture_managed(managed_root, executable, deadline)?;
+        snapshot.capture_managed(managed_root, executable, &mut deadline, is_retired)?;
         Ok(snapshot)
     }
 
     pub(crate) fn capture_evaluation(
         run: &EngineRunDto,
         spec: &crate::CommandSpec,
-        deadline: Instant,
+        mut deadline: Instant,
         diagnostics: AttemptCapture,
         managed_root: Option<&Path>,
+        is_retired: &(dyn Fn() -> bool + Sync),
     ) -> Result<Self, ResourceError> {
         let mut snapshot = Self {
             entries: Vec::new(),
@@ -81,7 +105,7 @@ impl ResourceSnapshot {
             thread_sources: None,
         };
         let executable = resolve_executable(&spec.program)?;
-        snapshot.add(executable.clone(), "executable", deadline)?;
+        snapshot.add(executable.clone(), "executable", deadline, is_retired)?;
         let mut model = false;
         let mut config = false;
         let mut args = spec.args.iter().skip(1);
@@ -94,10 +118,10 @@ impl ResourceSnapshot {
                 let path = Path::new(spec.working_dir.as_deref().unwrap_or(".")).join(value);
                 if flag == "-config" {
                     config = true;
-                    snapshot.config(path, deadline, 0)?;
+                    snapshot.config(path, deadline, is_retired)?;
                 } else {
                     model = true;
-                    snapshot.add(path, "model", deadline)?;
+                    snapshot.add(path, "model", deadline, is_retired)?;
                 }
             }
         }
@@ -112,25 +136,24 @@ impl ResourceSnapshot {
                 if snapshot.entries.len() >= 128 {
                     return Err((EngineFailureKind::Config, "Benchmark exceeds 128 resource files".into()));
                 }
-                snapshot.add(path, "launch_argument", deadline)?;
+                snapshot.add(path, "launch_argument", deadline, is_retired)?;
             }
         }
-        snapshot.capture_managed(managed_root, executable, deadline)?;
+        snapshot.capture_managed(managed_root, executable, &mut deadline, is_retired)?;
         Ok(snapshot)
     }
 
-    fn capture_managed(&mut self, root: Option<&Path>, executable: PathBuf, deadline: Instant) -> Result<(), ResourceError> {
+    fn capture_managed(&mut self, root: Option<&Path>, executable: PathBuf, deadline: &mut Instant, is_retired: &(dyn Fn() -> bool + Sync)) -> Result<(), ResourceError> {
         if let Some(root) = root {
-            if let Some(identity) = crate::managed::trust::qualify(root, &executable)
-                .map_err(|message| (EngineFailureKind::ResourceChanged, message))? {
-                for path in &identity.receipt_paths { self.add(path.clone(), "managed_receipt", deadline)?; }
+            if let Some(identity) = managed_authentication_stage(deadline, || crate::managed::trust::qualify(root, &executable, is_retired))? {
+                for path in &identity.receipt_paths { self.add(path.clone(), "managed_receipt", *deadline, is_retired)?; }
                 self.managed = Some((identity, root.to_path_buf(), executable));
             }
         }
         Ok(())
     }
 
-    fn add(&mut self, path: PathBuf, component: &str, deadline: Instant) -> Result<PathBuf, ResourceError> {
+    fn add(&mut self, path: PathBuf, component: &str, deadline: Instant, is_retired: &(dyn Fn() -> bool + Sync)) -> Result<PathBuf, ResourceError> {
         let kind = component_kind(component);
         path.canonicalize().map_err(|_| {
             (
@@ -141,24 +164,24 @@ impl ResourceSnapshot {
                 ),
             )
         })?;
-        let identity = identify(&path, component, deadline, &self.diagnostics)?;
+        let identity = identify(&path, component, deadline, &self.diagnostics, is_retired)?;
         self.entries.push((path.clone(), identity));
         Ok(path)
     }
 
-    fn config(&mut self, path: PathBuf, deadline: Instant, _depth: usize) -> Result<(), ResourceError> {
+    fn config(&mut self, path: PathBuf, deadline: Instant, is_retired: &(dyn Fn() -> bool + Sync)) -> Result<(), ResourceError> {
         let configuration = crate::katago_config::Configuration::from_file(&path, deadline)
             .map_err(|error| (EngineFailureKind::Config, error.diagnostic(&self.diagnostics)))?;
-        self.capture_configuration(configuration, deadline)?;
+        self.capture_configuration(configuration, deadline, is_retired)?;
         Ok(())
     }
 
-    fn capture_configuration(&mut self, configuration: crate::katago_config::Configuration, deadline: Instant) -> Result<(), ResourceError> {
+    fn capture_configuration(&mut self, configuration: crate::katago_config::Configuration, deadline: Instant, is_retired: &(dyn Fn() -> bool + Sync)) -> Result<(), ResourceError> {
         for (path, digest) in configuration.files.into_iter().zip(configuration.file_digests) {
             if self.entries.len() >= 128 {
                 return Err((EngineFailureKind::Config, "Configuration exceeds 128 resource files".into()));
             }
-            let identity = identify(&path, "config", deadline, &self.diagnostics)?;
+            let identity = identify(&path, "config", deadline, &self.diagnostics, is_retired)?;
             if identity.sha256 != digest {
                 return Err((EngineFailureKind::ResourceChanged, "Configuration changed after its source values were captured".into()));
             }
@@ -167,14 +190,14 @@ impl ResourceSnapshot {
         Ok(())
     }
 
-    pub(crate) fn revalidate(&self, deadline: Instant) -> Result<(), ResourceError> {
+    pub(crate) fn revalidate(&self, mut deadline: Instant, is_retired: &(dyn Fn() -> bool + Sync)) -> Result<(), ResourceError> {
         if let Some((_, root, executable)) = &self.managed {
-            crate::managed::trust::qualify(root, executable)
-                .map_err(|message| (EngineFailureKind::ResourceChanged, message))?
+            managed_authentication_stage(&mut deadline, || crate::managed::trust::qualify(root, executable, is_retired))?
                 .ok_or_else(|| (EngineFailureKind::ResourceChanged, "managed identity retired".into()))?;
         }
         for (path, expected) in &self.entries {
-            let actual = identify(path, &expected.component, deadline, &self.diagnostics).map_err(|_| {
+            let actual = identify(path, &expected.component, deadline, &self.diagnostics, is_retired).map_err(|error| {
+                if error.0 == EngineFailureKind::Cancellation { return error; }
                 (
                     EngineFailureKind::ResourceChanged,
                     format!(
@@ -214,6 +237,7 @@ impl ResourceSnapshot {
     }
 }
 
+
 fn component_kind(component: &str) -> EngineFailureKind {
     match component {
         "model" => EngineFailureKind::Model,
@@ -227,6 +251,7 @@ fn identify(
     component: &str,
     deadline: Instant,
     diagnostics: &AttemptCapture,
+    is_retired: &(dyn Fn() -> bool + Sync),
 ) -> Result<EngineResourceIdentityDto, ResourceError> {
     let fail = || {
         (
@@ -246,6 +271,9 @@ fn identify(
     let mut buffer = [0; 65536];
     let mut bytes = 0;
     loop {
+        if is_retired() {
+            return Err((EngineFailureKind::Cancellation, "Resource qualification retired".into()));
+        }
         if Instant::now() >= deadline {
             return Err((
                 EngineFailureKind::Timeout,
@@ -391,6 +419,61 @@ impl StartupOutput {
             Some(EngineFailureKind::Config)
         } else {
             None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn local_hash_observes_retirement_between_chunks() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let path = std::env::temp_dir().join(format!("resource-retirement-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, vec![0; 131072]).unwrap();
+        let profile = crate::default_engine_profiles_settings().profiles[0].profile.clone();
+        let run = EngineRunDto { run_id: "retired-resource".into(), profile_id: "target".into(),
+            adapter_kind: profile.adapter_kind(), profile_snapshot: profile,
+            capability_snapshot: None, qualified_resource: None };
+        let checks = AtomicUsize::new(0);
+        let error = identify(&path, "model", Instant::now() + Duration::from_secs(30),
+            &AttemptCapture::new(&run), &|| checks.fetch_add(1, Ordering::AcqRel) > 0).unwrap_err();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(error.0, EngineFailureKind::Cancellation);
+        assert_eq!(checks.load(Ordering::Acquire), 2);
+    }
+
+    #[test]
+    fn managed_stage_preserves_only_unspent_local_budget() {
+        let remaining = Duration::from_secs(20);
+        let original = Instant::now() + remaining;
+        let mut deadline = original;
+        assert_eq!(managed_authentication_stage(&mut deadline, || {
+            std::thread::sleep(Duration::from_millis(5));
+            Ok(7)
+        }).unwrap(), 7);
+        assert!(deadline.duration_since(original) >= Duration::from_millis(5));
+        assert!(deadline.saturating_duration_since(Instant::now()) <= remaining);
+    }
+
+    #[test]
+    fn exhausted_local_budget_cannot_enter_managed_stage() {
+        let mut deadline = Instant::now() - Duration::from_secs(1);
+        let error = managed_authentication_stage::<()>(&mut deadline, || panic!("expired local admission invoked verifier")).unwrap_err();
+        assert_eq!(error.0, EngineFailureKind::Timeout);
+    }
+
+    #[test]
+    fn managed_stage_preserves_failure_and_retirement_causes() {
+        for (message, kind) in [
+            ("managed_digest_mismatch", EngineFailureKind::ResourceChanged),
+            ("managed_verification_timeout", EngineFailureKind::Timeout),
+            ("managed_verification_retired", EngineFailureKind::Cancellation),
+        ] {
+            let mut deadline = Instant::now() + Duration::from_secs(30);
+            assert_eq!(managed_authentication_stage::<()>(&mut deadline, || Err(message.into())).unwrap_err(), (kind, message.into()));
         }
     }
 }

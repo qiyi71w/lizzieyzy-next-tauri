@@ -1234,7 +1234,7 @@ pub fn run() {
                     .join("lizzieyzy-next-model-inventory.json"),
             ));
             let managed_root = app.path().app_data_dir()?.join("managed-resources");
-            app.manage(engine_manager::managed::ManagedResources::new(managed_root.clone()));
+            app.manage(engine_manager::managed::ManagedResources::new(managed_root.clone(), app.path().app_data_dir()?.join("trt")));
             app.manage(engine_manager::diagnostic_export::DiagnosticExport::new(
                 app.path().app_data_dir()?.join("diagnostic-exports"),
             ));
@@ -1419,6 +1419,9 @@ pub fn run() {
             managed_resources::managed_resources_snapshot,
             managed_resources::acquire_managed_resources,
             managed_resources::cancel_managed_resources,
+            managed_resources::inspect_managed_trt_repair,
+            managed_resources::repair_managed_trt,
+            managed_resources::managed_repair_draft,
             katago_start_analyze_game,
             preview_analysis_scope,
             start_analysis_task,

@@ -832,8 +832,16 @@ function decodeEngineProfile(value: unknown): EngineProfileDto {
     selfplay: true, startposes: true, demoplay: true, clockinfo: true,
     "-model": true, "--model": true, "-config": true, "--config": true
   };
-  if (common.argv.some((argument) => Object.hasOwn(reservedModes, argument.split("=", 1)[0]))) {
-    throw new Error("KataGo argv conflicts with adapter-owned analysis/model/config arguments.");
+  for (let index = 0; index < common.argv.length; ++index) {
+    const argument = common.argv[index];
+    if (argument === "-config") {
+      const path = common.argv[index + 1];
+      if (!path?.trim() || path.startsWith("-")) throw new Error("KataGo -config requires a readable file argument at Start.");
+      continue;
+    }
+    if (Object.hasOwn(reservedModes, argument.split("=", 1)[0])) {
+      throw new Error("KataGo argv conflicts with adapter-owned protocol/model arguments or unsupported config spelling.");
+    }
   }
   return {
     ...common,
