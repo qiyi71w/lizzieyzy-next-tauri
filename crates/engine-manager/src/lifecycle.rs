@@ -32,6 +32,8 @@ pub use app_model::AnalysisJobLaneDto as AnalysisJobLane;
 mod game_move;
 mod match_reservation;
 mod ordinary_rules;
+mod gtp_control;
+mod gtp_analysis;
 pub use game_move::{GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle};
 
 pub trait AnalysisJobCancel: Send + Sync {
@@ -107,6 +109,7 @@ pub struct SelectedNodeJobRequest {
     pub board_width: u8,
     pub board_height: u8,
     pub position_empty: bool,
+    pub exact_position: Result<sgf::ExactPosition, String>,
 }
 
 #[derive(Clone)]
@@ -120,7 +123,12 @@ pub struct WholeGameWorkItem {
 
 struct SelectedSubmission {
     started: AnalysisJobStartedDto,
-    jsonl: String,
+    command: SelectedCommand,
+}
+
+enum SelectedCommand {
+    Jsonl(String),
+    Gtp(SelectedNodeJobRequest),
 }
 
 enum ContinuousReconcileWork {
@@ -243,6 +251,7 @@ struct ManagerState {
     game_move: Option<game_move::MoveSlot>,
     game_move_publication: Option<app_model::GameMoveJobDto>,
     gtp_command_seq: u32,
+    gtp_dispatch: gtp_control::Dispatch,
     match_reservation: Option<match_reservation::MatchReservation>,
     retiring: Vec<(EngineRunDto, Arc<Mutex<LiveEngine>>)>,
 }
@@ -291,6 +300,7 @@ impl ForegroundEngineManager {
                     game_move: None,
                     game_move_publication: None,
                     gtp_command_seq: 100,
+                    gtp_dispatch: gtp_control::Dispatch::default(),
                     match_reservation: None,
                     retiring: Vec::new(),
                 }),
@@ -914,7 +924,7 @@ impl ForegroundEngineManager {
         state: &mut ManagerState,
         mut request: SelectedNodeJobRequest,
     ) -> Result<SelectedSubmission, EngineFailureDto> {
-        validate_selected_admission(state, &request)?;
+        let run = validate_selected_admission(state, &request)?;
         state
             .jobs
             .retain(|job| !(job.lane == AnalysisJobLane::SelectedNode && job.terminal));
@@ -934,7 +944,10 @@ impl ForegroundEngineManager {
             generation: request.generation,
             node_path: request.node_path.clone(),
         };
-        let bound_query = request.query.to_jsonl().map_err(|error| {
+        let command = if run.adapter_kind == EngineBackend::KataGoGtp {
+            SelectedCommand::Gtp(request.clone())
+        } else {
+            SelectedCommand::Jsonl(request.query.to_jsonl().map_err(|error| {
             failure(
                 EngineOperationDto::Job,
                 EngineFailureKind::Protocol,
@@ -944,7 +957,8 @@ impl ForegroundEngineManager {
                 None,
             )
             .with_job_id(&started.job_id)
-        })?;
+            })?)
+        };
         state.jobs.push(RegisteredJob {
             query_id: job_id.clone(),
             job_id,
@@ -979,7 +993,7 @@ impl ForegroundEngineManager {
         publish_snapshot(state);
         Ok(SelectedSubmission {
             started,
-            jsonl: bound_query,
+            command,
         })
     }
 
@@ -987,7 +1001,14 @@ impl ForegroundEngineManager {
         &self,
         submission: SelectedSubmission,
     ) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
-        if let Err(error) = self.write_live_jsonl(&submission.started.run_id, &submission.jsonl) {
+        let jsonl = match submission.command {
+            SelectedCommand::Gtp(request) => {
+                self.spawn_gtp_analysis(submission.started.clone(), request);
+                return Ok(submission.started);
+            }
+            SelectedCommand::Jsonl(jsonl) => jsonl,
+        };
+        if let Err(error) = self.write_live_jsonl(&submission.started.run_id, &jsonl) {
             let published = error.with_job_id(&submission.started.job_id);
             self.abandon_job(
                 &submission.started.run_id,
@@ -1651,6 +1672,10 @@ impl ForegroundEngineManager {
             publish_snapshot(state);
             query_id
         };
+        if admitting_run(&state.phase, run_id).is_some_and(|run| run.adapter_kind == EngineBackend::KataGoGtp) {
+            // The registered stream worker owns Stop and both terminal barriers.
+            return Ok(());
+        }
         let manager = self.clone();
         let run_id = run_id.to_string();
         let job_id = job_id.to_string();
@@ -2188,7 +2213,7 @@ impl Inner {
                 || gtp.as_ref().is_some_and(|facts| {
                     crate::game_move_protocol::qualified_gtp_launch(&run.profile_snapshot, facts)
                 }),
-            analysis: (!generic).then_some(EngineAnalysisCapabilitiesDto {
+            analysis: if generic { gtp.as_ref().and_then(|facts| gtp_analysis::capabilities(run, facts)) } else { Some(EngineAnalysisCapabilitiesDto {
                 selected_node_analysis: true,
                 continuous_analysis: true,
                 whole_game_analysis: self.config.admit_whole_game_analysis,
@@ -2200,7 +2225,7 @@ impl Inner {
                 policy: true,
                 visits_limit: true,
                 protocol_cancel: true,
-            }),
+            }) },
             gtp,
         };
         resources
@@ -2984,13 +3009,11 @@ impl Inner {
             let (kind, message) = match stdout_rx.recv_timeout(Duration::from_millis(50)) {
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Ok(Ok(Some(line))) => {
-                    if self.route_game_move_line(&run_id, &line) {
-                        continue;
+                    let routed = self.lock().gtp_dispatch.route(&run_id, &line);
+                    match routed {
+                        Ok(()) => continue,
+                        Err(message) => (EngineFailureKind::Protocol, message),
                     }
-                    (
-                        EngineFailureKind::Protocol,
-                        "unsolicited GTP stdout after handshake".into(),
-                    )
                 }
                 Ok(Err(error)) => (EngineFailureKind::Protocol, format!("GTP stdout failed: {error}")),
                 Ok(Ok(None)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -3662,13 +3685,17 @@ impl Inner {
     }
 
     fn fail_unresponsive_run(&self, run_id: &str, message: &str) -> EngineFailureDto {
+        self.fail_analysis_run(run_id, EngineFailureKind::Timeout, message)
+    }
+
+    fn fail_analysis_run(&self, run_id: &str, kind: EngineFailureKind, message: &str) -> EngineFailureDto {
         let mut state = self.lock();
         if let Phase::Error { failure, .. } = &state.phase {
             return failure.clone();
         }
         let mut published = failure(
             EngineOperationDto::Job,
-            EngineFailureKind::Timeout,
+            kind,
             message.into(),
             Some(run_id),
             None,
@@ -3685,6 +3712,9 @@ impl Inner {
         let Some(run) = admitting_run(&state.phase, run_id) else {
             return published;
         };
+        if run.adapter_kind == EngineBackend::KataGoGtp {
+            state.continuous_safety_hold = true;
+        }
         fail_analysis_task_locked(&mut state, None, message);
         state.operation += 1;
         let deadline = state
@@ -3706,9 +3736,10 @@ impl Inner {
                 published.clone().with_job_id(&started.job_id),
             );
         }
-        let ManagerState { live, candidate, .. } = &mut *state;
+        let ManagerState { live, candidate, gtp_dispatch, .. } = &mut *state;
         for slot in [live, candidate] {
             if let Some(live) = slot.as_mut() {
+                gtp_dispatch.retire_run(&live.run_id);
                 match terminate_process(live, deadline) {
                     Ok(()) => {
                         *slot = None;
@@ -4400,7 +4431,7 @@ fn validate_query_capabilities(
     if query.include_ownership == Some(true) {
         require_capability(run, capabilities.ownership, "ownership analysis")?;
     }
-    if query.include_policy == Some(true) {
+    if query.include_policy == Some(true) && run.adapter_kind != EngineBackend::KataGoGtp {
         require_capability(run, capabilities.policy, "policy analysis")?;
     }
     if check_visits
@@ -4508,6 +4539,20 @@ fn validate_selected_admission(
             None,
         )
     })?;
+    if run.adapter_kind == EngineBackend::KataGoGtp {
+        if request.mode == AnalysisJobModeDto::Finite && request.query.max_visits.is_none_or(|visits| visits == 0) {
+            return Err(failure(EngineOperationDto::Job, EngineFailureKind::UnsupportedCapability,
+                "finite KataGo GTP analysis requires positive max visits".into(), Some(run_id), Some(&run.profile_id), None));
+        }
+        let exact = request.exact_position.as_ref().map_err(|message| failure(
+            EngineOperationDto::Job, EngineFailureKind::UnsupportedCapability, message.clone(),
+            Some(run_id), Some(&run.profile_id), None,
+        ))?;
+        ordinary_rules::admit(&run, exact).map_err(|message| failure(
+            EngineOperationDto::Job, EngineFailureKind::UnsupportedCapability, message,
+            Some(run_id), Some(&run.profile_id), None,
+        ))?;
+    }
     let capabilities = analysis_capabilities(&run)?;
     let continuous = request.mode == AnalysisJobModeDto::Continuous;
     require_capability(
@@ -4658,6 +4703,7 @@ fn owned_live_mut<'a>(state: &'a mut ManagerState, run_id: &str) -> Option<&'a m
 }
 
 fn take_owned_live(state: &mut ManagerState, run_id: &str) -> Option<LiveEngine> {
+    state.gtp_dispatch.retire_run(run_id);
     if state.live.as_ref().is_some_and(|live| live.run_id == run_id) {
         state.live.take()
     } else if state.candidate.as_ref().is_some_and(|live| live.run_id == run_id) {

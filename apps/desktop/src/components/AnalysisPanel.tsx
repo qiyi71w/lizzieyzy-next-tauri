@@ -1,3 +1,4 @@
+import { t } from "../i18n/resources";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useElementSize } from "../workspace/useElementSize";
 import type { AnalysisFrameDto, CandidateMoveDto, NodePath, PositionDto, ProblemMarkerDto } from "../domain/types";
@@ -123,7 +124,8 @@ export function AnalysisPanel({
                     const isSelected = selectedCandidateIndex === index || (selectedCandidateIndex === null && index === 0);
                     const moveText = vertexLabel(candidate.vertex, boardHeight);
                     const winrateText = `${(candidate.winrate_black * 100).toFixed(1)}%`;
-                    const scoreText = (candidate.score_mean_black >= 0 ? "+" : "") + candidate.score_mean_black.toFixed(1);
+                    const scoreText = candidate.score_mean_black == null ? t("analysis.scoreUnavailable")
+                      : (candidate.score_mean_black >= 0 ? "+" : "") + candidate.score_mean_black.toFixed(1);
                     return (
                       <tr
                         key={index}

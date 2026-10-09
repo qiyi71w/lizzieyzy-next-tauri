@@ -158,12 +158,22 @@ impl CurrentGameState {
                 )
             });
         match request {
-            Ok(request) => {
+            Ok(mut request) => {
+                request.exact_position = document.exact_position(&holder.selected_path);
                 holder.analysis_target = Some((holder.generation, holder.selected_path.clone()));
                 manager.follow_continuous_position(request);
             }
             Err(_) => manager.clear_continuous_position(),
         }
+    }
+
+    pub fn exact_analysis_position(&self, generation: u64, path: &NodePath) -> Result<sgf::ExactPosition, String> {
+        let holder = self.holder.lock().expect("current game state");
+        holder.ensure_generation(generation).map_err(|error| error.to_string())?;
+        if holder.selected_path != *path {
+            return Err("Exact analysis position no longer selected.".into());
+        }
+        holder.document.as_ref().ok_or("No current game")?.exact_position(path)
     }
 
     pub fn analysis_jobs(&self) -> crate::EngineCommandResult<Option<Vec<AnalysisJobStartedDto>>> {

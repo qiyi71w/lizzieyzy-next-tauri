@@ -1,3 +1,6 @@
+mod gtp_analysis;
+pub use gtp_analysis::parse_gtp_analysis;
+
 use app_model::{
     AnalysisFrameDto, AnalysisJobId, AnalysisStageConditionsDto, CandidateMoveDto,
     ContinuousAnalysisBudgetDto, GameDto, MoveDto, MoveVertex, PlayerColor, PointDto,
@@ -533,7 +536,7 @@ pub fn normalize_response(
                     .unwrap_or(MoveVertex::Pass),
                 visits: info.visits,
                 winrate_black: info.winrate,
-                score_mean_black: info.score_mean,
+                score_mean_black: Some(info.score_mean),
                 policy_prior: info.prior,
                 pv: info
                     .pv

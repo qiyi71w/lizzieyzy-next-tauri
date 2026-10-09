@@ -582,6 +582,7 @@ fn old_query_id_cannot_supply_a_current_move() {
 
 fn match_analysis_request(run_id: &str) -> SelectedNodeJobRequest {
     SelectedNodeJobRequest {
+        exact_position: Err("JSONL fixture does not require exact GTP history".into()),
         run_id: run_id.into(),
         mode: AnalysisJobModeDto::Finite,
         generation: 17,

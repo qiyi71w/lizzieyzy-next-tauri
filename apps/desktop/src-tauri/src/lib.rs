@@ -689,6 +689,7 @@ fn bind_selected_node_job(
         })
     })?;
     request.run_id = run_id;
+    request.exact_position = current_game.exact_analysis_position(generation, &request.node_path);
     request.mode = mode;
     request.query.max_visits = max_visits;
     Ok(request)

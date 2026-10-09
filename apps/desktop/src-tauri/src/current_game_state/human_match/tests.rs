@@ -1012,7 +1012,7 @@ fn continue_survives_analysis_accepted_while_the_dialog_was_open() {
             vertex: MoveVertex::Pass,
             visits: 64,
             winrate_black: 0.5,
-            score_mean_black: 0.0,
+            score_mean_black: Some(0.0),
             policy_prior: None,
             pv: vec![MoveVertex::Pass],
         }],

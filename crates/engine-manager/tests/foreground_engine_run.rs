@@ -176,6 +176,7 @@ fn sample_query() -> AnalysisQuery {
 
 fn selected_request(run_id: &str, generation: u64, indices: Vec<u32>) -> SelectedNodeJobRequest {
     SelectedNodeJobRequest {
+        exact_position: Err("JSONL fixture does not require exact GTP history".into()),
         run_id: run_id.into(),
         mode: app_model::AnalysisJobModeDto::Finite,
         generation,
@@ -783,6 +784,7 @@ fn selected_node_completion_publishes_normalized_candidates_pv_ownership_policy_
     query.board_y_size = 2;
     let started = manager
         .start_selected_node_job(SelectedNodeJobRequest {
+            exact_position: Err("JSONL fixture does not require exact GTP history".into()),
             run_id: run_id.clone(),
             mode: app_model::AnalysisJobModeDto::Finite,
             generation: 4,

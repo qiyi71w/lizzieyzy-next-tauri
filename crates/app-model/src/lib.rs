@@ -406,7 +406,7 @@ pub struct CandidateMoveDto {
     pub vertex: MoveVertex,
     pub visits: u32,
     pub winrate_black: f32,
-    pub score_mean_black: f32,
+    pub score_mean_black: Option<f32>,
     pub policy_prior: Option<f32>,
     pub pv: Vec<MoveVertex>,
 }

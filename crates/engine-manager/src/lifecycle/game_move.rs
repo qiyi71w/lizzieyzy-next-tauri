@@ -151,6 +151,7 @@ pub(super) struct MoveSlot {
     profile_id: String,
     pub(super) finished: bool,
     analysis_only: bool,
+    analysis_restore: bool,
 }
 
 enum MoveInput {
@@ -174,6 +175,7 @@ struct MoveWorker {
     final_frame: Option<app_model::AnalysisFrameDto>,
     rules_snapshot: Option<app_model::OrdinaryRulesSnapshotDto>,
     restore_file: Option<super::ordinary_rules::RestoreFile>,
+    analysis_restore: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -307,8 +309,12 @@ impl ForegroundEngineManager {
         &self,
         request: GameMoveRequest,
     ) -> Result<OrdinaryRulesHandle, EngineFailureDto> {
-        self.start_game_move_owned(None, request, MoveMode::ConfirmRules)
+        self.start_game_move_owned(None, request, MoveMode::ConfirmRules, None)
             .map(OrdinaryRulesHandle)
+    }
+
+    pub(super) fn confirm_analysis_rules(&self, request: GameMoveRequest, job_id: &str) -> Result<app_model::OrdinaryRulesSnapshotDto, EngineFailureDto> {
+        OrdinaryRulesHandle(self.start_game_move_owned(None, request, MoveMode::ConfirmRules, Some(job_id))?).wait()
     }
 
     pub fn confirm_ordinary_rules(
@@ -337,7 +343,7 @@ impl ForegroundEngineManager {
     }
 
     pub fn start_game_move(&self, request: GameMoveRequest) -> Result<GameMoveHandle, EngineFailureDto> {
-        self.start_game_move_owned(None, request, MoveMode::Move)
+        self.start_game_move_owned(None, request, MoveMode::Move, None)
     }
 
     pub fn start_reserved_game_move(
@@ -345,7 +351,7 @@ impl ForegroundEngineManager {
         owner: &str,
         request: GameMoveRequest,
     ) -> Result<GameMoveHandle, EngineFailureDto> {
-        self.start_game_move_owned(Some(owner), request, MoveMode::Move)
+        self.start_game_move_owned(Some(owner), request, MoveMode::Move, None)
     }
 
     /// Computes session-only candidates without granting permission to publish a move.
@@ -354,7 +360,7 @@ impl ForegroundEngineManager {
         owner: &str,
         request: GameMoveRequest,
     ) -> Result<GameMoveHandle, EngineFailureDto> {
-        self.start_game_move_owned(Some(owner), request, MoveMode::AnalysisOnly)
+        self.start_game_move_owned(Some(owner), request, MoveMode::AnalysisOnly, None)
     }
 
     /// Reports candidates from the actual engine move query, never a second analysis lane.
@@ -363,7 +369,7 @@ impl ForegroundEngineManager {
         owner: &str,
         request: GameMoveRequest,
     ) -> Result<GameMoveHandle, EngineFailureDto> {
-        self.start_game_move_owned(Some(owner), request, MoveMode::MoveWithAnalysis)
+        self.start_game_move_owned(Some(owner), request, MoveMode::MoveWithAnalysis, None)
     }
 
     fn start_game_move_owned(
@@ -371,7 +377,9 @@ impl ForegroundEngineManager {
         owner: Option<&str>,
         request: GameMoveRequest,
         mode: MoveMode,
+        analysis_job: Option<&str>,
     ) -> Result<GameMoveHandle, EngineFailureDto> {
+        let analysis_restore = analysis_job.is_some();
         let job_uuid = Uuid::new_v4();
         let identity = GameMoveJobDto {
             run_id: request.identity.run_id.clone(),
@@ -425,12 +433,15 @@ impl ForegroundEngineManager {
                 }
             }
             require_idle_move(&state)?;
+            if analysis_job.is_some_and(|id| !state.jobs.iter().any(|job| job.job_id == id && job.run_id == run.run_id && !job.terminal && job.disposition == JobDisposition::Running)) {
+                return Err(fail(EngineFailureKind::Cancellation, "analysis request retired before exact restore"));
+            }
             if state.finite_admission_pending
                 || state.continuous_departing
                 || state
                     .jobs
                     .iter()
-                    .any(|job| job.run_id == run.run_id && !job.terminal)
+                    .any(|job| job.run_id == run.run_id && !job.terminal && Some(job.job_id.as_str()) != analysis_job)
                 || state.analysis_task.as_ref().is_some_and(|task| {
                     matches!(
                         task.state,
@@ -466,6 +477,7 @@ impl ForegroundEngineManager {
                 profile_id: run.profile_id.clone(),
                 finished: false,
                 analysis_only: mode == MoveMode::AnalysisOnly,
+                analysis_restore,
             });
             publish_snapshot(&mut state);
             (run, plan, stdin, deadline, restore_file)
@@ -507,6 +519,7 @@ impl ForegroundEngineManager {
                 final_frame: None,
                 rules_snapshot: None,
                 restore_file,
+                analysis_restore,
             };
             let result = worker.compute(plan);
             let result = worker.finish(result);
@@ -682,7 +695,7 @@ impl ForegroundEngineManager {
             return;
         }
         state.game_move_publication = None;
-        if let Some(slot) = state.game_move.as_mut() {
+        if let Some(slot) = state.game_move.as_mut().filter(|slot| !slot.analysis_restore) {
             slot.sealed.get_or_insert_with(|| {
                 move_failure(
                     &slot.identity,
@@ -705,6 +718,7 @@ impl ForegroundEngineManager {
         if let Some(slot) = state
             .game_move
             .as_mut()
+            .filter(|slot| !slot.analysis_restore)
             .filter(|slot| slot.identity.generation != generation || slot.identity.node_path != *path)
         {
             slot.sealed.get_or_insert_with(|| {
@@ -727,8 +741,13 @@ impl ForegroundEngineManager {
         let Some(active) = active else {
             return Ok(false);
         };
-        self.cancel_game_move(&active.run_id, &active.job_id)?;
-        let deadline = Instant::now() + self.inner.config.stop_drain_timeout * 3 + Duration::from_secs(1);
+        let analysis_restore = self.lock().game_move.as_ref().is_some_and(|slot| slot.identity == active && slot.analysis_restore);
+        if !analysis_restore {
+            self.cancel_game_move(&active.run_id, &active.job_id)?;
+        }
+        let timeout = if analysis_restore { Duration::from_secs(31) }
+            else { self.inner.config.stop_drain_timeout * 3 + Duration::from_secs(1) };
+        let deadline = Instant::now() + timeout;
         loop {
             let state = self.lock();
             if state
@@ -860,41 +879,53 @@ impl MoveWorker {
 
     fn gtp_command(&mut self, command: String) -> Result<String, EngineFailureDto> {
         self.check()?;
-        let id = {
+        let (id, responses) = {
             let mut state = self.manager.lock();
-            state.gtp_command_seq = state
-                .gtp_command_seq
-                .checked_add(1)
+            if owned_live(&state, &self.identity.run_id).is_none() {
+                return Err(self.error(EngineFailureKind::Cancellation, "GTP reader incarnation retired"));
+            }
+            state.gtp_command_seq = state.gtp_command_seq.checked_add(1)
                 .ok_or_else(|| self.error(EngineFailureKind::Protocol, "GTP command ID exhausted"))?;
-            state.gtp_command_seq
+            let id = state.gtp_command_seq;
+            let responses = state.gtp_dispatch.register(
+                &self.identity.run_id, id, &self.identity.job_id, false,
+            ).map_err(|message| self.error(EngineFailureKind::Protocol, &message))?;
+            (id, responses)
         };
         self.write(format!("{id} {command}"))?;
         let mut decoder = ResponseDecoder::new(id);
         let mut written = false;
         let mut acknowledged = None;
         loop {
-            match self.receive()? {
-                MoveInput::Written(Ok(())) => written = true,
-                MoveInput::Written(Err(message)) => return Err(self.write_error(&message)),
-                MoveInput::Line(line) => {
-                    if let Some(response) = decoder
-                        .push(&line)
-                        .map_err(|message| self.error(EngineFailureKind::Protocol, &message))?
-                    {
-                        if !response.success {
-                            return Err(self.error(
-                                EngineFailureKind::Command,
-                                &format!("GTP {command} rejected: {}", response.body),
-                            ));
+            self.check()?;
+            match self.events.try_recv() {
+                Ok(MoveInput::Written(Ok(()))) => written = true,
+                Ok(MoveInput::Written(Err(message))) => return Err(self.write_error(&message)),
+                Ok(MoveInput::Line(_)) => return Err(self.error(EngineFailureKind::Protocol, "unexpected unregistered GTP reply")),
+                Err(mpsc::TryRecvError::Disconnected) => return Err(self.write_error("GTP writer closed")),
+                Err(mpsc::TryRecvError::Empty) => {},
+            }
+            if acknowledged.is_none() {
+                match responses.recv_timeout(Duration::from_millis(5)) {
+                    Ok(line) => {
+                        if let Some(response) = decoder.push(&line)
+                            .map_err(|message| self.error(EngineFailureKind::Protocol, &message))? {
+                            if !response.success {
+                                return Err(self.error(EngineFailureKind::Command,
+                                    &format!("GTP {command} rejected: {}", response.body)));
+                            }
+                            acknowledged = Some(response.body);
                         }
-                        acknowledged = Some(response.body);
-                    }
+                    },
+                    Err(mpsc::RecvTimeoutError::Timeout) => {},
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return Err(self.error(
+                        EngineFailureKind::Protocol, "registered GTP response retired before completion")),
                 }
+            } else if !written {
+                thread::sleep(Duration::from_millis(1));
             }
             if written {
-                if let Some(body) = acknowledged.take() {
-                    return Ok(body);
-                }
+                if let Some(body) = acknowledged.take() { return Ok(body); }
             }
         }
     }
@@ -1125,6 +1156,7 @@ impl MoveWorker {
         // Seal publication under the same lock as cancellation before beginning any cleanup.
         {
             let mut state = self.manager.lock();
+            state.gtp_dispatch.retire(&self.identity.run_id, &self.identity.job_id);
             if let Some(slot) = state
                 .game_move
                 .as_mut()
@@ -1145,7 +1177,7 @@ impl MoveWorker {
                 ));
             }
             if result.is_ok() {
-                if self.mode != MoveMode::AnalysisOnly {
+                if self.mode != MoveMode::AnalysisOnly && !self.analysis_restore {
                     state.game_move_publication = Some(self.identity.clone());
                 }
                 state.game_move = None;

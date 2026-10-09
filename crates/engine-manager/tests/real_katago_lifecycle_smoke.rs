@@ -211,6 +211,7 @@ fn query(max_visits: u32) -> AnalysisQuery {
 
 fn selected_request(run_id: &str, generation: u64, max_visits: u32) -> SelectedNodeJobRequest {
     SelectedNodeJobRequest {
+        exact_position: Err("JSONL fixture does not require exact GTP history".into()),
         run_id: run_id.into(),
         mode: app_model::AnalysisJobModeDto::Finite,
         generation,
