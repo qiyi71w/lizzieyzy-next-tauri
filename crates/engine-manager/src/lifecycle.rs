@@ -660,7 +660,7 @@ impl ForegroundEngineManager {
                 let published = failure(
                     operation_kind,
                     EngineFailureKind::ProfileNotFound,
-                    FailureText::unscoped(&format!("saved engine profile was not found: {profile_id}")),
+                    FailureText::unscoped(profile_id).prefixed("saved engine profile was not found: "),
                     None,
                     Some(profile_id),
                     None,
@@ -748,7 +748,7 @@ impl ForegroundEngineManager {
                 failure(
                     EngineOperationDto::Restart,
                     EngineFailureKind::ProfileNotFound,
-                    self.inner.diagnostic_text(&run.run_id, &format!("saved engine profile was not found: {}", run.profile_id)),
+                    self.inner.diagnostic_text(&run.run_id, &run.profile_id).prefixed("saved engine profile was not found: "),
                     Some(&run.run_id),
                     Some(&run.profile_id),
                     None,
@@ -792,7 +792,7 @@ impl ForegroundEngineManager {
             failure(
                 EngineOperationDto::Switch,
                 EngineFailureKind::ProfileNotFound,
-                FailureText::unscoped(&format!("saved engine profile was not found: {profile_id}")),
+                FailureText::unscoped(profile_id).prefixed("saved engine profile was not found: "),
                 None,
                 Some(profile_id),
                 None,
@@ -1010,7 +1010,7 @@ impl ForegroundEngineManager {
                 failure(
                     EngineOperationDto::Job,
                     EngineFailureKind::Protocol,
-                    self.inner.diagnostic_text(&started.run_id, &format!("failed to serialize selected-node query: {error}")),
+                    self.inner.diagnostic_text(&started.run_id, &error.to_string()).prefixed("failed to serialize selected-node query: "),
                     Some(started.run_id.as_str()),
                     None,
                     None,
@@ -1533,7 +1533,7 @@ impl ForegroundEngineManager {
                         failure(
                             EngineOperationDto::Job,
                             EngineFailureKind::Protocol,
-                            self.inner.diagnostic_text(run_id, &format!("failed to write analysis query: {error}")),
+                            self.inner.diagnostic_text(run_id, &error.to_string()).prefixed("failed to write analysis query: "),
                             Some(run_id),
                             None,
                             None,
@@ -1869,7 +1869,7 @@ impl ForegroundEngineManager {
             failure(
                 EngineOperationDto::Job,
                 EngineFailureKind::Protocol,
-                self.inner.diagnostic_text(run_id, &format!("failed to write analysis query: {error}")),
+                self.inner.diagnostic_text(run_id, &error.to_string()).prefixed("failed to write analysis query: "),
                 Some(run_id),
                 None,
                 None,
@@ -2118,7 +2118,7 @@ impl Inner {
             return Err(failure(
                 kind,
                 EngineFailureKind::Asset,
-                capture.failure_text(&format!("required engine assets are missing: {summary}")),
+                capture.failure_text(&summary).prefixed("required engine assets are missing: "),
                 Some(run.run_id.as_str()),
                 Some(run.profile_id.as_str()),
                 Some(capture.failure_text(&summary)),
@@ -2158,7 +2158,7 @@ impl Inner {
             failure(
                 kind,
                 EngineFailureKind::Start,
-                capture.failure_text(&format!("failed to spawn engine process: {error}")),
+                capture.failure_text(&error.to_string()).prefixed("failed to spawn engine process: "),
                 Some(run.run_id.as_str()),
                 Some(run.profile_id.as_str()),
                 None,
@@ -2273,7 +2273,7 @@ impl Inner {
                 return Err(failure(
                     kind,
                     EngineFailureKind::Protocol,
-                    capture.failure_text(&format!("failed to send readiness probe: {error}")),
+                    capture.failure_text(&error.to_string()).prefixed("failed to send readiness probe: "),
                     Some(&run.run_id),
                     Some(&run.profile_id),
                     None,
@@ -2404,11 +2404,11 @@ impl Inner {
         run: &EngineRunDto,
         kind: EngineOperationDto,
     ) -> Result<Option<EngineGtpFactsDto>, EngineFailureDto> {
-        let fail = |failure_kind, message: String| {
+        let fail = |failure_kind, message: FailureText| {
             failure(
                 kind,
                 failure_kind,
-                self.diagnostic_text(&run.run_id, &message),
+                message,
                 Some(&run.run_id),
                 Some(&run.profile_id),
                 None,
@@ -2438,7 +2438,7 @@ impl Inner {
                 write_jsonl(stdin, &format!("{id} {command}\n")).map_err(|error| {
                     fail(
                         EngineFailureKind::ProcessExit,
-                        format!("GTP command write failed: {error}"),
+                        self.diagnostic_text(&run.run_id, &error.to_string()).prefixed("GTP command write failed: "),
                     )
                 })?;
             }
@@ -2447,7 +2447,7 @@ impl Inner {
                 if Instant::now() >= deadline {
                     return Err(fail(
                         EngineFailureKind::Timeout,
-                        format!("GTP readiness timed out waiting for {command}"),
+                        FailureText::from("GTP readiness timed out waiting for ").then(*command),
                     ));
                 }
                 let received = {
@@ -2461,12 +2461,13 @@ impl Inner {
                     if let Some(status) = live.child.try_wait().map_err(|error| {
                         fail(
                             EngineFailureKind::ProcessExit,
-                            format!("GTP process observation failed: {error}"),
+                            self.diagnostic_text(&run.run_id, &error.to_string()).prefixed("GTP process observation failed: "),
                         )
                     })? {
                         return Err(fail(
                             EngineFailureKind::ProcessExit,
-                            format!("GTP exited during {command}: {status}"),
+                            FailureText::from("GTP exited during ").then(*command).then(": ")
+                                .then(self.diagnostic_text(&run.run_id, &status.to_string())),
                         ));
                     }
                     live.stdout_rx.as_ref().expect("readiness owns stdout").try_recv()
@@ -2475,12 +2476,13 @@ impl Inner {
                     Ok(Ok(Some(line))) => {
                         if let Some(response) = decoder
                             .push(&line)
-                            .map_err(|message| fail(EngineFailureKind::Protocol, message))?
+                            .map_err(|message| fail(EngineFailureKind::Protocol, self.diagnostic_text(&run.run_id, &message)))?
                         {
                             if !response.success {
                                 return Err(fail(
                                     EngineFailureKind::Command,
-                                    format!("GTP {command} rejected: {}", response.body),
+                                    FailureText::from("GTP ").then(*command).then(" rejected: ")
+                                        .then(self.diagnostic_text(&run.run_id, &response.body)),
                                 ));
                             }
                             bodies.push(response.body);
@@ -2490,13 +2492,13 @@ impl Inner {
                     Ok(Err(error)) => {
                         return Err(fail(
                             EngineFailureKind::Protocol,
-                            format!("GTP response read failed: {error}"),
+                            self.diagnostic_text(&run.run_id, &error.to_string()).prefixed("GTP response read failed: "),
                         ))
                     }
                     Ok(Ok(None)) | Err(mpsc::TryRecvError::Disconnected) => {
                         return Err(fail(
                             EngineFailureKind::ProcessExit,
-                            format!("GTP stdout closed during {command}"),
+                            FailureText::from("GTP stdout closed during ").then(*command),
                         ))
                     }
                     Err(mpsc::TryRecvError::Empty) => thread::sleep(Duration::from_millis(5)),
@@ -2537,7 +2539,7 @@ impl Inner {
             if !commands.iter().any(|command| command == required) {
                 return Err(fail(
                     EngineFailureKind::UnsupportedCapability,
-                    format!("GTP required command is missing: {required}"),
+                    FailureText::from("GTP required command is missing: ").then(required),
                 ));
             }
         }
@@ -2628,7 +2630,7 @@ impl Inner {
                         return Err(failure(
                             kind,
                             EngineFailureKind::Protocol,
-                            self.diagnostic_text(&run.run_id, &format!("failed to read engine stdout: {error}")),
+                            self.diagnostic_text(&run.run_id, &error.to_string()).prefixed("failed to read engine stdout: "),
                             Some(run.run_id.as_str()),
                             Some(run.profile_id.as_str()),
                             None,
@@ -2665,7 +2667,7 @@ impl Inner {
                         return Err(failure(
                             kind,
                             EngineFailureKind::Protocol,
-                            self.diagnostic_text(&run.run_id, &format!("readiness probe response was not parseable: {error}")),
+                            self.diagnostic_text(&run.run_id, &error.to_string()).prefixed("readiness probe response was not parseable: "),
                             Some(run.run_id.as_str()),
                             Some(run.profile_id.as_str()),
                             Some(self.diagnostic_text(&run.run_id, trimmed)),
@@ -2825,9 +2827,8 @@ impl Inner {
         let mut published = published.with_switch_id(switch_id);
         if let Some(live) = state.candidate.as_mut() {
             if let Err(error) = terminate_process(live, Instant::now() + self.config.stop_drain_timeout) {
-                published
-                    .message
-                    .push_str(&live.capture.sanitize(&format!("; candidate cleanup failed: {error}")));
+                published.message = FailureText::from_failure(&published).then(
+                    live.capture.failure_text(&error.to_string()).prefixed("; candidate cleanup failed: ")).into_string();
                 self.record_diagnostic_failure(&published);
                 state.phase = Phase::Error {
                     run: primary,
@@ -2875,9 +2876,8 @@ impl Inner {
                         attach_startup_failure(&mut published, &process.startup_output, &process.capture);
                         *slot = None;
                     }
-                    Err(error) => published
-                        .message
-                        .push_str(&process.capture.sanitize(&format!("; process cleanup failed: {error}"))),
+                    Err(error) => published.message = FailureText::from_failure(&published).then(
+                        process.capture.failure_text(&error.to_string()).prefixed("; process cleanup failed: ")).into_string(),
                 }
             }
         }
@@ -2936,7 +2936,7 @@ impl Inner {
                 let published = failure(
                     EngineOperationDto::Teardown,
                     EngineFailureKind::Timeout,
-                    self.diagnostic_text(&run.run_id, &format!("engine process cleanup failed: {error}")),
+                    self.diagnostic_text(&run.run_id, &error.to_string()).prefixed("engine process cleanup failed: "),
                     Some(&run.run_id),
                     None,
                     None,
@@ -3029,7 +3029,7 @@ impl Inner {
                         } else {
                             EngineFailureKind::NonzeroExit
                         },
-                        self.diagnostic_text(run_id, &format!("engine exited during start; exit_code={exit_code:?}")),
+                        self.diagnostic_text(run_id, &format!("{exit_code:?}")).prefixed("engine exited during start; exit_code="),
                         Some(run_id),
                         Some(profile_id.as_str()),
                         None,
@@ -3061,7 +3061,7 @@ impl Inner {
             } else {
                 EngineFailureKind::NonzeroExit
             },
-            self.diagnostic_text(&run.run_id, &format!("engine process exited unexpectedly; exit_code={exit_code:?}")),
+            self.diagnostic_text(&run.run_id, &format!("{exit_code:?}")).prefixed("engine process exited unexpectedly; exit_code="),
             Some(run.run_id.as_str()),
             Some(run.profile_id.as_str()),
             None,
@@ -3093,10 +3093,10 @@ impl Inner {
                     let routed = self.lock().gtp_dispatch.route(&run_id, &line);
                     match routed {
                         Ok(()) => continue,
-                        Err(message) => (EngineFailureKind::Protocol, message),
+                        Err(message) => (EngineFailureKind::Protocol, self.diagnostic_text(&run_id, &message)),
                     }
                 }
-                Ok(Err(error)) => (EngineFailureKind::Protocol, format!("GTP stdout failed: {error}")),
+                Ok(Err(error)) => (EngineFailureKind::Protocol, self.diagnostic_text(&run_id, &error.to_string()).prefixed("GTP stdout failed: ")),
                 Ok(Ok(None)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                     (EngineFailureKind::ProcessExit, "GTP stdout closed".into())
                 }
@@ -3107,7 +3107,7 @@ impl Inner {
                 &run_id,
                 Instant::now() + self.config.stop_drain_timeout,
                 kind,
-                &message,
+                message.clone(),
             ) {
                 return;
             }
@@ -3119,7 +3119,7 @@ impl Inner {
             let mut published = failure(
                 EngineOperationDto::UnexpectedExit,
                 kind,
-                self.diagnostic_text(&run_id, &message),
+                message,
                 Some(&run_id),
                 Some(&run.profile_id),
                 None,
@@ -3141,7 +3141,8 @@ impl Inner {
                     gtp_dispatch.retire_run(&process.run_id);
                     match terminate_process(process, deadline) {
                         Ok(()) => *slot = None,
-                        Err(error) => published.message.push_str(&process.capture.sanitize(&format!("; cleanup failed: {error}"))),
+                        Err(error) => published.message = FailureText::from_failure(&published).then(
+                            process.capture.failure_text(&error.to_string()).prefixed("; cleanup failed: ")).into_string(),
                     }
                 }
             }
@@ -3189,7 +3190,7 @@ impl Inner {
                         &run_id,
                         Instant::now() + self.config.stop_drain_timeout,
                         EngineFailureKind::ProcessExit,
-                        "The owned match engine stdout closed or failed unexpectedly.",
+                        "The owned match engine stdout closed or failed unexpectedly.".into(),
                     ) {
                         return;
                     }
@@ -3229,16 +3230,15 @@ impl Inner {
                 let (kind, message) = match capability_refusal {
                     Some(reason) => (
                         EngineFailureKind::UnsupportedCapability,
-                        format!(
-                            "The current engine does not support {board_width}×{board_height} boards: {reason}"
-                        ),
+                        self.diagnostic_text(run_id, &format!("{board_width}×{board_height}")).prefixed("The current engine does not support ")
+                            .then(" boards: ").then(self.diagnostic_text(run_id, reason)),
                     ),
                     None => (
                         EngineFailureKind::Protocol,
-                        format!("analysis response was not parseable: {error}"),
+                        self.diagnostic_text(run_id, &error.to_string()).prefixed("analysis response was not parseable: "),
                     ),
                 };
-                let published = failure(EngineOperationDto::Job, kind, self.diagnostic_text(run_id, &message), Some(run_id), None, None)
+                let published = failure(EngineOperationDto::Job, kind, message, Some(run_id), None, None)
                     .with_job_id(&started.job_id);
                 if capability_refusal.is_none()
                     && (started.mode == AnalysisJobModeDto::Continuous
@@ -3296,9 +3296,9 @@ impl Inner {
                 && (started.lane == AnalysisJobLane::WholeGame
                     || started.mode == AnalysisJobModeDto::Continuous)
             {
-                let message = format!("required analysis setting was ignored: {warning}");
+                let message = self.diagnostic_text(run_id, warning).prefixed("required analysis setting was ignored: ");
                 drop(state);
-                self.fail_unresponsive_run(run_id, self.diagnostic_text(run_id, &message));
+                self.fail_unresponsive_run(run_id, message);
             }
             return None;
         }
@@ -3700,7 +3700,7 @@ impl Inner {
                         failure(
                             EngineOperationDto::Job,
                             EngineFailureKind::Protocol,
-                            self.diagnostic_text(&started.run_id, &format!("whole-game response was not parseable: {error}")),
+                            self.diagnostic_text(&started.run_id, &error.to_string()).prefixed("whole-game response was not parseable: "),
                             Some(started.run_id.as_str()),
                             None,
                             None,
@@ -3834,9 +3834,8 @@ impl Inner {
                         *slot = None;
                     }
                     Err(error) => {
-                        published
-                            .message
-                            .push_str(&live.capture.sanitize(&format!("; process cleanup failed: {error}")));
+                        published.message = FailureText::from_failure(&published).then(
+                            live.capture.failure_text(&error.to_string()).prefixed("; process cleanup failed: ")).into_string();
                     }
                 }
             }
@@ -4042,7 +4041,7 @@ fn bound_work_item_query(
         failure(
             EngineOperationDto::Job,
             EngineFailureKind::Protocol,
-            FailureText::unscoped(&format!("failed to serialize whole-game query: {error}")),
+            FailureText::unscoped(&error.to_string()).prefixed("failed to serialize whole-game query: "),
             None,
             None,
             None,
@@ -4481,14 +4480,14 @@ fn current_admitting_run(phase: &Phase) -> Option<EngineRunDto> {
     }
 }
 
-fn require_capability(run: &EngineRunDto, supported: bool, capability: &str) -> Result<(), EngineFailureDto> {
+fn require_capability(run: &EngineRunDto, supported: bool, capability: &'static str) -> Result<(), EngineFailureDto> {
     if supported {
         Ok(())
     } else {
         Err(failure(
             EngineOperationDto::Job,
             EngineFailureKind::UnsupportedCapability,
-            FailureText::unscoped(&format!("current Ready Run does not admit {capability}")),
+            FailureText::from("current Ready Run does not admit ").then(capability),
             Some(&run.run_id),
             Some(&run.profile_id),
             None,

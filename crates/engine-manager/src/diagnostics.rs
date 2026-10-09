@@ -121,11 +121,21 @@ fn truncate(text: &mut String, limit: usize) {
 
 /// A public diagnostic copy: static product guidance or text redacted by its owner.
 /// Dynamic strings cannot implicitly cross this boundary.
+#[derive(Clone)]
 pub(crate) struct FailureText(String);
 impl From<&'static str> for FailureText {
     fn from(text: &'static str) -> Self { Self(text.into()) }
 }
 impl FailureText {
+    /// Compose already-public fragments without passing trusted guidance through redaction.
+    pub(crate) fn then(mut self, detail: impl Into<Self>) -> Self {
+        self.0.push_str(&detail.into().0);
+        truncate(&mut self.0, RECORD_BYTES);
+        self
+    }
+    pub(crate) fn prefixed(self, prefix: &'static str) -> Self {
+        Self::from(prefix).then(self)
+    }
     pub(crate) fn into_string(self) -> String { self.0 }
     pub(crate) fn from_failure(failure: &app_model::EngineFailureDto) -> Self {
         Self(failure.message.clone())
@@ -296,5 +306,28 @@ impl<R: Read> Read for ObservedRead<R> {
         }
         if length == 0 { self.capture.source_finished(self.source); }
         Ok(length)
+    }
+}
+
+#[cfg(test)]
+mod failure_text_tests {
+    use super::*;
+
+    #[test]
+    fn trusted_guidance_survives_alias_collision_and_dynamic_fragments_remain_private() {
+        let mut sanitizer = DiagnosticSanitizer::default();
+        let analysis = sanitizer.alias("analysis");
+        let secret = sanitizer.alias("fixture-private-value");
+        let text = FailureText::dynamic(&mut sanitizer, "analysis fixture-private-value")
+            .prefixed("required analysis setting was ignored: ").into_string();
+        assert!(text.starts_with("required analysis setting was ignored: "));
+        assert!(text.contains(&analysis) && text.contains(&secret));
+        assert!(!text.contains("fixture-private-value"));
+        assert_ne!(analysis, secret);
+        let bounded = FailureText::from("analysis response: ")
+            .then(FailureText::dynamic(&mut sanitizer, &"界".repeat(RECORD_BYTES)))
+            .then("; retry Stop").into_string();
+        assert!(bounded.len() <= RECORD_BYTES);
+        assert!(bounded.starts_with("analysis response: "));
     }
 }

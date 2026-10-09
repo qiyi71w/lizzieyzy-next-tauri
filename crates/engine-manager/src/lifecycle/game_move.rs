@@ -387,8 +387,8 @@ impl ForegroundEngineManager {
             generation: request.identity.generation,
             node_path: request.identity.node_path.clone(),
         };
-        let fail = |kind, message: &str| failure(
-            EngineOperationDto::Job, kind, self.inner.diagnostic_text(&identity.run_id, message),
+        let fail = |kind, message: &'static str| failure(
+            EngineOperationDto::Job, kind, message.into(),
             Some(&identity.run_id), None, None,
         ).with_job_id(&identity.job_id);
         let (events_tx, events) = mpsc::sync_channel(64);
@@ -413,7 +413,8 @@ impl ForegroundEngineManager {
             let budget = request.identity.budget;
             let plan = if mode == MoveMode::ConfirmRules {
                 super::ordinary_rules::admit(&run, &request.position)
-                    .map_err(|message| fail(EngineFailureKind::UnsupportedCapability, &message))?;
+                    .map_err(|message| failure(EngineOperationDto::Job, EngineFailureKind::UnsupportedCapability,
+                        self.inner.diagnostic_text(&identity.run_id, &message), Some(&identity.run_id), None, None).with_job_id(&identity.job_id))?;
                 Vec::new()
             } else {
                 validate_move_position(&run, &request.position, budget)?
@@ -467,7 +468,8 @@ impl ForegroundEngineManager {
             let restore_file = if mode == MoveMode::ConfirmRules {
                 Some(
                     super::ordinary_rules::RestoreFile::create(&run, request.position.dto())
-                        .map_err(|message| fail(EngineFailureKind::UnsupportedCapability, &message))?,
+                        .map_err(|message| failure(EngineOperationDto::Job, EngineFailureKind::UnsupportedCapability,
+                            self.inner.diagnostic_text(&identity.run_id, &message), Some(&identity.run_id), None, None).with_job_id(&identity.job_id))?,
                 )
             } else {
                 None
@@ -820,17 +822,20 @@ impl Inner {
 }
 
 impl MoveWorker {
-    fn error(&self, kind: EngineFailureKind, message: &str) -> EngineFailureDto {
+    fn error(&self, kind: EngineFailureKind, message: impl Into<FailureText>) -> EngineFailureDto {
         let mut error = failure(
-            EngineOperationDto::Job, kind, self.manager.inner.diagnostic_text(&self.identity.run_id, message),
+            EngineOperationDto::Job, kind, message.into(),
             Some(&self.identity.run_id), None, None,
         ).with_job_id(&self.identity.job_id);
         error.profile_id = Some(self.run.profile_id.clone());
         error
     }
+    fn dynamic_error(&self, kind: EngineFailureKind, message: &str) -> EngineFailureDto {
+        self.error(kind, self.manager.inner.diagnostic_text(&self.identity.run_id, message))
+    }
 
     fn write_error(&self, message: &str) -> EngineFailureDto {
-        let mut error = self.error(EngineFailureKind::Protocol, message);
+        let mut error = self.dynamic_error(EngineFailureKind::Protocol, message);
         if self
             .manager
             .lock()
@@ -897,7 +902,7 @@ impl MoveWorker {
             let id = state.gtp_command_seq;
             let responses = state.gtp_dispatch.register(
                 &self.identity.run_id, id, &self.identity.job_id, false,
-            ).map_err(|message| self.error(EngineFailureKind::Protocol, &message))?;
+            ).map_err(|message| self.dynamic_error(EngineFailureKind::Protocol, &message))?;
             (id, responses)
         };
         self.write(format!("{id} {command}"))?;
@@ -917,10 +922,11 @@ impl MoveWorker {
                 match responses.recv_timeout(Duration::from_millis(5)) {
                     Ok(line) => {
                         if let Some(response) = decoder.push(&line)
-                            .map_err(|message| self.error(EngineFailureKind::Protocol, &message))? {
+                            .map_err(|message| self.dynamic_error(EngineFailureKind::Protocol, &message))? {
                             if !response.success {
                                 return Err(self.error(EngineFailureKind::Command,
-                                    &format!("GTP {command} rejected: {}", response.body)));
+                                    self.manager.inner.diagnostic_text(&self.identity.run_id, &command).prefixed("GTP ")
+                                        .then(" rejected: ").then(self.manager.inner.diagnostic_text(&self.identity.run_id, &response.body))));
                             }
                             acknowledged = Some(response.body);
                         }
@@ -965,14 +971,14 @@ impl MoveWorker {
         self.empty_command(format!("loadsgf {}", restore.basename))?;
         restore
             .remove()
-            .map_err(|message| self.error(EngineFailureKind::Protocol, &message))?;
+            .map_err(|message| self.dynamic_error(EngineFailureKind::Protocol, &message))?;
         let rules = self.gtp_command("kata-get-rules".into())?;
         let komi = self.gtp_command("get_komi".into())?;
         let board = self.gtp_command("showboard".into())?;
         let history = self.gtp_command("printsgf".into())?;
         let confirmed_rules =
             super::ordinary_rules::verify(&self.request.position, &rules, &komi, &board, &history)
-                .map_err(|message| self.error(EngineFailureKind::Protocol, &message))?;
+                .map_err(|message| self.dynamic_error(EngineFailureKind::Protocol, &message))?;
         self.check()?;
         Ok(app_model::OrdinaryRulesSnapshotDto {
             identity: self.identity.clone(),
@@ -1024,13 +1030,13 @@ impl MoveWorker {
                                 position.board_width,
                                 position.board_height,
                             )
-                            .map_err(|message| self.error(EngineFailureKind::Protocol, &message))?
+                            .map_err(|message| self.dynamic_error(EngineFailureKind::Protocol, &message))?
                             {
                                 KataGoMoveResponse::Searching => None,
                                 KataGoMoveResponse::Complete(result) => Some(result),
                                 KataGoMoveResponse::Rejected(message) => {
                                     self.query_rejected = true;
-                                    return Err(self.error(EngineFailureKind::Protocol, &message));
+                                    return Err(self.dynamic_error(EngineFailureKind::Protocol, &message));
                                 }
                             };
                             if self.mode != MoveMode::Move {
@@ -1038,7 +1044,7 @@ impl MoveWorker {
                                 // before the common rich-analysis parser and normalizer are used.
                                 let response =
                                     katago_protocol::parse_response_line(&line).map_err(|error| {
-                                        self.error(EngineFailureKind::Protocol, &error.to_string())
+                                        self.dynamic_error(EngineFailureKind::Protocol, &error.to_string())
                                     })?;
                                 if !response
                                     .has_valid_search_result(position.board_width, position.board_height)
@@ -1105,14 +1111,14 @@ impl MoveWorker {
                 ))?;
                 let position = self.request.position.dto();
                 parse_gtp_move(&reply, position.board_width, position.board_height, true)
-                    .map_err(|message| self.error(EngineFailureKind::Protocol, &message))?
+                    .map_err(|message| self.dynamic_error(EngineFailureKind::Protocol, &message))?
             }
         };
         if let GameMoveDto::Move { vertex } = &result {
             self.request.position.validate_move(vertex).map_err(|message| {
                 self.error(
                     EngineFailureKind::Protocol,
-                    &format!("illegal engine move: {message}"),
+                    self.manager.inner.diagnostic_text(&self.identity.run_id, &message).prefixed("illegal engine move: "),
                 )
             })?;
         }
@@ -1210,10 +1216,9 @@ impl MoveWorker {
             let mut error = result.as_ref().expect_err("failed result").clone();
             error.profile_id = Some(self.run.profile_id.clone());
             if let Some(Err(cleanup)) = cleanup {
-                error
-                    .message
-                    .push_str(&self.manager.inner.diagnostic_text(&self.identity.run_id,
-                        &format!("; process cleanup failed: {cleanup}")).into_string());
+                error.message = FailureText::from_failure(&error).then(
+                    self.manager.inner.diagnostic_text(&self.identity.run_id, &cleanup.to_string())
+                        .prefixed("; process cleanup failed: ")).into_string();
                 error.kind = EngineFailureKind::Timeout;
             } else if self.run.adapter_kind == EngineBackend::KataGoAnalysis
                 && state
@@ -1221,9 +1226,8 @@ impl MoveWorker {
                     .as_ref()
                     .is_some_and(|reservation| reservation.pausing)
             {
-                error
-                    .message
-                    .push_str("; KataGo cancellation/drain was not acknowledged; the run cannot be resumed");
+                error.message = FailureText::from_failure(&error)
+                    .then("; KataGo cancellation/drain was not acknowledged; the run cannot be resumed").into_string();
                 error.kind = EngineFailureKind::Timeout;
             }
             result = Err(error.clone());

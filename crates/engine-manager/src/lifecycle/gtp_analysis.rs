@@ -41,29 +41,34 @@ struct Command {
 
 struct AnalysisError {
     kind: EngineFailureKind,
-    message: String,
+    message: AnalysisFailureText,
+}
+enum AnalysisFailureText {
+    Public(FailureText),
+    Dynamic(String),
+    Context(&'static str, String),
 }
 impl From<String> for AnalysisError {
     fn from(message: String) -> Self {
         Self {
             kind: EngineFailureKind::Protocol,
-            message,
+            message: AnalysisFailureText::Dynamic(message),
         }
     }
 }
-impl From<&str> for AnalysisError {
-    fn from(message: &str) -> Self {
-        message.to_owned().into()
+impl From<&'static str> for AnalysisError {
+    fn from(message: &'static str) -> Self {
+        Self { kind: EngineFailureKind::Protocol, message: AnalysisFailureText::Public(message.into()) }
     }
 }
-fn response_error(error: RecvTimeoutError, context: &str) -> AnalysisError {
+fn response_error(error: RecvTimeoutError, context: &'static str) -> AnalysisError {
     AnalysisError {
         kind: if error == RecvTimeoutError::Timeout {
             EngineFailureKind::Timeout
         } else {
             EngineFailureKind::Protocol
         },
-        message: format!("{context}: {error}"),
+        message: AnalysisFailureText::Context(context, error.to_string()),
     }
 }
 
@@ -111,10 +116,13 @@ impl ForegroundEngineManager {
         thread::spawn(move || {
             let result = manager.run_gtp_analysis(&started, &request);
             if let Err(error) = result {
-                manager
-                    .inner
-                    .fail_analysis_run(&started.run_id, error.kind,
-                        manager.inner.diagnostic_text(&started.run_id, &error.message));
+                let message = match error.message {
+                    AnalysisFailureText::Public(text) => text,
+                    AnalysisFailureText::Dynamic(text) => manager.inner.diagnostic_text(&started.run_id, &text),
+                    AnalysisFailureText::Context(context, text) => FailureText::from(context).then(": ")
+                        .then(manager.inner.diagnostic_text(&started.run_id, &text)),
+                };
+                manager.inner.fail_analysis_run(&started.run_id, error.kind, message);
             }
             manager
                 .lock()
@@ -339,7 +347,7 @@ fn wait_written(command: &Command, deadline: Instant) -> Result<(), AnalysisErro
         .map_err(|error| response_error(error, "GTP analysis write"))?
         .map_err(|error| AnalysisError {
             kind: error.kind,
-            message: error.message,
+            message: AnalysisFailureText::Public(FailureText::from_failure(&error)),
         })
 }
 fn require_stream_header(id: u32, line: &str) -> Result<(), String> {

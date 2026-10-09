@@ -445,10 +445,10 @@ fn active_lanes_survive_busy_move_admission_without_cancel_or_pipe_writes() {
         .register_job(&rig.run, AnalysisJobLane::WholeGame, cancel.clone())
         .unwrap();
     let before = rig.trace();
-    assert_eq!(
-        rig.manager.start_game_move(rig.request(3000)).err().unwrap().kind,
-        EngineFailureKind::Occupied
-    );
+    let failure = rig.manager.start_game_move(rig.request(3000)).err().unwrap();
+    assert_eq!(failure.kind, EngineFailureKind::Occupied);
+    assert!(failure.message.contains("analysis lane") && failure.message.contains("owns this run"), "{}", failure.message);
+    assert!(!failure.message.contains("[private-"));
     assert!(!cancel.is_cancelled());
     assert_eq!(rig.trace(), before);
 }

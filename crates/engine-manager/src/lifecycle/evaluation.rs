@@ -264,7 +264,6 @@ impl ForegroundEngineManager {
                 if let Some(inner) = weak.upgrade() {
                     let mut state = inner.lock();
                     if let Some(slot) = current(&mut state, &id) {
-                        let message = FailureText::dynamic(&mut slot.sanitizer, &message);
                         let _ = slot.retire(PhaseDto::Failed, message);
                     }
                 }
@@ -274,7 +273,7 @@ impl ForegroundEngineManager {
     }
 }
 
-fn wait_for_startup(weak: &Weak<Inner>, id: &str, autoload_run: Option<&str>) -> Result<(), String> {
+fn wait_for_startup(weak: &Weak<Inner>, id: &str, autoload_run: Option<&str>) -> Result<(), FailureText> {
     let Some(run_id) = autoload_run else { return Ok(()) };
     let deadline = Instant::now() + weak.upgrade().ok_or("Benchmark manager closed")?.config.readiness_timeout;
     loop {
@@ -286,7 +285,7 @@ fn wait_for_startup(weak: &Weak<Inner>, id: &str, autoload_run: Option<&str>) ->
             Phase::Ready(run) if run.run_id == run_id => return Ok(()),
             Phase::NoEngine { .. } => return Ok(()),
             _ => {
-                yield_to_foreground(&mut state).map_err(|error| error.message)?;
+                yield_to_foreground(&mut state).map_err(|error| FailureText::from_failure(&error))?;
                 return Err("Startup benchmark yielded during foreground transition".into());
             }
         }
@@ -308,7 +307,7 @@ fn execute(
     id: &str,
     saved: &SavedEngineProfile,
     spec: &mut crate::CommandSpec,
-) -> Result<(), String> {
+) -> Result<(), FailureText> {
     let managed_root = weak.upgrade().ok_or("Benchmark manager closed")?.config.managed_resources_root.clone();
     let mut evaluation_run = starting_run(saved);
     evaluation_run.run_id = id.into();
@@ -327,7 +326,7 @@ fn execute(
         managed_root.as_deref(),
         &is_retired,
     )
-    .map_err(|(_, message)| message)?;
+    .map_err(|(_, message)| evaluation_failure_text(weak, id, &message))?;
     let probe = crate::CommandSpec {
         program: spec.program.clone(),
         args: vec!["version".into()],
@@ -349,21 +348,21 @@ fn execute(
         .cloned();
     resources
         .revalidate(Instant::now() + Duration::from_secs(30), &is_retired)
-        .map_err(|(_, message)| message)?;
+        .map_err(|(_, message)| evaluation_failure_text(weak, id, &message))?;
     spec.args[0] = "benchmark".into();
     let (exit_code, output, elapsed) = run_process(weak, id, spec, MEASUREMENT_TIMEOUT, true)?;
     if exit_code != Some(0) {
-        return Err(format!(
-            "Benchmark failed (exit code {exit_code:?}); no measurement available. {}",
-            output.join("\n")
-        ));
+        return Err(FailureText::from("Benchmark failed (exit code ")
+            .then(evaluation_failure_text(weak, id, &format!("{exit_code:?}")))
+            .then("); no measurement available. ")
+            .then(evaluation_failure_text(weak, id, &output.join("\n"))));
     }
     if !output.iter().any(|line| completed_row(line).is_some()) {
         return Err("Benchmark exited without a completed measurement; result unavailable".into());
     }
     resources
         .revalidate(Instant::now() + Duration::from_secs(30), &is_retired)
-        .map_err(|(_, message)| message)?;
+        .map_err(|(_, message)| evaluation_failure_text(weak, id, &message))?;
     let qualified = resources.qualified(Some(version), backend);
     let inner = weak.upgrade().ok_or("Benchmark manager closed")?;
     let mut state = inner.lock();
@@ -465,19 +464,28 @@ fn read_output(mut reader: impl Read + Send + 'static, tx: SyncSender<Result<Out
     });
 }
 
+fn evaluation_failure_text(weak: &Weak<Inner>, id: &str, text: &str) -> FailureText {
+    if let Some(inner) = weak.upgrade() {
+        if let Some(slot) = current(&mut inner.lock(), id) {
+            return FailureText::dynamic(&mut slot.sanitizer, text);
+        }
+    }
+    FailureText::unscoped(text)
+}
+
 fn run_process(
     weak: &Weak<Inner>,
     id: &str,
     spec: &crate::CommandSpec,
     timeout: Duration,
     measurement: bool,
-) -> Result<(Option<i32>, Vec<String>, Duration), String> {
+) -> Result<(Option<i32>, Vec<String>, Duration), FailureText> {
     let (tx, rx) = mpsc::sync_channel(QUEUE_LINES);
     {
         let inner = weak.upgrade().ok_or("Benchmark manager closed")?;
         let mut state = inner.lock();
         if busy(&state) {
-            yield_to_foreground(&mut state).map_err(|error| error.message)?;
+            yield_to_foreground(&mut state).map_err(|error| FailureText::from_failure(&error))?;
             return Err("Foreground work has priority".into());
         }
         let slot = current(&mut state, id).ok_or("Benchmark retired")?;

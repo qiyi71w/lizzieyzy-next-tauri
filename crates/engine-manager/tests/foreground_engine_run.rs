@@ -6896,7 +6896,7 @@ time.sleep(30)
 "#;
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     let mut profile = gtp_profile(&temp, "privacy");
-    profile.argv = vec!["-u".into(), "-c".into(), script.into()];
+    profile.argv = vec!["-u".into(), "-c".into(), script.into(), "GTP".into(), "protocol_version".into(), "rejected".into()];
     catalog.upsert(SavedEngineProfile { profile_id: "private-attempt".into(), profile });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
     let events = manager.subscribe();
@@ -6904,6 +6904,7 @@ time.sleep(30)
     let failure = wait_failure(&events, Duration::from_secs(3), |_| true);
     manager.teardown().unwrap();
     assert_eq!(failure.kind, EngineFailureKind::Command);
+    assert!(failure.message.contains("GTP protocol_version rejected:"), "{}", failure.message);
     let snapshot = manager.diagnostic_snapshots().pop().unwrap();
     assert_eq!(failure.run_id.as_deref(), Some(snapshot.run_id.as_str()));
     assert!(snapshot.failure.as_ref().unwrap().ends_with(&failure.message));
@@ -7394,4 +7395,30 @@ fn preload_preparing_and_ready_retire_when_paused_task_continues() {
         assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, run);
         manager.teardown().unwrap();
     }
+}
+
+#[test]
+fn malformed_analysis_preserves_trusted_guidance_despite_command_alias() {
+    let temp = TestTempDir::new("diagnostic-malformed-guidance");
+    let (manager, _, events, run) = ready_manager(&temp, &selected_node_malformed_response_script());
+    let job = manager.start_selected_node_job(selected_request(&run, 1, vec![])).unwrap();
+    let failed = wait_job(&events, Duration::from_secs(2), |event|
+        event.job_id == job.job_id && event.outcome == AnalysisJobOutcomeDto::Failed);
+    manager.teardown().unwrap();
+    let message = failed.failure.unwrap().message;
+    assert!(message.contains("analysis response") && message.contains("not parseable"), "{message}");
+}
+
+#[test]
+fn ignored_analysis_setting_preserves_actionable_task_reason() {
+    let temp = TestTempDir::new("diagnostic-ignored-guidance");
+    std::fs::write(temp.path().join("budget-smoke"), "ignored_setting").unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/analysis_task_engine.py");
+    let script = format!("export TASK_ENGINE_DIR='{}'\nexec python3 -u '{}'\n", temp.path().display(), fixture.display());
+    let (manager, _, _, run) = ready_manager(&temp, &script);
+    manager.start_analysis_task(whole_game_request(&run, 75, 1), analysis_scope(), budget_conditions(Some(1), None, None)).unwrap();
+    let failed = wait_task(&manager, AnalysisTaskStateDto::Failed);
+    manager.teardown().unwrap();
+    let reason = failed.reason.unwrap();
+    assert!(reason.contains("required analysis setting") && reason.contains("ignored"), "{reason}");
 }
