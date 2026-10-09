@@ -304,7 +304,8 @@ it("keeps resource identity on the healthy primary while showing the failed cand
     operation: "switch", profile_id: "candidate-b", run_id: "failed-run-b", switch_id: "2", kind: "nvrtc",
     message: "candidate executable cannot load NVRTC", diagnostic_summary: "nvrtc64.dll missing; <redacted>"
   }} />));
-  const details = host.querySelector("details")!;
+  const details = Array.from(host.querySelectorAll("details")).find((element) =>
+    element.querySelector("summary")?.textContent === "当前运行实例的资源资格")!;
   await act(async () => details.querySelector("summary")!.click());
   expect(details.open).toBe(true);
   expect(details.textContent).toContain("healthy-run-a");
