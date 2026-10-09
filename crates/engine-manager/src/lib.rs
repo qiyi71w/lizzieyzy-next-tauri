@@ -19,6 +19,7 @@ mod game_move_protocol;
 mod gtp;
 mod lifecycle;
 mod resources;
+mod katago_config;
 pub mod models;
 pub mod managed;
 

@@ -433,6 +433,7 @@ impl ForegroundEngineManager {
                 }
             }
             require_idle_move(&state)?;
+            super::runtime_control::require_idle(&state)?;
             if analysis_job.is_some_and(|id| !state.jobs.iter().any(|job| job.job_id == id && job.run_id == run.run_id && !job.terminal && job.disposition == JobDisposition::Running)) {
                 return Err(fail(EngineFailureKind::Cancellation, "analysis request retired before exact restore"));
             }

@@ -306,6 +306,34 @@ export type EngineResourceIdentityDto = {
   sha256: string;
   bytes: number;
 };
+export type ThreadSourcesDto = {
+  entries: { key: string; value: number | null; source: string; layer: string }[];
+  saved: number | null;
+  launch_override: number | null;
+  effective: number | null;
+  analysis_threads: number | null;
+  error: string | null;
+};
+export type RuntimeThreadsRequestDto = {
+  identity: { run_id: string; profile_revision: string; request_id: string };
+  action: "read" | "apply" | "reset";
+  value: number | null;
+};
+export type RuntimeThreadsSnapshotDto = {
+  run_id: string | null;
+  profile_revision: string | null;
+  supported: boolean;
+  reason: string | null;
+  minimum: number;
+  maximum: number;
+  sources: ThreadSourcesDto | null;
+  request_id: string | null;
+  requested: number | null;
+  actual: number | null;
+  temporary: boolean;
+  status: "unknown" | "pending" | "confirmed" | "failed";
+  failure: string | null;
+};
 export type QualifiedLocalResourceDto = {
   profile_revision: string;
   resources: EngineResourceIdentityDto[];
@@ -314,6 +342,7 @@ export type QualifiedLocalResourceDto = {
   source_commit: string | null;
   backend: string | null;
   static_zlib_exemption: boolean;
+  thread_sources?: ThreadSourcesDto | null;
 };
 export type EngineRunDto = {
   run_id: string;

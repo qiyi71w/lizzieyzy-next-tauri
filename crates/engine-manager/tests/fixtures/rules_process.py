@@ -7,6 +7,9 @@ mode = pathlib.Path("mode").read_text()
 commands = "protocol_version name version list_commands boardsize clear_board komi play genmove quit loadsgf showboard printsgf kata-get-rules kata-set-rules get_komi".split()
 if mode.startswith("analysis"):
     commands += ["kata-analyze", "stop"]
+commands += ["kata-set-param", "kata-get-param"]
+threads = 1
+pathlib.Path("pid").write_text(str(os.getpid()))
 stream_count = 0
 def analysis_frame(winrate):
     return f"info move D4 visits 32 winrate {winrate} order 0 pv D4 E5 rootInfo visits 32 winrate {winrate}"
@@ -23,6 +26,19 @@ for raw in sys.stdin:
     elif name == "version": body = "1.18.2"
     elif name == "list_commands": body = "\n".join(commands)
     elif name == "quit": break
+    elif name == "kata-set-param":
+        value = int(command.split()[2])
+        if value < 1 or value > 4096: marker, body = "?", "invalid threads"
+        else: threads = value
+    elif name == "kata-get-param":
+        behavior = pathlib.Path("thread-mode").read_text() if pathlib.Path("thread-mode").exists() else "valid"
+        if behavior in ("hold", "timeout"):
+            pathlib.Path("thread-held").write_text(number)
+            while not pathlib.Path("thread-release").exists(): time.sleep(0.005)
+        if behavior == "negative": marker, body = "?", "read failed"
+        elif behavior == "mismatch": body = "4096"
+        elif behavior == "invalid": body = "NaN"
+        else: body = str(threads)
     elif name == "kata-analyze":
         stream_count += 1
         print(f"={number}", flush=True)

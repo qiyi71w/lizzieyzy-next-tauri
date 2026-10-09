@@ -17,6 +17,8 @@ mod managed_resources;
 pub use managed_resources::*;
 mod evaluation;
 pub use evaluation::*;
+mod runtime_threads;
+pub use runtime_threads::*;
 
 mod analysis_job;
 pub use analysis_job::{
@@ -778,6 +780,8 @@ pub struct QualifiedLocalResourceDto {
     pub source_commit: Option<String>,
     pub backend: Option<String>,
     pub static_zlib_exemption: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_sources: Option<ThreadSourcesDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -751,6 +751,16 @@ fn startup_failure_cancel_and_preexisting_match_preserve_durable_policy() {
 #[test]
 #[ignore = "requires actual frozen KataGo/model/private config; fresh manager startup and real analysis handoff"]
 fn real_startup_evaluation_result_and_autoload_analysis_handoff() {
+    real_startup_handoff(false);
+}
+
+#[test]
+#[ignore = "requires actual KataGo; startup slots coexist with explicit GTP controls before foreground handoff"]
+fn real_startup_background_slots_runtime_controls_and_foreground_handoff() {
+    real_startup_handoff(true);
+}
+
+fn real_startup_handoff(gtp: bool) {
     let engine = std::env::var("LIZZIEYZY_KATAGO_ENGINE").unwrap();
     let model = std::env::var("LIZZIEYZY_KATAGO_MODEL").unwrap();
     let config = std::env::var("LIZZIEYZY_KATAGO_CONFIG").unwrap();
@@ -778,9 +788,11 @@ fn real_startup_evaluation_result_and_autoload_analysis_handoff() {
     let mut primary = settings.profiles[1].clone();
     primary.id = "primary".into();
     primary.profile.argv.clear();
-    primary.profile.adapter = EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+    let adapter_settings = KataGoSettings {
         model_path: Some(model), config_path: Some(config.clone()), max_visits: 2,
-    });
+    };
+    primary.profile.adapter = if gtp { EngineAdapterSettings::KataGoGtp(adapter_settings) }
+        else { EngineAdapterSettings::KataGoAnalysis(adapter_settings) };
     settings.profiles[1].profile.argv[8] = "100000".into();
     let mut prepared = primary.clone();
     prepared.id = "prepared".into();
@@ -807,11 +819,34 @@ fn real_startup_evaluation_result_and_autoload_analysis_handoff() {
     }
     assert_eq!(f.manager.evaluation_snapshot().phase, Phase::Running);
     assert_eq!(f.manager.last_primary_profile_id().as_deref(), Some("primary"));
+    if gtp {
+        let evaluation_id = f.manager.evaluation_snapshot().evaluation_id;
+        let prepared = f.manager.preload_snapshot();
+        for (action, value, expected) in [
+            (app_model::RuntimeThreadsActionDto::Apply, Some(2), 2),
+            (app_model::RuntimeThreadsActionDto::Reset, None, 1),
+        ] {
+            let result = f.manager.runtime_threads(app_model::RuntimeThreadsRequestDto {
+                identity: app_model::RuntimeControlIdentityDto {
+                    run_id: run.run_id.clone(),
+                    profile_revision: run.qualified_resource.as_ref().unwrap().profile_revision.clone(),
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                }, action, value,
+            }).unwrap();
+            assert_eq!(result.actual, Some(expected));
+            assert_eq!(result.status, app_model::RuntimeThreadsStatusDto::Confirmed);
+            assert_eq!(f.manager.evaluation_snapshot().evaluation_id, evaluation_id);
+            assert_eq!(f.manager.evaluation_snapshot().phase, Phase::Running);
+            assert_eq!(f.manager.preload_snapshot(), prepared);
+            assert_eq!(f.manager.snapshot().continuous.enabled, Some(false));
+        }
+    }
     let events = f.manager.subscribe();
     let job = f.manager.start_selected_node_job(engine_manager::SelectedNodeJobRequest {
         run_id: run.run_id.clone(), mode: app_model::AnalysisJobModeDto::Finite, generation: 1,
         node_path: app_model::NodePath { indices: vec![] }, board_width: 9, board_height: 9, position_empty: true,
-        exact_position: Err("JSONL fixture does not require exact GTP history".into()),
+        exact_position: sgf::CurrentSgfDocument::open("(;SZ[9]RU[Chinese]KM[7.5])").unwrap()
+            .exact_position(&app_model::NodePath { indices: vec![] }).map_err(|error| error.to_string()),
         query: katago_protocol::AnalysisQuery { id: "startup-handoff".into(), moves: vec![], initial_stones: vec![],
             rules: "chinese".into(), komi: 7.5, board_x_size: 9, board_y_size: 9, analyze_turns: Some(vec![0]),
             max_visits: Some(2), include_ownership: None, include_policy: None, report_during_search_every: None, override_settings: None },

@@ -1112,6 +1112,18 @@ fn set_engine_diagnostic_trace(manager: State<'_, ForegroundEngineManager>, atte
 }
 
 #[tauri::command]
+fn engine_runtime_threads_snapshot(manager: State<'_, ForegroundEngineManager>) -> app_model::RuntimeThreadsSnapshotDto {
+    manager.runtime_threads_snapshot()
+}
+
+#[tauri::command]
+async fn engine_runtime_threads(manager: State<'_, ForegroundEngineManager>, request: app_model::RuntimeThreadsRequestDto) -> Result<app_model::RuntimeThreadsSnapshotDto, String> {
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || manager.runtime_threads(request))
+        .await.map_err(|_| "runtime thread worker failed".to_owned())?
+}
+
+#[tauri::command]
 fn engine_evaluation_snapshot(manager: State<'_, ForegroundEngineManager>) -> app_model::EvaluationSnapshotDto {
     manager.evaluation_snapshot()
 }
@@ -1422,6 +1434,8 @@ pub fn run() {
             diagnostic_export::cancel_diagnostic_export,
             diagnostic_export::open_diagnostic_export_folder,
             set_engine_diagnostic_trace,
+            engine_runtime_threads_snapshot,
+            engine_runtime_threads,
             engine_evaluation_snapshot,
             engine_evaluation_start,
             engine_evaluation_cancel,
