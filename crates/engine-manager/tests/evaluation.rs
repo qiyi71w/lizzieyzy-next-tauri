@@ -118,7 +118,8 @@ impl EngineProfileCatalog for DiskStartupCatalog {
             .startup_evaluation_target()
     }
     fn preload_profiles(&self) -> Vec<SavedEngineProfile> {
-        engine_manager::load_engine_profiles(&self.0).unwrap().profiles.into_iter()
+        engine_manager::load_engine_profiles(&self.0).ok().into_iter()
+            .flat_map(|settings| settings.profiles)
             .filter(|record| record.preload)
             .map(|record| SavedEngineProfile { profile_id: record.id, profile: record.profile })
             .collect()
