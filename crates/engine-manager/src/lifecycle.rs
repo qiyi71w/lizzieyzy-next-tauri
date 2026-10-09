@@ -2,6 +2,7 @@
 use crate::catalog::{EngineProfileCatalog, SavedEngineProfile};
 use crate::gtp::{self, ResponseDecoder};
 use crate::resources::{ResourceSnapshot, StartupOutput};
+use crate::diagnostics::{AttemptCapture, ObservedRead};
 use crate::{
     build_command_spec, build_process_command, check_assets, kill_timed_out_child, spawn_stdout_lines_reader,
     write_jsonl, AnalysisCancelToken,
@@ -195,6 +196,7 @@ struct LiveEngine {
     startup_output: Arc<Mutex<StartupOutput>>,
     run_id: String,
     process_id: u32,
+    capture: AttemptCapture,
 }
 
 enum Phase {
@@ -248,6 +250,7 @@ struct Inner {
     catalog: Arc<dyn EngineProfileCatalog>,
     config: ForegroundEngineConfig,
     state: Mutex<ManagerState>,
+    diagnostics: Mutex<std::collections::VecDeque<AttemptCapture>>,
 }
 
 #[derive(Clone)]
@@ -261,6 +264,7 @@ impl ForegroundEngineManager {
             inner: Arc::new(Inner {
                 catalog,
                 config,
+                diagnostics: Mutex::new(std::collections::VecDeque::new()),
                 state: Mutex::new(ManagerState {
                     revision: 0,
                     phase: Phase::NoEngine { failure: None },
@@ -295,6 +299,29 @@ impl ForegroundEngineManager {
 
     pub fn snapshot(&self) -> ForegroundEngineSnapshotDto {
         snapshot_from(&self.lock())
+    }
+
+    pub fn diagnostic_snapshots(&self) -> Vec<app_model::EngineDiagnosticSnapshotDto> {
+        self.inner.diagnostics.lock().expect("diagnostic capture list").iter().map(AttemptCapture::snapshot).collect()
+    }
+
+    pub fn set_diagnostic_trace(&self, attempt_id: &str, enabled: bool) -> Result<(), String> {
+        let attempts = self.inner.diagnostics.lock().expect("diagnostic capture list");
+        let attempt = attempts.iter().find(|capture| capture.matches_run(attempt_id)).ok_or("diagnostic attempt expired")?;
+        attempt.set_trace(enabled);
+        Ok(())
+    }
+
+    pub fn diagnostic_trace_enabled(&self, run_id: &str) -> bool {
+        self.inner.diagnostics.lock().expect("diagnostic capture list").iter()
+            .find(|capture| capture.matches_run(run_id)).is_some_and(AttemptCapture::trace_enabled)
+    }
+
+    pub fn trace_analysis_adoption(&self, run_id: &str, detail: impl FnOnce() -> String) {
+        if let Some(capture) = self.inner.diagnostics.lock().expect("diagnostic capture list").iter()
+            .find(|capture| capture.matches_run(run_id)) {
+            capture.trace(detail);
+        }
     }
 
     pub fn analysis_task_snapshot(&self) -> Option<AnalysisTaskDto> {
@@ -1942,6 +1969,13 @@ impl Inner {
         }
     }
 
+    fn record_diagnostic_failure(&self, failure: &EngineFailureDto) {
+        let attempts = self.diagnostics.lock().expect("diagnostic capture list");
+        if let Some(capture) = attempts.iter().find(|capture| failure.run_id.as_deref().is_some_and(|id| capture.matches_run(id))) {
+            capture.record("failure", &format!("{:?}: {}", failure.kind, failure.message));
+        }
+    }
+
     fn start_resident(
         self: &Arc<Self>,
         operation: u64,
@@ -1949,6 +1983,19 @@ impl Inner {
         as_candidate: bool,
     ) -> Result<(), EngineFailureDto> {
         let kind = self.lock().operation_kind;
+        let capture = AttemptCapture::new(run);
+        let protected_run = match &self.lock().phase {
+            Phase::Ready(run) | Phase::Switching { primary: run, .. } => Some(run.run_id.clone()),
+            _ => None,
+        };
+        {
+            let mut attempts = self.diagnostics.lock().expect("diagnostic capture list");
+            if attempts.len() == 4 {
+                let oldest_retired = attempts.iter().position(|attempt| !protected_run.as_deref().is_some_and(|id| attempt.matches_run(id))).unwrap_or(0);
+                attempts.remove(oldest_retired);
+            }
+            attempts.push_back(capture.clone());
+        }
         let missing: Vec<_> = check_assets(&run.profile_snapshot)
             .into_iter()
             .filter(|check| check.required && !check.exists)
@@ -1990,7 +2037,7 @@ impl Inner {
         })?;
         let resource_deadline = Instant::now() + Duration::from_secs(30);
         let resources =
-            ResourceSnapshot::capture(run, &spec, resource_deadline).map_err(|(cause, message)| {
+            ResourceSnapshot::capture(run, &spec, resource_deadline, capture.clone()).map_err(|(cause, message)| {
                 failure(
                     kind,
                     cause,
@@ -2003,6 +2050,7 @@ impl Inner {
         if self.current_operation() != operation {
             return Ok(());
         }
+        capture.command(&spec);
         let mut child = build_process_command(&spec).spawn().map_err(|error| {
             failure(
                 kind,
@@ -2044,6 +2092,8 @@ impl Inner {
             )
         })?;
         let generic = run.adapter_kind == EngineBackend::GenericGtp;
+        let stdout = ObservedRead::new(stdout, capture.clone(), "stdout");
+        let stderr = ObservedRead::new(stderr, capture.clone(), "stderr");
         let stdout_rx = if generic {
             gtp::spawn_stdout_reader(stdout)
         } else {
@@ -2060,6 +2110,7 @@ impl Inner {
                 startup_output: startup_output.clone(),
                 run_id: run.run_id.clone(),
                 process_id,
+                capture: capture.clone(),
             };
             if state.operation != operation {
                 // Keep even a late-spawned child manager-owned until its exit is confirmed.
@@ -2129,6 +2180,7 @@ impl Inner {
             self.await_readiness(operation, run, &probe_id, as_candidate)?;
             None
         };
+        capture.readiness_confirmed();
         let capabilities = EngineCapabilitySnapshotDto {
             adapter_kind: run.adapter_kind,
             game_move: !generic
@@ -2654,6 +2706,7 @@ impl Inner {
                 published
                     .message
                     .push_str(&format!("; candidate cleanup failed: {error}"));
+                self.record_diagnostic_failure(&published);
                 state.phase = Phase::Error {
                     run: primary,
                     failure: published.clone(),
@@ -2665,9 +2718,10 @@ impl Inner {
                 );
                 return;
             }
-            attach_startup_failure(&mut published, &live.startup_output);
+            attach_startup_failure(&mut published, &live.startup_output, &live.capture);
             state.candidate = None;
         }
+        self.record_diagnostic_failure(&published);
         state.phase =
             if state.live.as_mut().is_some_and(|live| {
                 live.run_id == primary.run_id && matches!(live.child.try_wait(), Ok(None))
@@ -2696,7 +2750,7 @@ impl Inner {
             if let Some(process) = slot.as_mut() {
                 match terminate_process(process, deadline) {
                     Ok(()) => {
-                        attach_startup_failure(&mut published, &process.startup_output);
+                        attach_startup_failure(&mut published, &process.startup_output, &process.capture);
                         *slot = None;
                     }
                     Err(error) => published
@@ -2705,6 +2759,7 @@ impl Inner {
                 }
             }
         }
+        self.record_diagnostic_failure(&published);
         cancel_jobs_for_current(&mut state);
         state.jobs.clear();
         state.phase = Phase::NoEngine {
@@ -2808,7 +2863,10 @@ impl Inner {
                     return;
                 }
                 match live.child.try_wait() {
-                    Ok(Some(status)) => Some(status.code()),
+                    Ok(Some(status)) => {
+                        live.capture.exited(status.code());
+                        Some(status.code())
+                    }
                     Ok(None) => None,
                     Err(_) => Some(None),
                 }
@@ -2828,6 +2886,7 @@ impl Inner {
         if live.process_id != process_id {
             return;
         }
+        live.capture.record("failure", &format!("process exited; exit_code={exit_code:?}"));
         if match_reservation::handle_reserved_exit(&mut state, run_id, exit_code) {
             return;
         }
@@ -4632,7 +4691,8 @@ fn write_terminate_to_live(live: &LiveEngine, job_id: &str) {
 }
 
 fn terminate_process(live: &mut LiveEngine, deadline: Instant) -> io::Result<()> {
-    if live.child.try_wait()?.is_some() {
+    if let Some(status) = live.child.try_wait()? {
+        live.capture.exited(status.code());
         return Ok(());
     }
     live.child.kill()?;
@@ -4643,7 +4703,8 @@ fn terminate_process(live: &mut LiveEngine, deadline: Instant) -> io::Result<()>
         ));
     }
     loop {
-        if live.child.try_wait()?.is_some() {
+        if let Some(status) = live.child.try_wait()? {
+            live.capture.exited(status.code());
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -4771,12 +4832,12 @@ fn identify_failed_executable(run: &EngineRunDto, failure: &mut EngineFailureDto
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     failure.message = format!(
         "executable {}: {}",
-        crate::resources::redact(&name),
+        crate::diagnostics::DiagnosticSanitizer::default().sanitize(&name),
         failure.message
     );
 }
 
-fn attach_startup_failure(failure: &mut EngineFailureDto, output: &Arc<Mutex<StartupOutput>>) {
+fn attach_startup_failure(failure: &mut EngineFailureDto, output: &Arc<Mutex<StartupOutput>>, capture: &AttemptCapture) {
     let output = output.lock().unwrap_or_else(|e| e.into_inner());
     if matches!(
         failure.kind,
@@ -4789,11 +4850,11 @@ fn attach_startup_failure(failure: &mut EngineFailureDto, output: &Arc<Mutex<Sta
             failure.kind = kind;
         }
     }
-    let summary = output.summary();
+    let summary = output.summary(capture);
     if !summary.is_empty() {
         failure.diagnostic_summary = Some(summary);
     }
-    failure.message = crate::resources::redact(&failure.message);
+    failure.message = capture.sanitize(&failure.message);
 }
 
 fn failure(
@@ -4804,6 +4865,7 @@ fn failure(
     profile_id: Option<&str>,
     diagnostic_summary: Option<String>,
 ) -> EngineFailureDto {
+    let mut sanitizer = crate::diagnostics::DiagnosticSanitizer::default();
     EngineFailureDto {
         operation,
         run_id: run_id.map(str::to_string),
@@ -4811,8 +4873,8 @@ fn failure(
         job_id: None,
         profile_id: profile_id.map(str::to_string),
         kind,
-        message: crate::resources::redact(&message),
-        diagnostic_summary: diagnostic_summary.map(|text| crate::resources::redact(&text)),
+        message: sanitizer.sanitize(&message),
+        diagnostic_summary: diagnostic_summary.map(|text| sanitizer.sanitize(&text)),
     }
 }
 

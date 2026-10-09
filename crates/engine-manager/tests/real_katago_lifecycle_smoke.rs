@@ -574,3 +574,44 @@ fn real_local_resource_qualification_start_switch_and_corrupt_model_preserve_pri
     manager.teardown().unwrap();
     std::fs::remove_file(corrupt).unwrap();
 }
+
+#[test]
+#[ignore = "requires real KataGoAnalysis assets; run with LIZZIEYZY_REAL_KATAGO=1 --ignored"]
+fn real_katago_bounded_live_diagnostics() {
+    require_real_katago();
+    let profile = real_profile("Real diagnostics");
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile { profile_id: "diagnostics-real".into(), profile: profile.clone() });
+    let (manager, events) = manager_with(catalog);
+    manager.start("diagnostics-real").unwrap();
+    let ready = wait_current(&manager, Duration::from_secs(300), |state| matches!(state, ForegroundEngineLifecycleDto::Ready { .. }));
+    let run = run_from_ready(&ready.lifecycle);
+    let qualification = run.qualified_resource.as_ref().expect("qualified real Run");
+    assert!(qualification.version.as_deref().is_some_and(|value| !value.is_empty()));
+    assert!(qualification.backend.as_deref().is_some_and(|value| !value.is_empty()));
+    assert_eq!(qualification.origin, "local_unknown");
+    assert!(!qualification.static_zlib_exemption);
+    assert!(qualification.resources.iter().all(|resource| resource.bytes > 0 && resource.sha256.len() == 64));
+    eprintln!("real qualification: {}", serde_json::to_string(qualification).unwrap());
+    let job = manager.start_selected_node_job(selected_request(&run.run_id, 1, 2)).unwrap();
+    wait_job(&events, Duration::from_secs(120), |event| event.job_id == job.job_id && event.outcome == app_model::AnalysisJobOutcomeDto::Completed);
+    let frozen = manager.diagnostic_snapshots().pop().unwrap();
+    assert_eq!(frozen.run_id, run.run_id);
+    assert!(!frozen.process_exited);
+    assert!(!frozen.full_trace);
+    assert!(frozen.records.iter().any(|record| record.source == "startup-probe-stderr"));
+    assert!(frozen.records.iter().any(|record| record.source == "stdout"));
+    assert!(frozen.retained_bytes <= 64 * 1024 && frozen.records.len() <= 256);
+    let encoded = serde_json::to_string(&frozen).unwrap();
+    assert!(!encoded.contains(&profile.program));
+    if let EngineAdapterSettings::KataGoAnalysis(settings) = &profile.adapter {
+        assert!(!encoded.contains(settings.model_path.as_ref().unwrap()));
+        assert!(!encoded.contains(settings.config_path.as_ref().unwrap()));
+    }
+    eprintln!("real diagnostic snapshot: {encoded}");
+    eprintln!("real analysis: run={} job={} completed=true", run.run_id, job.job_id);
+    manager.stop().unwrap();
+    wait_current(&manager, Duration::from_secs(20), |state| matches!(state, ForegroundEngineLifecycleDto::NoEngine { .. }));
+    assert_eq!(serde_json::to_string(&frozen).unwrap(), encoded);
+    eprintln!("real diagnostics: attempt={} records={} bytes={} frozen=true live-stdout=true startup-stderr=true", frozen.run_id, frozen.records.len(), frozen.retained_bytes);
+}

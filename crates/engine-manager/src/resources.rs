@@ -1,3 +1,4 @@
+use crate::diagnostics::AttemptCapture;
 use app_model::{EngineFailureKind, EngineResourceIdentityDto, EngineRunDto, QualifiedLocalResourceDto};
 use sha2::{Digest, Sha256};
 use std::fs::File;
@@ -14,6 +15,7 @@ const CONFIG_BYTES: u64 = 4 * 1024 * 1024;
 pub(crate) struct ResourceSnapshot {
     entries: Vec<(PathBuf, EngineResourceIdentityDto)>,
     revision: String,
+    diagnostics: AttemptCapture,
 }
 
 pub(crate) type ResourceError = (EngineFailureKind, String);
@@ -23,6 +25,7 @@ impl ResourceSnapshot {
         run: &EngineRunDto,
         spec: &crate::CommandSpec,
         deadline: Instant,
+        diagnostics: AttemptCapture,
     ) -> Result<Self, ResourceError> {
         let revision = format!(
             "{:x}",
@@ -32,6 +35,7 @@ impl ResourceSnapshot {
         let mut snapshot = Self {
             entries: Vec::new(),
             revision,
+            diagnostics,
         };
         snapshot.add(executable, "executable", deadline)?;
         if let app_model::EngineAdapterSettings::KataGoAnalysis(_) = &run.profile_snapshot.adapter {
@@ -58,11 +62,11 @@ impl ResourceSnapshot {
                 kind,
                 format!(
                     "{component}: file is missing or inaccessible ({})",
-                    display_path(&path)
+                    self.diagnostics.alias(&path.to_string_lossy())
                 ),
             )
         })?;
-        let identity = identify(&path, component, deadline)?;
+        let identity = identify(&path, component, deadline, &self.diagnostics)?;
         self.entries.push((path.clone(), identity));
         Ok(path)
     }
@@ -77,7 +81,7 @@ impl ResourceSnapshot {
         let canonical = path.canonicalize().map_err(|_| {
             (
                 EngineFailureKind::Config,
-                format!("config is missing ({})", display_path(&path)),
+                format!("config is missing ({})", self.diagnostics.alias(&path.to_string_lossy())),
             )
         })?;
         if self
@@ -111,7 +115,7 @@ impl ResourceSnapshot {
 
     pub(crate) fn revalidate(&self, deadline: Instant) -> Result<(), ResourceError> {
         for (path, expected) in &self.entries {
-            let actual = identify(path, &expected.component, deadline).map_err(|_| {
+            let actual = identify(path, &expected.component, deadline, &self.diagnostics).map_err(|_| {
                 (
                     EngineFailureKind::ResourceChanged,
                     format!(
@@ -163,13 +167,14 @@ fn identify(
     path: &Path,
     component: &str,
     deadline: Instant,
+    diagnostics: &AttemptCapture,
 ) -> Result<EngineResourceIdentityDto, ResourceError> {
     let fail = || {
         (
             component_kind(component),
             format!(
                 "{component}: cannot read a regular resource file ({})",
-                display_path(path)
+                diagnostics.alias(&path.to_string_lossy())
             ),
         )
     };
@@ -206,7 +211,7 @@ fn identify(
     let resolved = path.canonicalize().map_err(|_| fail())?;
     Ok(EngineResourceIdentityDto {
         component: component.into(),
-        resolved_path: display_path(&resolved),
+        resolved_path: diagnostics.alias(&resolved.to_string_lossy()),
         sha256: format!("{:x}", hasher.finalize()),
         bytes,
     })
@@ -238,14 +243,6 @@ fn resolve_executable(program: &str) -> Result<PathBuf, ResourceError> {
     ))
 }
 
-fn display_path(path: &Path) -> String {
-    let hash = format!("{:x}", Sha256::digest(path.to_string_lossy().as_bytes()));
-    format!(
-        "<path:{}>/{}",
-        &hash[..12],
-        redact(&path.file_name().unwrap_or_default().to_string_lossy())
-    )
-}
 
 /// Startup stderr is drained continuously; a prefix retains identity and a tail
 /// retains the actual loader failure. Neither probe output nor raw bytes is emitted.
@@ -300,8 +297,8 @@ impl StartupOutput {
         (version, backend)
     }
 
-    pub(crate) fn summary(&self) -> String {
-        redact(&String::from_utf8_lossy(&self.tail))
+    pub(crate) fn summary(&self, diagnostics: &AttemptCapture) -> String {
+        diagnostics.sanitize(&String::from_utf8_lossy(&self.tail))
     }
     pub(crate) fn failure_kind(&self) -> Option<EngineFailureKind> {
         let text = String::from_utf8_lossy(&self.tail).to_ascii_lowercase();
@@ -337,37 +334,4 @@ impl StartupOutput {
             None
         }
     }
-}
-
-pub(crate) fn redact(text: &str) -> String {
-    use regex::Regex;
-    use std::sync::LazyLock;
-    static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-        [
-        r#"(?i)(?:https?|wss?|ssh)://[^\s\"'<>]+"#,
-        r#"(?i)(?:token|password|passwd|secret|authorization|cookie|room[_-]?id|session[_-]?id)\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"#,
-        r#"(?:[A-Za-z]:[\\/]|/)[^\s\"'<>]*"#,
-    ].into_iter().map(|p| Regex::new(p).expect("redaction pattern")).collect()
-    });
-    let mut text = text.chars().take(OUTPUT_BYTES).collect::<String>();
-    for pattern in PATTERNS.iter() {
-        text = pattern.replace_all(&text, "<redacted>").into_owned();
-    }
-    let mut result = String::new();
-    for c in text.chars() {
-        let escaped = match c {
-            '\n' => "\\n".into(),
-            '\r' => "\\r".into(),
-            '\t' => "\\t".into(),
-            '"' => "\\\"".into(),
-            '\'' => "\\'".into(),
-            c if c.is_control() => "?".into(),
-            c => c.to_string(),
-        };
-        if result.len() + escaped.len() > OUTPUT_BYTES {
-            break;
-        }
-        result.push_str(&escaped);
-    }
-    result
 }

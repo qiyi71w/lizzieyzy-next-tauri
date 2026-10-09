@@ -6,6 +6,7 @@ import { profileHasPendingChanges, runFromSnapshot, verifiedEngineCapabilitiesLa
 import { t } from "../i18n/resources";
 import { EngineResourceDetails } from "./EngineResourceDetails";
 import { ModelInventoryPanel } from "./ModelInventoryPanel";
+import { EngineDiagnosticsPanel } from "./EngineDiagnosticsPanel";
 
 type Props = {
   disabled?: boolean;
@@ -312,6 +313,7 @@ export function EngineSetupPanel({ disabled = false, engineSnapshot = null, engi
 
   return (
     <section className="engine-setup-panel" aria-label="引擎设置" data-focus-owner="engine" tabIndex={-1}>
+      <EngineDiagnosticsPanel engineSnapshot={snapshot} disabled={disabled} />
       <fieldset disabled={disabled || modelBusy} style={{ border: 0, padding: 0, minWidth: 0 }}>
       <div className="engine-run-row">
         <label>

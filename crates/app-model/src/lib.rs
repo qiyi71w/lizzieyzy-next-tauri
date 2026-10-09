@@ -599,6 +599,45 @@ pub enum EngineFailureKind {
     Zlib,
 }
 
+/// A detached, already-redacted capture. Consumers must retain this value rather
+/// than resolving its attempt again when copying or exporting it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EngineDiagnosticSnapshotDto {
+    pub attempt_id: String,
+    pub run_id: String,
+    pub profile_id: String,
+    pub captured_at_ms: u64,
+    pub full_trace: bool,
+    pub command: String,
+    pub failure: Option<String>,
+    pub stdout_complete: bool,
+    pub stderr_complete: bool,
+    pub process_exited: bool,
+    pub exit_code: Option<i32>,
+    pub records: Vec<EngineDiagnosticRecordDto>,
+    pub dropped_records: u64,
+    pub retained_bytes: usize,
+    pub metrics: Vec<EngineDiagnosticMetricDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineDiagnosticRecordDto {
+    pub sequence: u64,
+    pub at_ms: u64,
+    pub source: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EngineDiagnosticMetricDto {
+    pub role: String,
+    pub name: String,
+    pub unit: String,
+    pub at_ms: u64,
+    pub value: Option<f64>,
+    pub missing: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineFailureDto {
     pub operation: EngineOperationDto,

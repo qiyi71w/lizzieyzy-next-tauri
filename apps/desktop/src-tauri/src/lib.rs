@@ -1039,6 +1039,17 @@ fn foreground_engine_snapshot(manager: State<'_, ForegroundEngineManager>) -> Fo
 }
 
 #[tauri::command]
+fn engine_diagnostic_snapshots(manager: State<'_, ForegroundEngineManager>) -> Vec<app_model::EngineDiagnosticSnapshotDto> {
+    manager.diagnostic_snapshots()
+}
+
+#[tauri::command]
+fn set_engine_diagnostic_trace(manager: State<'_, ForegroundEngineManager>, attempt_id: String, enabled: bool) -> Result<(), String> {
+    manager.set_diagnostic_trace(&attempt_id, enabled)
+}
+
+
+#[tauri::command]
 fn foreground_engine_start(
     manager: State<'_, ForegroundEngineManager>,
     profile_id: String,
@@ -1262,6 +1273,8 @@ pub fn run() {
             continue_analysis_task,
             katago_cancel_analysis,
             foreground_engine_snapshot,
+            engine_diagnostic_snapshots,
+            set_engine_diagnostic_trace,
             foreground_engine_start,
             foreground_engine_stop,
             foreground_engine_restart,
