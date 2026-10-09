@@ -38,7 +38,9 @@ impl ResourceSnapshot {
             diagnostics,
         };
         snapshot.add(executable, "executable", deadline)?;
-        if let app_model::EngineAdapterSettings::KataGoAnalysis(_) = &run.profile_snapshot.adapter {
+        if let app_model::EngineAdapterSettings::KataGoAnalysis(_)
+        | app_model::EngineAdapterSettings::KataGoGtp(_) = &run.profile_snapshot.adapter
+        {
             snapshot.add(PathBuf::from(&spec.args[4]), "model", deadline)?;
             snapshot.config(PathBuf::from(&spec.args[2]), deadline, 0)?;
         }

@@ -13,6 +13,7 @@ import { ReviewTree } from "./components/ReviewTree";
 import { reviewLineProblems, type ReviewProblem } from "./domain/reviewNavigation";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import { EngineSetupPanel } from "./components/EngineSetupPanel";
+import { OrdinaryRulesPanel } from "./components/OrdinaryRulesPanel";
 import { AppChrome, BottomBar, type ContinuousAnalysisAction, type OverlayMode, type SheetId } from "./components/AppChrome";
 import { PreferencesPanel } from "./components/PreferencesPanel";
 import { ShortcutReference } from "./components/ShortcutReference";
@@ -4694,6 +4695,13 @@ export function App() {
           engineSnapshot={engineSnapshot}
           engineFailure={visibleEngineFailure}
           onProfilesChange={setEngineProfiles}
+        />
+        <OrdinaryRulesPanel
+          run={engineSnapshot.lifecycle.state === "ready" ? engineSnapshot.lifecycle.run : null}
+          generation={currentGame?.generation ?? null}
+          nodePath={currentGame?.selected_path ?? { indices: [] }}
+          native={nativeRuntime}
+          disabled={matchBlocked || departurePending || documentFlowBusy || editActionPending || Boolean(trial) || trialPending || Boolean(scoring) || scoringPending || Boolean(engineSnapshot.game_move_job)}
         />
       </div>
       {sheet === "prefs" ? <PreferencesPanel

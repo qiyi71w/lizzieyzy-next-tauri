@@ -186,6 +186,10 @@ impl ExactPosition {
         &self.dto
     }
 
+    pub fn stones(&self) -> Vec<app_model::StoneDto> {
+        stones_from_board(&self.board)
+    }
+
     /// Checks an engine's point or pass without mutating the selected position.
     pub fn validate_move(&self, vertex: &MoveVertex) -> Result<(), String> {
         if matches!(vertex, MoveVertex::Pass) {

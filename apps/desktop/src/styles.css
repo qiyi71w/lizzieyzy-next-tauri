@@ -1157,6 +1157,13 @@ button[aria-pressed="true"] {
   overflow-wrap: anywhere;
 }
 
+.ordinary-rules-panel.message {
+  white-space: normal;
+  overflow: visible;
+  max-width: none;
+  overflow-wrap: anywhere;
+}
+
 /* =========================================================
    底部弹出工具抽屉 (Sheets)
    ========================================================= */

@@ -526,6 +526,7 @@ pub struct EngineProfileOrderRequestDto {
 #[serde(rename_all = "snake_case")]
 pub enum EngineBackend {
     KataGoAnalysis,
+    KataGoGtp,
     GenericGtp,
 }
 
@@ -533,6 +534,7 @@ pub enum EngineBackend {
 #[serde(tag = "adapter_kind", content = "settings", rename_all = "snake_case")]
 pub enum EngineAdapterSettings {
     KataGoAnalysis(KataGoSettings),
+    KataGoGtp(KataGoSettings),
     GenericGtp(GenericGtpSettings),
 }
 
@@ -552,6 +554,7 @@ impl EngineProfileDto {
     pub fn adapter_kind(&self) -> EngineBackend {
         match self.adapter {
             EngineAdapterSettings::KataGoAnalysis(_) => EngineBackend::KataGoAnalysis,
+            EngineAdapterSettings::KataGoGtp(_) => EngineBackend::KataGoGtp,
             EngineAdapterSettings::GenericGtp(_) => EngineBackend::GenericGtp,
         }
     }

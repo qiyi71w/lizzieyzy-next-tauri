@@ -117,7 +117,7 @@ export function profileHasPendingChanges(
     || current.working_dir !== saved.working_dir || current.adapter_kind !== saved.adapter_kind
     || current.argv.length !== saved.argv.length
     || current.argv.some((argument, index) => argument !== saved.argv[index])) return true;
-  if (current.adapter_kind === "kata_go_analysis" && saved.adapter_kind === "kata_go_analysis") {
+  if (current.adapter_kind !== "generic_gtp" && saved.adapter_kind !== "generic_gtp") {
     return current.settings.model_path !== saved.settings.model_path
       || current.settings.config_path !== saved.settings.config_path
       || current.settings.max_visits !== saved.settings.max_visits;
