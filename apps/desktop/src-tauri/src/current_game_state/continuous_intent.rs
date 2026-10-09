@@ -47,6 +47,16 @@ fn confirmed_departure_hold_survives_navigation_and_preference_reload() {
         manager.snapshot().lifecycle,
         app_model::ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
+    let admission = state.prepare_replacement("(;SZ[9]RU[Chinese-KGS]KM[6.5]C[new personal];B[cc];W[])", None).unwrap();
+    let id = match admission {
+        app_model::DocumentDepartureAdmissionDto::Ready { departure_id }
+        | app_model::DocumentDepartureAdmissionDto::NeedsDecision { departure_id } => departure_id,
+    };
+    state.begin_protected_commit(id, &[]).unwrap();
+    let imported = state.commit_replacement(id).unwrap();
+    assert!(imported.committed);
+    assert_eq!(manager.snapshot().continuous.phase, app_model::ContinuousAnalysisPhaseDto::SafetyHold);
+    assert!(manager.snapshot().selected_node_job.is_none());
 }
 
 #[cfg(unix)]

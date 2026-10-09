@@ -519,6 +519,10 @@ mod controlled {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
         }
+        rig.manager.begin_continuous_departure();
+        rig.manager.clear_continuous_position();
+        rig.manager.follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
+        rig.manager.finish_continuous_departure(true);
         std::fs::write(rig.dir.join("mode"), "analysis").unwrap();
         rig.manager.restart().unwrap();
         let replacement = ready(&rig.manager);

@@ -600,7 +600,8 @@ impl ForegroundEngineManager {
             }
             state.continuous_departing = false;
             if committed_replacement {
-                clear_resumable_holds(&mut state);
+                // Import changes the position, not the user's authorization after a failure.
+                clear_weak_holds_for_new_position(&mut state);
             } else {
                 state.continuous_safety_hold = true;
             }
@@ -3031,6 +3032,7 @@ impl Inner {
         );
         game_move::fail_move_for_run(state, &published);
         fail_analysis_task_locked(state, None, "The Foreground Engine Run exited unexpectedly.");
+        state.continuous_safety_hold = true;
         cancel_jobs_for_current(state);
         if let Some(mut live) = state.live.take() {
             let _ = live.child.wait();
@@ -3087,6 +3089,7 @@ impl Inner {
                 None,
             );
             game_move::fail_move_for_run(&mut state, &published);
+            state.continuous_safety_hold = true;
             let deadline = Instant::now() + self.config.stop_drain_timeout;
             let ManagerState { live, candidate, .. } = &mut *state;
             for slot in [live, candidate] {
@@ -3755,9 +3758,7 @@ impl Inner {
         let Some(run) = admitting_run(&state.phase, run_id) else {
             return published;
         };
-        if run.adapter_kind == EngineBackend::KataGoGtp {
-            state.continuous_safety_hold = true;
-        }
+        state.continuous_safety_hold = true;
         fail_analysis_task_locked(&mut state, None, message);
         state.operation += 1;
         let deadline = state
