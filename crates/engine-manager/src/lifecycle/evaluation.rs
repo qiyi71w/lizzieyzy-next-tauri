@@ -476,3 +476,38 @@ fn run_process(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FailedPipe;
+
+    impl Read for FailedPipe {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("controlled pipe failure"))
+        }
+    }
+
+    #[test]
+    fn pipe_read_failure_after_output_is_not_successful_eof() {
+        let row = b"numSearchThreads = 1: 1/1 positions, visits/s = 2.5\n";
+        let (tx, rx) = mpsc::sync_channel(QUEUE_LINES);
+        read_output(std::io::Cursor::new(row).chain(FailedPipe), tx);
+        let first = rx.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
+        assert!(completed_row(&first.text).is_some());
+        assert!(rx.recv_timeout(Duration::from_secs(1)).unwrap().is_err());
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(1)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ));
+
+        let (tx, rx) = mpsc::sync_channel(QUEUE_LINES);
+        read_output(std::io::Cursor::new(row), tx);
+        assert!(rx.recv_timeout(Duration::from_secs(1)).unwrap().is_ok());
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(1)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ));
+    }
+}
