@@ -113,8 +113,12 @@ pub(super) fn verify_package(directory: &Path, target: &str, asset: &Asset, netw
         if manifest.files.len() > 4096 { return Err("managed_manifest_limit".into()); }
         let mut names = BTreeSet::new();
         for file in &manifest.files {
-            if !safe_path(&file.file) || !names.insert(file.file.to_ascii_lowercase()) { return Err("managed_manifest_unsafe_path".into()); }
-            verify_file(&directory.join(&file.file), file.size_bytes, &file.sha256, network)?;
+            // Frozen Windows build receipts use native separators; ZIP entries remain strictly portable.
+            let path = if target.starts_with("windows-") && file.file.contains('\\') {
+                std::borrow::Cow::Owned(file.file.replace('\\', "/"))
+            } else { std::borrow::Cow::Borrowed(file.file.as_str()) };
+            if !safe_path(&path) || !names.insert(path.to_ascii_lowercase()) { return Err("managed_manifest_unsafe_path".into()); }
+            verify_file(&directory.join(path.as_ref()), file.size_bytes, &file.sha256, network)?;
         }
         if name == "source-release.json" && (!names.contains("analysis_example.cfg") || !names.contains("default_gtp.cfg")) {
             return Err("managed_config_identity_missing".into());
@@ -181,5 +185,23 @@ mod tests {
         })).unwrap()).unwrap();
         assert_eq!(verify_package(&root, "linux-cpu", asset, &network).unwrap_err(), "managed_manifest_identity_mismatch");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires read-only frozen CPU archives in LIZZIEYZY_MANAGED_ARCHIVES; package evidence, not download or Windows runtime evidence"]
+    fn real_frozen_cpu_packages_validate_native_manifest_paths() {
+        let inputs = std::path::PathBuf::from(std::env::var("LIZZIEYZY_MANAGED_ARCHIVES").unwrap());
+        for target in ["linux-cpu", "windows-cpu"] {
+            let root = std::env::temp_dir().join(format!("frozen-package-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&root).unwrap();
+            let network = NetworkState::default().begin_resource(0).unwrap();
+            let asset = &crate::managed::catalog::frozen().assets[target];
+            let archive = inputs.join(&asset.asset_name);
+            verify_file(&archive, asset.size_bytes, &asset.sha256, &network).unwrap();
+            extract(&archive, &root, &network).unwrap();
+            let result = verify_package(&root, target, asset, &network);
+            fs::remove_dir_all(root).unwrap();
+            assert_eq!(result, Ok(()), "{target}");
+        }
     }
 }
