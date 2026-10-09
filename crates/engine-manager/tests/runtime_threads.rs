@@ -60,10 +60,13 @@ fn real_runtime_threads_same_pid_analysis_pause_reset_and_expiry() {
     let engine = std::env::var("LIZZIEYZY_KATAGO_ENGINE").unwrap();
     let config = std::env::var("LIZZIEYZY_KATAGO_CONFIG").unwrap();
     let original_bytes = std::fs::read(&config).unwrap();
+    let layer = std::path::PathBuf::from(std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap())
+        .join(format!("thread-layer-{}.cfg", uuid::Uuid::new_v4()));
+    std::fs::write(&layer, "numSearchThreads=2\n").unwrap();
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     catalog.upsert(SavedEngineProfile { profile_id: "threads".into(), profile: EngineProfileDto {
         name: "manual GTP threads".into(), program: engine.clone(),
-        argv: vec!["-config".into(), config.clone(), "-override-config".into(), "numSearchThreads=1".into()],
+        argv: vec!["-config".into(), layer.to_string_lossy().into_owned(), "-override-config".into(), "numSearchThreads=1".into()],
         working_dir: Some(std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap()),
         adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings { model_path: Some(std::env::var("LIZZIEYZY_KATAGO_MODEL").unwrap()), config_path: Some(config.clone()), max_visits: 4 }),
     }});
@@ -149,4 +152,6 @@ fn real_runtime_threads_same_pid_analysis_pause_reset_and_expiry() {
     assert_eq!(manager.runtime_threads_snapshot().run_id, None);
     assert_eq!(manager.runtime_threads_snapshot().actual, None);
     assert_eq!(std::fs::read(&config).unwrap(), original_bytes);
+    assert_eq!(std::fs::read_to_string(&layer).unwrap(), "numSearchThreads=2\n");
+    std::fs::remove_file(layer).unwrap();
 }

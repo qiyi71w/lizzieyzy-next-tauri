@@ -9,13 +9,16 @@ use std::{
 #[ignore = "requires explicitly provided real KataGo 1.18.2 resources"]
 fn real_katago_gtp_rules_and_exact_selected_positions() {
     assert_eq!(std::env::var("LIZZIEYZY_REAL_KATAGO").unwrap(), "1");
+    let layer = std::path::PathBuf::from(std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap())
+        .join(format!("promotion-layer-{}.cfg", uuid::Uuid::new_v4()));
+    std::fs::write(&layer, "numSearchThreads=2\n").unwrap();
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     catalog.upsert(SavedEngineProfile {
         profile_id: "gtp".into(),
         profile: EngineProfileDto {
             name: "explicit KataGo GTP".into(),
             program: std::env::var("LIZZIEYZY_KATAGO_ENGINE").unwrap(),
-            argv: vec!["-config".into(), std::env::var("LIZZIEYZY_KATAGO_CONFIG").unwrap(),
+            argv: vec!["-config".into(), layer.to_string_lossy().into_owned(),
                 "-override-config".into(), "numSearchThreads=1".into()],
             working_dir: Some(std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap()),
             adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings {
@@ -204,6 +207,8 @@ fn real_katago_gtp_rules_and_exact_selected_positions() {
     println!("GTP DIAGNOSTICS {encoded}");
     manager.teardown().unwrap();
     assert_eq!(serde_json::to_string(&frozen).unwrap(), encoded);
+    assert_eq!(std::fs::read_to_string(&layer).unwrap(), "numSearchThreads=2\n");
+    std::fs::remove_file(layer).unwrap();
 }
 
 #[cfg(unix)]
