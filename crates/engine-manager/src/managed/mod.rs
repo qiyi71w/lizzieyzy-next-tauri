@@ -175,8 +175,9 @@ impl ManagedResources {
         }
         prepared.manifest.files = package::content_hashes(&contents, &network)?;
         let bytes = serde_json::to_vec(&prepared.manifest).map_err(|_| "managed_manifest_invalid")?;
-        fs::write(contents.join("installed-manifest.json"), &bytes).map_err(|_| "managed_manifest_write_failed")?;
-        fs::File::open(contents.join("installed-manifest.json")).and_then(|file| file.sync_all()).map_err(|_| "managed_manifest_write_failed")?;
+        let mut manifest_file = fs::File::create(contents.join("installed-manifest.json")).map_err(|_| "managed_manifest_write_failed")?;
+        std::io::Write::write_all(&mut manifest_file, &bytes).map_err(|_| "managed_manifest_write_failed")?;
+        manifest_file.sync_all().map_err(|_| "managed_manifest_write_failed")?;
         Ok(prepared)
     }
     /// Caller holds the existing saved-profile transaction lock and has revalidated the captured
