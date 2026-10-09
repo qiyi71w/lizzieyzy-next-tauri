@@ -58,7 +58,7 @@ const backend = vi.hoisted(() => ({
   undoCurrentGame: vi.fn(),
   redoCurrentGame: vi.fn(),
   startKataGoGameAnalysis: vi.fn(),
-  loadEngineProfilesSettings: vi.fn(() => Promise.resolve({ version: 1, selected_profile_id: "default", autoload_profile_id: null, profiles: [] })),
+  loadEngineProfilesSettings: vi.fn(() => Promise.resolve({ version: 2, selected_profile_id: "default", startup: { mode: "off" as const }, last_primary_profile_id: null, profiles: [] })),
   subscribeForegroundEngine: vi.fn(() => Promise.resolve(() => undefined)),
   subscribeTrialAnalysis: vi.fn(async () => () => undefined),
   startForegroundEngine: vi.fn(),

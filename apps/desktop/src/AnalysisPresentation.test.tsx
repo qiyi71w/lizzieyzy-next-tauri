@@ -198,9 +198,9 @@ beforeEach(() => {
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
   backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => snapshotAt(path));
   backend.loadEngineProfilesSettings.mockResolvedValue({
-    version: 1,
+    version: 2,
     selected_profile_id: "profile-1",
-    autoload_profile_id: null,
+    startup: { mode: "off" as const }, last_primary_profile_id: null,
     profiles: [savedProfile]
   });
   backend.getForegroundEngineSnapshot.mockResolvedValue({ revision: 0, lifecycle: { state: "no_engine" }, continuous: { enabled: null, phase: "loading" } });

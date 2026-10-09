@@ -224,6 +224,7 @@ enum Phase {
 struct ManagerState {
     revision: u64,
     phase: Phase,
+    last_primary_profile_id: Option<String>,
     operation: u64,
     operation_kind: EngineOperationDto,
     live: Option<LiveEngine>,
@@ -272,6 +273,7 @@ impl ForegroundEngineManager {
                 state: Mutex::new(ManagerState {
                     revision: 0,
                     phase: Phase::NoEngine { failure: None },
+                    last_primary_profile_id: None,
                     operation: 0,
                     operation_kind: EngineOperationDto::Start,
                     live: None,
@@ -326,6 +328,11 @@ impl ForegroundEngineManager {
             .find(|capture| capture.matches_run(run_id)) {
             capture.trace(detail);
         }
+    }
+
+    /// Last successfully established primary in this application session, retained after Stop.
+    pub fn last_primary_profile_id(&self) -> Option<String> {
+        self.lock().last_primary_profile_id.clone()
     }
 
     pub fn analysis_task_snapshot(&self) -> Option<AnalysisTaskDto> {
@@ -2596,6 +2603,7 @@ impl Inner {
             &mut state,
             "A new Foreground Engine Run is ready; start a new analysis task.",
         );
+        state.last_primary_profile_id = Some(ready.profile_id.clone());
         state.phase = Phase::Ready(ready);
         clear_holds_for_new_run(&mut state);
         publish_snapshot(&mut state);
@@ -2665,6 +2673,7 @@ impl Inner {
             cancel_jobs_for_run(&mut state, &primary_run_id);
             let retiring = state.live.take();
             state.live = state.candidate.take();
+            state.last_primary_profile_id = Some(ready.profile_id.clone());
             state.phase = Phase::Ready(ready);
             clear_holds_for_new_run(&mut state);
             publish_snapshot(&mut state);

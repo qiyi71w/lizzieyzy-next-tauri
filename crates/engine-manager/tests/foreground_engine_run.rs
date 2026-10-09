@@ -4048,15 +4048,16 @@ fn durable_reorder_and_failure_preserve_ready_run_launch_and_job_bindings() {
         fn autoload_profile_id(&self) -> Option<String> {
             engine_manager::load_engine_profiles(&self.0)
                 .ok()?
-                .autoload_profile_id
+                .startup_profile_id().map(str::to_owned)
         }
     }
     let temp = TestTempDir::new("order-ready-job");
     let path = temp.path().join("catalog.json");
     let current = engine_manager::EngineProfilesSettings {
-        version: 1,
+        version: 2,
         selected_profile_id: "profile-b".into(),
-        autoload_profile_id: Some("profile-a".into()),
+        startup: app_model::EngineStartupPolicyDto::Fixed { profile_id: "profile-a".into() },
+        last_primary_profile_id: None,
         profiles: vec![
             engine_manager::EngineProfileRecord {
                 id: "profile-a".into(),
@@ -4091,7 +4092,7 @@ fn durable_reorder_and_failure_preserve_ready_run_launch_and_job_bindings() {
     let reordered = engine_manager::reorder_engine_profiles(&path, current.clone(), &request).unwrap();
     assert_eq!(engine_manager::load_engine_profiles(&path).unwrap(), reordered);
     assert_eq!(reordered.selected_profile_id, "profile-b");
-    assert_eq!(reordered.autoload_profile_id.as_deref(), Some("profile-a"));
+    assert_eq!(reordered.startup_profile_id(), Some("profile-a"));
     assert_eq!(manager.snapshot(), before);
     let bytes = std::fs::read(&path).unwrap();
     std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
@@ -6887,4 +6888,30 @@ while True: print("WARN continuous " + "x"*1000,file=sys.stderr,flush=True)
         assert!(Instant::now() < deadline, "burst readers did not retire");
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+#[test]
+fn last_primary_tracks_only_successful_promotion_and_survives_stop() {
+    let temp = TestTempDir::new("last-primary-promotions");
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    for id in ["a", "b"] {
+        catalog.upsert(SavedEngineProfile {
+            profile_id: id.into(),
+            profile: setup_named_profile(&temp, id, &resident_echo_script()),
+        });
+    }
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    assert_eq!(manager.last_primary_profile_id(), None);
+    assert!(manager.start("missing").is_err());
+    assert_eq!(manager.last_primary_profile_id(), None);
+    manager.start("a").unwrap();
+    wait_lifecycle(&manager, Duration::from_secs(3), |phase| matches!(phase, ForegroundEngineLifecycleDto::Ready { .. }));
+    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("a"));
+    assert!(manager.switch_to("missing").is_err());
+    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("a"));
+    manager.switch_to("b").unwrap();
+    wait_lifecycle(&manager, Duration::from_secs(3), |phase| matches!(phase, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "b"));
+    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("b"));
+    manager.stop().unwrap();
+    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("b"));
 }

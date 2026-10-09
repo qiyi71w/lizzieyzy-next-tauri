@@ -610,9 +610,35 @@ pub fn confirm_application_exit_anyway(
     Ok(persist_exit_outcome(&state, &store, outcome))
 }
 
+fn persist_startup_after_exit(
+    state: &CurrentGameState,
+    path: &std::path::Path,
+    current: engine_manager::EngineProfilesSettings,
+    primary: Option<String>,
+) -> Result<(), String> {
+    if state.graceful_exit_completed() {
+        engine_manager::persist_last_primary(path, current, primary)?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn confirm_native_exit(app: AppHandle) -> Result<(), String> {
     crate::window_geometry::seal_for_exit(app.clone()).await?;
+    let primary = app.state::<ForegroundEngineManager>().last_primary_profile_id();
+    if primary.is_some() && app.state::<CurrentGameState>().graceful_exit_completed() {
+        let _transaction = crate::ENGINE_CATALOG_WRITES
+            .lock()
+            .map_err(|_| "engine catalog lock poisoned")?;
+        let current = crate::load_engine_profiles_from_disk(&app)?;
+        let path = crate::engine_profile_path(&app)?;
+        persist_startup_after_exit(
+            &app.state::<CurrentGameState>(),
+            &path,
+            current,
+            primary,
+        )?;
+    }
     app.exit(0);
     Ok(())
 }
@@ -1198,6 +1224,51 @@ mod tests {
             incomplete.application_exit_disposition(),
             Some(ApplicationExitDispositionDto::ExitIncomplete)
         );
+    }
+
+    #[test]
+    fn last_primary_is_written_only_after_actual_successful_departure() {
+        for scenario in ["cancel", "save_as_cancel", "clean", "discard", "forced", "write_failure"] {
+            let state = CurrentGameState::default();
+            let opened = state.replace(BRANCHING, None).unwrap();
+            if scenario != "clean" { state.force_dirty(); }
+            let id = departure_id(state.prepare_exit().unwrap());
+            let path = unique_path("startup-departure").with_extension("json");
+            let mut current = engine_manager::default_engine_profiles_settings();
+            current.startup = app_model::EngineStartupPolicyDto::LastPrimary;
+            current.last_primary_profile_id = Some("previous".into());
+            engine_manager::save_engine_profiles(&path, current.clone()).unwrap();
+            let before = fs::read(&path).unwrap();
+            let action = match scenario {
+                "cancel" => ApplicationExitActionDto::Cancel,
+                "save_as_cancel" => ApplicationExitActionDto::Save,
+                "clean" => ApplicationExitActionDto::Continue,
+                _ => ApplicationExitActionDto::Discard,
+            };
+            let outcome = resolve_exit(&state, ExitResolution {
+                departure_id: id, action, selected_path: opened.selected_path.clone(),
+                budget: Duration::from_millis(1),
+            }, &[], |_| Ok(()), wait_succeeds, || Ok(None), |_| {
+                if scenario == "forced" { vec!["owned resource".into()] } else { Vec::new() }
+            }).unwrap();
+            if scenario == "forced" {
+                exit_anyway(&state, id, opened.selected_path, vec!["owned resource".into()]).unwrap();
+            }
+            if scenario == "write_failure" { fs::create_dir(path.with_extension("json.tmp")).unwrap(); }
+            let result = persist_startup_after_exit(&state, &path, current, Some("this-session".into()));
+            if scenario == "write_failure" {
+                assert!(result.is_err());
+                fs::remove_dir(path.with_extension("json.tmp")).unwrap();
+            } else { result.unwrap(); }
+            if matches!(scenario, "clean" | "discard") {
+                assert!(outcome.committed);
+                assert_eq!(engine_manager::load_engine_profiles(&path).unwrap().last_primary_profile_id.as_deref(), Some("this-session"));
+            } else {
+                assert_eq!(fs::read(&path).unwrap(), before, "{scenario}");
+                assert_eq!(engine_manager::load_engine_profiles(&path).unwrap().last_primary_profile_id.as_deref(), Some("previous"));
+            }
+            fs::remove_file(path).unwrap();
+        }
     }
 }
 

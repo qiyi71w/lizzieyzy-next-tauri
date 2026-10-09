@@ -716,3 +716,86 @@ fn real_katago_bounded_live_diagnostics() {
     assert_eq!(serde_json::to_string(&frozen).unwrap(), encoded);
     eprintln!("real diagnostics: attempt={} records={} bytes={} frozen=true live-stdout=true startup-stderr=true", frozen.run_id, frozen.records.len(), frozen.retained_bytes);
 }
+
+#[test]
+#[ignore = "requires explicit real KataGo resources and isolated working directory"]
+fn real_katago_startup_modes_reopen_durable_catalog() {
+    require_real_katago();
+    struct DiskCatalog(std::path::PathBuf);
+    impl EngineProfileCatalog for DiskCatalog {
+        fn get(&self, id: &str) -> Option<SavedEngineProfile> {
+            engine_manager::load_engine_profiles(&self.0).ok()?.profiles.into_iter()
+                .find(|record| record.id == id)
+                .map(|record| SavedEngineProfile { profile_id: record.id, profile: record.profile })
+        }
+        fn autoload_profile_id(&self) -> Option<String> {
+            engine_manager::load_engine_profiles(&self.0).ok()?.startup_profile_id().map(str::to_owned)
+        }
+    }
+    let profile = real_profile("Startup A");
+    let directory = std::path::PathBuf::from(profile.working_dir.as_ref().unwrap())
+        .join(format!("startup-catalog-{}", std::process::id()));
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory.join("catalog.json");
+    let mut catalog = engine_manager::EngineProfilesSettings {
+        version: 2, selected_profile_id: "a".into(),
+        startup: app_model::EngineStartupPolicyDto::Off,
+        last_primary_profile_id: None,
+        profiles: vec![
+            engine_manager::EngineProfileRecord { id: "a".into(), profile: profile.clone() },
+            engine_manager::EngineProfileRecord { id: "b".into(), profile: EngineProfileDto { name: "Startup B".into(), ..profile } },
+        ],
+    };
+    let new_manager = || ForegroundEngineManager::new(Arc::new(DiskCatalog(path.clone())), ForegroundEngineConfig {
+        readiness_timeout: Duration::from_secs(300), stop_drain_timeout: Duration::from_secs(15),
+        job_timeout: Duration::from_secs(120), admit_whole_game_analysis: true,
+        managed_resources_root: None,
+    });
+    engine_manager::save_engine_profiles(&path, catalog.clone()).unwrap();
+    let off = new_manager();
+    off.apply_autoload().unwrap();
+    assert!(matches!(off.snapshot().lifecycle, ForegroundEngineLifecycleDto::NoEngine { failure: None }));
+    assert_eq!(off.last_primary_profile_id(), None);
+    drop(off);
+    catalog.startup = app_model::EngineStartupPolicyDto::Fixed { profile_id: "b".into() };
+    engine_manager::save_engine_profiles(&path, catalog.clone()).unwrap();
+    let fixed = new_manager();
+    let events = fixed.subscribe();
+    fixed.apply_autoload().unwrap();
+    let first = wait_snapshot(&events, Duration::from_secs(300), |phase| matches!(phase, ForegroundEngineLifecycleDto::Ready { .. }));
+    let first_run = run_from_ready(&first.lifecycle);
+    assert_eq!(first_run.profile_id, "b");
+    fixed.teardown().unwrap();
+    catalog = engine_manager::persist_last_primary(&path, catalog, fixed.last_primary_profile_id()).unwrap();
+    drop(fixed);
+    catalog.startup = app_model::EngineStartupPolicyDto::LastPrimary;
+    engine_manager::save_engine_profiles(&path, catalog.clone()).unwrap();
+    let last = new_manager();
+    let events = last.subscribe();
+    last.apply_autoload().unwrap();
+    let reopened = wait_snapshot(&events, Duration::from_secs(300), |phase| matches!(phase, ForegroundEngineLifecycleDto::Ready { .. }));
+    let reopened_run = run_from_ready(&reopened.lifecycle);
+    assert_eq!(reopened_run.profile_id, "b");
+    assert_ne!(reopened_run.run_id, first_run.run_id);
+    last.switch_to("a").unwrap();
+    wait_snapshot(&events, Duration::from_secs(300), |phase| matches!(phase, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "a"));
+    assert_eq!(last.last_primary_profile_id().as_deref(), Some("a"));
+    assert_eq!(engine_manager::load_engine_profiles(&path).unwrap().last_primary_profile_id.as_deref(), Some("b"));
+    last.teardown().unwrap();
+    drop(last); // No normal-exit persistence: previous durable B must still reopen.
+    let previous = new_manager();
+    let events = previous.subscribe();
+    previous.apply_autoload().unwrap();
+    let persisted = wait_snapshot(&events, Duration::from_secs(300), |phase| matches!(phase, ForegroundEngineLifecycleDto::Ready { .. }));
+    assert_eq!(run_from_ready(&persisted.lifecycle).profile_id, "b");
+    previous.teardown().unwrap();
+    drop(previous);
+    catalog.last_primary_profile_id = Some("deleted".into());
+    engine_manager::save_engine_profiles(&path, catalog).unwrap();
+    let missing = new_manager();
+    assert!(missing.apply_autoload().is_err());
+    assert!(matches!(missing.snapshot().lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. }));
+    assert_eq!(missing.last_primary_profile_id(), None);
+    eprintln!("startup smoke: off, fixed B, last-primary B/new Run, unsaved A retains durable B, deleted identity has no fallback");
+    std::fs::remove_dir_all(directory).unwrap();
+}

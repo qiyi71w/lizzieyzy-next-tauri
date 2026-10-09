@@ -194,7 +194,8 @@ export type EngineProfileDto = {
   | { adapter_kind: "generic_gtp"; settings: Record<string, never> }
 );
 export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto };
-export type EngineProfilesSettingsDto = { version: number; selected_profile_id: string; autoload_profile_id: string | null; profiles: EngineProfileRecordDto[] };
+export type EngineStartupPolicyDto = { mode: "off" } | { mode: "fixed"; profile_id: string } | { mode: "last_primary" };
+export type EngineProfilesSettingsDto = { version: number; selected_profile_id: string; startup: EngineStartupPolicyDto; last_primary_profile_id: string | null; profiles: EngineProfileRecordDto[] };
 export type EngineProfileOrderRequestDto = { expected_profile_ids: string[]; profile_ids: string[] };
 export type AssetCheckDto = { path: string; exists: boolean; required: boolean; label: string };
 export type AppHealthDto = { app: string; architecture: string; rust_backend_ready: boolean; notes: string[] };

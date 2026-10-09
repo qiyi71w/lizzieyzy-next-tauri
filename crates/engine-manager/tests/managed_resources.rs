@@ -76,6 +76,7 @@ fn real_public_acquisition_preserves_selection_and_qualifies_only_on_explicit_st
     assert_eq!(std::fs::read(&profile_path).unwrap(), saved_bytes);
     let installed = resources.publish(prepared, &inventory).unwrap();
     assert_eq!(manager.snapshot(), before);
+    assert_eq!(manager.last_primary_profile_id(), None);
     assert_eq!(std::fs::read(&profile_path).unwrap(), saved_bytes);
     let inventory_snapshot = inventory.snapshot().unwrap();
     assert!(inventory_snapshot.models.iter().any(|model| model.path.ends_with("preserved-custom.bin.gz")));
@@ -105,6 +106,7 @@ fn real_public_acquisition_preserves_selection_and_qualifies_only_on_explicit_st
         }
     }
     let ready = manager.snapshot();
+    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("default"));
     let cancel = resources.begin(request, &network).unwrap();
     resources.cancel(&cancel).unwrap();
     assert!(resources.prepare(&cancel).is_err());
@@ -124,7 +126,9 @@ fn real_public_acquisition_preserves_selection_and_qualifies_only_on_explicit_st
         }
     }
     assert_eq!(manager.snapshot().lifecycle, ready.lifecycle);
+    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("default"));
     std::fs::write(&installed.config_path, config_bytes).unwrap();
     manager.teardown().unwrap();
+    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("default"));
     std::fs::write(root.join("installation.json"), serde_json::to_vec_pretty(&installed).unwrap()).unwrap();
 }

@@ -517,6 +517,15 @@ pub struct EngineProfileDto {
     pub adapter: EngineAdapterSettings,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum EngineStartupPolicyDto {
+    #[default]
+    Off,
+    Fixed { profile_id: String },
+    LastPrimary,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EngineProfileOrderRequestDto {

@@ -91,6 +91,7 @@ struct CurrentGameHolder {
     edits_blocked: bool,
     closed_jobs: HashSet<(String, String)>,
     exit_disposition: Option<ApplicationExitDispositionDto>,
+    graceful_exit_completed: bool,
     selected_path: NodePath,
     document_seq: u64,
     document_identity: u64,
