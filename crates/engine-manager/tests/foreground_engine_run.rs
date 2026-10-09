@@ -4060,6 +4060,7 @@ fn durable_reorder_and_failure_preserve_ready_run_launch_and_job_bindings() {
         selected_profile_id: "profile-b".into(),
         startup: app_model::EngineStartupPolicyDto::Fixed { profile_id: "profile-a".into() },
         last_primary_profile_id: None,
+        startup_evaluation: Default::default(),
         profiles: vec![
             engine_manager::EngineProfileRecord {
                 id: "profile-a".into(),

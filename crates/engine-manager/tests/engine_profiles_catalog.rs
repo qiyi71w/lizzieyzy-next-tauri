@@ -69,6 +69,7 @@ fn settings(
         selected_profile_id: selected.to_string(),
         startup: autoload.map_or(EngineStartupPolicyDto::Off, |id| EngineStartupPolicyDto::Fixed { profile_id: id.into() }),
         last_primary_profile_id: None,
+        startup_evaluation: Default::default(),
         profiles,
     }
 }
@@ -83,6 +84,26 @@ fn first_use_and_missing_file_have_no_autoload_mark() {
     assert_eq!(loaded.startup_profile_id(), None);
     assert_eq!(loaded, default_engine_profiles_settings());
     assert!(!path.exists());
+}
+
+#[test]
+fn startup_evaluation_defaults_and_durable_target_are_independent() {
+    let temp = TestTempDir::new("startup-evaluation");
+    let path = temp.catalog_path();
+    let initial = serde_json::to_value(load_engine_profiles(&path).unwrap()).unwrap();
+    assert_eq!(initial["startup_evaluation"], serde_json::json!({"enabled": false, "target_profile_id": null}));
+    let mut bytes = initial.clone();
+    bytes["startup_evaluation"] = serde_json::json!({"enabled": true, "target_profile_id": "deleted-target"});
+    let settings = parse_engine_profiles(&bytes.to_string()).unwrap();
+    save_engine_profiles(&path, settings.clone()).unwrap();
+    assert_eq!(load_engine_profiles(&path).unwrap(), settings);
+    assert_eq!(serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap()["startup_evaluation"], bytes["startup_evaluation"]);
+    bytes["startup_evaluation"]["enabled"] = serde_json::json!("true");
+    assert!(parse_engine_profiles(&bytes.to_string()).is_err());
+    assert_eq!(load_engine_profiles(&path).unwrap(), settings);
+    let mut legacy = initial;
+    legacy.as_object_mut().unwrap().remove("startup_evaluation");
+    assert_eq!(serde_json::to_value(parse_engine_profiles(&legacy.to_string()).unwrap()).unwrap()["startup_evaluation"]["enabled"], false);
 }
 
 #[test]
@@ -520,6 +541,7 @@ fn version_one_migrates_off_and_fixed_without_rewriting_bytes() {
         let object = old.as_object_mut().unwrap();
         object.remove("startup");
         object.remove("last_primary_profile_id");
+        object.remove("startup_evaluation");
         object.insert("version".into(), serde_json::json!(1));
         object.insert("autoload_profile_id".into(), serde_json::json!(autoload));
         let bytes = serde_json::to_vec(&old).unwrap();

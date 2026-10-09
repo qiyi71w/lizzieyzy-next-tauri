@@ -263,6 +263,8 @@ struct ManagerState {
     match_reservation: Option<match_reservation::MatchReservation>,
     retiring: Vec<(EngineRunDto, Arc<Mutex<LiveEngine>>)>,
     evaluation: Option<evaluation::EvaluationSlot>,
+    startup_evaluation: Option<Result<Option<SavedEngineProfile>, String>>,
+    evaluation_notice: app_model::EvaluationSnapshotDto,
 }
 
 struct Inner {
@@ -280,6 +282,7 @@ pub struct ForegroundEngineManager {
 
 impl ForegroundEngineManager {
     pub fn new(catalog: Arc<dyn EngineProfileCatalog>, config: ForegroundEngineConfig) -> Self {
+        let startup_evaluation = Some(catalog.startup_evaluation_target());
         Self {
             inner: Arc::new(Inner {
                 catalog,
@@ -318,6 +321,8 @@ impl ForegroundEngineManager {
                     match_reservation: None,
                     retiring: Vec::new(),
                     evaluation: None,
+                    startup_evaluation,
+                    evaluation_notice: Default::default(),
                 }),
             }),
         }

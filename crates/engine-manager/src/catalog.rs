@@ -32,6 +32,8 @@ pub struct EngineProfilesSettings {
     pub startup: EngineStartupPolicyDto,
     #[serde(default)]
     pub last_primary_profile_id: Option<String>,
+    #[serde(default)]
+    pub startup_evaluation: app_model::StartupEvaluationSettingsDto,
     pub profiles: Vec<EngineProfileRecord>,
 }
 
@@ -42,6 +44,16 @@ impl EngineProfilesSettings {
             EngineStartupPolicyDto::Fixed { profile_id } => Some(profile_id),
             EngineStartupPolicyDto::LastPrimary => self.last_primary_profile_id.as_deref(),
         }
+    }
+
+    pub fn startup_evaluation_target(&self) -> Result<Option<SavedEngineProfile>, String> {
+        if !self.startup_evaluation.enabled {
+            return Ok(None);
+        }
+        let target = self.startup_evaluation.target_profile_id.as_deref()
+            .and_then(|id| self.profiles.iter().find(|record| record.id == id))
+            .ok_or("Startup evaluation unavailable: select an existing saved target")?;
+        Ok(Some(SavedEngineProfile { profile_id: target.id.clone(), profile: target.profile.clone() }))
     }
 }
 
@@ -120,6 +132,10 @@ pub trait EngineProfileCatalog: Send + Sync {
     fn preload_profiles(&self) -> Vec<SavedEngineProfile> {
         Vec::new()
     }
+
+    fn startup_evaluation_target(&self) -> Result<Option<SavedEngineProfile>, String> {
+        Ok(None)
+    }
     fn autoload_profile_id(&self) -> Option<String> {
         None
     }
@@ -190,6 +206,7 @@ pub fn default_engine_profiles_settings() -> EngineProfilesSettings {
         selected_profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
         startup: EngineStartupPolicyDto::Off,
         last_primary_profile_id: None,
+        startup_evaluation: Default::default(),
         profiles: vec![default_engine_profile_record()],
     }
 }
@@ -234,6 +251,7 @@ pub fn parse_engine_profiles(contents: &str) -> Result<EngineProfilesSettings, S
                     selected_profile_id: old.selected_profile_id,
                     startup: legacy_startup(old.autoload_profile_id),
                     last_primary_profile_id: None,
+                    startup_evaluation: Default::default(),
                     profiles: old.profiles,
                 }
             }
@@ -249,6 +267,7 @@ pub fn parse_engine_profiles(contents: &str) -> Result<EngineProfilesSettings, S
             selected_profile_id: legacy.selected_profile_id,
             startup: legacy_startup(legacy.autoload_profile_id),
             last_primary_profile_id: None,
+            startup_evaluation: Default::default(),
             profiles: legacy
                 .profiles
                 .into_iter()
@@ -269,6 +288,7 @@ pub fn parse_engine_profiles(contents: &str) -> Result<EngineProfilesSettings, S
             selected_profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
             startup: EngineStartupPolicyDto::Off,
             last_primary_profile_id: None,
+            startup_evaluation: Default::default(),
             profiles: vec![EngineProfileRecord {
                 id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
                 preload: false,
@@ -402,6 +422,9 @@ pub fn normalize_engine_profiles(settings: EngineProfilesSettings) -> Result<Eng
     if settings.last_primary_profile_id.as_deref().is_some_and(|id| id.trim().is_empty() || id.contains('\0')) {
         return Err("last primary profile ID is invalid".to_string());
     }
+    if settings.startup_evaluation.target_profile_id.as_deref().is_some_and(|id| id.trim().is_empty() || id.contains('\0')) {
+        return Err("startup evaluation target profile ID is invalid".to_string());
+    }
     Ok(settings)
 }
 
@@ -473,6 +496,7 @@ mod persist_failure_tests {
             selected_profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
             startup: EngineStartupPolicyDto::Fixed { profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string() },
             last_primary_profile_id: None,
+            startup_evaluation: Default::default(),
             profiles: vec![default_engine_profile_record()],
         }
     }
@@ -541,6 +565,23 @@ mod persist_failure_tests {
         assert!(!tmp_path(&path).exists());
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn startup_evaluation_atomic_failure_preserves_authorization_bytes() {
+        let (dir, path) = temp_catalog();
+        let original = save_engine_profiles(&path, sample_settings()).unwrap();
+        let before = fs::read(&path).unwrap();
+        let mut next = original.clone();
+        next.startup_evaluation = app_model::StartupEvaluationSettingsDto {
+            enabled: true, target_profile_id: Some("default".into()),
+        };
+        let json = serde_json::to_string_pretty(&normalize_engine_profiles(next).unwrap()).unwrap();
+        assert!(atomic_replace_file_with(&path, &json, |_, _| Err(io::Error::other("rename denied"))).is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(load_engine_profiles(&path).unwrap(), original);
+        assert!(!tmp_path(&path).exists());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

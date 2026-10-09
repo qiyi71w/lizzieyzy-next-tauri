@@ -884,7 +884,14 @@ function decodeEngineProfilesSettings(value: unknown, allowLegacy: boolean): Eng
   }
   const lastPrimary = input.version === 2 ? profileOptionalPath(input.last_primary_profile_id, "Last primary profile ID") : null;
   if (lastPrimary !== null && !lastPrimary.trim()) throw new Error("Last primary profile ID is invalid.");
-  return { version: 2, selected_profile_id: selected, startup, last_primary_profile_id: lastPrimary, profiles };
+  const evaluation = input.version === 2 && input.startup_evaluation !== undefined
+    ? profileObject(input.startup_evaluation, "Startup evaluation") : {};
+  if (Object.keys(evaluation).some((key) => key !== "enabled" && key !== "target_profile_id")) throw new Error("Unknown startup evaluation field.");
+  if (evaluation.enabled !== undefined && typeof evaluation.enabled !== "boolean") throw new Error("Startup evaluation enabled must be boolean.");
+  const target = profileOptionalPath(evaluation.target_profile_id, "Startup evaluation target");
+  if (target !== null && !target.trim()) throw new Error("Startup evaluation target is invalid.");
+  return { version: 2, selected_profile_id: selected, startup, last_primary_profile_id: lastPrimary,
+    startup_evaluation: { enabled: evaluation.enabled === true, target_profile_id: target }, profiles };
 }
 
 function defaultBrowserEngineProfilesSettings(): EngineProfilesSettingsDto {
@@ -893,6 +900,7 @@ function defaultBrowserEngineProfilesSettings(): EngineProfilesSettingsDto {
     selected_profile_id: defaultEngineProfileId,
     startup: { mode: "off" },
     last_primary_profile_id: null,
+    startup_evaluation: { enabled: false, target_profile_id: null },
     profiles: [{
       id: defaultEngineProfileId,
       preload: false,

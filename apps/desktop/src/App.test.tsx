@@ -380,7 +380,7 @@ beforeEach(() => {
   backend.loadEngineProfilesSettings.mockResolvedValue({
     version: 2,
     selected_profile_id: "profile-1",
-    startup: { mode: "off" as const }, last_primary_profile_id: null,
+    startup: { mode: "off" as const }, startup_evaluation: { enabled: false, target_profile_id: null }, last_primary_profile_id: null,
     profiles: [savedProfile]
   });
   backend.subscribeForegroundEngine.mockImplementation(async (

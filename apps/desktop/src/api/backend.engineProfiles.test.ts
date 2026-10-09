@@ -12,7 +12,7 @@ const legacyProfile = {
 
 function catalog(): EngineProfilesSettingsDto {
   return {
-    version: 2, selected_profile_id: "gtp", startup: { mode: "fixed", profile_id: "kata" }, last_primary_profile_id: null,
+    version: 2, selected_profile_id: "gtp", startup: { mode: "fixed", profile_id: "kata" }, startup_evaluation: { enabled: false, target_profile_id: null }, last_primary_profile_id: null,
     profiles: [
       { id: "kata", preload: false, profile: { name: "KataGo", program: "/with spaces/katago", argv: ["-override-config", "reportAnalysisWinratesAs=BLACK", "中文 参数", ""], working_dir: "/中文 工作目录", adapter_kind: "kata_go_analysis", settings: { model_path: "/模型", config_path: "/配置", max_visits: 1234 } } },
       { id: "gtp", preload: false, profile: { name: "GNU Go", program: "/program with spaces/gnugo", argv: ["--mode", "gtp", "two words", "中文", ""], working_dir: null, adapter_kind: "generic_gtp", settings: {} } }
@@ -29,7 +29,7 @@ afterEach(() => { vi.restoreAllMocks(); localStorage.clear(); });
 describe("browser engine profile persistence", () => {
   it("loads an unconfigured default without writing storage or claiming a live run", async () => {
     const result = await loadEngineProfilesSettings();
-    expect(result).toEqual({ version: 2, selected_profile_id: "default", startup: { mode: "off" }, last_primary_profile_id: null, profiles: [{ id: "default", preload: false, profile: { name: "Local KataGo", program: "", argv: [], working_dir: null, adapter_kind: "kata_go_analysis", settings: { model_path: null, config_path: null, max_visits: 800 } } }] });
+    expect(result).toEqual({ version: 2, selected_profile_id: "default", startup: { mode: "off" }, startup_evaluation: { enabled: false, target_profile_id: null }, last_primary_profile_id: null, profiles: [{ id: "default", preload: false, profile: { name: "Local KataGo", program: "", argv: [], working_dir: null, adapter_kind: "kata_go_analysis", settings: { model_path: null, config_path: null, max_visits: 800 } } }] });
     expect(localStorage.getItem(key)).toBeNull();
   });
 
@@ -38,7 +38,7 @@ describe("browser engine profile persistence", () => {
     const raw = JSON.stringify(legacy);
     localStorage.setItem(key, raw);
     const loaded = await loadEngineProfilesSettings();
-    expect(loaded).toEqual({ version: 2, selected_profile_id: "second", startup: { mode: "fixed", profile_id: "first" }, last_primary_profile_id: null, profiles: [{ id: "first", preload: false, profile: { name: legacyProfile.name, program: legacyProfile.engine_path, argv: [], working_dir: legacyProfile.working_dir, adapter_kind: "kata_go_analysis", settings: { model_path: legacyProfile.model_path, config_path: legacyProfile.config_path, max_visits: 17 } } }, { id: "second", preload: false, profile: { name: "Second", program: legacyProfile.engine_path, argv: [], working_dir: null, adapter_kind: "kata_go_analysis", settings: { model_path: legacyProfile.model_path, config_path: legacyProfile.config_path, max_visits: 4321 } } }] });
+    expect(loaded).toEqual({ version: 2, selected_profile_id: "second", startup: { mode: "fixed", profile_id: "first" }, startup_evaluation: { enabled: false, target_profile_id: null }, last_primary_profile_id: null, profiles: [{ id: "first", preload: false, profile: { name: legacyProfile.name, program: legacyProfile.engine_path, argv: [], working_dir: legacyProfile.working_dir, adapter_kind: "kata_go_analysis", settings: { model_path: legacyProfile.model_path, config_path: legacyProfile.config_path, max_visits: 17 } } }, { id: "second", preload: false, profile: { name: "Second", program: legacyProfile.engine_path, argv: [], working_dir: null, adapter_kind: "kata_go_analysis", settings: { model_path: legacyProfile.model_path, config_path: legacyProfile.config_path, max_visits: 4321 } } }] });
     expect(localStorage.getItem(key)).toBe(raw);
     await saveEngineProfilesSettings(loaded);
     expect(JSON.parse(localStorage.getItem(key)!)).toEqual(loaded);
@@ -177,6 +177,24 @@ describe("browser engine profile persistence", () => {
     }
     const missing = await saveEngineProfilesSettings({ ...current, startup: { mode: "fixed", profile_id: "deleted" } });
     expect(missing.startup).toEqual({ mode: "fixed", profile_id: "deleted" });
+    expect((await loadEngineProfilesSettings()).selected_profile_id).toBe("gtp");
+  });
+  it("loads missing policy as disabled and rejects corrupt policy without rewriting durable bytes", async () => {
+    const value = JSON.parse(JSON.stringify(catalog()));
+    delete value.startup_evaluation;
+    localStorage.setItem(key, JSON.stringify(value));
+    expect((await loadEngineProfilesSettings()).startup_evaluation).toEqual({ enabled: false, target_profile_id: null });
+    for (const invalid of [null, { enabled: "true" }, { enabled: true, target_profile_id: "bad\0id" }, { enabled: true, execution: "running" }]) {
+      value.startup_evaluation = invalid;
+      const bytes = JSON.stringify(value);
+      localStorage.setItem(key, bytes);
+      await expect(loadEngineProfilesSettings()).rejects.toThrow();
+      expect(localStorage.getItem(key)).toBe(bytes);
+    }
+    const saved = { ...catalog(), startup_evaluation: { enabled: true, target_profile_id: "deleted" } };
+    localStorage.setItem(key, JSON.stringify(catalog()));
+    await saveEngineProfilesSettings(saved);
+    expect((await loadEngineProfilesSettings()).startup_evaluation).toEqual(saved.startup_evaluation);
     expect((await loadEngineProfilesSettings()).selected_profile_id).toBe("gtp");
   });
 });

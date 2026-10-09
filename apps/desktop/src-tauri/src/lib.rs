@@ -112,6 +112,12 @@ impl EngineProfileCatalog for DiskEngineCatalog {
             .ok()
             .and_then(|settings| settings.startup_profile_id().map(str::to_owned))
     }
+
+    fn startup_evaluation_target(&self) -> Result<Option<SavedEngineProfile>, String> {
+        load_engine_profiles_from_disk(&self.handle)
+            .map_err(|_| "Startup evaluation unavailable: saved engine settings could not be loaded".to_string())?
+            .startup_evaluation_target()
+    }
 }
 
 fn map_engine_failure(failure: EngineFailureDto) -> String {
@@ -1261,6 +1267,7 @@ pub fn run() {
             });
             let _ = manager.apply_autoload();
             manager.schedule_startup_preloads();
+            manager.apply_startup_evaluation();
             app.manage(manager);
             let preferences = app.state::<PreferencesState>();
             // The frontend load command owns recovery/error reporting. A failed
@@ -1486,13 +1493,16 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn saved_benchmark_edit_retires_only_evaluation_and_preserves_game_and_catalog_on_failure() {
+    fn startup_benchmark_save_failure_and_recovery_preserve_game_and_retire_execution() {
         struct Catalog(PathBuf);
         impl EngineProfileCatalog for Catalog {
             fn get(&self, id: &str) -> Option<SavedEngineProfile> {
                 engine_manager::load_engine_profiles(&self.0).ok()?.profiles.into_iter()
                     .find(|record| record.id == id)
                     .map(|record| SavedEngineProfile { profile_id: record.id, profile: record.profile })
+            }
+            fn startup_evaluation_target(&self) -> Result<Option<SavedEngineProfile>, String> {
+                engine_manager::load_engine_profiles(&self.0)?.startup_evaluation_target()
             }
         }
         let directory = std::env::temp_dir().join(format!("benchmark-gateway-{}", Uuid::new_v4()));
@@ -1508,6 +1518,9 @@ mod tests {
             working_dir: Some(directory.to_string_lossy().into()),
             adapter: app_model::EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings::default()),
         };
+        settings.startup_evaluation = app_model::StartupEvaluationSettingsDto {
+            enabled: true, target_profile_id: Some("default".into()),
+        };
         persist_engine_profiles(&path, settings.clone()).unwrap();
         let manager = ForegroundEngineManager::new(std::sync::Arc::new(Catalog(path.clone())), ForegroundEngineConfig::for_tests());
         let game = CurrentGameState::default();
@@ -1515,7 +1528,7 @@ mod tests {
         game.replace("(;SZ[9]C[Personal comment];B[dd])", None).unwrap();
         let sgf = game.serialize().unwrap();
         let foreground = manager.snapshot();
-        manager.start_evaluation("default").unwrap();
+        manager.apply_startup_evaluation();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             if manager.evaluation_snapshot().phase == app_model::EvaluationPhaseDto::Running { break; }
@@ -1536,6 +1549,18 @@ mod tests {
         assert!(retired.process_id.is_none() && retired.result.is_none() && retired.output.is_empty());
         assert_eq!(manager.snapshot(), foreground);
         assert_eq!(game.serialize().unwrap(), sgf);
+        let store = FileRecoveryStore::new(directory.join("recovery.json"));
+        store.replace(&app_model::RecoveryEnvelopeDto {
+            document_seq: 3, snapshot_seq: 2, sgf_text: "(;SZ[9]C[Recovered];B[ee])".into(),
+            selected_path: NodePath { indices: vec![] }, source_path: None, dirty: true,
+            disposition: app_model::ApplicationExitDispositionDto::ExitIncomplete,
+        }).unwrap();
+        game.restore_from_store(&store).unwrap();
+        assert!(game.serialize().unwrap().contains("C[Recovered]"));
+        manager.apply_startup_evaluation();
+        assert_eq!(manager.evaluation_snapshot(), retired);
+        assert!(matches!(manager.snapshot().lifecycle, app_model::ForegroundEngineLifecycleDto::NoEngine { .. }));
+        assert!(engine_manager::load_engine_profiles(&path).unwrap().startup_evaluation.enabled);
         manager.teardown().unwrap();
         std::fs::remove_dir_all(directory).unwrap();
     }
