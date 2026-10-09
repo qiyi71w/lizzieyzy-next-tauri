@@ -49,6 +49,23 @@ function snapshot(revision: number, lifecycle: ForegroundEngineSnapshotDto["life
   return { revision, lifecycle, continuous: { enabled: null, phase: "loading" } };
 }
 
+it("admits explicitly qualified GTP main analysis without policy, not whole-game or unqualified GTP", () => {
+  const gtp: EngineRunDto = {
+    ...run, adapter_kind: "kata_go_gtp",
+    capability_snapshot: { adapter_kind: "kata_go_gtp", game_move: false,
+      gtp: { protocol_version: 2, name: "KataGo", version: "1.18.2", commands: ["kata-analyze", "stop"] },
+      analysis: { selected_node_analysis: true, continuous_analysis: true, whole_game_analysis: false,
+        candidates: true, pv: true, winrate: true, root_score: true, ownership: true,
+        policy: false, visits_limit: true, protocol_cancel: true } }
+  };
+  const ready = snapshot(1, { state: "ready", run: gtp });
+  expect(admitsForegroundEngineQuery(ready)).toBe(true);
+  expect(admitsForegroundEngineQuery(ready, "continuous_analysis")).toBe(true);
+  expect(admitsForegroundEngineQuery(ready, "whole_game_analysis")).toBe(false);
+  expect(admitsForegroundEngineQuery(snapshot(2, { state: "ready", run: { ...gtp, capability_snapshot: null } }))).toBe(false);
+  expect(admitsForegroundEngineQuery(snapshot(3, { state: "ready", run }))).toBe(true);
+});
+
 describe("verified game move disclosure", () => {
   it("requires qualification even when GTP advertises genmove and setup commands", () => {
     const gtpRun: EngineRunDto = {

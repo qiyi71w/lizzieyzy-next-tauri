@@ -24,6 +24,11 @@ fn real_katago_gtp_rules_and_exact_selected_positions() {
             }),
         },
     });
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "prepared-gtp".into(),
+        profile: catalog.get("gtp").unwrap().profile,
+    });
+    catalog.set_preload("prepared-gtp", true);
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::default());
     manager.start("gtp").unwrap();
     let deadline = Instant::now() + Duration::from_secs(40);
@@ -35,9 +40,32 @@ fn real_katago_gtp_rules_and_exact_selected_positions() {
         }
         std::thread::sleep(Duration::from_millis(10));
     };
+    let primary_id = run.run_id.clone();
+    manager.prepare_preload("prepared-gtp").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(40);
+    let prepared = loop {
+        let preparation = manager.preload_snapshot().into_iter().next().unwrap();
+        if preparation.phase == EnginePreloadPhaseDto::Ready {
+            break preparation.run;
+        }
+        assert!(Instant::now() < deadline, "{preparation:?}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("gtp"));
+    manager.switch_to("prepared-gtp").unwrap();
+    let run = match manager.snapshot().lifecycle {
+        ForegroundEngineLifecycleDto::Ready { run } => run,
+        other => panic!("{other:?}"),
+    };
+    assert_ne!(run.run_id, primary_id);
+    assert_eq!(run.run_id, prepared.run_id);
+    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("prepared-gtp"));
+    println!("GTP PRELOAD primary={primary_id} promoted={} same_run=true", run.run_id);
     println!("RUN {}", serde_json::to_string(&run).unwrap());
+    let events = manager.subscribe();
     assert!(!run.capability_snapshot.as_ref().unwrap().game_move);
-    assert!(run.capability_snapshot.as_ref().unwrap().analysis.is_none());
+    assert!(run.capability_snapshot.as_ref().unwrap().analysis.as_ref().unwrap().selected_node_analysis);
+    assert!(manager.diagnostic_snapshots().last().unwrap().records.iter().any(|record| record.source == "startup-probe-stderr"));
     let cases = [
         ("(;SZ[9]RU[Chinese]KM[7.5])", vec![]),
         ("(;SZ[9]RU[Chinese]KM[6.5]PL[W])", vec![]),
@@ -52,7 +80,7 @@ fn real_katago_gtp_rules_and_exact_selected_positions() {
         ),
         ("(;SZ[9]RU[Chinese]KM[6.5];B[dd](;W[ff])(;W[ee];B[]))", vec![0]),
     ];
-    for (text, indices) in cases {
+    for (generation, (text, indices)) in cases.into_iter().enumerate() {
         let document = sgf::CurrentSgfDocument::open(text).unwrap();
         let node_path = NodePath { indices };
         let position = document.exact_position(&node_path).unwrap();
@@ -61,7 +89,7 @@ fn real_katago_gtp_rules_and_exact_selected_positions() {
             identity: GameMoveRequestDto {
                 run_id: run.run_id.clone(),
                 generation: 1,
-                node_path,
+                node_path: node_path.clone(),
                 budget: ComputeBudgetDto {
                     deadline_ms: 10000,
                     max_visits: None,
@@ -74,12 +102,97 @@ fn real_katago_gtp_rules_and_exact_selected_positions() {
         assert_eq!(snapshot.position, expected);
         assert_eq!(snapshot.reader_id, run.run_id);
         assert_eq!(snapshot.true_final_move, expected.moves.last().cloned());
+        let selected_snapshot = document.snapshot(&node_path).unwrap();
+        let query = katago_protocol::analysis_query_from_position(9, 9, expected.komi,
+            &selected_snapshot.position.stones, expected.to_play,
+            katago_protocol::AnalysisQueryOptions { id: "pending".into(), rules: "chinese".into(),
+                turn: expected.moves.len() as u32, max_visits: Some(16), include_ownership: Some(true), include_policy: Some(true) }).unwrap();
+        let started = manager.start_selected_node_job(SelectedNodeJobRequest {
+            run_id: run.run_id.clone(), generation: generation as u64 + 1, node_path,
+            mode: AnalysisJobModeDto::Finite, query, board_width: 9, board_height: 9,
+            position_empty: selected_snapshot.position.stones.is_empty(),
+            exact_position: Ok(document.exact_position(&selected_snapshot.path).unwrap()),
+        }).unwrap();
+        let until = Instant::now() + Duration::from_secs(40);
+        loop {
+            match events.recv_timeout(until.saturating_duration_since(Instant::now())).unwrap() {
+                ForegroundEngineEventDto::Job { job } if job.job_id == started.job_id => {
+                    println!("MAIN_ANALYSIS {}", serde_json::to_string(&job).unwrap());
+                    assert!(!matches!(job.outcome, AnalysisJobOutcomeDto::Failed | AnalysisJobOutcomeDto::Timeout));
+                    if job.outcome == AnalysisJobOutcomeDto::Completed {
+                        let frame = job.frame.unwrap();
+                        assert!(frame.visits >= 16);
+                        assert!(!frame.candidates.is_empty());
+                        assert!(!frame.candidates[0].pv.is_empty());
+                        assert_eq!(frame.ownership.as_ref().unwrap().len(), 81);
+                        assert_eq!(frame.policy, None);
+                        assert_eq!(frame.turn, expected.moves.len() as u32);
+                        break;
+                    }
+                }
+                ForegroundEngineEventDto::Failure { failure } => panic!("{failure:?}"),
+                _ => {},
+            }
+        }
+        assert_eq!(document.serialize().unwrap(), sgf::CurrentSgfDocument::open(text).unwrap().serialize().unwrap());
     }
+    let document = sgf::CurrentSgfDocument::open("(;SZ[9]RU[Chinese]KM[6.5]C[personal];B[dd](;W[ff])(;W[ee]))").unwrap();
+    let before = document.serialize().unwrap();
+    let request = |indices: Vec<u32>| {
+        let node_path = NodePath { indices };
+        let snapshot = document.snapshot(&node_path).unwrap();
+        let position = document.exact_position(&node_path).unwrap();
+        SelectedNodeJobRequest {
+            run_id: run.run_id.clone(), generation: 77, node_path, mode: AnalysisJobModeDto::Continuous,
+            board_width: 9, board_height: 9, position_empty: snapshot.position.stones.is_empty(),
+            query: katago_protocol::analysis_query_from_position(9, 9, 6.5, &snapshot.position.stones,
+                snapshot.position.to_play, katago_protocol::AnalysisQueryOptions { id: "pending".into(),
+                    rules: "chinese".into(), turn: snapshot.position.move_number, max_visits: None,
+                    include_ownership: Some(true), include_policy: Some(true) }).unwrap(),
+            exact_position: Ok(position),
+        }
+    };
+    let wait_event = |outcome, path: &[u32]| {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            match events.recv_timeout(deadline.saturating_duration_since(Instant::now())).unwrap() {
+                ForegroundEngineEventDto::Job { job } if job.outcome == outcome && job.node_path.indices == path => {
+                    println!("CONTINUOUS {}", serde_json::to_string(&job).unwrap());
+                    break job;
+                }
+                ForegroundEngineEventDto::Failure { failure } => panic!("{failure:?}"),
+                _ => {},
+            }
+        }
+    };
+    let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };
+    manager.set_continuous_preferences(true, budget).unwrap();
+    manager.follow_continuous_position(request(vec![0, 0]));
+    let first = wait_event(AnalysisJobOutcomeDto::Progress, &[0, 0]);
+    manager.follow_continuous_position(request(vec![0, 1]));
+    let branch = wait_event(AnalysisJobOutcomeDto::Progress, &[0, 1]);
+    assert_ne!(branch.job_id, first.job_id);
+    assert_eq!(branch.run_id, run.run_id);
+    assert_eq!(branch.frame.as_ref().unwrap().turn, 2);
+    manager.set_continuous_preferences(false, budget).unwrap();
+    let paused = wait_event(AnalysisJobOutcomeDto::Cancelled, &[0, 1]);
+    assert_eq!(paused.job_id, branch.job_id);
+    assert!(paused.frame.is_none());
+    manager.follow_continuous_position(request(vec![]));
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(manager.snapshot().selected_node_job.is_none());
+    manager.set_continuous_preferences(true, budget).unwrap();
+    let resumed = wait_event(AnalysisJobOutcomeDto::Progress, &[]);
+    assert_eq!(resumed.run_id, run.run_id);
+    assert_ne!(resumed.job_id, branch.job_id);
+    assert_eq!(resumed.frame.as_ref().unwrap().turn, 0);
+    manager.set_continuous_preferences(false, budget).unwrap();
+    wait_event(AnalysisJobOutcomeDto::Cancelled, &[]);
+    assert_eq!(document.serialize().unwrap(), before);
     let frozen = manager.diagnostic_snapshots().pop().unwrap();
     assert_eq!(frozen.run_id, run.run_id);
     assert!(!frozen.process_exited);
     assert!(!frozen.full_trace);
-    assert!(frozen.records.iter().any(|record| record.source == "startup-probe-stderr"));
     assert!(frozen.records.iter().any(|record| record.source == "stdout"));
     assert!(frozen.retained_bytes <= 64 * 1024 && frozen.records.len() <= 256);
     let encoded = serde_json::to_string(&frozen).unwrap();
@@ -103,6 +216,9 @@ mod controlled {
     }
     impl Rig {
         fn new(mode: &str) -> Self {
+            Self::with_pending_target(mode, false)
+        }
+        fn with_pending_target(mode: &str, pending: bool) -> Self {
             let dir = std::env::temp_dir().join(format!("rules 空格 {}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("mode"), mode).unwrap();
@@ -134,9 +250,16 @@ mod controlled {
                 },
             });
             let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
-            manager.start("gtp").unwrap();
-            let run = ready(&manager);
-            Self { manager, dir, run }
+            let mut rig = Self { manager, dir, run: String::new() };
+            if pending {
+                rig.manager.set_continuous_preferences(true, ContinuousAnalysisBudgetDto {
+                    continuous_time_limit_enabled: false, ..Default::default()
+                }).unwrap();
+                rig.manager.follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+            }
+            rig.manager.start("gtp").unwrap();
+            rig.run = ready(&rig.manager);
+            rig
         }
         fn request(&self, deadline_ms: u32) -> GameMoveRequest {
             GameMoveRequest {
@@ -273,5 +396,143 @@ mod controlled {
         assert_eq!(result.unwrap_err().kind, EngineFailureKind::UnsupportedCapability);
         assert_eq!(ready(&rig.manager), rig.run);
         assert_eq!(std::fs::read(rig.dir.join("trace")).unwrap(), before);
+    }
+
+    fn selected(rig: &Rig, generation: u64, mode: AnalysisJobModeDto) -> SelectedNodeJobRequest {
+        SelectedNodeJobRequest {
+            run_id: rig.run.clone(), generation, node_path: NodePath { indices: vec![] }, mode,
+            board_width: 9, board_height: 9, position_empty: true,
+            exact_position: Ok(rig.request(2000).position),
+            query: katago_protocol::analysis_query_from_position(9, 9, 7.5, &[], PlayerColor::Black,
+                katago_protocol::AnalysisQueryOptions { id: "pending".into(), rules: "chinese".into(), turn: 0,
+                    max_visits: Some(16), include_ownership: Some(true), include_policy: Some(true) }).unwrap(),
+        }
+    }
+
+    fn event(receiver: &std::sync::mpsc::Receiver<ForegroundEngineEventDto>, outcome: AnalysisJobOutcomeDto) -> AnalysisJobEventDto {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())).expect("analysis event deadline") {
+                ForegroundEngineEventDto::Job { job } if job.outcome == outcome => return job,
+                ForegroundEngineEventDto::Failure { failure } => panic!("{failure:?}"),
+                _ => {},
+            }
+        }
+    }
+
+    #[test]
+    fn rich_analysis_uses_exact_restore_same_run_and_preserves_absent_fields() {
+        let rig = Rig::new("analysis");
+        let events = rig.manager.subscribe();
+        let started = rig.manager.start_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Finite)).unwrap();
+        let completed = event(&events, AnalysisJobOutcomeDto::Completed);
+        assert_eq!(completed.job_id, started.job_id);
+        let frame = completed.frame.unwrap();
+        assert_eq!(frame.winrate_black, 0.61);
+        assert_eq!(frame.visits, 32);
+        assert_eq!(frame.candidates[0].pv.len(), 2);
+        assert_eq!(frame.candidates[0].score_mean_black, None);
+        assert_eq!(frame.ownership, None);
+        assert_eq!(frame.policy, None);
+        assert_eq!(ready(&rig.manager), rig.run);
+        let trace = std::fs::read_to_string(rig.dir.join("trace")).unwrap();
+        assert!(trace.find("loadsgf").unwrap() < trace.find("kata-analyze").unwrap());
+        assert!(trace.find("printsgf").unwrap() < trace.find("kata-analyze").unwrap());
+        assert_eq!(trace.matches("kata-analyze").count(), 1);
+        assert!(trace.contains(" stop\n"));
+    }
+
+    #[test]
+    fn pause_waits_for_own_stop_ack_and_navigation_cannot_resume_or_publish_old_stream() {
+        let rig = Rig::new("analysis_hold_stop");
+        let events = rig.manager.subscribe();
+        let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };
+        rig.manager.set_continuous_preferences(true, budget).unwrap();
+        rig.manager.follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        let first = event(&events, AnalysisJobOutcomeDto::Progress);
+        assert_eq!(first.frame.as_ref().unwrap().winrate_black, 0.61);
+        rig.manager.set_continuous_preferences(false, budget).unwrap();
+        rig.held();
+        assert_eq!(rig.manager.snapshot().selected_node_job.unwrap().state, AnalysisJobStateDto::Stopping);
+        assert!(rig.manager.resume_continuous().is_err());
+        let occupied = rig.manager.confirm_ordinary_rules(rig.request(2000)).unwrap_err();
+        assert_eq!(occupied.kind, EngineFailureKind::Occupied);
+        rig.manager.follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
+        std::fs::write(rig.dir.join("release"), "").unwrap();
+        let cancelled = event(&events, AnalysisJobOutcomeDto::Cancelled);
+        assert_eq!(cancelled.job_id, first.job_id);
+        assert!(cancelled.frame.is_none());
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(rig.manager.snapshot().selected_node_job.is_none());
+        assert_eq!(std::fs::read_to_string(rig.dir.join("trace")).unwrap().matches("kata-analyze").count(), 1);
+        rig.manager.set_continuous_preferences(true, budget).unwrap();
+        let next = event(&events, AnalysisJobOutcomeDto::Progress);
+        assert_eq!(next.generation, 8);
+        assert_ne!(next.job_id, first.job_id);
+        assert_eq!(next.frame.unwrap().winrate_black, 0.62);
+        assert_eq!(ready(&rig.manager), rig.run);
+        rig.manager.set_continuous_preferences(false, budget).unwrap();
+        event(&events, AnalysisJobOutcomeDto::Cancelled);
+    }
+    #[test]
+    fn ready_gtp_reader_starts_the_existing_enabled_target() {
+        let rig = Rig::with_pending_target("analysis", true);
+        let events = rig.manager.subscribe();
+        let frame = event(&events, AnalysisJobOutcomeDto::Progress);
+        assert_eq!(frame.run_id, rig.run);
+        assert_eq!(frame.generation, 7);
+        assert_eq!(frame.mode, AnalysisJobModeDto::Continuous);
+        rig.manager.set_continuous_preferences(false, ContinuousAnalysisBudgetDto::default()).unwrap();
+        event(&events, AnalysisJobOutcomeDto::Cancelled);
+    }
+
+    #[test]
+    fn live_position_change_drains_then_starts_the_latest_target_on_same_run() {
+        let rig = Rig::new("analysis");
+        let events = rig.manager.subscribe();
+        let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };
+        rig.manager.set_continuous_preferences(true, budget).unwrap();
+        rig.manager.follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        let first = event(&events, AnalysisJobOutcomeDto::Progress);
+        rig.manager.follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
+        let next = event(&events, AnalysisJobOutcomeDto::Progress);
+        assert_ne!(next.job_id, first.job_id);
+        assert_eq!(next.generation, 8);
+        assert_eq!(next.run_id, first.run_id);
+        assert_eq!(next.frame.unwrap().winrate_black, 0.62);
+        rig.manager.set_continuous_preferences(false, budget).unwrap();
+        event(&events, AnalysisJobOutcomeDto::Cancelled);
+    }
+
+    #[test]
+    fn invalid_stream_requires_explicit_continue_after_restart_and_new_document() {
+        let mut rig = Rig::new("analysis_invalid");
+        let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };
+        rig.manager.set_continuous_preferences(true, budget).unwrap();
+        rig.manager.follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let ForegroundEngineLifecycleDto::Error { failure, .. } = rig.manager.snapshot().lifecycle {
+                assert_eq!(failure.kind, EngineFailureKind::Protocol);
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        std::fs::write(rig.dir.join("mode"), "analysis").unwrap();
+        rig.manager.restart().unwrap();
+        let replacement = ready(&rig.manager);
+        assert_ne!(replacement, rig.run);
+        rig.run = replacement;
+        rig.manager.follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(rig.manager.snapshot().selected_node_job.is_none());
+        let events = rig.manager.subscribe();
+        rig.manager.authorize_continuous_start();
+        let current = event(&events, AnalysisJobOutcomeDto::Progress);
+        assert_eq!(current.run_id, rig.run);
+        assert_eq!(current.generation, 8);
+        rig.manager.set_continuous_preferences(false, budget).unwrap();
+        event(&events, AnalysisJobOutcomeDto::Cancelled);
     }
 }

@@ -199,7 +199,7 @@ export type ApplicationExitOutcomeDto = {
   teardown?: ApplicationTeardownAttemptDto | null;
   recovery_persist_error?: string | null;
 };
-export type CandidateMoveDto = { vertex: MoveVertex; visits: number; winrate_black: number; score_mean_black: number; policy_prior?: number | null; pv: MoveVertex[] };
+export type CandidateMoveDto = { vertex: MoveVertex; visits: number; winrate_black: number; score_mean_black: number | null; policy_prior?: number | null; pv: MoveVertex[] };
 export type AnalysisFrameDto = { job_id: string; game_id?: string | null; node_id?: string | null; turn: number; visits: number; winrate_black: number; score_mean_black?: number | null; score_stdev?: number | null; candidates: CandidateMoveDto[]; ownership?: number[] | null; policy?: number[] | null };
 export type ProblemMarkerDto = { turn: number; severity: "info" | "inaccuracy" | "mistake" | "blunder"; winrate_loss: number; score_loss?: number | null; label: string };
 export type EngineBackendDto = "kata_go_analysis" | "kata_go_gtp" | "generic_gtp";

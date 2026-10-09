@@ -67,6 +67,21 @@ afterEach(() => {
 });
 
 describe("AnalysisPanel candidate preview", () => {
+  it("shows missing GTP candidate score as unavailable while preserving candidates, winrate and PV", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const absentScore = { ...frame, score_mean_black: null,
+      candidates: [{ ...frame.candidates[0], score_mean_black: null }] };
+    act(() => root?.render(<AnalysisPanel pane="reference" frame={absentScore} problems={[]}
+      boardWidth={9} boardHeight={9} currentMove={0} currentPosition={position}
+      selectedCandidateIndex={0} onSelectCandidate={() => undefined} onSelectProblem={() => undefined} />));
+    expect(host.querySelector(".cand-score")?.textContent).toBe("目数不可用");
+    expect(host.querySelector(".cand-winrate")?.textContent).toBe("52.0%");
+    expect(host.querySelector(".cand-coord")?.textContent).toBe("C6");
+    expect(drawArc).toHaveBeenCalled();
+  });
+
   it("renders the transient candidate on the mini-board without changing selection", () => {
     const host = document.createElement("div");
     document.body.append(host);

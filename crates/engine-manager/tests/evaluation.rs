@@ -385,6 +385,7 @@ fn real_katago_measurement_failure_cancel_and_foreground_handoff() {
             board_width: 9,
             board_height: 9,
             position_empty: true,
+            exact_position: Err("JSONL fixture does not require exact GTP history".into()),
             query: katago_protocol::AnalysisQuery {
                 id: "measurement-handoff".into(),
                 moves: vec![],

@@ -5,6 +5,11 @@ import time
 
 mode = pathlib.Path("mode").read_text()
 commands = "protocol_version name version list_commands boardsize clear_board komi play genmove quit loadsgf showboard printsgf kata-get-rules kata-set-rules get_komi".split()
+if mode.startswith("analysis"):
+    commands += ["kata-analyze", "stop"]
+stream_count = 0
+def analysis_frame(winrate):
+    return f"info move D4 visits 32 winrate {winrate} order 0 pv D4 E5 rootInfo visits 32 winrate {winrate}"
 text = ""
 for raw in sys.stdin:
     with open("trace", "a") as trace:
@@ -18,6 +23,22 @@ for raw in sys.stdin:
     elif name == "version": body = "1.18.2"
     elif name == "list_commands": body = "\n".join(commands)
     elif name == "quit": break
+    elif name == "kata-analyze":
+        stream_count += 1
+        print(f"={number}", flush=True)
+        if mode == "analysis_invalid":
+            print("info move D4 visits 2 winrate NaN", flush=True)
+        else:
+            print(analysis_frame(0.6 + stream_count / 100), flush=True)
+        continue
+    elif name == "stop":
+        print(analysis_frame(0.01), flush=True)
+        print("", flush=True)
+        if mode == "analysis_hold_stop":
+            print(f"={int(number)-20}\n", flush=True)
+            pathlib.Path("held").write_text(number)
+            while not pathlib.Path("release").exists(): time.sleep(0.005)
+        if mode == "analysis_negative_stop": marker, body = "?", "cannot stop"
     elif name == "loadsgf":
         if mode == "negative": marker, body = "?", "rejected exact position"
         elif mode in ("hold", "stream_only"):

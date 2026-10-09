@@ -75,7 +75,7 @@ fn frozen_java_payload_parses_score_ownership_and_playout_shorthand() {
     assert_close(payload.score_stdev.unwrap(), 0.7);
     assert_close(payload.pda.unwrap(), 0.9);
     assert_eq!(payload.ownership.as_deref(), Some(&[0.1, -0.2, 0.3][..]));
-    assert_close(payload.candidates[0].score_mean_black, 3.5);
+    assert_close(payload.candidates[0].score_mean_black.unwrap(), 3.5);
     assert_eq!(payload.candidates[0].policy_prior, Some(0.1828));
 }
 

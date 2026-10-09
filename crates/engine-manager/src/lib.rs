@@ -482,6 +482,25 @@ pub fn build_command_spec(profile: &EngineProfileDto) -> Result<CommandSpec, Eng
                 model,
             ];
             args.extend(profile.argv.iter().cloned());
+            if profile.adapter_kind() == app_model::EngineBackend::KataGoGtp {
+                // Protocol normalization requires a fixed perspective, independently of the
+                // user's display preference. Preserve saved argv/config bytes and other overrides.
+                let mut has_override = false;
+                for index in 0..args.len() {
+                    if args[index] != "-override-config" { continue; }
+                    has_override = true;
+                    if let Some(value) = args.get_mut(index + 1) {
+                        let mut overrides: Vec<_> = value.split(',').filter(|entry| {
+                            entry.split_once('=').is_none_or(|(key, _)| key.trim() != "reportAnalysisWinratesAs")
+                        }).map(str::to_owned).collect();
+                        overrides.push("reportAnalysisWinratesAs=BLACK".into());
+                        *value = overrides.join(",");
+                    }
+                }
+                if !has_override {
+                    args.extend(["-override-config".into(), "reportAnalysisWinratesAs=BLACK".into()]);
+                }
+            }
             Ok(CommandSpec {
                 program,
                 args,
@@ -1274,6 +1293,29 @@ mod tests {
             std::fs::canonicalize(&spec.args[4]).unwrap(),
             std::fs::canonicalize(working_dir.join("models").join("model.bin")).unwrap()
         );
+    }
+
+    #[test]
+    fn gtp_wire_perspective_overrides_preserve_saved_profile_and_other_keys() {
+        let temp = TestTempDir::new("gtp-wire-perspective");
+        for name in ["katago", "model.bin", "gtp.cfg"] {
+            std::fs::write(temp.path().join(name), "").unwrap();
+        }
+        let mut profile = EngineProfileDto {
+            name: "GTP".into(), program: "katago".into(), argv: vec![],
+            working_dir: Some(temp.path().to_string_lossy().into_owned()),
+            adapter: EngineAdapterSettings::KataGoGtp(app_model::KataGoSettings {
+                model_path: Some("model.bin".into()), config_path: Some("gtp.cfg".into()), max_visits: 800,
+            }),
+        };
+        assert_eq!(build_command_spec(&profile).unwrap().args.last().unwrap(), "reportAnalysisWinratesAs=BLACK");
+        profile.argv = vec!["-override-config".into(), "numSearchThreads=1,reportAnalysisWinratesAs=WHITE".into(),
+            "-override-config".into(), "reportAnalysisWinratesAs=SIDETOMOVE,maxVisits=64".into()];
+        let before = profile.argv.clone();
+        let args = build_command_spec(&profile).unwrap().args;
+        assert_eq!(&args[5..], &["-override-config", "numSearchThreads=1,reportAnalysisWinratesAs=BLACK",
+            "-override-config", "maxVisits=64,reportAnalysisWinratesAs=BLACK"]);
+        assert_eq!(profile.argv, before);
     }
 
     #[test]

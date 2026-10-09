@@ -59,8 +59,13 @@ export function admitsForegroundEngineQuery(
   snapshot: ForegroundEngineSnapshotDto,
   capability: "selected_node_analysis" | "continuous_analysis" | "whole_game_analysis" = "selected_node_analysis"
 ): boolean {
-  const analysis = runFromSnapshot(snapshot)?.capability_snapshot?.analysis;
-  // The current gateway queries always request ownership and policy together.
+  const run = runFromSnapshot(snapshot);
+  const analysis = run?.capability_snapshot?.analysis;
+  if (run?.adapter_kind === "kata_go_gtp") {
+    return admitsForegroundEngineJobs(snapshot, capability)
+      && analysis?.candidates === true && analysis.pv === true && analysis.winrate === true;
+  }
+  // JSONL gateway queries retain their ownership + policy contract.
   return admitsForegroundEngineJobs(snapshot, capability) && analysis?.ownership === true && analysis.policy === true;
 }
 
@@ -79,7 +84,7 @@ export function verifiedEngineCapabilitiesLabel(snapshot: ForegroundEngineSnapsh
   if (!run) return "当前没有运行引擎";
   const capabilities = run.capability_snapshot;
   if (!capabilities) return "当前 run：能力待验证";
-  if (capabilities.gtp) {
+  if (capabilities.gtp && !capabilities.analysis) {
     const facts = capabilities.gtp;
     const clocks = ["time_settings", "time_left"]
       .map((command) => `${command} ${facts.commands.includes(command) ? "已发现" : "未发现"}`).join(" · ");

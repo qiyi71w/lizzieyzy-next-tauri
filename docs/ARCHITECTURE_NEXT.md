@@ -569,12 +569,36 @@ The executable planning boundaries and evidence owners are in [R12 coordination]
 
 ### Explicit GTP ordinary rules confirmation
 
-The `kata_go_gtp` profile uses the existing foreground manager and resource qualification, with an actual KataGo 1.18.2 identity and command handshake. JSONL profiles and generic GNU Go move-only qualification retain their meanings. Engine settings expose an explicit confirmation action; Ready alone grants neither confirmed rules nor main analysis, runtime threads or paired parameter readback.
+The `kata_go_gtp` profile uses the existing foreground manager and resource qualification, with an actual KataGo 1.18.2 identity and command handshake. JSONL profiles and generic GNU Go move-only qualification retain their meanings. Engine settings expose an explicit confirmation action. Ready alone does not confirm a selected position; main analysis must complete the exact transaction described below. Runtime threads and paired parameter readback remain independently admitted capabilities.
 
 `start_ordinary_rules` occupies the existing identity-fenced GTP operation slot. Its immutable `OrdinaryRulesSnapshotDto` records Run/reader, profile revision, request, generation/node, requested exact position, actual full rules, stones and true final move. Successful writes and numbered responses are both required; `kata-get-rules`, `get_komi`, `showboard` and `printsgf` must agree with the strict SGF projection. The current-game gateway claims the receipt once against the still-current position. Navigation, cancellation, replacement and failed synchronization retire publication; unsupported white/mixed/intermediate setup is rejected before protocol mutation.
 
 KataGo 1.18.2 does not interpret quoted `loadsgf` filenames as shell paths. The adapter creates a unique private ASCII basename in the captured process working directory, verifies readability and sends only that basename. Explicit cleanup follows the load response; failure and cancellation also remove the owned file. JSONL and generic move replay remain path-free. `info`/`play` stream records cannot satisfy numbered control requests; ticket 10 owns the analysis-stream consumer and complete main-analysis admission. Fixtures and a real Eigen/b20 manager smoke cover this boundary; native surface and composed R12/R13 acceptance remain separate gates.
 
+
+### KataGo 1.18.2 main-analysis provider
+
+Explicit KataGo GTP profiles admit selected-node and continuous analysis through the existing selected-node lane, current-game gateway and main UI. Each request carries the immutable strict SGF position, not a board reconstructed from current stones alone. Before `kata-analyze`, the same Run performs the ordinary-rules restore/readback transaction above. Another positioning transaction cannot interrupt it. Unsupported projection is refused before writing; there is no protocol conversion, fallback or companion process. JSONL retains its original queries and independent whole-game lane.
+
+When the qualified GTP reader becomes ready, it reconciles an already selected position with existing continuous intent. This uses the same Pause, safety-hold and admission gates as later navigation; a position selected before Start does not wait for another user action or an unsolicited engine response.
+Finite analysis uses the captured active KataGo profile's max-visits setting for either protocol; editing or saving another profile leaves that Run's budget unchanged. The GTP profile editor exposes this same saved field.
+
+| Capability | GTP provider behavior |
+| --- | --- |
+| Candidates / winrate / PV | Required valid root and candidate data from `kata-analyze ... rootInfo true`; malformed or missing required values fail visibly. |
+| Streaming / selected node | Same actual Run and stdout reader; node/branch supersession drains the previous stream before new positioning and publication. |
+| Score / prior / ownership | Admitted when actually supplied; absent values remain null/unavailable in DTOs, rendering and SGF round trips. Ownership retains the main-board overlay surface. |
+| Policy / whole game | Not admitted by this provider. Existing JSONL support is unchanged. |
+| Visits / time limits | Manager-observed thresholds stop the stream; visits may exceed the threshold between reports. Published values are actual received samples, not an invented exact limit. Finite requests require positive max visits. |
+| Pause / Continue | Pause retains durable disabled intent across navigation. Continue is explicit. Protocol failure keeps a safety hold through document replacement and explicit Restart until the user continues. |
+
+The launch command fixes `reportAnalysisWinratesAs=BLACK`, merging that wire-perspective key into an existing `-override-config` argument while preserving other overrides and all saved profile/config bytes. No Java setting is imported or newly persisted. Graph Perspective remains the existing single-series presentation conversion; it does not change engine protocol normalization. Generated analysis never enters personal SGF `C`.
+
+`lifecycle::gtp_control` is the sole bounded numbered-response router on the existing reader and command sequence. Unique Run IDs also identify immutable reader incarnations. Registration precedes writing; a control succeeds only after its write succeeds and its complete own-ID response arrives. Sixteen pending commands and 64 queued lines per command bound stalled consumers; protocol records are capped at 64 KiB. Retired/unknown IDs cannot complete another request, and unsolicited idle replies remain protocol failures. An analysis Stop requires both the old stream's blank delimiter and the separately registered Stop's complete empty success response. `info`/`play` records never acknowledge controls. Five-second write/header/drain deadlines bound the stream worker; exact restore retains its own 30-second deadline. Failure retires response ownership and uses existing owned-process cleanup and canonical diagnostics.
+
+Both JSONL and GTP selected-node admission yield isolated evaluation and preload work before registering foreground work. Preload promotion transfers the existing process and stdout receiver to the same foreground pump; it does not allocate a second GTP reply authority. Successful promotion alone changes remembered primary identity. Detached diagnostic exports continue to consume their pinned canonical snapshot across analysis, promotion and departure.
+
+Captured named-engine records live under `crates/katago-protocol/tests/fixtures/katago-1.18.2-gtp-*.txt`. They came from the frozen 1.18.2 Linux Eigen binary (`20c4ede9f39455ab3c019ada7a22a6e4d7696361161feed5c56f2c42d1507bd0`) with the B20 model (`7c8a84ed9ee737e9c7e741a08bf242d63db37b648e7f64942f3a8b1b5101e7c2`); they are protocol evidence, not Windows or GPU qualification. The opt-in `ordinary_rules::real_katago_gtp_rules_and_exact_selected_positions` test exercises actual same-process rules, six finite positions, continuous branch replacement and Pause/Continue. Candidate-specific results and remaining native gates belong to the original ticket10 Implementation Record. Thread/pair composition remains the separate R12 integration gate.
 
 ## Provider And Sidecar Readiness
 

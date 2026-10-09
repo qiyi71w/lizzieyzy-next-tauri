@@ -403,7 +403,7 @@ mod tests {
                 vertex: MoveVertex::Point(PointDto { x: 3, y: 3 }),
                 visits: 32,
                 winrate_black: 0.55,
-                score_mean_black: 1.5,
+                score_mean_black: Some(1.5),
                 policy_prior: Some(0.4),
                 pv: vec![MoveVertex::Point(PointDto { x: 3, y: 3 })],
             }],

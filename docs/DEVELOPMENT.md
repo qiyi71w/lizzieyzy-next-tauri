@@ -1092,6 +1092,29 @@ Linux and Wayland screenshots and geometry JSON have durable copies under `D:\de
 
 The platform-adapter commit `f9b1dd82d66eb77c45b36d47206de66bada5862d` also built successfully as an isolated Windows candidate. Its `r7-window04-f9b1dd8-run2` restored numeric `310,170,1100×720@1`, showed saved status with no geometry error, rendered the native application, and exited 0. Native rectangles, status JSON and screenshot are retained in that run directory. Run1 used an invalid workspace-share fixture and exercised preference quarantine/default startup; it is excluded from numeric-restore evidence.
 
+## R12 KataGo GTP main-analysis checks
+
+The explicit `kata_go_gtp` provider uses the named KataGo 1.18.2 engine on its existing foreground Run; selecting a profile does not start or switch it. Use a strict ordinary Chinese/Chinese-KGS SGF position and the configured GTP model/config. Main candidates, PV, winrate, actual scores and ownership come from `kata-analyze`; policy and whole-game analysis remain unavailable for this provider. Missing score/prior/ownership values must remain unavailable in the table, overlays and saved/reopened SGF. JSONL profiles keep their existing support.
+
+Focused repository entrypoints:
+
+```sh
+cargo test --locked -p katago-protocol -p engine-manager --lib gtp_
+cargo test --locked -p engine-manager --test foreground_engine_run --test game_move --test ordinary_rules
+cargo test --locked -p sgf --test java_analysis_payloads --test replace_primary_analysis --test document_history
+cargo test --locked -p lizzieyzy-next-desktop --lib --no-default-features gtp_main_analysis_binds_exact_history
+```
+
+The rendered `AnalysisPanel`, `SelectedNodeAnalysis`, `AnalysisPresentation` and `foregroundEngine` suites cover nullable score presentation and capability admission. The gateway test exercises production manager events through current-game attachment, SGF save/reopen and obsolete-document rejection. Controlled manager tests distinguish write completion, stream closure and own numbered Stop ACK, including live navigation and explicit Continue after failure. These tests do not claim native desktop acceptance.
+
+For the actual engine, set `LIZZIEYZY_REAL_KATAGO=1` and explicit `LIZZIEYZY_KATAGO_ENGINE`, `LIZZIEYZY_KATAGO_MODEL`, `LIZZIEYZY_KATAGO_CONFIG`, `LIZZIEYZY_KATAGO_WORKDIR` paths, then run:
+
+```sh
+cargo test --locked -p engine-manager --test ordinary_rules real_katago_gtp_rules_and_exact_selected_positions -- --ignored --nocapture
+```
+
+Use an isolated writable workdir/config with owned logs; never change shared engine/model assets. Record exact candidate, engine/model/config digests, platform, Run/job/position tuple and actual result. The smoke checks six finite positions, continuous branch replacement, Pause/navigation/Continue on one Run, unchanged SGF, bounded canonical diagnostics and normal teardown. Bounded diagnostics may legitimately evict early startup records, so startup-source assertions are made at Ready rather than after streaming. Native main-window acceptance still requires a separately authorized committed candidate; thread/pair composition belongs to later R12 integration. Preserve earlier failed smoke records as failures rather than relabelling them after repairs.
+
 ## Documentation Acceptance
 
 When updating docs for this handoff package, keep these claims accurate:
