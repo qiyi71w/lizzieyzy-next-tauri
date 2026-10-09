@@ -52,7 +52,8 @@ export function DiagnosticExportPanel({ displayed, freeze, disabled }: {
         const result = await openDiagnosticExportFolder(target);
         setNotice(t(result === "opened" ? "diagnostics.export.folderOpened" : result === "timed_out" ? "diagnostics.export.folderTimeout" : "diagnostics.export.folderFailed"));
       }
-      setStatus(await diagnosticExportStatus());
+      const next = await diagnosticExportStatus();
+      if (next.generation === target) setStatus(next);
     } catch { setNotice(t("diagnostics.export.failed")); }
     finally { setBusy(false); }
   }

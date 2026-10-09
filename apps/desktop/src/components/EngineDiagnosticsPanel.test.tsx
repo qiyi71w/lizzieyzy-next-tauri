@@ -85,6 +85,11 @@ it("exports the displayed capture after Retry and keeps export success when open
   expect(host.textContent).toContain(t("diagnostics.export.folderFailed"));
   expect(host.textContent).toContain("failed-a");
   expect(host.textContent).toContain("diagnostics-test.zip");
+  poll.mockResolvedValue({ ...status, generation: 8, attempt_id: "replacement-c" });
+  await act(async () => button(t("diagnostics.export.folder")).click());
+  expect(host.textContent).toContain(t("diagnostics.export.phase.completed"));
+  expect(host.textContent).toContain("diagnostics-test.zip");
+  expect(host.textContent).not.toContain("replacement-c");
 });
 
 it("does not re-enable an older estimate after the displayed replacement is rejected", async () => {
