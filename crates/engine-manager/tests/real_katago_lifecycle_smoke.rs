@@ -9,6 +9,7 @@ use engine_manager::{
 use katago_protocol::AnalysisQuery;
 use std::env;
 use std::path::Path;
+#[cfg(target_os = "linux")]
 use std::process::Command;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
@@ -221,40 +222,138 @@ fn selected_request(run_id: &str, generation: u64, max_visits: u32) -> SelectedN
     }
 }
 
-fn katago_pids() -> Vec<u32> {
-    let output = Command::new("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-Command",
-            "Get-Process -Name katago -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id",
-        ])
-        .output()
-        .expect("list katago processes");
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| line.trim().parse().ok())
-        .collect()
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LinuxProcess {
+    pid: u32,
+    parent: u32,
+    start_ticks: u64,
+    executable: std::path::PathBuf,
+    cwd: std::path::PathBuf,
+    argv: Vec<Vec<u8>>,
 }
 
-fn kill_new_katago(before: &[u32]) {
-    let after = katago_pids();
-    let targets: Vec<u32> = after.into_iter().filter(|pid| !before.contains(pid)).collect();
-    assert!(
-        !targets.is_empty(),
-        "expected a live KataGo process to kill after Ready"
-    );
-    for pid in targets {
-        eprintln!("killing KataGo pid={pid}");
-        let status = Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-Command",
-                &format!("Stop-Process -Id {pid} -Force"),
-            ])
-            .status()
-            .expect("kill KataGo");
-        assert!(status.success(), "Stop-Process {pid} failed: {status}");
+#[cfg(target_os = "linux")]
+fn linux_process(pid: u32) -> Option<LinuxProcess> {
+    let root = std::path::PathBuf::from(format!("/proc/{pid}"));
+    let stat = std::fs::read_to_string(root.join("stat")).ok()?;
+    // comm can contain spaces and parentheses; fields after its final ')' start at field3.
+    let fields: Vec<_> = stat.rsplit_once(')')?.1.split_whitespace().collect();
+    Some(LinuxProcess {
+        pid,
+        parent: fields.get(1)?.parse().ok()?,
+        start_ticks: fields.get(19)?.parse().ok()?,
+        executable: std::fs::read_link(root.join("exe")).ok()?,
+        cwd: std::fs::read_link(root.join("cwd")).ok()?,
+        argv: std::fs::read(root.join("cmdline"))
+            .ok()?
+            .split(|byte| *byte == 0)
+            .filter(|arg| !arg.is_empty())
+            .map(<[u8]>::to_vec)
+            .collect(),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn is_owned_katago(
+    process: &LinuxProcess,
+    parent: u32,
+    executable: &Path,
+    cwd: &Path,
+    config: &Path,
+) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    process.parent == parent
+        && process.executable == executable
+        && process.cwd == cwd
+        && process.argv.windows(2).any(|args| {
+            args[0] == b"-config" && args[1] == config.as_os_str().as_bytes()
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn kill_owned_katago(profile: &EngineProfileDto) {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let executable = std::fs::canonicalize(&profile.program).unwrap();
+    let cwd = std::fs::canonicalize(profile.working_dir.as_ref().unwrap()).unwrap();
+    let EngineAdapterSettings::KataGoAnalysis(settings) = &profile.adapter else {
+        panic!("crash smoke requires KataGoAnalysis");
+    };
+    let config = Path::new(settings.config_path.as_ref().unwrap());
+    assert!(config.is_absolute(), "crash smoke requires an absolute private config");
+    let parent = std::process::id();
+    let targets: Vec<_> = std::fs::read_dir("/proc")
+        .unwrap()
+        .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+        .filter_map(linux_process)
+        .filter(|process| is_owned_katago(process, parent, &executable, &cwd, config))
+        .collect();
+    assert_eq!(targets.len(), 1, "expected exactly one owned KataGo child: {targets:?}");
+    let target = &targets[0];
+    eprintln!("dry-owned-selection={target:?}");
+    // A pidfd pins the selected process so PID reuse cannot redirect SIGKILL.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, target.pid, 0) };
+    assert!(fd >= 0, "pidfd_open failed: {}", std::io::Error::last_os_error());
+    let handle = unsafe { std::fs::File::from_raw_fd(fd as i32) };
+    let current = linux_process(target.pid).expect("owned KataGo exited before recheck");
+    assert_eq!(&current, target, "process identity changed before crash injection");
+    assert!(is_owned_katago(&current, parent, &executable, &cwd, config));
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            handle.as_raw_fd(),
+            libc::SIGKILL,
+            std::ptr::null::<libc::siginfo_t>(),
+            0,
+        )
+    };
+    assert_eq!(result, 0, "owned SIGKILL failed: {}", std::io::Error::last_os_error());
+    eprintln!("killed-owned-child pid={} parent={} start_ticks={}", target.pid, parent, target.start_ticks);
+}
+
+#[cfg(not(target_os = "linux"))]
+fn kill_owned_katago(_: &EngineProfileDto) {
+    panic!("crash smoke ownership is unsupported on this platform; never use global PID differences");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn owned_crash_selector_rejects_unrelated_lookalikes_without_signalling() {
+    use std::os::unix::process::CommandExt;
+    let cwd = std::env::current_dir().unwrap();
+    let executable = std::fs::canonicalize("/bin/sleep").unwrap();
+    let config = cwd.join("private-analysis.cfg");
+    let parent = std::process::id();
+    let selected = LinuxProcess {
+        pid: 1,
+        parent,
+        start_ticks: 123,
+        executable: executable.clone(),
+        cwd: cwd.clone(),
+        argv: vec![b"katago".to_vec(), b"-config".to_vec(), config.as_os_str().as_encoded_bytes().to_vec()],
+    };
+    assert!(is_owned_katago(&selected, parent, &executable, &cwd, &config));
+    for field in ["parent", "executable", "cwd", "config"] {
+        let mut lookalike = selected.clone();
+        match field {
+            "parent" => lookalike.parent = 0,
+            "executable" => lookalike.executable = cwd.join("unrelated-katago"),
+            "cwd" => lookalike.cwd = cwd.join("unrelated-run"),
+            "config" => lookalike.argv[2] = b"unrelated-analysis.cfg".to_vec(),
+            _ => unreachable!(),
+        }
+        assert!(!is_owned_katago(&lookalike, parent, &executable, &cwd, &config), "accepted mismatched {field}");
     }
+    // Same real parent, executable and cwd, misleading argv[0], but no private config.
+    // Inspect only: this short-lived owned lookalike exits naturally, never receives a signal.
+    let mut lookalike = Command::new(&executable).arg0("katago").arg("1").current_dir(&cwd).spawn().unwrap();
+    let identity = linux_process(lookalike.id()).unwrap();
+    assert_eq!(identity.parent, parent);
+    assert_eq!(identity.executable, executable);
+    assert_eq!(identity.cwd, cwd);
+    assert!(!is_owned_katago(&identity, parent, &executable, &cwd, &config));
+    eprintln!("dry-rejected-live-lookalike={identity:?}; no signal sent");
+    assert!(lookalike.wait().unwrap().success());
 }
 
 #[test]
@@ -393,7 +492,7 @@ fn real_katago_ready_job_stop_restart_and_switch() {
 #[ignore = "requires real KataGoAnalysis assets; run with LIZZIEYZY_REAL_KATAGO=1 --ignored"]
 fn real_katago_failed_start_failed_switch_crash_and_autoload() {
     require_real_katago();
-    let before_pids = katago_pids();
+    assert!(cfg!(target_os = "linux"), "crash smoke requires Linux owned-child pidfd support; other platforms remain an explicit unrun gate");
 
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     catalog.upsert(SavedEngineProfile {
@@ -469,7 +568,7 @@ fn real_katago_failed_start_failed_switch_crash_and_autoload() {
     wait_job(&events, Duration::from_secs(30), |event| {
         event.job_id == job.job_id && event.outcome == app_model::AnalysisJobOutcomeDto::Started
     });
-    kill_new_katago(&before_pids);
+    kill_owned_katago(&run_good.profile_snapshot);
     let crashed = wait_current(&manager, Duration::from_secs(30), |lifecycle| {
         matches!(lifecycle, ForegroundEngineLifecycleDto::Error { .. })
     });
