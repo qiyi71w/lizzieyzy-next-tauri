@@ -245,6 +245,8 @@ struct ManagerState {
     match_residents: Vec<LiveEngine>,
     preloads: Vec<preload::PreloadSlot>,
     preload_shutdown: bool,
+    startup_preloads: Option<Vec<SavedEngineProfile>>,
+    startup_preload_operation: Option<u64>,
     switch_seq: u64,
     last_activity: Instant,
     jobs: Vec<RegisteredJob>,
@@ -290,6 +292,7 @@ pub struct ForegroundEngineManager {
 impl ForegroundEngineManager {
     pub fn new(catalog: Arc<dyn EngineProfileCatalog>, config: ForegroundEngineConfig) -> Self {
         let startup_evaluation = Some(catalog.startup_evaluation_target());
+        let startup_preloads = Some(catalog.preload_profiles());
         Self {
             inner: Arc::new(Inner {
                 catalog,
@@ -308,6 +311,8 @@ impl ForegroundEngineManager {
                     match_residents: Vec::new(),
                     preloads: Vec::new(),
                     preload_shutdown: false,
+                    startup_preloads,
+                    startup_preload_operation: None,
                     switch_seq: 0,
                     jobs: Vec::new(),
                     analysis_task: None,
@@ -1441,6 +1446,7 @@ impl ForegroundEngineManager {
                 validate_query_capabilities(&run, &item.query, false)?;
             }
             evaluation::yield_to_foreground(&mut state)?;
+            self.yield_preloads_locked(&mut state);
             let job_id = Uuid::new_v4().to_string();
             let query_id = target_query_id(&job_id);
             let job = &mut state.jobs[index];

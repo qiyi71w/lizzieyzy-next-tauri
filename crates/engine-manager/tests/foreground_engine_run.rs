@@ -7116,3 +7116,197 @@ fn preload_gtp_readiness_keeps_foreground_authority_until_same_run_promotion() {
     assert_gtp_reaped(&temp, "fragment");
     assert_gtp_reaped(&temp, "stderr");
 }
+
+#[cfg(unix)]
+fn held_startup_preload(
+    label: &str,
+    opted_in: bool,
+    readiness_timeout: Duration,
+) -> (TestTempDir, ForegroundEngineManager, Arc<InMemoryEngineProfileCatalog>, PathBuf) {
+    let temp = TestTempDir::new(label);
+    let release = temp.path().join("startup-release");
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "a".into(),
+        profile: setup_named_profile(&temp, "a", &hold_probe_until_release_script(&release)),
+    });
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "b".into(),
+        profile: setup_named_profile(&temp, "b", &resident_echo_script()),
+    });
+    catalog.set_preload("b", opted_in);
+    catalog.set_autoload_profile_id(Some("a".into()));
+    let mut config = ForegroundEngineConfig::for_tests();
+    config.readiness_timeout = readiness_timeout;
+    let manager = ForegroundEngineManager::new(catalog.clone(), config);
+    manager.apply_autoload().unwrap();
+    manager.schedule_startup_preloads();
+    wait_lifecycle(&manager, Duration::from_secs(3), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::Starting { .. })
+    });
+    (temp, manager, catalog, release)
+}
+
+#[cfg(unix)]
+#[test]
+fn startup_preload_save_during_starting_requires_explicit_prepare() {
+    let (_temp, manager, catalog, release) =
+        held_startup_preload("startup-preload-save", false, Duration::from_secs(10));
+    catalog.set_preload("b", true);
+    std::fs::write(release, "release").unwrap();
+    wait_lifecycle(&manager, Duration::from_secs(3), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(manager.preload_snapshot().is_empty());
+    manager.prepare_preload("b").unwrap();
+    wait_preload(&manager, app_model::EnginePreloadPhaseDto::Ready);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "holds a real startup pipe beyond the former 120-second scheduler horizon"]
+fn startup_preload_survives_long_autoload_and_consumes_once() {
+    use app_model::EnginePreloadPhaseDto as Phase;
+    let (_temp, manager, _catalog, release) =
+        held_startup_preload("startup-preload-long", true, Duration::from_secs(140));
+    let started = Instant::now();
+    std::thread::sleep(Duration::from_secs(122));
+    assert!(matches!(manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::Starting { .. }));
+    std::fs::write(release, "release").unwrap();
+    let prepared = wait_preload(&manager, Phase::Ready);
+    eprintln!("SPEC-002 original autoload held {:?}; prepared {}", started.elapsed(), prepared.run.run_id);
+    manager.schedule_startup_preloads();
+    manager.apply_preloads();
+    assert_eq!(manager.preload_snapshot().len(), 1);
+    assert_eq!(manager.preload_snapshot()[0].run.run_id, prepared.run.run_id);
+    manager.cancel_preload("b").unwrap();
+    manager.schedule_startup_preloads();
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(manager.preload_snapshot()[0].phase, Phase::Cancelled);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn startup_preload_operation_shutdown_and_foreground_retire_authorization() {
+    for action in ["stop", "shutdown", "foreground"] {
+        let (_temp, manager, _catalog, release) =
+            held_startup_preload("startup-preload-retired", true, Duration::from_secs(10));
+        match action {
+            "stop" => manager.stop().unwrap(),
+            "shutdown" => manager.teardown().unwrap(),
+            _ => {
+                std::fs::write(&release, "release").unwrap();
+                wait_lifecycle(&manager, Duration::from_secs(3), |state| {
+                    matches!(state, ForegroundEngineLifecycleDto::Ready { .. })
+                });
+                manager.reserve_match("startup-priority").unwrap();
+                manager.stop_reserved_match("startup-priority").unwrap();
+            }
+        }
+        std::fs::write(release, "release").unwrap();
+        manager.schedule_startup_preloads();
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(manager.preload_snapshot().iter().all(|slot| {
+            slot.phase == app_model::EnginePreloadPhaseDto::Cancelled
+        }), "{action}");
+        manager.teardown().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn startup_preload_changed_or_deleted_saved_target_cannot_launch_replacement() {
+    struct DiskCatalog(PathBuf);
+    impl EngineProfileCatalog for DiskCatalog {
+        fn get(&self, id: &str) -> Option<SavedEngineProfile> {
+            self.preload_profiles().into_iter().find(|saved| saved.profile_id == id)
+        }
+        fn preload_profiles(&self) -> Vec<SavedEngineProfile> {
+            engine_manager::load_engine_profiles(&self.0).unwrap().profiles.into_iter()
+                .filter(|record| record.preload)
+                .map(|record| SavedEngineProfile { profile_id: record.id, profile: record.profile })
+                .collect()
+        }
+    }
+    for deleted in [false, true] {
+        let temp = TestTempDir::new("startup-preload-revision");
+        let path = temp.path().join("catalog.json");
+        let mut settings = engine_manager::default_engine_profiles_settings();
+        settings.profiles.push(engine_manager::EngineProfileRecord {
+            id: "b".into(), preload: true,
+            profile: setup_named_profile(&temp, "b", &resident_echo_script()),
+        });
+        engine_manager::save_engine_profiles(&path, settings.clone()).unwrap();
+        let manager = ForegroundEngineManager::new(
+            Arc::new(DiskCatalog(path.clone())), ForegroundEngineConfig::for_tests());
+        if deleted {
+            settings.profiles.retain(|record| record.id != "b");
+        } else {
+            settings.profiles.last_mut().unwrap().profile.name = "replacement revision".into();
+        }
+        engine_manager::save_engine_profiles(&path, settings).unwrap();
+        manager.schedule_startup_preloads();
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(manager.preload_snapshot().is_empty());
+        manager.teardown().unwrap();
+        if !deleted {
+            let fresh = ForegroundEngineManager::new(
+                Arc::new(DiskCatalog(path)), ForegroundEngineConfig::for_tests());
+            fresh.schedule_startup_preloads();
+            let ready = wait_preload(&fresh, app_model::EnginePreloadPhaseDto::Ready);
+            assert_eq!(ready.run.profile_snapshot.name, "replacement revision");
+            fresh.teardown().unwrap();
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn preload_preparing_and_ready_retire_when_paused_task_continues() {
+    use app_model::EnginePreloadPhaseDto as Phase;
+    for ready in [false, true] {
+        let temp = TestTempDir::new("preload-task-continue");
+        let (manager, catalog, events, run) = ready_manager(&temp, &task_engine_script(temp.path()));
+        let task = manager.start_analysis_task(
+            whole_game_request(&run, 42, 3), analysis_scope(), task_conditions(32)).unwrap();
+        wait_job(&events, Duration::from_secs(2), |job| {
+            job.job_id == task.job_id && job.outcome == AnalysisJobOutcomeDto::Progress
+        });
+        manager.pause_analysis_task(&run, &task.task_id).unwrap();
+        std::fs::write(temp.path().join("cancel-final"), "go").unwrap();
+        wait_task(&manager, AnalysisTaskStateDto::Paused);
+        let release = temp.path().join("preload-release");
+        let pid_file = temp.path().join("preload-pid");
+        let script = format!("echo $$ > '{}'\n{}", pid_file.display(),
+            if ready { resident_echo_script() } else { hold_probe_until_release_script(&release) });
+        catalog.upsert(SavedEngineProfile {
+            profile_id: "b".into(), profile: setup_named_profile(&temp, "background", &script),
+        });
+        catalog.set_preload("b", true);
+        manager.prepare_preload("b").unwrap();
+        wait_preload(&manager, if ready { Phase::Ready } else { Phase::Preparing });
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !pid_file.exists() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let pid = std::fs::read_to_string(pid_file).unwrap();
+        let continued = manager.continue_analysis_task(&run, &task.task_id, 42).unwrap();
+        assert_eq!(continued.state, AnalysisTaskStateDto::Queued);
+        assert_eq!(continued.task_id, task.task_id);
+        assert_eq!(continued.run_id, run);
+        assert_eq!(manager.preload_snapshot()[0].phase, Phase::Cancelled);
+        std::fs::write(release, "late release").unwrap();
+        #[cfg(target_os = "linux")]
+        while Path::new(&format!("/proc/{}", pid.trim())).exists() {
+            assert!(Instant::now() < deadline, "Continue must reap its background child");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(manager.preload_snapshot()[0].phase, Phase::Cancelled);
+        assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, run);
+        manager.teardown().unwrap();
+    }
+}

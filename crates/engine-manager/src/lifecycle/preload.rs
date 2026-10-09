@@ -69,8 +69,27 @@ impl ForegroundEngineManager {
             .into_iter()
             .find(|saved| saved.profile_id == profile_id)
             .ok_or_else(|| invalid(profile_id, "Save this profile's background preload opt-in first"))?;
+        self.prepare_saved_preload(saved, None)
+    }
+
+    fn prepare_saved_preload(
+        &self,
+        saved: SavedEngineProfile,
+        startup_operation: Option<u64>,
+    ) -> Result<(), EngineFailureDto> {
+        let profile_id = saved.profile_id.as_str();
         let (operation, run) = {
             let mut state = self.lock();
+            if let Some(operation) = startup_operation {
+                if state.operation != operation
+                    || state.startup_preload_operation != Some(operation)
+                    || !self.inner.catalog.preload_profiles().iter().any(|current| {
+                        current.profile_id == saved.profile_id && current.profile == saved.profile
+                    })
+                {
+                    return Err(invalid(profile_id, "Startup preload authorization was retired"));
+                }
+            }
             if busy(&state)
                 || current_run_id(&state.phase).is_some_and(|id| {
                     state.live.as_ref().is_some_and(|live| live.run_id == id)
@@ -134,31 +153,53 @@ impl ForegroundEngineManager {
         Ok(())
     }
 
-    /// Called once during application startup, never after Cancel or foreground handoff.
+    /// Consumes the saved startup authorization once, after the original autoload finishes.
     pub fn apply_preloads(&self) {
-        for saved in self.inner.catalog.preload_profiles() {
-            let _ = self.prepare_preload(&saved.profile_id);
-        }
+        self.schedule_startup_preloads();
     }
 
     pub fn schedule_startup_preloads(&self) {
-        let operation = self.inner.current_operation();
-        let manager = self.clone();
-        thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(120);
-            loop {
-                let state = manager.lock();
-                if state.operation != operation || state.preload_shutdown || Instant::now() >= deadline {
-                    return;
-                }
-                let starting = matches!(state.phase, Phase::Starting(_));
-                drop(state);
-                if !starting {
-                    manager.apply_preloads();
-                    return;
-                }
-                thread::sleep(Duration::from_millis(20));
+        let (operation, profiles) = {
+            let mut state = self.lock();
+            let Some(profiles) = state.startup_preloads.take() else {
+                return;
+            };
+            if state.preload_shutdown || profiles.is_empty() {
+                return;
             }
+            let operation = state.operation;
+            state.startup_preload_operation = Some(operation);
+            (operation, profiles)
+        };
+        let weak = Arc::downgrade(&self.inner);
+        thread::spawn(move || loop {
+            let Some(inner) = weak.upgrade() else {
+                return;
+            };
+            let manager = ForegroundEngineManager { inner };
+            let mut state = manager.lock();
+            if state.operation != operation
+                || state.startup_preload_operation != Some(operation)
+                || state.preload_shutdown
+            {
+                return;
+            }
+            if matches!(state.phase, Phase::Starting(_)) {
+                drop(state);
+                drop(manager);
+                thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+            if busy(&state) {
+                state.startup_preload_operation = None;
+                return;
+            }
+            drop(state);
+            for saved in profiles {
+                let _ = manager.prepare_saved_preload(saved, Some(operation));
+            }
+            manager.lock().startup_preload_operation = None;
+            return;
         });
     }
 
@@ -210,12 +251,15 @@ impl ForegroundEngineManager {
         {
             let mut state = self.lock();
             state.preload_shutdown |= shutdown;
+            state.startup_preloads = None;
+            state.startup_preload_operation = None;
             retire(&mut state, None);
         }
         self.wait_preload_workers(None)
     }
 
     pub(super) fn yield_preloads_locked(&self, state: &mut ManagerState) {
+        state.startup_preload_operation = None;
         if !state
             .preloads
             .iter()
