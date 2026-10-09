@@ -2,7 +2,7 @@
 use crate::catalog::{EngineProfileCatalog, SavedEngineProfile};
 use crate::gtp::{self, ResponseDecoder};
 use crate::resources::{ResourceSnapshot, StartupOutput};
-use crate::diagnostics::{AttemptCapture, ObservedRead};
+use crate::diagnostics::{AttemptCapture, FailureText, ObservedRead};
 use crate::{
     build_command_spec, build_process_command, check_assets, kill_timed_out_child, spawn_stdout_lines_reader,
     write_jsonl, AnalysisCancelToken,
@@ -660,7 +660,7 @@ impl ForegroundEngineManager {
                 let published = failure(
                     operation_kind,
                     EngineFailureKind::ProfileNotFound,
-                    format!("saved engine profile was not found: {profile_id}"),
+                    FailureText::unscoped(&format!("saved engine profile was not found: {profile_id}")),
                     None,
                     Some(profile_id),
                     None,
@@ -748,7 +748,7 @@ impl ForegroundEngineManager {
                 failure(
                     EngineOperationDto::Restart,
                     EngineFailureKind::ProfileNotFound,
-                    format!("saved engine profile was not found: {}", run.profile_id),
+                    self.inner.diagnostic_text(&run.run_id, &format!("saved engine profile was not found: {}", run.profile_id)),
                     Some(&run.run_id),
                     Some(&run.profile_id),
                     None,
@@ -792,7 +792,7 @@ impl ForegroundEngineManager {
             failure(
                 EngineOperationDto::Switch,
                 EngineFailureKind::ProfileNotFound,
-                format!("saved engine profile was not found: {profile_id}"),
+                FailureText::unscoped(&format!("saved engine profile was not found: {profile_id}")),
                 None,
                 Some(profile_id),
                 None,
@@ -1010,7 +1010,7 @@ impl ForegroundEngineManager {
                 failure(
                     EngineOperationDto::Job,
                     EngineFailureKind::Protocol,
-                    format!("failed to serialize selected-node query: {error}"),
+                    self.inner.diagnostic_text(&started.run_id, &format!("failed to serialize selected-node query: {error}")),
                     Some(started.run_id.as_str()),
                     None,
                     None,
@@ -1533,7 +1533,7 @@ impl ForegroundEngineManager {
                         failure(
                             EngineOperationDto::Job,
                             EngineFailureKind::Protocol,
-                            format!("failed to write analysis query: {error}"),
+                            self.inner.diagnostic_text(run_id, &format!("failed to write analysis query: {error}")),
                             Some(run_id),
                             None,
                             None,
@@ -1869,7 +1869,7 @@ impl ForegroundEngineManager {
             failure(
                 EngineOperationDto::Job,
                 EngineFailureKind::Protocol,
-                format!("failed to write analysis query: {error}"),
+                self.inner.diagnostic_text(run_id, &format!("failed to write analysis query: {error}")),
                 Some(run_id),
                 None,
                 None,
@@ -2048,7 +2048,7 @@ impl Inner {
             return;
         }
         if let Err(mut published) = self.start_resident(operation, &run, false, false) {
-            identify_failed_executable(&run, &mut published);
+            identify_failed_executable(&run, &mut published, &self);
             self.fail_attempt(operation, published);
         }
     }
@@ -2058,15 +2058,23 @@ impl Inner {
             return;
         }
         if let Err(mut published) = self.start_resident(operation, &run, true, false) {
-            identify_failed_executable(&run, &mut published);
+            identify_failed_executable(&run, &mut published, &self);
             self.fail_switch_candidate(operation, &run, &switch_id, published);
+        }
+    }
+
+    fn diagnostic_text(&self, run_id: &str, text: &str) -> FailureText {
+        let attempts = self.diagnostics.lock().expect("diagnostic capture list");
+        match attempts.iter().find(|capture| capture.matches_run(run_id)) {
+            Some(capture) => capture.failure_text(text),
+            None => FailureText::unscoped(text),
         }
     }
 
     fn record_diagnostic_failure(&self, failure: &EngineFailureDto) {
         let attempts = self.diagnostics.lock().expect("diagnostic capture list");
         if let Some(capture) = attempts.iter().find(|capture| failure.run_id.as_deref().is_some_and(|id| capture.matches_run(id))) {
-            capture.record("failure", &format!("{:?}: {}", failure.kind, failure.message));
+            capture.record_failure(failure);
         }
     }
 
@@ -2102,7 +2110,7 @@ impl Inner {
                     if check.path.is_empty() {
                         check.label.clone()
                     } else {
-                        format!("{} ({})", check.label, check.path)
+                        format!("{} ({})", check.label, capture.alias(&check.path))
                     }
                 })
                 .collect::<Vec<_>>()
@@ -2110,10 +2118,10 @@ impl Inner {
             return Err(failure(
                 kind,
                 EngineFailureKind::Asset,
-                format!("required engine assets are missing: {summary}"),
+                capture.failure_text(&format!("required engine assets are missing: {summary}")),
                 Some(run.run_id.as_str()),
                 Some(run.profile_id.as_str()),
-                Some(summary),
+                Some(capture.failure_text(&summary)),
             ));
         }
         if !self.preparation_current(operation, run, background) {
@@ -2124,7 +2132,7 @@ impl Inner {
             failure(
                 kind,
                 EngineFailureKind::Start,
-                error.to_string(),
+                capture.failure_text(&error.to_string()),
                 Some(run.run_id.as_str()),
                 Some(run.profile_id.as_str()),
                 None,
@@ -2136,7 +2144,7 @@ impl Inner {
                 failure(
                     kind,
                     cause,
-                    message,
+                    capture.failure_text(&message),
                     Some(&run.run_id),
                     Some(&run.profile_id),
                     None,
@@ -2150,7 +2158,7 @@ impl Inner {
             failure(
                 kind,
                 EngineFailureKind::Start,
-                format!("failed to spawn engine process: {error}"),
+                capture.failure_text(&format!("failed to spawn engine process: {error}")),
                 Some(run.run_id.as_str()),
                 Some(run.profile_id.as_str()),
                 None,
@@ -2265,7 +2273,7 @@ impl Inner {
                 return Err(failure(
                     kind,
                     EngineFailureKind::Protocol,
-                    format!("failed to send readiness probe: {error}"),
+                    capture.failure_text(&format!("failed to send readiness probe: {error}")),
                     Some(&run.run_id),
                     Some(&run.profile_id),
                     None,
@@ -2310,7 +2318,7 @@ impl Inner {
                 failure(
                     kind,
                     cause,
-                    message,
+                    capture.failure_text(&message),
                     Some(&run.run_id),
                     Some(&run.profile_id),
                     None,
@@ -2396,11 +2404,11 @@ impl Inner {
         run: &EngineRunDto,
         kind: EngineOperationDto,
     ) -> Result<Option<EngineGtpFactsDto>, EngineFailureDto> {
-        let fail = |failure_kind, message| {
+        let fail = |failure_kind, message: String| {
             failure(
                 kind,
                 failure_kind,
-                message,
+                self.diagnostic_text(&run.run_id, &message),
                 Some(&run.run_id),
                 Some(&run.profile_id),
                 None,
@@ -2620,7 +2628,7 @@ impl Inner {
                         return Err(failure(
                             kind,
                             EngineFailureKind::Protocol,
-                            format!("failed to read engine stdout: {error}"),
+                            self.diagnostic_text(&run.run_id, &format!("failed to read engine stdout: {error}")),
                             Some(run.run_id.as_str()),
                             Some(run.profile_id.as_str()),
                             None,
@@ -2657,10 +2665,10 @@ impl Inner {
                         return Err(failure(
                             kind,
                             EngineFailureKind::Protocol,
-                            format!("readiness probe response was not parseable: {error}"),
+                            self.diagnostic_text(&run.run_id, &format!("readiness probe response was not parseable: {error}")),
                             Some(run.run_id.as_str()),
                             Some(run.profile_id.as_str()),
-                            Some(trimmed.to_string()),
+                            Some(self.diagnostic_text(&run.run_id, trimmed)),
                         ));
                     }
                 }
@@ -2819,7 +2827,7 @@ impl Inner {
             if let Err(error) = terminate_process(live, Instant::now() + self.config.stop_drain_timeout) {
                 published
                     .message
-                    .push_str(&format!("; candidate cleanup failed: {error}"));
+                    .push_str(&live.capture.sanitize(&format!("; candidate cleanup failed: {error}")));
                 self.record_diagnostic_failure(&published);
                 state.phase = Phase::Error {
                     run: primary,
@@ -2869,7 +2877,7 @@ impl Inner {
                     }
                     Err(error) => published
                         .message
-                        .push_str(&format!("; process cleanup failed: {error}")),
+                        .push_str(&process.capture.sanitize(&format!("; process cleanup failed: {error}"))),
                 }
             }
         }
@@ -2928,7 +2936,7 @@ impl Inner {
                 let published = failure(
                     EngineOperationDto::Teardown,
                     EngineFailureKind::Timeout,
-                    format!("engine process cleanup failed: {error}"),
+                    self.diagnostic_text(&run.run_id, &format!("engine process cleanup failed: {error}")),
                     Some(&run.run_id),
                     None,
                     None,
@@ -3021,7 +3029,7 @@ impl Inner {
                         } else {
                             EngineFailureKind::NonzeroExit
                         },
-                        format!("engine exited during start; exit_code={exit_code:?}"),
+                        self.diagnostic_text(run_id, &format!("engine exited during start; exit_code={exit_code:?}")),
                         Some(run_id),
                         Some(profile_id.as_str()),
                         None,
@@ -3053,7 +3061,7 @@ impl Inner {
             } else {
                 EngineFailureKind::NonzeroExit
             },
-            format!("engine process exited unexpectedly; exit_code={exit_code:?}"),
+            self.diagnostic_text(&run.run_id, &format!("engine process exited unexpectedly; exit_code={exit_code:?}")),
             Some(run.run_id.as_str()),
             Some(run.profile_id.as_str()),
             None,
@@ -3111,7 +3119,7 @@ impl Inner {
             let mut published = failure(
                 EngineOperationDto::UnexpectedExit,
                 kind,
-                message,
+                self.diagnostic_text(&run_id, &message),
                 Some(&run_id),
                 Some(&run.profile_id),
                 None,
@@ -3133,7 +3141,7 @@ impl Inner {
                     gtp_dispatch.retire_run(&process.run_id);
                     match terminate_process(process, deadline) {
                         Ok(()) => *slot = None,
-                        Err(error) => published.message.push_str(&format!("; cleanup failed: {error}")),
+                        Err(error) => published.message.push_str(&process.capture.sanitize(&format!("; cleanup failed: {error}"))),
                     }
                 }
             }
@@ -3230,14 +3238,14 @@ impl Inner {
                         format!("analysis response was not parseable: {error}"),
                     ),
                 };
-                let published = failure(EngineOperationDto::Job, kind, message, Some(run_id), None, None)
+                let published = failure(EngineOperationDto::Job, kind, self.diagnostic_text(run_id, &message), Some(run_id), None, None)
                     .with_job_id(&started.job_id);
                 if capability_refusal.is_none()
                     && (started.mode == AnalysisJobModeDto::Continuous
                         || state.jobs[index].disposition == JobDisposition::BudgetReached)
                 {
                     drop(state);
-                    self.fail_unresponsive_run(run_id, &published.message);
+                    self.fail_unresponsive_run(run_id, FailureText::from_failure(&published));
                     return None;
                 }
                 finish_failed_job(&mut state, &started, published);
@@ -3290,7 +3298,7 @@ impl Inner {
             {
                 let message = format!("required analysis setting was ignored: {warning}");
                 drop(state);
-                self.fail_unresponsive_run(run_id, &message);
+                self.fail_unresponsive_run(run_id, self.diagnostic_text(run_id, &message));
             }
             return None;
         }
@@ -3692,7 +3700,7 @@ impl Inner {
                         failure(
                             EngineOperationDto::Job,
                             EngineFailureKind::Protocol,
-                            format!("whole-game response was not parseable: {error}"),
+                            self.diagnostic_text(&started.run_id, &format!("whole-game response was not parseable: {error}")),
                             Some(started.run_id.as_str()),
                             None,
                             None,
@@ -3767,11 +3775,11 @@ impl Inner {
         }
     }
 
-    fn fail_unresponsive_run(&self, run_id: &str, message: &str) -> EngineFailureDto {
+    fn fail_unresponsive_run(&self, run_id: &str, message: impl Into<FailureText>) -> EngineFailureDto {
         self.fail_analysis_run(run_id, EngineFailureKind::Timeout, message)
     }
 
-    fn fail_analysis_run(&self, run_id: &str, kind: EngineFailureKind, message: &str) -> EngineFailureDto {
+    fn fail_analysis_run(&self, run_id: &str, kind: EngineFailureKind, message: impl Into<FailureText>) -> EngineFailureDto {
         let mut state = self.lock();
         if let Phase::Error { failure, .. } = &state.phase {
             return failure.clone();
@@ -3796,7 +3804,7 @@ impl Inner {
             return published;
         };
         state.continuous_safety_hold = true;
-        fail_analysis_task_locked(&mut state, None, message);
+        fail_analysis_task_locked(&mut state, None, &published.message);
         state.operation += 1;
         let deadline = state
             .jobs
@@ -3828,7 +3836,7 @@ impl Inner {
                     Err(error) => {
                         published
                             .message
-                            .push_str(&format!("; process cleanup failed: {error}"));
+                            .push_str(&live.capture.sanitize(&format!("; process cleanup failed: {error}")));
                     }
                 }
             }
@@ -4034,7 +4042,7 @@ fn bound_work_item_query(
         failure(
             EngineOperationDto::Job,
             EngineFailureKind::Protocol,
-            format!("failed to serialize whole-game query: {error}"),
+            FailureText::unscoped(&format!("failed to serialize whole-game query: {error}")),
             None,
             None,
             None,
@@ -4480,7 +4488,7 @@ fn require_capability(run: &EngineRunDto, supported: bool, capability: &str) -> 
         Err(failure(
             EngineOperationDto::Job,
             EngineFailureKind::UnsupportedCapability,
-            format!("current Ready Run does not admit {capability}"),
+            FailureText::unscoped(&format!("current Ready Run does not admit {capability}")),
             Some(&run.run_id),
             Some(&run.profile_id),
             None,
@@ -4628,11 +4636,11 @@ fn validate_selected_admission(
                 "finite KataGo GTP analysis requires positive max visits".into(), Some(run_id), Some(&run.profile_id), None));
         }
         let exact = request.exact_position.as_ref().map_err(|message| failure(
-            EngineOperationDto::Job, EngineFailureKind::UnsupportedCapability, message.clone(),
+            EngineOperationDto::Job, EngineFailureKind::UnsupportedCapability, diagnostic_text_for_state(state, run_id, message),
             Some(run_id), Some(&run.profile_id), None,
         ))?;
         ordinary_rules::admit(&run, exact).map_err(|message| failure(
-            EngineOperationDto::Job, EngineFailureKind::UnsupportedCapability, message,
+            EngineOperationDto::Job, EngineFailureKind::UnsupportedCapability, diagnostic_text_for_state(state, run_id, &message),
             Some(run_id), Some(&run.profile_id), None,
         ))?;
     }
@@ -4685,7 +4693,7 @@ fn clear_holds_for_new_run(state: &mut ManagerState) {
         .retain(|job| !(job.lane == AnalysisJobLane::SelectedNode && job.terminal));
 }
 
-fn continuous_invalid_state(state: &ManagerState, message: &str) -> EngineFailureDto {
+fn continuous_invalid_state(state: &ManagerState, message: &'static str) -> EngineFailureDto {
     failure(
         EngineOperationDto::Job,
         EngineFailureKind::InvalidState,
@@ -4952,7 +4960,7 @@ fn invalid_task_conditions(run_id: &str, message: String) -> EngineFailureDto {
     failure(
         EngineOperationDto::Job,
         EngineFailureKind::InvalidState,
-        message,
+        FailureText::unscoped(&message),
         Some(run_id),
         None,
         None,
@@ -4976,14 +4984,19 @@ fn single_stage_conditions(total_visits: u32) -> AnalysisStageConditionsDto {
     }
 }
 
-fn identify_failed_executable(run: &EngineRunDto, failure: &mut EngineFailureDto) {
-    let path = std::path::Path::new(&run.profile_snapshot.program);
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    failure.message = format!(
-        "executable {}: {}",
-        crate::diagnostics::DiagnosticSanitizer::default().sanitize(&name),
-        failure.message
-    );
+fn diagnostic_text_for_state(state: &ManagerState, run_id: &str, text: &str) -> FailureText {
+    match owned_live(state, run_id) {
+        Some(live) => live.capture.failure_text(text),
+        None => FailureText::unscoped(text),
+    }
+}
+
+fn identify_failed_executable(run: &EngineRunDto, failure: &mut EngineFailureDto, inner: &Inner) {
+    let attempts = inner.diagnostics.lock().expect("diagnostic capture list");
+    let name = attempts.iter().find(|capture| capture.matches_run(&run.run_id))
+        .map(|capture| capture.alias(&run.profile_snapshot.program))
+        .unwrap_or_else(|| "[redacted]".into());
+    failure.message = format!("executable {name}: {}", failure.message);
 }
 
 fn attach_startup_failure(failure: &mut EngineFailureDto, output: &Arc<Mutex<StartupOutput>>, capture: &AttemptCapture) {
@@ -5003,18 +5016,16 @@ fn attach_startup_failure(failure: &mut EngineFailureDto, output: &Arc<Mutex<Sta
     if !summary.is_empty() {
         failure.diagnostic_summary = Some(summary);
     }
-    failure.message = capture.sanitize(&failure.message);
 }
 
 fn failure(
     operation: EngineOperationDto,
     kind: EngineFailureKind,
-    message: String,
+    message: FailureText,
     run_id: Option<&str>,
     profile_id: Option<&str>,
-    diagnostic_summary: Option<String>,
+    diagnostic_summary: Option<FailureText>,
 ) -> EngineFailureDto {
-    let mut sanitizer = crate::diagnostics::DiagnosticSanitizer::default();
     EngineFailureDto {
         operation,
         run_id: run_id.map(str::to_string),
@@ -5022,8 +5033,8 @@ fn failure(
         job_id: None,
         profile_id: profile_id.map(str::to_string),
         kind,
-        message: sanitizer.sanitize(&message),
-        diagnostic_summary: diagnostic_summary.map(|text| sanitizer.sanitize(&text)),
+        message: message.into_string(),
+        diagnostic_summary: diagnostic_summary.map(FailureText::into_string),
     }
 }
 

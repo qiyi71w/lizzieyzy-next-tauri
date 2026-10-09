@@ -61,11 +61,11 @@ impl EvaluationSlot {
         }
     }
 
-    fn retire(&mut self, phase: PhaseDto, message: &str) -> Result<(), EngineFailureDto> {
+    fn retire(&mut self, phase: PhaseDto, message: FailureText) -> Result<(), EngineFailureDto> {
         self.snapshot.phase = phase;
         self.snapshot.result = None;
         self.snapshot.output.clear();
-        self.snapshot.message = Some(self.sanitizer.sanitize(message));
+        self.snapshot.message = Some(message.into_string());
         if let Err(error) = self.reap() {
             self.snapshot.phase = PhaseDto::Failed;
             self.snapshot.message = Some(error.message.clone());
@@ -75,7 +75,7 @@ impl EvaluationSlot {
     }
 }
 
-fn eval_failure(message: &str) -> EngineFailureDto {
+fn eval_failure(message: &'static str) -> EngineFailureDto {
     failure(
         EngineOperationDto::Job,
         EngineFailureKind::InvalidState,
@@ -94,7 +94,7 @@ pub(super) fn yield_to_foreground(state: &mut ManagerState) -> Result<(), Engine
     {
         slot.retire(
             PhaseDto::Yielded,
-            "Benchmark yielded to foreground analysis or Match",
+            "Benchmark yielded to foreground analysis or Match".into(),
         )?;
     }
     Ok(())
@@ -105,7 +105,7 @@ pub(super) fn close(state: &mut ManagerState) -> Result<(), EngineFailureDto> {
     if let Some(slot) = state.evaluation.as_mut() {
         slot.retire(
             PhaseDto::Cancelled,
-            "Benchmark closed; session-only output and result retired",
+            "Benchmark closed; session-only output and result retired".into(),
         )?;
     }
     Ok(())
@@ -126,7 +126,8 @@ impl ForegroundEngineManager {
         let request = self.lock().startup_evaluation.take();
         let result = match request {
             None | Some(Ok(None)) => return,
-            Some(Err(message)) => Err(eval_failure(&message)),
+            Some(Err(message)) => Err(failure(EngineOperationDto::Job, EngineFailureKind::InvalidState,
+                FailureText::unscoped(&message), None, None, None)),
             Some(Ok(Some(saved))) => self.start_saved_evaluation(Ok(saved), true),
         };
         if let Err(error) = result {
@@ -145,7 +146,7 @@ impl ForegroundEngineManager {
         let mut state = self.lock();
         if let Some(slot) = state.evaluation.as_mut() {
             if self.inner.catalog.get(&slot.saved.profile_id).as_ref() != Some(&slot.saved) {
-                let _ = slot.retire(PhaseDto::Retired, "Saved benchmark target changed or was deleted");
+                let _ = slot.retire(PhaseDto::Retired, "Saved benchmark target changed or was deleted".into());
             }
             return slot.snapshot.clone();
         }
@@ -161,7 +162,7 @@ impl ForegroundEngineManager {
         {
             slot.retire(
                 PhaseDto::Cancelled,
-                "Benchmark cancelled; no settings were changed",
+                "Benchmark cancelled; no settings were changed".into(),
             )?;
             return Ok(slot.snapshot.clone());
         }
@@ -179,7 +180,7 @@ impl ForegroundEngineManager {
         {
             let mut state = self.lock();
             if let Some(old) = state.evaluation.as_mut() {
-                old.retire(PhaseDto::Retired, "Replaced by a new explicit benchmark")?;
+                old.retire(PhaseDto::Retired, "Replaced by a new explicit benchmark".into())?;
             }
         }
         let deadline = Instant::now() + CLEANUP_TIMEOUT;
@@ -263,7 +264,8 @@ impl ForegroundEngineManager {
                 if let Some(inner) = weak.upgrade() {
                     let mut state = inner.lock();
                     if let Some(slot) = current(&mut state, &id) {
-                        let _ = slot.retire(PhaseDto::Failed, &message);
+                        let message = FailureText::dynamic(&mut slot.sanitizer, &message);
+                        let _ = slot.retire(PhaseDto::Failed, message);
                     }
                 }
             }
@@ -367,7 +369,7 @@ fn execute(
     let mut state = inner.lock();
     let slot = current(&mut state, id).ok_or("Benchmark retired")?;
     if inner.catalog.get(&saved.profile_id).as_ref() != Some(saved) {
-        let _ = slot.retire(PhaseDto::Retired, "Saved benchmark target changed or was deleted");
+        let _ = slot.retire(PhaseDto::Retired, "Saved benchmark target changed or was deleted".into());
         return Ok(());
     }
     slot.snapshot.result = Some(EvaluationResultDto {
@@ -507,7 +509,7 @@ fn run_process(
         let mut state = inner.lock();
         let slot = current(&mut state, id).ok_or("Benchmark retired")?;
         if inner.catalog.get(&slot.saved.profile_id).as_ref() != Some(&slot.saved) {
-            let _ = slot.retire(PhaseDto::Retired, "Saved benchmark target changed or was deleted");
+            let _ = slot.retire(PhaseDto::Retired, "Saved benchmark target changed or was deleted".into());
             return Err("Benchmark retired".into());
         }
         if let Ok(line) = line {

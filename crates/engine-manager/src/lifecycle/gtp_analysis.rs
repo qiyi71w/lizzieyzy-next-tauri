@@ -113,7 +113,8 @@ impl ForegroundEngineManager {
             if let Err(error) = result {
                 manager
                     .inner
-                    .fail_analysis_run(&started.run_id, error.kind, &error.message);
+                    .fail_analysis_run(&started.run_id, error.kind,
+                        manager.inner.diagnostic_text(&started.run_id, &error.message));
             }
             manager
                 .lock()

@@ -800,7 +800,7 @@ fn real_katago_bounded_live_diagnostics() {
     let profile = real_profile("Real diagnostics");
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     catalog.upsert(SavedEngineProfile { profile_id: "diagnostics-real".into(), profile: profile.clone() });
-    let (manager, events) = manager_with(catalog);
+    let (manager, events) = manager_with(catalog.clone());
     manager.start("diagnostics-real").unwrap();
     let ready = wait_current(&manager, Duration::from_secs(300), |state| matches!(state, ForegroundEngineLifecycleDto::Ready { .. }));
     let run = run_from_ready(&ready.lifecycle);
@@ -832,39 +832,77 @@ fn real_katago_bounded_live_diagnostics() {
     wait_current(&manager, Duration::from_secs(20), |state| matches!(state, ForegroundEngineLifecycleDto::NoEngine { .. }));
     assert_eq!(serde_json::to_string(&frozen).unwrap(), encoded);
     eprintln!("real diagnostics: attempt={} records={} bytes={} frozen=true live-stdout=true startup-stderr=true", frozen.run_id, frozen.records.len(), frozen.retained_bytes);
-    let directory = std::env::temp_dir().join(format!("real-diagnostic-export-{}", uuid::Uuid::new_v4()));
-    let export = engine_manager::diagnostic_export::DiagnosticExport::new(directory.clone());
-    let generation = export.estimate(frozen.clone()).unwrap();
-    let wait_export = |phase| {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            let status = export.status();
-            if status.phase == phase { break status; }
-            assert!(Instant::now() < deadline, "export status: {status:?}");
-            std::thread::sleep(Duration::from_millis(5));
+    let mut invalid = profile.clone();
+    invalid.argv.push("--r12-diagnostic-fixture-invalid-argument".into());
+    catalog.upsert(SavedEngineProfile { profile_id: "diagnostics-failed".into(), profile: invalid });
+    manager.start("diagnostics-failed").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let failure = loop {
+        match events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(ForegroundEngineEventDto::Failure { failure })
+                if failure.profile_id.as_deref() == Some("diagnostics-failed") => break failure,
+            Ok(_) => continue,
+            Err(_) => {
+                manager.teardown().unwrap();
+                panic!("invalid CLI argument did not produce the expected real-engine failure");
+            }
         }
     };
-    wait_export(app_model::DiagnosticExportPhaseDto::Ready);
-    export.export(generation).unwrap();
-    let completed = wait_export(app_model::DiagnosticExportPhaseDto::Completed);
-    let path = directory.join(completed.file_name.as_ref().unwrap());
-    let mut archive = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
-    assert_eq!(archive.len(), 4);
-    let restored: app_model::EngineDiagnosticSnapshotDto = serde_json::from_reader(archive.by_name("snapshot.json").unwrap()).unwrap();
-    assert_eq!(restored, frozen);
-    let records: Vec<app_model::EngineDiagnosticRecordDto> = {
-        use std::io::{BufRead, BufReader};
-        BufReader::new(archive.by_name("records.jsonl").unwrap()).lines()
-            .map(|line| serde_json::from_str(&line.unwrap()).unwrap()).collect()
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let failed = loop {
+        let snapshot = manager.diagnostic_snapshots().pop().unwrap();
+        if snapshot.process_exited && snapshot.stdout_complete && snapshot.stderr_complete { break snapshot; }
+        assert!(Instant::now() < deadline, "failed attempt readers did not finish");
+        std::thread::sleep(Duration::from_millis(5));
     };
-    assert_eq!(records, frozen.records);
-    assert!(matches!(manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. }));
-    eprintln!("real export: {} zip_bytes={} source_exact=true records_exact=true entries=4 no_run_resurrection=true", serde_json::to_string(&completed).unwrap(), std::fs::metadata(&path).unwrap().len());
-    assert!(export.shutdown(Duration::from_millis(500)));
+    assert_eq!(failure.run_id.as_deref(), Some(failed.run_id.as_str()));
+    assert!(failed.records.iter().any(|record| record.source == "startup-probe-stderr"));
+    assert!(failed.process_exited && failed.stdout_complete && failed.stderr_complete);
+    assert!(failed.failure.as_ref().unwrap().ends_with(&failure.message));
+    let program_alias = failed.command.split_whitespace().next().unwrap().strip_prefix("program=").unwrap();
+    assert!(failure.message.contains(program_alias));
+    let encoded_failure = serde_json::to_string(&failure).unwrap();
+    assert!(!encoded_failure.contains(&profile.program));
+    if let EngineAdapterSettings::KataGoAnalysis(settings) = &profile.adapter {
+        assert!(!encoded_failure.contains(settings.model_path.as_ref().unwrap()));
+        assert!(!encoded_failure.contains(settings.config_path.as_ref().unwrap()));
+    }
+    eprintln!("real failed attempt: {}", serde_json::to_string(&failed).unwrap());
+    for frozen in [frozen, failed] {
+        let directory = std::env::temp_dir().join(format!("real-diagnostic-export-{}", uuid::Uuid::new_v4()));
+        let export = engine_manager::diagnostic_export::DiagnosticExport::new(directory.clone());
+        let generation = export.estimate(frozen.clone()).unwrap();
+        let wait_export = |phase| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let status = export.status();
+                if status.phase == phase { break status; }
+                assert!(Instant::now() < deadline, "export status: {status:?}");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        wait_export(app_model::DiagnosticExportPhaseDto::Ready);
+        export.export(generation).unwrap();
+        let completed = wait_export(app_model::DiagnosticExportPhaseDto::Completed);
+        let path = directory.join(completed.file_name.as_ref().unwrap());
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+        assert_eq!(archive.len(), 4);
+        let restored: app_model::EngineDiagnosticSnapshotDto = serde_json::from_reader(archive.by_name("snapshot.json").unwrap()).unwrap();
+        assert_eq!(restored, frozen);
+        let records: Vec<app_model::EngineDiagnosticRecordDto> = {
+            use std::io::{BufRead, BufReader};
+            BufReader::new(archive.by_name("records.jsonl").unwrap()).lines()
+                .map(|line| serde_json::from_str(&line.unwrap()).unwrap()).collect()
+        };
+        assert_eq!(records, frozen.records);
+        assert!(matches!(manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. }));
+        eprintln!("real export: {} zip_bytes={} source_exact=true records_exact=true entries=4 no_run_resurrection=true", serde_json::to_string(&completed).unwrap(), std::fs::metadata(&path).unwrap().len());
+        assert!(export.shutdown(Duration::from_millis(500)));
+        drop(archive);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
     manager.teardown().unwrap();
     assert_eq!(manager.last_primary_profile_id().as_deref(), Some("diagnostics-real"));
-    drop(archive);
-    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

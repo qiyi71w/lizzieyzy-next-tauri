@@ -119,6 +119,25 @@ fn truncate(text: &mut String, limit: usize) {
     }
 }
 
+/// A public diagnostic copy: static product guidance or text redacted by its owner.
+/// Dynamic strings cannot implicitly cross this boundary.
+pub(crate) struct FailureText(String);
+impl From<&'static str> for FailureText {
+    fn from(text: &'static str) -> Self { Self(text.into()) }
+}
+impl FailureText {
+    pub(crate) fn into_string(self) -> String { self.0 }
+    pub(crate) fn from_failure(failure: &app_model::EngineFailureDto) -> Self {
+        Self(failure.message.clone())
+    }
+    pub(crate) fn unscoped(text: &str) -> Self {
+        Self(DiagnosticSanitizer::default().sanitize(text))
+    }
+    pub(crate) fn dynamic(sanitizer: &mut DiagnosticSanitizer, text: &str) -> Self {
+        Self(sanitizer.sanitize(text))
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct AttemptCapture(Arc<Mutex<Capture>>);
 struct Capture {
@@ -167,6 +186,18 @@ impl AttemptCapture {
     }
     pub(crate) fn sanitize(&self, value: &str) -> String {
         self.0.lock().sanitizer.sanitize(value)
+    }
+    pub(crate) fn failure_text(&self, value: &str) -> FailureText {
+        FailureText(self.sanitize(value))
+    }
+    // Failure DTOs have already crossed the trusted/redacted text boundary.
+    // Re-sanitizing them would interpret product prose and aliases as new secrets.
+    pub(crate) fn record_failure(&self, failure: &app_model::EngineFailureDto) {
+        let mut state = self.0.lock();
+        let mut text = format!("{:?}: {}", failure.kind, failure.message);
+        truncate(&mut text, RECORD_BYTES);
+        state.failure = Some(text.clone());
+        state.push("failure", text);
     }
     pub(crate) fn readiness_confirmed(&self) {
         let mut state = self.0.lock();

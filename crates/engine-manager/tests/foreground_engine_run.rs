@@ -20,6 +20,19 @@ use std::time::{Duration, Instant};
 
 static NEXT_TEST_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
+#[test]
+fn match_rejection_preserves_actionable_ownership_guidance() {
+    let manager = ForegroundEngineManager::new(
+        Arc::new(InMemoryEngineProfileCatalog::default()),
+        ForegroundEngineConfig::default(),
+    );
+    let failure = manager.reserve_match("").unwrap_err();
+    assert_eq!(failure.kind, EngineFailureKind::InvalidState);
+    assert!(failure.message.contains("nonempty session"));
+    assert!(failure.message.contains("Ready") && failure.message.contains("unloaded"));
+    assert!(!failure.message.contains("[private-"));
+}
+
 struct TestTempDir {
     path: PathBuf,
 }
@@ -6871,6 +6884,72 @@ fn startup_dependency_failures_are_bounded_redacted_and_never_replace_ready_a() 
 
 #[cfg(unix)]
 #[test]
+fn failed_gtp_attempt_keeps_private_identities_across_failure_capture_and_export() {
+    use app_model::DiagnosticExportPhaseDto;
+    use engine_manager::diagnostic_export::DiagnosticExport;
+    let temp = TestTempDir::new("failure-alias-export");
+    let script = r#"import sys,time
+sys.stdin.readline()
+print('INFO control\x1b\x00', file=sys.stderr, flush=True)
+print('?1 token=FAKE-ALPHA\ntoken=FAKE-BETA\ntoken=FAKE-ALPHA\npassword="FAKE-FIRST\nFAKE-LAST"\n/home/FAKE User/private.cfg\n', flush=True)
+time.sleep(30)
+"#;
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    let mut profile = gtp_profile(&temp, "privacy");
+    profile.argv = vec!["-u".into(), "-c".into(), script.into()];
+    catalog.upsert(SavedEngineProfile { profile_id: "private-attempt".into(), profile });
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    let events = manager.subscribe();
+    manager.start("private-attempt").unwrap();
+    let failure = wait_failure(&events, Duration::from_secs(3), |_| true);
+    manager.teardown().unwrap();
+    assert_eq!(failure.kind, EngineFailureKind::Command);
+    let snapshot = manager.diagnostic_snapshots().pop().unwrap();
+    assert_eq!(failure.run_id.as_deref(), Some(snapshot.run_id.as_str()));
+    assert!(snapshot.failure.as_ref().unwrap().ends_with(&failure.message));
+    let aliases: Vec<_> = snapshot.records.iter()
+        .filter(|record| record.source == "startup-probe-stdout" && record.text.contains("token="))
+        .map(|record| record.text.split("token=").nth(1).unwrap().to_owned()).collect();
+    assert_eq!(aliases.len(), 3);
+    assert_eq!(aliases[0], aliases[2]);
+    assert_ne!(aliases[0], aliases[1]);
+    for alias in &aliases { assert!(failure.message.contains(alias)); }
+    let encoded = serde_json::to_string(&snapshot).unwrap();
+    for value in ["FAKE-ALPHA", "FAKE-BETA", "FAKE-FIRST", "FAKE-LAST", "FAKE User", "private.cfg", "\\u001b", "\\u0000"] {
+        assert!(!encoded.contains(value) && !failure.message.contains(value));
+    }
+    assert!(snapshot.retained_bytes <= 64 * 1024 && snapshot.records.len() <= 256);
+    let directory = temp.path().join("exports");
+    let export = DiagnosticExport::new(directory.clone());
+    let generation = export.estimate(snapshot.clone()).unwrap();
+    let wait = |phase| {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let status = export.status();
+            if status.phase == phase { break status; }
+            assert!(Instant::now() < deadline, "{status:?}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    wait(DiagnosticExportPhaseDto::Ready);
+    // A new public rejection cannot redirect the pinned export or its aliases.
+    assert!(manager.reserve_match("").is_err());
+    export.export(generation).unwrap();
+    let completed = wait(DiagnosticExportPhaseDto::Completed);
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(directory.join(completed.file_name.unwrap())).unwrap()).unwrap();
+    let restored: app_model::EngineDiagnosticSnapshotDto = serde_json::from_reader(archive.by_name("snapshot.json").unwrap()).unwrap();
+    assert_eq!(restored, snapshot);
+    let records: Vec<app_model::EngineDiagnosticRecordDto> = {
+        use std::io::{BufRead, BufReader};
+        BufReader::new(archive.by_name("records.jsonl").unwrap()).lines()
+            .map(|line| serde_json::from_str(&line.unwrap()).unwrap()).collect()
+    };
+    assert_eq!(records, snapshot.records);
+    assert!(export.shutdown(Duration::from_millis(500)));
+}
+
+#[cfg(unix)]
+#[test]
 fn diagnostics_preserve_healthy_primary_through_failed_attempts_and_cancel_burst() {
     let temp = TestTempDir::new("diagnostics-retention");
     let release = temp.path().join("release");
@@ -6886,7 +6965,13 @@ while True: print("WARN continuous " + "x"*1000,file=sys.stderr,flush=True)
         let id = format!("missing-{index}");
         catalog.upsert(SavedEngineProfile { profile_id: id.clone(), profile: missing_assets_profile(&id, &temp) });
         manager.switch_to(&id).unwrap();
-        wait_failure(&events, Duration::from_secs(2), |failure| failure.profile_id.as_deref() == Some(id.as_str()));
+        let failure = wait_failure(&events, Duration::from_secs(2), |failure| failure.profile_id.as_deref() == Some(id.as_str()));
+        let snapshot = manager.diagnostic_snapshots().pop().unwrap();
+        let executable_alias = snapshot.command.split_whitespace().next().unwrap().strip_prefix("program=").unwrap();
+        assert!(failure.message.contains(executable_alias));
+        assert!(snapshot.failure.as_ref().unwrap().ends_with(&failure.message));
+        assert!(failure.diagnostic_summary.as_ref().unwrap().contains(executable_alias));
+        assert!(!serde_json::to_string(&snapshot).unwrap().contains(&temp.path().to_string_lossy().to_string()));
         assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, primary);
     }
     let snapshots = manager.diagnostic_snapshots();
