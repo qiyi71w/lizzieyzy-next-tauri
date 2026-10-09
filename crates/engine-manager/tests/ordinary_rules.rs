@@ -190,6 +190,9 @@ mod controlled {
     }
     impl Rig {
         fn new(mode: &str) -> Self {
+            Self::with_pending_target(mode, false)
+        }
+        fn with_pending_target(mode: &str, pending: bool) -> Self {
             let dir = std::env::temp_dir().join(format!("rules 空格 {}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("mode"), mode).unwrap();
@@ -221,9 +224,16 @@ mod controlled {
                 },
             });
             let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
-            manager.start("gtp").unwrap();
-            let run = ready(&manager);
-            Self { manager, dir, run }
+            let mut rig = Self { manager, dir, run: String::new() };
+            if pending {
+                rig.manager.set_continuous_preferences(true, ContinuousAnalysisBudgetDto {
+                    continuous_time_limit_enabled: false, ..Default::default()
+                }).unwrap();
+                rig.manager.follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+            }
+            rig.manager.start("gtp").unwrap();
+            rig.run = ready(&rig.manager);
+            rig
         }
         fn request(&self, deadline_ms: u32) -> GameMoveRequest {
             GameMoveRequest {
@@ -438,6 +448,18 @@ mod controlled {
         rig.manager.set_continuous_preferences(false, budget).unwrap();
         event(&events, AnalysisJobOutcomeDto::Cancelled);
     }
+    #[test]
+    fn ready_gtp_reader_starts_the_existing_enabled_target() {
+        let rig = Rig::with_pending_target("analysis", true);
+        let events = rig.manager.subscribe();
+        let frame = event(&events, AnalysisJobOutcomeDto::Progress);
+        assert_eq!(frame.run_id, rig.run);
+        assert_eq!(frame.generation, 7);
+        assert_eq!(frame.mode, AnalysisJobModeDto::Continuous);
+        rig.manager.set_continuous_preferences(false, ContinuousAnalysisBudgetDto::default()).unwrap();
+        event(&events, AnalysisJobOutcomeDto::Cancelled);
+    }
+
     #[test]
     fn live_position_change_drains_then_starts_the_latest_target_on_same_run() {
         let rig = Rig::new("analysis");

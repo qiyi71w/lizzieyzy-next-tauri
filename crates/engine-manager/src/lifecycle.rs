@@ -3002,6 +3002,7 @@ impl Inner {
     }
     /// Match residents are owned outside `live`, so ownership, not the primary slot, keeps the pump.
     fn pump_gtp_stdout(self: Arc<Self>, run_id: String, stdout_rx: Receiver<io::Result<Option<String>>>) {
+        self.reconcile_continuous();
         loop {
             if owned_live(&self.lock(), &run_id).is_none() {
                 return;
