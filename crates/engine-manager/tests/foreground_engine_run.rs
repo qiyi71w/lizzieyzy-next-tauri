@@ -5076,6 +5076,7 @@ exit 9
     wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
         matches!(lifecycle, ForegroundEngineLifecycleDto::Error { .. })
     });
+    manager.set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default()).unwrap();
     let mut repaired = catalog.get("profile-1").unwrap();
     repaired.profile = setup_profile(&temp, &resident_echo_script());
     repaired.profile.name = "Repaired KataGo".into();
@@ -5087,6 +5088,9 @@ exit 9
     let run = run_from_ready(&ready.lifecycle);
     assert_ne!(run.run_id, old_run_id);
     assert_eq!(run.profile_snapshot.name, "Repaired KataGo");
+    assert_eq!(ready.continuous.phase, app_model::ContinuousAnalysisPhaseDto::SafetyHold);
+    assert!(ready.selected_node_job.is_none());
+    manager.teardown().unwrap();
 }
 
 #[cfg(unix)]
@@ -6598,6 +6602,7 @@ fn gtp_idle_eof_or_unsolicited_response_seals_run_until_manual_restart() {
     ] {
         let temp = TestTempDir::new(mode);
         let (manager, catalog) = gtp_manager(&temp, mode);
+        manager.set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default()).unwrap();
         manager.start("gtp").unwrap();
         let ready = wait_lifecycle(&manager, Duration::from_secs(2), |s| {
             matches!(s, ForegroundEngineLifecycleDto::Ready { .. })
@@ -6628,6 +6633,8 @@ fn gtp_idle_eof_or_unsolicited_response_seals_run_until_manual_restart() {
             matches!(s, ForegroundEngineLifecycleDto::Ready { .. })
         });
         assert_ne!(run_from_ready(&ready.lifecycle).run_id, old_id);
+        assert_eq!(ready.continuous.phase, app_model::ContinuousAnalysisPhaseDto::SafetyHold);
+        assert!(ready.selected_node_job.is_none());
         manager.teardown().unwrap();
         assert_gtp_reaped(&temp, "good");
     }

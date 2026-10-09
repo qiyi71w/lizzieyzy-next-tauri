@@ -223,6 +223,125 @@ fn selected_request(run_id: &str, generation: u64, max_visits: u32) -> SelectedN
         position_empty: true,
     }
 }
+#[cfg(target_os = "linux")]
+fn real_import_restart_recovery(gtp: bool) {
+    use app_model::*;
+    require_real_katago();
+    let mut profile = real_profile("Local recovery");
+    if gtp {
+        let EngineAdapterSettings::KataGoAnalysis(settings) = profile.adapter else { unreachable!() };
+        profile.adapter = EngineAdapterSettings::KataGoGtp(settings);
+    }
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile { profile_id: "recovery".into(), profile });
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::default());
+    struct Cleanup(ForegroundEngineManager);
+    impl Drop for Cleanup {
+        fn drop(&mut self) { let _ = self.0.teardown(); }
+    }
+    let _cleanup = Cleanup(manager.clone());
+    let events = manager.subscribe();
+    let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };
+    manager.set_continuous_preferences(true, budget).unwrap();
+    manager.start("recovery").unwrap();
+    let first = wait_current(&manager, Duration::from_secs(60), |phase| matches!(phase, ForegroundEngineLifecycleDto::Ready { .. }));
+    let first = run_from_ready(&first.lifecycle).clone();
+    let old_document = sgf::CurrentSgfDocument::open("(;SZ[9]RU[Chinese]KM[7.5];B[dd])").unwrap();
+    let document = sgf::CurrentSgfDocument::open("(;SZ[9]RU[Chinese-KGS]KM[6.5]C[new personal];B[cc];W[])").unwrap();
+    let before = document.serialize().unwrap();
+    let make_request = |doc: &sgf::CurrentSgfDocument, path: Vec<u32>, generation, run: &str| {
+        let path = NodePath { indices: path };
+        let snapshot = doc.snapshot(&path).unwrap();
+        let exact = doc.exact_position(&path).unwrap();
+        SelectedNodeJobRequest {
+            run_id: run.into(), generation, node_path: path, mode: AnalysisJobModeDto::Continuous,
+            board_width: 9, board_height: 9, position_empty: snapshot.position.stones.is_empty(),
+            query: katago_protocol::analysis_query_from_position(9, 9, exact.dto().komi,
+                &snapshot.position.stones, exact.dto().to_play,
+                katago_protocol::AnalysisQueryOptions { id: "pending".into(), rules: "chinese".into(),
+                    turn: snapshot.position.move_number, max_visits: None, include_ownership: Some(true), include_policy: None }).unwrap(),
+            exact_position: Ok(exact),
+        }
+    };
+    manager.follow_continuous_position(make_request(&old_document, vec![0], 1, &first.run_id));
+    let old = wait_job(&events, Duration::from_secs(30), |job| job.outcome == AnalysisJobOutcomeDto::Progress);
+    kill_owned_katago(&first.profile_snapshot);
+    wait_current(&manager, Duration::from_secs(30), |phase| matches!(phase, ForegroundEngineLifecycleDto::Error { .. }));
+    assert!(manager.snapshot().selected_node_job.is_none(), "failed Run must retire its active job before document departure");
+    manager.begin_continuous_departure();
+    // Mirror the gateway's protected departure cutoff: enumerate after suppression,
+    // deliver target cancellation, then wait for terminal cleanup before installing SGF.
+    let departure = manager.snapshot();
+    let closed_jobs: Vec<_> = departure.selected_node_job.into_iter()
+        .filter(|job| !job.state.is_limited()).chain(departure.whole_game_job).collect();
+    for job in &closed_jobs {
+        manager.cancel_job(&job.run_id, &job.job_id).unwrap();
+    }
+    for job in &closed_jobs {
+        manager.wait_for_job_cancellation(&job.run_id, &job.job_id, Duration::from_secs(3)).unwrap();
+    }
+    assert!(closed_jobs.is_empty(), "dead reader must leave no departure stop request");
+    manager.clear_continuous_position();
+    manager.follow_continuous_position(make_request(&document, vec![0, 0], 2, &first.run_id));
+    manager.finish_continuous_departure(true);
+    manager.restart().unwrap();
+    let restarted = wait_current(&manager, Duration::from_secs(60), |phase| matches!(phase, ForegroundEngineLifecycleDto::Ready { .. }));
+    let restarted = run_from_ready(&restarted.lifecycle).clone();
+    assert_ne!(restarted.run_id, first.run_id);
+    assert_eq!(manager.snapshot().continuous.phase, ContinuousAnalysisPhaseDto::SafetyHold);
+    assert!(manager.snapshot().selected_node_job.is_none());
+    if gtp {
+        let current = manager.runtime_threads_snapshot();
+        let read = manager.runtime_threads(RuntimeThreadsRequestDto {
+            identity: RuntimeControlIdentityDto {
+                run_id: restarted.run_id.clone(),
+                profile_revision: current.profile_revision.unwrap(),
+                request_id: uuid::Uuid::new_v4().to_string(),
+            }, action: RuntimeThreadsActionDto::Read, value: None,
+        }).unwrap();
+        assert_eq!(read.status, RuntimeThreadsStatusDto::Confirmed);
+        assert_eq!(manager.snapshot().continuous.phase, ContinuousAnalysisPhaseDto::SafetyHold);
+        assert!(manager.snapshot().selected_node_job.is_none());
+        let receipt = manager.confirm_ordinary_rules(engine_manager::GameMoveRequest {
+            identity: GameMoveRequestDto { run_id: restarted.run_id.clone(), generation: 2,
+                node_path: NodePath { indices: vec![0, 0] }, budget: ComputeBudgetDto { deadline_ms: 10000, max_visits: None } },
+            position: document.exact_position(&NodePath { indices: vec![0, 0] }).unwrap(),
+        }).unwrap();
+        assert_eq!(receipt.position.komi, 6.5);
+        assert_eq!(receipt.position.to_play, PlayerColor::Black);
+        assert_eq!(receipt.position.moves.len(), 2);
+        assert_eq!(receipt.true_final_move.unwrap().vertex, MoveVertex::Pass);
+        assert_eq!(receipt.reader_id, restarted.run_id);
+        println!("RECOVERY RULES {}", serde_json::to_string(&receipt.position).unwrap());
+    }
+    assert!(manager.snapshot().selected_node_job.is_none());
+    manager.authorize_continuous_start();
+    let current = wait_job(&events, Duration::from_secs(30), |job| job.outcome == AnalysisJobOutcomeDto::Progress && job.run_id == restarted.run_id);
+    assert_eq!(current.generation, 2);
+    assert_eq!(current.node_path.indices, vec![0, 0]);
+    assert_ne!(current.job_id, old.job_id);
+    // JSONL materializes selected stones as initialStones; GTP restores the true history.
+    assert_eq!(current.frame.as_ref().unwrap().turn, if gtp { 2 } else { 0 });
+    assert!(!current.frame.as_ref().unwrap().candidates.is_empty());
+    manager.set_continuous_preferences(false, budget).unwrap();
+    wait_job(&events, Duration::from_secs(30), |job| job.job_id == current.job_id && job.outcome == AnalysisJobOutcomeDto::Cancelled);
+    assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, restarted.run_id);
+    assert_eq!(document.serialize().unwrap(), before);
+    println!("RECOVERY adapter={:?} old={} new={} generation=2 user_continue=true personal_c_preserved=true", restarted.adapter_kind, first.run_id, restarted.run_id);
+    manager.teardown().unwrap();
+    assert!(matches!(manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. }));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires explicit real KataGo GTP resources and isolated cwd"]
+fn real_gtp_failure_import_restart_requires_user_continue() { real_import_restart_recovery(true); }
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires explicit real KataGo JSONL resources and isolated cwd"]
+fn real_jsonl_failure_import_restart_requires_user_continue() { real_import_restart_recovery(false); }
+
 
 #[cfg(target_os = "linux")]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -278,8 +397,9 @@ fn kill_owned_katago(profile: &EngineProfileDto) {
     use std::os::fd::{AsRawFd, FromRawFd};
     let executable = std::fs::canonicalize(&profile.program).unwrap();
     let cwd = std::fs::canonicalize(profile.working_dir.as_ref().unwrap()).unwrap();
-    let EngineAdapterSettings::KataGoAnalysis(settings) = &profile.adapter else {
-        panic!("crash smoke requires KataGoAnalysis");
+    let settings = match &profile.adapter {
+        EngineAdapterSettings::KataGoAnalysis(settings) | EngineAdapterSettings::KataGoGtp(settings) => settings,
+        _ => panic!("crash smoke requires KataGo"),
     };
     let config = Path::new(settings.config_path.as_ref().unwrap());
     assert!(config.is_absolute(), "crash smoke requires an absolute private config");

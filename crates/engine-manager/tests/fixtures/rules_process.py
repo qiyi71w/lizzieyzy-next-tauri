@@ -46,6 +46,11 @@ for raw in sys.stdin:
             print("info move D4 visits 2 winrate NaN", flush=True)
         else:
             print(analysis_frame(0.6 + stream_count / 100), flush=True)
+        if mode == "analysis_closed_stdout":
+            pathlib.Path("held").write_text(number)
+            while not pathlib.Path("release").exists(): time.sleep(0.005)
+            os.close(1)
+            while True: time.sleep(1)
         continue
     elif name == "stop":
         print(analysis_frame(0.01), flush=True)

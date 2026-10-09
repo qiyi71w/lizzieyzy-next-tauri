@@ -649,6 +649,55 @@ mod controlled {
     }
 
     #[test]
+    fn active_gtp_reader_failure_retires_job_before_document_departure() {
+        let rig = Rig::new("analysis_closed_stdout");
+        let events = rig.manager.subscribe();
+        rig.manager.set_continuous_preferences(true, ContinuousAnalysisBudgetDto {
+            continuous_time_limit_enabled: false, ..Default::default()
+        }).unwrap();
+        rig.manager.follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        let first = event(&events, AnalysisJobOutcomeDto::Progress);
+        rig.held();
+        let request = threads_request(&rig.manager, RuntimeThreadsActionDto::Apply, Some(2));
+        let stale_request = request.clone();
+        let control_manager = rig.manager.clone();
+        let control = std::thread::spawn(move || control_manager.runtime_threads(request));
+        let pending_deadline = Instant::now() + Duration::from_secs(3);
+        while rig.manager.runtime_threads_snapshot().status != RuntimeThreadsStatusDto::Pending {
+            assert!(Instant::now() < pending_deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        std::fs::write(rig.dir.join("release"), "").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let snapshot = rig.manager.snapshot();
+            if let ForegroundEngineLifecycleDto::Error { run, .. } = snapshot.lifecycle {
+                assert_eq!(run.run_id, first.run_id);
+                assert!(snapshot.selected_node_job.is_none(), "failed reader left a live departure job");
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let failed = event(&events, AnalysisJobOutcomeDto::Failed);
+        assert_eq!(failed.job_id, first.job_id);
+        assert_eq!(failed.run_id, first.run_id);
+        assert!(control.join().unwrap().is_err());
+        assert_eq!(rig.manager.runtime_threads_snapshot().actual, None);
+        assert_eq!(rig.manager.snapshot().continuous.phase, ContinuousAnalysisPhaseDto::Error);
+        std::fs::write(rig.dir.join("mode"), "analysis").unwrap();
+        rig.manager.restart().unwrap();
+        let replacement = ready(&rig.manager);
+        assert_ne!(replacement, first.run_id);
+        assert!(rig.manager.runtime_threads(stale_request).is_err());
+        let read = rig.manager.runtime_threads(threads_request(&rig.manager, RuntimeThreadsActionDto::Read, None)).unwrap();
+        assert_eq!(read.status, RuntimeThreadsStatusDto::Confirmed);
+        assert_eq!(read.actual, Some(1));
+        assert_eq!(rig.manager.snapshot().continuous.phase, ContinuousAnalysisPhaseDto::SafetyHold);
+        assert!(rig.manager.snapshot().selected_node_job.is_none());
+    }
+
+    #[test]
     fn invalid_stream_requires_explicit_continue_after_restart_and_new_document() {
         let mut rig = Rig::new("analysis_invalid");
         let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };
@@ -663,6 +712,10 @@ mod controlled {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
         }
+        rig.manager.begin_continuous_departure();
+        rig.manager.clear_continuous_position();
+        rig.manager.follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
+        rig.manager.finish_continuous_departure(true);
         std::fs::write(rig.dir.join("mode"), "analysis").unwrap();
         rig.manager.restart().unwrap();
         let replacement = ready(&rig.manager);
