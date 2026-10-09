@@ -6646,7 +6646,7 @@ fn gtp_cross_protocol_switch_preserves_primary_work_and_latest_intent() {
     let temp = TestTempDir::new("gtp-switch");
     let (manager, catalog, events, primary) = ready_manager(&temp, &hold_then_echo_script());
     let job = manager
-        .start_selected_node_job(selected_request(&primary, 1, vec![]))
+        .start_selected_node_job(continuous_request(&primary, 1, vec![]))
         .unwrap();
     for mode in ["badid", "slow", "good"] {
         catalog.upsert(SavedEngineProfile {
