@@ -440,7 +440,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
       </div>
       <p className="message">每项是一个原样传递的参数；空值、空格和中文不会拆分或经 shell 解释。</p>
       <p className="message">已保存配置与当前草稿的能力均待 run 验证。保存只更新目录；不会改变当前 run 的已验证能力。</p>
-      <p className="message">{adapterKind === "generic_gtp"
+      <p className="message engine-resource-message">{adapterKind === "generic_gtp"
         ? "静态 adapter 上限：GenericGtp 不提供 rich-analysis；落子是否可用及精确局面范围以当前 run 的资格验证为准。"
         : adapterKind === "kata_go_gtp" ? t("engineRules.boundary")
         : "静态 adapter 上限：KataGoAnalysis 可提供单点、连续、整谱/task、候选/PV、胜率/分数、ownership/policy、visits 限制与协议取消；实际能力以当前 run 验证结果为准。"}</p>
