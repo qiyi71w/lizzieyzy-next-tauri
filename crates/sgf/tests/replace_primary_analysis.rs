@@ -21,7 +21,7 @@ fn replacement_payload(engine_name: &str, visits: u32, x: u8, y: u8) -> SgfAnaly
             vertex: MoveVertex::Point(PointDto { x, y }),
             visits,
             winrate_black: 0.61,
-            score_mean_black: 2.25,
+            score_mean_black: Some(2.25),
             policy_prior: Some(0.4),
             pv: vec![MoveVertex::Point(PointDto { x, y })],
         }],
@@ -70,7 +70,7 @@ fn save_reopen_preserves_unavailable_root_score() {
         .primary_analysis
         .expect("root primary");
     assert_eq!(primary.score_mean_black, None);
-    assert_eq!(primary.candidates[0].score_mean_black, 2.25);
+    assert_eq!(primary.candidates[0].score_mean_black, Some(2.25));
 }
 
 #[test]

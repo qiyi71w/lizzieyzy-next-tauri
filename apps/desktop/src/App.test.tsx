@@ -195,6 +195,7 @@ const initialProjection: GameDto = {
 
 const savedProfile = {
   id: "profile-1",
+  preload: false,
   profile: {
     name: "Local KataGo",
     program: "/bin/katago", argv: [],
@@ -377,9 +378,9 @@ beforeEach(() => {
     node_path: { indices: [] }
   });
   backend.loadEngineProfilesSettings.mockResolvedValue({
-    version: 1,
+    version: 2,
     selected_profile_id: "profile-1",
-    autoload_profile_id: null,
+    startup: { mode: "off" as const }, startup_evaluation: { enabled: false, target_profile_id: null }, last_primary_profile_id: null,
     profiles: [savedProfile]
   });
   backend.subscribeForegroundEngine.mockImplementation(async (

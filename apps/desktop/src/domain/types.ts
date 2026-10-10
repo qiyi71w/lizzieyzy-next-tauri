@@ -1,3 +1,25 @@
+import type { NetworkRoute } from "./providers";
+export type EvaluationPhaseDto = "idle" | "unavailable" | "qualifying" | "running" | "completed" | "failed" | "cancelled" | "yielded" | "retired";
+export type EvaluationResultDto = {
+  target_id: string;
+  input_revision: string;
+  qualified_resource: QualifiedLocalResourceDto;
+  elapsed_ms: number;
+  search_visits_per_second: number | null;
+};
+export type EvaluationSnapshotDto = {
+  evaluation_id: string | null;
+  target_id: string | null;
+  input_revision: string | null;
+  phase: EvaluationPhaseDto;
+  process_id: number | null;
+  exit_code: number | null;
+  output: string[];
+  output_truncated: boolean;
+  message: string | null;
+  result: EvaluationResultDto | null;
+};
+
 export type ExportConfirmationDto = { title: string; message: string };
 export type RenderedImageExportOptionsDto = { defaultFileName?: string; pngOnly?: boolean };
 
@@ -177,10 +199,10 @@ export type ApplicationExitOutcomeDto = {
   teardown?: ApplicationTeardownAttemptDto | null;
   recovery_persist_error?: string | null;
 };
-export type CandidateMoveDto = { vertex: MoveVertex; visits: number; winrate_black: number; score_mean_black: number; policy_prior?: number | null; pv: MoveVertex[] };
+export type CandidateMoveDto = { vertex: MoveVertex; visits: number; winrate_black: number; score_mean_black: number | null; policy_prior?: number | null; pv: MoveVertex[] };
 export type AnalysisFrameDto = { job_id: string; game_id?: string | null; node_id?: string | null; turn: number; visits: number; winrate_black: number; score_mean_black?: number | null; score_stdev?: number | null; candidates: CandidateMoveDto[]; ownership?: number[] | null; policy?: number[] | null };
 export type ProblemMarkerDto = { turn: number; severity: "info" | "inaccuracy" | "mistake" | "blunder"; winrate_loss: number; score_loss?: number | null; label: string };
-export type EngineBackendDto = "kata_go_analysis" | "generic_gtp";
+export type EngineBackendDto = "kata_go_analysis" | "kata_go_gtp" | "generic_gtp";
 export type KataGoSettingsDto = { model_path: string | null; config_path: string | null; max_visits: number };
 export type EngineProfileDto = {
   name: string;
@@ -188,11 +210,13 @@ export type EngineProfileDto = {
   argv: string[];
   working_dir: string | null;
 } & (
-  | { adapter_kind: "kata_go_analysis"; settings: KataGoSettingsDto }
+  | { adapter_kind: "kata_go_analysis" | "kata_go_gtp"; settings: KataGoSettingsDto }
   | { adapter_kind: "generic_gtp"; settings: Record<string, never> }
 );
-export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto };
-export type EngineProfilesSettingsDto = { version: number; selected_profile_id: string; autoload_profile_id: string | null; profiles: EngineProfileRecordDto[] };
+export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto; preload: boolean };
+export type EngineStartupPolicyDto = { mode: "off" } | { mode: "fixed"; profile_id: string } | { mode: "last_primary" };
+export type StartupEvaluationSettingsDto = { enabled: boolean; target_profile_id: string | null };
+export type EngineProfilesSettingsDto = { version: number; selected_profile_id: string; startup: EngineStartupPolicyDto; last_primary_profile_id: string | null; startup_evaluation: StartupEvaluationSettingsDto; profiles: EngineProfileRecordDto[] };
 export type EngineProfileOrderRequestDto = { expected_profile_ids: string[]; profile_ids: string[] };
 export type AssetCheckDto = { path: string; exists: boolean; required: boolean; label: string };
 export type AppHealthDto = { app: string; architecture: string; rust_backend_ready: boolean; notes: string[] };
@@ -221,7 +245,26 @@ export type EngineFailureKind =
   | "invalid_state"
   | "occupied"
   | "profile_not_found"
-  | "profile_in_use";
+  | "profile_in_use"
+  | "resource_changed" | "executable" | "model" | "config"
+  | "cuda" | "cudnn" | "nvrtc" | "tensor_rt_parser" | "zlib";
+export type EngineDiagnosticRecordDto = { sequence: number; at_ms: number; source: string; text: string };
+export type EngineDiagnosticMetricDto = { role: string; name: string; unit: string; at_ms: number; value: number | null; missing: string | null };
+export type EngineDiagnosticSnapshotDto = {
+  attempt_id: string; run_id: string; profile_id: string; captured_at_ms: number; full_trace: boolean;
+  command: string; failure: string | null; stdout_complete: boolean; stderr_complete: boolean; process_exited: boolean; exit_code: number | null;
+  records: EngineDiagnosticRecordDto[]; dropped_records: number; retained_bytes: number; metrics: EngineDiagnosticMetricDto[];
+};
+
+export type DiagnosticExportPhaseDto = "idle" | "estimating" | "estimate_obsolete" | "ready" | "collecting" | "archiving" | "syncing" | "publishing" | "cancelling" | "cancelled" | "completed" | "failed" | "closed";
+export type DiagnosticExportStatusDto = {
+  generation: number; attempt_id: string | null; captured_at_ms: number | null;
+  phase: DiagnosticExportPhaseDto; source_bytes: number | null; entries: number | null;
+  completed_entries: number; failed_stage: DiagnosticExportPhaseDto | null;
+  message: string | null; file_name: string | null; cleanup_pending: boolean;
+};
+export type DiagnosticFolderOutcomeDto = "opened" | "failed" | "timed_out";
+
 export type EngineFailureDto = {
   operation: EngineOperationDto;
   run_id?: string | null;
@@ -257,12 +300,72 @@ export type EngineAnalysisCapabilitiesDto = {
   visits_limit: boolean;
   protocol_cancel: boolean;
 };
+export type EngineResourceIdentityDto = {
+  component: string;
+  resolved_path: string;
+  sha256: string;
+  bytes: number;
+};
+export type ThreadSourcesDto = {
+  entries: { key: string; value: number | null; source: string; layer: string }[];
+  saved: number | null;
+  launch_override: number | null;
+  effective: number | null;
+  analysis_threads: number | null;
+  error: string | null;
+};
+export type RuntimeThreadsRequestDto = {
+  identity: { run_id: string; profile_revision: string; request_id: string };
+  action: "read" | "apply" | "reset";
+  value: number | null;
+};
+export type RuntimeThreadsSnapshotDto = {
+  run_id: string | null;
+  profile_revision: string | null;
+  supported: boolean;
+  reason: string | null;
+  minimum: number;
+  maximum: number;
+  sources: ThreadSourcesDto | null;
+  request_id: string | null;
+  requested: number | null;
+  actual: number | null;
+  temporary: boolean;
+  status: "unknown" | "pending" | "confirmed" | "failed";
+  failure: string | null;
+};
+export type RuntimeParametersSnapshotDto = {
+  run_id: string | null;
+  profile_revision: string | null;
+  supported: boolean;
+  reason: string | null;
+  request_id: string | null;
+  last_valid: { playout_doubling_advantage: number; analysis_wide_root_noise: number } | null;
+  status: "unknown" | "pending" | "confirmed" | "failed";
+  failure: string | null;
+};
+export type QualifiedLocalResourceDto = {
+  profile_revision: string;
+  resources: EngineResourceIdentityDto[];
+  origin: string;
+  version: string | null;
+  source_commit: string | null;
+  backend: string | null;
+  static_zlib_exemption: boolean;
+  thread_sources?: ThreadSourcesDto | null;
+};
 export type EngineRunDto = {
   run_id: string;
   profile_id: string;
   adapter_kind: EngineBackendDto;
   profile_snapshot: EngineProfileDto;
   capability_snapshot?: EngineCapabilitySnapshotDto | null;
+  qualified_resource?: QualifiedLocalResourceDto | null;
+};
+export type EnginePreloadDto = {
+  run: EngineRunDto;
+  phase: "preparing" | "ready" | "failed" | "cancelled";
+  failure: EngineFailureDto | null;
 };
 export type ExactRulesDto = "chinese" | "chinese_kgs";
 export type ExactPositionDto = {
@@ -287,6 +390,16 @@ export type GameMoveJobDto = {
   job_id: string;
   generation: number;
   node_path: NodePath;
+};
+export type OrdinaryRulesRequestDto = { run_id: string; generation: number; node_path: NodePath };
+export type OrdinaryRulesSnapshotDto = {
+  identity: GameMoveJobDto;
+  reader_id: string;
+  profile_revision: string;
+  position: ExactPositionDto;
+  confirmed_rules: string;
+  stones: StoneDto[];
+  true_final_move: MoveDto | null;
 };
 export type GameMoveDto = { kind: "move"; vertex: MoveVertex } | { kind: "resign" };
 export type GameMoveResultDto = GameMoveJobDto & {
@@ -538,3 +651,58 @@ export type RecoveryStartupDto =
   | { status: "abnormal"; envelope: RecoveryEnvelopeDto }
   | { status: "normal"; envelope: RecoveryEnvelopeDto }
   | { status: "unreadable"; message: string };
+
+export type ModelInspectionStatusDto = "unchecked" | "header_recognized" | "unknown" | "corrupt" | "unavailable" | "limit_exceeded" | "changed";
+export type ModelInspectionDto = {
+  status: ModelInspectionStatusDto;
+  sha256: string | null;
+  size_bytes: number | null;
+  format: string | null;
+  model_name: string | null;
+  format_version: number | null;
+};
+export type ModelOriginDto = { kind: "unknown" } | { kind: "custom" }
+  | { kind: "managed"; catalog_id: string; installed_sha256: string };
+export type InstalledModelDto = {
+  id: string;
+  path: string;
+  origin: ModelOriginDto;
+  inspection: ModelInspectionDto;
+};
+export type ModelInventoryDto = { revision: string; models: InstalledModelDto[] };
+export type ModelPathDto = { path: string; working_dir: string | null };
+export type ModelSelectionRequestDto = { revision: string; model_id: string; sha256: string };
+
+export type ManagedTargetDto = {
+  id: string; platform: string; backend: string; archive: string; size_bytes: number;
+  sha256: string; executable_sha256: string; source_availability: string;
+  artifact_availability: string; hardware_qualification: string; runtime_acceptance: string;
+  acquisition_allowed: boolean;
+};
+export type ManagedModelDto = { id: string; file_name: string; sha256: string; size_bytes: number; minimum_katago_version: string };
+export type ManagedCatalogDto = {
+  schema_version: number; source_commit: string; katago_source_commit: string; katago_version: string;
+  engine_repository: string; engine_tag: string; model_tag: string; default_model_id: string;
+  targets: ManagedTargetDto[]; models: ManagedModelDto[];
+};
+export type ManagedAcquireRequestDto = {
+  profile_id: string; profile: EngineProfileDto; target_id: string; model_id: string; policy_revision: number;
+};
+export type ManagedHardwareDto = {
+  status: string; gpu_name: string | null; gpu_uuid: string | null;
+  driver_version: string | null; compute_capability: string | null; reason: string;
+};
+export type ManagedRepairPreviewDto = {
+  admission_id: string; request: ManagedAcquireRequestDto; hardware: ManagedHardwareDto;
+  runtime_version: string; download_bytes: number; additional_disk_bytes: number;
+  available_disk_bytes: number | null; repair_allowed: boolean; reason: string;
+};
+export type ManagedPhaseDto = "starting" | "downloading_engine" | "verifying_engine" | "downloading_model" | "verifying_model" | "downloading_runtime" | "qualifying_runtime" | "publishing" | "succeeded" | "failed" | "cancelled";
+export type ManagedInstallationDto = { target_id: string; model_id: string; program: string; model_path: string; config_path: string; manifest_sha256: string; repair_config_path: string | null };
+export type ManagedOperationDto = {
+  operation_id: string; profile_id: string; target_id: string; model_id: string; phase: ManagedPhaseDto;
+  transferred_bytes: number; total_bytes: number; message: string | null; installation: ManagedInstallationDto | null;
+  routes: NetworkRoute[];
+  repair_hardware: ManagedHardwareDto | null;
+};
+export type ManagedResourcesDto = { catalog: ManagedCatalogDto; operation: ManagedOperationDto | null };

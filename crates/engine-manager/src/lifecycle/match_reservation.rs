@@ -15,11 +15,11 @@ pub(super) struct MatchReservation {
     pub(super) failure: Option<EngineFailureDto>,
 }
 
-fn reservation_failure(kind: EngineFailureKind, message: &str) -> EngineFailureDto {
+fn reservation_failure(kind: EngineFailureKind, message: &'static str) -> EngineFailureDto {
     failure(EngineOperationDto::Job, kind, message.into(), None, None, None)
 }
 
-fn run_failure(run: &EngineRunDto, kind: EngineFailureKind, message: &str) -> EngineFailureDto {
+fn run_failure(run: &EngineRunDto, kind: EngineFailureKind, message: &'static str) -> EngineFailureDto {
     failure(
         EngineOperationDto::Job,
         kind,
@@ -125,10 +125,14 @@ pub(super) fn handle_reserved_exit(state: &mut ManagerState, run_id: &str, exit_
         return false;
     };
     let committed = reservation.committed;
-    let mut published = run_failure(
-        &run,
+    let mut published = failure(
+        EngineOperationDto::Job,
         EngineFailureKind::ProcessExit,
-        &format!("engine process exited unexpectedly; exit_code={exit_code:?}"),
+        diagnostic_text_for_state(state, run_id, &format!("{exit_code:?}"))
+            .prefixed("engine process exited unexpectedly; exit_code="),
+        Some(run_id),
+        Some(&run.profile_id),
+        None,
     );
     published.operation = EngineOperationDto::UnexpectedExit;
     if let Some(slot) = state
@@ -167,7 +171,7 @@ pub(super) fn handle_reserved_stdout_failure(
     run_id: &str,
     deadline: Instant,
     kind: EngineFailureKind,
-    message: &str,
+    message: FailureText,
 ) -> bool {
     let Some(reservation) = state.match_reservation.as_ref() else {
         return false;
@@ -184,7 +188,14 @@ pub(super) fn handle_reserved_stdout_failure(
     if let Some(Ok(Some(status))) = owned_live_mut(state, run_id).map(|live| live.child.try_wait()) {
         return handle_reserved_exit(state, run_id, status.code());
     }
-    let mut published = run_failure(&run, kind, message);
+    let mut published = failure(
+        EngineOperationDto::Job,
+        kind,
+        message,
+        Some(run_id),
+        Some(&run.profile_id),
+        None,
+    );
     published.operation = EngineOperationDto::UnexpectedExit;
     if let Some(slot) = state
         .game_move
@@ -206,9 +217,13 @@ pub(super) fn handle_reserved_stdout_failure(
         take_owned_live(state, run_id);
     }
     if let Some(Err(error)) = cleanup {
-        published.message.push_str(&format!(
-            "; process cleanup was not confirmed: {error}; retry Stop"
-        ));
+        published.message = FailureText::from_failure(&published)
+            .then(
+                diagnostic_text_for_state(state, run_id, &error.to_string())
+                    .prefixed("; process cleanup was not confirmed: ")
+                    .then("; retry Stop"),
+            )
+            .into_string();
     }
     let reservation = state.match_reservation.as_mut().unwrap();
     reservation.sealed = true;
@@ -228,6 +243,7 @@ impl ForegroundEngineManager {
         let mut state = self.lock();
         require_unreserved(&state)?;
         game_move::require_idle_move(&state)?;
+        super::runtime_control::require_idle(&state)?;
         if owner.is_empty()
             || !matches!(state.phase, Phase::NoEngine { .. } | Phase::Ready(_))
             || state.candidate.is_some()
@@ -240,6 +256,8 @@ impl ForegroundEngineManager {
                 "Match reservation requires a nonempty session and a stable Ready or unloaded foreground.",
             ));
         }
+        evaluation::yield_to_foreground(&mut state)?;
+        self.yield_preloads_locked(&mut state);
         state.match_reservation = Some(MatchReservation {
             owner: owner.into(),
             runs: Vec::new(),
@@ -369,7 +387,7 @@ impl ForegroundEngineManager {
             self.drain_reserved_analysis(owner)?;
             for (index, candidate) in candidates.iter().enumerate() {
                 *failed_side = index;
-                self.inner.start_resident(operation, candidate, true)?;
+                self.inner.start_resident(operation, candidate, true, false)?;
                 let mut state = self.lock();
                 let reservation = require_owner(&state, owner)?;
                 if let Some(error) = &reservation.failure {
@@ -545,18 +563,27 @@ impl ForegroundEngineManager {
                     ))
                 }
                 Err(error) => {
-                    return Err(run_failure(
-                        run,
+                    return Err(failure(
+                        EngineOperationDto::Job,
                         EngineFailureKind::ProcessExit,
-                        &format!("Cannot observe match candidate: {error}"),
+                        live.capture
+                            .failure_text(&error.to_string())
+                            .prefixed("Cannot observe match candidate: "),
+                        Some(&run.run_id),
+                        Some(&run.profile_id),
+                        None,
                     ))
                 }
             }
         }
         let result = install().map_err(|message| {
-            reservation_failure(
+            failure(
+                EngineOperationDto::Job,
                 EngineFailureKind::InvalidState,
-                &format!("Match installation failed before engine swap: {message}"),
+                FailureText::unscoped(&message).prefixed("Match installation failed before engine swap: "),
+                None,
+                None,
+                None,
             )
         })?;
         if let Some(old) = state.live.take() {
@@ -587,7 +614,9 @@ impl ForegroundEngineManager {
         for (run, stdout_rx) in readers {
             let inner = self.inner.clone();
             thread::spawn(move || match run.adapter_kind {
-                EngineBackend::GenericGtp => inner.pump_gtp_stdout(run.run_id, stdout_rx),
+                EngineBackend::GenericGtp | EngineBackend::KataGoGtp => {
+                    inner.pump_gtp_stdout(run.run_id, stdout_rx)
+                }
                 EngineBackend::KataGoAnalysis => inner.pump_stdout(operation, run.run_id, stdout_rx),
             });
         }
@@ -747,6 +776,7 @@ impl ForegroundEngineManager {
                             adapter_kind: old.adapter_kind,
                             profile_snapshot: old.profile_snapshot.clone(),
                             capability_snapshot: None,
+                            qualified_resource: None,
                         },
                     )
                 })
@@ -782,7 +812,7 @@ impl ForegroundEngineManager {
         let rebuilt = (|| {
             for (index, candidate) in &rebuild {
                 failed = *index;
-                self.inner.start_resident(operation, candidate, true)?;
+                self.inner.start_resident(operation, candidate, true, false)?;
                 let mut state = self.lock();
                 let reservation = require_owner(&state, owner)?;
                 if let Some(error) = &reservation.failure {
@@ -825,7 +855,9 @@ impl ForegroundEngineManager {
                 if let Some(stdout_rx) = stdout_rx {
                     let inner = self.inner.clone();
                     thread::spawn(move || match run.adapter_kind {
-                        EngineBackend::GenericGtp => inner.pump_gtp_stdout(run.run_id, stdout_rx),
+                        EngineBackend::GenericGtp | EngineBackend::KataGoGtp => {
+                            inner.pump_gtp_stdout(run.run_id, stdout_rx)
+                        }
                         EngineBackend::KataGoAnalysis => inner.pump_stdout(operation, run.run_id, stdout_rx),
                     });
                 }
@@ -966,13 +998,18 @@ impl ForegroundEngineManager {
                 match live.try_lock() {
                     Ok(mut live) => {
                         terminate_process(&mut live, deadline).map_err(|error| {
-                            run_failure(
-                                &run,
+                            failure(
+                                EngineOperationDto::Job,
                                 EngineFailureKind::Timeout,
-                                &format!(
-                                    "Engine {} cleanup was not confirmed: {error}; retry Stop.",
-                                    run.run_id
-                                ),
+                                live.capture
+                                    .failure_text(&run.run_id)
+                                    .prefixed("Engine ")
+                                    .then(" cleanup was not confirmed: ")
+                                    .then(live.capture.failure_text(&error.to_string()))
+                                    .then("; retry Stop."),
+                                Some(&run.run_id),
+                                Some(&run.profile_id),
+                                None,
                             )
                         })?;
                         break;

@@ -35,7 +35,7 @@ fn projectable_frame(visits: u32, x: u8, y: u8) -> app_model::AnalysisFrameDto {
             vertex: MoveVertex::Point(PointDto { x, y }),
             visits,
             winrate_black: 0.61,
-            score_mean_black: 2.25,
+            score_mean_black: Some(2.25),
             policy_prior: Some(0.4),
             pv: vec![MoveVertex::Point(PointDto { x, y })],
         }],

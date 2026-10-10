@@ -47,6 +47,21 @@ fn confirmed_departure_hold_survives_navigation_and_preference_reload() {
         manager.snapshot().lifecycle,
         app_model::ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
+    let admission = state
+        .prepare_replacement("(;SZ[9]RU[Chinese-KGS]KM[6.5]C[new personal];B[cc];W[])", None)
+        .unwrap();
+    let id = match admission {
+        app_model::DocumentDepartureAdmissionDto::Ready { departure_id }
+        | app_model::DocumentDepartureAdmissionDto::NeedsDecision { departure_id } => departure_id,
+    };
+    state.begin_protected_commit(id, &[]).unwrap();
+    let imported = state.commit_replacement(id).unwrap();
+    assert!(imported.committed);
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::SafetyHold
+    );
+    assert!(manager.snapshot().selected_node_job.is_none());
 }
 
 #[cfg(unix)]
@@ -1779,4 +1794,52 @@ fn task_search_budgets_controllable_engine_smoke() {
     let root = reopened.snapshot(&NodePath { indices: vec![] }).unwrap();
     assert_eq!(root.personal_comment, "budget smoke");
     assert!(root.primary_analysis.is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn invalid_resource_switch_preserves_connected_current_game_and_qualified_primary() {
+    use engine_manager::EngineProfileCatalog;
+    let engine = LiveFixture::new();
+    let state = CurrentGameState::default();
+    state.connect_analysis_manager(engine.manager.clone());
+    state
+        .replace(
+            "(;SZ[9]KM[6.5]C[personal];B[dd](;W[ee])(;W[ff]))",
+            Some("review.sgf".into()),
+        )
+        .unwrap();
+    let before = state.inspect();
+    let bytes = state.serialize().unwrap();
+    engine.manager.start("test").unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    let primary = loop {
+        if let app_model::ForegroundEngineLifecycleDto::Ready { run } = engine.manager.snapshot().lifecycle {
+            assert!(run.qualified_resource.is_some());
+            break run;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let mut invalid = engine.catalog.get("test").unwrap();
+    invalid.profile_id = "invalid-resource".into();
+    invalid.profile.program = engine.directory.to_string_lossy().into();
+    engine.catalog.upsert(invalid);
+    engine.manager.switch_to("invalid-resource").unwrap();
+    loop {
+        let event = engine
+            .events
+            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .unwrap();
+        if let app_model::ForegroundEngineEventDto::Failure { failure } = event {
+            assert_eq!(failure.kind, app_model::EngineFailureKind::Executable);
+            break;
+        }
+    }
+    assert_eq!(
+        engine.manager.snapshot().lifecycle,
+        app_model::ForegroundEngineLifecycleDto::Ready { run: primary }
+    );
+    assert_eq!(state.inspect(), before);
+    assert_eq!(state.serialize().unwrap(), bytes);
 }

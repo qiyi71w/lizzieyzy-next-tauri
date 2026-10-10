@@ -7,6 +7,8 @@ import { EngineSetupPanel } from "./EngineSetupPanel";
 import { loadEngineProfilesSettings, saveEngineProfilesSettings } from "../api/backend";
 import * as backend from "../api/backend";
 import type { ForegroundEngineSnapshotDto } from "../domain/types";
+import * as models from "../api/models";
+import type { ModelInventoryDto } from "../domain/types";
 
 let root: Root | null = null;
 let host: HTMLDivElement;
@@ -57,6 +59,57 @@ async function render(snapshot: ForegroundEngineSnapshotDto | null = null) {
 }
 
 describe("engine profile configuration editor", () => {
+  it("persists startup evaluation independently, preserving drafts and failed-save bytes without running", async () => {
+    const start = vi.spyOn(backend, "startEngineEvaluation");
+    const initial = await loadEngineProfilesSettings();
+    initial.profiles.push({ id: "benchmark", preload: false, profile: { ...initial.profiles[0].profile, name: "Benchmark target" } });
+    await saveEngineProfilesSettings(initial);
+    await render();
+    await change(field("名称"), "unsaved editor draft");
+    const policyTarget = Array.from(host.querySelectorAll("label")).find((label) => label.textContent?.startsWith("启动评估的已保存目标"))!.querySelector("select")!;
+    await change(policyTarget, "benchmark");
+    const checkbox = Array.from(host.querySelectorAll("label")).find((label) => label.textContent === "启动时评估（默认关闭）")!.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(checkbox.checked).toBe(false);
+    await act(async () => { checkbox.click(); });
+    const durable = await loadEngineProfilesSettings();
+    expect(durable.startup_evaluation).toEqual({ enabled: true, target_profile_id: "benchmark" });
+    expect(durable.selected_profile_id).toBe("default");
+    expect(durable.startup).toEqual({ mode: "off" });
+    expect(durable.profiles).toEqual(initial.profiles);
+    expect(field("名称").value).toBe("unsaved editor draft");
+    expect(start).not.toHaveBeenCalled();
+    const before = localStorage.getItem("lizzieyzy-next-engine-profile");
+    vi.spyOn(Storage.prototype, "setItem").mockImplementationOnce(() => { throw new Error("disk full"); });
+    await act(async () => { checkbox.click(); });
+    expect(checkbox.checked).toBe(true);
+    expect(host.textContent).toContain("disk full");
+    expect(localStorage.getItem("lizzieyzy-next-engine-profile")).toBe(before);
+    await click("重新加载配置");
+    expect(checkbox.checked).toBe(true);
+    expect(policyTarget.value).toBe("benchmark");
+    expect(start).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("浏览器预览不可测量性能");
+  });
+  it("saves and reloads explicit KataGo GTP without converting other profiles or losing resources", async () => {
+    await render();
+    await change(field("模型"), "/模型/gtp.bin");
+    await change(field("配置文件"), "/配置/gtp.cfg");
+    await click("保存配置");
+    const original = (await loadEngineProfilesSettings()).profiles[0];
+    await click("新增");
+    await change(field("适配器"), "kata_go_gtp");
+    await change(field("最大计算量"), "37");
+    await click("保存配置");
+    const saved = await loadEngineProfilesSettings();
+    expect(saved.profiles[0]).toEqual(original);
+    expect(saved.profiles[1].profile.adapter_kind).toBe("kata_go_gtp");
+    expect(saved.profiles[1].profile.settings).toEqual({ ...original.profile.settings, max_visits: 37 });
+    await click("重新加载配置");
+    expect(field("适配器").value).toBe("kata_go_gtp");
+    expect(field("模型").value).toBe("/模型/gtp.bin");
+    expect(field("配置文件").value).toBe("/配置/gtp.cfg");
+    expect(field("最大计算量").value).toBe("37");
+  });
   it("creates, edits, saves and reloads both adapters with verbatim per-item argv", async () => {
     await render();
     await change(field("名称"), "中文 KataGo");
@@ -84,7 +137,7 @@ describe("engine profile configuration editor", () => {
     await change(field("引擎"), "/gnu go/gnugo");
     await click("保存配置");
     const saved = await loadEngineProfilesSettings();
-    expect(saved.profiles).toEqual([kata, { id: gtpId, profile: { name: "GNU Go 中文", program: "/gnu go/gnugo", argv: ["two words", "中文 参数", ""], working_dir: "/中文 工作目录", adapter_kind: "generic_gtp", settings: {} } }]);
+    expect(saved.profiles).toEqual([kata, { id: gtpId, preload: false, profile: { name: "GNU Go 中文", program: "/gnu go/gnugo", argv: ["two words", "中文 参数", ""], working_dir: "/中文 工作目录", adapter_kind: "generic_gtp", settings: {} } }]);
     await change(field("名称"), "unsaved edit");
     await change(field("参数 1"), "not saved");
     await click("重新加载配置");
@@ -186,7 +239,7 @@ describe("engine profile configuration editor", () => {
     const beta = { ...alpha, id: "beta", profile: { ...alpha.profile, name: "Beta" } };
     settings.profiles.push(alpha, beta);
     settings.selected_profile_id = "alpha";
-    settings.autoload_profile_id = "alpha";
+    settings.startup = { mode: "fixed", profile_id: "alpha" };
     await saveEngineProfilesSettings(settings);
     const snapshot: ForegroundEngineSnapshotDto = {
       revision: 17, lifecycle: { state: "ready", run: { run_id: "immutable-run", profile_id: "default", adapter_kind: "kata_go_analysis", profile_snapshot: structuredClone(settings.profiles[0].profile) } },
@@ -210,10 +263,10 @@ describe("engine profile configuration editor", () => {
       expect(field("参数 1").value).toBe("unsaved argv");
       const saved = await loadEngineProfilesSettings();
       expect(saved.selected_profile_id).toBe("alpha");
-      expect(saved.autoload_profile_id).toBe("alpha");
+      expect(saved.startup).toEqual({ mode: "fixed", profile_id: "alpha" });
       expect(saved.profiles.find((record) => record.id === "alpha")).toEqual(alpha);
       expect(snapshot).toEqual(original);
-      expect((host.querySelector('[aria-label="Autoload Default"]') as HTMLInputElement).checked).toBe(true);
+      expect((host.querySelector('[aria-label="启动方式"]') as HTMLSelectElement).value).toBe("fixed");
     };
     await move("beta", "置首"); expect(order()).toEqual(["beta", "default", "alpha"]);
     await move("alpha", "上移"); expect(order()).toEqual(["beta", "alpha", "default"]);
@@ -282,4 +335,139 @@ describe("engine profile configuration editor", () => {
     expect(localStorage.getItem("lizzieyzy-next-engine-profile")).toBe(newerBytes);
     expect(Array.from(host.querySelectorAll<HTMLElement>("[data-profile-order-id]")).map((row) => row.dataset.profileOrderId)).toEqual(["default", "second"]);
   });
+});
+
+it("keeps resource identity on the healthy primary while showing the failed candidate component", async () => {
+  const settings = await loadEngineProfilesSettings();
+  const profile = settings.profiles[0].profile;
+  const run = {
+    run_id: "healthy-run-a", profile_id: "default", adapter_kind: profile.adapter_kind,
+    profile_snapshot: profile,
+    qualified_resource: {
+      profile_revision: "saved-content-a", origin: "local_unknown", version: "1.18.2",
+      backend: "Eigen", source_commit: null, static_zlib_exemption: false,
+      resources: [{ component: "model", resolved_path: "<path:123>/model.bin.gz", sha256: "actual-model-digest-a", bytes: 123 }]
+    }
+  };
+  const snapshot: ForegroundEngineSnapshotDto = { revision: 5, lifecycle: { state: "ready", run }, continuous: { enabled: null, phase: "off" } };
+  root = createRoot(host);
+  await act(async () => root!.render(<EngineSetupPanel engineSnapshot={snapshot} engineFailure={{
+    operation: "switch", profile_id: "candidate-b", run_id: "failed-run-b", switch_id: "2", kind: "nvrtc",
+    message: "candidate executable cannot load NVRTC", diagnostic_summary: "nvrtc64.dll missing; <redacted>"
+  }} />));
+  const details = Array.from(host.querySelectorAll("details")).find((element) =>
+    element.querySelector("summary")?.textContent === "当前运行实例的资源资格")!;
+  await act(async () => details.querySelector("summary")!.click());
+  expect(details.open).toBe(true);
+  expect(details.textContent).toContain("healthy-run-a");
+  expect(details.textContent).toContain("actual-model-digest-a");
+  expect(details.textContent).not.toContain("failed-run-b");
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("nvrtc64.dll missing");
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("failed-run-b");
+  await change(field("名称"), "Unsent new draft");
+  expect(details.textContent).toContain("saved-content-a");
+  expect((await loadEngineProfilesSettings()).profiles[0].profile.name).toBe(profile.name);
+});
+
+function modelInventory(): ModelInventoryDto {
+  return { revision: "inventory-1", models: ["b11-11750M", "b10"].map((name) => ({
+    id: name, path: `/models/${name}.bin.gz`, origin: { kind: "managed", catalog_id: name, installed_sha256: name },
+    inspection: { status: "header_recognized", model_name: `actual-${name}`, format_version: 17,
+      format: "katago_binary_gzip", sha256: name, size_bytes: 100 }
+  })) };
+}
+
+describe("retained local model selection", () => {
+  it.each(["kata_go_analysis", "kata_go_gtp"] as const)("keeps B11 available through B10, save, rename and manual argv for %s", async (adapterKind) => {
+    const inventory = modelInventory();
+    vi.spyOn(models, "loadModelInventory").mockResolvedValue(inventory);
+    vi.spyOn(models, "refreshModelInventory").mockResolvedValue(inventory);
+    vi.spyOn(models, "selectInstalledModel").mockImplementation(async (request) => inventory.models.find((model) => model.id === request.model_id)!.path);
+    const settings = await loadEngineProfilesSettings();
+    const initial = settings.profiles[0].profile;
+    if (initial.adapter_kind !== "kata_go_analysis") throw new Error("KataGo expected");
+    const profile = { ...initial, adapter_kind: adapterKind };
+    settings.profiles[0].profile = profile;
+    profile.settings.model_path = inventory.models[0].path;
+    profile.argv = ["-override-config", "numSearchThreads=2"];
+    await saveEngineProfilesSettings(settings);
+    await render();
+    await click("保留当前路径并刷新模型");
+    expect(field("模型").value).toBe(inventory.models[0].path);
+    const useModel = async (index: number) => {
+      const button = host.querySelector<HTMLButtonElement>(`button[aria-label="使用此模型路径 ${inventory.models[index].path}"]`)!;
+      await act(async () => { button.click(); });
+    };
+    await useModel(1);
+    expect(host.textContent).toContain("已更新模型路径草稿，尚未保存。");
+    expect(field("模型").value).toBe(inventory.models[1].path);
+    expect((await loadEngineProfilesSettings()).profiles[0].profile).toEqual(profile);
+    await change(field("名称"), "renamed custom command");
+    await change(field("参数 2"), "numSearchThreads=3");
+    await click("保存配置");
+    expect(host.textContent).not.toContain("已更新模型路径草稿，尚未保存。");
+    await click("重新加载配置");
+    expect(host.textContent).toContain("actual-b11-11750M");
+    expect(host.textContent).toContain("受管安装记录");
+    await useModel(0);
+    await click("保存配置");
+    expect(host.textContent).not.toContain("已更新模型路径草稿，尚未保存。");
+    const restored = (await loadEngineProfilesSettings()).profiles[0].profile;
+    expect(restored.name).toBe("renamed custom command");
+    expect(restored.argv).toEqual(["-override-config", "numSearchThreads=3"]);
+    expect(restored.adapter_kind).toBe(adapterKind);
+    expect(restored.adapter_kind !== "generic_gtp" && restored.settings.model_path).toBe(inventory.models[0].path);
+  });
+
+  it("disables conflicting actions while refreshing and rejects late or failed snapshots without changing drafts", async () => {
+    let loaded!: (result: ModelInventoryDto) => void;
+    vi.spyOn(models, "loadModelInventory").mockReturnValue(new Promise((resolve) => { loaded = resolve; }));
+    let refreshed!: (result: ModelInventoryDto) => void;
+    const refresh = vi.spyOn(models, "refreshModelInventory").mockReturnValue(new Promise((resolve) => { refreshed = resolve; }));
+    await render();
+    await change(field("模型"), "/custom/current.gz");
+    await click("保留当前路径并刷新模型");
+    expect(field("模型").matches(":disabled")).toBe(true);
+    await click("保存配置");
+    expect((await loadEngineProfilesSettings()).profiles[0].profile.adapter_kind === "kata_go_analysis").toBe(true);
+    await act(async () => { refreshed(modelInventory()); });
+    await act(async () => { loaded({ revision: "late", models: [] }); });
+    expect(host.textContent).toContain("actual-b11-11750M");
+    expect(field("模型").value).toBe("/custom/current.gz");
+    refresh.mockRejectedValue(new Error("read failed"));
+    await click("保留当前路径并刷新模型");
+    expect(host.textContent).toContain("模型快照已失效");
+    expect(field("模型").value).toBe("/custom/current.gz");
+    expect(Array.from(host.querySelectorAll<HTMLButtonElement>('button[aria-label^="使用此模型路径"]')).every((button) => button.disabled)).toBe(true);
+  });
+});
+
+it("closing the retained settings sheet cancels its isolated benchmark", async () => {
+  vi.spyOn(backend, "isTauriRuntime").mockReturnValue(true);
+  vi.spyOn(backend, "getEngineEvaluation").mockResolvedValue({
+    evaluation_id: "visible-benchmark", target_id: "default", input_revision: "revision", phase: "running",
+    process_id: 123, exit_code: null, output: [], output_truncated: false, message: null, result: null
+  });
+  const cancel = vi.spyOn(backend, "cancelEngineEvaluation").mockResolvedValue({
+    evaluation_id: "visible-benchmark", target_id: "default", input_revision: "revision", phase: "cancelled",
+    process_id: null, exit_code: null, output: [], output_truncated: false, message: null, result: null
+  });
+  await render();
+  await act(async () => root!.render(<EngineSetupPanel visible={false} />));
+  expect(cancel).toHaveBeenCalledWith("visible-benchmark");
+  expect(host.querySelector('section[aria-label="本地性能评估 Benchmark"]')).toBeNull();
+  expect(host.querySelector('section[aria-label="引擎设置"]')).not.toBeNull();
+});
+it("saves preload opt-in explicitly and keeps browser preparation unavailable", async () => {
+  await render();
+  const toggle = field("允许此配置后台预加载（保存后生效）") as HTMLInputElement;
+  expect(toggle.checked).toBe(false);
+  await act(async () => { toggle.click(); });
+  expect((await loadEngineProfilesSettings()).profiles[0].preload).toBe(false);
+  await click("保存配置");
+  expect((await loadEngineProfilesSettings()).profiles[0].preload).toBe(true);
+  const prepare = [...host.querySelectorAll("button")].find((button) => button.textContent === "准备")!;
+  expect(prepare.disabled).toBe(true);
+  await click("重新加载配置");
+  expect((field("允许此配置后台预加载（保存后生效）") as HTMLInputElement).checked).toBe(true);
 });

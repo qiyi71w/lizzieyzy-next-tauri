@@ -9,8 +9,8 @@ import { HumanMatchDialog } from "./HumanMatchDialog";
 let root: Root | null = null;
 beforeEach(() => { globalThis.IS_REACT_ACT_ENVIRONMENT = true; });
 afterEach(() => { act(() => root?.unmount()); root = null; document.body.replaceChildren(); });
-const profile: EngineProfileRecordDto = { id: "generic", profile: { name: "Saved GTP", program: "gtp", argv: [], working_dir: null, adapter_kind: "generic_gtp", settings: {} } };
-const kataProfile: EngineProfileRecordDto = { id: "kata", profile: { name: "Saved KataGo", program: "katago", argv: [], working_dir: null, adapter_kind: "kata_go_analysis", settings: { model_path: "model.bin", config_path: "analysis.cfg", max_visits: 800 } } };
+const profile: EngineProfileRecordDto = { id: "generic", preload: false, profile: { name: "Saved GTP", program: "gtp", argv: [], working_dir: null, adapter_kind: "generic_gtp", settings: {} } };
+const kataProfile: EngineProfileRecordDto = { id: "kata", preload: false, profile: { name: "Saved KataGo", program: "katago", argv: [], working_dir: null, adapter_kind: "kata_go_analysis", settings: { model_path: "model.bin", config_path: "analysis.cfg", max_visits: 800 } } };
 function renderDialog(pending = false, engineSnapshot?: ForegroundEngineSnapshotDto, continuation?: PositionDto, mode: MatchModeDto = "human", defaults: MatchDefaultsDto = defaultAppPreferences.matchDefaults, continuationRoot?: SgfTreeNodeDto) {
   const host = document.createElement("div");
   document.body.append(host);

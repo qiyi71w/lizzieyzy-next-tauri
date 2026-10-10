@@ -445,10 +445,14 @@ fn active_lanes_survive_busy_move_admission_without_cancel_or_pipe_writes() {
         .register_job(&rig.run, AnalysisJobLane::WholeGame, cancel.clone())
         .unwrap();
     let before = rig.trace();
-    assert_eq!(
-        rig.manager.start_game_move(rig.request(3000)).err().unwrap().kind,
-        EngineFailureKind::Occupied
+    let failure = rig.manager.start_game_move(rig.request(3000)).err().unwrap();
+    assert_eq!(failure.kind, EngineFailureKind::Occupied);
+    assert!(
+        failure.message.contains("analysis lane") && failure.message.contains("owns this run"),
+        "{}",
+        failure.message
     );
+    assert!(!failure.message.contains("[private-"));
     assert!(!cancel.is_cancelled());
     assert_eq!(rig.trace(), before);
 }
@@ -582,6 +586,7 @@ fn old_query_id_cannot_supply_a_current_move() {
 
 fn match_analysis_request(run_id: &str) -> SelectedNodeJobRequest {
     SelectedNodeJobRequest {
+        exact_position: Err("JSONL fixture does not require exact GTP history".into()),
         run_id: run_id.into(),
         mode: AnalysisJobModeDto::Finite,
         generation: 17,
@@ -1702,6 +1707,9 @@ fn pk_unconfirmed_pause_preserves_occupancy_until_stop() {
     assert_eq!(error.run_id.as_deref(), Some(runs[1].run_id.as_str()));
     assert_eq!(error.profile_id.as_deref(), Some("engine"));
     assert!(error.job_id.is_some());
+    assert!(error.message.contains("cancellation/drain"));
+    assert!(error.message.contains("cannot be resumed") || error.message.contains("Stop the match"));
+    assert!(!error.message.contains("[private-"));
     assert!(handle.wait().is_err());
     assert_eq!(rig.manager.match_reservation_owner().as_deref(), Some("pk"));
     assert!(rig.manager.start_reserved_game_move("pk", request).is_err());

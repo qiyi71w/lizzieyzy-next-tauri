@@ -1,9 +1,11 @@
 #![allow(clippy::result_large_err)]
 use crate::catalog::{EngineProfileCatalog, SavedEngineProfile};
+use crate::diagnostics::{AttemptCapture, FailureText, ObservedRead};
 use crate::gtp::{self, ResponseDecoder};
+use crate::resources::{ResourceSnapshot, StartupOutput};
 use crate::{
-    build_command_spec, build_process_command, check_assets, kill_timed_out_child, spawn_stderr_reader,
-    spawn_stdout_lines_reader, write_jsonl, AnalysisCancelToken,
+    build_command_spec, build_process_command, check_assets, kill_timed_out_child, spawn_stdout_lines_reader,
+    write_jsonl, AnalysisCancelToken,
 };
 use app_model::{
     AnalysisJobLaneDto, AnalysisJobModeDto, AnalysisJobOutcomeDto, AnalysisJobStartedDto,
@@ -27,9 +29,17 @@ use uuid::Uuid;
 pub use app_model::AnalysisJobEventDto;
 pub use app_model::AnalysisJobLaneDto as AnalysisJobLane;
 
+mod evaluation;
 mod game_move;
+mod gtp_analysis;
+mod gtp_control;
 mod match_reservation;
-pub use game_move::{GameMoveHandle, GameMoveRequest};
+mod ordinary_rules;
+mod preload;
+mod runtime_control;
+mod runtime_parameters;
+mod runtime_threads;
+pub use game_move::{GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle};
 
 pub trait AnalysisJobCancel: Send + Sync {
     fn cancel(&self);
@@ -47,6 +57,7 @@ pub struct ForegroundEngineConfig {
     pub stop_drain_timeout: Duration,
     pub job_timeout: Duration,
     pub admit_whole_game_analysis: bool,
+    pub managed_resources_root: Option<std::path::PathBuf>,
 }
 
 impl Default for ForegroundEngineConfig {
@@ -56,6 +67,7 @@ impl Default for ForegroundEngineConfig {
             stop_drain_timeout: Duration::from_secs(2),
             job_timeout: Duration::from_secs(60),
             admit_whole_game_analysis: true,
+            managed_resources_root: None,
         }
     }
 }
@@ -67,6 +79,7 @@ impl ForegroundEngineConfig {
             stop_drain_timeout: Duration::from_millis(400),
             job_timeout: Duration::from_millis(800),
             admit_whole_game_analysis: true,
+            managed_resources_root: None,
         }
     }
 }
@@ -104,6 +117,7 @@ pub struct SelectedNodeJobRequest {
     pub board_width: u8,
     pub board_height: u8,
     pub position_empty: bool,
+    pub exact_position: Result<sgf::ExactPosition, String>,
 }
 
 #[derive(Clone)]
@@ -117,7 +131,12 @@ pub struct WholeGameWorkItem {
 
 struct SelectedSubmission {
     started: AnalysisJobStartedDto,
-    jsonl: String,
+    command: SelectedCommand,
+}
+
+enum SelectedCommand {
+    Jsonl(String),
+    Gtp(Box<SelectedNodeJobRequest>),
 }
 
 enum ContinuousReconcileWork {
@@ -191,10 +210,10 @@ struct LiveEngine {
     child: Child,
     stdin: Arc<Mutex<Option<ChildStdin>>>,
     stdout_rx: Option<Receiver<io::Result<Option<String>>>>,
-    #[allow(dead_code)]
-    stderr_rx: Receiver<io::Result<String>>,
+    startup_output: Arc<Mutex<StartupOutput>>,
     run_id: String,
     process_id: u32,
+    capture: AttemptCapture,
 }
 
 enum Phase {
@@ -218,11 +237,16 @@ enum Phase {
 struct ManagerState {
     revision: u64,
     phase: Phase,
+    last_primary_profile_id: Option<String>,
     operation: u64,
     operation_kind: EngineOperationDto,
     live: Option<LiveEngine>,
     candidate: Option<LiveEngine>,
     match_residents: Vec<LiveEngine>,
+    preloads: Vec<preload::PreloadSlot>,
+    preload_shutdown: bool,
+    startup_preloads: Option<Vec<SavedEngineProfile>>,
+    startup_preload_operation: Option<u64>,
     switch_seq: u64,
     last_activity: Instant,
     jobs: Vec<RegisteredJob>,
@@ -240,14 +264,24 @@ struct ManagerState {
     game_move: Option<game_move::MoveSlot>,
     game_move_publication: Option<app_model::GameMoveJobDto>,
     gtp_command_seq: u32,
+    gtp_dispatch: gtp_control::Dispatch,
     match_reservation: Option<match_reservation::MatchReservation>,
     retiring: Vec<(EngineRunDto, Arc<Mutex<LiveEngine>>)>,
+    evaluation: Option<evaluation::EvaluationSlot>,
+    startup_evaluation: Option<Result<Option<SavedEngineProfile>, String>>,
+    evaluation_notice: app_model::EvaluationSnapshotDto,
+    runtime_control: Option<runtime_control::Slot>,
+    runtime_threads: Option<app_model::RuntimeThreadsSnapshotDto>,
+    runtime_parameters: Option<app_model::RuntimeParametersSnapshotDto>,
 }
 
 struct Inner {
     catalog: Arc<dyn EngineProfileCatalog>,
     config: ForegroundEngineConfig,
     state: Mutex<ManagerState>,
+    diagnostics: Mutex<std::collections::VecDeque<AttemptCapture>>,
+    evaluation_worker: Arc<std::sync::atomic::AtomicBool>,
+    runtime_control_writer: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -257,18 +291,28 @@ pub struct ForegroundEngineManager {
 
 impl ForegroundEngineManager {
     pub fn new(catalog: Arc<dyn EngineProfileCatalog>, config: ForegroundEngineConfig) -> Self {
+        let startup_evaluation = Some(catalog.startup_evaluation_target());
+        let startup_preloads = Some(catalog.preload_profiles());
         Self {
             inner: Arc::new(Inner {
                 catalog,
                 config,
+                diagnostics: Mutex::new(std::collections::VecDeque::new()),
+                evaluation_worker: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                runtime_control_writer: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 state: Mutex::new(ManagerState {
                     revision: 0,
                     phase: Phase::NoEngine { failure: None },
+                    last_primary_profile_id: None,
                     operation: 0,
                     operation_kind: EngineOperationDto::Start,
                     live: None,
                     candidate: None,
                     match_residents: Vec::new(),
+                    preloads: Vec::new(),
+                    preload_shutdown: false,
+                    startup_preloads,
+                    startup_preload_operation: None,
                     switch_seq: 0,
                     jobs: Vec::new(),
                     analysis_task: None,
@@ -286,8 +330,15 @@ impl ForegroundEngineManager {
                     game_move: None,
                     game_move_publication: None,
                     gtp_command_seq: 100,
+                    gtp_dispatch: gtp_control::Dispatch::default(),
                     match_reservation: None,
                     retiring: Vec::new(),
+                    evaluation: None,
+                    startup_evaluation,
+                    evaluation_notice: Default::default(),
+                    runtime_control: None,
+                    runtime_threads: None,
+                    runtime_parameters: None,
                 }),
             }),
         }
@@ -295,6 +346,54 @@ impl ForegroundEngineManager {
 
     pub fn snapshot(&self) -> ForegroundEngineSnapshotDto {
         snapshot_from(&self.lock())
+    }
+
+    pub fn diagnostic_snapshots(&self) -> Vec<app_model::EngineDiagnosticSnapshotDto> {
+        self.inner
+            .diagnostics
+            .lock()
+            .expect("diagnostic capture list")
+            .iter()
+            .map(AttemptCapture::snapshot)
+            .collect()
+    }
+
+    pub fn set_diagnostic_trace(&self, attempt_id: &str, enabled: bool) -> Result<(), String> {
+        let attempts = self.inner.diagnostics.lock().expect("diagnostic capture list");
+        let attempt = attempts
+            .iter()
+            .find(|capture| capture.matches_run(attempt_id))
+            .ok_or("diagnostic attempt expired")?;
+        attempt.set_trace(enabled);
+        Ok(())
+    }
+
+    pub fn diagnostic_trace_enabled(&self, run_id: &str) -> bool {
+        self.inner
+            .diagnostics
+            .lock()
+            .expect("diagnostic capture list")
+            .iter()
+            .find(|capture| capture.matches_run(run_id))
+            .is_some_and(AttemptCapture::trace_enabled)
+    }
+
+    pub fn trace_analysis_adoption(&self, run_id: &str, detail: impl FnOnce() -> String) {
+        if let Some(capture) = self
+            .inner
+            .diagnostics
+            .lock()
+            .expect("diagnostic capture list")
+            .iter()
+            .find(|capture| capture.matches_run(run_id))
+        {
+            capture.trace(detail);
+        }
+    }
+
+    /// Last successfully established primary in this application session, retained after Stop.
+    pub fn last_primary_profile_id(&self) -> Option<String> {
+        self.lock().last_primary_profile_id.clone()
     }
 
     pub fn analysis_task_snapshot(&self) -> Option<AnalysisTaskDto> {
@@ -542,7 +641,8 @@ impl ForegroundEngineManager {
             }
             state.continuous_departing = false;
             if committed_replacement {
-                clear_resumable_holds(&mut state);
+                // Import changes the position, not the user's authorization after a failure.
+                clear_weak_holds_for_new_position(&mut state);
             } else {
                 state.continuous_safety_hold = true;
             }
@@ -580,7 +680,7 @@ impl ForegroundEngineManager {
                 let published = failure(
                     operation_kind,
                     EngineFailureKind::ProfileNotFound,
-                    format!("saved engine profile was not found: {profile_id}"),
+                    FailureText::unscoped(profile_id).prefixed("saved engine profile was not found: "),
                     None,
                     Some(profile_id),
                     None,
@@ -603,6 +703,7 @@ impl ForegroundEngineManager {
                     None,
                 ));
             }
+            self.yield_preloads_locked(&mut state);
             state.operation += 1;
             state.operation_kind = operation_kind;
             let run = starting_run(&saved);
@@ -629,6 +730,11 @@ impl ForegroundEngineManager {
     }
 
     pub fn teardown(&self) -> Result<(), EngineFailureDto> {
+        {
+            let mut state = self.lock();
+            evaluation::close(&mut state)?;
+        }
+        self.cancel_all_preloads(true)?;
         if let Some(owner) = self.match_reservation_owner() {
             self.stop_reserved_match(&owner)?;
         }
@@ -662,12 +768,15 @@ impl ForegroundEngineManager {
                 failure(
                     EngineOperationDto::Restart,
                     EngineFailureKind::ProfileNotFound,
-                    format!("saved engine profile was not found: {}", run.profile_id),
+                    self.inner
+                        .diagnostic_text(&run.run_id, &run.profile_id)
+                        .prefixed("saved engine profile was not found: "),
                     Some(&run.run_id),
                     Some(&run.profile_id),
                     None,
                 )
             })?;
+            self.yield_preloads_locked(&mut state);
             state.operation += 1;
             let profile_id = run.profile_id.clone();
             state.phase = Phase::Stopping(run);
@@ -698,11 +807,14 @@ impl ForegroundEngineManager {
 
     pub fn switch_to(&self, profile_id: &str) -> Result<(), EngineFailureDto> {
         match_reservation::require_unreserved(&self.lock())?;
+        if self.switch_preload(profile_id)? {
+            return Ok(());
+        }
         let saved = self.inner.catalog.get(profile_id).ok_or_else(|| {
             failure(
                 EngineOperationDto::Switch,
                 EngineFailureKind::ProfileNotFound,
-                format!("saved engine profile was not found: {profile_id}"),
+                FailureText::unscoped(profile_id).prefixed("saved engine profile was not found: "),
                 None,
                 Some(profile_id),
                 None,
@@ -736,6 +848,7 @@ impl ForegroundEngineManager {
                 close_live_stdin(&previous);
                 let _ = kill_timed_out_child(&mut previous.child);
             }
+            self.yield_preloads_locked(&mut state);
             state.operation += 1;
             state.operation_kind = EngineOperationDto::Switch;
             state.switch_seq += 1;
@@ -763,6 +876,7 @@ impl ForegroundEngineManager {
         let mut state = self.lock();
         match_reservation::require_unreserved(&state)?;
         game_move::require_idle_move(&state)?;
+        runtime_control::require_idle(&state)?;
         let run = admitting_run(&state.phase, run_id).ok_or_else(|| {
             continuous_invalid_state(
                 &state,
@@ -780,7 +894,9 @@ impl ForegroundEngineManager {
                 require_capability(&run, capabilities.whole_game_analysis, "whole-game analysis")?
             }
         }
+        evaluation::yield_to_foreground(&mut state)?;
         let job_id = Uuid::new_v4().to_string();
+        self.yield_preloads_locked(&mut state);
         state.jobs.push(RegisteredJob {
             job_id: job_id.clone(),
             query_id: job_id.clone(),
@@ -886,7 +1002,8 @@ impl ForegroundEngineManager {
         state: &mut ManagerState,
         mut request: SelectedNodeJobRequest,
     ) -> Result<SelectedSubmission, EngineFailureDto> {
-        validate_selected_admission(state, &request)?;
+        let run = validate_selected_admission(state, &request)?;
+        evaluation::yield_to_foreground(state)?;
         state
             .jobs
             .retain(|job| !(job.lane == AnalysisJobLane::SelectedNode && job.terminal));
@@ -906,34 +1023,48 @@ impl ForegroundEngineManager {
             generation: request.generation,
             node_path: request.node_path.clone(),
         };
-        let bound_query = request.query.to_jsonl().map_err(|error| {
-            failure(
-                EngineOperationDto::Job,
-                EngineFailureKind::Protocol,
-                format!("failed to serialize selected-node query: {error}"),
-                Some(started.run_id.as_str()),
-                None,
-                None,
+        let board_width = request.board_width;
+        let board_height = request.board_height;
+        let (command, run_id, node_path) = if run.adapter_kind == EngineBackend::KataGoGtp {
+            (
+                SelectedCommand::Gtp(Box::new(request)),
+                started.run_id.clone(),
+                started.node_path.clone(),
             )
-            .with_job_id(&started.job_id)
-        })?;
+        } else {
+            let jsonl = request.query.to_jsonl().map_err(|error| {
+                failure(
+                    EngineOperationDto::Job,
+                    EngineFailureKind::Protocol,
+                    self.inner
+                        .diagnostic_text(&started.run_id, &error.to_string())
+                        .prefixed("failed to serialize selected-node query: "),
+                    Some(started.run_id.as_str()),
+                    None,
+                    None,
+                )
+                .with_job_id(&started.job_id)
+            })?;
+            (SelectedCommand::Jsonl(jsonl), request.run_id, request.node_path)
+        };
+        self.yield_preloads_locked(state);
         state.jobs.push(RegisteredJob {
             query_id: job_id.clone(),
             job_id,
-            run_id: request.run_id,
+            run_id,
             lane: AnalysisJobLane::SelectedNode,
-            mode: request.mode,
-            continuous_budget: (request.mode == AnalysisJobModeDto::Continuous)
+            mode: started.mode,
+            continuous_budget: (started.mode == AnalysisJobModeDto::Continuous)
                 .then_some(state.continuous_budget),
             state: AnalysisJobStateDto::Queued,
             cancel_deadline: None,
             cleanup_deadline: None,
             submitted: false,
             submitted_at: Instant::now(),
-            generation: request.generation,
-            node_path: request.node_path,
-            board_width: request.board_width,
-            board_height: request.board_height,
+            generation: started.generation,
+            node_path,
+            board_width,
+            board_height,
             cancel: Arc::new(AnalysisCancelToken::new()),
             disposition: JobDisposition::Running,
             expected: Some(1),
@@ -949,17 +1080,21 @@ impl ForegroundEngineManager {
             },
         );
         publish_snapshot(state);
-        Ok(SelectedSubmission {
-            started,
-            jsonl: bound_query,
-        })
+        Ok(SelectedSubmission { started, command })
     }
 
     fn submit_registered_selected(
         &self,
         submission: SelectedSubmission,
     ) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
-        if let Err(error) = self.write_live_jsonl(&submission.started.run_id, &submission.jsonl) {
+        let jsonl = match submission.command {
+            SelectedCommand::Gtp(request) => {
+                self.spawn_gtp_analysis(submission.started.clone(), *request);
+                return Ok(submission.started);
+            }
+            SelectedCommand::Jsonl(jsonl) => jsonl,
+        };
+        if let Err(error) = self.write_live_jsonl(&submission.started.run_id, &jsonl) {
             let published = error.with_job_id(&submission.started.job_id);
             self.abandon_job(
                 &submission.started.run_id,
@@ -1106,6 +1241,7 @@ impl ForegroundEngineManager {
             let mut state = self.lock();
             match_reservation::require_unreserved(&state)?;
             game_move::require_idle_move(&state)?;
+            runtime_control::require_idle(&state)?;
             let run = match admitting_run(&state.phase, &request.run_id) {
                 Some(run) => run,
                 None => {
@@ -1163,6 +1299,7 @@ impl ForegroundEngineManager {
             let first_board_width = request.work_items[0].board_width;
             let first_board_height = request.work_items[0].board_height;
             let bound_query = bound_work_item_query(&request.work_items[0], &query_id, &job_id)?;
+            evaluation::yield_to_foreground(&mut state)?;
             let started = AnalysisJobStartedDto {
                 run_id: request.run_id.clone(),
                 job_id: job_id.clone(),
@@ -1206,6 +1343,7 @@ impl ForegroundEngineManager {
                 reason: None,
             };
             let expected = request.work_items.len();
+            self.yield_preloads_locked(&mut state);
             state.jobs.push(RegisteredJob {
                 job_id: job_id.clone(),
                 query_id,
@@ -1332,6 +1470,8 @@ impl ForegroundEngineManager {
             for item in &state.jobs[index].work_items[state.jobs[index].current_index..] {
                 validate_query_capabilities(&run, &item.query, false)?;
             }
+            evaluation::yield_to_foreground(&mut state)?;
+            self.yield_preloads_locked(&mut state);
             let job_id = Uuid::new_v4().to_string();
             let query_id = target_query_id(&job_id);
             let job = &mut state.jobs[index];
@@ -1418,7 +1558,9 @@ impl ForegroundEngineManager {
                         failure(
                             EngineOperationDto::Job,
                             EngineFailureKind::Protocol,
-                            format!("failed to write analysis query: {error}"),
+                            self.inner
+                                .diagnostic_text(run_id, &error.to_string())
+                                .prefixed("failed to write analysis query: "),
                             Some(run_id),
                             None,
                             None,
@@ -1623,6 +1765,11 @@ impl ForegroundEngineManager {
             publish_snapshot(state);
             query_id
         };
+        if admitting_run(&state.phase, run_id).is_some_and(|run| run.adapter_kind == EngineBackend::KataGoGtp)
+        {
+            // The registered stream worker owns Stop and both terminal barriers.
+            return Ok(());
+        }
         let manager = self.clone();
         let run_id = run_id.to_string();
         let job_id = job_id.to_string();
@@ -1750,7 +1897,9 @@ impl ForegroundEngineManager {
             failure(
                 EngineOperationDto::Job,
                 EngineFailureKind::Protocol,
-                format!("failed to write analysis query: {error}"),
+                self.inner
+                    .diagnostic_text(run_id, &error.to_string())
+                    .prefixed("failed to write analysis query: "),
                 Some(run_id),
                 None,
                 None,
@@ -1767,6 +1916,7 @@ impl ForegroundEngineManager {
             if state.continuous_departing
                 || state.finite_admission_pending
                 || state.game_move.is_some()
+                || state.runtime_control.is_some()
                 || state.continuous_target.is_none()
             {
                 return;
@@ -1891,6 +2041,7 @@ impl ForegroundEngineManager {
     fn begin_stop(&self, _operation_kind: EngineOperationDto) -> Result<Option<u64>, EngineFailureDto> {
         let mut state = self.lock();
         match_reservation::require_unreserved(&state)?;
+        self.yield_preloads_locked(&mut state);
         let run = match &state.phase {
             Phase::NoEngine { .. } => return Ok(None),
             Phase::Starting(run) | Phase::Ready(run) | Phase::Stopping(run) => run.clone(),
@@ -1926,7 +2077,8 @@ impl Inner {
         if self.current_operation() != operation {
             return;
         }
-        if let Err(published) = self.start_resident(operation, &run, false) {
+        if let Err(mut published) = self.start_resident(operation, &run, false, false) {
+            identify_failed_executable(&run, &mut published, &self);
             self.fail_attempt(operation, published);
         }
     }
@@ -1935,8 +2087,29 @@ impl Inner {
         if self.current_operation() != operation {
             return;
         }
-        if let Err(published) = self.start_resident(operation, &run, true) {
+        if let Err(mut published) = self.start_resident(operation, &run, true, false) {
+            identify_failed_executable(&run, &mut published, &self);
             self.fail_switch_candidate(operation, &run, &switch_id, published);
+        }
+    }
+
+    fn diagnostic_text(&self, run_id: &str, text: &str) -> FailureText {
+        let attempts = self.diagnostics.lock().expect("diagnostic capture list");
+        match attempts.iter().find(|capture| capture.matches_run(run_id)) {
+            Some(capture) => capture.failure_text(text),
+            None => FailureText::unscoped(text),
+        }
+    }
+
+    fn record_diagnostic_failure(&self, failure: &EngineFailureDto) {
+        let attempts = self.diagnostics.lock().expect("diagnostic capture list");
+        if let Some(capture) = attempts.iter().find(|capture| {
+            failure
+                .run_id
+                .as_deref()
+                .is_some_and(|id| capture.matches_run(id))
+        }) {
+            capture.record_failure(failure);
         }
     }
 
@@ -1945,8 +2118,29 @@ impl Inner {
         operation: u64,
         run: &EngineRunDto,
         as_candidate: bool,
+        background: bool,
     ) -> Result<(), EngineFailureDto> {
-        let kind = self.lock().operation_kind;
+        let kind = if background {
+            EngineOperationDto::Start
+        } else {
+            self.lock().operation_kind
+        };
+        let capture = AttemptCapture::new(run);
+        let protected_run = match &self.lock().phase {
+            Phase::Ready(run) | Phase::Switching { primary: run, .. } => Some(run.run_id.clone()),
+            _ => None,
+        };
+        {
+            let mut attempts = self.diagnostics.lock().expect("diagnostic capture list");
+            if attempts.len() == 4 {
+                let oldest_retired = attempts
+                    .iter()
+                    .position(|attempt| !protected_run.as_deref().is_some_and(|id| attempt.matches_run(id)))
+                    .unwrap_or(0);
+                attempts.remove(oldest_retired);
+            }
+            attempts.push_back(capture.clone());
+        }
         let missing: Vec<_> = check_assets(&run.profile_snapshot)
             .into_iter()
             .filter(|check| check.required && !check.exists)
@@ -1958,7 +2152,7 @@ impl Inner {
                     if check.path.is_empty() {
                         check.label.clone()
                     } else {
-                        format!("{} ({})", check.label, check.path)
+                        format!("{} ({})", check.label, capture.alias(&check.path))
                     }
                 })
                 .collect::<Vec<_>>()
@@ -1966,13 +2160,15 @@ impl Inner {
             return Err(failure(
                 kind,
                 EngineFailureKind::Asset,
-                format!("required engine assets are missing: {summary}"),
+                capture
+                    .failure_text(&summary)
+                    .prefixed("required engine assets are missing: "),
                 Some(run.run_id.as_str()),
                 Some(run.profile_id.as_str()),
-                Some(summary),
+                Some(capture.failure_text(&summary)),
             ));
         }
-        if self.current_operation() != operation {
+        if !self.preparation_current(operation, run, background) {
             return Ok(());
         }
 
@@ -1980,17 +2176,42 @@ impl Inner {
             failure(
                 kind,
                 EngineFailureKind::Start,
-                error.to_string(),
+                capture.failure_text(&error.to_string()),
                 Some(run.run_id.as_str()),
                 Some(run.profile_id.as_str()),
                 None,
             )
         })?;
+        let resource_deadline = Instant::now() + Duration::from_secs(30);
+        let resources = ResourceSnapshot::capture(
+            run,
+            &spec,
+            resource_deadline,
+            capture.clone(),
+            self.config.managed_resources_root.as_deref(),
+            &|| !self.preparation_current(operation, run, background),
+        )
+        .map_err(|(cause, message)| {
+            failure(
+                kind,
+                cause,
+                capture.failure_text(&message),
+                Some(&run.run_id),
+                Some(&run.profile_id),
+                None,
+            )
+        })?;
+        if !self.preparation_current(operation, run, background) {
+            return Ok(());
+        }
+        capture.command(&spec);
         let mut child = build_process_command(&spec).spawn().map_err(|error| {
             failure(
                 kind,
                 EngineFailureKind::Start,
-                format!("failed to spawn engine process: {error}"),
+                capture
+                    .failure_text(&error.to_string())
+                    .prefixed("failed to spawn engine process: "),
                 Some(run.run_id.as_str()),
                 Some(run.profile_id.as_str()),
                 None,
@@ -2026,17 +2247,15 @@ impl Inner {
                 None,
             )
         })?;
-        let generic = run.adapter_kind == EngineBackend::GenericGtp;
+        let generic = run.adapter_kind != EngineBackend::KataGoAnalysis;
+        let stdout = ObservedRead::new(stdout, capture.clone(), "stdout");
+        let stderr = ObservedRead::new(stderr, capture.clone(), "stderr");
         let stdout_rx = if generic {
             gtp::spawn_stdout_reader(stdout)
         } else {
             spawn_stdout_lines_reader(stdout)
         };
-        let stderr_rx = if generic {
-            gtp::spawn_stderr_reader(stderr)
-        } else {
-            spawn_stderr_reader(stderr)
-        };
+        let startup_output = StartupOutput::capture(stderr);
         {
             let mut state = self.lock();
             let process_id = child.id();
@@ -2044,11 +2263,12 @@ impl Inner {
                 child,
                 stdin: Arc::new(Mutex::new(Some(stdin))),
                 stdout_rx: Some(stdout_rx),
-                stderr_rx,
+                startup_output: startup_output.clone(),
                 run_id: run.run_id.clone(),
                 process_id,
+                capture: capture.clone(),
             };
-            if state.operation != operation {
+            if state.operation != operation || (background && !preload::preparing(&state, &run.run_id)) {
                 // Keep even a late-spawned child manager-owned until its exit is confirmed.
                 state.retiring.push((run.clone(), Arc::new(Mutex::new(engine))));
                 drop(state);
@@ -2060,7 +2280,14 @@ impl Inner {
                 });
                 return Ok(());
             }
-            if as_candidate {
+            if background {
+                state
+                    .preloads
+                    .iter_mut()
+                    .find(|slot| slot.dto.run.run_id == run.run_id)
+                    .expect("admitted preload")
+                    .live = Some(engine);
+            } else if as_candidate {
                 state.candidate = Some(engine);
             } else {
                 state.live = Some(engine);
@@ -2099,7 +2326,9 @@ impl Inner {
                 return Err(failure(
                     kind,
                     EngineFailureKind::Protocol,
-                    format!("failed to send readiness probe: {error}"),
+                    capture
+                        .failure_text(&error.to_string())
+                        .prefixed("failed to send readiness probe: "),
                     Some(&run.run_id),
                     Some(&run.profile_id),
                     None,
@@ -2108,35 +2337,92 @@ impl Inner {
         }
 
         let gtp = if generic {
-            let Some(facts) = self.await_gtp_readiness(operation, run, as_candidate)? else {
+            let Some(facts) = self.await_gtp_readiness(operation, run, kind)? else {
                 return Ok(());
             };
             Some(facts)
         } else {
-            self.await_readiness(operation, run, &probe_id, as_candidate)?;
+            self.await_readiness(operation, run, &probe_id, kind)?;
             None
         };
+        capture.readiness_confirmed();
         let capabilities = EngineCapabilitySnapshotDto {
             adapter_kind: run.adapter_kind,
             game_move: !generic
                 || gtp.as_ref().is_some_and(|facts| {
                     crate::game_move_protocol::qualified_gtp_launch(&run.profile_snapshot, facts)
                 }),
-            analysis: (!generic).then_some(EngineAnalysisCapabilitiesDto {
-                selected_node_analysis: true,
-                continuous_analysis: true,
-                whole_game_analysis: self.config.admit_whole_game_analysis,
-                candidates: true,
-                pv: true,
-                winrate: true,
-                root_score: true,
-                ownership: true,
-                policy: true,
-                visits_limit: true,
-                protocol_cancel: true,
-            }),
+            analysis: if generic {
+                gtp.as_ref()
+                    .and_then(|facts| gtp_analysis::capabilities(run, facts))
+            } else {
+                Some(EngineAnalysisCapabilitiesDto {
+                    selected_node_analysis: true,
+                    continuous_analysis: true,
+                    whole_game_analysis: self.config.admit_whole_game_analysis,
+                    candidates: true,
+                    pv: true,
+                    winrate: true,
+                    root_score: true,
+                    ownership: true,
+                    policy: true,
+                    visits_limit: true,
+                    protocol_cancel: true,
+                })
+            },
             gtp,
         };
+        resources
+            .revalidate(Instant::now() + Duration::from_secs(30), &|| {
+                !self.preparation_current(operation, run, background)
+            })
+            .map_err(|(cause, message)| {
+                failure(
+                    kind,
+                    cause,
+                    capture.failure_text(&message),
+                    Some(&run.run_id),
+                    Some(&run.profile_id),
+                    None,
+                )
+            })?;
+        // Match resume intentionally uses the reservation's immutable launch snapshot.
+        if self.lock().match_reservation.is_none()
+            && !self
+                .catalog
+                .get(&run.profile_id)
+                .is_some_and(|saved| saved.profile == run.profile_snapshot)
+        {
+            return Err(failure(
+                kind,
+                EngineFailureKind::ResourceChanged,
+                "Saved profile changed during qualification; Start again explicitly".into(),
+                Some(&run.run_id),
+                Some(&run.profile_id),
+                None,
+            ));
+        }
+        let (version, backend) = startup_output
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .identity();
+        let version = capabilities
+            .gtp
+            .as_ref()
+            .map(|facts| facts.version.clone())
+            .or(version);
+        let mut qualified_run = run.clone();
+        let preload_resources = background.then(|| resources.clone());
+        qualified_run.qualified_resource = Some(Arc::new(resources.qualified(version, backend)));
+        let run = &qualified_run;
+        if background {
+            return self.finish_preload(
+                operation,
+                qualified_run,
+                capabilities,
+                preload_resources.expect("background resources"),
+            );
+        }
         if as_candidate {
             let mut state = self.lock();
             if state.match_reservation.is_some() {
@@ -2149,6 +2435,7 @@ impl Inner {
                                 .find(|ready| ready.run_id == run.run_id)
                             {
                                 ready.capability_snapshot = Some(capabilities);
+                                ready.qualified_resource = run.qualified_resource.clone();
                                 reservation.ready = reservation
                                     .runs
                                     .iter()
@@ -2159,7 +2446,7 @@ impl Inner {
                 }
             } else {
                 drop(state);
-                self.promote_candidate(operation, run, capabilities);
+                self.promote_candidate(operation, run, capabilities)?;
             }
         } else {
             self.admit_ready(operation, run, capabilities);
@@ -2177,10 +2464,9 @@ impl Inner {
         &self,
         operation: u64,
         run: &EngineRunDto,
-        as_candidate: bool,
+        kind: EngineOperationDto,
     ) -> Result<Option<EngineGtpFactsDto>, EngineFailureDto> {
-        let kind = self.lock().operation_kind;
-        let fail = |failure_kind, message| {
+        let fail = |failure_kind, message: FailureText| {
             failure(
                 kind,
                 failure_kind,
@@ -2203,12 +2489,7 @@ impl Inner {
                 if state.operation != operation {
                     return Ok(None);
                 }
-                let slot = if as_candidate {
-                    &mut state.candidate
-                } else {
-                    &mut state.live
-                };
-                let Some(live) = slot.as_mut().filter(|live| live.run_id == run.run_id) else {
+                let Some(live) = owned_live_mut(&mut state, &run.run_id) else {
                     return Ok(None);
                 };
                 let mut guard = live.stdin.lock().expect("engine stdin lock");
@@ -2219,7 +2500,8 @@ impl Inner {
                 write_jsonl(stdin, &format!("{id} {command}\n")).map_err(|error| {
                     fail(
                         EngineFailureKind::ProcessExit,
-                        format!("GTP command write failed: {error}"),
+                        self.diagnostic_text(&run.run_id, &error.to_string())
+                            .prefixed("GTP command write failed: "),
                     )
                 })?;
             }
@@ -2228,7 +2510,7 @@ impl Inner {
                 if Instant::now() >= deadline {
                     return Err(fail(
                         EngineFailureKind::Timeout,
-                        format!("GTP readiness timed out waiting for {command}"),
+                        FailureText::from("GTP readiness timed out waiting for ").then(*command),
                     ));
                 }
                 let received = {
@@ -2236,37 +2518,41 @@ impl Inner {
                     if state.operation != operation {
                         return Ok(None);
                     }
-                    let slot = if as_candidate {
-                        &mut state.candidate
-                    } else {
-                        &mut state.live
-                    };
-                    let Some(live) = slot.as_mut().filter(|live| live.run_id == run.run_id) else {
+                    let Some(live) = owned_live_mut(&mut state, &run.run_id) else {
                         return Ok(None);
                     };
                     if let Some(status) = live.child.try_wait().map_err(|error| {
                         fail(
                             EngineFailureKind::ProcessExit,
-                            format!("GTP process observation failed: {error}"),
+                            self.diagnostic_text(&run.run_id, &error.to_string())
+                                .prefixed("GTP process observation failed: "),
                         )
                     })? {
                         return Err(fail(
                             EngineFailureKind::ProcessExit,
-                            format!("GTP exited during {command}: {status}"),
+                            FailureText::from("GTP exited during ")
+                                .then(*command)
+                                .then(": ")
+                                .then(self.diagnostic_text(&run.run_id, &status.to_string())),
                         ));
                     }
                     live.stdout_rx.as_ref().expect("readiness owns stdout").try_recv()
                 };
                 match received {
                     Ok(Ok(Some(line))) => {
-                        if let Some(response) = decoder
-                            .push(&line)
-                            .map_err(|message| fail(EngineFailureKind::Protocol, message))?
-                        {
+                        if let Some(response) = decoder.push(&line).map_err(|message| {
+                            fail(
+                                EngineFailureKind::Protocol,
+                                self.diagnostic_text(&run.run_id, &message),
+                            )
+                        })? {
                             if !response.success {
                                 return Err(fail(
                                     EngineFailureKind::Command,
-                                    format!("GTP {command} rejected: {}", response.body),
+                                    FailureText::from("GTP ")
+                                        .then(*command)
+                                        .then(" rejected: ")
+                                        .then(self.diagnostic_text(&run.run_id, &response.body)),
                                 ));
                             }
                             bodies.push(response.body);
@@ -2276,13 +2562,14 @@ impl Inner {
                     Ok(Err(error)) => {
                         return Err(fail(
                             EngineFailureKind::Protocol,
-                            format!("GTP response read failed: {error}"),
+                            self.diagnostic_text(&run.run_id, &error.to_string())
+                                .prefixed("GTP response read failed: "),
                         ))
                     }
                     Ok(Ok(None)) | Err(mpsc::TryRecvError::Disconnected) => {
                         return Err(fail(
                             EngineFailureKind::ProcessExit,
-                            format!("GTP stdout closed during {command}"),
+                            FailureText::from("GTP stdout closed during ").then(*command),
                         ))
                     }
                     Err(mpsc::TryRecvError::Empty) => thread::sleep(Duration::from_millis(5)),
@@ -2323,9 +2610,26 @@ impl Inner {
             if !commands.iter().any(|command| command == required) {
                 return Err(fail(
                     EngineFailureKind::UnsupportedCapability,
-                    format!("GTP required command is missing: {required}"),
+                    FailureText::from("GTP required command is missing: ").then(required),
                 ));
             }
+        }
+        if run.adapter_kind == EngineBackend::KataGoGtp
+            && (name.trim() != "KataGo"
+                || !version.trim().split('+').next().is_some_and(|v| v == "1.18.2")
+                || [
+                    "loadsgf",
+                    "showboard",
+                    "printsgf",
+                    "kata-get-rules",
+                    "kata-set-rules",
+                    "get_komi",
+                ]
+                .iter()
+                .any(|required| !commands.iter().any(|command| command == required)))
+        {
+            return Err(fail(EngineFailureKind::UnsupportedCapability,
+                "KataGo GTP rules confirmation requires the qualified 1.18.2 protocol and exact-position commands".into()));
         }
         Ok(Some(EngineGtpFactsDto {
             protocol_version: 2,
@@ -2340,9 +2644,8 @@ impl Inner {
         operation: u64,
         run: &EngineRunDto,
         probe_id: &str,
-        as_candidate: bool,
+        kind: EngineOperationDto,
     ) -> Result<(), EngineFailureDto> {
-        let kind = self.lock().operation_kind;
         let deadline = Instant::now() + self.config.readiness_timeout;
         loop {
             if self.current_operation() != operation {
@@ -2361,11 +2664,7 @@ impl Inner {
             }
             let line = {
                 let state = self.lock();
-                let live = if as_candidate {
-                    state.candidate.as_ref()
-                } else {
-                    state.live.as_ref()
-                };
+                let live = owned_live(&state, &run.run_id);
                 let Some(live) = live else {
                     return Err(failure(
                         kind,
@@ -2402,7 +2701,8 @@ impl Inner {
                         return Err(failure(
                             kind,
                             EngineFailureKind::Protocol,
-                            format!("failed to read engine stdout: {error}"),
+                            self.diagnostic_text(&run.run_id, &error.to_string())
+                                .prefixed("failed to read engine stdout: "),
                             Some(run.run_id.as_str()),
                             Some(run.profile_id.as_str()),
                             None,
@@ -2439,10 +2739,11 @@ impl Inner {
                         return Err(failure(
                             kind,
                             EngineFailureKind::Protocol,
-                            format!("readiness probe response was not parseable: {error}"),
+                            self.diagnostic_text(&run.run_id, &error.to_string())
+                                .prefixed("readiness probe response was not parseable: "),
                             Some(run.run_id.as_str()),
                             Some(run.profile_id.as_str()),
-                            Some(trimmed.to_string()),
+                            Some(self.diagnostic_text(&run.run_id, trimmed)),
                         ));
                     }
                 }
@@ -2469,6 +2770,7 @@ impl Inner {
             &mut state,
             "A new Foreground Engine Run is ready; start a new analysis task.",
         );
+        state.last_primary_profile_id = Some(ready.profile_id.clone());
         state.phase = Phase::Ready(ready);
         clear_holds_for_new_run(&mut state);
         publish_snapshot(&mut state);
@@ -2484,7 +2786,7 @@ impl Inner {
         if let Some(stdout_rx) = stdout_rx {
             let inner = self.clone();
             let run_id = run.run_id.clone();
-            let generic = run.adapter_kind == EngineBackend::GenericGtp;
+            let generic = run.adapter_kind != EngineBackend::KataGoAnalysis;
             thread::spawn(move || {
                 if generic {
                     inner.pump_gtp_stdout(run_id, stdout_rx)
@@ -2500,11 +2802,11 @@ impl Inner {
         operation: u64,
         run: &EngineRunDto,
         capabilities: EngineCapabilitySnapshotDto,
-    ) {
+    ) -> Result<(), EngineFailureDto> {
         let retiring = {
             let mut state = self.lock();
             if state.operation != operation {
-                return;
+                return Ok(());
             }
             let Phase::Switching {
                 primary,
@@ -2512,12 +2814,23 @@ impl Inner {
                 switch_id: _,
             } = &state.phase
             else {
-                return;
+                return Ok(());
             };
             if candidate.run_id != run.run_id {
-                return;
+                return Ok(());
             }
             let primary_run_id = primary.run_id.clone();
+            if !state.live.as_mut().is_some_and(|live| {
+                live.run_id == primary_run_id && matches!(live.child.try_wait(), Ok(None))
+            }) || !state
+                .candidate
+                .as_mut()
+                .is_some_and(|live| live.run_id == run.run_id && matches!(live.child.try_wait(), Ok(None)))
+            {
+                return Err(failure(EngineOperationDto::Switch, EngineFailureKind::ProcessExit,
+                    "The captured primary or candidate exited before promotion; no alternate engine was selected".into(),
+                    Some(&run.run_id), Some(&run.profile_id), None));
+            }
             let mut ready = run.clone();
             ready.capability_snapshot = Some(capabilities);
             invalidate_analysis_task_locked(
@@ -2527,6 +2840,7 @@ impl Inner {
             cancel_jobs_for_run(&mut state, &primary_run_id);
             let retiring = state.live.take();
             state.live = state.candidate.take();
+            state.last_primary_profile_id = Some(ready.profile_id.clone());
             state.phase = Phase::Ready(ready);
             clear_holds_for_new_run(&mut state);
             publish_snapshot(&mut state);
@@ -2536,7 +2850,7 @@ impl Inner {
             if let Some(stdout_rx) = stdout_rx {
                 let inner = self.clone();
                 let run_id = run.run_id.clone();
-                let generic = run.adapter_kind == EngineBackend::GenericGtp;
+                let generic = run.adapter_kind != EngineBackend::KataGoAnalysis;
                 thread::spawn(move || {
                     if generic {
                         inner.pump_gtp_stdout(run_id, stdout_rx)
@@ -2557,6 +2871,7 @@ impl Inner {
             close_live_stdin(&live);
             let _ = kill_timed_out_child(&mut live.child);
         }
+        Ok(())
     }
 
     fn fail_switch_candidate(
@@ -2585,9 +2900,14 @@ impl Inner {
         let mut published = published.with_switch_id(switch_id);
         if let Some(live) = state.candidate.as_mut() {
             if let Err(error) = terminate_process(live, Instant::now() + self.config.stop_drain_timeout) {
-                published
-                    .message
-                    .push_str(&format!("; candidate cleanup failed: {error}"));
+                published.message = FailureText::from_failure(&published)
+                    .then(
+                        live.capture
+                            .failure_text(&error.to_string())
+                            .prefixed("; candidate cleanup failed: "),
+                    )
+                    .into_string();
+                self.record_diagnostic_failure(&published);
                 state.phase = Phase::Error {
                     run: primary,
                     failure: published.clone(),
@@ -2599,16 +2919,20 @@ impl Inner {
                 );
                 return;
             }
-            if run.adapter_kind == EngineBackend::GenericGtp {
-                published.diagnostic_summary = live
-                    .stderr_rx
-                    .recv_timeout(Duration::from_millis(25))
-                    .ok()
-                    .and_then(Result::ok);
-            }
+            attach_startup_failure(&mut published, &live.startup_output, &live.capture);
             state.candidate = None;
         }
-        state.phase = Phase::Ready(primary);
+        self.record_diagnostic_failure(&published);
+        state.phase =
+            if state.live.as_mut().is_some_and(|live| {
+                live.run_id == primary.run_id && matches!(live.child.try_wait(), Ok(None))
+            }) {
+                Phase::Ready(primary)
+            } else {
+                Phase::NoEngine {
+                    failure: Some(published.clone()),
+                }
+            };
         publish_snapshot(&mut state);
         publish_event(
             &mut state,
@@ -2621,43 +2945,33 @@ impl Inner {
         if state.operation != operation {
             return;
         }
-        let failed_run = match &state.phase {
-            Phase::Starting(run) if run.adapter_kind == EngineBackend::GenericGtp && state.live.is_some() => {
-                Some(run.clone())
-            }
-            _ => None,
-        };
         let deadline = Instant::now() + self.config.stop_drain_timeout;
         let ManagerState { live, candidate, .. } = &mut *state;
         for slot in [live, candidate] {
             if let Some(process) = slot.as_mut() {
                 match terminate_process(process, deadline) {
                     Ok(()) => {
-                        if failed_run.is_some() {
-                            published.diagnostic_summary = process
-                                .stderr_rx
-                                .recv_timeout(Duration::from_millis(25))
-                                .ok()
-                                .and_then(Result::ok);
-                        }
+                        attach_startup_failure(&mut published, &process.startup_output, &process.capture);
                         *slot = None;
                     }
-                    Err(error) => published
-                        .message
-                        .push_str(&format!("; process cleanup failed: {error}")),
+                    Err(error) => {
+                        published.message = FailureText::from_failure(&published)
+                            .then(
+                                process
+                                    .capture
+                                    .failure_text(&error.to_string())
+                                    .prefixed("; process cleanup failed: "),
+                            )
+                            .into_string()
+                    }
                 }
             }
         }
+        self.record_diagnostic_failure(&published);
         cancel_jobs_for_current(&mut state);
         state.jobs.clear();
-        state.phase = match failed_run {
-            Some(run) => Phase::Error {
-                run,
-                failure: published.clone(),
-            },
-            None => Phase::NoEngine {
-                failure: Some(published.clone()),
-            },
+        state.phase = Phase::NoEngine {
+            failure: Some(published.clone()),
         };
         publish_snapshot(&mut state);
         publish_event(
@@ -2708,7 +3022,8 @@ impl Inner {
                 let published = failure(
                     EngineOperationDto::Teardown,
                     EngineFailureKind::Timeout,
-                    format!("engine process cleanup failed: {error}"),
+                    self.diagnostic_text(&run.run_id, &error.to_string())
+                        .prefixed("engine process cleanup failed: "),
                     Some(&run.run_id),
                     None,
                     None,
@@ -2757,7 +3072,10 @@ impl Inner {
                     return;
                 }
                 match live.child.try_wait() {
-                    Ok(Some(status)) => Some(status.code()),
+                    Ok(Some(status)) => {
+                        live.capture.exited(status.code());
+                        Some(status.code())
+                    }
                     Ok(None) => None,
                     Err(_) => Some(None),
                 }
@@ -2777,6 +3095,8 @@ impl Inner {
         if live.process_id != process_id {
             return;
         }
+        live.capture
+            .record("failure", &format!("process exited; exit_code={exit_code:?}"));
         if match_reservation::handle_reserved_exit(&mut state, run_id, exit_code) {
             return;
         }
@@ -2797,7 +3117,8 @@ impl Inner {
                         } else {
                             EngineFailureKind::NonzeroExit
                         },
-                        format!("engine exited during start; exit_code={exit_code:?}"),
+                        self.diagnostic_text(run_id, &format!("{exit_code:?}"))
+                            .prefixed("engine exited during start; exit_code="),
                         Some(run_id),
                         Some(profile_id.as_str()),
                         None,
@@ -2824,18 +3145,20 @@ impl Inner {
     fn enter_primary_error(&self, state: &mut ManagerState, run: EngineRunDto, exit_code: Option<i32>) {
         let published = failure(
             EngineOperationDto::UnexpectedExit,
-            if run.adapter_kind == EngineBackend::GenericGtp {
+            if run.adapter_kind != EngineBackend::KataGoAnalysis {
                 EngineFailureKind::ProcessExit
             } else {
                 EngineFailureKind::NonzeroExit
             },
-            format!("engine process exited unexpectedly; exit_code={exit_code:?}"),
+            self.diagnostic_text(&run.run_id, &format!("{exit_code:?}"))
+                .prefixed("engine process exited unexpectedly; exit_code="),
             Some(run.run_id.as_str()),
             Some(run.profile_id.as_str()),
             None,
         );
         game_move::fail_move_for_run(state, &published);
         fail_analysis_task_locked(state, None, "The Foreground Engine Run exited unexpectedly.");
+        state.continuous_safety_hold = true;
         cancel_jobs_for_current(state);
         if let Some(mut live) = state.live.take() {
             let _ = live.child.wait();
@@ -2849,6 +3172,7 @@ impl Inner {
     }
     /// Match residents are owned outside `live`, so ownership, not the primary slot, keeps the pump.
     fn pump_gtp_stdout(self: Arc<Self>, run_id: String, stdout_rx: Receiver<io::Result<Option<String>>>) {
+        self.reconcile_continuous();
         loop {
             if owned_live(&self.lock(), &run_id).is_none() {
                 return;
@@ -2856,15 +3180,20 @@ impl Inner {
             let (kind, message) = match stdout_rx.recv_timeout(Duration::from_millis(50)) {
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Ok(Ok(Some(line))) => {
-                    if self.route_game_move_line(&run_id, &line) {
-                        continue;
+                    let routed = self.lock().gtp_dispatch.route(&run_id, &line);
+                    match routed {
+                        Ok(()) => continue,
+                        Err(message) => (
+                            EngineFailureKind::Protocol,
+                            self.diagnostic_text(&run_id, &message),
+                        ),
                     }
-                    (
-                        EngineFailureKind::Protocol,
-                        "unsolicited GTP stdout after handshake".into(),
-                    )
                 }
-                Ok(Err(error)) => (EngineFailureKind::Protocol, format!("GTP stdout failed: {error}")),
+                Ok(Err(error)) => (
+                    EngineFailureKind::Protocol,
+                    self.diagnostic_text(&run_id, &error.to_string())
+                        .prefixed("GTP stdout failed: "),
+                ),
                 Ok(Ok(None)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                     (EngineFailureKind::ProcessExit, "GTP stdout closed".into())
                 }
@@ -2875,7 +3204,7 @@ impl Inner {
                 &run_id,
                 Instant::now() + self.config.stop_drain_timeout,
                 kind,
-                &message,
+                message.clone(),
             ) {
                 return;
             }
@@ -2893,13 +3222,43 @@ impl Inner {
                 None,
             );
             game_move::fail_move_for_run(&mut state, &published);
+            state.continuous_safety_hold = true;
+            fail_analysis_task_locked(&mut state, None, &published.message);
+            let jobs: Vec<_> = state
+                .jobs
+                .iter()
+                .filter(|job| job.run_id == run_id && !job.terminal)
+                .map(started_from)
+                .collect();
+            for started in jobs {
+                finish_failed_job(
+                    &mut state,
+                    &started,
+                    published.clone().with_job_id(&started.job_id),
+                );
+            }
             let deadline = Instant::now() + self.config.stop_drain_timeout;
-            let ManagerState { live, candidate, .. } = &mut *state;
+            let ManagerState {
+                live,
+                candidate,
+                gtp_dispatch,
+                ..
+            } = &mut *state;
             for slot in [live, candidate] {
                 if let Some(process) = slot.as_mut() {
+                    gtp_dispatch.retire_run(&process.run_id);
                     match terminate_process(process, deadline) {
                         Ok(()) => *slot = None,
-                        Err(error) => published.message.push_str(&format!("; cleanup failed: {error}")),
+                        Err(error) => {
+                            published.message = FailureText::from_failure(&published)
+                                .then(
+                                    process
+                                        .capture
+                                        .failure_text(&error.to_string())
+                                        .prefixed("; cleanup failed: "),
+                                )
+                                .into_string()
+                        }
                     }
                 }
             }
@@ -2947,7 +3306,7 @@ impl Inner {
                         &run_id,
                         Instant::now() + self.config.stop_drain_timeout,
                         EngineFailureKind::ProcessExit,
-                        "The owned match engine stdout closed or failed unexpectedly.",
+                        "The owned match engine stdout closed or failed unexpectedly.".into(),
                     ) {
                         return;
                     }
@@ -2987,13 +3346,15 @@ impl Inner {
                 let (kind, message) = match capability_refusal {
                     Some(reason) => (
                         EngineFailureKind::UnsupportedCapability,
-                        format!(
-                            "The current engine does not support {board_width}×{board_height} boards: {reason}"
-                        ),
+                        self.diagnostic_text(run_id, &format!("{board_width}×{board_height}"))
+                            .prefixed("The current engine does not support ")
+                            .then(" boards: ")
+                            .then(self.diagnostic_text(run_id, reason)),
                     ),
                     None => (
                         EngineFailureKind::Protocol,
-                        format!("analysis response was not parseable: {error}"),
+                        self.diagnostic_text(run_id, &error.to_string())
+                            .prefixed("analysis response was not parseable: "),
                     ),
                 };
                 let published = failure(EngineOperationDto::Job, kind, message, Some(run_id), None, None)
@@ -3003,7 +3364,7 @@ impl Inner {
                         || state.jobs[index].disposition == JobDisposition::BudgetReached)
                 {
                     drop(state);
-                    self.fail_unresponsive_run(run_id, &published.message);
+                    self.fail_unresponsive_run(run_id, FailureText::from_failure(&published));
                     return None;
                 }
                 finish_failed_job(&mut state, &started, published);
@@ -3054,9 +3415,11 @@ impl Inner {
                 && (started.lane == AnalysisJobLane::WholeGame
                     || started.mode == AnalysisJobModeDto::Continuous)
             {
-                let message = format!("required analysis setting was ignored: {warning}");
+                let message = self
+                    .diagnostic_text(run_id, warning)
+                    .prefixed("required analysis setting was ignored: ");
                 drop(state);
-                self.fail_unresponsive_run(run_id, &message);
+                self.fail_unresponsive_run(run_id, message);
             }
             return None;
         }
@@ -3458,7 +3821,8 @@ impl Inner {
                         failure(
                             EngineOperationDto::Job,
                             EngineFailureKind::Protocol,
-                            format!("whole-game response was not parseable: {error}"),
+                            self.diagnostic_text(&started.run_id, &error.to_string())
+                                .prefixed("whole-game response was not parseable: "),
                             Some(started.run_id.as_str()),
                             None,
                             None,
@@ -3533,14 +3897,23 @@ impl Inner {
         }
     }
 
-    fn fail_unresponsive_run(&self, run_id: &str, message: &str) -> EngineFailureDto {
+    fn fail_unresponsive_run(&self, run_id: &str, message: impl Into<FailureText>) -> EngineFailureDto {
+        self.fail_analysis_run(run_id, EngineFailureKind::Timeout, message)
+    }
+
+    fn fail_analysis_run(
+        &self,
+        run_id: &str,
+        kind: EngineFailureKind,
+        message: impl Into<FailureText>,
+    ) -> EngineFailureDto {
         let mut state = self.lock();
         if let Phase::Error { failure, .. } = &state.phase {
             return failure.clone();
         }
         let mut published = failure(
             EngineOperationDto::Job,
-            EngineFailureKind::Timeout,
+            kind,
             message.into(),
             Some(run_id),
             None,
@@ -3557,7 +3930,8 @@ impl Inner {
         let Some(run) = admitting_run(&state.phase, run_id) else {
             return published;
         };
-        fail_analysis_task_locked(&mut state, None, message);
+        state.continuous_safety_hold = true;
+        fail_analysis_task_locked(&mut state, None, &published.message);
         state.operation += 1;
         let deadline = state
             .jobs
@@ -3578,17 +3952,27 @@ impl Inner {
                 published.clone().with_job_id(&started.job_id),
             );
         }
-        let ManagerState { live, candidate, .. } = &mut *state;
+        let ManagerState {
+            live,
+            candidate,
+            gtp_dispatch,
+            ..
+        } = &mut *state;
         for slot in [live, candidate] {
             if let Some(live) = slot.as_mut() {
+                gtp_dispatch.retire_run(&live.run_id);
                 match terminate_process(live, deadline) {
                     Ok(()) => {
                         *slot = None;
                     }
                     Err(error) => {
-                        published
-                            .message
-                            .push_str(&format!("; process cleanup failed: {error}"));
+                        published.message = FailureText::from_failure(&published)
+                            .then(
+                                live.capture
+                                    .failure_text(&error.to_string())
+                                    .prefixed("; process cleanup failed: "),
+                            )
+                            .into_string();
                     }
                 }
             }
@@ -3659,6 +4043,7 @@ fn cancel_jobs_for_current(state: &mut ManagerState) {
 
 fn cancel_jobs_for_run(state: &mut ManagerState, run_id: &str) {
     game_move::seal_move_for_run(state, run_id);
+    runtime_control::retire(state, run_id);
     let query_ids: Vec<String> = state
         .jobs
         .iter()
@@ -3793,7 +4178,7 @@ fn bound_work_item_query(
         failure(
             EngineOperationDto::Job,
             EngineFailureKind::Protocol,
-            format!("failed to serialize whole-game query: {error}"),
+            FailureText::unscoped(&error.to_string()).prefixed("failed to serialize whole-game query: "),
             None,
             None,
             None,
@@ -4232,14 +4617,18 @@ fn current_admitting_run(phase: &Phase) -> Option<EngineRunDto> {
     }
 }
 
-fn require_capability(run: &EngineRunDto, supported: bool, capability: &str) -> Result<(), EngineFailureDto> {
+fn require_capability(
+    run: &EngineRunDto,
+    supported: bool,
+    capability: &'static str,
+) -> Result<(), EngineFailureDto> {
     if supported {
         Ok(())
     } else {
         Err(failure(
             EngineOperationDto::Job,
             EngineFailureKind::UnsupportedCapability,
-            format!("current Ready Run does not admit {capability}"),
+            FailureText::from("current Ready Run does not admit ").then(capability),
             Some(&run.run_id),
             Some(&run.profile_id),
             None,
@@ -4272,7 +4661,7 @@ fn validate_query_capabilities(
     if query.include_ownership == Some(true) {
         require_capability(run, capabilities.ownership, "ownership analysis")?;
     }
-    if query.include_policy == Some(true) {
+    if query.include_policy == Some(true) && run.adapter_kind != EngineBackend::KataGoGtp {
         require_capability(run, capabilities.policy, "policy analysis")?;
     }
     if check_visits
@@ -4350,6 +4739,7 @@ fn validate_selected_admission(
 ) -> Result<EngineRunDto, EngineFailureDto> {
     match_reservation::require_unreserved(state)?;
     game_move::require_idle_move(state)?;
+    runtime_control::require_idle(state)?;
     let run_id = request.run_id.as_str();
     if state.continuous_departing {
         return Err(continuous_invalid_state(
@@ -4380,6 +4770,40 @@ fn validate_selected_admission(
             None,
         )
     })?;
+    if run.adapter_kind == EngineBackend::KataGoGtp {
+        if request.mode == AnalysisJobModeDto::Finite
+            && request.query.max_visits.is_none_or(|visits| visits == 0)
+        {
+            return Err(failure(
+                EngineOperationDto::Job,
+                EngineFailureKind::UnsupportedCapability,
+                "finite KataGo GTP analysis requires positive max visits".into(),
+                Some(run_id),
+                Some(&run.profile_id),
+                None,
+            ));
+        }
+        let exact = request.exact_position.as_ref().map_err(|message| {
+            failure(
+                EngineOperationDto::Job,
+                EngineFailureKind::UnsupportedCapability,
+                diagnostic_text_for_state(state, run_id, message),
+                Some(run_id),
+                Some(&run.profile_id),
+                None,
+            )
+        })?;
+        ordinary_rules::admit(&run, exact).map_err(|message| {
+            failure(
+                EngineOperationDto::Job,
+                EngineFailureKind::UnsupportedCapability,
+                diagnostic_text_for_state(state, run_id, &message),
+                Some(run_id),
+                Some(&run.profile_id),
+                None,
+            )
+        })?;
+    }
     let capabilities = analysis_capabilities(&run)?;
     let continuous = request.mode == AnalysisJobModeDto::Continuous;
     require_capability(
@@ -4429,7 +4853,7 @@ fn clear_holds_for_new_run(state: &mut ManagerState) {
         .retain(|job| !(job.lane == AnalysisJobLane::SelectedNode && job.terminal));
 }
 
-fn continuous_invalid_state(state: &ManagerState, message: &str) -> EngineFailureDto {
+fn continuous_invalid_state(state: &ManagerState, message: &'static str) -> EngineFailureDto {
     failure(
         EngineOperationDto::Job,
         EngineFailureKind::InvalidState,
@@ -4517,6 +4941,7 @@ fn owned_live<'a>(state: &'a ManagerState, run_id: &str) -> Option<&'a LiveEngin
         .iter()
         .chain(state.candidate.iter())
         .chain(state.match_residents.iter())
+        .chain(state.preloads.iter().filter_map(|slot| slot.live.as_ref()))
         .find(|live| live.run_id == run_id)
 }
 
@@ -4526,10 +4951,12 @@ fn owned_live_mut<'a>(state: &'a mut ManagerState, run_id: &str) -> Option<&'a m
         .iter_mut()
         .chain(state.candidate.iter_mut())
         .chain(state.match_residents.iter_mut())
+        .chain(state.preloads.iter_mut().filter_map(|slot| slot.live.as_mut()))
         .find(|live| live.run_id == run_id)
 }
 
 fn take_owned_live(state: &mut ManagerState, run_id: &str) -> Option<LiveEngine> {
+    state.gtp_dispatch.retire_run(run_id);
     if state.live.as_ref().is_some_and(|live| live.run_id == run_id) {
         state.live.take()
     } else if state.candidate.as_ref().is_some_and(|live| live.run_id == run_id) {
@@ -4581,7 +5008,8 @@ fn write_terminate_to_live(live: &LiveEngine, job_id: &str) {
 }
 
 fn terminate_process(live: &mut LiveEngine, deadline: Instant) -> io::Result<()> {
-    if live.child.try_wait()?.is_some() {
+    if let Some(status) = live.child.try_wait()? {
+        live.capture.exited(status.code());
         return Ok(());
     }
     live.child.kill()?;
@@ -4592,7 +5020,8 @@ fn terminate_process(live: &mut LiveEngine, deadline: Instant) -> io::Result<()>
         ));
     }
     loop {
-        if live.child.try_wait()?.is_some() {
+        if let Some(status) = live.child.try_wait()? {
+            live.capture.exited(status.code());
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -4672,6 +5101,7 @@ fn starting_run(saved: &SavedEngineProfile) -> EngineRunDto {
         adapter_kind: saved.profile.adapter_kind(),
         profile_snapshot: saved.profile.clone(),
         capability_snapshot: None,
+        qualified_resource: None,
     }
 }
 
@@ -4690,7 +5120,7 @@ fn invalid_task_conditions(run_id: &str, message: String) -> EngineFailureDto {
     failure(
         EngineOperationDto::Job,
         EngineFailureKind::InvalidState,
-        message,
+        FailureText::unscoped(&message),
         Some(run_id),
         None,
         None,
@@ -4714,13 +5144,53 @@ fn single_stage_conditions(total_visits: u32) -> AnalysisStageConditionsDto {
     }
 }
 
+fn diagnostic_text_for_state(state: &ManagerState, run_id: &str, text: &str) -> FailureText {
+    match owned_live(state, run_id) {
+        Some(live) => live.capture.failure_text(text),
+        None => FailureText::unscoped(text),
+    }
+}
+
+fn identify_failed_executable(run: &EngineRunDto, failure: &mut EngineFailureDto, inner: &Inner) {
+    let attempts = inner.diagnostics.lock().expect("diagnostic capture list");
+    let name = attempts
+        .iter()
+        .find(|capture| capture.matches_run(&run.run_id))
+        .map(|capture| capture.alias(&run.profile_snapshot.program))
+        .unwrap_or_else(|| "[redacted]".into());
+    failure.message = format!("executable {name}: {}", failure.message);
+}
+
+fn attach_startup_failure(
+    failure: &mut EngineFailureDto,
+    output: &Arc<Mutex<StartupOutput>>,
+    capture: &AttemptCapture,
+) {
+    let output = output.lock().unwrap_or_else(|e| e.into_inner());
+    if matches!(
+        failure.kind,
+        EngineFailureKind::Start
+            | EngineFailureKind::Readiness
+            | EngineFailureKind::ProcessExit
+            | EngineFailureKind::NonzeroExit
+    ) {
+        if let Some(kind) = output.failure_kind() {
+            failure.kind = kind;
+        }
+    }
+    let summary = output.summary(capture);
+    if !summary.is_empty() {
+        failure.diagnostic_summary = Some(summary);
+    }
+}
+
 fn failure(
     operation: EngineOperationDto,
     kind: EngineFailureKind,
-    message: String,
+    message: FailureText,
     run_id: Option<&str>,
     profile_id: Option<&str>,
-    diagnostic_summary: Option<String>,
+    diagnostic_summary: Option<FailureText>,
 ) -> EngineFailureDto {
     EngineFailureDto {
         operation,
@@ -4729,8 +5199,8 @@ fn failure(
         job_id: None,
         profile_id: profile_id.map(str::to_string),
         kind,
-        message,
-        diagnostic_summary,
+        message: message.into_string(),
+        diagnostic_summary: diagnostic_summary.map(FailureText::into_string),
     }
 }
 

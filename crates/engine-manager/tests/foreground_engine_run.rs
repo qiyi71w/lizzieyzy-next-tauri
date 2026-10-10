@@ -20,6 +20,19 @@ use std::time::{Duration, Instant};
 
 static NEXT_TEST_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
+#[test]
+fn match_rejection_preserves_actionable_ownership_guidance() {
+    let manager = ForegroundEngineManager::new(
+        Arc::new(InMemoryEngineProfileCatalog::default()),
+        ForegroundEngineConfig::default(),
+    );
+    let failure = manager.reserve_match("").unwrap_err();
+    assert_eq!(failure.kind, EngineFailureKind::InvalidState);
+    assert!(failure.message.contains("nonempty session"));
+    assert!(failure.message.contains("Ready") && failure.message.contains("unloaded"));
+    assert!(!failure.message.contains("[private-"));
+}
+
 struct TestTempDir {
     path: PathBuf,
 }
@@ -176,6 +189,7 @@ fn sample_query() -> AnalysisQuery {
 
 fn selected_request(run_id: &str, generation: u64, indices: Vec<u32>) -> SelectedNodeJobRequest {
     SelectedNodeJobRequest {
+        exact_position: Err("JSONL fixture does not require exact GTP history".into()),
         run_id: run_id.into(),
         mode: app_model::AnalysisJobModeDto::Finite,
         generation,
@@ -783,6 +797,7 @@ fn selected_node_completion_publishes_normalized_candidates_pv_ownership_policy_
     query.board_y_size = 2;
     let started = manager
         .start_selected_node_job(SelectedNodeJobRequest {
+            exact_position: Err("JSONL fixture does not require exact GTP history".into()),
             run_id: run_id.clone(),
             mode: app_model::AnalysisJobModeDto::Finite,
             generation: 4,
@@ -1030,6 +1045,13 @@ fn selected_node_protocol_failure_does_not_cancel_whole_game() {
         manager.snapshot().lifecycle,
         ForegroundEngineLifecycleDto::Ready { .. }
     ));
+
+    manager.teardown().unwrap();
+    assert_eq!(std::fs::read_to_string(&cancel_marker).unwrap(), "cancelled");
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine { .. }
+    ));
 }
 
 #[cfg(unix)]
@@ -1116,6 +1138,13 @@ fn selected_node_supersede_cancels_only_that_lane_and_completes_latest() {
     assert!(matches!(
         manager.snapshot().lifecycle,
         ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+
+    manager.teardown().unwrap();
+    assert_eq!(std::fs::read_to_string(&cancel_marker).unwrap(), "cancelled");
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
 }
 
@@ -3223,6 +3252,13 @@ fn whole_game_user_cancel_keeps_run_ready_and_does_not_cancel_selected_node() {
         snapshot.lifecycle,
         ForegroundEngineLifecycleDto::Ready { .. }
     ));
+
+    manager.teardown().unwrap();
+    assert_eq!(std::fs::read_to_string(&selected_cancelled).unwrap(), "cancelled");
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine { .. }
+    ));
 }
 
 #[cfg(unix)]
@@ -4048,22 +4084,29 @@ fn durable_reorder_and_failure_preserve_ready_run_launch_and_job_bindings() {
         fn autoload_profile_id(&self) -> Option<String> {
             engine_manager::load_engine_profiles(&self.0)
                 .ok()?
-                .autoload_profile_id
+                .startup_profile_id()
+                .map(str::to_owned)
         }
     }
     let temp = TestTempDir::new("order-ready-job");
     let path = temp.path().join("catalog.json");
     let current = engine_manager::EngineProfilesSettings {
-        version: 1,
+        version: 2,
         selected_profile_id: "profile-b".into(),
-        autoload_profile_id: Some("profile-a".into()),
+        startup: app_model::EngineStartupPolicyDto::Fixed {
+            profile_id: "profile-a".into(),
+        },
+        last_primary_profile_id: None,
+        startup_evaluation: Default::default(),
         profiles: vec![
             engine_manager::EngineProfileRecord {
                 id: "profile-a".into(),
+                preload: false,
                 profile: setup_named_profile(&temp, "a", &hold_after_probe_script()),
             },
             engine_manager::EngineProfileRecord {
                 id: "profile-b".into(),
+                preload: false,
                 profile: setup_named_profile(&temp, "b", &resident_echo_script()),
             },
         ],
@@ -4091,7 +4134,7 @@ fn durable_reorder_and_failure_preserve_ready_run_launch_and_job_bindings() {
     let reordered = engine_manager::reorder_engine_profiles(&path, current.clone(), &request).unwrap();
     assert_eq!(engine_manager::load_engine_profiles(&path).unwrap(), reordered);
     assert_eq!(reordered.selected_profile_id, "profile-b");
-    assert_eq!(reordered.autoload_profile_id.as_deref(), Some("profile-a"));
+    assert_eq!(reordered.startup_profile_id(), Some("profile-a"));
     assert_eq!(manager.snapshot(), before);
     let bytes = std::fs::read(&path).unwrap();
     std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
@@ -4557,7 +4600,7 @@ fn switch_asset_failure_keeps_ready_a_and_publishes_switch_scoped_failure() {
 
 #[cfg(unix)]
 #[test]
-fn switch_spawn_failure_keeps_ready_a_with_start_kind() {
+fn switch_non_file_executable_keeps_ready_a_with_component_kind() {
     let temp = TestTempDir::new("switch-spawn");
     let (manager, catalog, events, run_a) =
         ready_two_profiles(&temp, &resident_echo_script(), &resident_echo_script());
@@ -4577,7 +4620,7 @@ fn switch_spawn_failure_keeps_ready_a_with_start_kind() {
         panic!("expected switching snapshot");
     };
     let failure = wait_failure(&events, Duration::from_secs(2), |failure| {
-        failure.kind == EngineFailureKind::Start
+        failure.kind == EngineFailureKind::Executable
     });
     assert_eq!(failure.operation, EngineOperationDto::Switch);
     assert_eq!(failure.profile_id.as_deref(), Some("profile-b"));
@@ -4923,7 +4966,7 @@ impl AnalysisJobCancel for FileCancel {
 
 #[cfg(unix)]
 #[test]
-fn spawn_failure_stays_no_engine_with_start_kind() {
+fn non_file_executable_stays_no_engine_with_component_kind() {
     let temp = TestTempDir::new("spawn-start");
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     let mut profile = setup_profile(&temp, &resident_echo_script());
@@ -4938,7 +4981,7 @@ fn spawn_failure_stays_no_engine_with_start_kind() {
     let events = manager.subscribe();
     manager.start("profile-1").unwrap();
     let failure = wait_failure(&events, Duration::from_secs(2), |failure| {
-        failure.kind == EngineFailureKind::Start
+        failure.kind == EngineFailureKind::Executable
     });
     assert_eq!(failure.operation, EngineOperationDto::Start);
     assert_eq!(failure.profile_id.as_deref(), Some("profile-1"));
@@ -5070,6 +5113,9 @@ exit 9
     wait_snapshot(&events, Duration::from_secs(3), |lifecycle| {
         matches!(lifecycle, ForegroundEngineLifecycleDto::Error { .. })
     });
+    manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
     let mut repaired = catalog.get("profile-1").unwrap();
     repaired.profile = setup_profile(&temp, &resident_echo_script());
     repaired.profile.name = "Repaired KataGo".into();
@@ -5081,6 +5127,12 @@ exit 9
     let run = run_from_ready(&ready.lifecycle);
     assert_ne!(run.run_id, old_run_id);
     assert_eq!(run.profile_snapshot.name, "Repaired KataGo");
+    assert_eq!(
+        ready.continuous.phase,
+        app_model::ContinuousAnalysisPhaseDto::SafetyHold
+    );
+    assert!(ready.selected_node_job.is_none());
+    manager.teardown().unwrap();
 }
 
 #[cfg(unix)]
@@ -6574,7 +6626,7 @@ fn gtp_typed_failures_have_total_deadline_and_reap_children() {
         assert!(
             matches!(
                 manager.snapshot().lifecycle,
-                ForegroundEngineLifecycleDto::Error { .. }
+                ForegroundEngineLifecycleDto::NoEngine { failure: Some(_) }
             ),
             "{mode} must require explicit recovery"
         );
@@ -6592,11 +6644,15 @@ fn gtp_idle_eof_or_unsolicited_response_seals_run_until_manual_restart() {
     ] {
         let temp = TestTempDir::new(mode);
         let (manager, catalog) = gtp_manager(&temp, mode);
+        manager
+            .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+            .unwrap();
         manager.start("gtp").unwrap();
         let ready = wait_lifecycle(&manager, Duration::from_secs(2), |s| {
             matches!(s, ForegroundEngineLifecycleDto::Ready { .. })
         });
         let old_id = run_from_ready(&ready.lifecycle).run_id.clone();
+        std::fs::write(temp.path().join(format!("{mode}.idle-release")), "release").unwrap();
         let error = wait_lifecycle(&manager, Duration::from_secs(2), |s| {
             matches!(s, ForegroundEngineLifecycleDto::Error { .. })
         });
@@ -6621,6 +6677,11 @@ fn gtp_idle_eof_or_unsolicited_response_seals_run_until_manual_restart() {
             matches!(s, ForegroundEngineLifecycleDto::Ready { .. })
         });
         assert_ne!(run_from_ready(&ready.lifecycle).run_id, old_id);
+        assert_eq!(
+            ready.continuous.phase,
+            app_model::ContinuousAnalysisPhaseDto::SafetyHold
+        );
+        assert!(ready.selected_node_job.is_none());
         manager.teardown().unwrap();
         assert_gtp_reaped(&temp, "good");
     }
@@ -6632,7 +6693,7 @@ fn gtp_cross_protocol_switch_preserves_primary_work_and_latest_intent() {
     let temp = TestTempDir::new("gtp-switch");
     let (manager, catalog, events, primary) = ready_manager(&temp, &hold_then_echo_script());
     let job = manager
-        .start_selected_node_job(selected_request(&primary, 1, vec![]))
+        .start_selected_node_job(continuous_request(&primary, 1, vec![]))
         .unwrap();
     for mode in ["badid", "slow", "good"] {
         catalog.upsert(SavedEngineProfile {
@@ -6692,4 +6753,887 @@ fn gtp_stop_during_handshake_cannot_publish_late_ready() {
     assert_gtp_reaped(&temp, "slow");
     std::thread::sleep(Duration::from_millis(850));
     assert!(events.try_iter().all(|e| !matches!(e, ForegroundEngineEventDto::Snapshot { snapshot } if matches!(snapshot.lifecycle, ForegroundEngineLifecycleDto::Ready { .. }))));
+}
+
+#[cfg(unix)]
+#[test]
+fn local_qualification_binds_actual_content_to_the_run_without_managed_trust() {
+    let temp = TestTempDir::new("resource-identity");
+    let (manager, _, _, _) = ready_manager(&temp, &resident_echo_script());
+    let snapshot = manager.snapshot();
+    let run = run_from_ready(&snapshot.lifecycle);
+    let identity = run.qualified_resource.as_ref().expect("qualified resource");
+    assert_eq!(identity.origin, "local_unknown");
+    assert!(!identity.static_zlib_exemption);
+    assert_eq!(identity.profile_revision.len(), 64);
+    let model = identity
+        .resources
+        .iter()
+        .find(|resource| resource.component == "model")
+        .unwrap();
+    assert_eq!(
+        model.sha256,
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    assert_eq!(model.bytes, 0);
+    assert!(!model
+        .resolved_path
+        .contains(&temp.path().to_string_lossy().to_string()));
+    let diagnostics = manager.diagnostic_snapshots().pop().unwrap();
+    assert!(diagnostics.command.contains(&model.resolved_path));
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn diagnostics_capture_live_burst_without_waiting_for_exit_and_keep_frozen_identity() {
+    let temp = TestTempDir::new("diagnostics-burst");
+    let release = temp.path().join("release");
+    let script = format!(
+        r#"exec python3 -u -c '
+import json,sys,time,pathlib
+q=json.loads(sys.stdin.readline())
+print(json.dumps(dict(id=q["id"],turnNumber=0,isDuringSearch=False,rootInfo=dict(visits=4,winrate=0.6,scoreMean=1.25),moveInfos=[])),flush=True)
+while not pathlib.Path("{}").exists(): time.sleep(0.005)
+for i in range(3000): print("WARN burst " + str(i) + " " + "x"*1000,file=sys.stderr)
+print("token=FAKE-secret with spaces",file=sys.stderr)
+print("roomId=424242",file=sys.stderr)
+print("http://fake.invalid/private?token=FAKE-url",file=sys.stderr)
+print("/home/fake-user/private/model.bin",file=sys.stderr)
+print("diagnostic-barrier",file=sys.stderr,flush=True)
+while True: time.sleep(1)
+'"#,
+        release.display()
+    );
+    let (manager, _, _, first_run) = ready_manager(&temp, &script);
+    let before = manager.diagnostic_snapshots().pop().unwrap();
+    assert_eq!(before.run_id, first_run);
+    assert!(!before.full_trace);
+    assert!(before
+        .records
+        .iter()
+        .any(|record| record.source == "startup-probe-stdout"));
+    std::fs::write(release, "go").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let captured = loop {
+        let snapshot = manager.diagnostic_snapshots().pop().unwrap();
+        if snapshot
+            .records
+            .iter()
+            .any(|record| record.text == "diagnostic-barrier")
+        {
+            break snapshot;
+        }
+        assert!(Instant::now() < deadline, "live stderr was not observed");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(captured.dropped_records > 0);
+    assert!(captured.retained_bytes <= 64 * 1024);
+    assert!(captured.records.len() <= 256);
+    let encoded = serde_json::to_string(&captured).unwrap();
+    for private in ["FAKE-secret", "424242", "fake.invalid", "fake-user"] {
+        assert!(!encoded.contains(private), "leaked {private}");
+    }
+    assert!(captured
+        .records
+        .windows(2)
+        .all(|records| records[0].sequence < records[1].sequence));
+    assert!(captured
+        .metrics
+        .iter()
+        .any(|metric| metric.name == "resident-memory" && metric.value.is_some_and(|value| value > 0.0)));
+    manager.stop().unwrap();
+    wait_lifecycle(&manager, Duration::from_secs(3), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::NoEngine { .. })
+    });
+    assert_eq!(captured.run_id, first_run);
+    assert_eq!(serde_json::to_string(&captured).unwrap(), encoded);
+}
+
+#[cfg(unix)]
+#[test]
+fn resource_replacement_and_saved_revision_changes_cannot_promote_a_late_candidate() {
+    for change in ["model", "config", "layered_include", "executable", "profile"] {
+        let temp = TestTempDir::new(change);
+        let release = temp.path().join("release-resource");
+        let entered = temp.path().join("entered-resource");
+        let script = format!(
+            "touch '{}'\n{}",
+            entered.display(),
+            hold_probe_until_release_script(&release)
+        );
+        let (manager, catalog, events, run_a) = ready_two_profiles(&temp, &resident_echo_script(), &script);
+        if change == "layered_include" {
+            std::fs::write(
+                temp.path().join("cache-defaults.cfg"),
+                "@include='custom-cache.cfg'\n",
+            )
+            .unwrap();
+            std::fs::write(temp.path().join("custom-cache.cfg"), "homeDataDir = original\n").unwrap();
+            let mut saved = catalog.get("profile-b").unwrap();
+            saved.profile.argv.extend([
+                "-config".into(),
+                temp.path()
+                    .join("cache-defaults.cfg")
+                    .to_string_lossy()
+                    .into_owned(),
+            ]);
+            catalog.upsert(saved);
+        }
+        let before = manager.snapshot();
+        manager.switch_to("profile-b").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !entered.exists() {
+            assert!(Instant::now() < deadline, "candidate did not enter probe");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        match change {
+            "model" => std::fs::write(temp.path().join("engine-b.bin"), b"replacement model").unwrap(),
+            "config" => std::fs::write(temp.path().join("engine-b.cfg"), b"numSearchThreads=3").unwrap(),
+            "layered_include" => std::fs::write(
+                temp.path().join("custom-cache.cfg"),
+                "homeDataDir = replacement\n",
+            )
+            .unwrap(),
+            "executable" => {
+                let replacement = temp.path().join("replacement.sh");
+                write_executable(&replacement, &resident_echo_script());
+                std::fs::rename(replacement, temp.path().join("engine-b.sh")).unwrap();
+            }
+            _ => {
+                let mut saved = catalog.get("profile-b").unwrap();
+                saved.profile.name = "new saved revision".into();
+                catalog.upsert(saved);
+            }
+        }
+        std::fs::write(&release, "release").unwrap();
+        let failure = wait_failure(&events, Duration::from_secs(3), |failure| {
+            failure.operation == EngineOperationDto::Switch
+        });
+        assert_eq!(failure.kind, EngineFailureKind::ResourceChanged, "{failure:?}");
+        assert_eq!(failure.profile_id.as_deref(), Some("profile-b"));
+        assert_ready_a(
+            &manager.snapshot().lifecycle,
+            &run_a,
+            run_from_ready(&before.lifecycle),
+        );
+        manager.teardown().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn startup_dependency_failures_are_bounded_redacted_and_never_replace_ready_a() {
+    for (component, expected) in [
+        ("nvonnxparser.dll missing", EngineFailureKind::TensorRtParser),
+        ("cudnn64_9.dll missing", EngineFailureKind::Cudnn),
+        ("nvrtc64.dll missing", EngineFailureKind::Nvrtc),
+        ("CUDA driver error", EngineFailureKind::Cuda),
+        ("zlib1.dll missing", EngineFailureKind::Zlib),
+    ] {
+        let temp = TestTempDir::new("dependency-redaction");
+        let script = format!("printf '%s\\n' '{component} token=fake-secret session_id=fake-session https://example.test/private /home/alice/private-model' >&2\nexit 7");
+        let (manager, _, events, run_a) = ready_two_profiles(&temp, &resident_echo_script(), &script);
+        manager.switch_to("profile-b").unwrap();
+        let failure = wait_failure(&events, Duration::from_secs(3), |failure| {
+            failure.operation == EngineOperationDto::Switch
+        });
+        assert_eq!(failure.kind, expected, "{failure:?}");
+        let summary = failure.diagnostic_summary.unwrap();
+        assert!(summary.len() <= 8192);
+        for secret in [
+            "fake-secret",
+            "fake-session",
+            "example.test",
+            "/home/alice",
+            "\u{1}",
+        ] {
+            assert!(!summary.contains(secret), "{summary}");
+        }
+        let diagnostics = manager.diagnostic_snapshots().pop().unwrap();
+        assert_eq!(Some(diagnostics.run_id.as_str()), failure.run_id.as_deref());
+        assert!(diagnostics
+            .failure
+            .as_ref()
+            .unwrap()
+            .contains(&format!("{expected:?}")));
+        assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, run_a);
+        manager.teardown().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_gtp_attempt_keeps_private_identities_across_failure_capture_and_export() {
+    use app_model::DiagnosticExportPhaseDto;
+    use engine_manager::diagnostic_export::DiagnosticExport;
+    let temp = TestTempDir::new("failure-alias-export");
+    let script = r#"import sys,time
+sys.stdin.readline()
+print('INFO control\x1b\x00', file=sys.stderr, flush=True)
+print('?1 token=FAKE-ALPHA\ntoken=FAKE-BETA\ntoken=FAKE-ALPHA\npassword="FAKE-FIRST\nFAKE-LAST"\n/home/FAKE User/private.cfg\n', flush=True)
+time.sleep(30)
+"#;
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    let mut profile = gtp_profile(&temp, "privacy");
+    profile.argv = vec![
+        "-u".into(),
+        "-c".into(),
+        script.into(),
+        "GTP".into(),
+        "protocol_version".into(),
+        "rejected".into(),
+    ];
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "private-attempt".into(),
+        profile,
+    });
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    let events = manager.subscribe();
+    manager.start("private-attempt").unwrap();
+    let failure = wait_failure(&events, Duration::from_secs(3), |_| true);
+    manager.teardown().unwrap();
+    assert_eq!(failure.kind, EngineFailureKind::Command);
+    assert!(
+        failure.message.contains("GTP protocol_version rejected:"),
+        "{}",
+        failure.message
+    );
+    let snapshot = manager.diagnostic_snapshots().pop().unwrap();
+    assert_eq!(failure.run_id.as_deref(), Some(snapshot.run_id.as_str()));
+    assert!(snapshot.failure.as_ref().unwrap().ends_with(&failure.message));
+    let aliases: Vec<_> = snapshot
+        .records
+        .iter()
+        .filter(|record| record.source == "startup-probe-stdout" && record.text.contains("token="))
+        .map(|record| record.text.split("token=").nth(1).unwrap().to_owned())
+        .collect();
+    assert_eq!(aliases.len(), 3);
+    assert_eq!(aliases[0], aliases[2]);
+    assert_ne!(aliases[0], aliases[1]);
+    for alias in &aliases {
+        assert!(failure.message.contains(alias));
+    }
+    let encoded = serde_json::to_string(&snapshot).unwrap();
+    for value in [
+        "FAKE-ALPHA",
+        "FAKE-BETA",
+        "FAKE-FIRST",
+        "FAKE-LAST",
+        "FAKE User",
+        "private.cfg",
+        "\\u001b",
+        "\\u0000",
+    ] {
+        assert!(!encoded.contains(value) && !failure.message.contains(value));
+    }
+    assert!(snapshot.retained_bytes <= 64 * 1024 && snapshot.records.len() <= 256);
+    let directory = temp.path().join("exports");
+    let export = DiagnosticExport::new(directory.clone());
+    let generation = export.estimate(snapshot.clone()).unwrap();
+    let wait = |phase| {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let status = export.status();
+            if status.phase == phase {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "{status:?}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    wait(DiagnosticExportPhaseDto::Ready);
+    // A new public rejection cannot redirect the pinned export or its aliases.
+    assert!(manager.reserve_match("").is_err());
+    export.export(generation).unwrap();
+    let completed = wait(DiagnosticExportPhaseDto::Completed);
+    let mut archive =
+        zip::ZipArchive::new(std::fs::File::open(directory.join(completed.file_name.unwrap())).unwrap())
+            .unwrap();
+    let restored: app_model::EngineDiagnosticSnapshotDto =
+        serde_json::from_reader(archive.by_name("snapshot.json").unwrap()).unwrap();
+    assert_eq!(restored, snapshot);
+    let records: Vec<app_model::EngineDiagnosticRecordDto> = {
+        use std::io::{BufRead, BufReader};
+        BufReader::new(archive.by_name("records.jsonl").unwrap())
+            .lines()
+            .map(|line| serde_json::from_str(&line.unwrap()).unwrap())
+            .collect()
+    };
+    assert_eq!(records, snapshot.records);
+    assert!(export.shutdown(Duration::from_millis(500)));
+}
+
+#[cfg(unix)]
+#[test]
+fn diagnostics_preserve_healthy_primary_through_failed_attempts_and_cancel_burst() {
+    let temp = TestTempDir::new("diagnostics-retention");
+    let release = temp.path().join("release");
+    let script = format!(
+        r#"exec python3 -u -c '
+import json,sys,time,pathlib
+q=json.loads(sys.stdin.readline())
+print(json.dumps(dict(id=q["id"],turnNumber=0,isDuringSearch=False,rootInfo=dict(visits=4,winrate=0.6,scoreMean=1.25),moveInfos=[])),flush=True)
+while not pathlib.Path("{}").exists(): time.sleep(0.005)
+while True: print("WARN continuous " + "x"*1000,file=sys.stderr,flush=True)
+'"#,
+        release.display()
+    );
+    let (manager, catalog, events, primary) = ready_manager(&temp, &script);
+    for index in 0..6 {
+        let id = format!("missing-{index}");
+        catalog.upsert(SavedEngineProfile {
+            profile_id: id.clone(),
+            profile: missing_assets_profile(&id, &temp),
+        });
+        manager.switch_to(&id).unwrap();
+        let failure = wait_failure(&events, Duration::from_secs(2), |failure| {
+            failure.profile_id.as_deref() == Some(id.as_str())
+        });
+        let snapshot = manager.diagnostic_snapshots().pop().unwrap();
+        let executable_alias = snapshot
+            .command
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .strip_prefix("program=")
+            .unwrap();
+        assert!(failure.message.contains(executable_alias));
+        assert!(snapshot.failure.as_ref().unwrap().ends_with(&failure.message));
+        assert!(failure
+            .diagnostic_summary
+            .as_ref()
+            .unwrap()
+            .contains(executable_alias));
+        assert!(!serde_json::to_string(&snapshot)
+            .unwrap()
+            .contains(&temp.path().to_string_lossy().to_string()));
+        assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, primary);
+    }
+    let snapshots = manager.diagnostic_snapshots();
+    assert_eq!(snapshots.len(), 4);
+    assert_eq!(snapshots[0].run_id, primary);
+    assert!(snapshots
+        .iter()
+        .skip(1)
+        .all(|snapshot| snapshot.failure.is_some() && snapshot.run_id != primary));
+    std::fs::write(release, "go").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while manager.diagnostic_snapshots()[0].dropped_records == 0 {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    manager.stop().unwrap();
+    wait_lifecycle(&manager, Duration::from_secs(3), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::NoEngine { .. })
+    });
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = manager.diagnostic_snapshots().remove(0);
+        if snapshot.process_exited && snapshot.stderr_complete && snapshot.stdout_complete {
+            break;
+        }
+        assert!(Instant::now() < deadline, "burst readers did not retire");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn last_primary_tracks_only_successful_promotion_and_survives_stop() {
+    let temp = TestTempDir::new("last-primary-promotions");
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    for id in ["a", "b"] {
+        catalog.upsert(SavedEngineProfile {
+            profile_id: id.into(),
+            profile: setup_named_profile(&temp, id, &resident_echo_script()),
+        });
+    }
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
+    assert_eq!(manager.last_primary_profile_id(), None);
+    assert!(manager.start("missing").is_err());
+    assert_eq!(manager.last_primary_profile_id(), None);
+    manager.start("a").unwrap();
+    wait_lifecycle(&manager, Duration::from_secs(3), |phase| {
+        matches!(phase, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("a"));
+    assert!(manager.switch_to("missing").is_err());
+    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("a"));
+    manager.switch_to("b").unwrap();
+    wait_lifecycle(
+        &manager,
+        Duration::from_secs(3),
+        |phase| matches!(phase, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "b"),
+    );
+    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("b"));
+    manager.stop().unwrap();
+    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("b"));
+}
+
+#[cfg(unix)]
+fn wait_preload(
+    manager: &ForegroundEngineManager,
+    phase: app_model::EnginePreloadPhaseDto,
+) -> app_model::EnginePreloadDto {
+    let deadline = Instant::now() + Duration::from_secs(4);
+    loop {
+        let slots = manager.preload_snapshot();
+        if let Some(slot) = slots.iter().find(|slot| slot.phase == phase) {
+            return slot.clone();
+        }
+        assert!(Instant::now() < deadline, "preload timeout: {slots:?}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn preload_requires_opt_in_and_only_explicit_switch_promotes_same_child() {
+    use app_model::EnginePreloadPhaseDto as Phase;
+    let temp = TestTempDir::new("preload-promotion");
+    let (manager, catalog, _, a) =
+        ready_two_profiles(&temp, &resident_echo_script(), &resident_echo_script());
+    assert!(manager.prepare_preload("profile-b").is_err());
+    catalog.set_preload("profile-b", true);
+    manager.prepare_preload("profile-b").unwrap();
+    let prepared = wait_preload(&manager, Phase::Ready);
+    assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, a);
+    assert!(manager
+        .start_selected_node_job(selected_request(&prepared.run.run_id, 1, vec![]))
+        .is_err());
+    assert_eq!(manager.preload_snapshot()[0].phase, Phase::Ready);
+    manager.switch_to("profile-b").unwrap();
+    assert_eq!(
+        run_from_ready(&manager.snapshot().lifecycle).run_id,
+        prepared.run.run_id
+    );
+    assert!(manager.preload_snapshot().is_empty());
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn preload_changed_resource_or_profile_cannot_replace_healthy_primary() {
+    use app_model::EnginePreloadPhaseDto as Phase;
+    for change_profile in [false, true] {
+        let temp = TestTempDir::new("preload-stale");
+        let (manager, catalog, _, a) =
+            ready_two_profiles(&temp, &resident_echo_script(), &resident_echo_script());
+        catalog.set_preload("profile-b", true);
+        manager.prepare_preload("profile-b").unwrap();
+        wait_preload(&manager, Phase::Ready);
+        if change_profile {
+            let mut saved = catalog.get("profile-b").unwrap();
+            saved.profile.name = "changed revision".into();
+            catalog.upsert(saved);
+        } else {
+            std::fs::write(temp.path().join("engine-b.bin"), "replacement").unwrap();
+        }
+        assert!(manager.switch_to("profile-b").is_err());
+        assert_eq!(wait_preload(&manager, Phase::Failed).run.profile_id, "profile-b");
+        assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, a);
+        manager.teardown().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn preload_cancel_and_foreground_admission_retire_late_preparation() {
+    use app_model::EnginePreloadPhaseDto as Phase;
+    for foreground in [false, true] {
+        let temp = TestTempDir::new("preload-cancel");
+        let release = temp.path().join("release");
+        let started = temp.path().join("started");
+        let script = format!(
+            "echo $$ > '{}'\n{}",
+            started.display(),
+            hold_probe_until_release_script(&release)
+        );
+        let (manager, catalog, _, a) = ready_two_profiles(&temp, &resident_echo_script(), &script);
+        catalog.set_preload("profile-b", true);
+        manager.prepare_preload("profile-b").unwrap();
+        wait_preload(&manager, Phase::Preparing);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !started.exists() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let pid = std::fs::read_to_string(&started).unwrap();
+        if foreground {
+            manager
+                .start_selected_node_job(selected_request(&a, 1, vec![]))
+                .unwrap();
+        } else {
+            manager.cancel_preload("profile-b").unwrap();
+        }
+        std::fs::write(&release, "release").unwrap();
+        wait_preload(&manager, Phase::Cancelled);
+        manager.cancel_preload("profile-b").unwrap();
+        #[cfg(target_os = "linux")]
+        assert!(
+            !Path::new(&format!("/proc/{}", pid.trim())).exists(),
+            "owned preparation child must be reaped"
+        );
+        assert_eq!(manager.preload_snapshot()[0].phase, Phase::Cancelled);
+        assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, a);
+        manager.teardown().unwrap();
+        assert!(manager.prepare_preload("profile-b").is_err());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn preload_resource_failure_preserves_primary() {
+    use app_model::EnginePreloadPhaseDto as Phase;
+    let temp = TestTempDir::new("preload-failure");
+    let (manager, catalog, _, a) = ready_two_profiles(
+        &temp,
+        &resident_echo_script(),
+        "echo 'model allocation failed' >&2; exit 1",
+    );
+    catalog.set_preload("profile-b", true);
+    manager.prepare_preload("profile-b").unwrap();
+    assert!(wait_preload(&manager, Phase::Failed).failure.is_some());
+    assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, a);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn preload_ready_yields_to_match_reservation_without_taking_role() {
+    use app_model::EnginePreloadPhaseDto as Phase;
+    let temp = TestTempDir::new("preload-match");
+    let (manager, catalog, _, a) =
+        ready_two_profiles(&temp, &resident_echo_script(), &resident_echo_script());
+    catalog.set_preload("profile-b", true);
+    manager.prepare_preload("profile-b").unwrap();
+    wait_preload(&manager, Phase::Ready);
+    manager.reserve_match("match-owner").unwrap();
+    assert_eq!(manager.preload_snapshot()[0].phase, Phase::Cancelled);
+    assert_eq!(manager.match_reservation_owner().as_deref(), Some("match-owner"));
+    assert!(manager.prepare_preload("profile-b").is_err());
+    assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, a);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn preload_gtp_readiness_keeps_foreground_authority_until_same_run_promotion() {
+    let temp = TestTempDir::new("preload-gtp");
+    let (manager, catalog) = gtp_manager(&temp, "fragment");
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "background".into(),
+        profile: gtp_profile(&temp, "stderr"),
+    });
+    catalog.set_preload("background", true);
+    manager.start("gtp").unwrap();
+    let ready = wait_lifecycle(&manager, Duration::from_secs(3), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    let a = run_from_ready(&ready.lifecycle).run_id.clone();
+    manager.prepare_preload("background").unwrap();
+    let background = wait_preload(&manager, app_model::EnginePreloadPhaseDto::Ready);
+    assert!(background
+        .run
+        .capability_snapshot
+        .as_ref()
+        .unwrap()
+        .analysis
+        .is_none());
+    assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, a);
+    manager.switch_to("background").unwrap();
+    assert_eq!(
+        run_from_ready(&manager.snapshot().lifecycle).run_id,
+        background.run.run_id
+    );
+    manager.teardown().unwrap();
+    assert_gtp_reaped(&temp, "fragment");
+    assert_gtp_reaped(&temp, "stderr");
+}
+
+#[cfg(unix)]
+fn held_startup_preload(
+    label: &str,
+    opted_in: bool,
+    readiness_timeout: Duration,
+) -> (
+    TestTempDir,
+    ForegroundEngineManager,
+    Arc<InMemoryEngineProfileCatalog>,
+    PathBuf,
+) {
+    let temp = TestTempDir::new(label);
+    let release = temp.path().join("startup-release");
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "a".into(),
+        profile: setup_named_profile(&temp, "a", &hold_probe_until_release_script(&release)),
+    });
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "b".into(),
+        profile: setup_named_profile(&temp, "b", &resident_echo_script()),
+    });
+    catalog.set_preload("b", opted_in);
+    catalog.set_autoload_profile_id(Some("a".into()));
+    let mut config = ForegroundEngineConfig::for_tests();
+    config.readiness_timeout = readiness_timeout;
+    let manager = ForegroundEngineManager::new(catalog.clone(), config);
+    manager.apply_autoload().unwrap();
+    manager.schedule_startup_preloads();
+    wait_lifecycle(&manager, Duration::from_secs(3), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::Starting { .. })
+    });
+    (temp, manager, catalog, release)
+}
+
+#[cfg(unix)]
+#[test]
+fn startup_preload_save_during_starting_requires_explicit_prepare() {
+    let (_temp, manager, catalog, release) =
+        held_startup_preload("startup-preload-save", false, Duration::from_secs(10));
+    catalog.set_preload("b", true);
+    std::fs::write(release, "release").unwrap();
+    wait_lifecycle(&manager, Duration::from_secs(3), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::Ready { .. })
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(manager.preload_snapshot().is_empty());
+    manager.prepare_preload("b").unwrap();
+    wait_preload(&manager, app_model::EnginePreloadPhaseDto::Ready);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "holds a real startup pipe beyond the former 120-second scheduler horizon"]
+fn startup_preload_survives_long_autoload_and_consumes_once() {
+    use app_model::EnginePreloadPhaseDto as Phase;
+    let (_temp, manager, _catalog, release) =
+        held_startup_preload("startup-preload-long", true, Duration::from_secs(140));
+    let started = Instant::now();
+    std::thread::sleep(Duration::from_secs(122));
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Starting { .. }
+    ));
+    std::fs::write(release, "release").unwrap();
+    let prepared = wait_preload(&manager, Phase::Ready);
+    eprintln!(
+        "SPEC-002 original autoload held {:?}; prepared {}",
+        started.elapsed(),
+        prepared.run.run_id
+    );
+    manager.schedule_startup_preloads();
+    manager.apply_preloads();
+    assert_eq!(manager.preload_snapshot().len(), 1);
+    assert_eq!(manager.preload_snapshot()[0].run.run_id, prepared.run.run_id);
+    manager.cancel_preload("b").unwrap();
+    manager.schedule_startup_preloads();
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(manager.preload_snapshot()[0].phase, Phase::Cancelled);
+    manager.teardown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn startup_preload_operation_shutdown_and_foreground_retire_authorization() {
+    for action in ["stop", "shutdown", "foreground"] {
+        let (_temp, manager, _catalog, release) =
+            held_startup_preload("startup-preload-retired", true, Duration::from_secs(10));
+        match action {
+            "stop" => manager.stop().unwrap(),
+            "shutdown" => manager.teardown().unwrap(),
+            _ => {
+                std::fs::write(&release, "release").unwrap();
+                wait_lifecycle(&manager, Duration::from_secs(3), |state| {
+                    matches!(state, ForegroundEngineLifecycleDto::Ready { .. })
+                });
+                manager.reserve_match("startup-priority").unwrap();
+                manager.stop_reserved_match("startup-priority").unwrap();
+            }
+        }
+        std::fs::write(release, "release").unwrap();
+        manager.schedule_startup_preloads();
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            manager
+                .preload_snapshot()
+                .iter()
+                .all(|slot| { slot.phase == app_model::EnginePreloadPhaseDto::Cancelled }),
+            "{action}"
+        );
+        manager.teardown().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn startup_preload_changed_or_deleted_saved_target_cannot_launch_replacement() {
+    struct DiskCatalog(PathBuf);
+    impl EngineProfileCatalog for DiskCatalog {
+        fn get(&self, id: &str) -> Option<SavedEngineProfile> {
+            self.preload_profiles()
+                .into_iter()
+                .find(|saved| saved.profile_id == id)
+        }
+        fn preload_profiles(&self) -> Vec<SavedEngineProfile> {
+            engine_manager::load_engine_profiles(&self.0)
+                .unwrap()
+                .profiles
+                .into_iter()
+                .filter(|record| record.preload)
+                .map(|record| SavedEngineProfile {
+                    profile_id: record.id,
+                    profile: record.profile,
+                })
+                .collect()
+        }
+    }
+    for deleted in [false, true] {
+        let temp = TestTempDir::new("startup-preload-revision");
+        let path = temp.path().join("catalog.json");
+        let mut settings = engine_manager::default_engine_profiles_settings();
+        settings.profiles.push(engine_manager::EngineProfileRecord {
+            id: "b".into(),
+            preload: true,
+            profile: setup_named_profile(&temp, "b", &resident_echo_script()),
+        });
+        engine_manager::save_engine_profiles(&path, settings.clone()).unwrap();
+        let manager = ForegroundEngineManager::new(
+            Arc::new(DiskCatalog(path.clone())),
+            ForegroundEngineConfig::for_tests(),
+        );
+        if deleted {
+            settings.profiles.retain(|record| record.id != "b");
+        } else {
+            settings.profiles.last_mut().unwrap().profile.name = "replacement revision".into();
+        }
+        engine_manager::save_engine_profiles(&path, settings).unwrap();
+        manager.schedule_startup_preloads();
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(manager.preload_snapshot().is_empty());
+        manager.teardown().unwrap();
+        if !deleted {
+            let fresh = ForegroundEngineManager::new(
+                Arc::new(DiskCatalog(path)),
+                ForegroundEngineConfig::for_tests(),
+            );
+            fresh.schedule_startup_preloads();
+            let ready = wait_preload(&fresh, app_model::EnginePreloadPhaseDto::Ready);
+            assert_eq!(ready.run.profile_snapshot.name, "replacement revision");
+            fresh.teardown().unwrap();
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn preload_preparing_and_ready_retire_when_paused_task_continues() {
+    use app_model::EnginePreloadPhaseDto as Phase;
+    for ready in [false, true] {
+        let temp = TestTempDir::new("preload-task-continue");
+        let (manager, catalog, events, run) = ready_manager(&temp, &task_engine_script(temp.path()));
+        let task = manager
+            .start_analysis_task(
+                whole_game_request(&run, 42, 3),
+                analysis_scope(),
+                task_conditions(32),
+            )
+            .unwrap();
+        wait_job(&events, Duration::from_secs(2), |job| {
+            job.job_id == task.job_id && job.outcome == AnalysisJobOutcomeDto::Progress
+        });
+        manager.pause_analysis_task(&run, &task.task_id).unwrap();
+        std::fs::write(temp.path().join("cancel-final"), "go").unwrap();
+        wait_task(&manager, AnalysisTaskStateDto::Paused);
+        let release = temp.path().join("preload-release");
+        let pid_file = temp.path().join("preload-pid");
+        let script = format!(
+            "echo $$ > '{}'\n{}",
+            pid_file.display(),
+            if ready {
+                resident_echo_script()
+            } else {
+                hold_probe_until_release_script(&release)
+            }
+        );
+        catalog.upsert(SavedEngineProfile {
+            profile_id: "b".into(),
+            profile: setup_named_profile(&temp, "background", &script),
+        });
+        catalog.set_preload("b", true);
+        manager.prepare_preload("b").unwrap();
+        wait_preload(&manager, if ready { Phase::Ready } else { Phase::Preparing });
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !pid_file.exists() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let pid = std::fs::read_to_string(pid_file).unwrap();
+        let continued = manager.continue_analysis_task(&run, &task.task_id, 42).unwrap();
+        assert_eq!(continued.state, AnalysisTaskStateDto::Queued);
+        assert_eq!(continued.task_id, task.task_id);
+        assert_eq!(continued.run_id, run);
+        assert_eq!(manager.preload_snapshot()[0].phase, Phase::Cancelled);
+        std::fs::write(release, "late release").unwrap();
+        #[cfg(target_os = "linux")]
+        while Path::new(&format!("/proc/{}", pid.trim())).exists() {
+            assert!(
+                Instant::now() < deadline,
+                "Continue must reap its background child"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(manager.preload_snapshot()[0].phase, Phase::Cancelled);
+        assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, run);
+        manager.teardown().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn malformed_analysis_preserves_trusted_guidance_despite_command_alias() {
+    let temp = TestTempDir::new("diagnostic-malformed-guidance");
+    let (manager, _, events, run) = ready_manager(&temp, &selected_node_malformed_response_script());
+    let job = manager
+        .start_selected_node_job(selected_request(&run, 1, vec![]))
+        .unwrap();
+    let failed = wait_job(&events, Duration::from_secs(2), |event| {
+        event.job_id == job.job_id && event.outcome == AnalysisJobOutcomeDto::Failed
+    });
+    manager.teardown().unwrap();
+    let message = failed.failure.unwrap().message;
+    assert!(
+        message.contains("analysis response") && message.contains("not parseable"),
+        "{message}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ignored_analysis_setting_preserves_actionable_task_reason() {
+    let temp = TestTempDir::new("diagnostic-ignored-guidance");
+    std::fs::write(temp.path().join("budget-smoke"), "ignored_setting").unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/analysis_task_engine.py");
+    let script = format!(
+        "export TASK_ENGINE_DIR='{}'\nexec python3 -u '{}'\n",
+        temp.path().display(),
+        fixture.display()
+    );
+    let (manager, _, _, run) = ready_manager(&temp, &script);
+    manager
+        .start_analysis_task(
+            whole_game_request(&run, 75, 1),
+            analysis_scope(),
+            budget_conditions(Some(1), None, None),
+        )
+        .unwrap();
+    let failed = wait_task(&manager, AnalysisTaskStateDto::Failed);
+    manager.teardown().unwrap();
+    let reason = failed.reason.unwrap();
+    assert!(
+        reason.contains("required analysis setting") && reason.contains("ignored"),
+        "{reason}"
+    );
 }

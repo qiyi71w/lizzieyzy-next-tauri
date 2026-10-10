@@ -6478,7 +6478,7 @@
       "source_ref": "MIGRATION_CONTRACTS.md#b02",
       "facts": "Freeze catalog origin/source commit/release tag/target/archive/executable/model/config identity, admitted platform/backend/hardware set, explicit maintenance actions, compatibility and offline behavior. Retain all frozen 15 source targets as enumerated sources, not 15 automatically certified supported environments. Decide the specific managed catalog and user repair surface, not production repository, credentials, release signing or channels. Keep public GPU guidance tied to selected resource version; RTX30/40/50 CUDA preference, TRT RTX20/GTX16 and GTX10 rejection are source-version guidance, not permanent universal hardware law. Decide default B11-11750M adoption or non-adoption with named version/reason; active custom selection stays untouched.",
       "question": "Which managed catalog targets and explicit maintenance UI are admitted, with what immutable trust/default/resource transaction contract?",
-      "required_result": "具来源/实际能力证据的可执行合同；涉及非等价处置保留逐项批准。",
+      "required_result": "Q4 已获 2026-10-08 用户批准：冻结端点 schema2 目录、新装默认 B11-12002M、保留既有/自定义选择及全部15来源、按资格开放显式维护且不自动下载升级。逐目标可取得性、完整性、协议/硬件资格与 B03/B06/B73 实施验收仍未完成；当前合同见 stage_ref。",
       "blocked_legacy_behaviors": [
         "B03",
         "B06",
@@ -6487,7 +6487,7 @@
       "blocked_behavior": "Managed resource maintenance and version-qualified GPU guidance; Reachable acceleration setup actions and status layout; Approved explicit target-directed TensorRT resource repair",
       "field_scoped_consumers": [],
       "ordinary_design_is_not_approval": true,
-      "stage_ref": "R12_PLAN.md#resources"
+      "stage_ref": "R12_PLAN.md#r12-gate-b02"
     },
     {
       "id": "R13-gate-B11",
@@ -6518,14 +6518,14 @@
       "source_ref": "MIGRATION_CONTRACTS.md#b13",
       "facts": "Java autoload-last remembers the last primary on normal shutdown; missing last-engine=-1 and corrupt index must not choose another profile. Next selected_profile_id is editing identity, not startup identity; existing zero-or-one Autoload Default remains accepted. Inspect original corresponding disposition ticket and approval source already named in frozen Inventory/audits, not new Java investigation. Missing approval is not permission to delete. Decide Startup mode/default, stable last-run profile identity, normal-shutdown/crash persistence, deleted/corrupt identity and failure no-fallback.",
       "question": "Retain which non-equivalent user behavior for Last-primary-engine startup policy, or where is the item-specific approval for each non-equivalent disposition?",
-      "required_result": "具来源/实际能力证据的可执行合同；涉及非等价处置保留逐项批准。",
+      "required_result": "产品决定已获 2026-10-08 用户批准：三模式启动、稳定上次主引擎 ID、正常退出保存、旧配置保持及失败不 fallback；当前完整合同见 stage_ref。B14 实施与真实验收未完成，历史问题和受影响行为保留。",
       "blocked_legacy_behaviors": [
         "B14"
       ],
       "blocked_behavior": "Retained last-primary-engine startup policy successor",
       "field_scoped_consumers": [],
       "ordinary_design_is_not_approval": true,
-      "stage_ref": "R12_PLAN.md#startup"
+      "stage_ref": "R12_PLAN.md#r12-gate-b13"
     },
     {
       "id": "R12-gate-B15",
@@ -6537,14 +6537,14 @@
       "source_ref": "MIGRATION_CONTRACTS.md#b15",
       "facts": "Java saved non-primary preload defaults false and is not foreground promotion. Next processes currently exist only under Switch/Match Reservation. Preserve preload user goal without approving hidden parallel lifecycle by assumption. Inspect original corresponding disposition ticket and approval source already named in frozen Inventory/audits, not new Java investigation. Missing approval is not permission to delete. Decide Opt-in entry/default/save, background readiness display, single-manager reservation ownership, cancellation/resource failure and foreground priority.",
       "question": "Retain which non-equivalent user behavior for Background extra-engine preload, or where is the item-specific approval for each non-equivalent disposition?",
-      "required_result": "具来源/实际能力证据的可执行合同；涉及非等价处置保留逐项批准。",
+      "required_result": "产品决定已获 2026-10-08 用户批准：按配置后台预加载 opt-in、默认关闭、单 manager、前台优先及显式提升；当前完整合同见 stage_ref。B16 实施、资源/协议准入与真实验收未完成。",
       "blocked_legacy_behaviors": [
         "B16"
       ],
       "blocked_behavior": "Retained background extra-engine preload successor",
       "field_scoped_consumers": [],
       "ordinary_design_is_not_approval": true,
-      "stage_ref": "R12_PLAN.md#startup"
+      "stage_ref": "R12_PLAN.md#r12-gate-b15"
     },
     {
       "id": "R13-gate-B17",
@@ -6670,14 +6670,14 @@
       "source_ref": "MIGRATION_CONTRACTS.md#b28",
       "facts": "Identify each requested engine/version and exact supported candidates/winrate/PV/ownership/streaming/selected-node/whole-game fields. Record raw protocol samples, valid/absent/error/terminal/cancel and identity behavior. Each capability is independent; missing fields unavailable, not invented. Decide precise admitted set and unsupported outcomes; no empty generic interface or automatic engine build. Future SSH adapters obtain additional compatibility/service evidence under C.",
       "question": "Which named engine/version rich-analysis capabilities and protocol samples are actually admitted?",
-      "required_result": "具来源/实际能力证据的可执行合同；涉及非等价处置保留逐项批准。",
+      "required_result": "2026-10-08 用户已批准将显式 KataGo GTP 主分析纳入 R12/R13 联合安排，保留 JSONL。T02-ADAPTER-EVIDENCE 仍须取得具名版本、真实字段/流/取消样本与能力矩阵；T02-ANA-09 提供 katago-gtp-main-analysis scoped result。产品方向已定，不等于 adapter 或主分析验收通过；当前合同见 stage_ref。",
       "blocked_legacy_behaviors": [
         "B29"
       ],
       "blocked_behavior": "Named rich-analysis adapters and absent-field handling",
       "field_scoped_consumers": [],
       "ordinary_design_is_not_approval": true,
-      "stage_ref": "R13_PLAN.md#adapters"
+      "stage_ref": "R13_PLAN.md#r13-gate-b28"
     },
     {
       "id": "R13-gate-B30",
@@ -6746,14 +6746,14 @@
       "source_ref": "MIGRATION_CONTRACTS.md#b42",
       "facts": "Inputs distinguish saved config, launch policy/explicit override, current Run actual value, temporary requested value and user unsubmitted edits. Decide manual dynamic capability/version/valid input domain from actual protocol evidence, not Java1..1024. Freeze mouse/keyboard explicit Apply, confirm-readback failure/timeout, pending versus effective, expiry on Restart/Switch/disconnect, reset-to-config and no automatic reapply on reconnect. Initialization cannot kata-set-param legacy numSearchThreads over resolved launch override. Dynamic manual path must be executable without runner/policy recommendation. Consuming recommendation is separate B41 integration; H-STATIC proves only explicit Restart argv2.",
       "question": "Which real dynamic capability and manual source/effective/temporary precedence, input domain and expiry/reset semantics are admitted?",
-      "required_result": "具来源/实际能力证据的可执行合同；涉及非等价处置保留逐项批准。",
+      "required_result": "Q6 已获 2026-10-08 用户批准：动态线程 Apply/确认绑定显式合格 KataGo GTP Run，保留 JSONL，并联合 R13 的 GTP 主分析完成组合验收。B42 的具名版本/值域/实际协议证据及 B43 实施未完成；不以静态 argv 或单查询覆盖冒充实际回读。",
       "blocked_legacy_behaviors": [
         "B43"
       ],
       "blocked_behavior": "Manual dynamic thread Apply and confirmed readback",
       "field_scoped_consumers": [],
       "ordinary_design_is_not_approval": true,
-      "stage_ref": "R12_PLAN.md#manual-threads"
+      "stage_ref": "R12_PLAN.md#r12-gate-b42"
     },
     {
       "id": "R12-gate-B47",
@@ -6765,14 +6765,14 @@
       "source_ref": "MIGRATION_CONTRACTS.md#b47",
       "facts": "Frozen PR500/504 and preload H18 have retained performance user goal; single-lifecycle constraint is not approval to delete it. Decide explicit entry or admitted startup trigger/default/save behavior, engine selection, user analysis/Pause priority and yield versus true failure feedback. Cite approved individual disposition or retained successor. No actual benchmark required in decision and no Java independent process scheduler migration. This does not block manual Benchmark/Threads or existing current-analysis handoff investigations.",
       "question": "Which startup performance evaluation/default/yield policy is retained or item-specifically approved for replacement?",
-      "required_result": "具来源/实际能力证据的可执行合同；涉及非等价处置保留逐项批准。",
+      "required_result": "产品决定已获 2026-10-08 用户批准：显式评估及默认关闭的启动评估开关、前台分析/对局优先、不自动应用线程建议；当前完整合同见 stage_ref。B48 仍消费 R13 独立 runner 的已验证结果并完成实际验收。",
       "blocked_legacy_behaviors": [
         "B48"
       ],
       "blocked_behavior": "Approved startup evaluation and non-disruptive yield",
       "field_scoped_consumers": [],
       "ordinary_design_is_not_approval": true,
-      "stage_ref": "R12_PLAN.md#startup"
+      "stage_ref": "R12_PLAN.md#r12-gate-b47"
     },
     {
       "id": "R12-gate-B67",
@@ -6784,14 +6784,14 @@
       "source_ref": "MIGRATION_CONTRACTS.md#b67",
       "facts": "Bind PDA and WRN readback to current reader/Run/request round/numbered responses; both valid finite values are required for current pair success. Identify actual compatible engine binary/version, command/value domains and round retirement on cancel/reconnect/new Run from minimal real protocol evidence, not static argv or chart encoding. Default display is unknown until a valid current pair; invalidation preserves the last valid values with visible failed/unknown state. Current response must not overwrite unsent edits. Preserve existing editing behavior; this ticket neither pairs writes nor adds mutation/retry/reapply semantics.",
       "question": "Which named actual local-engine binary/version supports both PDA/WRN readback commands, as proved by B67 minimal real protocol evidence for current reader/Run/round/numbered responses?",
-      "required_result": "具来源/实际能力证据的可执行合同；涉及非等价处置保留逐项批准。",
+      "required_result": "Q6 已获 2026-10-08 用户批准：PDA/WRN pair 绑定同一显式合格 KataGo GTP 主分析 Run，并消费 R13 主分析结果完成联合验收。独立 binary 成功回读仅为部分协议证据，Next reader/round/身份失效与原生显示尚未验收；当前合同见 stage_ref。",
       "blocked_legacy_behaviors": [
         "B68"
       ],
       "blocked_behavior": "Paired PDA/WRN current-Run readback",
       "field_scoped_consumers": [],
       "ordinary_design_is_not_approval": true,
-      "stage_ref": "R12_PLAN.md#runtime-readback"
+      "stage_ref": "R12_PLAN.md#r12-gate-b67"
     },
     {
       "id": "R12-gate-B04",
@@ -6803,7 +6803,7 @@
       "source_ref": "MIGRATION_CONTRACTS.md#b04",
       "facts": "Use frozen resource acquisition/replacement boundaries, not new Java diagnosis. Compare selectable TRT identity to maintenance ownership even with non-TRT foreground engine. Stop at supported/external-owner/needs-decision table and exact retained-resource failure/cancel contract. No repair implementation before this result; a supported repair successor must be linked to managed-resources and retain last-known-good, original user target and explicit action. No new engine compile.",
       "question": "Admitted TRT target repair ownership remains supported/external/needs-decision until investigation result.",
-      "required_result": "具来源/实际能力证据的可执行合同；涉及非等价处置保留逐项批准。",
+      "required_result": "Q5 已获 2026-10-08 用户批准：应用承担已准入原 TensorRT 目标的显式受管修复，展示版本/下载/磁盘需求，可取消并保留 last-good，不自动安装系统驱动或换后端。逐目标可修复性、B05 硬件资格与 B73 实施验收仍未完成；当前合同见 stage_ref。",
       "blocked_legacy_behaviors": [
         "B06",
         "B73"
@@ -6811,7 +6811,7 @@
       "blocked_behavior": "Reachable acceleration setup actions and status layout; Approved explicit target-directed TensorRT resource repair",
       "field_scoped_consumers": [],
       "ordinary_design_is_not_approval": true,
-      "stage_ref": "R12_PLAN.md#resources"
+      "stage_ref": "R12_PLAN.md#r12-gate-b04"
     },
     {
       "id": "R12-gate-B05",
@@ -7468,6 +7468,10 @@
       "result": "Passed ordinary capability/query/confirmation and same immutable operational snapshot",
       "consumers": [
         {
+          "stage": "R13",
+          "scope": "KataGo GTP main analysis consumes actual ordinary rules confirmation for the same Run; no Match storage or whole-R12 completion prerequisite"
+        },
+        {
           "stage": "R15",
           "scope": "Operational Match admission/original-rule restoration/read-only detail; storage choice only gates save/share"
         }
@@ -7576,6 +7580,26 @@
         }
       ],
       "provider_ref": "R11_PLAN.md#behavior-a16"
+    },
+    {
+      "id": "katago-gtp-main-analysis",
+      "owner_intent": "T02-ANA-09",
+      "owner_stage": "R13",
+      "owner_section": "adapters",
+      "result": "Validated explicitly selected KataGo GTP main analysis on a named actual Run: candidates/winrate/PV, admitted optional fields, position/rules identity, streaming, Pause/Continue, retirement and native presentation; existing JSONL behavior preserved",
+      "consumers": [
+        {
+          "stage": "R12",
+          "scope": "Composed main-analysis plus manual-thread confirmation and paired PDA/WRN readback acceptance on the same integrated candidate; required for full R12 completion, not a prerequisite for local resource/rules/Run or standalone parameter work"
+        }
+      ],
+      "not_required": [
+        "whole R13 completion",
+        "batch/tracking/automatic-analysis completion",
+        "benchmark or saved recommendations",
+        "R12 final composed acceptance before producing this result"
+      ],
+      "provider_ref": "R13_PLAN.md#gtp-main-analysis"
     },
     {
       "id": "actual-identity-routing",

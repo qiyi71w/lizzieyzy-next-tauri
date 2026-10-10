@@ -13,6 +13,7 @@ import { ReviewTree } from "./components/ReviewTree";
 import { reviewLineProblems, type ReviewProblem } from "./domain/reviewNavigation";
 import { AnalysisPanel } from "./components/AnalysisPanel";
 import { EngineSetupPanel } from "./components/EngineSetupPanel";
+import { OrdinaryRulesPanel } from "./components/OrdinaryRulesPanel";
 import { AppChrome, BottomBar, type ContinuousAnalysisAction, type OverlayMode, type SheetId } from "./components/AppChrome";
 import { PreferencesPanel } from "./components/PreferencesPanel";
 import { ShortcutReference } from "./components/ShortcutReference";
@@ -1257,7 +1258,7 @@ export function App() {
       setMessage("当前 run 未验证所需的分析能力。历史分析仍可查看。");
       return;
     }
-    const maxVisits = run.profile_snapshot.adapter_kind === "kata_go_analysis" ? run.profile_snapshot.settings.max_visits : 800;
+    const maxVisits = run.profile_snapshot.adapter_kind !== "generic_gtp" ? run.profile_snapshot.settings.max_visits : 800;
     if (kind === "once") void handleRunKataGo(run.profile_snapshot, maxVisits);
     else void handleAnalyzeKataGoGame(run.run_id, maxVisits);
   }
@@ -4289,7 +4290,9 @@ export function App() {
           ?? (engineSnapshot.lifecycle.state === "no_engine" ? "" : ""),
         canStop: !matchBlocked && canStopForegroundEngine(engineSnapshot),
         canRestart: !matchBlocked && canRestartForegroundEngine(engineSnapshot),
-        failureMessage: visibleEngineFailure?.message ?? null,
+        failureMessage: visibleEngineFailure
+          ? [visibleEngineFailure.message, visibleEngineFailure.diagnostic_summary].filter(Boolean).join(" · ")
+          : null,
         failureKind: visibleEngineFailure?.kind ?? null,
         failureOperation: visibleEngineFailure?.operation ?? null,
         onSelectProfile: (profileId) => void handleSelectSwitcherProfile(profileId),
@@ -4688,9 +4691,18 @@ export function App() {
       </> : null}
       <div hidden={sheet !== "engine"}>
         <EngineSetupPanel
+          visible={sheet === "engine"}
           disabled={matchBlocked}
           engineSnapshot={engineSnapshot}
+          engineFailure={visibleEngineFailure}
           onProfilesChange={setEngineProfiles}
+        />
+        <OrdinaryRulesPanel
+          run={engineSnapshot.lifecycle.state === "ready" ? engineSnapshot.lifecycle.run : null}
+          generation={currentGame?.generation ?? null}
+          nodePath={currentGame?.selected_path ?? { indices: [] }}
+          native={nativeRuntime}
+          disabled={matchBlocked || departurePending || documentFlowBusy || editActionPending || Boolean(trial) || trialPending || Boolean(scoring) || scoringPending || Boolean(engineSnapshot.game_move_job)}
         />
       </div>
       {sheet === "prefs" ? <PreferencesPanel

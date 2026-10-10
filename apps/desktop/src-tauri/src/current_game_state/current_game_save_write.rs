@@ -17,7 +17,7 @@ fn analysis_payload(visits: u32) -> SgfAnalysisPayload {
             vertex: MoveVertex::Pass,
             visits,
             winrate_black: 0.6,
-            score_mean_black: 2.0,
+            score_mean_black: Some(2.0),
             policy_prior: None,
             pv: vec![MoveVertex::Pass],
         }],

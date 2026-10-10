@@ -117,7 +117,7 @@ pub fn parse_analysis_payload(raw: &str, board_width: u8, board_height: u8) -> O
     let score_stdev = header.get(4).and_then(|value| parse_f32(value));
     let pda = header.get(5).and_then(|value| parse_f32(value));
     let (analysis_line, ownership) = split_ownership(detail_line);
-    let candidates = parse_candidates(analysis_line, board_width, board_height, score_mean_black);
+    let candidates = parse_candidates(analysis_line, board_width, board_height);
     Some(SgfAnalysisPayload {
         engine_name,
         visits,
@@ -144,24 +144,14 @@ fn split_ownership(detail_line: &str) -> (&str, Option<Vec<f32>>) {
     (analysis, if values.is_empty() { None } else { Some(values) })
 }
 
-fn parse_candidates(
-    analysis_line: &str,
-    board_width: u8,
-    board_height: u8,
-    header_score_mean: Option<f32>,
-) -> Vec<CandidateMoveDto> {
+fn parse_candidates(analysis_line: &str, board_width: u8, board_height: u8) -> Vec<CandidateMoveDto> {
     analysis_line
         .split(" info ")
-        .filter_map(|variation| parse_candidate(variation, board_width, board_height, header_score_mean))
+        .filter_map(|variation| parse_candidate(variation, board_width, board_height))
         .collect()
 }
 
-fn parse_candidate(
-    variation: &str,
-    board_width: u8,
-    board_height: u8,
-    header_score_mean: Option<f32>,
-) -> Option<CandidateMoveDto> {
+fn parse_candidate(variation: &str, board_width: u8, board_height: u8) -> Option<CandidateMoveDto> {
     let tokens: Vec<&str> = variation.split_whitespace().collect();
     if tokens.is_empty() {
         return None;
@@ -170,7 +160,7 @@ fn parse_candidate(
     let mut visits = 0;
     let mut winrate_black = 0.0;
     let mut policy_prior = None;
-    let mut score_mean_black = header_score_mean.unwrap_or(0.0);
+    let mut score_mean_black = None;
     let mut pv = Vec::new();
     let mut index = 0;
     while index + 1 < tokens.len() {
@@ -193,7 +183,7 @@ fn parse_candidate(
             "visits" => visits = parse_playouts(value),
             "winrate" => winrate_black = parse_playouts(value) as f32 / 10_000.0,
             "prior" => policy_prior = Some(parse_prior(value)),
-            "scoreMean" => score_mean_black = parse_f32(value).unwrap_or(score_mean_black),
+            "scoreMean" => score_mean_black = parse_f32(value),
             _ => {}
         }
         index += 2;
@@ -406,13 +396,17 @@ fn format_detail_line(payload: &SgfAnalysisPayload, board_width: u8, board_heigh
 
 fn format_candidate(candidate: &CandidateMoveDto, board_width: u8, board_height: u8) -> String {
     let mut body = format!(
-        "move {} visits {} winrate {} prior {}",
+        "move {} visits {} winrate {}",
         vertex_to_gtp(&candidate.vertex, board_width, board_height),
         candidate.visits,
         (candidate.winrate_black * 10_000.0).round() as i32,
-        (candidate.policy_prior.unwrap_or(0.0) * 10_000.0).round() as i32
     );
-    body.push_str(&format!(" scoreMean {:.2}", candidate.score_mean_black));
+    if let Some(prior) = candidate.policy_prior {
+        body.push_str(&format!(" prior {}", (prior * 10_000.0).round() as i32));
+    }
+    if let Some(score) = candidate.score_mean_black {
+        body.push_str(&format!(" scoreMean {score:.2}"));
+    }
     body.push_str(" pv");
     let pv = if candidate.pv.is_empty() {
         vec![candidate.vertex.clone()]

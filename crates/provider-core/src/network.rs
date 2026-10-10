@@ -15,6 +15,9 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use url::Url;
 
+#[path = "network_download.rs"]
+mod download;
+
 #[cfg(windows)]
 #[path = "platform/windows.rs"]
 mod platform;
@@ -37,6 +40,7 @@ struct PolicyState {
     sequence: u64,
     current: Option<NetworkOperation>,
     sync: Option<NetworkOperation>,
+    resource: Option<NetworkOperation>,
 }
 
 #[derive(Default)]
@@ -121,6 +125,9 @@ impl NetworkState {
         if let Some(previous) = state.sync.take() {
             previous.cancel();
         }
+        if let Some(previous) = state.resource.take() {
+            previous.cancel();
+        }
         state.settings = settings;
         state.revision += 1;
         Ok(NetworkSnapshotDto {
@@ -181,6 +188,29 @@ impl NetworkState {
         state.sync = Some(operation.clone());
         Ok(operation)
     }
+    /// Independent managed-download lane; provider/document reads cannot retire it.
+    pub fn begin_resource(&self, policy_revision: u64) -> ProviderResult<NetworkOperation> {
+        let mut state = self.0.lock().expect("network state");
+        if self.1.state.lock().expect("network activity").0 || state.revision != policy_revision {
+            return Err(cancelled());
+        }
+        if let Some(previous) = state.resource.take() {
+            previous.cancel();
+        }
+        state.sequence += 1;
+        let operation = NetworkOperation::new(
+            ProviderRequestIdentityDto {
+                request_id: state.sequence,
+                policy_revision,
+                document_identity: 0,
+            },
+            state.settings.clone(),
+            self.1.clone(),
+        );
+        state.resource = Some(operation.clone());
+        Ok(operation)
+    }
+
     pub fn operation(&self, identity: &ProviderRequestIdentityDto) -> ProviderResult<NetworkOperation> {
         let state = self.0.lock().expect("network state");
         let operation = state
@@ -205,6 +235,9 @@ impl NetworkState {
         if let Some(op) = state.sync.take() {
             op.cancel();
         }
+        if let Some(op) = state.resource.take() {
+            op.cancel();
+        }
     }
     /// Seal both lanes and drain all generations within the shared exit budget.
     pub fn shutdown(&self, budget: Duration) -> bool {
@@ -219,11 +252,19 @@ impl NetworkState {
                 return false;
             };
             // Seal both reads before waiting for either in-flight commit lease.
-            for op in [&state.current, &state.sync].into_iter().flatten() {
+            for op in [&state.current, &state.sync, &state.resource]
+                .into_iter()
+                .flatten()
+            {
                 op.lease.0.cancelled.store(true, Ordering::Release);
             }
-            let PolicyState { current, sync, .. } = &mut *state;
-            for slot in [current, sync] {
+            let PolicyState {
+                current,
+                sync,
+                resource,
+                ..
+            } = &mut *state;
+            for slot in [current, sync, resource] {
                 if let Some(op) = slot.as_ref() {
                     let Some(mut valid) = lock_before(&op.lease.0.valid, deadline) else {
                         // Retain this and later slots so a shutdown retry can finish sealing them.

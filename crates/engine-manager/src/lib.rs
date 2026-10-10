@@ -13,20 +13,26 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 mod catalog;
+pub mod diagnostic_export;
+pub mod diagnostics;
 mod game_move_protocol;
 mod gtp;
+mod katago_config;
 mod lifecycle;
+pub mod managed;
+pub mod models;
+mod resources;
 
 pub use catalog::{
     default_engine_profile_record, default_engine_profiles_settings, load_engine_profiles,
-    normalize_engine_profiles, parse_engine_profiles, prepare_engine_profiles_save, reorder_engine_profiles,
-    replace_json_file, save_engine_profiles, EngineProfileCatalog, EngineProfileRecord,
-    EngineProfilesSettings, InMemoryEngineProfileCatalog, SavedEngineProfile, DEFAULT_ENGINE_PROFILE_ID,
-    ENGINE_PROFILES_VERSION,
+    normalize_engine_profiles, parse_engine_profiles, persist_last_primary, prepare_engine_profiles_save,
+    reorder_engine_profiles, replace_json_file, save_engine_profiles, EngineProfileCatalog,
+    EngineProfileRecord, EngineProfilesSettings, InMemoryEngineProfileCatalog, SavedEngineProfile,
+    DEFAULT_ENGINE_PROFILE_ID, ENGINE_PROFILES_VERSION,
 };
 pub use lifecycle::{
     AnalysisJobCancel, AnalysisJobEventDto, AnalysisJobLane, ContinuousPrimaryAction, ForegroundEngineConfig,
-    ForegroundEngineManager, GameMoveHandle, GameMoveRequest, SelectedNodeJobRequest,
+    ForegroundEngineManager, GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle, SelectedNodeJobRequest,
     SwingAnalysisTaskRequest, WholeGameJobRequest, WholeGameWorkItem,
 };
 
@@ -382,7 +388,9 @@ pub fn validate_engine_profile(profile: &EngineProfileDto) -> Result<(), String>
             return Err(format!("engine {label} must not contain NUL"));
         }
     }
-    if let EngineAdapterSettings::KataGoAnalysis(settings) = &profile.adapter {
+    if let EngineAdapterSettings::KataGoAnalysis(settings) | EngineAdapterSettings::KataGoGtp(settings) =
+        &profile.adapter
+    {
         if settings.max_visits == 0 {
             return Err("max_visits must be greater than 0".to_string());
         }
@@ -394,7 +402,19 @@ pub fn validate_engine_profile(profile: &EngineProfileDto) -> Result<(), String>
                 return Err("engine model/config path must not contain NUL".to_string());
             }
         }
-        for arg in &profile.argv {
+        for (index, arg) in profile.argv.iter().enumerate() {
+            // Frozen KataGo accepts repeated -config files in order, before CLI overrides.
+            // Keep inline/alternate spellings reserved until actually qualified.
+            if arg == "-config" {
+                if profile
+                    .argv
+                    .get(index + 1)
+                    .is_none_or(|path| path.trim().is_empty() || path.starts_with('-'))
+                {
+                    return Err("KataGo -config requires a readable file argument at Start".into());
+                }
+                continue;
+            }
             let token = arg.split_once('=').map_or(arg.as_str(), |(flag, _)| flag);
             if matches!(
                 token,
@@ -433,7 +453,14 @@ pub fn build_command_spec(profile: &EngineProfileDto) -> Result<CommandSpec, Eng
     if profile.program.trim().is_empty() {
         return Err(EngineManagerError::MissingEnginePath);
     }
-    let working_dir = normalized_optional_path(profile.working_dir.as_deref());
+    let mut working_dir = normalized_optional_path(profile.working_dir.as_deref());
+    if let Some(path) = working_dir.as_mut().filter(|path| Path::new(path).is_relative()) {
+        let parent = std::env::current_dir().map_err(|source| EngineManagerError::Spawn {
+            program: profile.program.clone(),
+            source,
+        })?;
+        *path = parent.join(&*path).to_string_lossy().into_owned();
+    }
     if let Some(working_dir) = working_dir.as_deref() {
         if !Path::new(working_dir).is_dir() {
             return Err(EngineManagerError::WorkingDirNotFound {
@@ -443,7 +470,7 @@ pub fn build_command_spec(profile: &EngineProfileDto) -> Result<CommandSpec, Eng
     }
     let program = resolve_program_path(&profile.program, working_dir.as_deref());
     match &profile.adapter {
-        EngineAdapterSettings::KataGoAnalysis(settings) => {
+        EngineAdapterSettings::KataGoAnalysis(settings) | EngineAdapterSettings::KataGoGtp(settings) => {
             let model = settings
                 .model_path
                 .as_ref()
@@ -463,13 +490,44 @@ pub fn build_command_spec(profile: &EngineProfileDto) -> Result<CommandSpec, Eng
                 return Err(EngineManagerError::ConfigPathNotFound { path: config });
             }
             let mut args = vec![
-                "analysis".into(),
+                if profile.adapter_kind() == app_model::EngineBackend::KataGoGtp {
+                    "gtp".into()
+                } else {
+                    "analysis".into()
+                },
                 "-config".into(),
                 config,
                 "-model".into(),
                 model,
             ];
             args.extend(profile.argv.iter().cloned());
+            if profile.adapter_kind() == app_model::EngineBackend::KataGoGtp {
+                // Protocol normalization requires a fixed perspective, independently of the
+                // user's display preference. Preserve saved argv/config bytes and other overrides.
+                let mut has_override = false;
+                for index in 0..args.len() {
+                    if args[index] != "-override-config" {
+                        continue;
+                    }
+                    has_override = true;
+                    if let Some(value) = args.get_mut(index + 1) {
+                        let mut overrides: Vec<_> = value
+                            .split(',')
+                            .filter(|entry| {
+                                entry
+                                    .split_once('=')
+                                    .is_none_or(|(key, _)| key.trim() != "reportAnalysisWinratesAs")
+                            })
+                            .map(str::to_owned)
+                            .collect();
+                        overrides.push("reportAnalysisWinratesAs=BLACK".into());
+                        *value = overrides.join(",");
+                    }
+                }
+                if !has_override {
+                    args.extend(["-override-config".into(), "reportAnalysisWinratesAs=BLACK".into()]);
+                }
+            }
             Ok(CommandSpec {
                 program,
                 args,
@@ -503,7 +561,9 @@ pub fn check_assets(profile: &EngineProfileDto) -> Vec<AssetCheck> {
             label: "working directory".into(),
         });
     }
-    if let EngineAdapterSettings::KataGoAnalysis(settings) = &profile.adapter {
+    if let EngineAdapterSettings::KataGoAnalysis(settings) | EngineAdapterSettings::KataGoGtp(settings) =
+        &profile.adapter
+    {
         let model = settings.model_path.as_deref().unwrap_or("");
         let resolved_model = resolve_asset_path(model, working_dir.as_deref());
         checks.push(AssetCheck {
@@ -824,16 +884,25 @@ fn spawn_stdout_reader(stdout: std::process::ChildStdout) -> Receiver<io::Result
 }
 
 pub(crate) fn spawn_stdout_lines_reader(
-    stdout: std::process::ChildStdout,
+    stdout: impl Read + Send + 'static,
 ) -> Receiver<io::Result<Option<String>>> {
-    let (tx, rx) = mpsc::channel();
+    // Eight complete 4 MiB records bound queued protocol data to 32 MiB.
+    // Oversize input fails explicitly; diagnostics never trim parser bytes.
+    let (tx, rx) = mpsc::sync_channel(8);
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
         loop {
             let mut line = String::new();
-            match reader.read_line(&mut line) {
+            match (&mut reader).take(4 * 1024 * 1024 + 1).read_line(&mut line) {
                 Ok(0) => {
                     let _ = tx.send(Ok(None));
+                    break;
+                }
+                Ok(length) if length > 4 * 1024 * 1024 => {
+                    let _ = tx.send(Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "JSONL stdout record exceeds 4 MiB",
+                    )));
                     break;
                 }
                 Ok(_) => {
@@ -851,12 +920,26 @@ pub(crate) fn spawn_stdout_lines_reader(
     rx
 }
 
-pub(crate) fn spawn_stderr_reader(stderr: std::process::ChildStderr) -> Receiver<io::Result<String>> {
+pub(crate) fn spawn_stderr_reader(stderr: impl Read + Send + 'static) -> Receiver<io::Result<String>> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let mut reader = BufReader::new(stderr);
-        let mut output = String::new();
-        let result = reader.read_to_string(&mut output).map(|_| output);
+        let mut reader = stderr;
+        let mut retained = Vec::with_capacity(16 * 1024);
+        let mut chunk = [0u8; 4096];
+        let result = loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break Ok(String::from_utf8_lossy(&retained).into_owned()),
+                Ok(length) => {
+                    if retained.len() + length > 16 * 1024 {
+                        let remove = retained.len() + length - 16 * 1024;
+                        retained.drain(..remove);
+                    }
+                    retained.extend_from_slice(&chunk[..length]);
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => break Err(error),
+            }
+        };
         let _ = tx.send(result);
     });
     rx
@@ -1240,6 +1323,105 @@ mod tests {
             std::fs::canonicalize(&spec.args[4]).unwrap(),
             std::fs::canonicalize(working_dir.join("models").join("model.bin")).unwrap()
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn katago_launch_opens_assets_from_relative_and_absolute_working_directories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let unique = TestTempDir::new("launch-cwd");
+        let fixture = TestTempDir {
+            path: PathBuf::from(format!(
+                " {} ",
+                unique.path().file_name().unwrap().to_str().unwrap()
+            )),
+        };
+        std::fs::create_dir(fixture.path()).unwrap();
+        std::fs::write(fixture.path().join("model file.bin"), "model contents\n").unwrap();
+        std::fs::write(fixture.path().join("config file.cfg"), "config contents\n").unwrap();
+        let engine = fixture.path().join("engine script");
+        std::fs::write(
+            &engine,
+            r#"#!/bin/sh
+read query
+test "$1" = analysis || test "$1" = gtp || exit 20
+test "$2" = -config && test "$4" = -model || exit 21
+read config < "$3" && read model < "$5" || exit 22
+test "$config" = 'config contents' && test "$model" = 'model contents' || exit 23
+printf '{"id":"opened-assets"}\n'
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let absolute = std::env::current_dir().unwrap().join(fixture.path());
+        for working_dir in [fixture.path(), absolute.as_path()] {
+            for gtp in [false, true] {
+                let settings = app_model::KataGoSettings {
+                    model_path: Some("model file.bin".into()),
+                    config_path: Some("config file.cfg".into()),
+                    max_visits: 800,
+                };
+                let profile = EngineProfileDto {
+                    name: "launch cwd".into(),
+                    program: "./engine script".into(),
+                    argv: vec![],
+                    working_dir: Some(working_dir.to_str().unwrap().into()),
+                    adapter: if gtp {
+                        EngineAdapterSettings::KataGoGtp(settings)
+                    } else {
+                        EngineAdapterSettings::KataGoAnalysis(settings)
+                    },
+                };
+                let saved = serde_json::to_value(&profile).unwrap();
+                let spec = build_command_spec(&profile).unwrap();
+                let result = run_katago_analysis_batch(&spec, "{}", 1, Duration::from_secs(2)).unwrap();
+                assert_eq!(result.exit_code, Some(0));
+                assert_eq!(result.response_jsonl_lines, [r#"{"id":"opened-assets"}"#]);
+                assert_eq!(serde_json::to_value(&profile).unwrap(), saved);
+            }
+        }
+    }
+
+    #[test]
+    fn gtp_wire_perspective_overrides_preserve_saved_profile_and_other_keys() {
+        let temp = TestTempDir::new("gtp-wire-perspective");
+        for name in ["katago", "model.bin", "gtp.cfg"] {
+            std::fs::write(temp.path().join(name), "").unwrap();
+        }
+        let mut profile = EngineProfileDto {
+            name: "GTP".into(),
+            program: "katago".into(),
+            argv: vec![],
+            working_dir: Some(temp.path().to_string_lossy().into_owned()),
+            adapter: EngineAdapterSettings::KataGoGtp(app_model::KataGoSettings {
+                model_path: Some("model.bin".into()),
+                config_path: Some("gtp.cfg".into()),
+                max_visits: 800,
+            }),
+        };
+        assert_eq!(
+            build_command_spec(&profile).unwrap().args.last().unwrap(),
+            "reportAnalysisWinratesAs=BLACK"
+        );
+        profile.argv = vec![
+            "-override-config".into(),
+            "numSearchThreads=1,reportAnalysisWinratesAs=WHITE".into(),
+            "-override-config".into(),
+            "reportAnalysisWinratesAs=SIDETOMOVE,maxVisits=64".into(),
+        ];
+        let before = profile.argv.clone();
+        let args = build_command_spec(&profile).unwrap().args;
+        assert_eq!(
+            &args[5..],
+            &[
+                "-override-config",
+                "numSearchThreads=1,reportAnalysisWinratesAs=BLACK",
+                "-override-config",
+                "maxVisits=64,reportAnalysisWinratesAs=BLACK"
+            ]
+        );
+        assert_eq!(profile.argv, before);
     }
 
     #[test]

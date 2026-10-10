@@ -577,6 +577,7 @@ pub fn position_request(
         board_width,
         board_height,
         position_empty: snapshot.position.stones.is_empty(),
+        exact_position: Err("Exact GTP history is unavailable for this analysis surface.".into()),
     })
 }
 

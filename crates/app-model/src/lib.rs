@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
 mod workspace;
@@ -13,6 +14,14 @@ mod game_move;
 pub use game_move::*;
 mod match_session;
 pub use match_session::*;
+mod managed_resources;
+pub use managed_resources::*;
+mod evaluation;
+pub use evaluation::*;
+mod runtime_threads;
+pub use runtime_threads::*;
+mod runtime_parameters;
+pub use runtime_parameters::*;
 
 mod analysis_job;
 pub use analysis_job::{
@@ -406,7 +415,7 @@ pub struct CandidateMoveDto {
     pub vertex: MoveVertex,
     pub visits: u32,
     pub winrate_black: f32,
-    pub score_mean_black: f32,
+    pub score_mean_black: Option<f32>,
     pub policy_prior: Option<f32>,
     pub pv: Vec<MoveVertex>,
 }
@@ -444,6 +453,70 @@ pub enum ProblemSeverity {
     Blunder,
 }
 
+/// Header inspection is descriptive, never runtime or managed-resource admission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelInspectionDto {
+    pub status: ModelInspectionStatusDto,
+    pub sha256: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub format: Option<String>,
+    pub model_name: Option<String>,
+    pub format_version: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelInspectionStatusDto {
+    Unchecked,
+    HeaderRecognized,
+    Unknown,
+    Corrupt,
+    Unavailable,
+    LimitExceeded,
+    Changed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ModelOriginDto {
+    Unknown,
+    Custom,
+    /// A retained installation receipt, not a claim of current qualification.
+    Managed {
+        catalog_id: String,
+        installed_sha256: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledModelDto {
+    pub id: String,
+    pub path: String,
+    pub origin: ModelOriginDto,
+    pub inspection: ModelInspectionDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelInventoryDto {
+    pub revision: String,
+    pub models: Vec<InstalledModelDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelPathDto {
+    pub path: String,
+    pub working_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelSelectionRequestDto {
+    pub revision: String,
+    pub model_id: String,
+    pub sha256: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineProfileDto {
     pub name: String,
@@ -452,6 +525,17 @@ pub struct EngineProfileDto {
     pub working_dir: Option<String>,
     #[serde(flatten)]
     pub adapter: EngineAdapterSettings,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum EngineStartupPolicyDto {
+    #[default]
+    Off,
+    Fixed {
+        profile_id: String,
+    },
+    LastPrimary,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -465,6 +549,7 @@ pub struct EngineProfileOrderRequestDto {
 #[serde(rename_all = "snake_case")]
 pub enum EngineBackend {
     KataGoAnalysis,
+    KataGoGtp,
     GenericGtp,
 }
 
@@ -472,6 +557,7 @@ pub enum EngineBackend {
 #[serde(tag = "adapter_kind", content = "settings", rename_all = "snake_case")]
 pub enum EngineAdapterSettings {
     KataGoAnalysis(KataGoSettings),
+    KataGoGtp(KataGoSettings),
     GenericGtp(GenericGtpSettings),
 }
 
@@ -491,6 +577,7 @@ impl EngineProfileDto {
     pub fn adapter_kind(&self) -> EngineBackend {
         match self.adapter {
             EngineAdapterSettings::KataGoAnalysis(_) => EngineBackend::KataGoAnalysis,
+            EngineAdapterSettings::KataGoGtp(_) => EngineBackend::KataGoGtp,
             EngineAdapterSettings::GenericGtp(_) => EngineBackend::GenericGtp,
         }
     }
@@ -527,6 +614,95 @@ pub enum EngineFailureKind {
     Occupied,
     ProfileNotFound,
     ProfileInUse,
+    ResourceChanged,
+    Executable,
+    Model,
+    Config,
+    Cuda,
+    Cudnn,
+    Nvrtc,
+    TensorRtParser,
+    Zlib,
+}
+
+/// A detached, already-redacted capture. Consumers must retain this value rather
+/// than resolving its attempt again when copying or exporting it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EngineDiagnosticSnapshotDto {
+    pub attempt_id: String,
+    pub run_id: String,
+    pub profile_id: String,
+    pub captured_at_ms: u64,
+    pub full_trace: bool,
+    pub command: String,
+    pub failure: Option<String>,
+    pub stdout_complete: bool,
+    pub stderr_complete: bool,
+    pub process_exited: bool,
+    pub exit_code: Option<i32>,
+    pub records: Vec<EngineDiagnosticRecordDto>,
+    pub dropped_records: u64,
+    pub retained_bytes: usize,
+    pub metrics: Vec<EngineDiagnosticMetricDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineDiagnosticRecordDto {
+    pub sequence: u64,
+    pub at_ms: u64,
+    pub source: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EngineDiagnosticMetricDto {
+    pub role: String,
+    pub name: String,
+    pub unit: String,
+    pub at_ms: u64,
+    pub value: Option<f64>,
+    pub missing: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticExportPhaseDto {
+    Idle,
+    Estimating,
+    EstimateObsolete,
+    Ready,
+    Collecting,
+    Archiving,
+    Syncing,
+    Publishing,
+    Cancelling,
+    Cancelled,
+    Completed,
+    Failed,
+    Closed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticExportStatusDto {
+    pub generation: u64,
+    pub attempt_id: Option<String>,
+    pub captured_at_ms: Option<u64>,
+    pub phase: DiagnosticExportPhaseDto,
+    pub source_bytes: Option<u64>,
+    pub entries: Option<u32>,
+    pub completed_entries: u32,
+    pub failed_stage: Option<DiagnosticExportPhaseDto>,
+    pub message: Option<String>,
+    pub file_name: Option<String>,
+    pub cleanup_pending: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticFolderOutcomeDto {
+    Opened,
+    Failed,
+    TimedOut,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -553,6 +729,22 @@ impl std::fmt::Display for EngineFailureDto {
 }
 
 impl std::error::Error for EngineFailureDto {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnginePreloadPhaseDto {
+    Preparing,
+    Ready,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnginePreloadDto {
+    pub run: EngineRunDto,
+    pub phase: EnginePreloadPhaseDto,
+    pub failure: Option<EngineFailureDto>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineCapabilitySnapshotDto {
@@ -589,6 +781,29 @@ pub struct EngineAnalysisCapabilitiesDto {
     pub protocol_cancel: bool,
 }
 
+/// Content identity is independent of origin trust and runtime capability.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineResourceIdentityDto {
+    pub component: String,
+    pub resolved_path: String,
+    pub sha256: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QualifiedLocalResourceDto {
+    pub profile_revision: String,
+    pub resources: Vec<EngineResourceIdentityDto>,
+    /// Local files have no authenticated publisher receipt.
+    pub origin: String,
+    pub version: Option<String>,
+    pub source_commit: Option<String>,
+    pub backend: Option<String>,
+    pub static_zlib_exemption: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_sources: Option<ThreadSourcesDto>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineRunDto {
     pub run_id: String,
@@ -597,6 +812,8 @@ pub struct EngineRunDto {
     pub profile_snapshot: EngineProfileDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability_snapshot: Option<EngineCapabilitySnapshotDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualified_resource: Option<Arc<QualifiedLocalResourceDto>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1221,6 +1438,16 @@ mod foreground_engine_wire {
                     profile_id: "profile-1".into(),
                     adapter_kind: EngineBackend::KataGoAnalysis,
                     profile_snapshot: sample_profile(),
+                    qualified_resource: Some(Arc::new(QualifiedLocalResourceDto {
+                        profile_revision: "resource-revision".into(),
+                        resources: vec![],
+                        origin: "local_unknown".into(),
+                        version: Some("1.18.2".into()),
+                        source_commit: None,
+                        backend: None,
+                        static_zlib_exemption: false,
+                        thread_sources: None,
+                    })),
                     capability_snapshot: Some(EngineCapabilitySnapshotDto {
                         adapter_kind: EngineBackend::KataGoAnalysis,
                         game_move: true,
@@ -1287,6 +1514,10 @@ mod foreground_engine_wire {
         assert_eq!(snapshot_json["lifecycle"]["run"]["run_id"], "run-1");
         assert_eq!(snapshot_json["lifecycle"]["run"]["profile_id"], "profile-1");
         assert_eq!(
+            snapshot_json["lifecycle"]["run"]["qualified_resource"]["profile_revision"],
+            "resource-revision"
+        );
+        assert_eq!(
             snapshot_json["lifecycle"]["run"]["adapter_kind"],
             "kata_go_analysis"
         );
@@ -1321,6 +1552,7 @@ mod foreground_engine_wire {
             adapter_kind: EngineBackend::KataGoAnalysis,
             profile_snapshot: sample_profile(),
             capability_snapshot: None,
+            qualified_resource: None,
         };
         let snapshot = ForegroundEngineSnapshotDto {
             revision: 1,

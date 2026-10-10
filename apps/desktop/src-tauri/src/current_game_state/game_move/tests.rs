@@ -19,14 +19,20 @@ struct Rig {
 }
 impl Rig {
     fn new(mode: &str) -> Self {
+        Self::with_adapter(mode, false)
+    }
+    fn with_adapter(mode: &str, gtp: bool) -> Self {
         let directory = std::env::temp_dir().join(format!("move-holder-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(directory.join("mode"), mode).unwrap();
         std::fs::write(directory.join("model"), "").unwrap();
         std::fs::write(directory.join("config"), "").unwrap();
         let engine = directory.join("engine");
-        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../crates/engine-manager/tests/fixtures/game_move_process.py");
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(if gtp {
+            "../../../crates/engine-manager/tests/fixtures/rules_process.py"
+        } else {
+            "../../../crates/engine-manager/tests/fixtures/game_move_process.py"
+        });
         std::fs::write(
             &engine,
             format!(
@@ -44,11 +50,18 @@ impl Rig {
                 program: engine.to_string_lossy().into(),
                 argv: vec![],
                 working_dir: Some(directory.to_string_lossy().into()),
-                adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
-                    model_path: Some("model".into()),
-                    config_path: Some("config".into()),
-                    max_visits: 8,
-                }),
+                adapter: {
+                    let settings = KataGoSettings {
+                        model_path: Some("model".into()),
+                        config_path: Some("config".into()),
+                        max_visits: 8,
+                    };
+                    if gtp {
+                        EngineAdapterSettings::KataGoGtp(settings)
+                    } else {
+                        EngineAdapterSettings::KataGoAnalysis(settings)
+                    }
+                },
             },
         });
         let manager = ForegroundEngineManager::new(catalog.clone(), ForegroundEngineConfig::for_tests());
@@ -227,4 +240,151 @@ fn completed_results_stay_sealed_after_path_or_mode_round_trips() {
         assert_eq!(error.kind, EngineFailureKind::Cancellation);
         assert_eq!(error.job_id.as_deref(), Some(job_id.as_str()));
     }
+}
+
+#[test]
+fn ordinary_rules_gateway_preserves_authoritative_game_and_rejects_unsupported_setup() {
+    let rig = Rig::with_adapter("stream", true);
+    rig.state
+        .replace("(;SZ[9]RU[Chinese]KM[7.5]C[personal];B[dd])", None)
+        .unwrap();
+    rig.state
+        .select_path(NodePath::default(), rig.state.inspect().0)
+        .unwrap();
+    let request = || OrdinaryRulesRequestDto {
+        run_id: rig.run.clone(),
+        generation: rig.state.inspect().0,
+        node_path: NodePath::default(),
+    };
+    let before = rig.state.serialize().unwrap();
+    let receipt = rig
+        .state
+        .start_ordinary_rules(&rig.manager, request())
+        .unwrap()
+        .wait()
+        .unwrap();
+    let receipt = rig.state.publish_ordinary_rules(&rig.manager, receipt).unwrap();
+    assert_eq!(receipt.position.komi, 7.5);
+    assert_eq!(rig.state.serialize().unwrap(), before);
+    assert_eq!(
+        rig.state
+            .publish_ordinary_rules(&rig.manager, receipt)
+            .unwrap_err()
+            .kind,
+        EngineFailureKind::Cancellation
+    );
+    for text in [
+        "(;SZ[9]RU[Chinese]AW[aa]C[keep])",
+        "(;SZ[9]RU[Chinese]AB[aa][bb]AW[cc])",
+        "(;SZ[9]RU[Chinese];B[aa];AB[bb])",
+    ] {
+        let loaded = rig.state.replace(text, None).unwrap();
+        let before = rig.state.serialize().unwrap();
+        let trace = std::fs::read(rig.directory.join("trace")).unwrap();
+        let request = OrdinaryRulesRequestDto {
+            run_id: rig.run.clone(),
+            generation: loaded.generation,
+            node_path: loaded.selected_path,
+        };
+        assert_eq!(
+            rig.state
+                .start_ordinary_rules(&rig.manager, request)
+                .err()
+                .unwrap()
+                .kind,
+            EngineFailureKind::UnsupportedCapability
+        );
+        assert_eq!(rig.state.serialize().unwrap(), before);
+        assert_eq!(std::fs::read(rig.directory.join("trace")).unwrap(), trace);
+        assert!(
+            matches!(rig.manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::Ready { ref run } if run.run_id == rig.run)
+        );
+    }
+}
+
+#[test]
+fn ordinary_rules_gateway_rejects_completed_receipt_after_navigation_round_trip() {
+    let rig = Rig::with_adapter("stream", true);
+    rig.state
+        .replace("(;SZ[9]RU[Chinese]KM[7.5];B[dd])", None)
+        .unwrap();
+    let generation = rig.state.inspect().0;
+    rig.state.select_path(NodePath::default(), generation).unwrap();
+    let receipt = rig
+        .state
+        .start_ordinary_rules(
+            &rig.manager,
+            OrdinaryRulesRequestDto {
+                run_id: rig.run.clone(),
+                generation,
+                node_path: NodePath::default(),
+            },
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+    rig.state
+        .select_path(NodePath { indices: vec![0] }, generation)
+        .unwrap();
+    rig.state.select_path(NodePath::default(), generation).unwrap();
+    assert_eq!(
+        rig.state
+            .publish_ordinary_rules(&rig.manager, receipt)
+            .unwrap_err()
+            .kind,
+        EngineFailureKind::Cancellation
+    );
+}
+
+#[test]
+fn gtp_main_analysis_binds_exact_history_attaches_and_rejects_replaced_document() {
+    let rig = Rig::with_adapter("analysis", true);
+    let loaded = rig
+        .state
+        .replace("(;SZ[9]RU[Chinese]KM[7.5]C[personal only])", None)
+        .unwrap();
+    let events = rig.manager.subscribe();
+    let request = crate::bind_selected_node_job(
+        &rig.state,
+        rig.run.clone(),
+        loaded.generation,
+        loaded.selected_path.clone(),
+        AnalysisJobModeDto::Finite,
+        Some(16),
+    )
+    .unwrap();
+    rig.manager.start_selected_node_job(request).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let completed = loop {
+        match events
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap()
+        {
+            ForegroundEngineEventDto::Job { job } if job.outcome == AnalysisJobOutcomeDto::Completed => {
+                break job
+            }
+            ForegroundEngineEventDto::Failure { failure } => panic!("{failure:?}"),
+            _ => {}
+        }
+    };
+    let attached = rig.state.attach_from_job_event(&completed).unwrap();
+    assert_eq!(attached.snapshot.personal_comment, "personal only");
+    let frame = attached.snapshot.primary_analysis.unwrap();
+    assert_eq!(frame.winrate_black, 0.61);
+    assert_eq!(frame.candidates[0].score_mean_black, None);
+    assert_eq!(frame.candidates[0].pv.len(), 2);
+    let persisted = rig.state.serialize().unwrap();
+    let reopened = sgf::CurrentSgfDocument::open(&persisted).unwrap();
+    let reopened = reopened.snapshot(&NodePath::default()).unwrap();
+    assert_eq!(reopened.personal_comment, "personal only");
+    assert_eq!(
+        reopened.primary_analysis.unwrap().candidates[0].score_mean_black,
+        None
+    );
+    rig.state
+        .replace("(;SZ[9]RU[Chinese]KM[7.5]C[new document])", None)
+        .unwrap();
+    let before = rig.state.serialize().unwrap();
+    assert!(rig.state.attach_from_job_event(&completed).is_none());
+    assert_eq!(rig.state.serialize().unwrap(), before);
 }

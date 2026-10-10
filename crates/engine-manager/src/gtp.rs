@@ -1,5 +1,4 @@
 use std::io::{self, BufRead, BufReader, Read};
-use std::process::{ChildStderr, ChildStdout};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
@@ -7,9 +6,10 @@ const MAX_LINE_BYTES: usize = 64 * 1024;
 const MAX_QUEUED_LINES: usize = 64;
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_RESPONSE_LINES: usize = 1024;
-const MAX_STDERR_BYTES: usize = 8 * 1024;
 
-pub(crate) fn spawn_stdout_reader(stdout: ChildStdout) -> Receiver<io::Result<Option<String>>> {
+pub(crate) fn spawn_stdout_reader(
+    stdout: impl Read + Send + 'static,
+) -> Receiver<io::Result<Option<String>>> {
     let (sender, receiver) = mpsc::sync_channel(MAX_QUEUED_LINES);
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
@@ -68,58 +68,10 @@ fn read_stdout_line(reader: &mut impl BufRead) -> io::Result<Option<String>> {
     }
 }
 
-pub(crate) fn spawn_stderr_reader(mut stderr: ChildStderr) -> Receiver<io::Result<String>> {
-    let (sender, receiver) = mpsc::sync_channel(1);
-    thread::spawn(move || {
-        let mut retained = Vec::with_capacity(MAX_STDERR_BYTES);
-        let mut buffer = [0; 4096];
-        loop {
-            match stderr.read(&mut buffer) {
-                Ok(0) => {
-                    let _ = sender.send(Ok(stderr_summary(&retained)));
-                    break;
-                }
-                Ok(length) => {
-                    let keep = length.min(MAX_STDERR_BYTES - retained.len());
-                    retained.extend_from_slice(&buffer[..keep]);
-                }
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) => {
-                    let _ = sender.send(Err(error));
-                    break;
-                }
-            }
-        }
-    });
-    receiver
-}
-
-fn stderr_summary(mut bytes: &[u8]) -> String {
-    let mut summary = String::with_capacity((bytes.len() * 3).min(MAX_STDERR_BYTES));
-    while !bytes.is_empty() {
-        let (valid, invalid) = match std::str::from_utf8(bytes) {
-            Ok(text) => (text, 0),
-            Err(error) => (
-                // The prefix ending at valid_up_to is guaranteed valid UTF-8.
-                std::str::from_utf8(&bytes[..error.valid_up_to()]).unwrap(),
-                error.error_len().unwrap_or(bytes.len() - error.valid_up_to()),
-            ),
-        };
-        let mut keep = valid.len().min(MAX_STDERR_BYTES - summary.len());
-        while !valid.is_char_boundary(keep) {
-            keep -= 1;
-        }
-        summary.push_str(&valid[..keep]);
-        if keep < valid.len() || invalid == 0 {
-            break;
-        }
-        if MAX_STDERR_BYTES - summary.len() < '\u{fffd}'.len_utf8() {
-            break;
-        }
-        summary.push('\u{fffd}');
-        bytes = &bytes[valid.len() + invalid..];
-    }
-    summary
+/// Stream records never enter a numbered response decoder. The analysis consumer
+/// owns their meaning and completion; a command ID alone is not analysis output.
+pub(crate) fn is_analysis_stream_record(line: &str) -> bool {
+    line.starts_with("info ") || line.starts_with("play ")
 }
 
 pub(crate) struct GtpResponse {

@@ -43,6 +43,32 @@ Yike analysis-rule compatibility was verified on Windows source candidate `5c2fc
 
 Focused regression: `cargo test -p katago-protocol -p engine-manager --lib --test analysis_rules` passed 46 tests; the pre-existing ignored exact-match engine smoke is a separate path. `cargo clippy -p katago-protocol -p engine-manager --all-targets -- -D warnings` passed. The rule conversion is confined to analysis JSONL; exact-position match admission and local scoring inference retain their existing contracts.
 
+### Isolated Benchmark and opt-in startup evaluation
+
+Engine Settings → 本地性能评估 Benchmark selects a saved target independently of the profile editor. Browser preview displays unavailable; actual measurement requires native IPC and a directly executed, qualified KataGo 1.18.2. Benchmark preserves the saved command's arguments/config layers/workdir while selecting the benchmark subcommand. Engine-specific incompatible arguments fail visibly rather than being dropped. A saved custom `benchmark` command may supply explicit `-t`, `-v`, and `-n` limits; ordinary benchmark defaults still have the declared 120-second application deadline. Results are session-only measurements, not saved thread recommendations.
+
+Focused checks:
+
+```bash
+cargo test -p engine-manager --test evaluation
+cargo test -p engine-manager --test engine_profiles_catalog
+cargo test -p engine-manager --lib startup_evaluation_atomic_failure_preserves_authorization_bytes
+unset DISPLAY && cargo test -p lizzieyzy-next-desktop --lib startup_benchmark_save_failure_and_recovery_preserve_game_and_retire_execution
+cd apps/desktop
+npm exec vitest -- run src/components/EngineEvaluationPanel.test.tsx src/components/EngineSetupPanel.test.tsx
+npm run build
+```
+
+The controlled process cases cover original argv and all config layers, bounded streamed output, genuine completion versus exit-only/no metric, failure/privacy, Cancel/new request/target edit/delete, same-path resource replacement, Match priority, and task Pause/Continue retirement. The gateway case observes actual catalog bytes and unchanged SGF/current-game ownership. Rendered cases cover explicit saved-target selection, actual versus unavailable result, close-before-start-completion, cancellation, and browser refusal.
+
+Real production-manager smoke is opt-in: set `LIZZIEYZY_KATAGO_ENGINE`, `LIZZIEYZY_KATAGO_MODEL`, `LIZZIEYZY_KATAGO_CONFIG` and `LIZZIEYZY_KATAGO_WORKDIR` to isolated compatible resources, then run `cargo test -p engine-manager --test evaluation real_katago_measurement_failure_cancel_and_foreground_handoff -- --ignored --nocapture`. It records the actual measurement receipt and checks process success, nonzero failure, cancellation, Match yield and handoff to a real foreground JSONL query while preserving Pause and config bytes. Version/resource probes alone are not a measurement. Required Windows native entry/result/cancel and the exact candidate/resource tuple are recorded separately in the R12 ticket13 acceptance record; repository or Linux evidence does not satisfy that native gate. This manual result does not enable startup evaluation by itself.
+
+Startup evaluation is separately enabled in Engine Settings, with its own saved target selector. Changes persist for the next native fresh launch and never measure immediately. The startup result uses the same visible Benchmark panel and Cancel action. Missing/deleted/corrupt targets remain unavailable; the editor and off/fixed/last-primary startup modes cannot substitute a target. See the [startup setting map](ARCHITECTURE_NEXT.md) for Java provenance, defaults, atomic failure and Session Recovery boundaries.
+
+With the same four isolated real-resource environment variables above, run `cargo test --locked -p engine-manager --test evaluation real_startup_evaluation_result_and_autoload_analysis_handoff -- --ignored --nocapture --test-threads=1`. This trigger-composition smoke reloads durable opt-in into fresh managers, observes a real measurement, then a separate fixed primary autoload and actual JSONL analysis handoff that reaps startup measurement while preserving disabled continuous intent and catalog/config bytes. It does not repeat the manual-runner benchmark matrix. Native acceptance additionally requires an exact Windows candidate, saved opt-in followed by fresh launch, visible actual result, foreground handoff and Cancel; Linux manager and browser tests are not that native proof.
+
+
+
 ### Per-Surface Validation Gates
 
 - **Frontend / Tauri UI changes (`apps/desktop`)**:
@@ -182,9 +208,9 @@ Expected result: the status message reports a loaded/opened game and the board c
 - Save the profile.
 - Add a second profile if Autoload or Switch coverage is part of the change.
 
-Expected result: successfully saved additions, renames and deletions immediately update the Engine Switcher; failed saves leave its prior catalog intact. Profiles also reload after app restart. Saving Autoload Default or Settings selection does not change the current Foreground Engine Run.
+Expected result: successfully saved additions, renames and deletions immediately update the Engine Switcher; failed saves leave its prior catalog intact. Profiles also reload after app restart. Saving startup policy or Settings selection does not change the current Foreground Engine Run.
 
-For migration coverage, seed an isolated app-data directory with an old unversioned collection or single-profile file. Loading must preserve values without rewriting the bytes. Explicit Save writes version 1. An unknown version or malformed settings must report an error without replacing the stored file. A denied write must retain the prior catalog and Run.
+For migration coverage, seed an isolated app-data directory with a version-1 catalog, old unversioned collection or single-profile file. Loading preserves values without rewriting bytes. Explicit Save writes version 2: `startup` is exactly one of `{mode: "off"}`, `{mode: "fixed", profile_id: "stable-id"}`, or `{mode: "last_primary"}`; `last_primary_profile_id` is separately owned by normal graceful exit. The old autoload mark becomes fixed, an absent mark becomes off, and migration cannot invent last-primary history. Unknown versions or malformed settings report an error without replacing storage. A denied write retains the prior catalog and Run.
 
 While KataGo is Ready, save changed argv or finite visits. The live snapshot and process remain unchanged and the profile is pending; Restart must create a new Run from the saved values. A GenericGtp candidate cannot replace that run until its complete handshake succeeds; a failed candidate leaves the original run and work intact.
 
@@ -192,7 +218,11 @@ During A-to-B switching, deleting either A or candidate B must fail at the backe
 
 R11 profile ordering uses the existing catalog order as its initial order. The Rust `reorder_engine_profiles_settings` command persists a complete stable-ID permutation and reloads the latest records under the same write lock as Save. Stale order/membership, unknown/duplicate IDs and incomplete sets fail before writing; write/replace failures retain the previous bytes and returned/runtime order. Same-order requests do not write, even when storage is unavailable. Focused catalog, injected replacement, gateway late-consumer and browser-storage regressions cover these boundaries; native Settings/restart and real Run/job invariants remain separate acceptance gates.
 
-Java mapping: `MoreEngines` first/up/down/last controls correspond to user-directed permutation of `leelaz.engine-settings-list[]`. Next stores that permutation as the `profiles[]` stable-ID sequence in catalog version 1. Java `ui.default-engine` is an index into its saved list; resolve that index to the original profile identity when interpreting the mapping. Next's `autoload_profile_id` keeps that stable identity through a reorder; an absent mark remains off. Neither Settings selection nor Autoload is a Run ID, and a new list index never changes the immutable active launch snapshot or job profile bindings. No alphabetical or other default sorting policy is introduced.
+Java mapping: `MoreEngines` first/up/down/last controls correspond to user-directed permutation of `leelaz.engine-settings-list[]`. Next stores that permutation as the `profiles[]` stable-ID sequence in catalog version 2. Java `ui.default-engine` is a list index; resolve that index to the original profile identity when interpreting the mapping. Next's `startup.mode=fixed` holds that identity in `profile_id` through reorder. Editor selection is independent. Neither is a Run ID, and list positions never change the immutable active launch snapshot or job bindings. No alphabetical/default sorting is introduced.
+
+Java startup flags `autoload-default`, `autoload-last`, and `autoload-empty` map to the mutually exclusive Next fixed, last-primary, and off choices. Java missing flags default false/manual (bundled new KataGo may set default true); Next missing legacy marks remain off. Java `ui.last-engine` defaults to -1 and is written on normal shutdown when autoload-last is selected. Next records the stable identity of the last successfully promoted primary at every completed normal graceful exit, independently of the chosen next-start policy. A successful Switch replaces that identity; failed candidates, editor selection, reorder, and explicit Stop do not. Cancel exit, cancelled Save As, failed document save, crash/kill, and forced incomplete teardown do not update it. A session with no successful primary retains the previous record. Atomic-write failure preserves old bytes, displays the storage error, and prevents final native exit until retry succeeds. This deliberately differs from Java's modal-write-error-then-exit behavior.
+
+Production consumers are the Rust catalog decoder/normalizer, gateway disk catalog startup resolver, ForegroundEngineManager promotion history, and final document-departure confirmation. TypeScript DTOs, API browser storage, and Engine Settings use the same version-2 shape; browser profile saves retain the durable remembered ID and cannot manufacture a native exit. No Java configuration is read or dual-written. Deleted/missing fixed or remembered targets remain explicit missing identities: startup stays No-engine with the existing typed autoload failure, without using editor selection, list position, or another engine. Corrupt/unsupported files are not rewritten. Browser preview checks settings persistence only, not native startup or graceful exit.
 
 For order smoke, seed three saved profiles and keep one selected/marked while editing its unsaved name, program and argv. Move saved rows through all four controls; the dropdown and main-workspace catalog order update after each successful write while the editor and mark stay unchanged. First/up on the first row and down/last on the last row remain disabled. Reload/restart recovers the durable order. Inject a write/replace failure: old bytes/order and pending editor remain, and the full storage diagnostic is visible. A stale consumer must reject without overwriting newer storage. The localized labels use the shared effective-locale and missing/blank-resource fallback.
 
@@ -227,6 +257,14 @@ Windows M01–M03 passed on exact committed debug candidate `D:\dev\weiqi\worktr
 - M03: Generic selection from NoEngine and from Ready A, plus Restart after saving A as Generic, explained refusal before lifecycle IPC. A CDP function-call breakpoint recorded two successful snapshot positive controls and no Start/Switch/Restart calls per refused action; full catalog/game/preferences/run snapshots were unchanged. Real continuous analysis reached its visits limit, finite analysis completed with17 visits, and a current-node task completed1/1. Stop reaped KataGo while SGF `LZ` history and durable intent remained readable; the desktop exited normally with code0.
 
 The exact candidate also passed `real_katago_ready_job_stop_restart_and_switch` (1 passed,1 filtered,52.55s), with `LIZZIEYZY_REAL_KATAGO=1` and explicit engine/model/config/workdir environment paths. Log: `D:\dev\weiqi\acceptance\r8-capability-checks\real-katago.log`; repository transcripts are in that directory. Earlier profile-cutover evidence above retains its original candidate attribution for unchanged legacy migration/autoload paths. No Generic GTP readiness, game-move, cross-protocol N02/N03/N05/N06, provider or release-package claim follows from these checks; `ENG-10` remains Missing.
+
+### Local failure / import / explicit Restart recovery
+
+The production-manager recovery smokes are named ignored tests in `real_katago_lifecycle_smoke`: `real_gtp_failure_import_restart_requires_user_continue` and `real_jsonl_failure_import_restart_requires_user_continue`. Run each separately with `cargo test --locked -p engine-manager --test real_katago_lifecycle_smoke <name> -- --ignored --exact --nocapture --test-threads=1`, setting `LIZZIEYZY_REAL_KATAGO=1` and the four explicit engine/model/config/workdir variables. Use private compatible configs/cwd and read-only engine/model assets. These Linux checks use the existing parent/executable/cwd/argv/start-time selector and pidfd to fail only their owned child; they never use a global process difference or Windows PID killer.
+
+Each case obtains real analysis, observes a primary failure, installs a different parsed SGF target through the manager departure sequence, explicitly Restarts, and asserts retained SafetyHold with no analysis job. GTP additionally reads back the new exact rules/6.5 komi/black player/two-move PASS tail before explicit Continue. Both require genuine new-generation candidates, Pause retaining the healthy replacement Run, unchanged personal-comment SGF bytes and bounded owned teardown. JSONL's selected-position query uses `initialStones` and wire turn zero, not the GTP history turn or a claimed GTP rules receipt.
+
+`ordinary_rules::controlled::invalid_stream_requires_explicit_continue_after_restart_and_new_document` covers the deterministic malformed-stream → committed import → Restart order. The gateway `confirmed_departure_hold_survives_navigation_and_preference_reload` exercises actual `CurrentGameState` protected replacement after cancelled departure. Existing move/Match, late-ACK, independent-lane cancellation and document attachment tests retain their distinct boundaries. Native acceptance still requires actual Open/new game identity, explicit Restart, new position confirmation and user Continue on one committed candidate; manager tests do not replace that surface.
 
 ### 2.2 Generic GTP lifecycle (R8 ticket 03)
 
@@ -520,7 +558,7 @@ These results apply to the local review-repair working tree, not a pushed or new
 - In the main-workspace Engine Switcher, choose the saved profile (`选择引擎` starts it).
 - Confirm the chip leaves `未加载引擎` and `停止` / `重启` become enabled.
 - Optional diagnostic: in Engine Settings click `检查资源`. Asset existence is not a Start gate; Start still validates assets and adapter readiness.
-- Optional Autoload: mark `启动时自动加载`, restart the desktop app, and confirm only that profile is started. A missing model stays No-engine with a typed Autoload/asset banner and no fallback.
+- Startup policy: test off, fixed, and last-primary separately. Fixed must reopen its stable profile despite another editor selection or reorder. Last-primary must reopen the last successful Ready primary after normal exit (including Stop before exit), not after cancelled/forced exit. Missing targets/assets stay No-engine with a typed startup/asset banner and no fallback; a failed atomic exit write must keep the old record and show the error.
 - Click `停止` and confirm the chip returns to `未加载引擎` with `停止` / `重启` disabled.
 - Start again, then click `重启` and confirm a new Ready run.
 
@@ -547,6 +585,8 @@ cargo test -p engine-manager --test foreground_engine_run selected_node_ --offli
 cd apps/desktop && npx vitest run src/EngineLifecycle.test.tsx src/SelectedNodeAnalysis.test.tsx
 cd ../.. && cargo test -p engine-manager --test foreground_engine_run continuous_
 ```
+
+The selected-node protocol-failure and supersede fixtures retain their Ready/lane assertions, then explicitly tear down the owned manager before deleting temporary callback files. Both assert the cancellation marker and final NoEngine snapshot. STD-04 Linux real-pipe validation ran each case with `--exact --nocapture --test-threads=1`, then the full `foreground_engine_run` target serially: **160 passed, 1 ignored** (the existing long-startup case). Captured stdout/stderr contained no background panic, PoisonError or cleanup NotFound; an owned-descendant observer confirmed both targeted engine children and their observed helpers were gone after execution. This is fixture-cleanup evidence, not native GUI or live-engine acceptance.
 
 Optional real KataGo on a resident Run (ignored by default):
 
@@ -1068,6 +1108,56 @@ User-assisted Windows acceptance on exact snapshot `85a5cc12f876186c95b996145136
 Linux and Wayland screenshots and geometry JSON have durable copies under `D:\dev\weiqi\acceptance\r7-window04-platform-evidence\linux` and `\wayland`. The Wayland repair passed independent Standards and Spec verification against the frozen repair delta; `SPEC-WAYLAND-1` and its duplicate `STD-WAYLAND-1` are resolved. This scoped result supplies no AppKit evidence; this R7 run's AppKit native acceptance is separately SKIPPED by user approval on 2026-09-30, with its unverified candidate and original review attribution retained.
 
 The platform-adapter commit `f9b1dd82d66eb77c45b36d47206de66bada5862d` also built successfully as an isolated Windows candidate. Its `r7-window04-f9b1dd8-run2` restored numeric `310,170,1100×720@1`, showed saved status with no geometry error, rendered the native application, and exited 0. Native rectangles, status JSON and screenshot are retained in that run directory. Run1 used an invalid workspace-share fixture and exercised preference quarantine/default startup; it is excluded from numeric-restore evidence.
+
+## R12 KataGo GTP main-analysis checks
+
+The explicit `kata_go_gtp` provider uses the named KataGo 1.18.2 engine on its existing foreground Run; selecting a profile does not start or switch it. Use a strict ordinary Chinese/Chinese-KGS SGF position and the configured GTP model/config. Main candidates, PV, winrate, actual scores and ownership come from `kata-analyze`; policy and whole-game analysis remain unavailable for this provider. Missing score/prior/ownership values must remain unavailable in the table, overlays and saved/reopened SGF. JSONL profiles keep their existing support.
+
+Focused repository entrypoints:
+
+```sh
+cargo test --locked -p katago-protocol -p engine-manager --lib gtp_
+cargo test --locked -p engine-manager --test foreground_engine_run --test game_move --test ordinary_rules
+cargo test --locked -p sgf --test java_analysis_payloads --test replace_primary_analysis --test document_history
+cargo test --locked -p lizzieyzy-next-desktop --lib --no-default-features gtp_main_analysis_binds_exact_history
+```
+
+The rendered `AnalysisPanel`, `SelectedNodeAnalysis`, `AnalysisPresentation` and `foregroundEngine` suites cover nullable score presentation and capability admission. The gateway test exercises production manager events through current-game attachment, SGF save/reopen and obsolete-document rejection. Controlled manager tests distinguish write completion, stream closure and own numbered Stop ACK, including live navigation and explicit Continue after failure. These tests do not claim native desktop acceptance.
+
+For the actual engine, set `LIZZIEYZY_REAL_KATAGO=1` and explicit `LIZZIEYZY_KATAGO_ENGINE`, `LIZZIEYZY_KATAGO_MODEL`, `LIZZIEYZY_KATAGO_CONFIG`, `LIZZIEYZY_KATAGO_WORKDIR` paths, then run:
+
+```sh
+cargo test --locked -p engine-manager --test ordinary_rules real_katago_gtp_rules_and_exact_selected_positions -- --ignored --nocapture
+```
+
+Use an isolated writable workdir/config with owned logs; never change shared engine/model assets. Record exact candidate, engine/model/config digests, platform, Run/job/position tuple and actual result. The smoke checks six finite positions, continuous branch replacement, Pause/navigation/Continue on one Run, unchanged SGF, bounded canonical diagnostics and normal teardown. Bounded diagnostics may legitimately evict early startup records, so startup-source assertions are made at Ready rather than after streaming. Native main-window acceptance still requires a separately authorized committed candidate; thread/pair composition belongs to later R12 integration. Preserve earlier failed smoke records as failures rather than relabelling them after repairs.
+
+## R12 Combined Candidate Evidence
+
+Local reconciliation on 2026-10-10 uses repository `qiyi71w/lizzieyzy-next-tauri`, original R12 base `9d2ccf3ba6881c755013b82948e5da1a01f7fcd4`, PR #21 head `2e781f32633872f115f55e273098420d341cf91a` and stacked PR #22 head `9add0eed40d2426730f371258145c72623f7b990`. Both PRs were observed OPEN. Their common ancestor is `ca1b6f33ec822931fb51501c3e24c6e1924ee62e`. Local merge `3496fd4b886ac9321e4ce84c3176c1120dc8e1a4` on `fix/r12-candidate-closeout` contains both exact heads without conflicts; it does not merge either GitHub PR or change either published branch.
+
+### Candidate And Inheritance Chain
+
+| Candidate | Evidence and affected boundary |
+| --- | --- |
+| `d2462d3d60d5b9c293d55e106dd77cf3323fcf5b` | Original integrated Windows same-process GTP analysis/thread/pair, JSONL switch/failure preservation/recovery and qualified TRT startup/cache evidence. Exact engine/resources and platform limits remain in the original R12-16 receipt. |
+| `ab9f8184daddc00a8a214336c1d7eb85210f8cb8` | Repaired preload authorization and priority: actual TRT startup beyond 371s, Save authorization boundary, task Continue retiring preload and diagnostic ZIP observations. |
+| `ca1b6f33ec822931fb51501c3e24c6e1924ee62e` | Final diagnostic convergence, affected Windows controlled-pipe and real CPU/failed-Switch/ZIP evidence; unchanged preload/TRT scope inherits ab9f818. Shared Spec/Standards SUCCESS and read-only Closeout cover all 17 tickets / 85 acceptance clauses. |
+| `2d414b4288e4f3107118f5c4454f4a7d0620e1f1` → `50038314355dee7cf61d22302ada747d2b46e66f` | Managed receipt publication/locking and clean API cutover. Actual controlled-file publish/reopen, cancellation/rollback and production 60-second timeout; deterministic contention regression and affected platform compilation. Independent repair review SUCCESS. These are not new live-download/GPU runs. |
+| `9acea672711c22c5b127e7c1bcc912eeea789866` | Current-settings gateway fixture repair; 254 desktop-lib tests and bounded independent review. [CI 38028105229](https://github.com/qiyi71w/lizzieyzy-next-tauri/actions/runs/38028105229) passed for this source. |
+| `2e781f32633872f115f55e273098420d341cf91a` | Relative launch cwd resolved at the shared builder, with nine actual controlled child launches and focused consumers. [Published evidence](https://github.com/qiyi71w/lizzieyzy-next-tauri/pull/21#issuecomment-6094812522) retains exact scope and independent review. [CI 38031612555](https://github.com/qiyi71w/lizzieyzy-next-tauri/actions/runs/38031612555) passed on attempt 2; attempt 1 exposed the separate process-identity fixture race, not a fixed-by-rerun result. |
+| `9add0eed40d2426730f371258145c72623f7b990` → local combined candidate | PR #22 drains two selected-node fixtures before deleting callback files. Only tests and this guide differ from PR #21. The additional local repairs below preserve that production-code equivalence. |
+
+Original R12 authority: `/home/dev/dev/weiqi/worktrees/lizzieyzy-next-tauri/r12-planning-20261008/.scratch/engine-runtime-r12/tracker.md` and its linked R12-16 integration, final review and Closeout records. Later repair authority is `/home/dev/dev/weiqi/worktrees/lizzieyzy-next-tauri/r12-pr-repair-20261010/.scratch/pr21-review-repair/issues/01-approved-repairs.md` and `.scratch/pr21-relative-cwd/issues/01-relative-launch-directory.md` in that same worktree. Consume the actual linked records and original candidates; copied preliminary states and the original PR-body commit count do not describe the final candidate.
+
+### Combined-Candidate Fixture Repairs And Checks
+
+- First combined run reported 161 passing assertions but also emitted a background `NotFound` at `foreground_engine_run.rs`'s `whole_game_user_cancel_keeps_run_ready_and_does_not_cancel_selected_node` callback, followed by manager-lock `PoisonError`. This third fixture retained a selected-node cancellation callback after its temporary directory was destroyed. It now follows PR #22's existing explicit teardown, cancellation-marker and NoEngine assertions after the original Ready/lane assertions. That first run is not a clean pass.
+- CWD-CI-01: the live-lookalike selector now waits at most two seconds for the expected executed image and `argv[0]`, with bounded polling rather than a fixed startup delay. Parent/executable/cwd/private-config rejection assertions remain; the naturally exiting child is reaped before identity assertions, including timeout paths. No process-selection or engine production code changed, and the selector sends no signal.
+- Diagnosis limits: 128 ordinary local launches showed no initial identity mismatch; the original CI failure is retained as the failing-before signal. A controlled real-process smoke deliberately held a child in its initial image before exec. The immediate sample had the wrong executable; the exact repaired sampling loop admitted the later correct image and rejected a child that exited before reaching it. Both children were reaped. This proves the readiness boundary, not the CI kernel's precise internal scheduling.
+- Final local command: `cargo test -p engine-manager --test foreground_engine_run --test real_katago_lifecycle_smoke -- --nocapture` — **161 passed, 0 failed, 9 ignored**. Complete stdout/stderr had no background panic, PoisonError or poisoned-lock diagnostic. Ignored real-engine/long-start cases were not run. The actual compiled live-lookalike selector additionally passed **20/20** isolated invocations. Focused Clippy for those two test targets with `-D warnings` and formatting checks for the two changed Rust files passed.
+- This is a test/docs-only delta after PR #21; its nine-launch cwd proof and original native/GPU results retain their exact attribution and scope. No new Windows, genuine KataGo/GPU, live provider, full-workspace or combined-head remote CI result is claimed. STD-03 repeated directory-reading performance and STD-PR21-02 unsupported-host publication fixtures remain separate non-blocking follow-ups; neither is repaired here.
+- Before publication/merge, choose the exact containing commit and run its actual required CI. Existing published PR checks do not qualify this new local combined head. The R11 status reconciliation is a separate docs commit `551ebc16fccacb283df8e165375b4ee686ab345a`; this R12 candidate does not implicitly include or publish it.
 
 ## Documentation Acceptance
 

@@ -1149,7 +1149,15 @@ button[aria-pressed="true"] {
   max-width: 320px;
 }
 
-.human-match-dialog .message {
+.human-match-dialog .message,
+.engine-resource-message {
+  white-space: normal;
+  overflow: visible;
+  max-width: none;
+  overflow-wrap: anywhere;
+}
+
+.ordinary-rules-panel.message {
   white-space: normal;
   overflow: visible;
   max-width: none;
@@ -1265,6 +1273,32 @@ textarea {
   gap: 8px;
   min-width: 0;
 }
+
+.managed-resources {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.managed-resources h3 {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+.managed-group {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+}
+
+.managed-group legend { font-weight: 600; }
+.managed-resources p { margin: 0; white-space: normal; overflow: visible; }
+.managed-resources button { height: auto; min-height: 28px; white-space: normal; text-align: start; }
+.managed-resources progress { width: 100%; min-width: 0; }
 
 .engine-grid {
   display: grid;

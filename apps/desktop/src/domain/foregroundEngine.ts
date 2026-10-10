@@ -59,8 +59,13 @@ export function admitsForegroundEngineQuery(
   snapshot: ForegroundEngineSnapshotDto,
   capability: "selected_node_analysis" | "continuous_analysis" | "whole_game_analysis" = "selected_node_analysis"
 ): boolean {
-  const analysis = runFromSnapshot(snapshot)?.capability_snapshot?.analysis;
-  // The current gateway queries always request ownership and policy together.
+  const run = runFromSnapshot(snapshot);
+  const analysis = run?.capability_snapshot?.analysis;
+  if (run?.adapter_kind === "kata_go_gtp") {
+    return admitsForegroundEngineJobs(snapshot, capability)
+      && analysis?.candidates === true && analysis.pv === true && analysis.winrate === true;
+  }
+  // JSONL gateway queries retain their ownership + policy contract.
   return admitsForegroundEngineJobs(snapshot, capability) && analysis?.ownership === true && analysis.policy === true;
 }
 
@@ -79,7 +84,7 @@ export function verifiedEngineCapabilitiesLabel(snapshot: ForegroundEngineSnapsh
   if (!run) return "当前没有运行引擎";
   const capabilities = run.capability_snapshot;
   if (!capabilities) return "当前 run：能力待验证";
-  if (capabilities.gtp) {
+  if (capabilities.gtp && !capabilities.analysis) {
     const facts = capabilities.gtp;
     const clocks = ["time_settings", "time_left"]
       .map((command) => `${command} ${facts.commands.includes(command) ? "已发现" : "未发现"}`).join(" · ");
@@ -117,7 +122,7 @@ export function profileHasPendingChanges(
     || current.working_dir !== saved.working_dir || current.adapter_kind !== saved.adapter_kind
     || current.argv.length !== saved.argv.length
     || current.argv.some((argument, index) => argument !== saved.argv[index])) return true;
-  if (current.adapter_kind === "kata_go_analysis" && saved.adapter_kind === "kata_go_analysis") {
+  if (current.adapter_kind !== "generic_gtp" && saved.adapter_kind !== "generic_gtp") {
     return current.settings.model_path !== saved.settings.model_path
       || current.settings.config_path !== saved.settings.config_path
       || current.settings.max_visits !== saved.settings.max_visits;

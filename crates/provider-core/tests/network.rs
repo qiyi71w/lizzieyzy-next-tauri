@@ -24,6 +24,162 @@ const PROXY_ENV_KEYS: &[&str] = &[
     "NO_PROXY",
 ];
 
+#[test]
+fn resource_download_streams_binary_and_policy_change_retires_its_lease() {
+    let _env = EnvGuard::new();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let mut stream = accept_timeout(&listener, Duration::from_secs(3)).unwrap();
+        let mut request = [0; 1];
+        stream.read_exact(&mut request).unwrap();
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n\0\xffab")
+            .unwrap();
+    });
+    let state = NetworkState::default();
+    let operation = state.begin_resource(0).unwrap();
+    let path = std::env::temp_dir().join(format!("resource-download-{}", std::process::id()));
+    operation
+        .download(&format!("{origin}/asset"), &path, 4, &[origin.as_str()], |_| {})
+        .unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"\0\xffab");
+    assert_eq!(operation.routes()[0].source, "direct");
+    state.commit(NetworkSettingsDto::default(), || Ok(())).unwrap();
+    assert!(operation.lease().check().is_err());
+    std::fs::remove_file(path).unwrap();
+    server.join().unwrap();
+}
+
+#[test]
+fn resource_download_obeys_manual_and_system_routes_without_direct_fallback() {
+    let env = EnvGuard::new();
+    for mode in [NetworkModeDto::Manual, NetworkModeDto::System] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        env.set("http_proxy", &format!("http://127.0.0.1:{port}"));
+        let server = std::thread::spawn(move || {
+            let mut stream = accept_timeout(&listener, Duration::from_secs(3)).unwrap();
+            let mut bytes = [0; 2048];
+            let count = stream.read(&mut bytes).unwrap();
+            assert!(String::from_utf8_lossy(&bytes[..count]).starts_with("GET http://asset.invalid/frozen "));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc")
+                .unwrap();
+        });
+        let state = NetworkState::default();
+        let snapshot = state
+            .commit(
+                NetworkSettingsDto {
+                    mode,
+                    manual_host: "127.0.0.1".into(),
+                    manual_port: port,
+                },
+                || Ok(()),
+            )
+            .unwrap();
+        let operation = state.begin_resource(snapshot.policy_revision).unwrap();
+        let path = std::env::temp_dir().join(format!("resource-policy-{}", std::process::id()));
+        operation
+            .download(
+                "http://asset.invalid/frozen",
+                &path,
+                3,
+                &["http://asset.invalid"],
+                |_| {},
+            )
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"abc");
+        assert_eq!(
+            operation.routes()[0].source,
+            if mode == NetworkModeDto::Manual {
+                "manual"
+            } else {
+                "environment"
+            }
+        );
+        std::fs::remove_file(path).unwrap();
+        server.join().unwrap();
+    }
+    env.set("http_proxy", "socks5://127.0.0.1:1");
+    let state = NetworkState::default();
+    let snapshot = state
+        .commit(
+            NetworkSettingsDto {
+                mode: NetworkModeDto::System,
+                ..Default::default()
+            },
+            || Ok(()),
+        )
+        .unwrap();
+    let operation = state.begin_resource(snapshot.policy_revision).unwrap();
+    let path = std::env::temp_dir().join("resource-unsupported-must-not-exist");
+    assert_eq!(
+        operation
+            .download(
+                "http://asset.invalid/frozen",
+                &path,
+                3,
+                &["http://asset.invalid"],
+                |_| {}
+            )
+            .unwrap_err()
+            .kind,
+        ProviderErrorKind::ProxyFailed
+    );
+    assert!(!path.exists());
+}
+
+#[test]
+fn resource_download_cancel_and_origin_rejection_never_complete_a_partial_file() {
+    let _env = EnvGuard::new();
+    let controlled = ControlledRead::new();
+    let origin = controlled.request.url.trim_end_matches("/controlled").to_owned();
+    let state = NetworkState::default();
+    let operation = state.begin_resource(0).unwrap();
+    let path = std::env::temp_dir().join(format!("resource-cancel-{}", std::process::id()));
+    let worker_operation = operation.clone();
+    let worker_path = path.clone();
+    let url = controlled.request.url.clone();
+    let worker =
+        std::thread::spawn(move || worker_operation.download(&url, &worker_path, 9, &[&origin], |_| {}));
+    controlled.accepted.recv_timeout(Duration::from_secs(3)).unwrap();
+    operation.cancel();
+    assert_eq!(
+        worker.join().unwrap().unwrap_err().kind,
+        ProviderErrorKind::Cancelled
+    );
+    controlled.release.send(()).unwrap();
+    controlled.server.join().unwrap();
+    assert!(std::fs::read(&path).unwrap().is_empty());
+    std::fs::remove_file(&path).unwrap();
+    let operation = state.begin_resource(0).unwrap();
+    assert!(operation
+        .download(
+            "http://127.0.0.1:1/forged",
+            &path,
+            9,
+            &["https://github.com"],
+            |_| {}
+        )
+        .is_err());
+    assert!(!path.exists());
+    assert_eq!(
+        operation
+            .download(
+                "http://127.0.0.1:1/offline",
+                &path,
+                9,
+                &["http://127.0.0.1:1"],
+                |_| {}
+            )
+            .unwrap_err()
+            .kind,
+        ProviderErrorKind::TransportFailed
+    );
+    std::fs::remove_file(path).unwrap();
+}
+
 struct EnvGuard {
     _lock: std::sync::MutexGuard<'static, ()>,
     original: Vec<(&'static str, Option<String>)>,

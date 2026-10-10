@@ -1,4 +1,6 @@
-use app_model::{EngineAdapterSettings, EngineProfileDto, GenericGtpSettings, KataGoSettings};
+use app_model::{
+    EngineAdapterSettings, EngineProfileDto, EngineStartupPolicyDto, GenericGtpSettings, KataGoSettings,
+};
 use engine_manager::{
     default_engine_profiles_settings, load_engine_profiles, parse_engine_profiles, save_engine_profiles,
     EngineProfileRecord, EngineProfilesSettings, DEFAULT_ENGINE_PROFILE_ID, ENGINE_PROFILES_VERSION,
@@ -44,6 +46,7 @@ impl Drop for TestTempDir {
 fn profile(id: &str, name: &str) -> EngineProfileRecord {
     EngineProfileRecord {
         id: id.to_string(),
+        preload: false,
         profile: EngineProfileDto {
             name: name.to_string(),
             program: format!("/bin/{id}"),
@@ -66,7 +69,11 @@ fn settings(
     EngineProfilesSettings {
         version: ENGINE_PROFILES_VERSION,
         selected_profile_id: selected.to_string(),
-        autoload_profile_id: autoload.map(str::to_string),
+        startup: autoload.map_or(EngineStartupPolicyDto::Off, |id| EngineStartupPolicyDto::Fixed {
+            profile_id: id.into(),
+        }),
+        last_primary_profile_id: None,
+        startup_evaluation: Default::default(),
         profiles,
     }
 }
@@ -78,9 +85,40 @@ fn first_use_and_missing_file_have_no_autoload_mark() {
     assert!(!path.exists());
 
     let loaded = load_engine_profiles(&path).unwrap();
-    assert_eq!(loaded.autoload_profile_id, None);
+    assert_eq!(loaded.startup_profile_id(), None);
     assert_eq!(loaded, default_engine_profiles_settings());
     assert!(!path.exists());
+}
+
+#[test]
+fn startup_evaluation_defaults_and_durable_target_are_independent() {
+    let temp = TestTempDir::new("startup-evaluation");
+    let path = temp.catalog_path();
+    let initial = serde_json::to_value(load_engine_profiles(&path).unwrap()).unwrap();
+    assert_eq!(
+        initial["startup_evaluation"],
+        serde_json::json!({"enabled": false, "target_profile_id": null})
+    );
+    let mut bytes = initial.clone();
+    bytes["startup_evaluation"] = serde_json::json!({"enabled": true, "target_profile_id": "deleted-target"});
+    let settings = parse_engine_profiles(&bytes.to_string()).unwrap();
+    save_engine_profiles(&path, settings.clone()).unwrap();
+    assert_eq!(load_engine_profiles(&path).unwrap(), settings);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap()
+            ["startup_evaluation"],
+        bytes["startup_evaluation"]
+    );
+    bytes["startup_evaluation"]["enabled"] = serde_json::json!("true");
+    assert!(parse_engine_profiles(&bytes.to_string()).is_err());
+    assert_eq!(load_engine_profiles(&path).unwrap(), settings);
+    let mut legacy = initial;
+    legacy.as_object_mut().unwrap().remove("startup_evaluation");
+    assert_eq!(
+        serde_json::to_value(parse_engine_profiles(&legacy.to_string()).unwrap()).unwrap()
+            ["startup_evaluation"]["enabled"],
+        false
+    );
 }
 
 #[test]
@@ -116,7 +154,7 @@ fn old_format_without_autoload_field_is_off() {
     }"#;
     let parsed = parse_engine_profiles(collection).unwrap();
     assert_eq!(parsed.selected_profile_id, "profile-a");
-    assert_eq!(parsed.autoload_profile_id, None);
+    assert_eq!(parsed.startup_profile_id(), None);
 
     let legacy = r#"{
         "profile": {
@@ -131,7 +169,7 @@ fn old_format_without_autoload_field_is_off() {
     }"#;
     let migrated = parse_engine_profiles(legacy).unwrap();
     assert_eq!(migrated.selected_profile_id, DEFAULT_ENGINE_PROFILE_ID);
-    assert_eq!(migrated.autoload_profile_id, None);
+    assert_eq!(migrated.startup_profile_id(), None);
     assert_eq!(migrated.profiles[0].profile.name, "Legacy");
 }
 
@@ -150,53 +188,54 @@ fn set_replace_clear_and_reload_keep_a_single_autoload_mark() {
     );
 
     let saved = save_engine_profiles(&path, catalog.clone()).unwrap();
-    assert_eq!(saved.autoload_profile_id, None);
-    assert_eq!(load_engine_profiles(&path).unwrap().autoload_profile_id, None);
+    assert_eq!(saved.startup_profile_id(), None);
+    assert_eq!(load_engine_profiles(&path).unwrap().startup_profile_id(), None);
 
     let marked = save_engine_profiles(
         &path,
         EngineProfilesSettings {
-            autoload_profile_id: Some("alpha".into()),
+            startup: EngineStartupPolicyDto::Fixed {
+                profile_id: "alpha".into(),
+            },
             ..catalog.clone()
         },
     )
     .unwrap();
-    assert_eq!(marked.autoload_profile_id.as_deref(), Some("alpha"));
+    assert_eq!(marked.startup_profile_id(), Some("alpha"));
     assert_eq!(
-        load_engine_profiles(&path)
-            .unwrap()
-            .autoload_profile_id
-            .as_deref(),
+        load_engine_profiles(&path).unwrap().startup_profile_id(),
         Some("alpha")
     );
 
     let replaced = save_engine_profiles(
         &path,
         EngineProfilesSettings {
-            autoload_profile_id: Some("beta".into()),
+            startup: EngineStartupPolicyDto::Fixed {
+                profile_id: "beta".into(),
+            },
             ..catalog.clone()
         },
     )
     .unwrap();
-    assert_eq!(replaced.autoload_profile_id.as_deref(), Some("beta"));
+    assert_eq!(replaced.startup_profile_id(), Some("beta"));
     let reloaded = load_engine_profiles(&path).unwrap();
-    assert_eq!(reloaded.autoload_profile_id.as_deref(), Some("beta"));
+    assert_eq!(reloaded.startup_profile_id(), Some("beta"));
     assert_eq!(reloaded.selected_profile_id, "default");
 
     let cleared = save_engine_profiles(
         &path,
         EngineProfilesSettings {
-            autoload_profile_id: None,
+            startup: EngineStartupPolicyDto::Off,
             ..catalog
         },
     )
     .unwrap();
-    assert_eq!(cleared.autoload_profile_id, None);
-    assert_eq!(load_engine_profiles(&path).unwrap().autoload_profile_id, None);
+    assert_eq!(cleared.startup_profile_id(), None);
+    assert_eq!(load_engine_profiles(&path).unwrap().startup_profile_id(), None);
 }
 
 #[test]
-fn dangling_selection_and_autoload_are_rejected_without_replacing_storage() {
+fn corrupt_identities_are_rejected_without_replacing_storage() {
     let temp = TestTempDir::new("dangling-identities");
     let path = temp.catalog_path();
     let valid = settings("alpha", Some("alpha"), vec![profile("alpha", "Alpha")]);
@@ -208,11 +247,15 @@ fn dangling_selection_and_autoload_are_rejected_without_replacing_storage() {
             ..valid.clone()
         },
         EngineProfilesSettings {
-            autoload_profile_id: Some("missing".into()),
+            startup: EngineStartupPolicyDto::Fixed {
+                profile_id: "bad\0id".into(),
+            },
             ..valid.clone()
         },
         EngineProfilesSettings {
-            autoload_profile_id: Some("   ".into()),
+            startup: EngineStartupPolicyDto::Fixed {
+                profile_id: "   ".into(),
+            },
             ..valid.clone()
         },
     ] {
@@ -223,7 +266,7 @@ fn dangling_selection_and_autoload_are_rejected_without_replacing_storage() {
 }
 
 #[test]
-fn deleting_inactive_marked_profile_clears_mark_in_the_same_document() {
+fn deleting_inactive_fixed_profile_retains_missing_identity_without_fallback() {
     let temp = TestTempDir::new("delete-marked");
     let path = temp.catalog_path();
     save_engine_profiles(
@@ -238,14 +281,14 @@ fn deleting_inactive_marked_profile_clears_mark_in_the_same_document() {
 
     let after_delete = save_engine_profiles(
         &path,
-        settings("default", None, vec![profile("default", "Local KataGo")]),
+        settings("default", Some("alpha"), vec![profile("default", "Local KataGo")]),
     )
     .unwrap();
-    assert_eq!(after_delete.autoload_profile_id, None);
+    assert_eq!(after_delete.startup_profile_id(), Some("alpha"));
     assert!(after_delete.profiles.iter().all(|record| record.id != "alpha"));
 
     let reloaded = load_engine_profiles(&path).unwrap();
-    assert_eq!(reloaded.autoload_profile_id, None);
+    assert_eq!(reloaded.startup_profile_id(), Some("alpha"));
     assert!(reloaded.profiles.iter().all(|record| record.id != "alpha"));
 }
 
@@ -271,9 +314,9 @@ fn legacy_read_preserves_every_value_and_never_rewrites_until_explicit_save() {
     std::fs::write(&path, &original).unwrap();
     let loaded = load_engine_profiles(&path).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
-    assert_eq!(loaded.version, 1);
+    assert_eq!(loaded.version, 2);
     assert_eq!(loaded.selected_profile_id, "second");
-    assert_eq!(loaded.autoload_profile_id.as_deref(), Some("first"));
+    assert_eq!(loaded.startup_profile_id(), Some("first"));
     assert_eq!(
         loaded
             .profiles
@@ -306,7 +349,7 @@ fn legacy_read_preserves_every_value_and_never_rewrites_until_explicit_save() {
     );
     save_engine_profiles(&path, loaded.clone()).unwrap();
     let persisted: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(persisted["version"], 1);
+    assert_eq!(persisted["version"], 2);
     assert_eq!(persisted["profiles"][0]["profile"]["settings"]["max_visits"], 123);
     assert!(persisted["profiles"][0].get("max_visits").is_none());
     assert!(persisted["profiles"][0]["profile"].get("engine_path").is_none());
@@ -327,7 +370,7 @@ fn malformed_version_adapter_and_settings_remain_observable_without_storage_chan
     let base = serde_json::to_value(settings("alpha", None, vec![profile("alpha", "Alpha")])).unwrap();
     let mut cases = Vec::new();
     for version in [
-        serde_json::json!(2),
+        serde_json::json!(3),
         serde_json::Value::Null,
         serde_json::json!("1"),
         serde_json::json!(1.5),
@@ -434,6 +477,23 @@ fn generic_settings_roundtrip_preserves_unrestricted_argv() {
 }
 
 #[test]
+fn katago_layered_config_arguments_roundtrip_in_source_order() {
+    let temp = TestTempDir::new("layered-config-roundtrip");
+    let mut record = profile("layered", "Layered KataGo");
+    record.profile.argv = vec![
+        "-config".into(),
+        "配置, space.cfg".into(),
+        "-config".into(),
+        "second.cfg".into(),
+        "-override-config".into(),
+        "homeDataDir=custom".into(),
+    ];
+    let catalog = settings("layered", Some("layered"), vec![record]);
+    save_engine_profiles(&temp.catalog_path(), catalog.clone()).unwrap();
+    assert_eq!(load_engine_profiles(&temp.catalog_path()).unwrap(), catalog);
+}
+
+#[test]
 fn reorder_persists_stable_ids_without_changing_catalog_identities_or_records() {
     let temp = TestTempDir::new("reorder");
     let path = temp.catalog_path();
@@ -453,7 +513,7 @@ fn reorder_persists_stable_ids_without_changing_catalog_identities_or_records() 
     };
     let reordered = engine_manager::reorder_engine_profiles(&path, current.clone(), &request).unwrap();
     assert_eq!(reordered.selected_profile_id, "beta");
-    assert_eq!(reordered.autoload_profile_id.as_deref(), Some("alpha"));
+    assert_eq!(reordered.startup_profile_id(), Some("alpha"));
     assert_eq!(
         reordered.profiles,
         vec![
@@ -512,4 +572,113 @@ fn stale_invalid_and_boundary_orders_never_replace_durable_catalog() {
     );
     assert_eq!(std::fs::read(&path).unwrap(), before);
     assert_eq!(load_engine_profiles(&path).unwrap(), current);
+}
+
+#[test]
+fn version_one_migrates_off_and_fixed_without_rewriting_bytes() {
+    let temp = TestTempDir::new("v1-startup");
+    let path = temp.catalog_path();
+    for autoload in [None, Some("alpha")] {
+        let original = settings(
+            "beta",
+            autoload,
+            vec![profile("alpha", "A"), profile("beta", "B")],
+        );
+        let mut old = serde_json::to_value(&original).unwrap();
+        let object = old.as_object_mut().unwrap();
+        object.remove("startup");
+        object.remove("last_primary_profile_id");
+        object.remove("startup_evaluation");
+        object.insert("version".into(), serde_json::json!(1));
+        object.insert("autoload_profile_id".into(), serde_json::json!(autoload));
+        let bytes = serde_json::to_vec(&old).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(load_engine_profiles(&path).unwrap(), original);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        save_engine_profiles(&path, original).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["version"], 2);
+        assert!(saved.get("autoload_profile_id").is_none());
+    }
+}
+
+#[test]
+fn last_primary_reopens_independently_of_editor_and_retains_durable_identity_on_failed_write() {
+    let temp = TestTempDir::new("last-primary");
+    let path = temp.catalog_path();
+    let mut current = settings("beta", None, vec![profile("alpha", "A"), profile("beta", "B")]);
+    current.startup = EngineStartupPolicyDto::LastPrimary;
+    save_engine_profiles(&path, current.clone()).unwrap();
+    assert_eq!(load_engine_profiles(&path).unwrap().startup_profile_id(), None);
+    current = engine_manager::persist_last_primary(&path, current, Some("alpha".into())).unwrap();
+    assert_eq!(
+        load_engine_profiles(&path).unwrap().startup_profile_id(),
+        Some("alpha")
+    );
+    let mut stale_form = current.clone();
+    stale_form.last_primary_profile_id = Some("beta".into());
+    let prepared = engine_manager::prepare_engine_profiles_save(&current, stale_form).unwrap();
+    assert_eq!(prepared.last_primary_profile_id.as_deref(), Some("alpha"));
+    let reordered = engine_manager::reorder_engine_profiles(
+        &path,
+        current.clone(),
+        &app_model::EngineProfileOrderRequestDto {
+            expected_profile_ids: vec!["alpha".into(), "beta".into()],
+            profile_ids: vec!["beta".into(), "alpha".into()],
+        },
+    )
+    .unwrap();
+    assert_eq!(reordered.startup_profile_id(), Some("alpha"));
+    let before = std::fs::read(&path).unwrap();
+    std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
+    assert!(engine_manager::persist_last_primary(&path, reordered.clone(), Some("beta".into())).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(load_engine_profiles(&path).unwrap(), reordered);
+    // A session with no established primary is not a request to clear last-good.
+    assert_eq!(
+        engine_manager::persist_last_primary(&path, reordered.clone(), None).unwrap(),
+        reordered
+    );
+}
+
+#[test]
+fn missing_deleted_and_corrupt_last_primary_never_select_the_editor() {
+    let mut current = settings("beta", None, vec![profile("beta", "B")]);
+    current.startup = EngineStartupPolicyDto::LastPrimary;
+    assert_eq!(current.startup_profile_id(), None);
+    current.last_primary_profile_id = Some("deleted".into());
+    let parsed = parse_engine_profiles(&serde_json::to_string(&current).unwrap()).unwrap();
+    assert_eq!(parsed.startup_profile_id(), Some("deleted"));
+    for invalid in [
+        serde_json::json!(12),
+        serde_json::json!(""),
+        serde_json::json!("bad\0id"),
+    ] {
+        let mut value = serde_json::to_value(&current).unwrap();
+        value["last_primary_profile_id"] = invalid;
+        assert!(parse_engine_profiles(&value.to_string()).is_err());
+    }
+}
+
+#[test]
+fn preload_opt_in_defaults_off_round_trips_and_failed_save_retains_bytes() {
+    let temp = TestTempDir::new("preload");
+    let path = temp.catalog_path();
+    let mut value = serde_json::to_value(settings("a", None, vec![profile("a", "A")])).unwrap();
+    value["profiles"][0].as_object_mut().unwrap().remove("preload");
+    let mut catalog = parse_engine_profiles(&value.to_string()).unwrap();
+    assert!(!catalog.profiles[0].preload);
+    catalog.profiles[0].preload = true;
+    catalog.startup = EngineStartupPolicyDto::LastPrimary;
+    catalog.last_primary_profile_id = Some("remembered-not-editor".into());
+    save_engine_profiles(&path, catalog.clone()).unwrap();
+    assert!(load_engine_profiles(&path).unwrap().profiles[0].preload);
+    assert_eq!(load_engine_profiles(&path).unwrap(), catalog);
+    let before = std::fs::read(&path).unwrap();
+    std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
+    catalog.profiles[0].preload = false;
+    assert!(save_engine_profiles(&path, catalog).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    value["profiles"][0]["preload"] = serde_json::json!("true");
+    assert!(parse_engine_profiles(&value.to_string()).is_err());
 }

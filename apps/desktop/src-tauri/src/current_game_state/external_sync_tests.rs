@@ -124,7 +124,7 @@ fn job_event(generation: u64, indices: &[u32], visits: u32) -> AnalysisJobEventD
                 vertex: MoveVertex::Point(PointDto { x: 3, y: 3 }),
                 visits,
                 winrate_black: 0.61,
-                score_mean_black: 2.25,
+                score_mean_black: Some(2.25),
                 policy_prior: Some(0.4),
                 pv: vec![MoveVertex::Point(PointDto { x: 3, y: 3 })],
             }],

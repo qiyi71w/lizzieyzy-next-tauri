@@ -3,6 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
+  RuntimeThreadsRequestDto,
+  RuntimeThreadsSnapshotDto,
+  RuntimeParametersSnapshotDto,
+  EvaluationSnapshotDto,
   AnalysisFrameDto,
   AnalysisBranchChoiceDto,
   AnalysisJobEventDto,
@@ -32,6 +36,7 @@ import type {
   EngineProfilesSettingsDto,
   EngineProfileOrderRequestDto,
   EngineFailureDto,
+  EngineDiagnosticSnapshotDto,
   ForegroundEngineSnapshotDto,
   FileActivationDeliveryDto,
   FileActivationRejectionDto,
@@ -39,6 +44,8 @@ import type {
   GameDto,
   GameMoveRequestDto,
   GameMoveResultDto,
+  OrdinaryRulesRequestDto,
+  OrdinaryRulesSnapshotDto,
   MoveDto,
   MoveVertex,
   PlayerColor,
@@ -68,6 +75,41 @@ declare global {
 }
 
 export const isTauriRuntime = () => typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
+
+export async function getRuntimeThreads(): Promise<RuntimeThreadsSnapshotDto> {
+  if (!isTauriRuntime()) throw new Error("Runtime threads require the native qualified GTP Run.");
+  return invoke<RuntimeThreadsSnapshotDto>("engine_runtime_threads_snapshot");
+}
+
+export async function requestRuntimeThreads(request: RuntimeThreadsRequestDto): Promise<RuntimeThreadsSnapshotDto> {
+  if (!isTauriRuntime()) throw new Error("Runtime threads require the native qualified GTP Run.");
+  return invoke<RuntimeThreadsSnapshotDto>("engine_runtime_threads", { request });
+}
+
+export async function getRuntimeParameters(): Promise<RuntimeParametersSnapshotDto> {
+  if (!isTauriRuntime()) throw new Error("Parameter readback requires the native qualified GTP Run.");
+  return invoke<RuntimeParametersSnapshotDto>("engine_runtime_parameters_snapshot");
+}
+
+export async function readRuntimeParameters(identity: RuntimeThreadsRequestDto["identity"]): Promise<RuntimeParametersSnapshotDto> {
+  if (!isTauriRuntime()) throw new Error("Parameter readback requires the native qualified GTP Run.");
+  return invoke<RuntimeParametersSnapshotDto>("engine_runtime_parameters_read", { identity });
+}
+
+export async function getEngineEvaluation(): Promise<EvaluationSnapshotDto> {
+  if (!isTauriRuntime()) throw new Error("Benchmark requires the native desktop and a qualified direct-local KataGo binary.");
+  return invoke<EvaluationSnapshotDto>("engine_evaluation_snapshot");
+}
+
+export async function startEngineEvaluation(profileId: string): Promise<EvaluationSnapshotDto> {
+  if (!isTauriRuntime()) throw new Error("Benchmark requires the native desktop and a qualified direct-local KataGo binary.");
+  return invoke<EvaluationSnapshotDto>("engine_evaluation_start", { profileId });
+}
+
+export async function cancelEngineEvaluation(evaluationId: string): Promise<EvaluationSnapshotDto> {
+  if (!isTauriRuntime()) throw new Error("Benchmark requires the native desktop.");
+  return invoke<EvaluationSnapshotDto>("engine_evaluation_cancel", { evaluationId });
+}
 
 export async function getHealth(): Promise<AppHealthDto> {
   if (!isTauriRuntime()) {
@@ -537,6 +579,7 @@ export async function saveEngineProfilesSettings(settings: EngineProfilesSetting
   if (!isTauriRuntime()) {
     const normalized = decodeEngineProfilesSettings(settings, false);
     const current = loadBrowserEngineProfilesSettings();
+    normalized.last_primary_profile_id = current.last_primary_profile_id;
     const records = new Map(normalized.profiles.map((record) => [record.id, record]));
     const retained: EngineProfileRecordDto[] = [];
     for (const record of current.profiles) {
@@ -600,6 +643,11 @@ export async function computeGameMove(request: GameMoveRequestDto): Promise<Game
   return invoke<GameMoveResultDto>("foreground_engine_game_move", { request });
 }
 
+export async function confirmOrdinaryRules(request: OrdinaryRulesRequestDto): Promise<OrdinaryRulesSnapshotDto> {
+  if (!isTauriRuntime()) throw new Error("Rules confirmation requires the native desktop and an actual KataGo GTP Run.");
+  return invoke<OrdinaryRulesSnapshotDto>("foreground_engine_confirm_rules", { request });
+}
+
 export async function cancelGameMove(input: { runId: string; jobId: string }): Promise<void> {
   if (!isTauriRuntime()) return;
   await invoke<void>("foreground_engine_cancel_game_move", input);
@@ -615,6 +663,17 @@ export async function getForegroundEngineSnapshot(): Promise<ForegroundEngineSna
   if (!isTauriRuntime()) return emptyForegroundEngineSnapshot();
   return await invoke<ForegroundEngineSnapshotDto>("foreground_engine_snapshot");
 }
+
+export async function getEngineDiagnostics(): Promise<EngineDiagnosticSnapshotDto[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke("engine_diagnostic_snapshots");
+}
+
+export async function setEngineDiagnosticTrace(attemptId: string, enabled: boolean): Promise<void> {
+  if (!isTauriRuntime()) throw new Error("Native diagnostics unavailable");
+  return invoke("set_engine_diagnostic_trace", { attemptId, enabled });
+}
+
 
 export async function startForegroundEngine(profileId: string): Promise<void> {
   if (!isTauriRuntime()) {
@@ -774,7 +833,7 @@ function decodeEngineProfile(value: unknown): EngineProfileDto {
     if (Object.keys(settings).length) throw new Error("GenericGtp settings must be empty.");
     return { ...common, adapter_kind: "generic_gtp", settings: {} };
   }
-  if (profile.adapter_kind !== "kata_go_analysis") throw new Error("Unknown engine adapter.");
+  if (profile.adapter_kind !== "kata_go_analysis" && profile.adapter_kind !== "kata_go_gtp") throw new Error("Unknown engine adapter.");
   if (Object.keys(settings).some((key) => !["model_path", "config_path", "max_visits"].includes(key))) {
     throw new Error("Unknown KataGo setting.");
   }
@@ -784,12 +843,20 @@ function decodeEngineProfile(value: unknown): EngineProfileDto {
     selfplay: true, startposes: true, demoplay: true, clockinfo: true,
     "-model": true, "--model": true, "-config": true, "--config": true
   };
-  if (common.argv.some((argument) => Object.hasOwn(reservedModes, argument.split("=", 1)[0]))) {
-    throw new Error("KataGo argv conflicts with adapter-owned analysis/model/config arguments.");
+  for (let index = 0; index < common.argv.length; ++index) {
+    const argument = common.argv[index];
+    if (argument === "-config") {
+      const path = common.argv[index + 1];
+      if (!path?.trim() || path.startsWith("-")) throw new Error("KataGo -config requires a readable file argument at Start.");
+      continue;
+    }
+    if (Object.hasOwn(reservedModes, argument.split("=", 1)[0])) {
+      throw new Error("KataGo argv conflicts with adapter-owned protocol/model arguments or unsupported config spelling.");
+    }
   }
   return {
     ...common,
-    adapter_kind: "kata_go_analysis",
+    adapter_kind: profile.adapter_kind,
     settings: {
       model_path: profileOptionalPath(settings.model_path, "Model path"),
       config_path: profileOptionalPath(settings.config_path, "Config path"),
@@ -814,33 +881,60 @@ function decodeLegacyEngineProfile(value: unknown, maxVisits: unknown): EnginePr
 function decodeEngineProfilesSettings(value: unknown, allowLegacy: boolean): EngineProfilesSettingsDto {
   const input = profileObject(value, "Profile catalog");
   const legacy = !("version" in input);
-  if ((!legacy && input.version !== 1) || (legacy && !allowLegacy)) throw new Error("Unsupported profile catalog version.");
+  if (input.version !== 2 && !(allowLegacy && (legacy || input.version === 1))) throw new Error("Unsupported profile catalog version.");
   const single = legacy && !("profiles" in input);
   const records = single ? [{ id: defaultEngineProfileId, profile: input.profile, max_visits: input.max_visits }] : input.profiles;
   if (!Array.isArray(records) || records.length === 0) throw new Error("Profile catalog must contain at least one profile.");
   const profiles: EngineProfileRecordDto[] = records.map((value) => {
     const record = profileObject(value, "Profile record");
     if (!legacy && "max_visits" in record) throw new Error("Version 1 max_visits belongs in KataGo settings.");
+    if (!legacy && record.preload !== undefined && typeof record.preload !== "boolean") {
+      throw new Error("Background preload must be a boolean.");
+    }
     return {
       id: profileString(record.id, "Profile ID", true),
+      preload: !legacy && record.preload === true,
       profile: legacy ? decodeLegacyEngineProfile(record.profile, record.max_visits) : decodeEngineProfile(record.profile)
     };
   });
   const ids = new Set(profiles.map((record) => record.id));
   if (ids.size !== profiles.length) throw new Error("Duplicate profile ID.");
   const selected = single ? defaultEngineProfileId : profileString(input.selected_profile_id, "Selected profile ID", true);
-  const autoload = single ? null : profileOptionalPath(input.autoload_profile_id, "Autoload profile ID");
-  if (!ids.has(selected) || (autoload !== null && !ids.has(autoload))) throw new Error("Selected/Autoload profile ID is not in the catalog.");
-  return { version: 1, selected_profile_id: selected, autoload_profile_id: autoload, profiles };
+  if (!ids.has(selected)) throw new Error("Selected profile ID is not in the catalog.");
+  let startup: EngineProfilesSettingsDto["startup"];
+  if (input.version !== 2) {
+    const autoload = single ? null : profileOptionalPath(input.autoload_profile_id, "Autoload profile ID");
+    startup = autoload === null ? { mode: "off" } : { mode: "fixed", profile_id: autoload };
+  } else {
+    const policy = profileObject(input.startup, "Startup policy");
+    if (Object.keys(policy).some((key) => key !== "mode" && !(policy.mode === "fixed" && key === "profile_id"))) throw new Error("Unknown startup policy field.");
+    if (policy.mode === "fixed") startup = { mode: "fixed", profile_id: profileString(policy.profile_id, "Fixed profile ID", true) };
+    else if (policy.mode === "off" || policy.mode === "last_primary") startup = { mode: policy.mode };
+    else throw new Error("Unknown startup policy.");
+    if ("autoload_profile_id" in input) throw new Error("Obsolete startup field in version 2 catalog.");
+  }
+  const lastPrimary = input.version === 2 ? profileOptionalPath(input.last_primary_profile_id, "Last primary profile ID") : null;
+  if (lastPrimary !== null && !lastPrimary.trim()) throw new Error("Last primary profile ID is invalid.");
+  const evaluation = input.version === 2 && input.startup_evaluation !== undefined
+    ? profileObject(input.startup_evaluation, "Startup evaluation") : {};
+  if (Object.keys(evaluation).some((key) => key !== "enabled" && key !== "target_profile_id")) throw new Error("Unknown startup evaluation field.");
+  if (evaluation.enabled !== undefined && typeof evaluation.enabled !== "boolean") throw new Error("Startup evaluation enabled must be boolean.");
+  const target = profileOptionalPath(evaluation.target_profile_id, "Startup evaluation target");
+  if (target !== null && !target.trim()) throw new Error("Startup evaluation target is invalid.");
+  return { version: 2, selected_profile_id: selected, startup, last_primary_profile_id: lastPrimary,
+    startup_evaluation: { enabled: evaluation.enabled === true, target_profile_id: target }, profiles };
 }
 
 function defaultBrowserEngineProfilesSettings(): EngineProfilesSettingsDto {
   return {
-    version: 1,
+    version: 2,
     selected_profile_id: defaultEngineProfileId,
-    autoload_profile_id: null,
+    startup: { mode: "off" },
+    last_primary_profile_id: null,
+    startup_evaluation: { enabled: false, target_profile_id: null },
     profiles: [{
       id: defaultEngineProfileId,
+      preload: false,
       profile: {
         name: "Local KataGo", program: "", argv: [], working_dir: null,
         adapter_kind: "kata_go_analysis", settings: { model_path: null, config_path: null, max_visits: 800 }
