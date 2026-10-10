@@ -63,7 +63,8 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("gtp-model-retention-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let settings: engine_manager::EngineProfilesSettings = serde_json::from_value(serde_json::json!({
-            "version": 1,
+            "version": engine_manager::ENGINE_PROFILES_VERSION,
+            "startup": app_model::EngineStartupPolicyDto::Off,
             "selected_profile_id": "gtp",
             "profiles": (["kata_go_analysis", "kata_go_gtp"].map(|adapter| serde_json::json!({
                 "id": if adapter == "kata_go_gtp" { "gtp" } else { "jsonl" },
