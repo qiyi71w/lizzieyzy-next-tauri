@@ -1,6 +1,6 @@
 # R11 — 常用复盘与操作迁移计划
 
-Status: 已批准规划；产品实现尚未开始。本文定义公开能力与验收合同，不记录产品运行通过结论。
+Status: 已完成批准范围的实现、共享状态集成、统一审查与只读 Closeout；经 [PR #20](https://github.com/qiyi71w/lizzieyzy-next-tauri/pull/20) 合入 `9d2ccf3ba6881c755013b82948e5da1a01f7fcd4`。本文保留批准合同；当前条目状态以 [Parity Matrix](PARITY_MATRIX.md) 为准，原候选、后续修复和证据限制见 [R11 完成证据](DEVELOPMENT.md#r11-completion-evidence)，不声称本次文档回填产生新的运行通过结论。
 
 ## 1. 目标与基线
 
@@ -11,7 +11,15 @@ R11 将常用复盘与棋谱操作组织为七个完整能力组，配套一次�
 - Java Migration Baseline v1：`7b4027531c2b26062d0bfc27a040cc550cfbea4d`；冻结增量终点：`af0e07a7386483f3bfc8a15780de72ffc2f0de4c`。后续上游审计由 R17 追加冻结区间，不移动 v1。
 - 权威边界：[Architecture](ARCHITECTURE_NEXT.md)、[Migration Plan](MIGRATION_PLAN.md)、[Parity Matrix](PARITY_MATRIX.md)、[上游 Delta](UPSTREAM_DELTA.md) 的原条目、Accepted 窄范围和候选证据保持不变。
 - 本阶段对应历史 A 来源中的 31 个唯一责任意图、35 个来源意图、30 个 `behavior-aXX` 行为；数量是覆盖索引，不是新功能配额。详见 [公开责任路线](MIGRATION_ROUTES.json) 和 [完整来源图](MIGRATION_SOURCE_MAP.md)。
-- 产品实施另需实现授权，并选择包含最终规划发布成果的完整提交；不能用历史规划候选、共同旧 HEAD 或当日 main 推断产品成果存在。依赖消费以实际已验证、已集成的包含提交和完整证据材料为准。
+- 原产品开工须另获授权并消费最终规划成果，该门已经由 R11 正式执行满足；不再把本阶段列为待开工。后续改动仍须选择包含所需成果的完整提交，并核对实际已验证、已集成的证据材料；历史规划候选、共同旧 HEAD 或阶段完成标签不替代该检查。
+
+### 完成记录与保留边界
+
+- R11-01–08 在 `4fe5e6a3aa1383d7e5c643f2339f5d105317a8f2` 完成批准范围、统一 Spec/Standards 审查及修复；R11-09 只读 Closeout 核对 90 条原验收条款。原生验收分别绑定原功能候选、`b4492f1a1f22c494264d84c134c5e7d9b501b8ad` 的 17 个集成场景和最终修复后的 6 个受影响场景，不是全部场景无条件 PASS。
+- PR 后续 `5c2fc5b5f5ed0c99154a3e9d1ed1f8cceb2fc5e3` 修复 `RU[cn]` 并取得真实 Windows/KataGo 证据；最终 PR head `03c8180115c083bfb31110930a846ff13c46f9ef` 的 Add/图表/Unix 保存修复另有受影响验证，不沿用旧正文“最终仅文档差异”的说法。详细版本关系与各证据类见 DEVELOPMENT。
+- `EXPORT-03` 的 Windows 功能证据可供后续 owner 按范围消费；整项仍为 Partial，保留每个 Shipped Platform 原生准入强门。R11 记录时准入平台集合为空；这不否定已完成的批准 R11 范围，也不产生安装态/全平台通过结论。
+- SPEC-F02 公共导入差异、SPEC-F03 图表 drag/click 差异及 SPEC-F04 真实音频设备失败仍是具名后续；有界调查完成不等于修复或未来能力验收。R17 全量语言/入口闭环、R18 安装/发行义务和原 Accepted 窄范围不变。
+- 下文的“Parity IDs（不改原状态）”及“尚无/仍须取得证据”等表述保留原规划时点和验收要求，不作为当前状态公告；当前 disposition 只由 Matrix 维护。行为、Acceptance、scoped results、历史决定、依赖和原生强门未在本次回填中改写。
 
 ## 2. 共同合同与结果归属
 
