@@ -453,7 +453,14 @@ pub fn build_command_spec(profile: &EngineProfileDto) -> Result<CommandSpec, Eng
     if profile.program.trim().is_empty() {
         return Err(EngineManagerError::MissingEnginePath);
     }
-    let working_dir = normalized_optional_path(profile.working_dir.as_deref());
+    let mut working_dir = normalized_optional_path(profile.working_dir.as_deref());
+    if let Some(path) = working_dir.as_mut().filter(|path| Path::new(path).is_relative()) {
+        let parent = std::env::current_dir().map_err(|source| EngineManagerError::Spawn {
+            program: profile.program.clone(),
+            source,
+        })?;
+        *path = parent.join(&*path).to_string_lossy().into_owned();
+    }
     if let Some(working_dir) = working_dir.as_deref() {
         if !Path::new(working_dir).is_dir() {
             return Err(EngineManagerError::WorkingDirNotFound {
@@ -1316,6 +1323,64 @@ mod tests {
             std::fs::canonicalize(&spec.args[4]).unwrap(),
             std::fs::canonicalize(working_dir.join("models").join("model.bin")).unwrap()
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn katago_launch_opens_assets_from_relative_and_absolute_working_directories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let unique = TestTempDir::new("launch-cwd");
+        let fixture = TestTempDir {
+            path: PathBuf::from(format!(
+                " {} ",
+                unique.path().file_name().unwrap().to_str().unwrap()
+            )),
+        };
+        std::fs::create_dir(fixture.path()).unwrap();
+        std::fs::write(fixture.path().join("model file.bin"), "model contents\n").unwrap();
+        std::fs::write(fixture.path().join("config file.cfg"), "config contents\n").unwrap();
+        let engine = fixture.path().join("engine script");
+        std::fs::write(
+            &engine,
+            r#"#!/bin/sh
+read query
+test "$1" = analysis || test "$1" = gtp || exit 20
+test "$2" = -config && test "$4" = -model || exit 21
+read config < "$3" && read model < "$5" || exit 22
+test "$config" = 'config contents' && test "$model" = 'model contents' || exit 23
+printf '{"id":"opened-assets"}\n'
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let absolute = std::env::current_dir().unwrap().join(fixture.path());
+        for working_dir in [fixture.path(), absolute.as_path()] {
+            for gtp in [false, true] {
+                let settings = app_model::KataGoSettings {
+                    model_path: Some("model file.bin".into()),
+                    config_path: Some("config file.cfg".into()),
+                    max_visits: 800,
+                };
+                let profile = EngineProfileDto {
+                    name: "launch cwd".into(),
+                    program: "./engine script".into(),
+                    argv: vec![],
+                    working_dir: Some(working_dir.to_str().unwrap().into()),
+                    adapter: if gtp {
+                        EngineAdapterSettings::KataGoGtp(settings)
+                    } else {
+                        EngineAdapterSettings::KataGoAnalysis(settings)
+                    },
+                };
+                let saved = serde_json::to_value(&profile).unwrap();
+                let spec = build_command_spec(&profile).unwrap();
+                let result = run_katago_analysis_batch(&spec, "{}", 1, Duration::from_secs(2)).unwrap();
+                assert_eq!(result.exit_code, Some(0));
+                assert_eq!(result.response_jsonl_lines, [r#"{"id":"opened-assets"}"#]);
+                assert_eq!(serde_json::to_value(&profile).unwrap(), saved);
+            }
+        }
     }
 
     #[test]
