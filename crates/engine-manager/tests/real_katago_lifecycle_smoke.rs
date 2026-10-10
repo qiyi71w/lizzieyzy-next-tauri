@@ -585,13 +585,28 @@ fn owned_crash_selector_rejects_unrelated_lookalikes_without_signalling() {
         .current_dir(&cwd)
         .spawn()
         .unwrap();
-    let identity = linux_process(lookalike.id()).unwrap();
+    // /proc fields are separate reads; wait for the executed image and argv before asserting.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let identity = loop {
+        let observed = linux_process(lookalike.id());
+        let executed = observed.as_ref().is_some_and(|process| {
+            process.executable == executable && process.argv.first().is_some_and(|arg| arg == b"katago")
+        });
+        if executed || Instant::now() >= deadline {
+            break observed;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    // Reap before any identity assertion, including timeout/failure paths.
+    let status = lookalike.wait().unwrap();
+    let identity = identity.expect("lookalike exited before its executed identity was observed");
     assert_eq!(identity.parent, parent);
     assert_eq!(identity.executable, executable);
     assert_eq!(identity.cwd, cwd);
+    assert_eq!(identity.argv.first().map(Vec::as_slice), Some(&b"katago"[..]));
     assert!(!is_owned_katago(&identity, parent, &executable, &cwd, &config));
     eprintln!("dry-rejected-live-lookalike={identity:?}; no signal sent");
-    assert!(lookalike.wait().unwrap().success());
+    assert!(status.success());
 }
 
 #[test]

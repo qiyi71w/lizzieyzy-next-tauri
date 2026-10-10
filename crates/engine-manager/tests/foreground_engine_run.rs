@@ -3252,6 +3252,13 @@ fn whole_game_user_cancel_keeps_run_ready_and_does_not_cancel_selected_node() {
         snapshot.lifecycle,
         ForegroundEngineLifecycleDto::Ready { .. }
     ));
+
+    manager.teardown().unwrap();
+    assert_eq!(std::fs::read_to_string(&selected_cancelled).unwrap(), "cancelled");
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine { .. }
+    ));
 }
 
 #[cfg(unix)]
