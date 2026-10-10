@@ -1,6 +1,17 @@
 # R12 — 引擎资源与运行管理
 
-Status: 实施进行中；2026-10-08 已批准 Q1–Q6 产品决定及 R12/R13 KataGo GTP 主分析联合安排，随后已发布本地 spec/实施票并启动整票执行。资源/协议/硬件准入、原生验收与联合出口仍按具名门推进；不声明整个 R12 完成。
+Status: 已完成批准的 R12 spec 范围及 R12/R13 同实例联合验收；17 张票、85 项验收在最终集成 `ca1b6f33ec822931fb51501c3e24c6e1924ee62e` 完成共享 Spec/Standards 审查和只读 Closeout，后续修复随 PR #21 合并于 `7731e72f8918956d98e76abe6456552357cb6ef1`。完整条目状态仍按 Matrix 的跨阶段剩余义务判断；候选、平台及硬件限制见下文。
+
+<a id="r12-completion"></a>
+## 完成记录与保留边界
+
+- 调查与实施起点为 `9d2ccf3ba6881c755013b82948e5da1a01f7fcd4`。唯一原始执行记录位于 `/home/dev/dev/weiqi/worktrees/lizzieyzy-next-tauri/r12-planning-20261008/.scratch/engine-runtime-r12/` 的 `tracker.md`、`issues/01–17` 和共享 `review.md`；以下批准合同及历史调查保持原有归属。
+- 具名 gate/决定记录中的“实施/验收未完成”“仍未验收”“尚未获证”等状态描述保留 2026-10-08 批准时点的历史上下文；合同与资格要求继续有效，当前完成结果以本节和 Matrix 为准。
+- [公开完成证据](DEVELOPMENT.md#r12-completion-evidence) 分列局部实现、真实引擎、Windows 原生与集成验收；[后续修复和合并](DEVELOPMENT.md#r12-combined-candidate-evidence) 保留精确候选与实际 CI。原始原生证据不重标为合并提交的新运行。
+- R12-16 已在 `d2462d3d60d5b9c293d55e106dd77cf3323fcf5b` 完成同一 GTP Run 的主分析、线程 Apply/确认、PDA/WRN pair，以及 JSONL 切换、失败保留和导入后显式恢复。预加载修复在 `ab9f8184daddc00a8a214336c1d7eb85210f8cb8` 补充真实 TRT 长启动与任务 Continue 让路；诊断收敛在 `ca1b6f33ec822931fb51501c3e24c6e1924ee62e` 补充受影响原生证据。R12-17 仅核账，不承担这些运行验收。
+- R13 提供的 `katago-gtp-main-analysis` 和 `isolated-benchmark-result` 已按批准范围交付。保存式 CFG/BENCHMARK 策略、双性能指标与无障碍反馈、实测报告 Import/Review/Apply/Restore 仍归 [R13](R13_PLAN.md#performance)，不因 runner 或手动线程完成而视为完成。
+- 真实 GPU 证据仅覆盖记录的 RTX 5070 Ti Laptop／驱动 591.66／TRT 10.9.0.34、CUDA 12.8、cuDNN 9.8.0.87／KataGo 1.18.2／B11 资源元组。15 个目录目标不是全硬件准入；B10 保留的受控证据不等于真实 B10 原生资格。OpenFolder 实际结果是 TimedOut，不是可见 Explorer 成功。
+- R17 设置迁移/完整语言、R18 签名/安装/更新/安装态支持路径、其他平台及后续消费者的实际资格仍保留各自门禁。后续功能只消费已验证 scope，变更行为、资源或平台时由消费者重验受影响边界。
 
 ## 目标、完整范围与非目标
 
@@ -246,7 +257,7 @@ Start/Switch 本地合格资源必须有 origin/version/path/digest/协议能力
 - 环境：合格local binary/model与实际已准入backend/平台；Windows原生lifecycle/credential-independent local restore；真实NVIDIA目标仅对应TRT准入，不以CPU代证。
 - 集成消费已经归属的 original candidate/条件证据，只执行最终 changed boundary gap；各全文适用 required modes/协议/失败/身份/恢复断言完整保留，不新增无理由次数、平台或全组合。没有兼容真实引擎/服务/凭据/目标硬件，完成reachable独立工作但对应门保持受阻。
 - 阶段退出：本阶段全部 required capability/Delta 有实际结果或逐项批准处置，required local/integration/native/service assertions 获证，保留残余发行或独立引擎编译 Not run。阶段实现与集成完成后统一 Spec/Standards 审查和集中修复、实际验收，再只读 Closeout；不逐票重复双轴审查。
-- 本计划不记录产品/native/真实服务/installed trust 验收通过；实际证据由对应能力与阶段验收负责人取得。
+- 验收由对应能力与阶段负责人取得；本节保留原阶段门禁，[完成记录](#r12-completion) 只引用其已执行证据，不由计划文字代替产品/native/真实服务/installed trust 验收。
 
 ## Baseline 与阶段启动细化规则
 
@@ -260,7 +271,7 @@ Start/Switch 本地合格资源必须有 origin/version/path/digest/协议能力
 <a id="refinement-20261008"></a>
 ## 2026-10-08 阶段细化：起点、能力分组与验收
 
-历史上下文：本节保留阶段细化时的调查与授权边界；其中“未授权发布实施票”“本轮不自动进入”等表述描述当时的规划步骤。后续已获整阶段实施授权，当前执行进行中；历史 HEAD、路径存在性检查与协议探测不是当前实现或验收结论。合格本地资源的现行实现合同见 [Architecture](ARCHITECTURE_NEXT.md#cratesengine-manager)，原生及完整阶段验收仍未完成。
+历史上下文：本节保留阶段细化时的调查与授权边界；其中“未授权发布实施票”“本轮不自动进入”等表述描述当时的规划步骤。后续批准 spec 的实施、required acceptance、共享审查及 Closeout 已完成，见[完成记录](#r12-completion)。历史 HEAD、路径存在性检查与协议探测不是当前实现或验收结论；合格本地资源的现行实现合同见 [Architecture](ARCHITECTURE_NEXT.md#cratesengine-manager)。
 
 ### 调查起点与批准边界
 

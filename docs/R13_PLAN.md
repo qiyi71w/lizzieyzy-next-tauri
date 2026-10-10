@@ -1,6 +1,8 @@
 # R13 — 分析任务与展示
 
-Status: 滚动阶段计划；2026-10-08 已按用户批准将显式 KataGo GTP 主分析纳入与 R12 的联合安排，其他本阶段决定仍按具名门滚动细化；产品能力验收尚未完成。
+Status: 滚动阶段计划；与 R12 联合安排的具名 KataGo GTP 主分析、隔离评估 runner 与手动入口已按批准 scope 交付并验收，见 [R12 完成证据](DEVELOPMENT.md#r12-completion-evidence)。其他 R13 决定、实现与验收仍由本阶段具名 owner 推进，不声明整个 R13 完成。
+
+已交付范围：R12-10 完成 KataGo 1.18.2 的 selected-node/continuous 主分析，policy 与 whole-game 明确未准入；R12-13 完成冻结 saved-target 的实际可取消测量。R12-16 验证同一真实 GTP 进程的主分析、线程和 pair 组合。原始候选与条件见上述证据；以下能力/验收合同保留，剩余 B39/B40/B41/B45/B46 不由 B38 runner 代替。
 
 ## 目标、完整范围与非目标
 
