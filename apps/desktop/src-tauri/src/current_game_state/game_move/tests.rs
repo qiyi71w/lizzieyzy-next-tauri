@@ -339,17 +339,32 @@ fn ordinary_rules_gateway_rejects_completed_receipt_after_navigation_round_trip(
 #[test]
 fn gtp_main_analysis_binds_exact_history_attaches_and_rejects_replaced_document() {
     let rig = Rig::with_adapter("analysis", true);
-    let loaded = rig.state.replace("(;SZ[9]RU[Chinese]KM[7.5]C[personal only])", None).unwrap();
+    let loaded = rig
+        .state
+        .replace("(;SZ[9]RU[Chinese]KM[7.5]C[personal only])", None)
+        .unwrap();
     let events = rig.manager.subscribe();
-    let request = crate::bind_selected_node_job(&rig.state, rig.run.clone(), loaded.generation,
-        loaded.selected_path.clone(), AnalysisJobModeDto::Finite, Some(16)).unwrap();
+    let request = crate::bind_selected_node_job(
+        &rig.state,
+        rig.run.clone(),
+        loaded.generation,
+        loaded.selected_path.clone(),
+        AnalysisJobModeDto::Finite,
+        Some(16),
+    )
+    .unwrap();
     rig.manager.start_selected_node_job(request).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     let completed = loop {
-        match events.recv_timeout(deadline.saturating_duration_since(Instant::now())).unwrap() {
-            ForegroundEngineEventDto::Job { job } if job.outcome == AnalysisJobOutcomeDto::Completed => break job,
+        match events
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap()
+        {
+            ForegroundEngineEventDto::Job { job } if job.outcome == AnalysisJobOutcomeDto::Completed => {
+                break job
+            }
             ForegroundEngineEventDto::Failure { failure } => panic!("{failure:?}"),
-            _ => {},
+            _ => {}
         }
     };
     let attached = rig.state.attach_from_job_event(&completed).unwrap();
@@ -362,8 +377,13 @@ fn gtp_main_analysis_binds_exact_history_attaches_and_rejects_replaced_document(
     let reopened = sgf::CurrentSgfDocument::open(&persisted).unwrap();
     let reopened = reopened.snapshot(&NodePath::default()).unwrap();
     assert_eq!(reopened.personal_comment, "personal only");
-    assert_eq!(reopened.primary_analysis.unwrap().candidates[0].score_mean_black, None);
-    rig.state.replace("(;SZ[9]RU[Chinese]KM[7.5]C[new document])", None).unwrap();
+    assert_eq!(
+        reopened.primary_analysis.unwrap().candidates[0].score_mean_black,
+        None
+    );
+    rig.state
+        .replace("(;SZ[9]RU[Chinese]KM[7.5]C[new document])", None)
+        .unwrap();
     let before = rig.state.serialize().unwrap();
     assert!(rig.state.attach_from_job_event(&completed).is_none());
     assert_eq!(rig.state.serialize().unwrap(), before);

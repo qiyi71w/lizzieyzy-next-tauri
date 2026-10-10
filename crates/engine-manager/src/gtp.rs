@@ -7,7 +7,9 @@ const MAX_QUEUED_LINES: usize = 64;
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_RESPONSE_LINES: usize = 1024;
 
-pub(crate) fn spawn_stdout_reader(stdout: impl Read + Send + 'static) -> Receiver<io::Result<Option<String>>> {
+pub(crate) fn spawn_stdout_reader(
+    stdout: impl Read + Send + 'static,
+) -> Receiver<io::Result<Option<String>>> {
     let (sender, receiver) = mpsc::sync_channel(MAX_QUEUED_LINES);
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);

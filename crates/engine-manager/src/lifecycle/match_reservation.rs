@@ -126,9 +126,13 @@ pub(super) fn handle_reserved_exit(state: &mut ManagerState, run_id: &str, exit_
     };
     let committed = reservation.committed;
     let mut published = failure(
-        EngineOperationDto::Job, EngineFailureKind::ProcessExit,
-        diagnostic_text_for_state(state, run_id, &format!("{exit_code:?}")).prefixed("engine process exited unexpectedly; exit_code="),
-        Some(run_id), Some(&run.profile_id), None,
+        EngineOperationDto::Job,
+        EngineFailureKind::ProcessExit,
+        diagnostic_text_for_state(state, run_id, &format!("{exit_code:?}"))
+            .prefixed("engine process exited unexpectedly; exit_code="),
+        Some(run_id),
+        Some(&run.profile_id),
+        None,
     );
     published.operation = EngineOperationDto::UnexpectedExit;
     if let Some(slot) = state
@@ -184,8 +188,14 @@ pub(super) fn handle_reserved_stdout_failure(
     if let Some(Ok(Some(status))) = owned_live_mut(state, run_id).map(|live| live.child.try_wait()) {
         return handle_reserved_exit(state, run_id, status.code());
     }
-    let mut published = failure(EngineOperationDto::Job, kind,
-        message, Some(run_id), Some(&run.profile_id), None);
+    let mut published = failure(
+        EngineOperationDto::Job,
+        kind,
+        message,
+        Some(run_id),
+        Some(&run.profile_id),
+        None,
+    );
     published.operation = EngineOperationDto::UnexpectedExit;
     if let Some(slot) = state
         .game_move
@@ -207,9 +217,13 @@ pub(super) fn handle_reserved_stdout_failure(
         take_owned_live(state, run_id);
     }
     if let Some(Err(error)) = cleanup {
-        published.message = FailureText::from_failure(&published).then(
-            diagnostic_text_for_state(state, run_id, &error.to_string()).prefixed("; process cleanup was not confirmed: ")
-                .then("; retry Stop")).into_string();
+        published.message = FailureText::from_failure(&published)
+            .then(
+                diagnostic_text_for_state(state, run_id, &error.to_string())
+                    .prefixed("; process cleanup was not confirmed: ")
+                    .then("; retry Stop"),
+            )
+            .into_string();
     }
     let reservation = state.match_reservation.as_mut().unwrap();
     reservation.sealed = true;
@@ -550,17 +564,27 @@ impl ForegroundEngineManager {
                 }
                 Err(error) => {
                     return Err(failure(
-                        EngineOperationDto::Job, EngineFailureKind::ProcessExit,
-                        live.capture.failure_text(&error.to_string()).prefixed("Cannot observe match candidate: "),
-                        Some(&run.run_id), Some(&run.profile_id), None,
+                        EngineOperationDto::Job,
+                        EngineFailureKind::ProcessExit,
+                        live.capture
+                            .failure_text(&error.to_string())
+                            .prefixed("Cannot observe match candidate: "),
+                        Some(&run.run_id),
+                        Some(&run.profile_id),
+                        None,
                     ))
                 }
             }
         }
         let result = install().map_err(|message| {
-            failure(EngineOperationDto::Job, EngineFailureKind::InvalidState,
+            failure(
+                EngineOperationDto::Job,
+                EngineFailureKind::InvalidState,
                 FailureText::unscoped(&message).prefixed("Match installation failed before engine swap: "),
-                None, None, None)
+                None,
+                None,
+                None,
+            )
         })?;
         if let Some(old) = state.live.take() {
             let old_run = current_admitting_run(&state.phase).expect("live foreground has a run");
@@ -975,11 +999,17 @@ impl ForegroundEngineManager {
                     Ok(mut live) => {
                         terminate_process(&mut live, deadline).map_err(|error| {
                             failure(
-                                EngineOperationDto::Job, EngineFailureKind::Timeout,
-                                live.capture.failure_text(&run.run_id).prefixed("Engine ")
-                                    .then(" cleanup was not confirmed: ").then(live.capture.failure_text(&error.to_string()))
+                                EngineOperationDto::Job,
+                                EngineFailureKind::Timeout,
+                                live.capture
+                                    .failure_text(&run.run_id)
+                                    .prefixed("Engine ")
+                                    .then(" cleanup was not confirmed: ")
+                                    .then(live.capture.failure_text(&error.to_string()))
                                     .then("; retry Stop."),
-                                Some(&run.run_id), Some(&run.profile_id), None,
+                                Some(&run.run_id),
+                                Some(&run.profile_id),
+                                None,
                             )
                         })?;
                         break;

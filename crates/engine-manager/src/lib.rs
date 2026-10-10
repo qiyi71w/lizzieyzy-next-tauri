@@ -13,23 +13,22 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 mod catalog;
-pub mod diagnostics;
 pub mod diagnostic_export;
+pub mod diagnostics;
 mod game_move_protocol;
 mod gtp;
-mod lifecycle;
-mod resources;
 mod katago_config;
-pub mod models;
+mod lifecycle;
 pub mod managed;
+pub mod models;
+mod resources;
 
 pub use catalog::{
     default_engine_profile_record, default_engine_profiles_settings, load_engine_profiles,
-    normalize_engine_profiles, parse_engine_profiles, prepare_engine_profiles_save, reorder_engine_profiles,
-    persist_last_primary,
-    replace_json_file, save_engine_profiles, EngineProfileCatalog, EngineProfileRecord,
-    EngineProfilesSettings, InMemoryEngineProfileCatalog, SavedEngineProfile, DEFAULT_ENGINE_PROFILE_ID,
-    ENGINE_PROFILES_VERSION,
+    normalize_engine_profiles, parse_engine_profiles, persist_last_primary, prepare_engine_profiles_save,
+    reorder_engine_profiles, replace_json_file, save_engine_profiles, EngineProfileCatalog,
+    EngineProfileRecord, EngineProfilesSettings, InMemoryEngineProfileCatalog, SavedEngineProfile,
+    DEFAULT_ENGINE_PROFILE_ID, ENGINE_PROFILES_VERSION,
 };
 pub use lifecycle::{
     AnalysisJobCancel, AnalysisJobEventDto, AnalysisJobLane, ContinuousPrimaryAction, ForegroundEngineConfig,
@@ -407,7 +406,11 @@ pub fn validate_engine_profile(profile: &EngineProfileDto) -> Result<(), String>
             // Frozen KataGo accepts repeated -config files in order, before CLI overrides.
             // Keep inline/alternate spellings reserved until actually qualified.
             if arg == "-config" {
-                if profile.argv.get(index + 1).is_none_or(|path| path.trim().is_empty() || path.starts_with('-')) {
+                if profile
+                    .argv
+                    .get(index + 1)
+                    .is_none_or(|path| path.trim().is_empty() || path.starts_with('-'))
+                {
                     return Err("KataGo -config requires a readable file argument at Start".into());
                 }
                 continue;
@@ -496,12 +499,20 @@ pub fn build_command_spec(profile: &EngineProfileDto) -> Result<CommandSpec, Eng
                 // user's display preference. Preserve saved argv/config bytes and other overrides.
                 let mut has_override = false;
                 for index in 0..args.len() {
-                    if args[index] != "-override-config" { continue; }
+                    if args[index] != "-override-config" {
+                        continue;
+                    }
                     has_override = true;
                     if let Some(value) = args.get_mut(index + 1) {
-                        let mut overrides: Vec<_> = value.split(',').filter(|entry| {
-                            entry.split_once('=').is_none_or(|(key, _)| key.trim() != "reportAnalysisWinratesAs")
-                        }).map(str::to_owned).collect();
+                        let mut overrides: Vec<_> = value
+                            .split(',')
+                            .filter(|entry| {
+                                entry
+                                    .split_once('=')
+                                    .is_none_or(|(key, _)| key.trim() != "reportAnalysisWinratesAs")
+                            })
+                            .map(str::to_owned)
+                            .collect();
                         overrides.push("reportAnalysisWinratesAs=BLACK".into());
                         *value = overrides.join(",");
                     }
@@ -881,7 +892,10 @@ pub(crate) fn spawn_stdout_lines_reader(
                     break;
                 }
                 Ok(length) if length > 4 * 1024 * 1024 => {
-                    let _ = tx.send(Err(io::Error::new(io::ErrorKind::InvalidData, "JSONL stdout record exceeds 4 MiB")));
+                    let _ = tx.send(Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "JSONL stdout record exceeds 4 MiB",
+                    )));
                     break;
                 }
                 Ok(_) => {
@@ -1311,19 +1325,37 @@ mod tests {
             std::fs::write(temp.path().join(name), "").unwrap();
         }
         let mut profile = EngineProfileDto {
-            name: "GTP".into(), program: "katago".into(), argv: vec![],
+            name: "GTP".into(),
+            program: "katago".into(),
+            argv: vec![],
             working_dir: Some(temp.path().to_string_lossy().into_owned()),
             adapter: EngineAdapterSettings::KataGoGtp(app_model::KataGoSettings {
-                model_path: Some("model.bin".into()), config_path: Some("gtp.cfg".into()), max_visits: 800,
+                model_path: Some("model.bin".into()),
+                config_path: Some("gtp.cfg".into()),
+                max_visits: 800,
             }),
         };
-        assert_eq!(build_command_spec(&profile).unwrap().args.last().unwrap(), "reportAnalysisWinratesAs=BLACK");
-        profile.argv = vec!["-override-config".into(), "numSearchThreads=1,reportAnalysisWinratesAs=WHITE".into(),
-            "-override-config".into(), "reportAnalysisWinratesAs=SIDETOMOVE,maxVisits=64".into()];
+        assert_eq!(
+            build_command_spec(&profile).unwrap().args.last().unwrap(),
+            "reportAnalysisWinratesAs=BLACK"
+        );
+        profile.argv = vec![
+            "-override-config".into(),
+            "numSearchThreads=1,reportAnalysisWinratesAs=WHITE".into(),
+            "-override-config".into(),
+            "reportAnalysisWinratesAs=SIDETOMOVE,maxVisits=64".into(),
+        ];
         let before = profile.argv.clone();
         let args = build_command_spec(&profile).unwrap().args;
-        assert_eq!(&args[5..], &["-override-config", "numSearchThreads=1,reportAnalysisWinratesAs=BLACK",
-            "-override-config", "maxVisits=64,reportAnalysisWinratesAs=BLACK"]);
+        assert_eq!(
+            &args[5..],
+            &[
+                "-override-config",
+                "numSearchThreads=1,reportAnalysisWinratesAs=BLACK",
+                "-override-config",
+                "maxVisits=64,reportAnalysisWinratesAs=BLACK"
+            ]
+        );
         assert_eq!(profile.argv, before);
     }
 

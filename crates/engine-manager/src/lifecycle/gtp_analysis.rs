@@ -58,7 +58,10 @@ impl From<String> for AnalysisError {
 }
 impl From<&'static str> for AnalysisError {
     fn from(message: &'static str) -> Self {
-        Self { kind: EngineFailureKind::Protocol, message: AnalysisFailureText::Public(message.into()) }
+        Self {
+            kind: EngineFailureKind::Protocol,
+            message: AnalysisFailureText::Public(message.into()),
+        }
     }
 }
 fn response_error(error: RecvTimeoutError, context: &'static str) -> AnalysisError {
@@ -118,11 +121,16 @@ impl ForegroundEngineManager {
             if let Err(error) = result {
                 let message = match error.message {
                     AnalysisFailureText::Public(text) => text,
-                    AnalysisFailureText::Dynamic(text) => manager.inner.diagnostic_text(&started.run_id, &text),
-                    AnalysisFailureText::Context(context, text) => FailureText::from(context).then(": ")
+                    AnalysisFailureText::Dynamic(text) => {
+                        manager.inner.diagnostic_text(&started.run_id, &text)
+                    }
+                    AnalysisFailureText::Context(context, text) => FailureText::from(context)
+                        .then(": ")
                         .then(manager.inner.diagnostic_text(&started.run_id, &text)),
                 };
-                manager.inner.fail_analysis_run(&started.run_id, error.kind, message);
+                manager
+                    .inner
+                    .fail_analysis_run(&started.run_id, error.kind, message);
             }
             manager
                 .lock()

@@ -144,22 +144,14 @@ fn split_ownership(detail_line: &str) -> (&str, Option<Vec<f32>>) {
     (analysis, if values.is_empty() { None } else { Some(values) })
 }
 
-fn parse_candidates(
-    analysis_line: &str,
-    board_width: u8,
-    board_height: u8,
-) -> Vec<CandidateMoveDto> {
+fn parse_candidates(analysis_line: &str, board_width: u8, board_height: u8) -> Vec<CandidateMoveDto> {
     analysis_line
         .split(" info ")
         .filter_map(|variation| parse_candidate(variation, board_width, board_height))
         .collect()
 }
 
-fn parse_candidate(
-    variation: &str,
-    board_width: u8,
-    board_height: u8,
-) -> Option<CandidateMoveDto> {
+fn parse_candidate(variation: &str, board_width: u8, board_height: u8) -> Option<CandidateMoveDto> {
     let tokens: Vec<&str> = variation.split_whitespace().collect();
     if tokens.is_empty() {
         return None;

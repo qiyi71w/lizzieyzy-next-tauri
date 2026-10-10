@@ -1,9 +1,16 @@
 use app_model::*;
 use engine_manager::*;
-use std::{sync::Arc, time::{Duration, Instant}};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 struct OwnedManager(ForegroundEngineManager);
-impl Drop for OwnedManager { fn drop(&mut self) { let _ = self.0.teardown(); } }
+impl Drop for OwnedManager {
+    fn drop(&mut self) {
+        let _ = self.0.teardown();
+    }
+}
 
 fn ready(manager: &ForegroundEngineManager) -> EngineRunDto {
     let deadline = Instant::now() + Duration::from_secs(40);
@@ -16,17 +23,39 @@ fn ready(manager: &ForegroundEngineManager) -> EngineRunDto {
         std::thread::sleep(Duration::from_millis(10));
     }
 }
-fn request(manager: &ForegroundEngineManager, action: RuntimeThreadsActionDto, value: Option<u32>) -> RuntimeThreadsRequestDto {
+fn request(
+    manager: &ForegroundEngineManager,
+    action: RuntimeThreadsActionDto,
+    value: Option<u32>,
+) -> RuntimeThreadsRequestDto {
     let state = manager.runtime_threads_snapshot();
-    RuntimeThreadsRequestDto { identity: RuntimeControlIdentityDto { run_id: state.run_id.unwrap(), profile_revision: state.profile_revision.unwrap(), request_id: uuid::Uuid::new_v4().to_string() }, action, value }
+    RuntimeThreadsRequestDto {
+        identity: RuntimeControlIdentityDto {
+            run_id: state.run_id.unwrap(),
+            profile_revision: state.profile_revision.unwrap(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        },
+        action,
+        value,
+    }
 }
-fn progress(events: &std::sync::mpsc::Receiver<ForegroundEngineEventDto>, after: Option<&str>) -> AnalysisJobEventDto {
+fn progress(
+    events: &std::sync::mpsc::Receiver<ForegroundEngineEventDto>,
+    after: Option<&str>,
+) -> AnalysisJobEventDto {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        match events.recv_timeout(deadline.saturating_duration_since(Instant::now())).unwrap() {
-            ForegroundEngineEventDto::Job { job } if job.outcome == AnalysisJobOutcomeDto::Progress && Some(job.job_id.as_str()) != after => return job,
+        match events
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap()
+        {
+            ForegroundEngineEventDto::Job { job }
+                if job.outcome == AnalysisJobOutcomeDto::Progress && Some(job.job_id.as_str()) != after =>
+            {
+                return job
+            }
             ForegroundEngineEventDto::Failure { failure } => panic!("{failure:?}"),
-            _ => {},
+            _ => {}
         }
     }
 }
@@ -41,13 +70,21 @@ fn owned_engine_identity(engine: &str) -> (u32, String) {
             for child in children.split_whitespace() {
                 if std::fs::read_link(format!("/proc/{child}/exe")).ok().as_ref() == Some(&executable) {
                     let stat = std::fs::read_to_string(format!("/proc/{child}/stat")).unwrap();
-                    let start = stat.rsplit_once(')').unwrap().1.split_whitespace().nth(19).unwrap().to_owned();
+                    let start = stat
+                        .rsplit_once(')')
+                        .unwrap()
+                        .1
+                        .split_whitespace()
+                        .nth(19)
+                        .unwrap()
+                        .to_owned();
                     result.push((child.parse().unwrap(), start));
                 }
             }
         }
     }
-    result.sort(); result.dedup();
+    result.sort();
+    result.dedup();
     assert_eq!(result.len(), 1, "one actual manager-owned foreground engine");
     result.pop().unwrap()
 }
@@ -64,46 +101,98 @@ fn real_runtime_threads_same_pid_analysis_pause_reset_and_expiry() {
         .join(format!("thread-layer-{}.cfg", uuid::Uuid::new_v4()));
     std::fs::write(&layer, "numSearchThreads=2\n").unwrap();
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-    catalog.upsert(SavedEngineProfile { profile_id: "threads".into(), profile: EngineProfileDto {
-        name: "manual GTP threads".into(), program: engine.clone(),
-        argv: vec!["-config".into(), layer.file_name().unwrap().to_string_lossy().into_owned(), "-override-config".into(), "numSearchThreads=1".into()],
-        working_dir: Some(std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap()),
-        adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings { model_path: Some(std::env::var("LIZZIEYZY_KATAGO_MODEL").unwrap()), config_path: Some(config.clone()), max_visits: 4 }),
-    }});
-    let owner = OwnedManager(ForegroundEngineManager::new(catalog.clone(), ForegroundEngineConfig::default()));
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "threads".into(),
+        profile: EngineProfileDto {
+            name: "manual GTP threads".into(),
+            program: engine.clone(),
+            argv: vec![
+                "-config".into(),
+                layer.file_name().unwrap().to_string_lossy().into_owned(),
+                "-override-config".into(),
+                "numSearchThreads=1".into(),
+            ],
+            working_dir: Some(std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap()),
+            adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings {
+                model_path: Some(std::env::var("LIZZIEYZY_KATAGO_MODEL").unwrap()),
+                config_path: Some(config.clone()),
+                max_visits: 4,
+            }),
+        },
+    });
+    let owner = OwnedManager(ForegroundEngineManager::new(
+        catalog.clone(),
+        ForegroundEngineConfig::default(),
+    ));
     let manager = &owner.0;
     manager.start("threads").unwrap();
     let run = ready(manager);
     let pid = owned_engine_identity(&engine);
-    println!("REAL_THREAD_RUN {} pid={pid:?}", serde_json::to_string(&run).unwrap());
-    let initial = manager.runtime_threads(request(manager, RuntimeThreadsActionDto::Read, None)).unwrap();
+    println!(
+        "REAL_THREAD_RUN {} pid={pid:?}",
+        serde_json::to_string(&run).unwrap()
+    );
+    let initial = manager
+        .runtime_threads(request(manager, RuntimeThreadsActionDto::Read, None))
+        .unwrap();
     assert_eq!(initial.status, RuntimeThreadsStatusDto::Confirmed);
     assert_eq!(initial.actual, initial.sources.as_ref().unwrap().effective);
     // Exercise the protocol domain, not a 4096-worker benchmark: no search exists here,
     // and the recorded launch value is restored before analysis admission.
-    let upper = manager.runtime_threads(request(manager, RuntimeThreadsActionDto::Apply, Some(4096))).unwrap();
+    let upper = manager
+        .runtime_threads(request(manager, RuntimeThreadsActionDto::Apply, Some(4096)))
+        .unwrap();
     println!("REAL_THREAD_DOMAIN {}", serde_json::to_string(&upper).unwrap());
     assert_eq!(upper.status, RuntimeThreadsStatusDto::Confirmed);
     assert_eq!(upper.actual, Some(4096));
-    let lower = manager.runtime_threads(request(manager, RuntimeThreadsActionDto::Apply, Some(1))).unwrap();
+    let lower = manager
+        .runtime_threads(request(manager, RuntimeThreadsActionDto::Apply, Some(1)))
+        .unwrap();
     assert_eq!(lower.actual, Some(1));
-    manager.runtime_threads(request(manager, RuntimeThreadsActionDto::Reset, None)).unwrap();
+    manager
+        .runtime_threads(request(manager, RuntimeThreadsActionDto::Reset, None))
+        .unwrap();
     let document = sgf::CurrentSgfDocument::open("(;SZ[9]RU[Chinese]KM[7.5]C[personal];B[dd])").unwrap();
     let before = document.serialize().unwrap();
     let node_path = NodePath { indices: vec![0] };
     let position = document.snapshot(&node_path).unwrap();
-    let selected = SelectedNodeJobRequest { run_id: run.run_id.clone(), generation: 11, node_path: node_path.clone(),
-        mode: AnalysisJobModeDto::Continuous, board_width: 9, board_height: 9, position_empty: false,
+    let selected = SelectedNodeJobRequest {
+        run_id: run.run_id.clone(),
+        generation: 11,
+        node_path: node_path.clone(),
+        mode: AnalysisJobModeDto::Continuous,
+        board_width: 9,
+        board_height: 9,
+        position_empty: false,
         exact_position: Ok(document.exact_position(&node_path).unwrap()),
-        query: katago_protocol::analysis_query_from_position(9, 9, 7.5, &position.position.stones, PlayerColor::White,
-            katago_protocol::AnalysisQueryOptions { id: "pending".into(), rules: "chinese".into(), turn: 1, max_visits: None, include_ownership: Some(true), include_policy: Some(false) }).unwrap(),
+        query: katago_protocol::analysis_query_from_position(
+            9,
+            9,
+            7.5,
+            &position.position.stones,
+            PlayerColor::White,
+            katago_protocol::AnalysisQueryOptions {
+                id: "pending".into(),
+                rules: "chinese".into(),
+                turn: 1,
+                max_visits: None,
+                include_ownership: Some(true),
+                include_policy: Some(false),
+            },
+        )
+        .unwrap(),
     };
     let events = manager.subscribe();
-    let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };
+    let budget = ContinuousAnalysisBudgetDto {
+        continuous_time_limit_enabled: false,
+        ..Default::default()
+    };
     manager.set_continuous_preferences(true, budget).unwrap();
     manager.follow_continuous_position(selected);
     let first = progress(&events, None);
-    let applied = manager.runtime_threads(request(manager, RuntimeThreadsActionDto::Apply, Some(2))).unwrap();
+    let applied = manager
+        .runtime_threads(request(manager, RuntimeThreadsActionDto::Apply, Some(2)))
+        .unwrap();
     println!("REAL_THREAD_APPLY {}", serde_json::to_string(&applied).unwrap());
     assert_eq!(applied.status, RuntimeThreadsStatusDto::Confirmed);
     assert_eq!(applied.actual, Some(2));
@@ -116,10 +205,17 @@ fn real_runtime_threads_same_pid_analysis_pause_reset_and_expiry() {
     assert_eq!(owned_engine_identity(&engine), pid);
     manager.set_continuous_preferences(false, budget).unwrap();
     let deadline = Instant::now() + Duration::from_secs(8);
-    while manager.snapshot().selected_node_job.is_some() { assert!(Instant::now() < deadline); std::thread::sleep(Duration::from_millis(10)); }
-    let applied = manager.runtime_threads(request(manager, RuntimeThreadsActionDto::Apply, Some(3))).unwrap();
+    while manager.snapshot().selected_node_job.is_some() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let applied = manager
+        .runtime_threads(request(manager, RuntimeThreadsActionDto::Apply, Some(3)))
+        .unwrap();
     assert_eq!(applied.actual, Some(3));
-    let reset = manager.runtime_threads(request(manager, RuntimeThreadsActionDto::Reset, None)).unwrap();
+    let reset = manager
+        .runtime_threads(request(manager, RuntimeThreadsActionDto::Reset, None))
+        .unwrap();
     println!("REAL_THREAD_RESET {}", serde_json::to_string(&reset).unwrap());
     assert_eq!(reset.actual, initial.actual);
     assert!(!reset.temporary);
@@ -132,18 +228,27 @@ fn real_runtime_threads_same_pid_analysis_pause_reset_and_expiry() {
     manager.restart().unwrap();
     let restarted = ready(manager);
     assert_ne!(restarted.run_id, run.run_id);
-    assert_eq!(restarted.qualified_resource.as_ref().unwrap().resources,
-        run.qualified_resource.as_ref().unwrap().resources);
+    assert_eq!(
+        restarted.qualified_resource.as_ref().unwrap().resources,
+        run.qualified_resource.as_ref().unwrap().resources
+    );
     assert_ne!(owned_engine_identity(&engine), pid);
     assert!(manager.runtime_threads(stale).is_err());
     assert_eq!(manager.runtime_threads_snapshot().actual, None);
     assert!(!manager.runtime_threads_snapshot().temporary);
     assert_eq!(manager.snapshot().continuous.enabled, Some(false));
     assert!(manager.snapshot().selected_node_job.is_none());
-    let restarted_value = manager.runtime_threads(request(manager, RuntimeThreadsActionDto::Read, None)).unwrap();
+    let restarted_value = manager
+        .runtime_threads(request(manager, RuntimeThreadsActionDto::Read, None))
+        .unwrap();
     assert_eq!(restarted_value.actual, initial.actual);
-    println!("REAL_THREAD_RESTART {}", serde_json::to_string(&restarted_value).unwrap());
-    let mut other = catalog.get("threads").unwrap(); other.profile_id = "other".into(); catalog.upsert(other);
+    println!(
+        "REAL_THREAD_RESTART {}",
+        serde_json::to_string(&restarted_value).unwrap()
+    );
+    let mut other = catalog.get("threads").unwrap();
+    other.profile_id = "other".into();
+    catalog.upsert(other);
     manager.switch_to("other").unwrap();
     let switched = ready(manager);
     assert_ne!(switched.run_id, restarted.run_id);
@@ -165,39 +270,90 @@ fn real_runtime_pair_same_pid_analysis_threads_pause_and_expiry() {
     let config = std::env::var("LIZZIEYZY_KATAGO_CONFIG").unwrap();
     let config_bytes = std::fs::read(&config).unwrap();
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-    catalog.upsert(SavedEngineProfile { profile_id: "pair".into(), profile: EngineProfileDto {
-        name: "read-only GTP pair".into(), program: engine.clone(), argv: vec![],
-        working_dir: Some(std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap()),
-        adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings { model_path: Some(std::env::var("LIZZIEYZY_KATAGO_MODEL").unwrap()), config_path: Some(config.clone()), max_visits: 4 }),
-    }});
-    let owner = OwnedManager(ForegroundEngineManager::new(catalog.clone(), ForegroundEngineConfig::default()));
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "pair".into(),
+        profile: EngineProfileDto {
+            name: "read-only GTP pair".into(),
+            program: engine.clone(),
+            argv: vec![],
+            working_dir: Some(std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap()),
+            adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings {
+                model_path: Some(std::env::var("LIZZIEYZY_KATAGO_MODEL").unwrap()),
+                config_path: Some(config.clone()),
+                max_visits: 4,
+            }),
+        },
+    });
+    let owner = OwnedManager(ForegroundEngineManager::new(
+        catalog.clone(),
+        ForegroundEngineConfig::default(),
+    ));
     let manager = &owner.0;
     manager.start("pair").unwrap();
     let run = ready(manager);
     let pid = owned_engine_identity(&engine);
-    println!("REAL_PAIR_RUN {} pid={pid:?}", serde_json::to_string(&run).unwrap());
+    println!(
+        "REAL_PAIR_RUN {} pid={pid:?}",
+        serde_json::to_string(&run).unwrap()
+    );
     let identity = || {
         let state = manager.runtime_parameters_snapshot();
-        RuntimeControlIdentityDto { run_id: state.run_id.unwrap(), profile_revision: state.profile_revision.unwrap(), request_id: uuid::Uuid::new_v4().to_string() }
+        RuntimeControlIdentityDto {
+            run_id: state.run_id.unwrap(),
+            profile_revision: state.profile_revision.unwrap(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        }
     };
-    assert_eq!(manager.runtime_parameters_snapshot().status, RuntimeParametersStatusDto::Unknown);
+    assert_eq!(
+        manager.runtime_parameters_snapshot().status,
+        RuntimeParametersStatusDto::Unknown
+    );
     assert_eq!(manager.runtime_parameters_snapshot().last_valid, None);
     let first = manager.read_runtime_parameters(identity()).unwrap();
     assert_eq!(first.status, RuntimeParametersStatusDto::Confirmed);
-    assert_eq!(first.last_valid, Some(RuntimeParameterPairDto { playout_doubling_advantage: 0.0, analysis_wide_root_noise: 0.04 }));
+    assert_eq!(
+        first.last_valid,
+        Some(RuntimeParameterPairDto {
+            playout_doubling_advantage: 0.0,
+            analysis_wide_root_noise: 0.04
+        })
+    );
     println!("REAL_PAIR_INITIAL {}", serde_json::to_string(&first).unwrap());
     let document = sgf::CurrentSgfDocument::open("(;SZ[9]RU[Chinese]KM[7.5]C[personal];B[dd])").unwrap();
     let before = document.serialize().unwrap();
     let node_path = NodePath { indices: vec![0] };
     let position = document.snapshot(&node_path).unwrap();
-    let selected = SelectedNodeJobRequest { run_id: run.run_id.clone(), generation: 12, node_path: node_path.clone(),
-        mode: AnalysisJobModeDto::Continuous, board_width: 9, board_height: 9, position_empty: false,
+    let selected = SelectedNodeJobRequest {
+        run_id: run.run_id.clone(),
+        generation: 12,
+        node_path: node_path.clone(),
+        mode: AnalysisJobModeDto::Continuous,
+        board_width: 9,
+        board_height: 9,
+        position_empty: false,
         exact_position: Ok(document.exact_position(&node_path).unwrap()),
-        query: katago_protocol::analysis_query_from_position(9, 9, 7.5, &position.position.stones, PlayerColor::White,
-            katago_protocol::AnalysisQueryOptions { id: "pending".into(), rules: "chinese".into(), turn: 1, max_visits: None, include_ownership: Some(true), include_policy: Some(false) }).unwrap(),
+        query: katago_protocol::analysis_query_from_position(
+            9,
+            9,
+            7.5,
+            &position.position.stones,
+            PlayerColor::White,
+            katago_protocol::AnalysisQueryOptions {
+                id: "pending".into(),
+                rules: "chinese".into(),
+                turn: 1,
+                max_visits: None,
+                include_ownership: Some(true),
+                include_policy: Some(false),
+            },
+        )
+        .unwrap(),
     };
     let events = manager.subscribe();
-    let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };
+    let budget = ContinuousAnalysisBudgetDto {
+        continuous_time_limit_enabled: false,
+        ..Default::default()
+    };
     manager.set_continuous_preferences(true, budget).unwrap();
     manager.follow_continuous_position(selected);
     let searching = progress(&events, None);
@@ -210,7 +366,9 @@ fn real_runtime_pair_same_pid_analysis_threads_pause_and_expiry() {
     assert_eq!(resumed.generation, 12);
     assert_eq!(resumed.node_path, node_path);
     assert_eq!(owned_engine_identity(&engine), pid);
-    let threads = manager.runtime_threads(request(manager, RuntimeThreadsActionDto::Apply, Some(2))).unwrap();
+    let threads = manager
+        .runtime_threads(request(manager, RuntimeThreadsActionDto::Apply, Some(2)))
+        .unwrap();
     assert_eq!(threads.status, RuntimeThreadsStatusDto::Confirmed);
     assert_eq!(threads.actual, Some(2));
     let after_threads = manager.read_runtime_parameters(identity()).unwrap();
@@ -229,20 +387,31 @@ fn real_runtime_pair_same_pid_analysis_threads_pause_and_expiry() {
     manager.restart().unwrap();
     let restarted = ready(manager);
     assert_ne!(restarted.run_id, run.run_id);
-    assert_eq!(restarted.qualified_resource.as_ref().unwrap().resources, run.qualified_resource.as_ref().unwrap().resources);
+    assert_eq!(
+        restarted.qualified_resource.as_ref().unwrap().resources,
+        run.qualified_resource.as_ref().unwrap().resources
+    );
     assert!(manager.read_runtime_parameters(stale).is_err());
     assert_eq!(manager.runtime_parameters_snapshot().last_valid, None);
-    assert_eq!(manager.runtime_parameters_snapshot().status, RuntimeParametersStatusDto::Unknown);
+    assert_eq!(
+        manager.runtime_parameters_snapshot().status,
+        RuntimeParametersStatusDto::Unknown
+    );
     assert_eq!(manager.snapshot().continuous.enabled, Some(false));
     assert!(manager.snapshot().selected_node_job.is_none());
-    let mut other = catalog.get("pair").unwrap(); other.profile_id = "other".into(); catalog.upsert(other);
+    let mut other = catalog.get("pair").unwrap();
+    other.profile_id = "other".into();
+    catalog.upsert(other);
     manager.switch_to("other").unwrap();
     let switched = ready(manager);
     assert_ne!(switched.run_id, restarted.run_id);
     assert_eq!(manager.runtime_parameters_snapshot().last_valid, None);
     let final_pair = manager.read_runtime_parameters(identity()).unwrap();
     assert_eq!(final_pair.last_valid, first.last_valid);
-    println!("REAL_PAIR_NEW_RUN {}", serde_json::to_string(&final_pair).unwrap());
+    println!(
+        "REAL_PAIR_NEW_RUN {}",
+        serde_json::to_string(&final_pair).unwrap()
+    );
     manager.teardown().unwrap();
     assert_eq!(manager.runtime_parameters_snapshot().run_id, None);
     assert_eq!(manager.runtime_parameters_snapshot().last_valid, None);

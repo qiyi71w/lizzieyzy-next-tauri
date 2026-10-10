@@ -229,94 +229,168 @@ fn real_import_restart_recovery(gtp: bool) {
     require_real_katago();
     let mut profile = real_profile("Local recovery");
     if gtp {
-        let EngineAdapterSettings::KataGoAnalysis(settings) = profile.adapter else { unreachable!() };
+        let EngineAdapterSettings::KataGoAnalysis(settings) = profile.adapter else {
+            unreachable!()
+        };
         profile.adapter = EngineAdapterSettings::KataGoGtp(settings);
     }
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-    catalog.upsert(SavedEngineProfile { profile_id: "recovery".into(), profile });
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "recovery".into(),
+        profile,
+    });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::default());
     struct Cleanup(ForegroundEngineManager);
     impl Drop for Cleanup {
-        fn drop(&mut self) { let _ = self.0.teardown(); }
+        fn drop(&mut self) {
+            let _ = self.0.teardown();
+        }
     }
     let _cleanup = Cleanup(manager.clone());
     let events = manager.subscribe();
-    let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };
+    let budget = ContinuousAnalysisBudgetDto {
+        continuous_time_limit_enabled: false,
+        ..Default::default()
+    };
     manager.set_continuous_preferences(true, budget).unwrap();
     manager.start("recovery").unwrap();
-    let first = wait_current(&manager, Duration::from_secs(60), |phase| matches!(phase, ForegroundEngineLifecycleDto::Ready { .. }));
+    let first = wait_current(&manager, Duration::from_secs(60), |phase| {
+        matches!(phase, ForegroundEngineLifecycleDto::Ready { .. })
+    });
     let first = run_from_ready(&first.lifecycle).clone();
     let old_document = sgf::CurrentSgfDocument::open("(;SZ[9]RU[Chinese]KM[7.5];B[dd])").unwrap();
-    let document = sgf::CurrentSgfDocument::open("(;SZ[9]RU[Chinese-KGS]KM[6.5]C[new personal];B[cc];W[])").unwrap();
+    let document =
+        sgf::CurrentSgfDocument::open("(;SZ[9]RU[Chinese-KGS]KM[6.5]C[new personal];B[cc];W[])").unwrap();
     let before = document.serialize().unwrap();
     let make_request = |doc: &sgf::CurrentSgfDocument, path: Vec<u32>, generation, run: &str| {
         let path = NodePath { indices: path };
         let snapshot = doc.snapshot(&path).unwrap();
         let exact = doc.exact_position(&path).unwrap();
         SelectedNodeJobRequest {
-            run_id: run.into(), generation, node_path: path, mode: AnalysisJobModeDto::Continuous,
-            board_width: 9, board_height: 9, position_empty: snapshot.position.stones.is_empty(),
-            query: katago_protocol::analysis_query_from_position(9, 9, exact.dto().komi,
-                &snapshot.position.stones, exact.dto().to_play,
-                katago_protocol::AnalysisQueryOptions { id: "pending".into(), rules: "chinese".into(),
-                    turn: snapshot.position.move_number, max_visits: None, include_ownership: Some(true), include_policy: None }).unwrap(),
+            run_id: run.into(),
+            generation,
+            node_path: path,
+            mode: AnalysisJobModeDto::Continuous,
+            board_width: 9,
+            board_height: 9,
+            position_empty: snapshot.position.stones.is_empty(),
+            query: katago_protocol::analysis_query_from_position(
+                9,
+                9,
+                exact.dto().komi,
+                &snapshot.position.stones,
+                exact.dto().to_play,
+                katago_protocol::AnalysisQueryOptions {
+                    id: "pending".into(),
+                    rules: "chinese".into(),
+                    turn: snapshot.position.move_number,
+                    max_visits: None,
+                    include_ownership: Some(true),
+                    include_policy: None,
+                },
+            )
+            .unwrap(),
             exact_position: Ok(exact),
         }
     };
     manager.follow_continuous_position(make_request(&old_document, vec![0], 1, &first.run_id));
-    let old = wait_job(&events, Duration::from_secs(30), |job| job.outcome == AnalysisJobOutcomeDto::Progress);
+    let old = wait_job(&events, Duration::from_secs(30), |job| {
+        job.outcome == AnalysisJobOutcomeDto::Progress
+    });
     kill_owned_katago(&first.profile_snapshot);
-    wait_current(&manager, Duration::from_secs(30), |phase| matches!(phase, ForegroundEngineLifecycleDto::Error { .. }));
-    assert!(manager.snapshot().selected_node_job.is_none(), "failed Run must retire its active job before document departure");
+    wait_current(&manager, Duration::from_secs(30), |phase| {
+        matches!(phase, ForegroundEngineLifecycleDto::Error { .. })
+    });
+    assert!(
+        manager.snapshot().selected_node_job.is_none(),
+        "failed Run must retire its active job before document departure"
+    );
     manager.begin_continuous_departure();
     // Mirror the gateway's protected departure cutoff: enumerate after suppression,
     // deliver target cancellation, then wait for terminal cleanup before installing SGF.
     let departure = manager.snapshot();
-    let closed_jobs: Vec<_> = departure.selected_node_job.into_iter()
-        .filter(|job| !job.state.is_limited()).chain(departure.whole_game_job).collect();
+    let closed_jobs: Vec<_> = departure
+        .selected_node_job
+        .into_iter()
+        .filter(|job| !job.state.is_limited())
+        .chain(departure.whole_game_job)
+        .collect();
     for job in &closed_jobs {
         manager.cancel_job(&job.run_id, &job.job_id).unwrap();
     }
     for job in &closed_jobs {
-        manager.wait_for_job_cancellation(&job.run_id, &job.job_id, Duration::from_secs(3)).unwrap();
+        manager
+            .wait_for_job_cancellation(&job.run_id, &job.job_id, Duration::from_secs(3))
+            .unwrap();
     }
-    assert!(closed_jobs.is_empty(), "dead reader must leave no departure stop request");
+    assert!(
+        closed_jobs.is_empty(),
+        "dead reader must leave no departure stop request"
+    );
     manager.clear_continuous_position();
     manager.follow_continuous_position(make_request(&document, vec![0, 0], 2, &first.run_id));
     manager.finish_continuous_departure(true);
     manager.restart().unwrap();
-    let restarted = wait_current(&manager, Duration::from_secs(60), |phase| matches!(phase, ForegroundEngineLifecycleDto::Ready { .. }));
+    let restarted = wait_current(&manager, Duration::from_secs(60), |phase| {
+        matches!(phase, ForegroundEngineLifecycleDto::Ready { .. })
+    });
     let restarted = run_from_ready(&restarted.lifecycle).clone();
     assert_ne!(restarted.run_id, first.run_id);
-    assert_eq!(manager.snapshot().continuous.phase, ContinuousAnalysisPhaseDto::SafetyHold);
+    assert_eq!(
+        manager.snapshot().continuous.phase,
+        ContinuousAnalysisPhaseDto::SafetyHold
+    );
     assert!(manager.snapshot().selected_node_job.is_none());
     if gtp {
         let current = manager.runtime_threads_snapshot();
-        let read = manager.runtime_threads(RuntimeThreadsRequestDto {
-            identity: RuntimeControlIdentityDto {
-                run_id: restarted.run_id.clone(),
-                profile_revision: current.profile_revision.unwrap(),
-                request_id: uuid::Uuid::new_v4().to_string(),
-            }, action: RuntimeThreadsActionDto::Read, value: None,
-        }).unwrap();
+        let read = manager
+            .runtime_threads(RuntimeThreadsRequestDto {
+                identity: RuntimeControlIdentityDto {
+                    run_id: restarted.run_id.clone(),
+                    profile_revision: current.profile_revision.unwrap(),
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                },
+                action: RuntimeThreadsActionDto::Read,
+                value: None,
+            })
+            .unwrap();
         assert_eq!(read.status, RuntimeThreadsStatusDto::Confirmed);
-        assert_eq!(manager.snapshot().continuous.phase, ContinuousAnalysisPhaseDto::SafetyHold);
+        assert_eq!(
+            manager.snapshot().continuous.phase,
+            ContinuousAnalysisPhaseDto::SafetyHold
+        );
         assert!(manager.snapshot().selected_node_job.is_none());
-        let receipt = manager.confirm_ordinary_rules(engine_manager::GameMoveRequest {
-            identity: GameMoveRequestDto { run_id: restarted.run_id.clone(), generation: 2,
-                node_path: NodePath { indices: vec![0, 0] }, budget: ComputeBudgetDto { deadline_ms: 10000, max_visits: None } },
-            position: document.exact_position(&NodePath { indices: vec![0, 0] }).unwrap(),
-        }).unwrap();
+        let receipt = manager
+            .confirm_ordinary_rules(engine_manager::GameMoveRequest {
+                identity: GameMoveRequestDto {
+                    run_id: restarted.run_id.clone(),
+                    generation: 2,
+                    node_path: NodePath { indices: vec![0, 0] },
+                    budget: ComputeBudgetDto {
+                        deadline_ms: 10000,
+                        max_visits: None,
+                    },
+                },
+                position: document
+                    .exact_position(&NodePath { indices: vec![0, 0] })
+                    .unwrap(),
+            })
+            .unwrap();
         assert_eq!(receipt.position.komi, 6.5);
         assert_eq!(receipt.position.to_play, PlayerColor::Black);
         assert_eq!(receipt.position.moves.len(), 2);
         assert_eq!(receipt.true_final_move.unwrap().vertex, MoveVertex::Pass);
         assert_eq!(receipt.reader_id, restarted.run_id);
-        println!("RECOVERY RULES {}", serde_json::to_string(&receipt.position).unwrap());
+        println!(
+            "RECOVERY RULES {}",
+            serde_json::to_string(&receipt.position).unwrap()
+        );
     }
     assert!(manager.snapshot().selected_node_job.is_none());
     manager.authorize_continuous_start();
-    let current = wait_job(&events, Duration::from_secs(30), |job| job.outcome == AnalysisJobOutcomeDto::Progress && job.run_id == restarted.run_id);
+    let current = wait_job(&events, Duration::from_secs(30), |job| {
+        job.outcome == AnalysisJobOutcomeDto::Progress && job.run_id == restarted.run_id
+    });
     assert_eq!(current.generation, 2);
     assert_eq!(current.node_path.indices, vec![0, 0]);
     assert_ne!(current.job_id, old.job_id);
@@ -324,24 +398,38 @@ fn real_import_restart_recovery(gtp: bool) {
     assert_eq!(current.frame.as_ref().unwrap().turn, if gtp { 2 } else { 0 });
     assert!(!current.frame.as_ref().unwrap().candidates.is_empty());
     manager.set_continuous_preferences(false, budget).unwrap();
-    wait_job(&events, Duration::from_secs(30), |job| job.job_id == current.job_id && job.outcome == AnalysisJobOutcomeDto::Cancelled);
-    assert_eq!(run_from_ready(&manager.snapshot().lifecycle).run_id, restarted.run_id);
+    wait_job(&events, Duration::from_secs(30), |job| {
+        job.job_id == current.job_id && job.outcome == AnalysisJobOutcomeDto::Cancelled
+    });
+    assert_eq!(
+        run_from_ready(&manager.snapshot().lifecycle).run_id,
+        restarted.run_id
+    );
     assert_eq!(document.serialize().unwrap(), before);
-    println!("RECOVERY adapter={:?} old={} new={} generation=2 user_continue=true personal_c_preserved=true", restarted.adapter_kind, first.run_id, restarted.run_id);
+    println!(
+        "RECOVERY adapter={:?} old={} new={} generation=2 user_continue=true personal_c_preserved=true",
+        restarted.adapter_kind, first.run_id, restarted.run_id
+    );
     manager.teardown().unwrap();
-    assert!(matches!(manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. }));
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine { .. }
+    ));
 }
 
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires explicit real KataGo GTP resources and isolated cwd"]
-fn real_gtp_failure_import_restart_requires_user_continue() { real_import_restart_recovery(true); }
+fn real_gtp_failure_import_restart_requires_user_continue() {
+    real_import_restart_recovery(true);
+}
 
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires explicit real KataGo JSONL resources and isolated cwd"]
-fn real_jsonl_failure_import_restart_requires_user_continue() { real_import_restart_recovery(false); }
-
+fn real_jsonl_failure_import_restart_requires_user_continue() {
+    real_import_restart_recovery(false);
+}
 
 #[cfg(target_os = "linux")]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -387,9 +475,10 @@ fn is_owned_katago(
     process.parent == parent
         && process.executable == executable
         && process.cwd == cwd
-        && process.argv.windows(2).any(|args| {
-            args[0] == b"-config" && args[1] == config.as_os_str().as_bytes()
-        })
+        && process
+            .argv
+            .windows(2)
+            .any(|args| args[0] == b"-config" && args[1] == config.as_os_str().as_bytes())
 }
 
 #[cfg(target_os = "linux")]
@@ -398,11 +487,16 @@ fn kill_owned_katago(profile: &EngineProfileDto) {
     let executable = std::fs::canonicalize(&profile.program).unwrap();
     let cwd = std::fs::canonicalize(profile.working_dir.as_ref().unwrap()).unwrap();
     let settings = match &profile.adapter {
-        EngineAdapterSettings::KataGoAnalysis(settings) | EngineAdapterSettings::KataGoGtp(settings) => settings,
+        EngineAdapterSettings::KataGoAnalysis(settings) | EngineAdapterSettings::KataGoGtp(settings) => {
+            settings
+        }
         _ => panic!("crash smoke requires KataGo"),
     };
     let config = Path::new(settings.config_path.as_ref().unwrap());
-    assert!(config.is_absolute(), "crash smoke requires an absolute private config");
+    assert!(
+        config.is_absolute(),
+        "crash smoke requires an absolute private config"
+    );
     let parent = std::process::id();
     let targets: Vec<_> = std::fs::read_dir("/proc")
         .unwrap()
@@ -410,7 +504,11 @@ fn kill_owned_katago(profile: &EngineProfileDto) {
         .filter_map(linux_process)
         .filter(|process| is_owned_katago(process, parent, &executable, &cwd, config))
         .collect();
-    assert_eq!(targets.len(), 1, "expected exactly one owned KataGo child: {targets:?}");
+    assert_eq!(
+        targets.len(),
+        1,
+        "expected exactly one owned KataGo child: {targets:?}"
+    );
     let target = &targets[0];
     eprintln!("dry-owned-selection={target:?}");
     // A pidfd pins the selected process so PID reuse cannot redirect SIGKILL.
@@ -418,7 +516,10 @@ fn kill_owned_katago(profile: &EngineProfileDto) {
     assert!(fd >= 0, "pidfd_open failed: {}", std::io::Error::last_os_error());
     let handle = unsafe { std::fs::File::from_raw_fd(fd as i32) };
     let current = linux_process(target.pid).expect("owned KataGo exited before recheck");
-    assert_eq!(&current, target, "process identity changed before crash injection");
+    assert_eq!(
+        &current, target,
+        "process identity changed before crash injection"
+    );
     assert!(is_owned_katago(&current, parent, &executable, &cwd, config));
     let result = unsafe {
         libc::syscall(
@@ -429,10 +530,17 @@ fn kill_owned_katago(profile: &EngineProfileDto) {
             0,
         )
     };
-    assert_eq!(result, 0, "owned SIGKILL failed: {}", std::io::Error::last_os_error());
-    eprintln!("killed-owned-child pid={} parent={} start_ticks={}", target.pid, parent, target.start_ticks);
+    assert_eq!(
+        result,
+        0,
+        "owned SIGKILL failed: {}",
+        std::io::Error::last_os_error()
+    );
+    eprintln!(
+        "killed-owned-child pid={} parent={} start_ticks={}",
+        target.pid, parent, target.start_ticks
+    );
 }
-
 
 #[cfg(target_os = "linux")]
 #[test]
@@ -448,7 +556,11 @@ fn owned_crash_selector_rejects_unrelated_lookalikes_without_signalling() {
         start_ticks: 123,
         executable: executable.clone(),
         cwd: cwd.clone(),
-        argv: vec![b"katago".to_vec(), b"-config".to_vec(), config.as_os_str().as_encoded_bytes().to_vec()],
+        argv: vec![
+            b"katago".to_vec(),
+            b"-config".to_vec(),
+            config.as_os_str().as_encoded_bytes().to_vec(),
+        ],
     };
     assert!(is_owned_katago(&selected, parent, &executable, &cwd, &config));
     for field in ["parent", "executable", "cwd", "config"] {
@@ -460,11 +572,19 @@ fn owned_crash_selector_rejects_unrelated_lookalikes_without_signalling() {
             "config" => lookalike.argv[2] = b"unrelated-analysis.cfg".to_vec(),
             _ => unreachable!(),
         }
-        assert!(!is_owned_katago(&lookalike, parent, &executable, &cwd, &config), "accepted mismatched {field}");
+        assert!(
+            !is_owned_katago(&lookalike, parent, &executable, &cwd, &config),
+            "accepted mismatched {field}"
+        );
     }
     // Same real parent, executable and cwd, misleading argv[0], but no private config.
     // Inspect only: this short-lived owned lookalike exits naturally, never receives a signal.
-    let mut lookalike = Command::new(&executable).arg0("katago").arg("1").current_dir(&cwd).spawn().unwrap();
+    let mut lookalike = Command::new(&executable)
+        .arg0("katago")
+        .arg("1")
+        .current_dir(&cwd)
+        .spawn()
+        .unwrap();
     let identity = linux_process(lookalike.id()).unwrap();
     assert_eq!(identity.parent, parent);
     assert_eq!(identity.executable, executable);
@@ -799,25 +919,49 @@ fn real_katago_bounded_live_diagnostics() {
     require_real_katago();
     let profile = real_profile("Real diagnostics");
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-    catalog.upsert(SavedEngineProfile { profile_id: "diagnostics-real".into(), profile: profile.clone() });
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "diagnostics-real".into(),
+        profile: profile.clone(),
+    });
     let (manager, events) = manager_with(catalog.clone());
     manager.start("diagnostics-real").unwrap();
-    let ready = wait_current(&manager, Duration::from_secs(300), |state| matches!(state, ForegroundEngineLifecycleDto::Ready { .. }));
+    let ready = wait_current(&manager, Duration::from_secs(300), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::Ready { .. })
+    });
     let run = run_from_ready(&ready.lifecycle);
     let qualification = run.qualified_resource.as_ref().expect("qualified real Run");
-    assert!(qualification.version.as_deref().is_some_and(|value| !value.is_empty()));
-    assert!(qualification.backend.as_deref().is_some_and(|value| !value.is_empty()));
+    assert!(qualification
+        .version
+        .as_deref()
+        .is_some_and(|value| !value.is_empty()));
+    assert!(qualification
+        .backend
+        .as_deref()
+        .is_some_and(|value| !value.is_empty()));
     assert_eq!(qualification.origin, "local_unknown");
     assert!(!qualification.static_zlib_exemption);
-    assert!(qualification.resources.iter().all(|resource| resource.bytes > 0 && resource.sha256.len() == 64));
-    eprintln!("real qualification: {}", serde_json::to_string(qualification).unwrap());
-    let job = manager.start_selected_node_job(selected_request(&run.run_id, 1, 2)).unwrap();
-    wait_job(&events, Duration::from_secs(120), |event| event.job_id == job.job_id && event.outcome == app_model::AnalysisJobOutcomeDto::Completed);
+    assert!(qualification
+        .resources
+        .iter()
+        .all(|resource| resource.bytes > 0 && resource.sha256.len() == 64));
+    eprintln!(
+        "real qualification: {}",
+        serde_json::to_string(qualification).unwrap()
+    );
+    let job = manager
+        .start_selected_node_job(selected_request(&run.run_id, 1, 2))
+        .unwrap();
+    wait_job(&events, Duration::from_secs(120), |event| {
+        event.job_id == job.job_id && event.outcome == app_model::AnalysisJobOutcomeDto::Completed
+    });
     let frozen = manager.diagnostic_snapshots().pop().unwrap();
     assert_eq!(frozen.run_id, run.run_id);
     assert!(!frozen.process_exited);
     assert!(!frozen.full_trace);
-    assert!(frozen.records.iter().any(|record| record.source == "startup-probe-stderr"));
+    assert!(frozen
+        .records
+        .iter()
+        .any(|record| record.source == "startup-probe-stderr"));
     assert!(frozen.records.iter().any(|record| record.source == "stdout"));
     assert!(frozen.retained_bytes <= 64 * 1024 && frozen.records.len() <= 256);
     let encoded = serde_json::to_string(&frozen).unwrap();
@@ -827,20 +971,38 @@ fn real_katago_bounded_live_diagnostics() {
         assert!(!encoded.contains(settings.config_path.as_ref().unwrap()));
     }
     eprintln!("real diagnostic snapshot: {encoded}");
-    eprintln!("real analysis: run={} job={} completed=true", run.run_id, job.job_id);
+    eprintln!(
+        "real analysis: run={} job={} completed=true",
+        run.run_id, job.job_id
+    );
     manager.stop().unwrap();
-    wait_current(&manager, Duration::from_secs(20), |state| matches!(state, ForegroundEngineLifecycleDto::NoEngine { .. }));
+    wait_current(&manager, Duration::from_secs(20), |state| {
+        matches!(state, ForegroundEngineLifecycleDto::NoEngine { .. })
+    });
     assert_eq!(serde_json::to_string(&frozen).unwrap(), encoded);
-    eprintln!("real diagnostics: attempt={} records={} bytes={} frozen=true live-stdout=true startup-stderr=true", frozen.run_id, frozen.records.len(), frozen.retained_bytes);
+    eprintln!(
+        "real diagnostics: attempt={} records={} bytes={} frozen=true live-stdout=true startup-stderr=true",
+        frozen.run_id,
+        frozen.records.len(),
+        frozen.retained_bytes
+    );
     let mut invalid = profile.clone();
-    invalid.argv.push("--r12-diagnostic-fixture-invalid-argument".into());
-    catalog.upsert(SavedEngineProfile { profile_id: "diagnostics-failed".into(), profile: invalid });
+    invalid
+        .argv
+        .push("--r12-diagnostic-fixture-invalid-argument".into());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "diagnostics-failed".into(),
+        profile: invalid,
+    });
     manager.start("diagnostics-failed").unwrap();
     let deadline = Instant::now() + Duration::from_secs(90);
     let failure = loop {
         match events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(ForegroundEngineEventDto::Failure { failure })
-                if failure.profile_id.as_deref() == Some("diagnostics-failed") => break failure,
+                if failure.profile_id.as_deref() == Some("diagnostics-failed") =>
+            {
+                break failure
+            }
             Ok(_) => continue,
             Err(_) => {
                 manager.teardown().unwrap();
@@ -851,15 +1013,26 @@ fn real_katago_bounded_live_diagnostics() {
     let deadline = Instant::now() + Duration::from_secs(3);
     let failed = loop {
         let snapshot = manager.diagnostic_snapshots().pop().unwrap();
-        if snapshot.process_exited && snapshot.stdout_complete && snapshot.stderr_complete { break snapshot; }
+        if snapshot.process_exited && snapshot.stdout_complete && snapshot.stderr_complete {
+            break snapshot;
+        }
         assert!(Instant::now() < deadline, "failed attempt readers did not finish");
         std::thread::sleep(Duration::from_millis(5));
     };
     assert_eq!(failure.run_id.as_deref(), Some(failed.run_id.as_str()));
-    assert!(failed.records.iter().any(|record| record.source == "startup-probe-stderr"));
+    assert!(failed
+        .records
+        .iter()
+        .any(|record| record.source == "startup-probe-stderr"));
     assert!(failed.process_exited && failed.stdout_complete && failed.stderr_complete);
     assert!(failed.failure.as_ref().unwrap().ends_with(&failure.message));
-    let program_alias = failed.command.split_whitespace().next().unwrap().strip_prefix("program=").unwrap();
+    let program_alias = failed
+        .command
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .strip_prefix("program=")
+        .unwrap();
     assert!(failure.message.contains(program_alias));
     let encoded_failure = serde_json::to_string(&failure).unwrap();
     assert!(!encoded_failure.contains(&profile.program));
@@ -876,7 +1049,9 @@ fn real_katago_bounded_live_diagnostics() {
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 let status = export.status();
-                if status.phase == phase { break status; }
+                if status.phase == phase {
+                    break status;
+                }
                 assert!(Instant::now() < deadline, "export status: {status:?}");
                 std::thread::sleep(Duration::from_millis(5));
             }
@@ -887,22 +1062,31 @@ fn real_katago_bounded_live_diagnostics() {
         let path = directory.join(completed.file_name.as_ref().unwrap());
         let mut archive = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
         assert_eq!(archive.len(), 4);
-        let restored: app_model::EngineDiagnosticSnapshotDto = serde_json::from_reader(archive.by_name("snapshot.json").unwrap()).unwrap();
+        let restored: app_model::EngineDiagnosticSnapshotDto =
+            serde_json::from_reader(archive.by_name("snapshot.json").unwrap()).unwrap();
         assert_eq!(restored, frozen);
         let records: Vec<app_model::EngineDiagnosticRecordDto> = {
             use std::io::{BufRead, BufReader};
-            BufReader::new(archive.by_name("records.jsonl").unwrap()).lines()
-                .map(|line| serde_json::from_str(&line.unwrap()).unwrap()).collect()
+            BufReader::new(archive.by_name("records.jsonl").unwrap())
+                .lines()
+                .map(|line| serde_json::from_str(&line.unwrap()).unwrap())
+                .collect()
         };
         assert_eq!(records, frozen.records);
-        assert!(matches!(manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. }));
+        assert!(matches!(
+            manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::NoEngine { .. }
+        ));
         eprintln!("real export: {} zip_bytes={} source_exact=true records_exact=true entries=4 no_run_resurrection=true", serde_json::to_string(&completed).unwrap(), std::fs::metadata(&path).unwrap().len());
         assert!(export.shutdown(Duration::from_millis(500)));
         drop(archive);
         std::fs::remove_dir_all(directory).unwrap();
     }
     manager.teardown().unwrap();
-    assert_eq!(manager.last_primary_profile_id().as_deref(), Some("diagnostics-real"));
+    assert_eq!(
+        manager.last_primary_profile_id().as_deref(),
+        Some("diagnostics-real")
+    );
 }
 
 #[test]
@@ -912,12 +1096,21 @@ fn real_katago_startup_modes_reopen_durable_catalog() {
     struct DiskCatalog(std::path::PathBuf);
     impl EngineProfileCatalog for DiskCatalog {
         fn get(&self, id: &str) -> Option<SavedEngineProfile> {
-            engine_manager::load_engine_profiles(&self.0).ok()?.profiles.into_iter()
+            engine_manager::load_engine_profiles(&self.0)
+                .ok()?
+                .profiles
+                .into_iter()
                 .find(|record| record.id == id)
-                .map(|record| SavedEngineProfile { profile_id: record.id, profile: record.profile })
+                .map(|record| SavedEngineProfile {
+                    profile_id: record.id,
+                    profile: record.profile,
+                })
         }
         fn autoload_profile_id(&self) -> Option<String> {
-            engine_manager::load_engine_profiles(&self.0).ok()?.startup_profile_id().map(str::to_owned)
+            engine_manager::load_engine_profiles(&self.0)
+                .ok()?
+                .startup_profile_id()
+                .map(str::to_owned)
         }
     }
     let profile = real_profile("Startup A");
@@ -926,32 +1119,58 @@ fn real_katago_startup_modes_reopen_durable_catalog() {
     std::fs::create_dir(&directory).unwrap();
     let path = directory.join("catalog.json");
     let mut catalog = engine_manager::EngineProfilesSettings {
-        version: 2, selected_profile_id: "a".into(),
+        version: 2,
+        selected_profile_id: "a".into(),
         startup: app_model::EngineStartupPolicyDto::Off,
         last_primary_profile_id: None,
         startup_evaluation: Default::default(),
         profiles: vec![
-            engine_manager::EngineProfileRecord { id: "a".into(), profile: profile.clone(), preload: false },
-            engine_manager::EngineProfileRecord { id: "b".into(), profile: EngineProfileDto { name: "Startup B".into(), ..profile }, preload: false },
+            engine_manager::EngineProfileRecord {
+                id: "a".into(),
+                profile: profile.clone(),
+                preload: false,
+            },
+            engine_manager::EngineProfileRecord {
+                id: "b".into(),
+                profile: EngineProfileDto {
+                    name: "Startup B".into(),
+                    ..profile
+                },
+                preload: false,
+            },
         ],
     };
-    let new_manager = || ForegroundEngineManager::new(Arc::new(DiskCatalog(path.clone())), ForegroundEngineConfig {
-        readiness_timeout: Duration::from_secs(300), stop_drain_timeout: Duration::from_secs(15),
-        job_timeout: Duration::from_secs(120), admit_whole_game_analysis: true,
-        managed_resources_root: None,
-    });
+    let new_manager = || {
+        ForegroundEngineManager::new(
+            Arc::new(DiskCatalog(path.clone())),
+            ForegroundEngineConfig {
+                readiness_timeout: Duration::from_secs(300),
+                stop_drain_timeout: Duration::from_secs(15),
+                job_timeout: Duration::from_secs(120),
+                admit_whole_game_analysis: true,
+                managed_resources_root: None,
+            },
+        )
+    };
     engine_manager::save_engine_profiles(&path, catalog.clone()).unwrap();
     let off = new_manager();
     off.apply_autoload().unwrap();
-    assert!(matches!(off.snapshot().lifecycle, ForegroundEngineLifecycleDto::NoEngine { failure: None }));
+    assert!(matches!(
+        off.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine { failure: None }
+    ));
     assert_eq!(off.last_primary_profile_id(), None);
     drop(off);
-    catalog.startup = app_model::EngineStartupPolicyDto::Fixed { profile_id: "b".into() };
+    catalog.startup = app_model::EngineStartupPolicyDto::Fixed {
+        profile_id: "b".into(),
+    };
     engine_manager::save_engine_profiles(&path, catalog.clone()).unwrap();
     let fixed = new_manager();
     let events = fixed.subscribe();
     fixed.apply_autoload().unwrap();
-    let first = wait_snapshot(&events, Duration::from_secs(300), |phase| matches!(phase, ForegroundEngineLifecycleDto::Ready { .. }));
+    let first = wait_snapshot(&events, Duration::from_secs(300), |phase| {
+        matches!(phase, ForegroundEngineLifecycleDto::Ready { .. })
+    });
     let first_run = run_from_ready(&first.lifecycle);
     assert_eq!(first_run.profile_id, "b");
     fixed.teardown().unwrap();
@@ -962,20 +1181,34 @@ fn real_katago_startup_modes_reopen_durable_catalog() {
     let last = new_manager();
     let events = last.subscribe();
     last.apply_autoload().unwrap();
-    let reopened = wait_snapshot(&events, Duration::from_secs(300), |phase| matches!(phase, ForegroundEngineLifecycleDto::Ready { .. }));
+    let reopened = wait_snapshot(&events, Duration::from_secs(300), |phase| {
+        matches!(phase, ForegroundEngineLifecycleDto::Ready { .. })
+    });
     let reopened_run = run_from_ready(&reopened.lifecycle);
     assert_eq!(reopened_run.profile_id, "b");
     assert_ne!(reopened_run.run_id, first_run.run_id);
     last.switch_to("a").unwrap();
-    wait_snapshot(&events, Duration::from_secs(300), |phase| matches!(phase, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "a"));
+    wait_snapshot(
+        &events,
+        Duration::from_secs(300),
+        |phase| matches!(phase, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "a"),
+    );
     assert_eq!(last.last_primary_profile_id().as_deref(), Some("a"));
-    assert_eq!(engine_manager::load_engine_profiles(&path).unwrap().last_primary_profile_id.as_deref(), Some("b"));
+    assert_eq!(
+        engine_manager::load_engine_profiles(&path)
+            .unwrap()
+            .last_primary_profile_id
+            .as_deref(),
+        Some("b")
+    );
     last.teardown().unwrap();
     drop(last); // No normal-exit persistence: previous durable B must still reopen.
     let previous = new_manager();
     let events = previous.subscribe();
     previous.apply_autoload().unwrap();
-    let persisted = wait_snapshot(&events, Duration::from_secs(300), |phase| matches!(phase, ForegroundEngineLifecycleDto::Ready { .. }));
+    let persisted = wait_snapshot(&events, Duration::from_secs(300), |phase| {
+        matches!(phase, ForegroundEngineLifecycleDto::Ready { .. })
+    });
     assert_eq!(run_from_ready(&persisted.lifecycle).profile_id, "b");
     previous.teardown().unwrap();
     drop(previous);
@@ -983,7 +1216,10 @@ fn real_katago_startup_modes_reopen_durable_catalog() {
     engine_manager::save_engine_profiles(&path, catalog).unwrap();
     let missing = new_manager();
     assert!(missing.apply_autoload().is_err());
-    assert!(matches!(missing.snapshot().lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. }));
+    assert!(matches!(
+        missing.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine { .. }
+    ));
     assert_eq!(missing.last_primary_profile_id(), None);
     eprintln!("startup smoke: off, fixed B, last-primary B/new Run, unsaved A retains durable B, deleted identity has no fallback");
     std::fs::remove_dir_all(directory).unwrap();
@@ -1091,7 +1327,10 @@ fn real_preload_promotion_cancellation_and_memory_pressure_preserve_primary() {
     let job = manager
         .start_selected_node_job(selected_request(&b.run.run_id, 1, 2))
         .unwrap();
-    assert_eq!(manager.evaluation_snapshot().phase, app_model::EvaluationPhaseDto::Yielded);
+    assert_eq!(
+        manager.evaluation_snapshot().phase,
+        app_model::EvaluationPhaseDto::Yielded
+    );
     assert_eq!(manager.evaluation_snapshot().process_id, None);
     assert_eq!(wait(Phase::Cancelled).run.profile_id, "preload-a");
     wait_job(&events, Duration::from_secs(30), |event| {

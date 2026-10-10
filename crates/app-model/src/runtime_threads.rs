@@ -28,7 +28,11 @@ pub struct RuntimeControlIdentityDto {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum RuntimeThreadsActionDto { Read, Apply, Reset }
+pub enum RuntimeThreadsActionDto {
+    Read,
+    Apply,
+    Reset,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeThreadsRequestDto {
@@ -39,7 +43,12 @@ pub struct RuntimeThreadsRequestDto {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum RuntimeThreadsStatusDto { Unknown, Pending, Confirmed, Failed }
+pub enum RuntimeThreadsStatusDto {
+    Unknown,
+    Pending,
+    Confirmed,
+    Failed,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeThreadsSnapshotDto {

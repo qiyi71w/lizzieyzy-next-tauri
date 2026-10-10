@@ -32,7 +32,6 @@ it("keeps sent requests unconfirmed and only presents an identity-matching actua
   await act(async () => resolve(receipt));
   expect(host.textContent).toContain("已确认：");
   expect(host.textContent).toContain("confirmed-request");
-  expect(host.textContent).toContain("主分析、动态线程与参数回读尚未准入");
   await render(7, [0]);
   expect(host.textContent).not.toContain("confirmed-request");
   expect(host.textContent).toContain("尚未确认");

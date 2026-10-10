@@ -532,7 +532,9 @@ pub struct EngineProfileDto {
 pub enum EngineStartupPolicyDto {
     #[default]
     Off,
-    Fixed { profile_id: String },
+    Fixed {
+        profile_id: String,
+    },
     LastPrimary,
 }
 
@@ -665,8 +667,19 @@ pub struct EngineDiagnosticMetricDto {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticExportPhaseDto {
-    Idle, Estimating, EstimateObsolete, Ready, Collecting, Archiving, Syncing,
-    Publishing, Cancelling, Cancelled, Completed, Failed, Closed,
+    Idle,
+    Estimating,
+    EstimateObsolete,
+    Ready,
+    Collecting,
+    Archiving,
+    Syncing,
+    Publishing,
+    Cancelling,
+    Cancelled,
+    Completed,
+    Failed,
+    Closed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -686,7 +699,11 @@ pub struct DiagnosticExportStatusDto {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum DiagnosticFolderOutcomeDto { Opened, Failed, TimedOut }
+pub enum DiagnosticFolderOutcomeDto {
+    Opened,
+    Failed,
+    TimedOut,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineFailureDto {

@@ -186,7 +186,11 @@ enum MoveMode {
     ConfirmRules,
 }
 
-fn move_failure(identity: &GameMoveJobDto, kind: EngineFailureKind, message: &'static str) -> EngineFailureDto {
+fn move_failure(
+    identity: &GameMoveJobDto,
+    kind: EngineFailureKind,
+    message: &'static str,
+) -> EngineFailureDto {
     failure(
         EngineOperationDto::Job,
         kind,
@@ -313,8 +317,18 @@ impl ForegroundEngineManager {
             .map(OrdinaryRulesHandle)
     }
 
-    pub(super) fn confirm_analysis_rules(&self, request: GameMoveRequest, job_id: &str) -> Result<app_model::OrdinaryRulesSnapshotDto, EngineFailureDto> {
-        OrdinaryRulesHandle(self.start_game_move_owned(None, request, MoveMode::ConfirmRules, Some(job_id))?).wait()
+    pub(super) fn confirm_analysis_rules(
+        &self,
+        request: GameMoveRequest,
+        job_id: &str,
+    ) -> Result<app_model::OrdinaryRulesSnapshotDto, EngineFailureDto> {
+        OrdinaryRulesHandle(self.start_game_move_owned(
+            None,
+            request,
+            MoveMode::ConfirmRules,
+            Some(job_id),
+        )?)
+        .wait()
     }
 
     pub fn confirm_ordinary_rules(
@@ -387,10 +401,17 @@ impl ForegroundEngineManager {
             generation: request.identity.generation,
             node_path: request.identity.node_path.clone(),
         };
-        let fail = |kind, message: &'static str| failure(
-            EngineOperationDto::Job, kind, message.into(),
-            Some(&identity.run_id), None, None,
-        ).with_job_id(&identity.job_id);
+        let fail = |kind, message: &'static str| {
+            failure(
+                EngineOperationDto::Job,
+                kind,
+                message.into(),
+                Some(&identity.run_id),
+                None,
+                None,
+            )
+            .with_job_id(&identity.job_id)
+        };
         let (events_tx, events) = mpsc::sync_channel(64);
         let (writes, writes_rx) = mpsc::channel::<String>();
         let (completed, completion) = mpsc::channel();
@@ -412,9 +433,17 @@ impl ForegroundEngineManager {
             })?;
             let budget = request.identity.budget;
             let plan = if mode == MoveMode::ConfirmRules {
-                super::ordinary_rules::admit(&run, &request.position)
-                    .map_err(|message| failure(EngineOperationDto::Job, EngineFailureKind::UnsupportedCapability,
-                        self.inner.diagnostic_text(&identity.run_id, &message), Some(&identity.run_id), None, None).with_job_id(&identity.job_id))?;
+                super::ordinary_rules::admit(&run, &request.position).map_err(|message| {
+                    failure(
+                        EngineOperationDto::Job,
+                        EngineFailureKind::UnsupportedCapability,
+                        self.inner.diagnostic_text(&identity.run_id, &message),
+                        Some(&identity.run_id),
+                        None,
+                        None,
+                    )
+                    .with_job_id(&identity.job_id)
+                })?;
                 Vec::new()
             } else {
                 validate_move_position(&run, &request.position, budget)?
@@ -438,15 +467,24 @@ impl ForegroundEngineManager {
             }
             require_idle_move(&state)?;
             super::runtime_control::require_idle(&state)?;
-            if analysis_job.is_some_and(|id| !state.jobs.iter().any(|job| job.job_id == id && job.run_id == run.run_id && !job.terminal && job.disposition == JobDisposition::Running)) {
-                return Err(fail(EngineFailureKind::Cancellation, "analysis request retired before exact restore"));
+            if analysis_job.is_some_and(|id| {
+                !state.jobs.iter().any(|job| {
+                    job.job_id == id
+                        && job.run_id == run.run_id
+                        && !job.terminal
+                        && job.disposition == JobDisposition::Running
+                })
+            }) {
+                return Err(fail(
+                    EngineFailureKind::Cancellation,
+                    "analysis request retired before exact restore",
+                ));
             }
             if state.finite_admission_pending
                 || state.continuous_departing
-                || state
-                    .jobs
-                    .iter()
-                    .any(|job| job.run_id == run.run_id && !job.terminal && Some(job.job_id.as_str()) != analysis_job)
+                || state.jobs.iter().any(|job| {
+                    job.run_id == run.run_id && !job.terminal && Some(job.job_id.as_str()) != analysis_job
+                })
                 || state.analysis_task.as_ref().is_some_and(|task| {
                     matches!(
                         task.state,
@@ -467,9 +505,19 @@ impl ForegroundEngineManager {
             let deadline = Instant::now() + Duration::from_millis(u64::from(budget.deadline_ms));
             let restore_file = if mode == MoveMode::ConfirmRules {
                 Some(
-                    super::ordinary_rules::RestoreFile::create(&run, request.position.dto())
-                        .map_err(|message| failure(EngineOperationDto::Job, EngineFailureKind::UnsupportedCapability,
-                            self.inner.diagnostic_text(&identity.run_id, &message), Some(&identity.run_id), None, None).with_job_id(&identity.job_id))?,
+                    super::ordinary_rules::RestoreFile::create(&run, request.position.dto()).map_err(
+                        |message| {
+                            failure(
+                                EngineOperationDto::Job,
+                                EngineFailureKind::UnsupportedCapability,
+                                self.inner.diagnostic_text(&identity.run_id, &message),
+                                Some(&identity.run_id),
+                                None,
+                                None,
+                            )
+                            .with_job_id(&identity.job_id)
+                        },
+                    )?,
                 )
             } else {
                 None
@@ -748,12 +796,19 @@ impl ForegroundEngineManager {
         let Some(active) = active else {
             return Ok(false);
         };
-        let analysis_restore = self.lock().game_move.as_ref().is_some_and(|slot| slot.identity == active && slot.analysis_restore);
+        let analysis_restore = self
+            .lock()
+            .game_move
+            .as_ref()
+            .is_some_and(|slot| slot.identity == active && slot.analysis_restore);
         if !analysis_restore {
             self.cancel_game_move(&active.run_id, &active.job_id)?;
         }
-        let timeout = if analysis_restore { Duration::from_secs(31) }
-            else { self.inner.config.stop_drain_timeout * 3 + Duration::from_secs(1) };
+        let timeout = if analysis_restore {
+            Duration::from_secs(31)
+        } else {
+            self.inner.config.stop_drain_timeout * 3 + Duration::from_secs(1)
+        };
         let deadline = Instant::now() + timeout;
         loop {
             let state = self.lock();
@@ -824,14 +879,22 @@ impl Inner {
 impl MoveWorker {
     fn error(&self, kind: EngineFailureKind, message: impl Into<FailureText>) -> EngineFailureDto {
         let mut error = failure(
-            EngineOperationDto::Job, kind, message.into(),
-            Some(&self.identity.run_id), None, None,
-        ).with_job_id(&self.identity.job_id);
+            EngineOperationDto::Job,
+            kind,
+            message.into(),
+            Some(&self.identity.run_id),
+            None,
+            None,
+        )
+        .with_job_id(&self.identity.job_id);
         error.profile_id = Some(self.run.profile_id.clone());
         error
     }
     fn dynamic_error(&self, kind: EngineFailureKind, message: &str) -> EngineFailureDto {
-        self.error(kind, self.manager.inner.diagnostic_text(&self.identity.run_id, message))
+        self.error(
+            kind,
+            self.manager.inner.diagnostic_text(&self.identity.run_id, message),
+        )
     }
 
     fn write_error(&self, message: &str) -> EngineFailureDto {
@@ -897,12 +960,15 @@ impl MoveWorker {
             if owned_live(&state, &self.identity.run_id).is_none() {
                 return Err(self.error(EngineFailureKind::Cancellation, "GTP reader incarnation retired"));
             }
-            state.gtp_command_seq = state.gtp_command_seq.checked_add(1)
+            state.gtp_command_seq = state
+                .gtp_command_seq
+                .checked_add(1)
                 .ok_or_else(|| self.error(EngineFailureKind::Protocol, "GTP command ID exhausted"))?;
             let id = state.gtp_command_seq;
-            let responses = state.gtp_dispatch.register(
-                &self.identity.run_id, id, &self.identity.job_id, false,
-            ).map_err(|message| self.dynamic_error(EngineFailureKind::Protocol, &message))?;
+            let responses = state
+                .gtp_dispatch
+                .register(&self.identity.run_id, id, &self.identity.job_id, false)
+                .map_err(|message| self.dynamic_error(EngineFailureKind::Protocol, &message))?;
             (id, responses)
         };
         self.write(format!("{id} {command}"))?;
@@ -914,32 +980,52 @@ impl MoveWorker {
             match self.events.try_recv() {
                 Ok(MoveInput::Written(Ok(()))) => written = true,
                 Ok(MoveInput::Written(Err(message))) => return Err(self.write_error(&message)),
-                Ok(MoveInput::Line(_)) => return Err(self.error(EngineFailureKind::Protocol, "unexpected unregistered GTP reply")),
+                Ok(MoveInput::Line(_)) => {
+                    return Err(self.error(EngineFailureKind::Protocol, "unexpected unregistered GTP reply"))
+                }
                 Err(mpsc::TryRecvError::Disconnected) => return Err(self.write_error("GTP writer closed")),
-                Err(mpsc::TryRecvError::Empty) => {},
+                Err(mpsc::TryRecvError::Empty) => {}
             }
             if acknowledged.is_none() {
                 match responses.recv_timeout(Duration::from_millis(5)) {
                     Ok(line) => {
-                        if let Some(response) = decoder.push(&line)
-                            .map_err(|message| self.dynamic_error(EngineFailureKind::Protocol, &message))? {
+                        if let Some(response) = decoder
+                            .push(&line)
+                            .map_err(|message| self.dynamic_error(EngineFailureKind::Protocol, &message))?
+                        {
                             if !response.success {
-                                return Err(self.error(EngineFailureKind::Command,
-                                    self.manager.inner.diagnostic_text(&self.identity.run_id, &command).prefixed("GTP ")
-                                        .then(" rejected: ").then(self.manager.inner.diagnostic_text(&self.identity.run_id, &response.body))));
+                                return Err(self.error(
+                                    EngineFailureKind::Command,
+                                    self.manager
+                                        .inner
+                                        .diagnostic_text(&self.identity.run_id, &command)
+                                        .prefixed("GTP ")
+                                        .then(" rejected: ")
+                                        .then(
+                                            self.manager
+                                                .inner
+                                                .diagnostic_text(&self.identity.run_id, &response.body),
+                                        ),
+                                ));
                             }
                             acknowledged = Some(response.body);
                         }
-                    },
-                    Err(mpsc::RecvTimeoutError::Timeout) => {},
-                    Err(mpsc::RecvTimeoutError::Disconnected) => return Err(self.error(
-                        EngineFailureKind::Protocol, "registered GTP response retired before completion")),
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        return Err(self.error(
+                            EngineFailureKind::Protocol,
+                            "registered GTP response retired before completion",
+                        ))
+                    }
                 }
             } else if !written {
                 thread::sleep(Duration::from_millis(1));
             }
             if written {
-                if let Some(body) = acknowledged.take() { return Ok(body); }
+                if let Some(body) = acknowledged.take() {
+                    return Ok(body);
+                }
             }
         }
     }
@@ -1118,7 +1204,10 @@ impl MoveWorker {
             self.request.position.validate_move(vertex).map_err(|message| {
                 self.error(
                     EngineFailureKind::Protocol,
-                    self.manager.inner.diagnostic_text(&self.identity.run_id, &message).prefixed("illegal engine move: "),
+                    self.manager
+                        .inner
+                        .diagnostic_text(&self.identity.run_id, &message)
+                        .prefixed("illegal engine move: "),
                 )
             })?;
         }
@@ -1170,7 +1259,9 @@ impl MoveWorker {
         // Seal publication under the same lock as cancellation before beginning any cleanup.
         {
             let mut state = self.manager.lock();
-            state.gtp_dispatch.retire(&self.identity.run_id, &self.identity.job_id);
+            state
+                .gtp_dispatch
+                .retire(&self.identity.run_id, &self.identity.job_id);
             if let Some(slot) = state
                 .game_move
                 .as_mut()
@@ -1216,9 +1307,14 @@ impl MoveWorker {
             let mut error = result.as_ref().expect_err("failed result").clone();
             error.profile_id = Some(self.run.profile_id.clone());
             if let Some(Err(cleanup)) = cleanup {
-                error.message = FailureText::from_failure(&error).then(
-                    self.manager.inner.diagnostic_text(&self.identity.run_id, &cleanup.to_string())
-                        .prefixed("; process cleanup failed: ")).into_string();
+                error.message = FailureText::from_failure(&error)
+                    .then(
+                        self.manager
+                            .inner
+                            .diagnostic_text(&self.identity.run_id, &cleanup.to_string())
+                            .prefixed("; process cleanup failed: "),
+                    )
+                    .into_string();
                 error.kind = EngineFailureKind::Timeout;
             } else if self.run.adapter_kind == EngineBackend::KataGoAnalysis
                 && state
@@ -1227,7 +1323,8 @@ impl MoveWorker {
                     .is_some_and(|reservation| reservation.pausing)
             {
                 error.message = FailureText::from_failure(&error)
-                    .then("; KataGo cancellation/drain was not acknowledged; the run cannot be resumed").into_string();
+                    .then("; KataGo cancellation/drain was not acknowledged; the run cannot be resumed")
+                    .into_string();
                 error.kind = EngineFailureKind::Timeout;
             }
             result = Err(error.clone());

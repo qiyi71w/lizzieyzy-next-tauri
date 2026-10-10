@@ -815,43 +815,106 @@ fn existing_child_play_selects_without_dirtying_and_accepts_continuous_progress(
 
 #[test]
 fn diagnostic_trace_reports_actual_stronger_weaker_ownership_and_identity_decisions() {
-    use engine_manager::{ForegroundEngineConfig, ForegroundEngineManager, InMemoryEngineProfileCatalog, SavedEngineProfile};
+    use engine_manager::{
+        ForegroundEngineConfig, ForegroundEngineManager, InMemoryEngineProfileCatalog, SavedEngineProfile,
+    };
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-    catalog.upsert(SavedEngineProfile { profile_id: "trace".into(), profile: app_model::EngineProfileDto {
-        name: "Trace fixture".into(), program: "/definitely-missing-diagnostic-fixture".into(), argv: vec![], working_dir: None,
-        adapter: app_model::EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings {}),
-    }});
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "trace".into(),
+        profile: app_model::EngineProfileDto {
+            name: "Trace fixture".into(),
+            program: "/definitely-missing-diagnostic-fixture".into(),
+            argv: vec![],
+            working_dir: None,
+            adapter: app_model::EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings {}),
+        },
+    });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
     manager.start("trace").unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);
     let attempt = loop {
-        if let Some(snapshot) = manager.diagnostic_snapshots().pop() { break snapshot; }
+        if let Some(snapshot) = manager.diagnostic_snapshots().pop() {
+            break snapshot;
+        }
         assert!(Instant::now() < deadline);
         std::thread::yield_now();
     };
     let state = CurrentGameState::default();
     let opened = state.replace("(;SZ[9])", None).unwrap();
     state.connect_analysis_manager(manager.clone());
-    let mut event = job_event(AnalysisJobLaneDto::SelectedNode, AnalysisJobOutcomeDto::Completed, opened.generation, &[], Some(projectable_frame(100, 3, 3)));
+    let mut event = job_event(
+        AnalysisJobLaneDto::SelectedNode,
+        AnalysisJobOutcomeDto::Completed,
+        opened.generation,
+        &[],
+        Some(projectable_frame(100, 3, 3)),
+    );
     event.run_id = attempt.run_id.clone();
     assert!(state.attach_from_job_event(&event).is_some());
-    assert!(manager.diagnostic_snapshots()[0].records.iter().all(|record| record.source != "cache-adoption"));
+    assert!(manager.diagnostic_snapshots()[0]
+        .records
+        .iter()
+        .all(|record| record.source != "cache-adoption"));
     manager.set_diagnostic_trace(&attempt.attempt_id, true).unwrap();
     event.frame = Some(projectable_frame(200, 3, 3));
-    assert_eq!(state.attach_from_job_event(&event).unwrap().snapshot.primary_analysis.unwrap().visits, 200);
+    assert_eq!(
+        state
+            .attach_from_job_event(&event)
+            .unwrap()
+            .snapshot
+            .primary_analysis
+            .unwrap()
+            .visits,
+        200
+    );
     event.frame = Some(projectable_frame(50, 3, 3));
-    assert_eq!(state.attach_from_job_event(&event).unwrap().snapshot.primary_analysis.unwrap().visits, 50);
+    assert_eq!(
+        state
+            .attach_from_job_event(&event)
+            .unwrap()
+            .snapshot
+            .primary_analysis
+            .unwrap()
+            .visits,
+        50
+    );
     event.frame.as_mut().unwrap().ownership = Some(vec![0.5; 81]);
-    assert!(state.attach_from_job_event(&event).unwrap().snapshot.primary_analysis.unwrap().ownership.is_some());
+    assert!(state
+        .attach_from_job_event(&event)
+        .unwrap()
+        .snapshot
+        .primary_analysis
+        .unwrap()
+        .ownership
+        .is_some());
     event.generation += 1;
     assert!(state.attach_from_job_event(&event).is_none());
     let snapshot = manager.diagnostic_snapshots().pop().unwrap();
-    for expected in ["accepted-stronger", "accepted-weaker-replacement", "accepted-ownership-update", "rejected-invalid-identity-or-position"] {
-        assert!(snapshot.records.iter().any(|record| record.source == "cache-adoption" && record.text.starts_with(expected)), "missing {expected}: {:?}", snapshot.records);
+    for expected in [
+        "accepted-stronger",
+        "accepted-weaker-replacement",
+        "accepted-ownership-update",
+        "rejected-invalid-identity-or-position",
+    ] {
+        assert!(
+            snapshot
+                .records
+                .iter()
+                .any(|record| record.source == "cache-adoption" && record.text.starts_with(expected)),
+            "missing {expected}: {:?}",
+            snapshot.records
+        );
     }
     manager.set_diagnostic_trace(&attempt.attempt_id, false).unwrap();
     state.attach_from_job_event(&event);
-    assert_eq!(manager.diagnostic_snapshots()[0].records.iter().filter(|record| record.source == "cache-adoption").count(), 4);
+    assert_eq!(
+        manager.diagnostic_snapshots()[0]
+            .records
+            .iter()
+            .filter(|record| record.source == "cache-adoption")
+            .count(),
+        4
+    );
 }

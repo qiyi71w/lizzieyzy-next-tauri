@@ -105,12 +105,21 @@ impl Drop for Fixture {
 struct DiskStartupCatalog(PathBuf);
 impl EngineProfileCatalog for DiskStartupCatalog {
     fn get(&self, id: &str) -> Option<SavedEngineProfile> {
-        engine_manager::load_engine_profiles(&self.0).ok()?.profiles.into_iter()
+        engine_manager::load_engine_profiles(&self.0)
+            .ok()?
+            .profiles
+            .into_iter()
             .find(|record| record.id == id)
-            .map(|record| SavedEngineProfile { profile_id: record.id, profile: record.profile })
+            .map(|record| SavedEngineProfile {
+                profile_id: record.id,
+                profile: record.profile,
+            })
     }
     fn autoload_profile_id(&self) -> Option<String> {
-        engine_manager::load_engine_profiles(&self.0).ok()?.startup_profile_id().map(str::to_owned)
+        engine_manager::load_engine_profiles(&self.0)
+            .ok()?
+            .startup_profile_id()
+            .map(str::to_owned)
     }
     fn startup_evaluation_target(&self) -> Result<Option<SavedEngineProfile>, String> {
         engine_manager::load_engine_profiles(&self.0)
@@ -118,10 +127,15 @@ impl EngineProfileCatalog for DiskStartupCatalog {
             .startup_evaluation_target()
     }
     fn preload_profiles(&self) -> Vec<SavedEngineProfile> {
-        engine_manager::load_engine_profiles(&self.0).ok().into_iter()
+        engine_manager::load_engine_profiles(&self.0)
+            .ok()
+            .into_iter()
             .flat_map(|settings| settings.profiles)
             .filter(|record| record.preload)
-            .map(|record| SavedEngineProfile { profile_id: record.id, profile: record.profile })
+            .map(|record| SavedEngineProfile {
+                profile_id: record.id,
+                profile: record.profile,
+            })
             .collect()
     }
 }
@@ -130,9 +144,14 @@ impl Fixture {
     fn install_startup(&mut self, enabled: bool, target: Option<&str>) -> PathBuf {
         let mut settings = engine_manager::default_engine_profiles_settings();
         let saved = self.catalog.get("target").unwrap();
-        settings.profiles.push(engine_manager::EngineProfileRecord { id: saved.profile_id, profile: saved.profile, preload: false });
+        settings.profiles.push(engine_manager::EngineProfileRecord {
+            id: saved.profile_id,
+            profile: saved.profile,
+            preload: false,
+        });
         settings.startup_evaluation = app_model::StartupEvaluationSettingsDto {
-            enabled, target_profile_id: target.map(str::to_owned),
+            enabled,
+            target_profile_id: target.map(str::to_owned),
         };
         let path = self.dir.join("catalog.json");
         engine_manager::save_engine_profiles(&path, settings).unwrap();
@@ -141,8 +160,13 @@ impl Fixture {
     }
     fn fresh_startup(&mut self, path: &std::path::Path) {
         self.manager.teardown().unwrap();
-        self.manager = ForegroundEngineManager::new(Arc::new(DiskStartupCatalog(path.into())),
-            ForegroundEngineConfig { readiness_timeout: self.wait_timeout, ..ForegroundEngineConfig::default() });
+        self.manager = ForegroundEngineManager::new(
+            Arc::new(DiskStartupCatalog(path.into())),
+            ForegroundEngineConfig {
+                readiness_timeout: self.wait_timeout,
+                ..ForegroundEngineConfig::default()
+            },
+        );
     }
 }
 
@@ -162,12 +186,17 @@ fn startup_authorization_is_frozen_one_shot_and_not_editor_selection() {
     f.manager.apply_startup_evaluation();
     let result = f.wait(|s| s.phase == Phase::Completed);
     assert_eq!(result.target_id.as_deref(), Some("target"));
-    assert_eq!(result.result.as_ref().unwrap().search_visits_per_second, Some(123.5));
+    assert_eq!(
+        result.result.as_ref().unwrap().search_visits_per_second,
+        Some(123.5)
+    );
     f.manager.apply_startup_evaluation();
     assert_eq!(f.manager.evaluation_snapshot(), result);
     assert_eq!(f.manager.snapshot(), foreground);
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
-    f.manager.cancel_evaluation(result.evaluation_id.as_ref().unwrap()).unwrap();
+    f.manager
+        .cancel_evaluation(result.evaluation_id.as_ref().unwrap())
+        .unwrap();
     f.manager.apply_startup_evaluation();
     assert_eq!(f.manager.evaluation_snapshot().phase, Phase::Cancelled);
 }
@@ -184,7 +213,11 @@ fn startup_missing_corrupt_deleted_and_changed_targets_never_fall_back() {
     for delete in [false, true] {
         let path = f.install_startup(true, Some("target"));
         let mut settings = engine_manager::load_engine_profiles(&path).unwrap();
-        if delete { settings.profiles.pop(); } else { settings.profiles[1].profile.name = "later revision".into(); }
+        if delete {
+            settings.profiles.pop();
+        } else {
+            settings.profiles[1].profile.name = "later revision".into();
+        }
         engine_manager::save_engine_profiles(&path, settings).unwrap();
         f.manager.apply_startup_evaluation();
         assert_eq!(f.manager.evaluation_snapshot().phase, Phase::Unavailable);
@@ -218,9 +251,13 @@ fn startup_yields_to_match_and_never_reactivates_after_handback() {
 
 #[test]
 fn startup_q1_modes_do_not_retarget_evaluation_and_wait_only_for_autoload() {
-    for startup in [app_model::EngineStartupPolicyDto::Off,
-        app_model::EngineStartupPolicyDto::Fixed { profile_id: "primary".into() },
-        app_model::EngineStartupPolicyDto::LastPrimary] {
+    for startup in [
+        app_model::EngineStartupPolicyDto::Off,
+        app_model::EngineStartupPolicyDto::Fixed {
+            profile_id: "primary".into(),
+        },
+        app_model::EngineStartupPolicyDto::LastPrimary,
+    ] {
         let mut f = Fixture::new("success");
         let path = f.install_startup(true, Some("target"));
         let mut settings = engine_manager::load_engine_profiles(&path).unwrap();
@@ -228,7 +265,9 @@ fn startup_q1_modes_do_not_retarget_evaluation_and_wait_only_for_autoload() {
         primary.id = "primary".into();
         primary.profile.argv = vec!["-override-config".into(), "testMode=hold".into()];
         primary.profile.adapter = EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
-            model_path: Some("model.bin".into()), config_path: Some("config.cfg".into()), max_visits: 10,
+            model_path: Some("model.bin".into()),
+            config_path: Some("config.cfg".into()),
+            max_visits: 10,
         });
         settings.profiles.push(primary);
         settings.last_primary_profile_id = Some("primary".into());
@@ -240,9 +279,14 @@ fn startup_q1_modes_do_not_retarget_evaluation_and_wait_only_for_autoload() {
         let result = f.wait(|s| s.phase == Phase::Completed);
         assert_eq!(result.target_id.as_deref(), Some("target"));
         if startup == app_model::EngineStartupPolicyDto::Off {
-            assert!(matches!(f.manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. }));
+            assert!(matches!(
+                f.manager.snapshot().lifecycle,
+                ForegroundEngineLifecycleDto::NoEngine { .. }
+            ));
         } else {
-            assert!(matches!(f.manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "primary"));
+            assert!(
+                matches!(f.manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::Ready { run } if run.profile_id == "primary")
+            );
         }
     }
 }
@@ -291,7 +335,12 @@ fn canonical_display_sanitization_preserves_raw_measurement_and_isolated_identit
     f.manager.start_evaluation("target").unwrap();
     let done = f.wait(|s| s.phase == Phase::Completed);
     let display = done.output.join("\n");
-    for secret in ["private-first-line", "private-second-line", "private-owner", "\u{1b}"] {
+    for secret in [
+        "private-first-line",
+        "private-second-line",
+        "private-owner",
+        "\u{1b}",
+    ] {
         assert!(!display.contains(secret), "{display}");
     }
     assert_eq!(done.result.unwrap().search_visits_per_second, Some(123.5));
@@ -397,10 +446,22 @@ fn match_and_analysis_admission_reap_evaluation_before_foreground_work() {
         .unwrap();
     let foreground = f.manager.snapshot();
     let primary = f.manager.last_primary_profile_id();
-    let attempts: Vec<_> = f.manager.diagnostic_snapshots().into_iter().map(|s| s.run_id).collect();
+    let attempts: Vec<_> = f
+        .manager
+        .diagnostic_snapshots()
+        .into_iter()
+        .map(|s| s.run_id)
+        .collect();
     f.running();
     assert_eq!(f.manager.last_primary_profile_id(), primary);
-    assert_eq!(f.manager.diagnostic_snapshots().into_iter().map(|s| s.run_id).collect::<Vec<_>>(), attempts);
+    assert_eq!(
+        f.manager
+            .diagnostic_snapshots()
+            .into_iter()
+            .map(|s| s.run_id)
+            .collect::<Vec<_>>(),
+        attempts
+    );
     f.manager
         .register_job(
             &run.run_id,
@@ -681,16 +742,26 @@ fn startup_task_start_and_explicit_continue_preempt_benchmark_without_releasing_
 #[ignore = "requires an owned public acquisition root with installation.json; real JSONL/GTP benchmark and managed tamper rejection"]
 fn real_managed_evaluation_qualifies_both_adapters_without_primary_authority() {
     let root = PathBuf::from(std::env::var("LIZZIEYZY_ACQUISITION_ROOT").unwrap());
-    let installed: app_model::ManagedInstallationDto = serde_json::from_slice(
-        &std::fs::read(root.join("installation.json")).unwrap(),
-    ).unwrap();
+    let installed: app_model::ManagedInstallationDto =
+        serde_json::from_slice(&std::fs::read(root.join("installation.json")).unwrap()).unwrap();
     let mut f = Fixture::new("success");
     f.wait_timeout = Duration::from_secs(130);
-    f.manager = ForegroundEngineManager::new(f.catalog.clone(), ForegroundEngineConfig {
-        managed_resources_root: Some(root.join("resources")), ..Default::default()
-    });
-    let settings = KataGoSettings { model_path: Some(installed.model_path.clone()), config_path: Some(installed.config_path.clone()), max_visits: 2 };
-    for adapter in [EngineAdapterSettings::KataGoAnalysis(settings.clone()), EngineAdapterSettings::KataGoGtp(settings)] {
+    f.manager = ForegroundEngineManager::new(
+        f.catalog.clone(),
+        ForegroundEngineConfig {
+            managed_resources_root: Some(root.join("resources")),
+            ..Default::default()
+        },
+    );
+    let settings = KataGoSettings {
+        model_path: Some(installed.model_path.clone()),
+        config_path: Some(installed.config_path.clone()),
+        max_visits: 2,
+    };
+    for adapter in [
+        EngineAdapterSettings::KataGoAnalysis(settings.clone()),
+        EngineAdapterSettings::KataGoGtp(settings),
+    ] {
         let saved = SavedEngineProfile { profile_id: "target".into(), profile: EngineProfileDto {
             name: "Managed explicit evaluation".into(), program: installed.program.clone(),
             argv: vec!["-t".into(), "1".into(), "-v".into(), "2".into(), "-n".into(), "1".into(),
@@ -700,7 +771,10 @@ fn real_managed_evaluation_qualifies_both_adapters_without_primary_authority() {
         *f.catalog.0.lock() = Some(saved.clone());
         let qualifying = f.manager.start_evaluation("target").unwrap();
         assert_eq!(qualifying.phase, Phase::Qualifying);
-        let cancelled = f.manager.cancel_evaluation(qualifying.evaluation_id.as_deref().unwrap()).unwrap();
+        let cancelled = f
+            .manager
+            .cancel_evaluation(qualifying.evaluation_id.as_deref().unwrap())
+            .unwrap();
         assert_eq!(cancelled.phase, Phase::Cancelled);
         assert!(cancelled.result.is_none());
         assert!(cancelled.process_id.is_none());
@@ -712,13 +786,23 @@ fn real_managed_evaluation_qualifies_both_adapters_without_primary_authority() {
         assert_eq!(terminal.phase, Phase::Completed, "{terminal:?}");
         let result = terminal.result.as_ref().unwrap();
         assert_eq!(result.qualified_resource.origin, "project-source-build");
-        assert!(result.qualified_resource.resources.iter().any(|r| r.component == "managed_receipt"));
+        assert!(result
+            .qualified_resource
+            .resources
+            .iter()
+            .any(|r| r.component == "managed_receipt"));
         assert!(result.search_visits_per_second.unwrap() > 0.0);
         assert_eq!(f.catalog.get("target"), Some(saved));
         assert_eq!(f.manager.last_primary_profile_id(), None);
         assert!(f.manager.diagnostic_snapshots().is_empty());
-        assert!(matches!(f.manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::NoEngine { failure: None }));
-        println!("REAL_MANAGED_EVALUATION {}", serde_json::to_string(&terminal).unwrap());
+        assert!(matches!(
+            f.manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::NoEngine { failure: None }
+        ));
+        println!(
+            "REAL_MANAGED_EVALUATION {}",
+            serde_json::to_string(&terminal).unwrap()
+        );
     }
     let original = std::fs::read(&installed.config_path).unwrap();
     std::fs::write(&installed.config_path, b"numSearchThreads=999\n").unwrap();
@@ -727,9 +811,16 @@ fn real_managed_evaluation_qualifies_both_adapters_without_primary_authority() {
     std::fs::write(&installed.config_path, original).unwrap();
     assert_eq!(failed.phase, Phase::Failed);
     assert!(failed.result.is_none());
-    assert!(failed.message.as_deref().unwrap().contains("managed_content_changed"));
+    assert!(failed
+        .message
+        .as_deref()
+        .unwrap()
+        .contains("managed_content_changed"));
     assert_eq!(f.manager.last_primary_profile_id(), None);
-    println!("REAL_MANAGED_REJECTION {}", serde_json::to_string(&failed).unwrap());
+    println!(
+        "REAL_MANAGED_REJECTION {}",
+        serde_json::to_string(&failed).unwrap()
+    );
 }
 
 #[test]
@@ -743,7 +834,9 @@ fn startup_failure_cancel_and_preexisting_match_preserve_durable_policy() {
             f.wait(|s| s.phase == Phase::Failed);
         } else {
             let running = f.wait(|s| s.phase == Phase::Running && !s.output.is_empty());
-            f.manager.cancel_evaluation(running.evaluation_id.as_ref().unwrap()).unwrap();
+            f.manager
+                .cancel_evaluation(running.evaluation_id.as_ref().unwrap())
+                .unwrap();
             std::fs::write(f.dir.join("release"), "late completion").unwrap();
             f.manager.apply_startup_evaluation();
             assert_eq!(f.manager.evaluation_snapshot().phase, Phase::Cancelled);
@@ -782,10 +875,23 @@ fn real_startup_handoff(gtp: bool) {
     let mut f = Fixture::new("success");
     f.wait_timeout = Duration::from_secs(120);
     f.catalog.0.lock().as_mut().unwrap().profile = EngineProfileDto {
-        name: "Actual startup benchmark".into(), program: engine,
-        argv: vec!["gtp".into(), "-config".into(), config.clone(), "-model".into(), model.clone(),
-            "-t".into(), "1".into(), "-v".into(), "2".into(), "-n".into(), "1".into()],
-        working_dir: Some(workdir), adapter: EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings::default()),
+        name: "Actual startup benchmark".into(),
+        program: engine,
+        argv: vec![
+            "gtp".into(),
+            "-config".into(),
+            config.clone(),
+            "-model".into(),
+            model.clone(),
+            "-t".into(),
+            "1".into(),
+            "-v".into(),
+            "2".into(),
+            "-n".into(),
+            "1".into(),
+        ],
+        working_dir: Some(workdir),
+        adapter: EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings::default()),
     };
     let path = f.install_startup(true, Some("target"));
     let before = std::fs::read(&path).unwrap();
@@ -802,31 +908,47 @@ fn real_startup_handoff(gtp: bool) {
     primary.id = "primary".into();
     primary.profile.argv.clear();
     let adapter_settings = KataGoSettings {
-        model_path: Some(model), config_path: Some(config.clone()), max_visits: 2,
+        model_path: Some(model),
+        config_path: Some(config.clone()),
+        max_visits: 2,
     };
-    primary.profile.adapter = if gtp { EngineAdapterSettings::KataGoGtp(adapter_settings) }
-        else { EngineAdapterSettings::KataGoAnalysis(adapter_settings) };
+    primary.profile.adapter = if gtp {
+        EngineAdapterSettings::KataGoGtp(adapter_settings)
+    } else {
+        EngineAdapterSettings::KataGoAnalysis(adapter_settings)
+    };
     settings.profiles[1].profile.argv[8] = "100000".into();
     let mut prepared = primary.clone();
     prepared.id = "prepared".into();
     prepared.preload = true;
     settings.profiles.push(prepared);
     settings.profiles.push(primary);
-    settings.startup = app_model::EngineStartupPolicyDto::Fixed { profile_id: "primary".into() };
+    settings.startup = app_model::EngineStartupPolicyDto::Fixed {
+        profile_id: "primary".into(),
+    };
     engine_manager::save_engine_profiles(&path, settings).unwrap();
     f.fresh_startup(&path);
     let before = std::fs::read(&path).unwrap();
-    f.manager.set_continuous_preferences(false, app_model::ContinuousAnalysisBudgetDto::default()).unwrap();
+    f.manager
+        .set_continuous_preferences(false, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
     f.manager.apply_autoload().unwrap();
     f.manager.schedule_startup_preloads();
     f.manager.apply_startup_evaluation();
     f.wait(|s| s.phase == Phase::Running && !s.output.is_empty());
-    let ForegroundEngineLifecycleDto::Ready { run } = f.manager.snapshot().lifecycle else { panic!("autoload not ready") };
+    let ForegroundEngineLifecycleDto::Ready { run } = f.manager.snapshot().lifecycle else {
+        panic!("autoload not ready")
+    };
     assert_eq!(run.profile_id, "primary");
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let prepared = f.manager.preload_snapshot();
-        if prepared.iter().any(|slot| slot.phase == app_model::EnginePreloadPhaseDto::Ready) { break; }
+        if prepared
+            .iter()
+            .any(|slot| slot.phase == app_model::EnginePreloadPhaseDto::Ready)
+        {
+            break;
+        }
         assert!(Instant::now() < deadline, "{prepared:?}");
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -839,13 +961,18 @@ fn real_startup_handoff(gtp: bool) {
             (app_model::RuntimeThreadsActionDto::Apply, Some(2), 2),
             (app_model::RuntimeThreadsActionDto::Reset, None, 1),
         ] {
-            let result = f.manager.runtime_threads(app_model::RuntimeThreadsRequestDto {
-                identity: app_model::RuntimeControlIdentityDto {
-                    run_id: run.run_id.clone(),
-                    profile_revision: run.qualified_resource.as_ref().unwrap().profile_revision.clone(),
-                    request_id: uuid::Uuid::new_v4().to_string(),
-                }, action, value,
-            }).unwrap();
+            let result = f
+                .manager
+                .runtime_threads(app_model::RuntimeThreadsRequestDto {
+                    identity: app_model::RuntimeControlIdentityDto {
+                        run_id: run.run_id.clone(),
+                        profile_revision: run.qualified_resource.as_ref().unwrap().profile_revision.clone(),
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                    },
+                    action,
+                    value,
+                })
+                .unwrap();
             assert_eq!(result.actual, Some(expected));
             assert_eq!(result.status, app_model::RuntimeThreadsStatusDto::Confirmed);
             assert_eq!(f.manager.evaluation_snapshot().evaluation_id, evaluation_id);
@@ -855,31 +982,68 @@ fn real_startup_handoff(gtp: bool) {
         }
     }
     let events = f.manager.subscribe();
-    let job = f.manager.start_selected_node_job(engine_manager::SelectedNodeJobRequest {
-        run_id: run.run_id.clone(), mode: app_model::AnalysisJobModeDto::Finite, generation: 1,
-        node_path: app_model::NodePath { indices: vec![] }, board_width: 9, board_height: 9, position_empty: true,
-        exact_position: sgf::CurrentSgfDocument::open("(;SZ[9]RU[Chinese]KM[7.5])").unwrap()
-            .exact_position(&app_model::NodePath { indices: vec![] }).map_err(|error| error.to_string()),
-        query: katago_protocol::AnalysisQuery { id: "startup-handoff".into(), moves: vec![], initial_stones: vec![],
-            rules: "chinese".into(), komi: 7.5, board_x_size: 9, board_y_size: 9, analyze_turns: Some(vec![0]),
-            max_visits: Some(2), include_ownership: None, include_policy: None, report_during_search_every: None, override_settings: None },
-    }).unwrap();
+    let job = f
+        .manager
+        .start_selected_node_job(engine_manager::SelectedNodeJobRequest {
+            run_id: run.run_id.clone(),
+            mode: app_model::AnalysisJobModeDto::Finite,
+            generation: 1,
+            node_path: app_model::NodePath { indices: vec![] },
+            board_width: 9,
+            board_height: 9,
+            position_empty: true,
+            exact_position: sgf::CurrentSgfDocument::open("(;SZ[9]RU[Chinese]KM[7.5])")
+                .unwrap()
+                .exact_position(&app_model::NodePath { indices: vec![] })
+                .map_err(|error| error.to_string()),
+            query: katago_protocol::AnalysisQuery {
+                id: "startup-handoff".into(),
+                moves: vec![],
+                initial_stones: vec![],
+                rules: "chinese".into(),
+                komi: 7.5,
+                board_x_size: 9,
+                board_y_size: 9,
+                analyze_turns: Some(vec![0]),
+                max_visits: Some(2),
+                include_ownership: None,
+                include_policy: None,
+                report_during_search_every: None,
+                override_settings: None,
+            },
+        })
+        .unwrap();
     let yielded = f.manager.evaluation_snapshot();
     assert_eq!(yielded.phase, Phase::Yielded);
     assert!(yielded.process_id.is_none() && yielded.result.is_none());
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let event = events.recv_timeout(deadline.saturating_duration_since(Instant::now())).unwrap();
+        let event = events
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap();
         if let app_model::ForegroundEngineEventDto::Job { job: observed } = event {
-            if observed.job_id == job.job_id && observed.outcome == app_model::AnalysisJobOutcomeDto::Completed { break; }
+            if observed.job_id == job.job_id
+                && observed.outcome == app_model::AnalysisJobOutcomeDto::Completed
+            {
+                break;
+            }
         }
     }
     f.manager.apply_startup_evaluation();
     assert_eq!(f.manager.evaluation_snapshot(), yielded);
-    assert!(f.manager.preload_snapshot().iter().all(|slot| slot.phase == app_model::EnginePreloadPhaseDto::Cancelled));
-    assert!(matches!(f.manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::Ready { run: current } if current.run_id == run.run_id));
+    assert!(f
+        .manager
+        .preload_snapshot()
+        .iter()
+        .all(|slot| slot.phase == app_model::EnginePreloadPhaseDto::Cancelled));
+    assert!(
+        matches!(f.manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::Ready { run: current } if current.run_id == run.run_id)
+    );
     assert_eq!(f.manager.snapshot().continuous.enabled, Some(false));
     assert_eq!(std::fs::read(path).unwrap(), before);
     assert_eq!(std::fs::read(config).unwrap(), config_bytes);
-    println!("REAL_STARTUP_HANDOFF {}", serde_json::to_string(&yielded).unwrap());
+    println!(
+        "REAL_STARTUP_HANDOFF {}",
+        serde_json::to_string(&yielded).unwrap()
+    );
 }

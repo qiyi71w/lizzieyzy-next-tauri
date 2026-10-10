@@ -168,13 +168,23 @@ impl CurrentGameState {
         }
     }
 
-    pub fn exact_analysis_position(&self, generation: u64, path: &NodePath) -> Result<sgf::ExactPosition, String> {
+    pub fn exact_analysis_position(
+        &self,
+        generation: u64,
+        path: &NodePath,
+    ) -> Result<sgf::ExactPosition, String> {
         let holder = self.holder.lock().expect("current game state");
-        holder.ensure_generation(generation).map_err(|error| error.to_string())?;
+        holder
+            .ensure_generation(generation)
+            .map_err(|error| error.to_string())?;
         if holder.selected_path != *path {
             return Err("Exact analysis position no longer selected.".into());
         }
-        holder.document.as_ref().ok_or("No current game")?.exact_position(path)
+        holder
+            .document
+            .as_ref()
+            .ok_or("No current game")?
+            .exact_position(path)
     }
 
     pub fn analysis_jobs(&self) -> crate::EngineCommandResult<Option<Vec<AnalysisJobStartedDto>>> {
@@ -895,7 +905,10 @@ impl CurrentGameState {
                 }
             }
         }
-        let cached = self.analysis_manager.get().filter(|manager| manager.diagnostic_trace_enabled(&event.run_id))
+        let cached = self
+            .analysis_manager
+            .get()
+            .filter(|manager| manager.diagnostic_trace_enabled(&event.run_id))
             .and_then(|_| holder.document.as_ref())
             .and_then(|document| document.snapshot(&event.node_path).ok())
             .and_then(|snapshot| snapshot.primary_analysis);
@@ -907,13 +920,19 @@ impl CurrentGameState {
                 return None;
             }
         };
-        if self.analysis_manager.get().is_some_and(|manager| manager.diagnostic_trace_enabled(&event.run_id)) {
+        if self
+            .analysis_manager
+            .get()
+            .is_some_and(|manager| manager.diagnostic_trace_enabled(&event.run_id))
+        {
             let reason = match cached.as_ref() {
                 None => "accepted-empty-slot",
                 Some(old) if old.visits < frame.visits => "accepted-stronger",
                 Some(old) if old.visits > frame.visits => "accepted-weaker-replacement",
                 Some(old) if old.ownership != frame.ownership => "accepted-ownership-update",
-                Some(old) if result.snapshot.primary_analysis.as_ref() == Some(old) => "unchanged-canonical-result",
+                Some(old) if result.snapshot.primary_analysis.as_ref() == Some(old) => {
+                    "unchanged-canonical-result"
+                }
                 Some(_) => "accepted-equal-visits-update",
             };
             self.trace_adoption(event, reason, cached.as_ref());
@@ -926,7 +945,12 @@ impl CurrentGameState {
         Some(result)
     }
 
-    fn trace_adoption(&self, event: &AnalysisJobEventDto, reason: &'static str, cached: Option<&app_model::AnalysisFrameDto>) {
+    fn trace_adoption(
+        &self,
+        event: &AnalysisJobEventDto,
+        reason: &'static str,
+        cached: Option<&app_model::AnalysisFrameDto>,
+    ) {
         if let Some(manager) = self.analysis_manager.get() {
             manager.trace_analysis_adoption(&event.run_id, || format!(
                 "{reason} job={} generation={} node={:?} incoming-visits={:?} cached-visits={:?} incoming-winrate={:?} incoming-score={:?}",

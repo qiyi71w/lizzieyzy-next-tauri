@@ -215,11 +215,97 @@ pub struct ModelInventory {
     snapshot: Mutex<Option<ModelInventoryDto>>,
 }
 
+pub(crate) struct ManagedReceipt {
+    catalog_id: String,
+    sha256: String,
+    model_name: Option<String>,
+}
+
+impl ManagedReceipt {
+    pub(crate) fn inspect(path: &Path, catalog_id: &str, sha256: &str) -> Result<Self, String> {
+        let inspection = inspect_model(path);
+        if catalog_id.is_empty()
+            || inspection.status != Status::HeaderRecognized
+            || inspection.sha256.as_deref() != Some(sha256)
+        {
+            return Err("model_installation_changed".into());
+        }
+        Ok(Self {
+            catalog_id: catalog_id.into(),
+            sha256: sha256.into(),
+            model_name: inspection.model_name,
+        })
+    }
+    pub(crate) fn model_name(&self) -> Option<&str> {
+        self.model_name.as_deref()
+    }
+    pub(crate) fn matches_digest(&self, digest: Option<&String>) -> bool {
+        digest == Some(&self.sha256)
+    }
+}
+
+pub(crate) struct ManagedInventoryGuard<'a> {
+    inventory: &'a ModelInventory,
+    snapshot: MutexGuard<'a, Option<ModelInventoryDto>>,
+}
+
+impl ManagedInventoryGuard<'_> {
+    pub(crate) fn retain(&mut self, path: &Path, receipt: ManagedReceipt) -> Result<(), String> {
+        let input = ModelPathDto {
+            path: path.to_string_lossy().into_owned(),
+            working_dir: None,
+        };
+        let resolved = resolve_model_path(&input)?;
+        let mut models = self.inventory.load()?;
+        merge_paths(&mut models, &[input], ModelOriginDto::Unknown)?;
+        let model = models
+            .iter_mut()
+            .find(|model| model.path == resolved)
+            .expect("retained model");
+        model.origin = ModelOriginDto::Managed {
+            catalog_id: receipt.catalog_id,
+            installed_sha256: receipt.sha256,
+        };
+        self.inventory.save(&models)?;
+        *self.snapshot = None;
+        Ok(())
+    }
+}
+
 impl ModelInventory {
     pub fn new(path: PathBuf) -> Self {
         Self {
             path,
             snapshot: Mutex::new(None),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_for_publication_probe(&self) -> MutexGuard<'_, Option<ModelInventoryDto>> {
+        self.snapshot.lock().unwrap()
+    }
+
+    pub(crate) fn publication_guard(
+        &self,
+        deadline: Instant,
+        mut check: impl FnMut() -> Result<(), String>,
+    ) -> Result<ManagedInventoryGuard<'_>, String> {
+        loop {
+            check()?;
+            match self.snapshot.try_lock() {
+                Ok(snapshot) => {
+                    return Ok(ManagedInventoryGuard {
+                        inventory: self,
+                        snapshot,
+                    })
+                }
+                Err(std::sync::TryLockError::Poisoned(_)) => return Err("model_inventory_unavailable".into()),
+                Err(std::sync::TryLockError::WouldBlock) => {}
+            }
+            if Instant::now() >= deadline {
+                return Err("model_inventory_busy".into());
+            }
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 
@@ -325,29 +411,13 @@ impl ModelInventory {
         catalog_id: &str,
         installed_sha256: &str,
     ) -> Result<(), String> {
-        let mut snapshot = self.lock()?;
-        let inspection = inspect_model(path);
-        if catalog_id.is_empty() || inspection.sha256.as_deref() != Some(installed_sha256) {
-            return Err("model_installation_changed".into());
+        let snapshot = self.lock()?;
+        let receipt = ManagedReceipt::inspect(path, catalog_id, installed_sha256)?;
+        ManagedInventoryGuard {
+            inventory: self,
+            snapshot,
         }
-        let input = ModelPathDto {
-            path: path.to_string_lossy().into_owned(),
-            working_dir: None,
-        };
-        let resolved = resolve_model_path(&input)?;
-        let mut models = self.load()?;
-        merge_paths(&mut models, &[input], ModelOriginDto::Unknown)?;
-        let model = models
-            .iter_mut()
-            .find(|model| model.path == resolved)
-            .expect("retained model");
-        model.origin = ModelOriginDto::Managed {
-            catalog_id: catalog_id.to_owned(),
-            installed_sha256: installed_sha256.to_owned(),
-        };
-        self.save(&models)?;
-        *snapshot = None;
-        Ok(())
+        .retain(path, receipt)
     }
 
     /// Explicit draft selection re-reads content, including same-size/same-time replacements.

@@ -18,8 +18,12 @@ fn real_katago_gtp_rules_and_exact_selected_positions() {
         profile: EngineProfileDto {
             name: "explicit KataGo GTP".into(),
             program: std::env::var("LIZZIEYZY_KATAGO_ENGINE").unwrap(),
-            argv: vec!["-config".into(), layer.file_name().unwrap().to_string_lossy().into_owned(),
-                "-override-config".into(), "numSearchThreads=1".into()],
+            argv: vec![
+                "-config".into(),
+                layer.file_name().unwrap().to_string_lossy().into_owned(),
+                "-override-config".into(),
+                "numSearchThreads=1".into(),
+            ],
             working_dir: Some(std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap()),
             adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings {
                 model_path: Some(std::env::var("LIZZIEYZY_KATAGO_MODEL").unwrap()),
@@ -64,12 +68,29 @@ fn real_katago_gtp_rules_and_exact_selected_positions() {
     assert_ne!(run.run_id, primary_id);
     assert_eq!(run.run_id, prepared.run_id);
     assert_eq!(manager.last_primary_profile_id().as_deref(), Some("prepared-gtp"));
-    println!("GTP PRELOAD primary={primary_id} promoted={} same_run=true", run.run_id);
+    println!(
+        "GTP PRELOAD primary={primary_id} promoted={} same_run=true",
+        run.run_id
+    );
     println!("RUN {}", serde_json::to_string(&run).unwrap());
     let events = manager.subscribe();
     assert!(!run.capability_snapshot.as_ref().unwrap().game_move);
-    assert!(run.capability_snapshot.as_ref().unwrap().analysis.as_ref().unwrap().selected_node_analysis);
-    assert!(manager.diagnostic_snapshots().last().unwrap().records.iter().any(|record| record.source == "startup-probe-stderr"));
+    assert!(
+        run.capability_snapshot
+            .as_ref()
+            .unwrap()
+            .analysis
+            .as_ref()
+            .unwrap()
+            .selected_node_analysis
+    );
+    assert!(manager
+        .diagnostic_snapshots()
+        .last()
+        .unwrap()
+        .records
+        .iter()
+        .any(|record| record.source == "startup-probe-stderr"));
     let cases = [
         ("(;SZ[9]RU[Chinese]KM[7.5])", vec![]),
         ("(;SZ[9]RU[Chinese]KM[6.5]PL[W])", vec![]),
@@ -107,22 +128,47 @@ fn real_katago_gtp_rules_and_exact_selected_positions() {
         assert_eq!(snapshot.reader_id, run.run_id);
         assert_eq!(snapshot.true_final_move, expected.moves.last().cloned());
         let selected_snapshot = document.snapshot(&node_path).unwrap();
-        let query = katago_protocol::analysis_query_from_position(9, 9, expected.komi,
-            &selected_snapshot.position.stones, expected.to_play,
-            katago_protocol::AnalysisQueryOptions { id: "pending".into(), rules: "chinese".into(),
-                turn: expected.moves.len() as u32, max_visits: Some(16), include_ownership: Some(true), include_policy: Some(true) }).unwrap();
-        let started = manager.start_selected_node_job(SelectedNodeJobRequest {
-            run_id: run.run_id.clone(), generation: generation as u64 + 1, node_path,
-            mode: AnalysisJobModeDto::Finite, query, board_width: 9, board_height: 9,
-            position_empty: selected_snapshot.position.stones.is_empty(),
-            exact_position: Ok(document.exact_position(&selected_snapshot.path).unwrap()),
-        }).unwrap();
+        let query = katago_protocol::analysis_query_from_position(
+            9,
+            9,
+            expected.komi,
+            &selected_snapshot.position.stones,
+            expected.to_play,
+            katago_protocol::AnalysisQueryOptions {
+                id: "pending".into(),
+                rules: "chinese".into(),
+                turn: expected.moves.len() as u32,
+                max_visits: Some(16),
+                include_ownership: Some(true),
+                include_policy: Some(true),
+            },
+        )
+        .unwrap();
+        let started = manager
+            .start_selected_node_job(SelectedNodeJobRequest {
+                run_id: run.run_id.clone(),
+                generation: generation as u64 + 1,
+                node_path,
+                mode: AnalysisJobModeDto::Finite,
+                query,
+                board_width: 9,
+                board_height: 9,
+                position_empty: selected_snapshot.position.stones.is_empty(),
+                exact_position: Ok(document.exact_position(&selected_snapshot.path).unwrap()),
+            })
+            .unwrap();
         let until = Instant::now() + Duration::from_secs(40);
         loop {
-            match events.recv_timeout(until.saturating_duration_since(Instant::now())).unwrap() {
+            match events
+                .recv_timeout(until.saturating_duration_since(Instant::now()))
+                .unwrap()
+            {
                 ForegroundEngineEventDto::Job { job } if job.job_id == started.job_id => {
                     println!("MAIN_ANALYSIS {}", serde_json::to_string(&job).unwrap());
-                    assert!(!matches!(job.outcome, AnalysisJobOutcomeDto::Failed | AnalysisJobOutcomeDto::Timeout));
+                    assert!(!matches!(
+                        job.outcome,
+                        AnalysisJobOutcomeDto::Failed | AnalysisJobOutcomeDto::Timeout
+                    ));
                     if job.outcome == AnalysisJobOutcomeDto::Completed {
                         let frame = job.frame.unwrap();
                         assert!(frame.visits >= 16);
@@ -135,41 +181,70 @@ fn real_katago_gtp_rules_and_exact_selected_positions() {
                     }
                 }
                 ForegroundEngineEventDto::Failure { failure } => panic!("{failure:?}"),
-                _ => {},
+                _ => {}
             }
         }
-        assert_eq!(document.serialize().unwrap(), sgf::CurrentSgfDocument::open(text).unwrap().serialize().unwrap());
+        assert_eq!(
+            document.serialize().unwrap(),
+            sgf::CurrentSgfDocument::open(text).unwrap().serialize().unwrap()
+        );
     }
-    let document = sgf::CurrentSgfDocument::open("(;SZ[9]RU[Chinese]KM[6.5]C[personal];B[dd](;W[ff])(;W[ee]))").unwrap();
+    let document =
+        sgf::CurrentSgfDocument::open("(;SZ[9]RU[Chinese]KM[6.5]C[personal];B[dd](;W[ff])(;W[ee]))").unwrap();
     let before = document.serialize().unwrap();
     let request = |indices: Vec<u32>| {
         let node_path = NodePath { indices };
         let snapshot = document.snapshot(&node_path).unwrap();
         let position = document.exact_position(&node_path).unwrap();
         SelectedNodeJobRequest {
-            run_id: run.run_id.clone(), generation: 77, node_path, mode: AnalysisJobModeDto::Continuous,
-            board_width: 9, board_height: 9, position_empty: snapshot.position.stones.is_empty(),
-            query: katago_protocol::analysis_query_from_position(9, 9, 6.5, &snapshot.position.stones,
-                snapshot.position.to_play, katago_protocol::AnalysisQueryOptions { id: "pending".into(),
-                    rules: "chinese".into(), turn: snapshot.position.move_number, max_visits: None,
-                    include_ownership: Some(true), include_policy: Some(true) }).unwrap(),
+            run_id: run.run_id.clone(),
+            generation: 77,
+            node_path,
+            mode: AnalysisJobModeDto::Continuous,
+            board_width: 9,
+            board_height: 9,
+            position_empty: snapshot.position.stones.is_empty(),
+            query: katago_protocol::analysis_query_from_position(
+                9,
+                9,
+                6.5,
+                &snapshot.position.stones,
+                snapshot.position.to_play,
+                katago_protocol::AnalysisQueryOptions {
+                    id: "pending".into(),
+                    rules: "chinese".into(),
+                    turn: snapshot.position.move_number,
+                    max_visits: None,
+                    include_ownership: Some(true),
+                    include_policy: Some(true),
+                },
+            )
+            .unwrap(),
             exact_position: Ok(position),
         }
     };
     let wait_event = |outcome, path: &[u32]| {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            match events.recv_timeout(deadline.saturating_duration_since(Instant::now())).unwrap() {
-                ForegroundEngineEventDto::Job { job } if job.outcome == outcome && job.node_path.indices == path => {
+            match events
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .unwrap()
+            {
+                ForegroundEngineEventDto::Job { job }
+                    if job.outcome == outcome && job.node_path.indices == path =>
+                {
                     println!("CONTINUOUS {}", serde_json::to_string(&job).unwrap());
                     break job;
                 }
                 ForegroundEngineEventDto::Failure { failure } => panic!("{failure:?}"),
-                _ => {},
+                _ => {}
             }
         }
     };
-    let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };
+    let budget = ContinuousAnalysisBudgetDto {
+        continuous_time_limit_enabled: false,
+        ..Default::default()
+    };
     manager.set_continuous_preferences(true, budget).unwrap();
     manager.follow_continuous_position(request(vec![0, 0]));
     let first = wait_event(AnalysisJobOutcomeDto::Progress, &[0, 0]);
@@ -200,10 +275,16 @@ fn real_katago_gtp_rules_and_exact_selected_positions() {
     assert!(frozen.records.iter().any(|record| record.source == "stdout"));
     assert!(frozen.retained_bytes <= 64 * 1024 && frozen.records.len() <= 256);
     let encoded = serde_json::to_string(&frozen).unwrap();
-    for key in ["LIZZIEYZY_KATAGO_ENGINE", "LIZZIEYZY_KATAGO_MODEL", "LIZZIEYZY_KATAGO_CONFIG"] {
+    for key in [
+        "LIZZIEYZY_KATAGO_ENGINE",
+        "LIZZIEYZY_KATAGO_MODEL",
+        "LIZZIEYZY_KATAGO_CONFIG",
+    ] {
         assert!(!encoded.contains(&std::env::var(key).unwrap()));
     }
-    assert!(matches!(manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::Ready { run: current } if current.run_id == run.run_id));
+    assert!(
+        matches!(manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::Ready { run: current } if current.run_id == run.run_id)
+    );
     println!("GTP DIAGNOSTICS {encoded}");
     manager.teardown().unwrap();
     assert_eq!(serde_json::to_string(&frozen).unwrap(), encoded);
@@ -257,12 +338,24 @@ mod controlled {
                 },
             });
             let manager = ForegroundEngineManager::new(catalog.clone(), ForegroundEngineConfig::for_tests());
-            let mut rig = Self { manager, dir, catalog, run: String::new() };
+            let mut rig = Self {
+                manager,
+                dir,
+                catalog,
+                run: String::new(),
+            };
             if pending {
-                rig.manager.set_continuous_preferences(true, ContinuousAnalysisBudgetDto {
-                    continuous_time_limit_enabled: false, ..Default::default()
-                }).unwrap();
-                rig.manager.follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+                rig.manager
+                    .set_continuous_preferences(
+                        true,
+                        ContinuousAnalysisBudgetDto {
+                            continuous_time_limit_enabled: false,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                rig.manager
+                    .follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
             }
             rig.manager.start("gtp").unwrap();
             rig.run = ready(&rig.manager);
@@ -414,7 +507,10 @@ mod controlled {
         std::fs::write(rig.dir.join("config"), cfg).unwrap();
         std::fs::write(rig.dir.join("base config.cfg"), included).unwrap();
         let mut saved = rig.catalog.get("gtp").unwrap();
-        saved.profile.argv = vec!["-override-config".into(), "numSearchThreads=4,numAnalysisThreads=5".into()];
+        saved.profile.argv = vec![
+            "-override-config".into(),
+            "numSearchThreads=4,numAnalysisThreads=5".into(),
+        ];
         rig.catalog.upsert(saved);
         rig.manager.start("gtp").unwrap();
         ready(&rig.manager);
@@ -423,29 +519,68 @@ mod controlled {
         assert_eq!(sources.launch_override, Some(4));
         assert_eq!(sources.effective, Some(4));
         assert_eq!(sources.analysis_threads, Some(5));
-        assert_eq!(sources.entries.iter().map(|entry| entry.value).collect::<Vec<_>>(), [Some(2), Some(3), Some(7), Some(2), Some(4), Some(5)]);
+        assert_eq!(
+            sources
+                .entries
+                .iter()
+                .map(|entry| entry.value)
+                .collect::<Vec<_>>(),
+            [Some(2), Some(3), Some(7), Some(2), Some(4), Some(5)]
+        );
         assert_eq!(sources.entries[0].layer, "include");
-        assert!(sources.entries.iter().all(|entry| !entry.source.contains(&rig.dir.to_string_lossy().to_string())));
-        let reset = rig.manager.runtime_threads(threads_request(&rig.manager, RuntimeThreadsActionDto::Reset, None)).unwrap();
+        assert!(sources
+            .entries
+            .iter()
+            .all(|entry| !entry.source.contains(&rig.dir.to_string_lossy().to_string())));
+        let reset = rig
+            .manager
+            .runtime_threads(threads_request(
+                &rig.manager,
+                RuntimeThreadsActionDto::Reset,
+                None,
+            ))
+            .unwrap();
         assert_eq!(reset.actual, Some(4));
         assert_eq!(std::fs::read_to_string(rig.dir.join("config")).unwrap(), cfg);
-        assert_eq!(std::fs::read_to_string(rig.dir.join("base config.cfg")).unwrap(), included);
+        assert_eq!(
+            std::fs::read_to_string(rig.dir.join("base config.cfg")).unwrap(),
+            included
+        );
         std::fs::write(rig.dir.join("config"), "numSearchThreads=6\n").unwrap();
-        let reset = rig.manager.runtime_threads(threads_request(&rig.manager, RuntimeThreadsActionDto::Reset, None)).unwrap();
+        let reset = rig
+            .manager
+            .runtime_threads(threads_request(
+                &rig.manager,
+                RuntimeThreadsActionDto::Reset,
+                None,
+            ))
+            .unwrap();
         assert_eq!(reset.actual, Some(4));
     }
 
-    fn threads_request(manager: &ForegroundEngineManager, action: RuntimeThreadsActionDto, value: Option<u32>) -> RuntimeThreadsRequestDto {
+    fn threads_request(
+        manager: &ForegroundEngineManager,
+        action: RuntimeThreadsActionDto,
+        value: Option<u32>,
+    ) -> RuntimeThreadsRequestDto {
         let current = manager.runtime_threads_snapshot();
-        RuntimeThreadsRequestDto { identity: RuntimeControlIdentityDto {
-            run_id: current.run_id.unwrap(), profile_revision: current.profile_revision.unwrap(),
-            request_id: uuid::Uuid::new_v4().to_string(),
-        }, action, value }
+        RuntimeThreadsRequestDto {
+            identity: RuntimeControlIdentityDto {
+                run_id: current.run_id.unwrap(),
+                profile_revision: current.profile_revision.unwrap(),
+                request_id: uuid::Uuid::new_v4().to_string(),
+            },
+            action,
+            value,
+        }
     }
 
     fn wait_file(path: &std::path::Path) {
         let until = Instant::now() + Duration::from_secs(5);
-        while !path.exists() { assert!(Instant::now() < until, "missing barrier {path:?}"); std::thread::sleep(Duration::from_millis(5)); }
+        while !path.exists() {
+            assert!(Instant::now() < until, "missing barrier {path:?}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     #[test]
@@ -459,11 +594,25 @@ mod controlled {
         assert_eq!(result.actual, Some(2));
         assert!(result.temporary);
         assert_eq!(result.sources.as_ref().unwrap().effective, Some(1));
-        let reset = rig.manager.runtime_threads(threads_request(&rig.manager, RuntimeThreadsActionDto::Reset, None)).unwrap();
+        let reset = rig
+            .manager
+            .runtime_threads(threads_request(
+                &rig.manager,
+                RuntimeThreadsActionDto::Reset,
+                None,
+            ))
+            .unwrap();
         assert_eq!(reset.actual, Some(1));
         assert!(!reset.temporary);
         for value in [0, 4097] {
-            assert!(rig.manager.runtime_threads(threads_request(&rig.manager, RuntimeThreadsActionDto::Apply, Some(value))).is_err());
+            assert!(rig
+                .manager
+                .runtime_threads(threads_request(
+                    &rig.manager,
+                    RuntimeThreadsActionDto::Apply,
+                    Some(value)
+                ))
+                .is_err());
         }
         assert_eq!(std::fs::read(rig.dir.join("config")).unwrap(), bytes);
         rig.manager.restart().unwrap();
@@ -471,16 +620,35 @@ mod controlled {
         assert_ne!(replacement, rig.run);
         assert_eq!(rig.manager.runtime_threads_snapshot().actual, None);
         assert!(rig.manager.runtime_threads(request).is_err());
-        assert_eq!(std::fs::read_to_string(rig.dir.join("trace")).unwrap().matches("kata-set-param").count(), 2);
+        assert_eq!(
+            std::fs::read_to_string(rig.dir.join("trace"))
+                .unwrap()
+                .matches("kata-set-param")
+                .count(),
+            2
+        );
     }
 
     #[test]
     fn runtime_threads_errors_retain_last_valid_without_claiming_confirmation() {
         let rig = Rig::new("analysis");
-        rig.manager.runtime_threads(threads_request(&rig.manager, RuntimeThreadsActionDto::Apply, Some(2))).unwrap();
+        rig.manager
+            .runtime_threads(threads_request(
+                &rig.manager,
+                RuntimeThreadsActionDto::Apply,
+                Some(2),
+            ))
+            .unwrap();
         for mode in ["negative", "mismatch", "invalid"] {
             std::fs::write(rig.dir.join("thread-mode"), mode).unwrap();
-            let result = rig.manager.runtime_threads(threads_request(&rig.manager, RuntimeThreadsActionDto::Apply, Some(3))).unwrap();
+            let result = rig
+                .manager
+                .runtime_threads(threads_request(
+                    &rig.manager,
+                    RuntimeThreadsActionDto::Apply,
+                    Some(3),
+                ))
+                .unwrap();
             assert_eq!(result.status, RuntimeThreadsStatusDto::Failed, "{mode}");
             assert_eq!(result.actual, Some(2));
             assert_eq!(result.requested, Some(3));
@@ -493,23 +661,42 @@ mod controlled {
     fn runtime_control_waits_for_stop_ack_blocks_finite_and_preserves_new_pause_target() {
         let rig = Rig::new("analysis_hold_stop");
         let events = rig.manager.subscribe();
-        let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };
+        let budget = ContinuousAnalysisBudgetDto {
+            continuous_time_limit_enabled: false,
+            ..Default::default()
+        };
         rig.manager.set_continuous_preferences(true, budget).unwrap();
-        rig.manager.follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        rig.manager
+            .follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
         event(&events, AnalysisJobOutcomeDto::Progress);
         let request = threads_request(&rig.manager, RuntimeThreadsActionDto::Apply, Some(2));
         let manager = rig.manager.clone();
         let worker = std::thread::spawn(move || manager.runtime_threads(request));
         wait_file(&rig.dir.join("held"));
-        assert!(!std::fs::read_to_string(rig.dir.join("trace")).unwrap().contains("kata-set-param"));
-        assert_eq!(rig.manager.start_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Finite)).unwrap_err().kind, EngineFailureKind::Occupied);
+        assert!(!std::fs::read_to_string(rig.dir.join("trace"))
+            .unwrap()
+            .contains("kata-set-param"));
+        assert_eq!(
+            rig.manager
+                .start_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Finite))
+                .unwrap_err()
+                .kind,
+            EngineFailureKind::Occupied
+        );
         rig.manager.set_continuous_preferences(false, budget).unwrap();
-        rig.manager.follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
+        rig.manager
+            .follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
         std::fs::write(rig.dir.join("release"), "").unwrap();
         assert_eq!(worker.join().unwrap().unwrap().actual, Some(2));
         assert_eq!(rig.manager.snapshot().continuous.enabled, Some(false));
         assert!(rig.manager.snapshot().selected_node_job.is_none());
-        assert_eq!(std::fs::read_to_string(rig.dir.join("trace")).unwrap().matches("kata-analyze").count(), 1);
+        assert_eq!(
+            std::fs::read_to_string(rig.dir.join("trace"))
+                .unwrap()
+                .matches("kata-analyze")
+                .count(),
+            1
+        );
         rig.manager.set_continuous_preferences(true, budget).unwrap();
         assert_eq!(event(&events, AnalysisJobOutcomeDto::Progress).generation, 8);
     }
@@ -517,15 +704,31 @@ mod controlled {
     #[test]
     fn runtime_threads_timeout_late_reply_and_new_run_cannot_confirm_old_request() {
         let rig = Rig::new("analysis");
-        rig.manager.runtime_threads(threads_request(&rig.manager, RuntimeThreadsActionDto::Apply, Some(2))).unwrap();
+        rig.manager
+            .runtime_threads(threads_request(
+                &rig.manager,
+                RuntimeThreadsActionDto::Apply,
+                Some(2),
+            ))
+            .unwrap();
         std::fs::write(rig.dir.join("thread-mode"), "timeout").unwrap();
-        let result = rig.manager.runtime_threads(threads_request(&rig.manager, RuntimeThreadsActionDto::Apply, Some(3))).unwrap();
+        let result = rig
+            .manager
+            .runtime_threads(threads_request(
+                &rig.manager,
+                RuntimeThreadsActionDto::Apply,
+                Some(3),
+            ))
+            .unwrap();
         assert_eq!(result.status, RuntimeThreadsStatusDto::Failed);
         assert_eq!(result.actual, Some(2));
         assert!(result.failure.as_ref().unwrap().contains("timed out"));
         std::fs::write(rig.dir.join("thread-release"), "").unwrap();
         std::fs::write(rig.dir.join("thread-mode"), "valid").unwrap();
-        let read = rig.manager.runtime_threads(threads_request(&rig.manager, RuntimeThreadsActionDto::Read, None)).unwrap();
+        let read = rig
+            .manager
+            .runtime_threads(threads_request(&rig.manager, RuntimeThreadsActionDto::Read, None))
+            .unwrap();
         assert_eq!(read.actual, Some(3));
         assert_eq!(read.status, RuntimeThreadsStatusDto::Confirmed);
         std::fs::remove_file(rig.dir.join("thread-release")).unwrap();
@@ -534,7 +737,10 @@ mod controlled {
         let manager = rig.manager.clone();
         let worker = std::thread::spawn(move || manager.runtime_threads(request));
         let until = Instant::now() + Duration::from_secs(5);
-        while rig.manager.runtime_threads_snapshot().requested != Some(4) { assert!(Instant::now() < until); std::thread::sleep(Duration::from_millis(5)); }
+        while rig.manager.runtime_threads_snapshot().requested != Some(4) {
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
         rig.manager.restart().unwrap();
         ready(&rig.manager);
         assert!(worker.join().unwrap().is_err());
@@ -544,19 +750,39 @@ mod controlled {
 
     fn pair_request(manager: &ForegroundEngineManager) -> RuntimeControlIdentityDto {
         let snapshot = manager.runtime_parameters_snapshot();
-        RuntimeControlIdentityDto { run_id: snapshot.run_id.unwrap(), profile_revision: snapshot.profile_revision.unwrap(), request_id: uuid::Uuid::new_v4().to_string() }
+        RuntimeControlIdentityDto {
+            run_id: snapshot.run_id.unwrap(),
+            profile_revision: snapshot.profile_revision.unwrap(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        }
     }
 
     #[test]
     fn runtime_pair_publishes_both_numbered_values_in_either_order() {
         for mode in ["forward", "reverse"] {
             let rig = Rig::new("analysis");
-            assert_eq!(rig.manager.runtime_parameters_snapshot().status, RuntimeParametersStatusDto::Unknown);
+            assert_eq!(
+                rig.manager.runtime_parameters_snapshot().status,
+                RuntimeParametersStatusDto::Unknown
+            );
             assert_eq!(rig.manager.runtime_parameters_snapshot().last_valid, None);
             std::fs::write(rig.dir.join("pair-mode"), mode).unwrap();
-            let result = rig.manager.read_runtime_parameters(pair_request(&rig.manager)).unwrap();
-            assert_eq!(result.status, RuntimeParametersStatusDto::Confirmed, "{mode}: {result:?}");
-            assert_eq!(result.last_valid, Some(RuntimeParameterPairDto { playout_doubling_advantage: -0.5, analysis_wide_root_noise: 0.04 }));
+            let result = rig
+                .manager
+                .read_runtime_parameters(pair_request(&rig.manager))
+                .unwrap();
+            assert_eq!(
+                result.status,
+                RuntimeParametersStatusDto::Confirmed,
+                "{mode}: {result:?}"
+            );
+            assert_eq!(
+                result.last_valid,
+                Some(RuntimeParameterPairDto {
+                    playout_doubling_advantage: -0.5,
+                    analysis_wide_root_noise: 0.04
+                })
+            );
             assert_eq!(ready(&rig.manager), rig.run);
         }
     }
@@ -572,12 +798,37 @@ mod controlled {
     #[test]
     fn runtime_pair_invalid_halves_keep_last_valid_and_never_overwrite_thread_draft_state() {
         let rig = Rig::new("analysis");
-        let valid = rig.manager.read_runtime_parameters(pair_request(&rig.manager)).unwrap();
-        let thread = rig.manager.runtime_threads(threads_request(&rig.manager, RuntimeThreadsActionDto::Apply, Some(2))).unwrap();
-        for mode in ["error_first", "error_second", "nan", "infinity", "pda_domain", "wrn_domain", "extra_value"] {
+        let valid = rig
+            .manager
+            .read_runtime_parameters(pair_request(&rig.manager))
+            .unwrap();
+        let thread = rig
+            .manager
+            .runtime_threads(threads_request(
+                &rig.manager,
+                RuntimeThreadsActionDto::Apply,
+                Some(2),
+            ))
+            .unwrap();
+        for mode in [
+            "error_first",
+            "error_second",
+            "nan",
+            "infinity",
+            "pda_domain",
+            "wrn_domain",
+            "extra_value",
+        ] {
             std::fs::write(rig.dir.join("pair-mode"), mode).unwrap();
-            let failed = rig.manager.read_runtime_parameters(pair_request(&rig.manager)).unwrap();
-            assert_eq!(failed.status, RuntimeParametersStatusDto::Failed, "{mode}: {failed:?}");
+            let failed = rig
+                .manager
+                .read_runtime_parameters(pair_request(&rig.manager))
+                .unwrap();
+            assert_eq!(
+                failed.status,
+                RuntimeParametersStatusDto::Failed,
+                "{mode}: {failed:?}"
+            );
             assert_eq!(failed.last_valid, valid.last_valid);
             assert!(failed.failure.is_some());
             assert_ne!(failed.request_id, valid.request_id);
@@ -589,7 +840,10 @@ mod controlled {
     #[test]
     fn runtime_pair_half_is_not_current_and_same_transaction_excludes_threads_preserves_pause() {
         let rig = Rig::new("analysis");
-        let valid = rig.manager.read_runtime_parameters(pair_request(&rig.manager)).unwrap();
+        let valid = rig
+            .manager
+            .read_runtime_parameters(pair_request(&rig.manager))
+            .unwrap();
         std::fs::write(rig.dir.join("pair-mode"), "hold").unwrap();
         let manager = rig.manager.clone();
         let request = pair_request(&manager);
@@ -598,8 +852,14 @@ mod controlled {
         let pending = rig.manager.runtime_parameters_snapshot();
         assert_eq!(pending.status, RuntimeParametersStatusDto::Pending);
         assert_eq!(pending.last_valid, valid.last_valid);
-        assert!(rig.manager.runtime_threads(threads_request(&rig.manager, RuntimeThreadsActionDto::Read, None)).is_err());
-        assert!(rig.manager.read_runtime_parameters(pair_request(&rig.manager)).is_err());
+        assert!(rig
+            .manager
+            .runtime_threads(threads_request(&rig.manager, RuntimeThreadsActionDto::Read, None))
+            .is_err());
+        assert!(rig
+            .manager
+            .read_runtime_parameters(pair_request(&rig.manager))
+            .is_err());
         let budget = ContinuousAnalysisBudgetDto::default();
         rig.manager.set_continuous_preferences(false, budget).unwrap();
         std::fs::write(rig.dir.join("pair-release"), "").unwrap();
@@ -608,7 +868,14 @@ mod controlled {
         assert_eq!(result.last_valid.unwrap().playout_doubling_advantage, 1.5);
         assert_eq!(rig.manager.snapshot().continuous.enabled, Some(false));
         assert!(rig.manager.snapshot().selected_node_job.is_none());
-        let thread = rig.manager.runtime_threads(threads_request(&rig.manager, RuntimeThreadsActionDto::Apply, Some(2))).unwrap();
+        let thread = rig
+            .manager
+            .runtime_threads(threads_request(
+                &rig.manager,
+                RuntimeThreadsActionDto::Apply,
+                Some(2),
+            ))
+            .unwrap();
         assert_eq!(thread.actual, Some(2));
     }
 
@@ -616,16 +883,29 @@ mod controlled {
     fn runtime_pair_missing_old_and_stream_halves_timeout_without_cross_round_assembly() {
         for mode in ["missing", "old_ids", "stream_only", "timeout"] {
             let rig = Rig::new("analysis");
-            let valid = rig.manager.read_runtime_parameters(pair_request(&rig.manager)).unwrap();
+            let valid = rig
+                .manager
+                .read_runtime_parameters(pair_request(&rig.manager))
+                .unwrap();
             std::fs::write(rig.dir.join("pair-mode"), mode).unwrap();
-            let failed = rig.manager.read_runtime_parameters(pair_request(&rig.manager)).unwrap();
-            assert_eq!(failed.status, RuntimeParametersStatusDto::Failed, "{mode}: {failed:?}");
+            let failed = rig
+                .manager
+                .read_runtime_parameters(pair_request(&rig.manager))
+                .unwrap();
+            assert_eq!(
+                failed.status,
+                RuntimeParametersStatusDto::Failed,
+                "{mode}: {failed:?}"
+            );
             assert_eq!(failed.last_valid, valid.last_valid);
             assert!(failed.failure.unwrap().contains("timed out"));
             // A late complete old response cannot satisfy this new round's IDs.
             std::fs::write(rig.dir.join("pair-release"), "").unwrap();
             std::fs::write(rig.dir.join("pair-mode"), "reverse").unwrap();
-            let next = rig.manager.read_runtime_parameters(pair_request(&rig.manager)).unwrap();
+            let next = rig
+                .manager
+                .read_runtime_parameters(pair_request(&rig.manager))
+                .unwrap();
             assert_eq!(next.status, RuntimeParametersStatusDto::Confirmed);
             assert_eq!(next.last_valid, valid.last_valid);
             assert_ne!(next.request_id, failed.request_id);
@@ -643,17 +923,27 @@ mod controlled {
             let worker = std::thread::spawn(move || manager.read_runtime_parameters(request));
             pair_held(&rig);
             match action {
-                "restart" => { rig.manager.restart().unwrap(); ready(&rig.manager); }
+                "restart" => {
+                    rig.manager.restart().unwrap();
+                    ready(&rig.manager);
+                }
                 "switch" => {
-                    let mut profile = rig.catalog.get("gtp").unwrap(); profile.profile_id = "other".into(); rig.catalog.upsert(profile);
-                    rig.manager.switch_to("other").unwrap(); ready(&rig.manager);
+                    let mut profile = rig.catalog.get("gtp").unwrap();
+                    profile.profile_id = "other".into();
+                    rig.catalog.upsert(profile);
+                    rig.manager.switch_to("other").unwrap();
+                    ready(&rig.manager);
                 }
                 _ => rig.manager.teardown().unwrap(),
             }
             // Switch keeps A visible while B starts: retirement can return A's
             // explicit Failed snapshot before B promotion, or an expired error.
             if let Ok(retired) = worker.join().unwrap() {
-                assert_eq!(retired.status, RuntimeParametersStatusDto::Failed, "{action}: {retired:?}");
+                assert_eq!(
+                    retired.status,
+                    RuntimeParametersStatusDto::Failed,
+                    "{action}: {retired:?}"
+                );
                 assert_eq!(retired.last_valid, None);
             }
             assert!(rig.manager.read_runtime_parameters(stale).is_err());
@@ -670,13 +960,25 @@ mod controlled {
         std::fs::write(rig.dir.join("pair-mode"), "wrong_order").unwrap();
         let result = rig.manager.read_runtime_parameters(pair_request(&rig.manager));
         assert!(result.is_err() || result.unwrap().status == RuntimeParametersStatusDto::Failed);
-        assert_ne!(rig.manager.runtime_parameters_snapshot().status, RuntimeParametersStatusDto::Confirmed);
+        assert_ne!(
+            rig.manager.runtime_parameters_snapshot().status,
+            RuntimeParametersStatusDto::Confirmed
+        );
         let rig = Rig::new("analysis_hold_stop");
         let events = rig.manager.subscribe();
-        let job = rig.manager.start_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Finite)).unwrap();
+        let job = rig
+            .manager
+            .start_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Finite))
+            .unwrap();
         event(&events, AnalysisJobOutcomeDto::Progress);
-        assert!(rig.manager.read_runtime_parameters(pair_request(&rig.manager)).is_err());
-        assert_eq!(rig.manager.snapshot().selected_node_job.unwrap().job_id, job.job_id);
+        assert!(rig
+            .manager
+            .read_runtime_parameters(pair_request(&rig.manager))
+            .is_err());
+        assert_eq!(
+            rig.manager.snapshot().selected_node_job.unwrap().job_id,
+            job.job_id
+        );
         std::fs::write(rig.dir.join("release"), "").unwrap();
     }
 
@@ -684,14 +986,23 @@ mod controlled {
     fn runtime_pair_refuses_match_and_exclusive_position_without_retiring_them() {
         let rig = Rig::new("analysis");
         rig.manager.reserve_match("pair-test-match").unwrap();
-        assert!(rig.manager.read_runtime_parameters(pair_request(&rig.manager)).is_err());
-        assert_eq!(rig.manager.match_reservation_owner().as_deref(), Some("pair-test-match"));
+        assert!(rig
+            .manager
+            .read_runtime_parameters(pair_request(&rig.manager))
+            .is_err());
+        assert_eq!(
+            rig.manager.match_reservation_owner().as_deref(),
+            Some("pair-test-match")
+        );
         rig.manager.abort_reserved_match("pair-test-match").unwrap();
         assert_eq!(ready(&rig.manager), rig.run);
         let rig = Rig::new("hold");
         let position = rig.manager.start_ordinary_rules(rig.request(3000)).unwrap();
         rig.held();
-        assert!(rig.manager.read_runtime_parameters(pair_request(&rig.manager)).is_err());
+        assert!(rig
+            .manager
+            .read_runtime_parameters(pair_request(&rig.manager))
+            .is_err());
         std::fs::write(rig.dir.join("release"), "").unwrap();
         assert_eq!(position.wait().unwrap().identity.run_id, rig.run);
     }
@@ -700,21 +1011,42 @@ mod controlled {
     fn runtime_pair_holds_analysis_across_halves_then_reconciles_latest_target() {
         let rig = Rig::new("analysis");
         let events = rig.manager.subscribe();
-        let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };
+        let budget = ContinuousAnalysisBudgetDto {
+            continuous_time_limit_enabled: false,
+            ..Default::default()
+        };
         rig.manager.set_continuous_preferences(true, budget).unwrap();
-        rig.manager.follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        rig.manager
+            .follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
         let first = event(&events, AnalysisJobOutcomeDto::Progress);
         std::fs::write(rig.dir.join("pair-mode"), "hold").unwrap();
         let manager = rig.manager.clone();
         let request = pair_request(&manager);
         let worker = std::thread::spawn(move || manager.read_runtime_parameters(request));
         pair_held(&rig);
-        rig.manager.follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
+        rig.manager
+            .follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
         assert!(rig.manager.snapshot().selected_node_job.is_none());
-        assert_eq!(std::fs::read_to_string(rig.dir.join("trace")).unwrap().matches("kata-analyze").count(), 1);
-        assert!(rig.manager.runtime_threads(threads_request(&rig.manager, RuntimeThreadsActionDto::Apply, Some(2))).is_err());
+        assert_eq!(
+            std::fs::read_to_string(rig.dir.join("trace"))
+                .unwrap()
+                .matches("kata-analyze")
+                .count(),
+            1
+        );
+        assert!(rig
+            .manager
+            .runtime_threads(threads_request(
+                &rig.manager,
+                RuntimeThreadsActionDto::Apply,
+                Some(2)
+            ))
+            .is_err());
         std::fs::write(rig.dir.join("pair-release"), "").unwrap();
-        assert_eq!(worker.join().unwrap().unwrap().status, RuntimeParametersStatusDto::Confirmed);
+        assert_eq!(
+            worker.join().unwrap().unwrap().status,
+            RuntimeParametersStatusDto::Confirmed
+        );
         let resumed = event(&events, AnalysisJobOutcomeDto::Progress);
         assert_eq!(resumed.generation, 8);
         assert_eq!(resumed.run_id, first.run_id);
@@ -726,12 +1058,22 @@ mod controlled {
     #[test]
     fn runtime_pair_reader_failure_retires_both_replies_and_restart_read_preserves_safety_hold() {
         let rig = Rig::new("analysis");
-        let valid = rig.manager.read_runtime_parameters(pair_request(&rig.manager)).unwrap();
+        let valid = rig
+            .manager
+            .read_runtime_parameters(pair_request(&rig.manager))
+            .unwrap();
         let events = rig.manager.subscribe();
-        rig.manager.set_continuous_preferences(true, ContinuousAnalysisBudgetDto {
-            continuous_time_limit_enabled: false, ..Default::default()
-        }).unwrap();
-        rig.manager.follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        rig.manager
+            .set_continuous_preferences(
+                true,
+                ContinuousAnalysisBudgetDto {
+                    continuous_time_limit_enabled: false,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        rig.manager
+            .follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
         event(&events, AnalysisJobOutcomeDto::Progress);
         std::fs::write(rig.dir.join("pair-mode"), "closed_stdout").unwrap();
         let request = pair_request(&rig.manager);
@@ -739,12 +1081,21 @@ mod controlled {
         let manager = rig.manager.clone();
         let worker = std::thread::spawn(move || manager.read_runtime_parameters(request));
         pair_held(&rig);
-        assert_eq!(rig.manager.runtime_parameters_snapshot().status, RuntimeParametersStatusDto::Pending);
-        assert_eq!(rig.manager.runtime_parameters_snapshot().last_valid, valid.last_valid);
+        assert_eq!(
+            rig.manager.runtime_parameters_snapshot().status,
+            RuntimeParametersStatusDto::Pending
+        );
+        assert_eq!(
+            rig.manager.runtime_parameters_snapshot().last_valid,
+            valid.last_valid
+        );
         assert!(rig.manager.snapshot().selected_node_job.is_none());
         std::fs::write(rig.dir.join("pair-release"), "").unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
-        while !matches!(rig.manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::Error { .. }) {
+        while !matches!(
+            rig.manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::Error { .. }
+        ) {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -754,31 +1105,61 @@ mod controlled {
         assert_ne!(ready(&rig.manager), rig.run);
         assert_eq!(rig.manager.runtime_parameters_snapshot().last_valid, None);
         assert!(rig.manager.read_runtime_parameters(stale).is_err());
-        let fresh = rig.manager.read_runtime_parameters(pair_request(&rig.manager)).unwrap();
+        let fresh = rig
+            .manager
+            .read_runtime_parameters(pair_request(&rig.manager))
+            .unwrap();
         assert_eq!(fresh.status, RuntimeParametersStatusDto::Confirmed);
         assert_eq!(fresh.last_valid, valid.last_valid);
-        assert_eq!(rig.manager.snapshot().continuous.phase, ContinuousAnalysisPhaseDto::SafetyHold);
+        assert_eq!(
+            rig.manager.snapshot().continuous.phase,
+            ContinuousAnalysisPhaseDto::SafetyHold
+        );
         assert!(rig.manager.snapshot().selected_node_job.is_none());
     }
 
     fn selected(rig: &Rig, generation: u64, mode: AnalysisJobModeDto) -> SelectedNodeJobRequest {
         SelectedNodeJobRequest {
-            run_id: rig.run.clone(), generation, node_path: NodePath { indices: vec![] }, mode,
-            board_width: 9, board_height: 9, position_empty: true,
+            run_id: rig.run.clone(),
+            generation,
+            node_path: NodePath { indices: vec![] },
+            mode,
+            board_width: 9,
+            board_height: 9,
+            position_empty: true,
             exact_position: Ok(rig.request(2000).position),
-            query: katago_protocol::analysis_query_from_position(9, 9, 7.5, &[], PlayerColor::Black,
-                katago_protocol::AnalysisQueryOptions { id: "pending".into(), rules: "chinese".into(), turn: 0,
-                    max_visits: Some(16), include_ownership: Some(true), include_policy: Some(true) }).unwrap(),
+            query: katago_protocol::analysis_query_from_position(
+                9,
+                9,
+                7.5,
+                &[],
+                PlayerColor::Black,
+                katago_protocol::AnalysisQueryOptions {
+                    id: "pending".into(),
+                    rules: "chinese".into(),
+                    turn: 0,
+                    max_visits: Some(16),
+                    include_ownership: Some(true),
+                    include_policy: Some(true),
+                },
+            )
+            .unwrap(),
         }
     }
 
-    fn event(receiver: &std::sync::mpsc::Receiver<ForegroundEngineEventDto>, outcome: AnalysisJobOutcomeDto) -> AnalysisJobEventDto {
+    fn event(
+        receiver: &std::sync::mpsc::Receiver<ForegroundEngineEventDto>,
+        outcome: AnalysisJobOutcomeDto,
+    ) -> AnalysisJobEventDto {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())).expect("analysis event deadline") {
+            match receiver
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("analysis event deadline")
+            {
                 ForegroundEngineEventDto::Job { job } if job.outcome == outcome => return job,
                 ForegroundEngineEventDto::Failure { failure } => panic!("{failure:?}"),
-                _ => {},
+                _ => {}
             }
         }
     }
@@ -787,7 +1168,10 @@ mod controlled {
     fn rich_analysis_uses_exact_restore_same_run_and_preserves_absent_fields() {
         let rig = Rig::new("analysis");
         let events = rig.manager.subscribe();
-        let started = rig.manager.start_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Finite)).unwrap();
+        let started = rig
+            .manager
+            .start_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Finite))
+            .unwrap();
         let completed = event(&events, AnalysisJobOutcomeDto::Completed);
         assert_eq!(completed.job_id, started.job_id);
         let frame = completed.frame.unwrap();
@@ -809,25 +1193,39 @@ mod controlled {
     fn pause_waits_for_own_stop_ack_and_navigation_cannot_resume_or_publish_old_stream() {
         let rig = Rig::new("analysis_hold_stop");
         let events = rig.manager.subscribe();
-        let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };
+        let budget = ContinuousAnalysisBudgetDto {
+            continuous_time_limit_enabled: false,
+            ..Default::default()
+        };
         rig.manager.set_continuous_preferences(true, budget).unwrap();
-        rig.manager.follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        rig.manager
+            .follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
         let first = event(&events, AnalysisJobOutcomeDto::Progress);
         assert_eq!(first.frame.as_ref().unwrap().winrate_black, 0.61);
         rig.manager.set_continuous_preferences(false, budget).unwrap();
         rig.held();
-        assert_eq!(rig.manager.snapshot().selected_node_job.unwrap().state, AnalysisJobStateDto::Stopping);
+        assert_eq!(
+            rig.manager.snapshot().selected_node_job.unwrap().state,
+            AnalysisJobStateDto::Stopping
+        );
         assert!(rig.manager.resume_continuous().is_err());
         let occupied = rig.manager.confirm_ordinary_rules(rig.request(2000)).unwrap_err();
         assert_eq!(occupied.kind, EngineFailureKind::Occupied);
-        rig.manager.follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
+        rig.manager
+            .follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
         std::fs::write(rig.dir.join("release"), "").unwrap();
         let cancelled = event(&events, AnalysisJobOutcomeDto::Cancelled);
         assert_eq!(cancelled.job_id, first.job_id);
         assert!(cancelled.frame.is_none());
         std::thread::sleep(Duration::from_millis(100));
         assert!(rig.manager.snapshot().selected_node_job.is_none());
-        assert_eq!(std::fs::read_to_string(rig.dir.join("trace")).unwrap().matches("kata-analyze").count(), 1);
+        assert_eq!(
+            std::fs::read_to_string(rig.dir.join("trace"))
+                .unwrap()
+                .matches("kata-analyze")
+                .count(),
+            1
+        );
         rig.manager.set_continuous_preferences(true, budget).unwrap();
         let next = event(&events, AnalysisJobOutcomeDto::Progress);
         assert_eq!(next.generation, 8);
@@ -845,7 +1243,9 @@ mod controlled {
         assert_eq!(frame.run_id, rig.run);
         assert_eq!(frame.generation, 7);
         assert_eq!(frame.mode, AnalysisJobModeDto::Continuous);
-        rig.manager.set_continuous_preferences(false, ContinuousAnalysisBudgetDto::default()).unwrap();
+        rig.manager
+            .set_continuous_preferences(false, ContinuousAnalysisBudgetDto::default())
+            .unwrap();
         event(&events, AnalysisJobOutcomeDto::Cancelled);
     }
 
@@ -853,11 +1253,16 @@ mod controlled {
     fn live_position_change_drains_then_starts_the_latest_target_on_same_run() {
         let rig = Rig::new("analysis");
         let events = rig.manager.subscribe();
-        let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };
+        let budget = ContinuousAnalysisBudgetDto {
+            continuous_time_limit_enabled: false,
+            ..Default::default()
+        };
         rig.manager.set_continuous_preferences(true, budget).unwrap();
-        rig.manager.follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        rig.manager
+            .follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
         let first = event(&events, AnalysisJobOutcomeDto::Progress);
-        rig.manager.follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
+        rig.manager
+            .follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
         let next = event(&events, AnalysisJobOutcomeDto::Progress);
         assert_ne!(next.job_id, first.job_id);
         assert_eq!(next.generation, 8);
@@ -871,10 +1276,17 @@ mod controlled {
     fn active_gtp_reader_failure_retires_job_before_document_departure() {
         let rig = Rig::new("analysis_closed_stdout");
         let events = rig.manager.subscribe();
-        rig.manager.set_continuous_preferences(true, ContinuousAnalysisBudgetDto {
-            continuous_time_limit_enabled: false, ..Default::default()
-        }).unwrap();
-        rig.manager.follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        rig.manager
+            .set_continuous_preferences(
+                true,
+                ContinuousAnalysisBudgetDto {
+                    continuous_time_limit_enabled: false,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        rig.manager
+            .follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
         let first = event(&events, AnalysisJobOutcomeDto::Progress);
         rig.held();
         let request = threads_request(&rig.manager, RuntimeThreadsActionDto::Apply, Some(2));
@@ -892,7 +1304,10 @@ mod controlled {
             let snapshot = rig.manager.snapshot();
             if let ForegroundEngineLifecycleDto::Error { run, .. } = snapshot.lifecycle {
                 assert_eq!(run.run_id, first.run_id);
-                assert!(snapshot.selected_node_job.is_none(), "failed reader left a live departure job");
+                assert!(
+                    snapshot.selected_node_job.is_none(),
+                    "failed reader left a live departure job"
+                );
                 break;
             }
             assert!(Instant::now() < deadline);
@@ -903,25 +1318,38 @@ mod controlled {
         assert_eq!(failed.run_id, first.run_id);
         assert!(control.join().unwrap().is_err());
         assert_eq!(rig.manager.runtime_threads_snapshot().actual, None);
-        assert_eq!(rig.manager.snapshot().continuous.phase, ContinuousAnalysisPhaseDto::Error);
+        assert_eq!(
+            rig.manager.snapshot().continuous.phase,
+            ContinuousAnalysisPhaseDto::Error
+        );
         std::fs::write(rig.dir.join("mode"), "analysis").unwrap();
         rig.manager.restart().unwrap();
         let replacement = ready(&rig.manager);
         assert_ne!(replacement, first.run_id);
         assert!(rig.manager.runtime_threads(stale_request).is_err());
-        let read = rig.manager.runtime_threads(threads_request(&rig.manager, RuntimeThreadsActionDto::Read, None)).unwrap();
+        let read = rig
+            .manager
+            .runtime_threads(threads_request(&rig.manager, RuntimeThreadsActionDto::Read, None))
+            .unwrap();
         assert_eq!(read.status, RuntimeThreadsStatusDto::Confirmed);
         assert_eq!(read.actual, Some(1));
-        assert_eq!(rig.manager.snapshot().continuous.phase, ContinuousAnalysisPhaseDto::SafetyHold);
+        assert_eq!(
+            rig.manager.snapshot().continuous.phase,
+            ContinuousAnalysisPhaseDto::SafetyHold
+        );
         assert!(rig.manager.snapshot().selected_node_job.is_none());
     }
 
     #[test]
     fn invalid_stream_requires_explicit_continue_after_restart_and_new_document() {
         let mut rig = Rig::new("analysis_invalid");
-        let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };
+        let budget = ContinuousAnalysisBudgetDto {
+            continuous_time_limit_enabled: false,
+            ..Default::default()
+        };
         rig.manager.set_continuous_preferences(true, budget).unwrap();
-        rig.manager.follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        rig.manager
+            .follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if let ForegroundEngineLifecycleDto::Error { failure, .. } = rig.manager.snapshot().lifecycle {
@@ -933,14 +1361,16 @@ mod controlled {
         }
         rig.manager.begin_continuous_departure();
         rig.manager.clear_continuous_position();
-        rig.manager.follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
+        rig.manager
+            .follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
         rig.manager.finish_continuous_departure(true);
         std::fs::write(rig.dir.join("mode"), "analysis").unwrap();
         rig.manager.restart().unwrap();
         let replacement = ready(&rig.manager);
         assert_ne!(replacement, rig.run);
         rig.run = replacement;
-        rig.manager.follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
+        rig.manager
+            .follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
         std::thread::sleep(Duration::from_millis(100));
         assert!(rig.manager.snapshot().selected_node_job.is_none());
         let events = rig.manager.subscribe();

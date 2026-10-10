@@ -43,7 +43,10 @@ impl Dispatch {
                 sender,
             },
         );
-        self.issued_through.entry(run.into()).and_modify(|last| *last = (*last).max(id)).or_insert(id);
+        self.issued_through
+            .entry(run.into())
+            .and_modify(|last| *last = (*last).max(id))
+            .or_insert(id);
         Ok(receiver)
     }
 
@@ -69,7 +72,8 @@ impl Dispatch {
                 .parse::<u32>()
                 .map_err(|_| "GTP response has no valid numbered identity")?;
             if !self.pending.keys().any(|(owner, _)| owner == run)
-                && self.issued_through.get(run).is_none_or(|last| id > *last) {
+                && self.issued_through.get(run).is_none_or(|last| id > *last)
+            {
                 return Err("unsolicited GTP response on an idle reader".into());
             }
             self.active.insert(run.into(), id);
@@ -107,7 +111,9 @@ mod tests {
         let mut dispatch = Dispatch::default();
         let old = dispatch.register("run", 101, "timed-out", false).unwrap();
         dispatch.retire("run", "timed-out");
-        for line in ["=101 2", ""] { dispatch.route("run", line).unwrap(); }
+        for line in ["=101 2", ""] {
+            dispatch.route("run", line).unwrap();
+        }
         assert!(old.try_recv().is_err());
         assert!(dispatch.route("run", "=102 unsolicited").is_err());
     }

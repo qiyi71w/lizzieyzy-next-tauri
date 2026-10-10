@@ -40,11 +40,11 @@ mod document_departure;
 mod export;
 mod file_activation;
 mod human_match;
+mod managed_resources;
 mod models;
 mod readboard;
 mod save_as;
 mod session_recovery;
-mod managed_resources;
 #[cfg(windows)]
 extern crate windows_core;
 #[cfg(test)]
@@ -115,7 +115,9 @@ impl EngineProfileCatalog for DiskEngineCatalog {
 
     fn startup_evaluation_target(&self) -> Result<Option<SavedEngineProfile>, String> {
         load_engine_profiles_from_disk(&self.handle)
-            .map_err(|_| "Startup evaluation unavailable: saved engine settings could not be loaded".to_string())?
+            .map_err(|_| {
+                "Startup evaluation unavailable: saved engine settings could not be loaded".to_string()
+            })?
             .startup_evaluation_target()
     }
 }
@@ -1102,51 +1104,77 @@ fn foreground_engine_snapshot(manager: State<'_, ForegroundEngineManager>) -> Fo
 }
 
 #[tauri::command]
-fn engine_diagnostic_snapshots(manager: State<'_, ForegroundEngineManager>) -> Vec<app_model::EngineDiagnosticSnapshotDto> {
+fn engine_diagnostic_snapshots(
+    manager: State<'_, ForegroundEngineManager>,
+) -> Vec<app_model::EngineDiagnosticSnapshotDto> {
     manager.diagnostic_snapshots()
 }
 
 #[tauri::command]
-fn set_engine_diagnostic_trace(manager: State<'_, ForegroundEngineManager>, attempt_id: String, enabled: bool) -> Result<(), String> {
+fn set_engine_diagnostic_trace(
+    manager: State<'_, ForegroundEngineManager>,
+    attempt_id: String,
+    enabled: bool,
+) -> Result<(), String> {
     manager.set_diagnostic_trace(&attempt_id, enabled)
 }
 
 #[tauri::command]
-fn engine_runtime_threads_snapshot(manager: State<'_, ForegroundEngineManager>) -> app_model::RuntimeThreadsSnapshotDto {
+fn engine_runtime_threads_snapshot(
+    manager: State<'_, ForegroundEngineManager>,
+) -> app_model::RuntimeThreadsSnapshotDto {
     manager.runtime_threads_snapshot()
 }
 
 #[tauri::command]
-async fn engine_runtime_threads(manager: State<'_, ForegroundEngineManager>, request: app_model::RuntimeThreadsRequestDto) -> Result<app_model::RuntimeThreadsSnapshotDto, String> {
+async fn engine_runtime_threads(
+    manager: State<'_, ForegroundEngineManager>,
+    request: app_model::RuntimeThreadsRequestDto,
+) -> Result<app_model::RuntimeThreadsSnapshotDto, String> {
     let manager = manager.inner().clone();
     tauri::async_runtime::spawn_blocking(move || manager.runtime_threads(request))
-        .await.map_err(|_| "runtime thread worker failed".to_owned())?
+        .await
+        .map_err(|_| "runtime thread worker failed".to_owned())?
 }
 
 #[tauri::command]
-fn engine_runtime_parameters_snapshot(manager: State<'_, ForegroundEngineManager>) -> app_model::RuntimeParametersSnapshotDto {
+fn engine_runtime_parameters_snapshot(
+    manager: State<'_, ForegroundEngineManager>,
+) -> app_model::RuntimeParametersSnapshotDto {
     manager.runtime_parameters_snapshot()
 }
 
 #[tauri::command]
-async fn engine_runtime_parameters_read(manager: State<'_, ForegroundEngineManager>, identity: app_model::RuntimeControlIdentityDto) -> Result<app_model::RuntimeParametersSnapshotDto, String> {
+async fn engine_runtime_parameters_read(
+    manager: State<'_, ForegroundEngineManager>,
+    identity: app_model::RuntimeControlIdentityDto,
+) -> Result<app_model::RuntimeParametersSnapshotDto, String> {
     let manager = manager.inner().clone();
     tauri::async_runtime::spawn_blocking(move || manager.read_runtime_parameters(identity))
-        .await.map_err(|_| "runtime parameter worker failed".to_owned())?
+        .await
+        .map_err(|_| "runtime parameter worker failed".to_owned())?
 }
 
 #[tauri::command]
-fn engine_evaluation_snapshot(manager: State<'_, ForegroundEngineManager>) -> app_model::EvaluationSnapshotDto {
+fn engine_evaluation_snapshot(
+    manager: State<'_, ForegroundEngineManager>,
+) -> app_model::EvaluationSnapshotDto {
     manager.evaluation_snapshot()
 }
 
 #[tauri::command]
-fn engine_evaluation_start(manager: State<'_, ForegroundEngineManager>, profile_id: String) -> EngineCommandResult<app_model::EvaluationSnapshotDto> {
+fn engine_evaluation_start(
+    manager: State<'_, ForegroundEngineManager>,
+    profile_id: String,
+) -> EngineCommandResult<app_model::EvaluationSnapshotDto> {
     manager.start_evaluation(&profile_id).map_err(Box::new)
 }
 
 #[tauri::command]
-fn engine_evaluation_cancel(manager: State<'_, ForegroundEngineManager>, evaluation_id: String) -> EngineCommandResult<app_model::EvaluationSnapshotDto> {
+fn engine_evaluation_cancel(
+    manager: State<'_, ForegroundEngineManager>,
+    evaluation_id: String,
+) -> EngineCommandResult<app_model::EvaluationSnapshotDto> {
     manager.cancel_evaluation(&evaluation_id).map_err(Box::new)
 }
 
@@ -1246,17 +1274,23 @@ pub fn run() {
                     .join("lizzieyzy-next-model-inventory.json"),
             ));
             let managed_root = app.path().app_data_dir()?.join("managed-resources");
-            app.manage(engine_manager::managed::ManagedResources::new(managed_root.clone(), app.path().app_data_dir()?.join("trt")));
+            app.manage(engine_manager::managed::ManagedResources::new(
+                managed_root.clone(),
+                app.path().app_data_dir()?.join("trt"),
+            ));
             app.manage(engine_manager::diagnostic_export::DiagnosticExport::new(
                 app.path().app_data_dir()?.join("diagnostic-exports"),
             ));
             let catalog = std::sync::Arc::new(DiskEngineCatalog {
                 handle: app.handle().clone(),
             });
-            let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig {
-                managed_resources_root: Some(managed_root),
-                ..ForegroundEngineConfig::default()
-            });
+            let manager = ForegroundEngineManager::new(
+                catalog,
+                ForegroundEngineConfig {
+                    managed_resources_root: Some(managed_root),
+                    ..ForegroundEngineConfig::default()
+                },
+            );
             app.state::<CurrentGameState>()
                 .connect_analysis_manager(manager.clone());
             let events = manager.subscribe();
@@ -1528,9 +1562,15 @@ mod tests {
         struct Catalog(PathBuf);
         impl EngineProfileCatalog for Catalog {
             fn get(&self, id: &str) -> Option<SavedEngineProfile> {
-                engine_manager::load_engine_profiles(&self.0).ok()?.profiles.into_iter()
+                engine_manager::load_engine_profiles(&self.0)
+                    .ok()?
+                    .profiles
+                    .into_iter()
                     .find(|record| record.id == id)
-                    .map(|record| SavedEngineProfile { profile_id: record.id, profile: record.profile })
+                    .map(|record| SavedEngineProfile {
+                        profile_id: record.id,
+                        profile: record.profile,
+                    })
             }
             fn startup_evaluation_target(&self) -> Result<Option<SavedEngineProfile>, String> {
                 engine_manager::load_engine_profiles(&self.0)?.startup_evaluation_target()
@@ -1544,16 +1584,31 @@ mod tests {
         let mut settings = default_engine_profiles_settings();
         settings.profiles[0].profile = EngineProfileDto {
             name: "Saved benchmark".into(),
-            program: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../crates/engine-manager/tests/fixtures/evaluation_process.py").to_string_lossy().into(),
-            argv: vec!["gtp".into(), "-config".into(), "config.cfg".into(), "-model".into(), "model.bin".into(), "-override-config".into(), "testMode=hold".into()],
+            program: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../crates/engine-manager/tests/fixtures/evaluation_process.py")
+                .to_string_lossy()
+                .into(),
+            argv: vec![
+                "gtp".into(),
+                "-config".into(),
+                "config.cfg".into(),
+                "-model".into(),
+                "model.bin".into(),
+                "-override-config".into(),
+                "testMode=hold".into(),
+            ],
             working_dir: Some(directory.to_string_lossy().into()),
             adapter: app_model::EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings::default()),
         };
         settings.startup_evaluation = app_model::StartupEvaluationSettingsDto {
-            enabled: true, target_profile_id: Some("default".into()),
+            enabled: true,
+            target_profile_id: Some("default".into()),
         };
         persist_engine_profiles(&path, settings.clone()).unwrap();
-        let manager = ForegroundEngineManager::new(std::sync::Arc::new(Catalog(path.clone())), ForegroundEngineConfig::for_tests());
+        let manager = ForegroundEngineManager::new(
+            std::sync::Arc::new(Catalog(path.clone())),
+            ForegroundEngineConfig::for_tests(),
+        );
         let game = CurrentGameState::default();
         game.connect_analysis_manager(manager.clone());
         game.replace("(;SZ[9]C[Personal comment];B[dd])", None).unwrap();
@@ -1562,7 +1617,9 @@ mod tests {
         manager.apply_startup_evaluation();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            if manager.evaluation_snapshot().phase == app_model::EvaluationPhaseDto::Running { break; }
+            if manager.evaluation_snapshot().phase == app_model::EvaluationPhaseDto::Running {
+                break;
+            }
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
@@ -1571,7 +1628,10 @@ mod tests {
         invalid.profiles[0].profile.name.clear();
         assert!(save_engine_profiles_at_path(&path, &manager, &settings, invalid).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        assert_eq!(manager.evaluation_snapshot().phase, app_model::EvaluationPhaseDto::Running);
+        assert_eq!(
+            manager.evaluation_snapshot().phase,
+            app_model::EvaluationPhaseDto::Running
+        );
         let mut edited = settings.clone();
         edited.profiles[0].profile.name = "Edited target".into();
         save_engine_profiles_at_path(&path, &manager, &settings, edited).unwrap();
@@ -1581,17 +1641,31 @@ mod tests {
         assert_eq!(manager.snapshot(), foreground);
         assert_eq!(game.serialize().unwrap(), sgf);
         let store = FileRecoveryStore::new(directory.join("recovery.json"));
-        store.replace(&app_model::RecoveryEnvelopeDto {
-            document_seq: 3, snapshot_seq: 2, sgf_text: "(;SZ[9]C[Recovered];B[ee])".into(),
-            selected_path: NodePath { indices: vec![] }, source_path: None, dirty: true,
-            disposition: app_model::ApplicationExitDispositionDto::ExitIncomplete,
-        }).unwrap();
+        store
+            .replace(&app_model::RecoveryEnvelopeDto {
+                document_seq: 3,
+                snapshot_seq: 2,
+                sgf_text: "(;SZ[9]C[Recovered];B[ee])".into(),
+                selected_path: NodePath { indices: vec![] },
+                source_path: None,
+                dirty: true,
+                disposition: app_model::ApplicationExitDispositionDto::ExitIncomplete,
+            })
+            .unwrap();
         game.restore_from_store(&store).unwrap();
         assert!(game.serialize().unwrap().contains("C[Recovered]"));
         manager.apply_startup_evaluation();
         assert_eq!(manager.evaluation_snapshot(), retired);
-        assert!(matches!(manager.snapshot().lifecycle, app_model::ForegroundEngineLifecycleDto::NoEngine { .. }));
-        assert!(engine_manager::load_engine_profiles(&path).unwrap().startup_evaluation.enabled);
+        assert!(matches!(
+            manager.snapshot().lifecycle,
+            app_model::ForegroundEngineLifecycleDto::NoEngine { .. }
+        ));
+        assert!(
+            engine_manager::load_engine_profiles(&path)
+                .unwrap()
+                .startup_evaluation
+                .enabled
+        );
         manager.teardown().unwrap();
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -1651,7 +1725,9 @@ mod tests {
         second.id = "second".into();
         second.profile.name = "Second".into();
         current.profiles.push(second);
-        current.startup = app_model::EngineStartupPolicyDto::Fixed { profile_id: "second".into() };
+        current.startup = app_model::EngineStartupPolicyDto::Fixed {
+            profile_id: "second".into(),
+        };
         let request = app_model::EngineProfileOrderRequestDto {
             expected_profile_ids: vec!["default".into(), "second".into()],
             profile_ids: vec!["second".into(), "default".into()],

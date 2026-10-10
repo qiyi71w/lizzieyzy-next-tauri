@@ -50,10 +50,16 @@ impl EngineProfilesSettings {
         if !self.startup_evaluation.enabled {
             return Ok(None);
         }
-        let target = self.startup_evaluation.target_profile_id.as_deref()
+        let target = self
+            .startup_evaluation
+            .target_profile_id
+            .as_deref()
             .and_then(|id| self.profiles.iter().find(|record| record.id == id))
             .ok_or("Startup evaluation unavailable: select an existing saved target")?;
-        Ok(Some(SavedEngineProfile { profile_id: target.id.clone(), profile: target.profile.clone() }))
+        Ok(Some(SavedEngineProfile {
+            profile_id: target.id.clone(),
+            profile: target.profile.clone(),
+        }))
     }
 }
 
@@ -255,8 +261,9 @@ pub fn parse_engine_profiles(contents: &str) -> Result<EngineProfilesSettings, S
                     profiles: old.profiles,
                 }
             }
-            Some(2) => serde_json::from_value::<EngineProfilesSettings>(value)
-                .map_err(|err| err.to_string())?,
+            Some(2) => {
+                serde_json::from_value::<EngineProfilesSettings>(value).map_err(|err| err.to_string())?
+            }
             _ => return Err(format!("unsupported engine profiles version: {version}")),
         }
     } else if value.get("profiles").is_some() {
@@ -315,7 +322,9 @@ pub fn persist_last_primary(
     mut current: EngineProfilesSettings,
     primary: Option<String>,
 ) -> Result<EngineProfilesSettings, String> {
-    let Some(primary) = primary else { return Ok(current) };
+    let Some(primary) = primary else {
+        return Ok(current);
+    };
     if current.last_primary_profile_id.as_ref() == Some(&primary) {
         return Ok(current);
     }
@@ -419,10 +428,19 @@ pub fn normalize_engine_profiles(settings: EngineProfilesSettings) -> Result<Eng
             return Err("fixed startup profile ID is invalid".to_string());
         }
     }
-    if settings.last_primary_profile_id.as_deref().is_some_and(|id| id.trim().is_empty() || id.contains('\0')) {
+    if settings
+        .last_primary_profile_id
+        .as_deref()
+        .is_some_and(|id| id.trim().is_empty() || id.contains('\0'))
+    {
         return Err("last primary profile ID is invalid".to_string());
     }
-    if settings.startup_evaluation.target_profile_id.as_deref().is_some_and(|id| id.trim().is_empty() || id.contains('\0')) {
+    if settings
+        .startup_evaluation
+        .target_profile_id
+        .as_deref()
+        .is_some_and(|id| id.trim().is_empty() || id.contains('\0'))
+    {
         return Err("startup evaluation target profile ID is invalid".to_string());
     }
     Ok(settings)
@@ -494,7 +512,9 @@ mod persist_failure_tests {
         EngineProfilesSettings {
             version: ENGINE_PROFILES_VERSION,
             selected_profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
-            startup: EngineStartupPolicyDto::Fixed { profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string() },
+            startup: EngineStartupPolicyDto::Fixed {
+                profile_id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
+            },
             last_primary_profile_id: None,
             startup_evaluation: Default::default(),
             profiles: vec![default_engine_profile_record()],
@@ -541,10 +561,7 @@ mod persist_failure_tests {
         }
 
         let loaded = load_engine_profiles(&path).unwrap();
-        assert_eq!(
-            loaded.startup_profile_id(),
-            Some(DEFAULT_ENGINE_PROFILE_ID)
-        );
+        assert_eq!(loaded.startup_profile_id(), Some(DEFAULT_ENGINE_PROFILE_ID));
         assert_eq!(fs::read_to_string(&path).unwrap(), before);
 
         let _ = fs::remove_dir_all(dir);
@@ -574,10 +591,13 @@ mod persist_failure_tests {
         let before = fs::read(&path).unwrap();
         let mut next = original.clone();
         next.startup_evaluation = app_model::StartupEvaluationSettingsDto {
-            enabled: true, target_profile_id: Some("default".into()),
+            enabled: true,
+            target_profile_id: Some("default".into()),
         };
         let json = serde_json::to_string_pretty(&normalize_engine_profiles(next).unwrap()).unwrap();
-        assert!(atomic_replace_file_with(&path, &json, |_, _| Err(io::Error::other("rename denied"))).is_err());
+        assert!(
+            atomic_replace_file_with(&path, &json, |_, _| Err(io::Error::other("rename denied"))).is_err()
+        );
         assert_eq!(fs::read(&path).unwrap(), before);
         assert_eq!(load_engine_profiles(&path).unwrap(), original);
         assert!(!tmp_path(&path).exists());

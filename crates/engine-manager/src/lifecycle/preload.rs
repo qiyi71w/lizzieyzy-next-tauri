@@ -138,7 +138,10 @@ impl ForegroundEngineManager {
             } else if preparing(&inner.lock(), &run.run_id) {
                 inner.fail_preload(
                     &run.run_id,
-                    invalid(&run.profile_id, "Foreground authority superseded background preparation"),
+                    invalid(
+                        &run.profile_id,
+                        "Foreground authority superseded background preparation",
+                    ),
                 );
             }
             if let Some(slot) = inner

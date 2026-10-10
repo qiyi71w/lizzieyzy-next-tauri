@@ -9,7 +9,12 @@ pub struct RuntimeParameterPairDto {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum RuntimeParametersStatusDto { Unknown, Pending, Confirmed, Failed }
+pub enum RuntimeParametersStatusDto {
+    Unknown,
+    Pending,
+    Confirmed,
+    Failed,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeParametersSnapshotDto {

@@ -83,7 +83,9 @@ pub enum ManagedPhaseDto {
     Cancelled,
 }
 impl ManagedPhaseDto {
-    pub fn terminal(self) -> bool { matches!(self, Self::Succeeded | Self::Failed | Self::Cancelled) }
+    pub fn terminal(self) -> bool {
+        matches!(self, Self::Succeeded | Self::Failed | Self::Cancelled)
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManagedInstallationDto {

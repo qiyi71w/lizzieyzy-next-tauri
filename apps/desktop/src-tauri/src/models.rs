@@ -7,15 +7,16 @@ pub fn saved_paths(settings: &engine_manager::EngineProfilesSettings) -> Vec<Mod
         .profiles
         .iter()
         .filter_map(|record| match &record.profile.adapter {
-            EngineAdapterSettings::KataGoAnalysis(settings)
-            | EngineAdapterSettings::KataGoGtp(settings) => settings
-                .model_path
-                .as_ref()
-                .filter(|path| !path.is_empty())
-                .map(|path| ModelPathDto {
-                    path: path.clone(),
-                    working_dir: record.profile.working_dir.clone(),
-                }),
+            EngineAdapterSettings::KataGoAnalysis(settings) | EngineAdapterSettings::KataGoGtp(settings) => {
+                settings
+                    .model_path
+                    .as_ref()
+                    .filter(|path| !path.is_empty())
+                    .map(|path| ModelPathDto {
+                        path: path.clone(),
+                        working_dir: record.profile.working_dir.clone(),
+                    })
+            }
             EngineAdapterSettings::GenericGtp(_) => None,
         })
         .collect()
@@ -77,10 +78,18 @@ mod tests {
         inventory.remember_saved(&saved_paths(&settings)).unwrap();
         let retained = inventory.snapshot().unwrap();
         assert_eq!(retained.models.len(), 2);
-        assert!(retained.models.iter().any(|model| model.path.ends_with("kata_go_gtp.bin.gz")));
-        assert!(retained.models.iter().any(|model| model.path.ends_with("kata_go_analysis.bin.gz")));
+        assert!(retained
+            .models
+            .iter()
+            .any(|model| model.path.ends_with("kata_go_gtp.bin.gz")));
+        assert!(retained
+            .models
+            .iter()
+            .any(|model| model.path.ends_with("kata_go_analysis.bin.gz")));
         assert_eq!(serde_json::to_vec(&settings).unwrap(), before);
-        let reopened = ModelInventory::new(directory.join("inventory.json")).snapshot().unwrap();
+        let reopened = ModelInventory::new(directory.join("inventory.json"))
+            .snapshot()
+            .unwrap();
         assert_eq!(reopened.models, retained.models);
         std::fs::remove_dir_all(directory).unwrap();
     }

@@ -126,15 +126,25 @@ impl ForegroundEngineManager {
         let request = self.lock().startup_evaluation.take();
         let result = match request {
             None | Some(Ok(None)) => return,
-            Some(Err(message)) => Err(failure(EngineOperationDto::Job, EngineFailureKind::InvalidState,
-                FailureText::unscoped(&message), None, None, None)),
+            Some(Err(message)) => Err(failure(
+                EngineOperationDto::Job,
+                EngineFailureKind::InvalidState,
+                FailureText::unscoped(&message),
+                None,
+                None,
+                None,
+            )),
             Some(Ok(Some(saved))) => self.start_saved_evaluation(Ok(saved), true),
         };
         if let Err(error) = result {
             let mut state = self.lock();
             if state.evaluation.is_none() {
                 state.evaluation_notice = EvaluationSnapshotDto {
-                    phase: if busy(&state) { PhaseDto::Yielded } else { PhaseDto::Unavailable },
+                    phase: if busy(&state) {
+                        PhaseDto::Yielded
+                    } else {
+                        PhaseDto::Unavailable
+                    },
                     message: Some(error.message),
                     ..Default::default()
                 };
@@ -146,7 +156,10 @@ impl ForegroundEngineManager {
         let mut state = self.lock();
         if let Some(slot) = state.evaluation.as_mut() {
             if self.inner.catalog.get(&slot.saved.profile_id).as_ref() != Some(&slot.saved) {
-                let _ = slot.retire(PhaseDto::Retired, "Saved benchmark target changed or was deleted".into());
+                let _ = slot.retire(
+                    PhaseDto::Retired,
+                    "Saved benchmark target changed or was deleted".into(),
+                );
             }
             return slot.snapshot.clone();
         }
@@ -171,12 +184,19 @@ impl ForegroundEngineManager {
 
     pub fn start_evaluation(&self, profile_id: &str) -> Result<EvaluationSnapshotDto, EngineFailureDto> {
         self.lock().startup_evaluation = None;
-        let saved = self.inner.catalog.get(profile_id)
+        let saved = self
+            .inner
+            .catalog
+            .get(profile_id)
             .ok_or_else(|| eval_failure("Select an existing saved local profile to benchmark"));
         self.start_saved_evaluation(saved, false)
     }
 
-    fn start_saved_evaluation(&self, saved: Result<SavedEngineProfile, EngineFailureDto>, startup: bool) -> Result<EvaluationSnapshotDto, EngineFailureDto> {
+    fn start_saved_evaluation(
+        &self,
+        saved: Result<SavedEngineProfile, EngineFailureDto>,
+        startup: bool,
+    ) -> Result<EvaluationSnapshotDto, EngineFailureDto> {
         {
             let mut state = self.lock();
             if let Some(old) = state.evaluation.as_mut() {
@@ -199,7 +219,9 @@ impl ForegroundEngineManager {
         let worker = EvaluationWorker(Arc::clone(&self.inner.evaluation_worker));
         let saved = saved?;
         if self.inner.catalog.get(&saved.profile_id).as_ref() != Some(&saved) {
-            return Err(eval_failure("Startup evaluation unavailable: captured saved target changed or was deleted"));
+            return Err(eval_failure(
+                "Startup evaluation unavailable: captured saved target changed or was deleted",
+            ));
         }
         let mut spec = build_command_spec(&saved.profile)
             .map_err(|_| eval_failure("Benchmark target has invalid or missing local resources"))?;
@@ -239,7 +261,9 @@ impl ForegroundEngineManager {
         let autoload_run = {
             let mut state = self.lock();
             let autoload_run = match &state.phase {
-                Phase::Starting(run) if startup && state.operation_kind == EngineOperationDto::Autoload => Some(run.run_id.clone()),
+                Phase::Starting(run) if startup && state.operation_kind == EngineOperationDto::Autoload => {
+                    Some(run.run_id.clone())
+                }
                 _ => None,
             };
             if busy(&state) && autoload_run.is_none() {
@@ -275,13 +299,20 @@ impl ForegroundEngineManager {
 
 fn wait_for_startup(weak: &Weak<Inner>, id: &str, autoload_run: Option<&str>) -> Result<(), FailureText> {
     let Some(run_id) = autoload_run else { return Ok(()) };
-    let deadline = Instant::now() + weak.upgrade().ok_or("Benchmark manager closed")?.config.readiness_timeout;
+    let deadline = Instant::now()
+        + weak
+            .upgrade()
+            .ok_or("Benchmark manager closed")?
+            .config
+            .readiness_timeout;
     loop {
         let inner = weak.upgrade().ok_or("Benchmark manager closed")?;
         let mut state = inner.lock();
-        if current(&mut state, id).is_none() { return Err("Benchmark retired".into()); }
+        if current(&mut state, id).is_none() {
+            return Err("Benchmark retired".into());
+        }
         match &state.phase {
-            Phase::Starting(run) if run.run_id == run_id && Instant::now() < deadline => {},
+            Phase::Starting(run) if run.run_id == run_id && Instant::now() < deadline => {}
             Phase::Ready(run) if run.run_id == run_id => return Ok(()),
             Phase::NoEngine { .. } => return Ok(()),
             _ => {
@@ -308,13 +339,20 @@ fn execute(
     saved: &SavedEngineProfile,
     spec: &mut crate::CommandSpec,
 ) -> Result<(), FailureText> {
-    let managed_root = weak.upgrade().ok_or("Benchmark manager closed")?.config.managed_resources_root.clone();
+    let managed_root = weak
+        .upgrade()
+        .ok_or("Benchmark manager closed")?
+        .config
+        .managed_resources_root
+        .clone();
     let mut evaluation_run = starting_run(saved);
     evaluation_run.run_id = id.into();
     // This capture belongs only to the evaluation; it is not a Foreground Run attempt.
     let diagnostics = crate::diagnostics::AttemptCapture::new(&evaluation_run);
     let is_retired = || {
-        let Some(inner) = weak.upgrade() else { return true; };
+        let Some(inner) = weak.upgrade() else {
+            return true;
+        };
         current(&mut inner.lock(), id).is_none()
             || inner.catalog.get(&saved.profile_id).as_ref() != Some(saved)
     };
@@ -368,7 +406,10 @@ fn execute(
     let mut state = inner.lock();
     let slot = current(&mut state, id).ok_or("Benchmark retired")?;
     if inner.catalog.get(&saved.profile_id).as_ref() != Some(saved) {
-        let _ = slot.retire(PhaseDto::Retired, "Saved benchmark target changed or was deleted".into());
+        let _ = slot.retire(
+            PhaseDto::Retired,
+            "Saved benchmark target changed or was deleted".into(),
+        );
         return Ok(());
     }
     slot.snapshot.result = Some(EvaluationResultDto {
@@ -517,7 +558,10 @@ fn run_process(
         let mut state = inner.lock();
         let slot = current(&mut state, id).ok_or("Benchmark retired")?;
         if inner.catalog.get(&slot.saved.profile_id).as_ref() != Some(&slot.saved) {
-            let _ = slot.retire(PhaseDto::Retired, "Saved benchmark target changed or was deleted".into());
+            let _ = slot.retire(
+                PhaseDto::Retired,
+                "Saved benchmark target changed or was deleted".into(),
+            );
             return Err("Benchmark retired".into());
         }
         if let Ok(line) = line {

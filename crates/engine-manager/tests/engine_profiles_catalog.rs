@@ -1,4 +1,6 @@
-use app_model::{EngineAdapterSettings, EngineProfileDto, EngineStartupPolicyDto, GenericGtpSettings, KataGoSettings};
+use app_model::{
+    EngineAdapterSettings, EngineProfileDto, EngineStartupPolicyDto, GenericGtpSettings, KataGoSettings,
+};
 use engine_manager::{
     default_engine_profiles_settings, load_engine_profiles, parse_engine_profiles, save_engine_profiles,
     EngineProfileRecord, EngineProfilesSettings, DEFAULT_ENGINE_PROFILE_ID, ENGINE_PROFILES_VERSION,
@@ -67,7 +69,9 @@ fn settings(
     EngineProfilesSettings {
         version: ENGINE_PROFILES_VERSION,
         selected_profile_id: selected.to_string(),
-        startup: autoload.map_or(EngineStartupPolicyDto::Off, |id| EngineStartupPolicyDto::Fixed { profile_id: id.into() }),
+        startup: autoload.map_or(EngineStartupPolicyDto::Off, |id| EngineStartupPolicyDto::Fixed {
+            profile_id: id.into(),
+        }),
         last_primary_profile_id: None,
         startup_evaluation: Default::default(),
         profiles,
@@ -91,19 +95,30 @@ fn startup_evaluation_defaults_and_durable_target_are_independent() {
     let temp = TestTempDir::new("startup-evaluation");
     let path = temp.catalog_path();
     let initial = serde_json::to_value(load_engine_profiles(&path).unwrap()).unwrap();
-    assert_eq!(initial["startup_evaluation"], serde_json::json!({"enabled": false, "target_profile_id": null}));
+    assert_eq!(
+        initial["startup_evaluation"],
+        serde_json::json!({"enabled": false, "target_profile_id": null})
+    );
     let mut bytes = initial.clone();
     bytes["startup_evaluation"] = serde_json::json!({"enabled": true, "target_profile_id": "deleted-target"});
     let settings = parse_engine_profiles(&bytes.to_string()).unwrap();
     save_engine_profiles(&path, settings.clone()).unwrap();
     assert_eq!(load_engine_profiles(&path).unwrap(), settings);
-    assert_eq!(serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap()["startup_evaluation"], bytes["startup_evaluation"]);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap()
+            ["startup_evaluation"],
+        bytes["startup_evaluation"]
+    );
     bytes["startup_evaluation"]["enabled"] = serde_json::json!("true");
     assert!(parse_engine_profiles(&bytes.to_string()).is_err());
     assert_eq!(load_engine_profiles(&path).unwrap(), settings);
     let mut legacy = initial;
     legacy.as_object_mut().unwrap().remove("startup_evaluation");
-    assert_eq!(serde_json::to_value(parse_engine_profiles(&legacy.to_string()).unwrap()).unwrap()["startup_evaluation"]["enabled"], false);
+    assert_eq!(
+        serde_json::to_value(parse_engine_profiles(&legacy.to_string()).unwrap()).unwrap()
+            ["startup_evaluation"]["enabled"],
+        false
+    );
 }
 
 #[test]
@@ -179,18 +194,25 @@ fn set_replace_clear_and_reload_keep_a_single_autoload_mark() {
     let marked = save_engine_profiles(
         &path,
         EngineProfilesSettings {
-            startup: EngineStartupPolicyDto::Fixed { profile_id: "alpha".into() },
+            startup: EngineStartupPolicyDto::Fixed {
+                profile_id: "alpha".into(),
+            },
             ..catalog.clone()
         },
     )
     .unwrap();
     assert_eq!(marked.startup_profile_id(), Some("alpha"));
-    assert_eq!(load_engine_profiles(&path).unwrap().startup_profile_id(), Some("alpha"));
+    assert_eq!(
+        load_engine_profiles(&path).unwrap().startup_profile_id(),
+        Some("alpha")
+    );
 
     let replaced = save_engine_profiles(
         &path,
         EngineProfilesSettings {
-            startup: EngineStartupPolicyDto::Fixed { profile_id: "beta".into() },
+            startup: EngineStartupPolicyDto::Fixed {
+                profile_id: "beta".into(),
+            },
             ..catalog.clone()
         },
     )
@@ -225,11 +247,15 @@ fn corrupt_identities_are_rejected_without_replacing_storage() {
             ..valid.clone()
         },
         EngineProfilesSettings {
-            startup: EngineStartupPolicyDto::Fixed { profile_id: "bad\0id".into() },
+            startup: EngineStartupPolicyDto::Fixed {
+                profile_id: "bad\0id".into(),
+            },
             ..valid.clone()
         },
         EngineProfilesSettings {
-            startup: EngineStartupPolicyDto::Fixed { profile_id: "   ".into() },
+            startup: EngineStartupPolicyDto::Fixed {
+                profile_id: "   ".into(),
+            },
             ..valid.clone()
         },
     ] {
@@ -454,7 +480,14 @@ fn generic_settings_roundtrip_preserves_unrestricted_argv() {
 fn katago_layered_config_arguments_roundtrip_in_source_order() {
     let temp = TestTempDir::new("layered-config-roundtrip");
     let mut record = profile("layered", "Layered KataGo");
-    record.profile.argv = vec!["-config".into(), "配置, space.cfg".into(), "-config".into(), "second.cfg".into(), "-override-config".into(), "homeDataDir=custom".into()];
+    record.profile.argv = vec![
+        "-config".into(),
+        "配置, space.cfg".into(),
+        "-config".into(),
+        "second.cfg".into(),
+        "-override-config".into(),
+        "homeDataDir=custom".into(),
+    ];
     let catalog = settings("layered", Some("layered"), vec![record]);
     save_engine_profiles(&temp.catalog_path(), catalog.clone()).unwrap();
     assert_eq!(load_engine_profiles(&temp.catalog_path()).unwrap(), catalog);
@@ -546,7 +579,11 @@ fn version_one_migrates_off_and_fixed_without_rewriting_bytes() {
     let temp = TestTempDir::new("v1-startup");
     let path = temp.catalog_path();
     for autoload in [None, Some("alpha")] {
-        let original = settings("beta", autoload, vec![profile("alpha", "A"), profile("beta", "B")]);
+        let original = settings(
+            "beta",
+            autoload,
+            vec![profile("alpha", "A"), profile("beta", "B")],
+        );
         let mut old = serde_json::to_value(&original).unwrap();
         let object = old.as_object_mut().unwrap();
         object.remove("startup");
@@ -574,15 +611,23 @@ fn last_primary_reopens_independently_of_editor_and_retains_durable_identity_on_
     save_engine_profiles(&path, current.clone()).unwrap();
     assert_eq!(load_engine_profiles(&path).unwrap().startup_profile_id(), None);
     current = engine_manager::persist_last_primary(&path, current, Some("alpha".into())).unwrap();
-    assert_eq!(load_engine_profiles(&path).unwrap().startup_profile_id(), Some("alpha"));
+    assert_eq!(
+        load_engine_profiles(&path).unwrap().startup_profile_id(),
+        Some("alpha")
+    );
     let mut stale_form = current.clone();
     stale_form.last_primary_profile_id = Some("beta".into());
     let prepared = engine_manager::prepare_engine_profiles_save(&current, stale_form).unwrap();
     assert_eq!(prepared.last_primary_profile_id.as_deref(), Some("alpha"));
-    let reordered = engine_manager::reorder_engine_profiles(&path, current.clone(), &app_model::EngineProfileOrderRequestDto {
-        expected_profile_ids: vec!["alpha".into(), "beta".into()],
-        profile_ids: vec!["beta".into(), "alpha".into()],
-    }).unwrap();
+    let reordered = engine_manager::reorder_engine_profiles(
+        &path,
+        current.clone(),
+        &app_model::EngineProfileOrderRequestDto {
+            expected_profile_ids: vec!["alpha".into(), "beta".into()],
+            profile_ids: vec!["beta".into(), "alpha".into()],
+        },
+    )
+    .unwrap();
     assert_eq!(reordered.startup_profile_id(), Some("alpha"));
     let before = std::fs::read(&path).unwrap();
     std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
@@ -590,7 +635,10 @@ fn last_primary_reopens_independently_of_editor_and_retains_durable_identity_on_
     assert_eq!(std::fs::read(&path).unwrap(), before);
     assert_eq!(load_engine_profiles(&path).unwrap(), reordered);
     // A session with no established primary is not a request to clear last-good.
-    assert_eq!(engine_manager::persist_last_primary(&path, reordered.clone(), None).unwrap(), reordered);
+    assert_eq!(
+        engine_manager::persist_last_primary(&path, reordered.clone(), None).unwrap(),
+        reordered
+    );
 }
 
 #[test]
@@ -601,7 +649,11 @@ fn missing_deleted_and_corrupt_last_primary_never_select_the_editor() {
     current.last_primary_profile_id = Some("deleted".into());
     let parsed = parse_engine_profiles(&serde_json::to_string(&current).unwrap()).unwrap();
     assert_eq!(parsed.startup_profile_id(), Some("deleted"));
-    for invalid in [serde_json::json!(12), serde_json::json!(""), serde_json::json!("bad\0id")] {
+    for invalid in [
+        serde_json::json!(12),
+        serde_json::json!(""),
+        serde_json::json!("bad\0id"),
+    ] {
         let mut value = serde_json::to_value(&current).unwrap();
         value["last_primary_profile_id"] = invalid;
         assert!(parse_engine_profiles(&value.to_string()).is_err());

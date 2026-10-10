@@ -353,7 +353,10 @@ impl CurrentGameState {
     }
 
     pub fn graceful_exit_completed(&self) -> bool {
-        self.holder.lock().expect("current game state").graceful_exit_completed
+        self.holder
+            .lock()
+            .expect("current game state")
+            .graceful_exit_completed
     }
 
     #[cfg(test)]

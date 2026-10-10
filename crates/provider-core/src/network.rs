@@ -199,8 +199,13 @@ impl NetworkState {
         }
         state.sequence += 1;
         let operation = NetworkOperation::new(
-            ProviderRequestIdentityDto { request_id: state.sequence, policy_revision, document_identity: 0 },
-            state.settings.clone(), self.1.clone(),
+            ProviderRequestIdentityDto {
+                request_id: state.sequence,
+                policy_revision,
+                document_identity: 0,
+            },
+            state.settings.clone(),
+            self.1.clone(),
         );
         state.resource = Some(operation.clone());
         Ok(operation)
@@ -247,10 +252,18 @@ impl NetworkState {
                 return false;
             };
             // Seal both reads before waiting for either in-flight commit lease.
-            for op in [&state.current, &state.sync, &state.resource].into_iter().flatten() {
+            for op in [&state.current, &state.sync, &state.resource]
+                .into_iter()
+                .flatten()
+            {
                 op.lease.0.cancelled.store(true, Ordering::Release);
             }
-            let PolicyState { current, sync, resource, .. } = &mut *state;
+            let PolicyState {
+                current,
+                sync,
+                resource,
+                ..
+            } = &mut *state;
             for slot in [current, sync, resource] {
                 if let Some(op) = slot.as_ref() {
                     let Some(mut valid) = lock_before(&op.lease.0.valid, deadline) else {
