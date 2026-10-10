@@ -586,6 +586,8 @@ cd apps/desktop && npx vitest run src/EngineLifecycle.test.tsx src/SelectedNodeA
 cd ../.. && cargo test -p engine-manager --test foreground_engine_run continuous_
 ```
 
+The selected-node protocol-failure and supersede fixtures retain their Ready/lane assertions, then explicitly tear down the owned manager before deleting temporary callback files. Both assert the cancellation marker and final NoEngine snapshot. STD-04 Linux real-pipe validation ran each case with `--exact --nocapture --test-threads=1`, then the full `foreground_engine_run` target serially: **160 passed, 1 ignored** (the existing long-startup case). Captured stdout/stderr contained no background panic, PoisonError or cleanup NotFound; an owned-descendant observer confirmed both targeted engine children and their observed helpers were gone after execution. This is fixture-cleanup evidence, not native GUI or live-engine acceptance.
+
 Optional real KataGo on a resident Run (ignored by default):
 
 ```bash

@@ -1045,6 +1045,13 @@ fn selected_node_protocol_failure_does_not_cancel_whole_game() {
         manager.snapshot().lifecycle,
         ForegroundEngineLifecycleDto::Ready { .. }
     ));
+
+    manager.teardown().unwrap();
+    assert_eq!(std::fs::read_to_string(&cancel_marker).unwrap(), "cancelled");
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine { .. }
+    ));
 }
 
 #[cfg(unix)]
@@ -1131,6 +1138,13 @@ fn selected_node_supersede_cancels_only_that_lane_and_completes_latest() {
     assert!(matches!(
         manager.snapshot().lifecycle,
         ForegroundEngineLifecycleDto::Ready { .. }
+    ));
+
+    manager.teardown().unwrap();
+    assert_eq!(std::fs::read_to_string(&cancel_marker).unwrap(), "cancelled");
+    assert!(matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine { .. }
     ));
 }
 
