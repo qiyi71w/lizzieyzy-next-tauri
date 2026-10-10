@@ -770,6 +770,9 @@ mod tests {
     fn publication_waits_for_inventory_then_preserves_resources_and_receipt() {
         let (resources, prepared, inventory) = publication_fixture();
         let root = resources.root.clone();
+        let contents = prepared.directory.join("contents");
+        let destination = root.join("installed").join(&prepared.operation_id);
+        let (contended, resume) = inventory.observe_publication_contention();
         let held = inventory.hold_for_publication_probe();
         std::thread::scope(|scope| {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -777,13 +780,18 @@ mod tests {
             let worker = scope.spawn(move || {
                 tx.send(resources.publish(prepared, inventory)).unwrap();
             });
-            assert!(rx.recv_timeout(std::time::Duration::from_millis(50)).is_err());
-            assert!(root.read_dir().unwrap().any(|entry| entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with("staging-")));
+            contended
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("publisher observed inventory contention");
+            assert_eq!(
+                fs::read(contents.join("katago")).unwrap(),
+                b"controlled engine bytes"
+            );
+            assert!(!destination.exists());
+            assert!(!root.join("inventory.json").exists());
+            assert!(rx.try_recv().is_err());
             drop(held);
+            resume.send(()).unwrap();
             let installed = rx
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap()
@@ -791,6 +799,14 @@ mod tests {
             assert!(std::path::Path::new(&installed.model_path).is_file());
             worker.join().unwrap();
             assert_eq!(inventory.snapshot().unwrap().models.len(), 1);
+            let reopened = crate::models::ModelInventory::new(root.join("inventory.json"));
+            let retained = reopened.snapshot().unwrap();
+            assert_eq!(retained.models.len(), 1);
+            assert_eq!(retained.models[0].path, installed.model_path);
+            assert!(matches!(
+                retained.models[0].origin,
+                ModelOriginDto::Managed { .. }
+            ));
         });
         fs::remove_dir_all(root).unwrap();
     }
@@ -803,19 +819,30 @@ mod tests {
             let id = prepared.operation_id.clone();
             let contents = prepared.directory.join("contents");
             let held = inventory.hold_for_publication_probe();
+            let (contended, resume) = inventory.observe_publication_contention();
             std::thread::scope(|scope| {
                 let (tx, rx) = std::sync::mpsc::channel();
                 let (resources, inventory) = (&resources, &inventory);
                 let worker = scope.spawn(move || {
                     tx.send(resources.publish(prepared, inventory)).unwrap();
                 });
-                assert!(rx.recv_timeout(std::time::Duration::from_millis(50)).is_err());
+                contended
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("publisher observed inventory contention");
+                assert_eq!(
+                    fs::read(contents.join("katago")).unwrap(),
+                    b"controlled engine bytes"
+                );
+                assert!(!root.join("installed").join(&id).exists());
+                assert!(!root.join("inventory.json").exists());
+                assert!(rx.try_recv().is_err());
                 if cancel {
                     resources.cancel(&id).unwrap();
                 } else {
                     fs::write(contents.join("katago"), b"changed").unwrap();
                 }
                 drop(held);
+                resume.send(()).unwrap();
                 assert_eq!(
                     rx.recv_timeout(std::time::Duration::from_secs(5))
                         .unwrap()

@@ -208,11 +208,20 @@ struct InventoryFile<T> {
     models: T,
 }
 
-/// One non-queuing owner for local inspection and atomic retained-path updates.
+/// Local inspections and ordinary retained-path updates use non-queuing ownership.
+/// Managed publication alone uses a bounded, cancellable inventory guard.
 /// Saved profile selection remains exclusively in the profile catalog.
 pub struct ModelInventory {
     path: PathBuf,
     snapshot: Mutex<Option<ModelInventoryDto>>,
+    #[cfg(test)]
+    publication_probe: parking_lot::Mutex<Option<PublicationContentionProbe>>,
+}
+
+#[cfg(test)]
+struct PublicationContentionProbe {
+    reached: std::sync::mpsc::Sender<()>,
+    resume: std::sync::mpsc::Receiver<()>,
 }
 
 pub(crate) struct ManagedReceipt {
@@ -277,12 +286,27 @@ impl ModelInventory {
         Self {
             path,
             snapshot: Mutex::new(None),
+            #[cfg(test)]
+            publication_probe: parking_lot::Mutex::new(None),
         }
     }
 
     #[cfg(test)]
     pub(crate) fn hold_for_publication_probe(&self) -> MutexGuard<'_, Option<ModelInventoryDto>> {
         self.snapshot.lock().unwrap()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observe_publication_contention(
+        &self,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (reached, observed) = std::sync::mpsc::channel();
+        let (resume, resumed) = std::sync::mpsc::channel();
+        *self.publication_probe.lock() = Some(PublicationContentionProbe {
+            reached,
+            resume: resumed,
+        });
+        (observed, resume)
     }
 
     pub(crate) fn publication_guard(
@@ -300,7 +324,16 @@ impl ModelInventory {
                     })
                 }
                 Err(std::sync::TryLockError::Poisoned(_)) => return Err("model_inventory_unavailable".into()),
-                Err(std::sync::TryLockError::WouldBlock) => {}
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    #[cfg(test)]
+                    if let Some(probe) = self.publication_probe.lock().take() {
+                        probe.reached.send(()).expect("contention observer");
+                        probe
+                            .resume
+                            .recv_timeout(Duration::from_secs(5))
+                            .expect("contention observer resumes publication");
+                    }
+                }
             }
             if Instant::now() >= deadline {
                 return Err("model_inventory_busy".into());
@@ -403,23 +436,6 @@ impl ModelInventory {
         Ok(result)
     }
 
-    /// Called by the managed installer only after its own catalog/source admission.
-    /// This receipt records installation ownership, not ongoing resource trust.
-    pub fn retain_managed(
-        &self,
-        path: &Path,
-        catalog_id: &str,
-        installed_sha256: &str,
-    ) -> Result<(), String> {
-        let snapshot = self.lock()?;
-        let receipt = ManagedReceipt::inspect(path, catalog_id, installed_sha256)?;
-        ManagedInventoryGuard {
-            inventory: self,
-            snapshot,
-        }
-        .retain(path, receipt)
-    }
-
     /// Explicit draft selection re-reads content, including same-size/same-time replacements.
     /// A path receipt is not engine admission; Start still qualifies the actual launch.
     pub fn select(&self, request: &ModelSelectionRequestDto) -> Result<String, String> {
@@ -520,5 +536,68 @@ fn make_snapshot(models: Vec<RetainedModel>) -> ModelInventoryDto {
                 inspection: empty_inspection(Status::Unchecked),
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    #[test]
+    fn retained_paths_survive_reopen_and_same_size_time_replacement_rejects_selection() {
+        use app_model::{ModelOriginDto, ModelPathDto, ModelSelectionRequestDto};
+        let dir = std::env::temp_dir().join(format!("model-retention-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let b11 = dir.join("b11.bin");
+        let b10 = dir.join("b10.bin");
+        fs::write(&b11, b"real-b11\n8\n22\n19\ntrunk\n@BIN@1234").unwrap();
+        fs::write(&b10, b"real-b10\n8\n22\n19\ntrunk\n@BIN@1234").unwrap();
+        let model = |path: &std::path::Path| ModelPathDto {
+            path: path.to_string_lossy().into_owned(),
+            working_dir: None,
+        };
+        let inventory = ModelInventory::new(dir.join("inventory.json"));
+        let first = inventory.refresh(&[model(&b11)]).unwrap();
+        let digest = first.models[0].inspection.sha256.clone().unwrap();
+        let receipt = ManagedReceipt::inspect(&b11, "b11-11750M", &digest).unwrap();
+        inventory
+            .publication_guard(Instant::now() + Duration::from_secs(1), || Ok(()))
+            .unwrap()
+            .retain(&b11, receipt)
+            .unwrap();
+        let second = inventory.refresh(&[model(&b10)]).unwrap();
+        assert_eq!(second.models.len(), 2);
+        let original = &second.models[0];
+        assert!(matches!(original.origin, ModelOriginDto::Managed { .. }));
+        let request = ModelSelectionRequestDto {
+            revision: second.revision.clone(),
+            model_id: original.id.clone(),
+            sha256: digest,
+        };
+        assert_eq!(inventory.select(&request).unwrap(), b11.to_string_lossy());
+        let modified = fs::metadata(&b11).unwrap().modified().unwrap();
+        fs::write(&b11, b"real-new\n8\n22\n19\ntrunk\n@BIN@1234").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&b11)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert!(inventory.select(&request).is_err());
+        drop(inventory);
+        let reopened = ModelInventory::new(dir.join("inventory.json"));
+        let snapshot = reopened.snapshot().unwrap();
+        assert_eq!(snapshot.models.len(), 2);
+        assert_eq!(snapshot.models[0].id, original.id);
+        assert!(matches!(
+            snapshot.models[0].origin,
+            ModelOriginDto::Managed { .. }
+        ));
+        assert!(snapshot
+            .models
+            .iter()
+            .all(|model| model.inspection.status == Status::Unchecked));
+        assert!(reopened.select(&request).is_err());
+        fs::remove_dir_all(dir).unwrap();
     }
 }

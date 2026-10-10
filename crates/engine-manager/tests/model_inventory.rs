@@ -29,60 +29,6 @@ fn content_header_not_filename_and_corrupt_gzip_are_distinct() {
 }
 
 #[test]
-fn retained_paths_survive_reopen_and_same_size_time_replacement_rejects_selection() {
-    use app_model::{ModelOriginDto, ModelPathDto, ModelSelectionRequestDto};
-    use engine_manager::models::ModelInventory;
-    let dir = std::env::temp_dir().join(format!("model-retention-{}", uuid::Uuid::new_v4()));
-    fs::create_dir_all(&dir).unwrap();
-    let b11 = dir.join("b11.bin");
-    let b10 = dir.join("b10.bin");
-    fs::write(&b11, b"real-b11\n8\n22\n19\ntrunk\n@BIN@1234").unwrap();
-    fs::write(&b10, b"real-b10\n8\n22\n19\ntrunk\n@BIN@1234").unwrap();
-    let model = |path: &std::path::Path| ModelPathDto {
-        path: path.to_string_lossy().into_owned(),
-        working_dir: None,
-    };
-    let inventory = ModelInventory::new(dir.join("inventory.json"));
-    let first = inventory.refresh(&[model(&b11)]).unwrap();
-    let digest = first.models[0].inspection.sha256.clone().unwrap();
-    inventory.retain_managed(&b11, "b11-11750M", &digest).unwrap();
-    let second = inventory.refresh(&[model(&b10)]).unwrap();
-    assert_eq!(second.models.len(), 2);
-    let original = &second.models[0];
-    assert!(matches!(original.origin, ModelOriginDto::Managed { .. }));
-    let request = ModelSelectionRequestDto {
-        revision: second.revision.clone(),
-        model_id: original.id.clone(),
-        sha256: digest,
-    };
-    assert_eq!(inventory.select(&request).unwrap(), b11.to_string_lossy());
-    let modified = fs::metadata(&b11).unwrap().modified().unwrap();
-    fs::write(&b11, b"real-new\n8\n22\n19\ntrunk\n@BIN@1234").unwrap();
-    fs::File::options()
-        .write(true)
-        .open(&b11)
-        .unwrap()
-        .set_times(fs::FileTimes::new().set_modified(modified))
-        .unwrap();
-    assert!(inventory.select(&request).is_err());
-    drop(inventory);
-    let reopened = ModelInventory::new(dir.join("inventory.json"));
-    let snapshot = reopened.snapshot().unwrap();
-    assert_eq!(snapshot.models.len(), 2);
-    assert_eq!(snapshot.models[0].id, original.id);
-    assert!(matches!(
-        snapshot.models[0].origin,
-        ModelOriginDto::Managed { .. }
-    ));
-    assert!(snapshot
-        .models
-        .iter()
-        .all(|model| model.inspection.status == Status::Unchecked));
-    assert!(reopened.select(&request).is_err());
-    fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
 #[ignore = "requires named local model samples; set LIZZIEYZY_MODEL_SAMPLES"]
 fn named_real_model_headers() {
     let directory = std::path::PathBuf::from(std::env::var("LIZZIEYZY_MODEL_SAMPLES").unwrap());
