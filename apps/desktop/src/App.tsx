@@ -1789,6 +1789,8 @@ export function App() {
   }
 
   function adoptContinuationGame(result: CurrentGameResultDto) {
+    // Navigation owns the cursor from dispatch, before its newer snapshot arrives.
+    if (navigatingRef.current) return;
     const previous = currentGameRef.current;
     if (!previous || result.generation < previous.generation
       || (result.generation === previous.generation && result.snapshot_seq < previous.snapshot_seq)) return;

@@ -4,7 +4,7 @@ import { loadContinuationPreferences, saveContinuationPreferences } from "../api
 import { defaultContinuationPreferences } from "../domain/continuation";
 import type { AnalysisBranchChoiceDto, ContinuationModeDto, ContinuationSnapshotDto, CurrentGameResultDto } from "../domain/types";
 import { t } from "../i18n/resources";
-import "./BatchPanel.css";
+import "./ContinuationPanel.css";
 
 type Props = { current: CurrentGameResultDto | null; choices: AnalysisBranchChoiceDto[]; onCurrent: (value: CurrentGameResultDto) => void; onStart: () => void };
 export function ContinuationPanel({ current, choices, onCurrent, onStart }: Props) {
@@ -82,16 +82,10 @@ export function ContinuationPanel({ current, choices, onCurrent, onStart }: Prop
     finally { setBusy(false); }
   }
   return <>
-    <div className="batch-global"><button ref={source} type="button" onClick={() => setOpen(true)}>{t("continuation.title")}</button></div>
-    {open ? <section ref={panel} className="batch-panel" role="dialog" aria-modal="true" aria-label={t("continuation.title")} onKeyDown={event => {
+    <div className="continuation-global"><button ref={source} type="button" aria-expanded={open} onKeyDown={event => { if (event.key === " ") event.stopPropagation(); }} onClick={() => setOpen(true)}>{t("continuation.title")}</button></div>
+    {open ? <section ref={panel} className="continuation-panel" role="dialog" aria-modal="false" aria-label={t("continuation.title")} onKeyDown={event => {
       if (event.nativeEvent.isComposing) return;
       if (event.key === "Escape") { event.stopPropagation(); event.preventDefault(); void stop(true); }
-      if (event.key === "Tab") {
-        const controls = Array.from(panel.current?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled)") ?? []);
-        const first = controls[0], last = controls.at(-1);
-        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-      }
     }}>
       <header><h2>{t("continuation.title")}</h2><button type="button" onClick={() => void stop(true)}>{t("continuation.close")}</button></header>
       {!native ? <p>{t("continuation.native")}</p> : null}
@@ -103,10 +97,12 @@ export function ContinuationPanel({ current, choices, onCurrent, onStart }: Prop
         <button type="button" onClick={() => void save()}>{t("continuation.save")}</button>
         <button type="button" onClick={() => { setMode(saved.mode); setSeconds(String(saved.intervalSeconds)); setError(null); }}>{t("continuation.cancel")}</button>
       </fieldset>
-      <p>{t("continuation.explicit")}</p>
-      <button type="button" disabled={!native || !current || busy || active} onClick={() => void start()}>{t("continuation.start")}</button>
-      <button type="button" disabled={!native} onClick={() => void stop(false)}>{t("continuation.stop")}</button>
-      <p role="status">{t(`continuation.${snapshot?.phase ?? "stopped"}`)}{snapshot?.reason ? ` · ${snapshot.reason}` : ""}</p>
+      <div className="continuation-actions">
+        <button type="button" disabled={!native || !current || busy || active} onClick={() => void start()}>{t("continuation.start")}</button>
+        <button type="button" disabled={!native} onClick={() => void stop(false)}>{t("continuation.stop")}</button>
+        <p role="status">{t(`continuation.${snapshot?.phase ?? "stopped"}`)}{snapshot?.reason ? ` · ${snapshot.reason}` : ""}</p>
+        <p>{t("continuation.explicit")}</p>
+      </div>
       {error ? <p role="alert">{error}</p> : null}
     </section> : null}
   </>;

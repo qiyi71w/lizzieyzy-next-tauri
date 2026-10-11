@@ -12,6 +12,8 @@ import type { WindowGeometryStatusDto } from "./domain/types";
 import type { EngineProfileRecordDto, HumanMatchActionDto, HumanMatchStartDto, MatchAnalysisPolicyDto, MatchTurnDto, MatchUpdateDto } from "./domain/types";
 import * as externalSyncApi from "./api/externalSync";
 import * as batchApi from "./api/batch";
+import * as continuationApi from "./api/continuation";
+import type { ContinuationSnapshotDto } from "./domain/types";
 import type { ExternalSyncSnapshot } from "./domain/providers";
 import type * as ExportModule from "./api/export";
 
@@ -422,6 +424,47 @@ afterEach(() => {
 });
 
 describe("App workflow toolbar ownership", () => {
+  it("keeps continuation controls keyboard-owned and rejects beats across pending user navigation", async () => {
+    currentGameFixture.mockResolvedValue(branchingGame);
+    vi.spyOn(continuationApi, "continuationNativeAvailable").mockReturnValue(true);
+    const running: ContinuationSnapshotDto = { session_id: "continuation", phase: "running", mode: "leaf_only", run_id: "run", request_id: "request", generation: branchingGame.generation, node_path: branchingGame.selected_path, reason: null, current_game: null };
+    vi.spyOn(continuationApi, "startContinuation").mockResolvedValue(running);
+    vi.spyOn(continuationApi, "stopContinuation").mockResolvedValue({ ...running, phase: "stopped" });
+    let releaseBeat!: (value: ContinuationSnapshotDto) => void;
+    vi.spyOn(continuationApi, "continuationBeat").mockImplementation(() => new Promise(resolve => { releaseBeat = resolve; }));
+    const host = await renderApp();
+    vi.useFakeTimers();
+    try {
+      await act(async () => buttonNamed(host, "引擎续走").click());
+      const panel = requiredElement(host, '[role="dialog"][aria-label="引擎续走"]');
+      backend.selectCurrentGameNode.mockClear();
+      backend.foregroundEngineContinuousAction.mockClear();
+      const save = buttonNamed(panel, "保存续走设置");
+      for (const key of [" ", "Enter", "ArrowUp", "ArrowLeft"]) pressKey(save, key);
+      expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+      expect(backend.foregroundEngineContinuousAction).not.toHaveBeenCalled();
+      const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+      act(() => panel.dispatchEvent(tab));
+      expect(tab.defaultPrevented).toBe(false);
+      await act(async () => buttonNamed(panel, "开始续走").click());
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      let releaseNavigation!: (value: CurrentGameResultDto) => void;
+      backend.selectCurrentGameNode.mockReturnValueOnce(new Promise(resolve => { releaseNavigation = resolve; }));
+      act(() => buttonLabeled(host, "首手").click());
+      const stale = { ...branchingGame, snapshot_seq: branchingGame.snapshot_seq + 1, selected_path: { indices: [0] }, snapshot: { ...branchingGame.snapshot, path: { indices: [0] }, position: { ...emptyPosition, move_number: 1 } } };
+      await act(async () => releaseBeat({ ...running, current_game: stale }));
+      expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("2");
+      const selected = { ...branchingGame, snapshot_seq: branchingGame.snapshot_seq + 2, selected_path: { indices: [] }, snapshot: { ...branchingGame.snapshot, path: { indices: [] }, position: emptyPosition } };
+      await act(async () => releaseNavigation(selected));
+      expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("0");
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      await act(async () => releaseBeat({ ...running, phase: "stopped", current_game: stale }));
+      expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("0");
+      await act(async () => panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+      expect(continuationApi.stopContinuation).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(buttonNamed(host, "引擎续走"));
+    } finally { vi.useRealTimers(); }
+  });
   it("opens both workflow dialogs from the workspace toolbar and returns focus without replacing the workspace", async () => {
     const host = await renderApp();
     const toolbar = requiredElement<HTMLElement>(host, '.workspace-visibility-controls');
