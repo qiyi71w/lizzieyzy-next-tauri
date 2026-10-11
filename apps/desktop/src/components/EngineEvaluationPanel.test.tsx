@@ -6,7 +6,7 @@ import * as backend from "../api/backend";
 import type { EngineProfileRecordDto, EvaluationSnapshotDto } from "../domain/types";
 import { EngineEvaluationPanel } from "./EngineEvaluationPanel";
 import { t } from "../i18n/resources";
-import productionResult from "../../../../../crates/engine-manager/tests/fixtures/katago-1.18.2-benchmark/variations-result.json";
+import productionResult from "../../../../crates/engine-manager/tests/fixtures/katago-1.18.2-benchmark/variations-result.json";
 
 const idle: EvaluationSnapshotDto = { evaluation_id: null, target_id: null, input_revision: null, phase: "idle", process_id: null, exit_code: null, output: [], output_truncated: false, message: null, result: null };
 const running: EvaluationSnapshotDto = { ...idle, evaluation_id: "one", target_id: "saved", input_revision: "revision", phase: "running", process_id: 123 };
