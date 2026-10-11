@@ -418,6 +418,65 @@ function canvasContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
 }
 
 describe("analysis presentation bound to exact nodes", () => {
+  it("retains the selected ownership target during heatmap suppression without inventing missing ownership", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await startWholeGame(host);
+    await emitWholeGameProgress({ indices: [] }, analysisFrame({ job_id: "job-wg",
+      candidates: [candidateAt(2, 3), { ...candidateAt(6, 5), ownership: Array(81).fill(-0.5) }], ownership: Array(81).fill(0.5)
+    }));
+    act(() => (host.querySelectorAll(".cand-row")[1] as HTMLElement).click());
+    act(() => buttonNamed(host, "领地").click());
+    expect(candidateCoords(host)).toEqual([]);
+    expect(buttonNamed(host, "领地").disabled).toBe(false);
+    await emitWholeGameProgress({ indices: [] }, analysisFrame({ job_id: "job-wg",
+      candidates: [candidateAt(2, 3), candidateAt(6, 5)], ownership: Array(81).fill(0.5)
+    }));
+    expect(buttonNamed(host, "领地").disabled).toBe(true);
+    expect(host.textContent).toContain("当前候选未提供自身领地，不能用根局面领地代替。");
+    act(() => buttonNamed(host, "候选").click());
+    expect(host.querySelector(".cand-row.is-selected .cand-coord")?.textContent).toBe("G4");
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+  });
+
+  it("keeps the explicitly selected vertex through streaming reorder and clears it on removal", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await startWholeGame(host);
+    const first = candidateAt(2, 3);
+    const selected = candidateAt(6, 5);
+    await emitWholeGameProgress({ indices: [] }, analysisFrame({ job_id: "job-wg", candidates: [first, selected] }));
+    const miniBoard = host.querySelector('.subboard-canvas') as HTMLCanvasElement;
+    const initialPv = miniBoard.dataset.drawn;
+    act(() => (host.querySelectorAll(".cand-row")[1] as HTMLElement).click());
+    expect(host.querySelector(".cand-row.is-selected .cand-coord")?.textContent).toBe("G4");
+    const selectedPv = miniBoard.dataset.drawn;
+    expect(selectedPv).not.toBe(initialPv);
+    const requests = backend.selectCurrentGameNode.mock.calls.length;
+    await emitWholeGameProgress({ indices: [] }, analysisFrame({ job_id: "job-wg", visits: 200, candidates: [selected, first] }));
+    expect(host.querySelector(".cand-row.is-selected .cand-coord")?.textContent).toBe("G4");
+    expect(miniBoard.dataset.drawn).toBe(selectedPv);
+    await emitWholeGameProgress({ indices: [] }, analysisFrame({ job_id: "job-wg", candidates: [first] }));
+    expect(host.querySelector(".cand-row.is-selected")).toBeNull();
+    expect(miniBoard.dataset.drawn).toBe(initialPv);
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    expect(backend.selectCurrentGameNode.mock.calls.length).toBe(requests + 2);
+    await emitWholeGameProgress({ indices: [] }, analysisFrame({ job_id: "job-wg", candidates: [first, selected] }));
+    expect(host.querySelector(".cand-row.is-selected")).toBeNull();
+    expect(miniBoard.dataset.drawn).toBe(initialPv);
+    act(() => (host.querySelectorAll(".cand-row")[1] as HTMLElement).click());
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", bubbles: true })));
+    expect(candidateCoords(host)).toEqual([]);
+    act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", bubbles: true })));
+    expect(candidateCoords(host)).toEqual(["C6", "G4"]);
+    expect(host.querySelector(".cand-row.is-selected")).toBeNull();
+    act(() => (host.querySelectorAll(".cand-row")[1] as HTMLElement).click());
+    await selectPath(host, "下一变化");
+    await selectPath(host, "父节点");
+    expect(host.querySelector(".cand-row.is-selected")).toBeNull();
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+  });
+
   it("projects candidate limit from durable preferences without a second hardcoded cap", async () => {
     preferencesApi.loadAppPreferences.mockResolvedValue({
       preferences: { ...defaultAppPreferences, candidateLimit: 12 }
@@ -479,8 +538,7 @@ describe("analysis presentation bound to exact nodes", () => {
     await selectPath(host, "父节点");
     expect(candidateCoords(host)).toEqual(["C6", "G4"]);
     expect(miniBoard.dataset.drawn).toBe(restingDrawn);
-    expect(host.querySelectorAll(".cand-row.is-selected")).toHaveLength(1);
-    expect(host.querySelectorAll(".cand-row")[0]?.classList.contains("is-selected")).toBe(true);
+    expect(host.querySelectorAll(".cand-row.is-selected")).toHaveLength(0);
   });
 
   it("keeps a selected-node result when it completes after the user has left the node", async () => {

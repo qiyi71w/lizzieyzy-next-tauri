@@ -1,6 +1,14 @@
 // Complete compatibility resource. New consumers add their keys here before use.
 export const baseResources = {
   "analysis.scoreUnavailable": "目数不可用",
+  "analysis.candidates.label": "候选点",
+  "analysis.candidates.instructions": "候选点：方向键、Home、End 浏览，Enter 或空格选择",
+  "analysis.candidates.move": "选点",
+  "analysis.candidates.winrate": "胜率",
+  "analysis.candidates.visits": "计算量",
+  "analysis.candidates.score": "目数",
+  "analysis.candidates.empty": "暂无可用候选点。可分析当前节点或第一子主线。",
+  "analysis.candidates.hidden": "候选点当前已隐藏。请检查显示设置或使用显示候选动作。",
   "engineRules.protocol": "KataGo GTP（显式选择）",
   "engineRules.title": "当前局面的引擎规则确认",
   "engineRules.confirm": "确认规则与精确局面",

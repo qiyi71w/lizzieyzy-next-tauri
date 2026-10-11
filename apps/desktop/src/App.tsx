@@ -126,7 +126,7 @@ import { loadAppPreferences, saveAppPreferences, updateRecentGameHistory, update
 import { useCandidateVisibility } from "./hooks/useCandidateVisibility";
 import { flushWindowGeometry, freezeWindowGeometry, nativeWindowGeometryUnavailable, resetWindowGeometry, retryWindowGeometry, subscribeWindowGeometryStatus, windowGeometryStatus } from "./api/windowGeometry";
 import { useMainWindowPin } from "./hooks/useMainWindowPin";
-import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition } from "./domain/board";
+import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition, vertexKey } from "./domain/board";
 import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "./domain/preferences";
 import { buildNextMoveReviewMarkers, cycleNextMoveReviewMarker } from "./domain/nextMoveReviewMarker";
 import { admitsChartSeriesChange, buildWinrateChartModel, displayedWinrate } from "./domain/winrateChart";
@@ -163,7 +163,7 @@ type PendingPreferencesSave = {
   onSaved?: (preferences: AppPreferences) => void;
   onFailed?: (error: unknown) => void;
 };
-type CandidatePreview = { index: number; scope: ReviewPresentationScope; matchFrameIdentity: string | null };
+type CandidatePreview = { vertex: string; identity: string };
 type ReplacementOptions = {
   networkIdentity?: ProviderRequestIdentity;
   confirmMessage: string;
@@ -255,7 +255,7 @@ export function App() {
   const [analysisTask, setAnalysisTask] = useState<AnalysisTaskDto | null>(null);
   const [analysisTaskError, setAnalysisTaskError] = useState<string | null>(null);
   const [analysisTaskRequestPending, setAnalysisTaskRequestPending] = useState(false);
-  const [selectedCandidateIndex, setSelectedCandidateIndex] = useState<number | null>(null);
+  const [selectedCandidate, setSelectedCandidate] = useState<CandidatePreview | null>(null);
   const [candidatePreview, setCandidatePreview] = useState<CandidatePreview | null>(null);
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
   const [fallbackFileName, setFallbackFileName] = useState<string | null>(null);
@@ -635,24 +635,26 @@ export function App() {
     : null;
   const presentationFrame = matchBlocked ? matchFrame : currentFrame;
   const visibleCurrentFrame = useMemo(() => applyPreferencesToFrame(presentationFrame, preferences), [presentationFrame, preferences]);
-  useEffect(() => {
-    setSelectedCandidateIndex(null);
-    setCandidatePreview(null);
-    setReplayProgress({ identity: "", prefix: 0 });
-  }, [matchFrameIdentity]);
-  const previewCandidateIndex = candidatePreview
-    && candidatePreview.matchFrameIdentity === matchFrameIdentity
-    && (matchBlocked ? Boolean(matchFrame) : presentationLive)
-    && shouldPublishReviewPresentation(activeScope, candidatePreview.scope)
-    ? candidatePreview.index
-    : null;
-  const candidatesEligible = preferences.showCandidates && overlayMode === "candidates"
-    && Boolean(visibleCurrentFrame?.candidates.length)
+  const candidateIdentity = JSON.stringify([activeScope, matchFrameIdentity, presentationFrame?.job_id, currentPosition.move_number]);
+  const candidateIndex = (candidate: CandidatePreview | null, eligible: boolean): number | null => {
+    if (!candidate || candidate.identity !== candidateIdentity || !eligible) return null;
+    const index = visibleCurrentFrame?.candidates.findIndex((item) => vertexKey(item.vertex) === candidate.vertex) ?? -1;
+    return index < 0 ? null : index;
+  };
+  const candidateSelectionEligible = preferences.showCandidates && Boolean(visibleCurrentFrame?.candidates.length)
     && (currentPosition.to_play === "black" ? showBlackCandidates : showWhiteCandidates);
+  const candidatesEligible = candidateSelectionEligible && overlayMode === "candidates";
   const candidateVisibility = useCandidateVisibility(
-    JSON.stringify([activeScope, matchFrameIdentity, presentationFrame?.job_id, currentPosition.move_number]),
+    candidateIdentity,
     candidatesEligible, preferences.granularDisplay);
   const hideCandidates = !candidateVisibility.visible;
+  // Heatmap suppression does not retire the selected ownership target.
+  const selectedCandidateIndex = candidateIndex(selectedCandidate, candidateSelectionEligible && (overlayMode !== "candidates" || !hideCandidates));
+  const previewCandidateIndex = candidateIndex(candidatePreview, !hideCandidates);
+  useEffect(() => {
+    if (selectedCandidate && selectedCandidateIndex === null) setSelectedCandidate(null);
+    if (candidatePreview && previewCandidateIndex === null) setCandidatePreview(null);
+  }, [selectedCandidate, selectedCandidateIndex, candidatePreview, previewCandidateIndex]);
   const activeCandidateIndex = previewCandidateIndex ?? selectedCandidateIndex ?? 0;
   const activeCandidate = visibleCurrentFrame?.candidates[activeCandidateIndex]
     ?? visibleCurrentFrame?.candidates[0]
@@ -811,11 +813,10 @@ export function App() {
     setSelectedCandidateIndex(null);
   }, [currentMove]);
 
-  useEffect(() => {
-    if (!preferences.showCandidates || (selectedCandidateIndex !== null && selectedCandidateIndex >= preferences.candidateLimit)) {
-      setSelectedCandidateIndex(null);
-    }
-  }, [preferences.showCandidates, preferences.candidateLimit, selectedCandidateIndex]);
+  function setSelectedCandidateIndex(index: number | null) {
+    const candidate = index === null || hideCandidates ? null : visibleCurrentFrame?.candidates[index];
+    setSelectedCandidate(candidate ? { vertex: vertexKey(candidate.vertex), identity: candidateIdentity } : null);
+  }
 
   useEffect(() => {
     const openEnabled = nativeRuntime && !historyActionBlocked;
@@ -926,7 +927,7 @@ export function App() {
     });
     shortcutRegistry.bind("review.select-candidate", (event) => {
       const index = Number(event.key) - 1;
-      if (visibleCurrentFrame?.candidates[index]) setSelectedCandidateIndex(index);
+      if (visibleCurrentFrame?.candidates[index]) selectCandidate(index);
     });
     shortcutRegistry.bind("view.coordinates", () => {
       // Coordinate visibility remains a persisted preference, unlike candidate reveal.
@@ -1973,8 +1974,6 @@ export function App() {
     setPublishedScope(captured);
     setFrames(nextFrames);
     setProblems(nextProblems);
-    setSelectedCandidateIndex(null);
-    setCandidatePreview(null);
     return true;
   }
 
@@ -4243,7 +4242,8 @@ export function App() {
   }
 
   function previewCandidate(index: number | null) {
-    setCandidatePreview(index === null ? null : { index, scope: activeScope, matchFrameIdentity });
+    const candidate = index === null || hideCandidates ? null : visibleCurrentFrame?.candidates[index];
+    setCandidatePreview(candidate ? { vertex: vertexKey(candidate.vertex), identity: candidateIdentity } : null);
     // Java FloatBoard: browsing a candidate variation lets readboard give focus back (`loss`), never per frame.
     const sync = externalSyncRef.current;
     if (index !== null && sync?.source === "readboard" && sync.phase === "syncing" && sync.readboard?.preferences.focus) {
@@ -4572,6 +4572,7 @@ export function App() {
         <AnalysisPanel
           pane="reference"
           frame={visibleCurrentFrame}
+          presentationIdentity={candidateIdentity}
           problems={reviewProblems}
           boardWidth={game.summary.board_width}
           boardHeight={game.summary.board_height}

@@ -1,10 +1,10 @@
 import { t } from "../i18n/resources";
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { useElementSize } from "../workspace/useElementSize";
 import type { AnalysisFrameDto, CandidateMoveDto, NodePath, PositionDto, ProblemMarkerDto } from "../domain/types";
 import type { ChartPoint } from "../domain/winrateChart";
 import type { ReviewProblem } from "../domain/reviewNavigation";
-import { isPoint, vertexLabel } from "../domain/board";
+import { isPoint, vertexKey, vertexLabel } from "../domain/board";
 import { defaultGranularDisplay, displayVariationSteps, pvVisitsLabel, type GranularDisplay } from "../domain/granularDisplay";
 
 type PolicyPoint = { x: number; y: number; value: number };
@@ -13,6 +13,7 @@ type SubBoardContentMode = "variation" | "raw";
 
 type Props = {
   frame?: AnalysisFrameDto;
+  presentationIdentity?: string;
   problems: ReviewProblem[];
   reviewLine?: ChartPoint[];
   selectedPath?: NodePath;
@@ -47,6 +48,7 @@ const severityLabel: Record<ProblemMarkerDto["severity"], string> = {
 
 export function AnalysisPanel({
   frame,
+  presentationIdentity,
   problems,
   reviewLine = [],
   selectedPath,
@@ -83,6 +85,79 @@ export function AnalysisPanel({
   const candidates = hideCandidates ? [] : frame?.candidates ?? [];
   const activeCandidateIndex = previewCandidateIndex ?? selectedCandidateIndex ?? 0;
   const activeCandidate = candidates[activeCandidateIndex] ?? candidates[0] ?? null;
+  const listId = useId();
+  const listRef = useRef<HTMLDivElement>(null);
+  const identity = presentationIdentity ?? JSON.stringify([frame?.job_id, selectedPath, currentMove]);
+  const keys = candidates.map((candidate) => vertexKey(candidate.vertex));
+  const [focus, setFocus] = useState<{ identity: string; vertex: string; index: number } | null>(null);
+  const focusedKey = focus?.identity === identity && keys.includes(focus.vertex)
+    ? focus.vertex : keys[Math.min(focus?.identity === identity ? focus.index : 0, keys.length - 1)];
+  const scrollAnchor = useRef<{ identity: string; vertex: string; offset: number } | null>(null);
+  function captureScrollAnchor() {
+    const list = listRef.current;
+    if (!list) return;
+    const bounds = list.getBoundingClientRect();
+    const scale = list.offsetHeight > 0 ? bounds.height / list.offsetHeight : 1;
+    const top = bounds.top + (list.querySelector("thead")?.getBoundingClientRect().height ?? 0);
+    const row = [...list.querySelectorAll<HTMLElement>("[data-candidate]")].find((item) => item.getBoundingClientRect().bottom > top);
+    scrollAnchor.current = row ? { identity, vertex: row.dataset.candidate!, offset: (row.getBoundingClientRect().top - top) / scale } : null;
+  }
+  function revealRow(vertex: string) {
+    const list = listRef.current;
+    const row = list && [...list.querySelectorAll<HTMLElement>("[data-candidate]")].find((item) => item.dataset.candidate === vertex);
+    if (!list || !row) return;
+    const bounds = list.getBoundingClientRect();
+    const rect = row.getBoundingClientRect();
+    const scale = list.offsetHeight > 0 ? bounds.height / list.offsetHeight : 1;
+    const top = bounds.top + (list.querySelector("thead")?.getBoundingClientRect().height ?? 0);
+    const bottom = bounds.top + list.clientHeight * scale;
+    if (rect.top < top) list.scrollTop += Math.floor((rect.top - top) / scale);
+    else if (rect.bottom > bottom) list.scrollTop += Math.ceil((rect.bottom - bottom) / scale);
+  }
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const anchor = scrollAnchor.current;
+    if (anchor?.identity === identity) {
+      const row = [...list.querySelectorAll<HTMLElement>("[data-candidate]")].find((item) => item.dataset.candidate === anchor.vertex);
+      if (row) {
+        const bounds = list.getBoundingClientRect();
+        const scale = list.offsetHeight > 0 ? bounds.height / list.offsetHeight : 1;
+        const top = bounds.top + (list.querySelector("thead")?.getBoundingClientRect().height ?? 0);
+        list.scrollTop += (row.getBoundingClientRect().top - top) / scale - anchor.offset;
+      }
+    }
+    list.scrollTop = Math.max(0, Math.min(list.scrollTop, list.scrollHeight - list.clientHeight));
+    captureScrollAnchor();
+    if (!focusedKey) {
+      if (focus) setFocus(null);
+    } else if (focus?.identity !== identity || focus.vertex !== focusedKey || focus.index !== keys.indexOf(focusedKey)) {
+      setFocus({ identity, vertex: focusedKey, index: keys.indexOf(focusedKey) });
+    }
+  }, [identity, candidates, focusedKey]);
+  function handleListKey(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.nativeEvent.isComposing || event.key === "Process" || event.keyCode === 229) {
+      event.stopPropagation();
+      return;
+    }
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const index = keys.indexOf(focusedKey);
+    let next = index;
+    if (event.key === "ArrowDown" || event.key === "ArrowRight") next = Math.min(index + 1, keys.length - 1);
+    else if (event.key === "ArrowUp" || event.key === "ArrowLeft") next = Math.max(index - 1, 0);
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = keys.length - 1;
+    else if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (next < 0) return;
+    if (event.key === "Enter" || event.key === " ") onSelectCandidate(next);
+    else {
+      setFocus({ identity, vertex: keys[next], index: next });
+      revealRow(keys[next]);
+      captureScrollAnchor();
+    }
+  }
 
   if (pane === "reference") {
     return (
@@ -107,53 +182,65 @@ export function AnalysisPanel({
             );
           })}
         </section>
-        <section className="candidate-table-section" aria-label="候选点">
+        <section className="candidate-table-section" aria-label={t("analysis.candidates.label")}>
           <div className="candidate-title-bar">
-            <span>候选点</span>
+            <span>{t("analysis.candidates.label")}</span>
           </div>
+          <div className="table-wrapper" ref={listRef} role="grid" tabIndex={0}
+            aria-label={t("analysis.candidates.instructions")}
+            aria-activedescendant={focusedKey ? `${listId}-${focusedKey}` : undefined}
+            onKeyDown={handleListKey} onScroll={captureScrollAnchor} onWheel={(event) => event.stopPropagation()}
+            onFocus={() => { if (focusedKey) revealRow(focusedKey); }}>
           {candidates.length > 0 ? (
-            <div className="table-wrapper">
-              <table className="candidate-table">
+              <table className="candidate-table" role="presentation">
                 <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>选点</th>
-                    <th>胜率</th>
-                    <th>计算量</th>
-                    <th>目数</th>
+                  <tr role="row">
+                    <th role="columnheader">#</th>
+                    <th role="columnheader">{t("analysis.candidates.move")}</th>
+                    <th role="columnheader">{t("analysis.candidates.winrate")}</th>
+                    <th role="columnheader">{t("analysis.candidates.visits")}</th>
+                    <th role="columnheader">{t("analysis.candidates.score")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {candidates.map((candidate, index) => {
-                    const isSelected = selectedCandidateIndex === index || (selectedCandidateIndex === null && index === 0);
+                    const isSelected = selectedCandidateIndex === index;
+                    const key = vertexKey(candidate.vertex);
                     const moveText = vertexLabel(candidate.vertex, boardHeight);
                     const winrateText = `${(candidate.winrate_black * 100).toFixed(1)}%`;
                     const scoreText = candidate.score_mean_black == null ? t("analysis.scoreUnavailable")
                       : (candidate.score_mean_black >= 0 ? "+" : "") + candidate.score_mean_black.toFixed(1);
                     return (
                       <tr
-                        key={index}
-                        className={`cand-row${isSelected ? " is-selected" : ""}`}
-                        onClick={() => onSelectCandidate(index)}
+                        key={`${identity}:${key}`}
+                        id={`${listId}-${key}`}
+                        role="row" aria-selected={isSelected} aria-label={moveText}
+                        data-candidate={key}
+                        className={`cand-row${isSelected ? " is-selected" : ""}${focusedKey === key ? " is-focused" : ""}`}
+                        onClick={() => {
+                          setFocus({ identity, vertex: key, index });
+                          listRef.current?.focus({ preventScroll: true });
+                          onSelectCandidate(index);
+                        }}
                       >
-                        <td>
+                        <td role="gridcell">
                           <span className={`rank-badge rank-${index + 1}`}>{index + 1}</span>
                         </td>
-                        <td className="cand-coord">{moveText}</td>
-                        <td className="cand-winrate">{winrateText}</td>
-                        <td className="cand-visits">{candidate.visits.toLocaleString()}</td>
-                        <td className="cand-score">{scoreText}</td>
+                        <td role="gridcell" className="cand-coord">{moveText}</td>
+                        <td role="gridcell" className="cand-winrate">{winrateText}</td>
+                        <td role="gridcell" className="cand-visits">{candidate.visits.toLocaleString()}</td>
+                        <td role="gridcell" className="cand-score">{scoreText}</td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
-            </div>
           ) : (
-            <p className="muted commentary" style={{ padding: "12px 10px", margin: 0 }}>
-              暂无候选点。点击“分析当前节点”或“分析第一子主线”。
+            <p className="muted commentary candidate-empty" role="status">
+              {t(hideCandidates ? "analysis.candidates.hidden" : "analysis.candidates.empty")}
             </p>
           )}
+          </div>
         </section>
         <section className="subboard-section" aria-label="副棋盘">
           <div className="subboard-card">

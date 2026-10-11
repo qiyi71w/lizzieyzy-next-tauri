@@ -128,6 +128,8 @@ Required invariants:
 
 Candidate and PV state is scoped to the selected `NodePath` and analysis job identity. Changing node, game, or job clears stale hover and candidate state before new results are presented.
 
+R13 B70 stores ordinary explicit selection by presentation identity and vertex, so statistics/reorder retain the same candidate rather than the same array slot. Its single-focus list separates browsing from Enter/Space activation and preserves/clamps scroll anchors; filtering/removal retire selection without auto-selecting the first row. Heatmap-only suppression retains a valid candidate ownership target under the B33 contract. Browser/state verification is not Windows continuous-update, input/IME or font/DPI acceptance; first-wave ticket02/05 retain those gates.
+
 `APP-05` owns one Shortcut Registry: actions, primary keys, visible non-conflicting Java aliases, conflict checks, labels, and the Help / `?` reference. Per-action semantics remain with their owner domains and do not expand accepted `UI-05`.
 
 ### Foreground Engine And Analysis Jobs

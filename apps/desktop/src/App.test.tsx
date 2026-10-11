@@ -684,7 +684,7 @@ describe("App human match ownership", () => {
     fresh.match_state.analysis.frame!.epoch = 3;
     await act(async () => { matchListener?.(fresh); });
     expect(candidateCoordinates(host)).toEqual(["J1"]);
-    expect(requiredElement(host, ".cand-row").classList.contains("is-selected")).toBe(true);
+    expect(requiredElement(host, ".cand-row").classList.contains("is-selected")).toBe(false);
     const completed = { ...fresh, match_state: { ...fresh.match_state, revision: 6, job: null } };
     await act(async () => { matchListener?.(completed); });
     expect(candidateCoordinates(host)).toEqual(["J1"]);
@@ -1341,7 +1341,7 @@ describe("App candidate continuation preview", () => {
 
     expect(miniBoard.dataset.drawn).not.toBe(beforePreview);
     const rows = host.querySelectorAll(".cand-row");
-    expect(rows[0]?.classList.contains("is-selected")).toBe(true);
+    expect(rows[0]?.classList.contains("is-selected")).toBe(false);
     expect(rows[1]?.classList.contains("is-selected")).toBe(false);
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe(currentMove);
     expect(backend.serializeCurrentGame).toHaveBeenCalledTimes(serializedCalls);
@@ -2347,7 +2347,7 @@ describe("App focus-safe review controls", () => {
     await waitForCandidateRows(host);
 
     const [first, second] = candidateRows(host);
-    expect(first?.classList.contains("is-selected")).toBe(true);
+    expect(first?.classList.contains("is-selected")).toBe(false);
 
     pressKey(buttonNamed(host, "坐标"), "1");
     expect(first?.classList.contains("is-selected")).toBe(true);
@@ -2390,6 +2390,7 @@ describe("App focus-safe review controls", () => {
     const blackFilter = requiredElement<HTMLInputElement>(hostKey, ".check-label input");
     expect(blackFilter.checked).toBe(true);
     act(() => blackFilter.click());
+    await flushLast(preferencesApi.saveAppPreferences);
     expect(blackFilter.checked).toBe(false);
   });
 

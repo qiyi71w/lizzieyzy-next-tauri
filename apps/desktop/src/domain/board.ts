@@ -6,6 +6,11 @@ export function isPoint(vertex: MoveVertex): vertex is { point: PointDto } {
   return typeof vertex === "object" && vertex !== null && "point" in vertex;
 }
 
+/** Position-local identity, independent of rank and display coordinates. */
+export function vertexKey(vertex: MoveVertex): string {
+  return isPoint(vertex) ? `${vertex.point.x}:${vertex.point.y}` : "pass";
+}
+
 export function replayMainLine(game: GameDto, untilMove = game.moves.length): Stone[] {
   const stones = new Map<string, Stone>();
   for (const move of game.moves.slice(0, untilMove)) {
