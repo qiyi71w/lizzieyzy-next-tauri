@@ -45,6 +45,7 @@ type Props = {
   task: AnalysisTaskDto | null;
   canRun: boolean;
   busy: boolean;
+  automaticTaskActive?: boolean;
   error: string | null;
   onDraftChange: (draft: AnalysisScopeDraft) => void;
   onPreview: () => void;
@@ -294,7 +295,7 @@ export function AnalysisTaskPanel(props: Props) {
         </div>
         <div className="button-row">
           <button type="button" onClick={props.onPreview} disabled={!props.canRun || props.busy}>Preview scope</button>
-          <button type="button" onClick={props.onStart} disabled={!props.canRun || props.busy || reserved || !props.preview}>Start task</button>
+          <button type="button" onClick={props.onStart} disabled={!props.canRun || props.busy || (reserved && !props.automaticTaskActive) || !props.preview}>Start task</button>
           <button type="button" onClick={props.onPause} disabled={props.busy || !pauseable}>Pause task</button>
           <button type="button" onClick={props.onContinue} disabled={!props.canRun || props.busy || !continuable}>Continue task</button>
           <button type="button" onClick={props.onCancel} disabled={props.busy || !reserved}>Cancel task</button>

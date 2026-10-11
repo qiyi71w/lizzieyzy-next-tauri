@@ -1335,6 +1335,7 @@ pub fn run() {
                     match event {
                         ForegroundEngineEventDto::Snapshot { snapshot } => {
                             let _ = emit_handle.emit("foreground-engine://snapshot", snapshot);
+                            emit_handle.state::<CurrentGameState>().reconcile_auto_load();
                         }
                         ForegroundEngineEventDto::Failure { failure } => {
                             if let Some(update) = emit_handle
@@ -1547,6 +1548,7 @@ pub fn run() {
             human_match::human_match_analysis_policy,
             foreground_engine_cancel_game_move,
             foreground_engine_continuous_action,
+            continuous_analysis::cancel_auto_load,
             foreground_engine_cancel_job
         ])
         .build(tauri::generate_context!())
@@ -1595,7 +1597,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn startup_benchmark_save_failure_and_recovery_preserve_game_and_retire_execution() {
+    fn startup_unknown_executable_save_failure_and_recovery_preserve_refusal() {
         struct Catalog(PathBuf);
         impl EngineProfileCatalog for Catalog {
             fn get(&self, id: &str) -> Option<SavedEngineProfile> {
@@ -1655,21 +1657,24 @@ mod tests {
         manager.apply_startup_evaluation();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            if manager.evaluation_snapshot().phase == app_model::EvaluationPhaseDto::Running {
+            if manager.evaluation_snapshot().phase == app_model::EvaluationPhaseDto::Failed {
                 break;
             }
-            assert!(std::time::Instant::now() < deadline);
+            assert!(std::time::Instant::now() < deadline, "startup evaluation: {:?}", manager.evaluation_snapshot());
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        let refused = manager.evaluation_snapshot();
+        assert_eq!(refused.message.as_deref(), Some("policy_direct_local_unknown"));
+        assert!(refused.process_id.is_none() && refused.result.is_none());
+        assert!(!directory.join("spawned.json").exists());
+        // Running-child retirement belongs to engine-manager's qualified fixture
+        // tests and the opt-in actual CPU startup-evaluation smoke.
         let bytes = std::fs::read(&path).unwrap();
         let mut invalid = settings.clone();
         invalid.profiles[0].profile.name.clear();
         assert!(save_engine_profiles_at_path(&path, &manager, &settings, invalid).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        assert_eq!(
-            manager.evaluation_snapshot().phase,
-            app_model::EvaluationPhaseDto::Running
-        );
+        assert_eq!(manager.evaluation_snapshot(), refused);
         let mut edited = settings.clone();
         edited.profiles[0].profile.name = "Edited target".into();
         save_engine_profiles_at_path(&path, &manager, &settings, edited).unwrap();

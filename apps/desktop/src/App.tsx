@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { GameLoadSourceDto } from "./domain/types";
+import { cancelAutoLoad } from "./api/backend";
 import { Workspace } from "./workspace/Workspace";
 import { useWorkspace } from "./workspace/useWorkspace";
 import { useReviewAutoplay } from "./hooks/useReviewAutoplay";
@@ -165,6 +167,7 @@ type PendingPreferencesSave = {
 };
 type CandidatePreview = { vertex: string; identity: string };
 type ReplacementOptions = {
+  loadSource: GameLoadSourceDto;
   networkIdentity?: ProviderRequestIdentity;
   confirmMessage: string;
   fallbackName?: string | null;
@@ -562,6 +565,7 @@ export function App() {
           }
         }
         await applyReplacement(demoSgf, null, {
+          loadSource: "excluded",
           confirmMessage: "放弃未保存的棋谱并载入示例？",
           fallbackName: "sample.sgf",
           successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
@@ -765,6 +769,12 @@ export function App() {
     }
     if (departurePending || departurePrompt || continuousPhase === "departing" || continuousPhase === "stopping") {
       return { label: CONTINUOUS_ANALYSIS_STOP_LABEL, disabled: true, title: "正在等待离开或分析取消完成。", status: continuousPhaseStatus(continuousPhase) };
+    }
+    if (engineSnapshot.auto_load?.phase === "waiting" || engineSnapshot.auto_load?.phase === "running") {
+      return { label: CONTINUOUS_ANALYSIS_STOP_LABEL, disabled: continuousActionPending, status: t(`autoLoad.${engineSnapshot.auto_load.phase}`) };
+    }
+    if (engineSnapshot.auto_load_recovery && engineSnapshot.auto_load_recovery !== "confirmed") {
+      return { label: CONTINUOUS_ANALYSIS_RESUME_LABEL, disabled: true, status: t(`autoLoad.recovery.${engineSnapshot.auto_load_recovery}`) };
     }
     if (engineSnapshot.lifecycle.state === "error") {
       return { label: CONTINUOUS_ANALYSIS_RESUME_LABEL, disabled: true, title: "前台引擎运行失败；请先显式重启引擎。", status: "连续分析：引擎失败" };
@@ -1133,7 +1143,7 @@ export function App() {
     if (id === "edit.redo") return editReason ?? (!canRedo ? "reason.noRedo" : undefined);
     if (id.startsWith("markup.")) return editReason;
     if (id === "analysis.continuous") return continuousAnalysisAction.disabled ? (!continuousEngineReady ? "reason.engine" : "reason.busy") : undefined;
-    if (id.startsWith("analysis.")) return documentReason ?? (!taskEngineReady ? "reason.engine" : wholeGameRunning ? "reason.busy" : undefined);
+    if (id.startsWith("analysis.")) return documentReason ?? (!taskEngineReady ? "reason.engine" : wholeGameRunning && explicitTaskReserved() ? "reason.busy" : undefined);
     if (id === "review.try-play") return documentReason ?? (trialPending || scoring || scoringPending ? "reason.trial" : undefined);
     if (id === "review.scoring") return editReason;
     if (id === "review.pass") return humanTurn ? undefined : documentReason;
@@ -2407,6 +2417,7 @@ export function App() {
       await activationHandlerRef.current(pending);
     } else {
       await applyReplacement(demoSgf, null, {
+        loadSource: "excluded",
         confirmMessage: "放弃未保存的棋谱并载入示例？",
         fallbackName: "sample.sgf",
         successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
@@ -2498,7 +2509,7 @@ export function App() {
     await enterFileFlow();
 
     try {
-      const admission = await prepareDocumentReplacement(sgfInput, nativePath, options.networkIdentity);
+      const admission = await prepareDocumentReplacement(sgfInput, nativePath, options.networkIdentity, options.loadSource);
       const action: DocumentDepartureActionDto = admission.status === "needs_decision"
         ? await requestDepartureDecision(options.confirmMessage)
         : "discard";
@@ -2519,6 +2530,7 @@ export function App() {
 
   async function handleParseSgf() {
     await applyReplacement(sgfText, null, {
+      loadSource: "text",
       confirmMessage: "放弃未保存的棋谱并载入这段文本？",
       fallbackName: fallbackFileName ?? "imported.sgf",
       successMessage: (projection) =>
@@ -2527,8 +2539,9 @@ export function App() {
     });
   }
 
-  async function replaceImportedGame(document: GameFileImportDto): Promise<boolean> {
+  async function replaceImportedGame(document: GameFileImportDto, loadSource: GameLoadSourceDto): Promise<boolean> {
     return applyReplacement(document.sgf_text, document.native_path ?? null, {
+      loadSource,
       confirmMessage: "放弃未保存的棋谱并打开这个文件？",
       fallbackName: document.format === "gib"
         ? document.display_name.replace(/\.gib$/i, ".sgf")
@@ -2563,7 +2576,7 @@ export function App() {
     if (!path) return;
     await enterFileFlow();
     try {
-      await replaceImportedGame(await readGameFile(path));
+      await replaceImportedGame(await readGameFile(path), "recent");
     } catch (error) {
       setMessage(`Open failed: ${errorMessage(error)}`);
     } finally {
@@ -2599,7 +2612,7 @@ export function App() {
     await enterFileFlow();
     try {
       const document = await readGameFile(delivery.path);
-      await replaceImportedGame(document);
+      await replaceImportedGame(document, "file_delivery");
     } catch (error) {
       setMessage(`Open failed: ${errorMessage(error)}`);
     } finally {
@@ -2619,7 +2632,7 @@ export function App() {
     try {
       const document = await openSgfDocument();
       if (!document) return;
-      await replaceImportedGame(document);
+      await replaceImportedGame(document, "open");
     } catch (error) {
       setMessage(`Open failed: ${errorMessage(error)}`);
     } finally {
@@ -2967,13 +2980,14 @@ export function App() {
       setMessage("浏览器预览只保存连续分析偏好，不会启动分析任务。");
       return;
     }
+    const automaticActive = snapshot.auto_load?.phase === "waiting" || snapshot.auto_load?.phase === "running";
     const continuousAdmitted = admitsForegroundEngineQuery(snapshot, "continuous_analysis")
       && (!committedPreferencesRef.current.continuousVisitsLimitEnabled || admitsForegroundEngineJobs(snapshot, "visits_limit"));
-    if (!continuousAdmitted && snapshot.selected_node_job?.mode !== "continuous") {
+    if (!automaticActive && !continuousAdmitted && snapshot.selected_node_job?.mode !== "continuous") {
       setMessage("当前 run 未验证连续分析或所请求的 ownership、policy、visits 限制能力；已保存的连续分析意图保持不变。");
       return;
     }
-    if ((phase === "time_limited" || phase === "visits_limited" || phase === "paused" || phase === "error" || phase === "safety_hold")
+    if (!automaticActive && (phase === "time_limited" || phase === "visits_limited" || phase === "paused" || phase === "error" || phase === "safety_hold")
       && (!continuousAdmitted || !currentGameRef.current)) {
       setMessage("继续连续分析需要可用的前台引擎和当前棋谱。");
       return;
@@ -3185,6 +3199,11 @@ export function App() {
     }
   }
 
+  function explicitTaskReserved() {
+    const task = analysisTaskRef.current;
+    return isAnalysisTaskReserved(task) && task?.task_id !== engineSnapshotRef.current.auto_load?.task_id;
+  }
+
   async function runAnalysisTask(input: {
     runId: string;
     scope: AnalysisScopeDto;
@@ -3199,7 +3218,7 @@ export function App() {
     if (!nativeRuntime || !game) throw new Error("Analysis task requires a current game.");
     const stages = input.overviewConditions ? [input.conditions, input.overviewConditions] : [input.conditions];
     assertTaskCapabilities(input.runId, input.swingCriteria, stages);
-    if (isAnalysisTaskReserved(analysisTaskRef.current)) {
+    if (explicitTaskReserved()) {
       throw new Error("An analysis task is already active.");
     }
     const conditionsError = input.strategy === "all_positions_two_stage" && input.overviewConditions
@@ -3317,7 +3336,7 @@ export function App() {
     if (trialRef.current || trialTransitionRef.current || scoringRef.current || scoringPendingRef.current) return;
     const run = runFromSnapshot(engineSnapshotRef.current);
     const game = currentGameRef.current;
-    if (!run || !game || !admitsForegroundEngineJobs(engineSnapshotRef.current, "whole_game_analysis") || departurePendingRef.current || isAnalysisTaskReserved(analysisTaskRef.current)) return;
+    if (!run || !game || !admitsForegroundEngineJobs(engineSnapshotRef.current, "whole_game_analysis") || departurePendingRef.current || explicitTaskReserved()) return;
     setAnalysisTaskRequestPending(true);
     setAnalysisTaskError(null);
     try {
@@ -3345,7 +3364,7 @@ export function App() {
     if (trialRef.current || trialTransitionRef.current || scoringRef.current || scoringPendingRef.current) return;
     const run = runFromSnapshot(engineSnapshotRef.current);
     const game = currentGameRef.current;
-    if (!run || !game || !admitsForegroundEngineJobs(engineSnapshotRef.current, "whole_game_analysis") || departurePendingRef.current || isAnalysisTaskReserved(analysisTaskRef.current)) return;
+    if (!run || !game || !admitsForegroundEngineJobs(engineSnapshotRef.current, "whole_game_analysis") || departurePendingRef.current || explicitTaskReserved()) return;
     setAnalysisTaskRequestPending(true);
     setAnalysisTaskError(null);
     try {
@@ -3468,7 +3487,7 @@ export function App() {
       setMessage("当前 run 不支持整谱分析所请求的 ownership、policy 或 visits 限制。");
       return;
     }
-    if (isAnalysisTaskReserved(analysisTaskRef.current)) return;
+    if (explicitTaskReserved()) return;
     if (!nativeRuntime || !game) {
       setMessage(nativeRuntime ? "整局分析需要当前游戏。" : nativeCurrentGameUnavailable);
       return;
@@ -3552,6 +3571,7 @@ export function App() {
     try {
       const imported = await importGameFile(file);
       await applyReplacement(imported.sgf_text, imported.native_path ?? null, {
+        loadSource: "open",
         confirmMessage: "放弃未保存的棋谱并导入这个文件？",
         fallbackName: imported.format === "gib"
           ? imported.display_name.replace(/\.gib$/i, ".sgf")
@@ -3570,6 +3590,7 @@ export function App() {
     const source = providerSourceLabel(result);
     const warningText = result.warnings.length > 0 ? ` ${result.warnings.length} provider warning(s).` : "";
     const applied = await applyReplacement(result.sgf_text, null, {
+      loadSource: "excluded",
       networkIdentity,
       confirmMessage: "放弃未保存的棋谱并载入 Provider 棋谱？",
       fallbackName: providerDocumentName(result),
@@ -3582,6 +3603,7 @@ export function App() {
 
   async function loadSample() {
     await applyReplacement(demoSgf, null, {
+      loadSource: "excluded",
       confirmMessage: "放弃未保存的棋谱并载入示例？",
       fallbackName: "sample.sgf",
       successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
@@ -3619,6 +3641,7 @@ export function App() {
     try {
       const sgf = newDocumentSgf(parameters);
       await applyReplacement(sgf, null, {
+        loadSource: "excluded",
         confirmMessage: "放弃未保存的棋谱并新建对局？",
         successMessage: () => `已新建 ${parameters.boardWidth} × ${parameters.boardHeight} 空谱。`,
         failurePrefix: "New game failed"
@@ -3647,6 +3670,7 @@ export function App() {
         return;
       }
       await applyReplacement(text, null, {
+        loadSource: "clipboard",
         confirmMessage: "放弃未保存的棋谱并粘贴剪贴板棋谱？",
         fallbackName: "clipboard.sgf",
         successMessage: (projection) => `已粘贴棋谱: ${projection.summary.move_count} 手。`,
@@ -4349,6 +4373,7 @@ export function App() {
       onRailVisibility={(side, visible) => void handleRailVisibility(side, visible)}
       selectedNodeRunning={selectedNodeRunning}
       wholeGameRunning={wholeGameRunning}
+      automaticTaskActive={engineSnapshot.auto_load?.phase === "running"}
       autoPlaying={autoPlaying}
       komi={game.summary.komi}
       onNew={() => void handleNewGame()}
@@ -4593,6 +4618,13 @@ export function App() {
       </aside>
     </Workspace>
     <div className="analysis-task-area">
+    {engineSnapshot.auto_load && engineSnapshot.auto_load.phase !== "idle" ? <div className="native-runtime-note" role="status">
+      <span>{t(`autoLoad.${engineSnapshot.auto_load.phase}`)}</span>
+      {engineSnapshot.auto_load.reason ? <span> · {engineSnapshot.auto_load.reason}</span> : null}
+      {engineSnapshot.auto_load.phase === "waiting" || engineSnapshot.auto_load.phase === "running" ?
+        <button type="button" onClick={() => void cancelAutoLoad().catch((error) => setMessage(errorMessage(error)))}>{t("autoLoad.stop")}</button> : null}
+    </div> : null}
+    {engineSnapshot.auto_load_recovery ? <p role="status">{t(`autoLoad.recovery.${engineSnapshot.auto_load_recovery}`)}</p> : null}
     {recoveryProtection.status === "unprotected" ? (
       <div className="recovery-unprotected">
         <span role="status">{recoveryProtection.message}</span>
@@ -4605,6 +4637,7 @@ export function App() {
       draft={analysisScopeDraft}
       preview={analysisScopePreview}
       task={analysisTask}
+      automaticTaskActive={engineSnapshot.auto_load?.phase === "running"}
       canRun={nativeRuntime && taskEngineReady && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending && !departurePending && !departurePrompt}
       busy={matchBlocked || analysisTaskRequestPending}
       error={analysisTaskError}
@@ -4642,6 +4675,7 @@ export function App() {
       selectedNodeRunning={selectedNodeRunning}
       selectedNodeMode={selectedNodeJobRef.current?.mode}
       wholeGameRunning={wholeGameRunning}
+      automaticTaskActive={engineSnapshot.auto_load?.phase === "running"}
       wholeGameProgress={wholeGameProgress}
       continuousAnalysisAction={continuousAnalysisAction}
       onContinuousAnalysis={() => void handleContinuousAnalysisAction()}

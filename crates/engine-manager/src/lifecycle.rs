@@ -30,6 +30,8 @@ pub use app_model::AnalysisJobEventDto;
 pub use app_model::AnalysisJobLaneDto as AnalysisJobLane;
 
 mod evaluation;
+mod auto_load;
+mod auto_load_recovery;
 #[cfg(test)]
 mod evaluation_tests;
 mod game_move;
@@ -254,6 +256,7 @@ struct ManagerState {
     last_activity: Instant,
     jobs: Vec<RegisteredJob>,
     analysis_task: Option<AnalysisTaskDto>,
+    auto_load: auto_load::Owner,
     subscribers: Vec<Sender<ForegroundEngineEventDto>>,
     continuous_intent: Option<bool>,
     continuous_budget: ContinuousAnalysisBudgetDto,
@@ -319,6 +322,7 @@ impl ForegroundEngineManager {
                     switch_seq: 0,
                     jobs: Vec::new(),
                     analysis_task: None,
+                    auto_load: auto_load::Owner::default(),
                     last_activity: Instant::now(),
                     subscribers: Vec::new(),
                     continuous_intent: None,
@@ -433,6 +437,9 @@ impl ForegroundEngineManager {
             }
             match_reservation::require_unreserved(&state).map_err(|error| error.message)?;
             let saved = persist()?;
+            if !enabled {
+                auto_load::retire_locked(self, &mut state).map_err(|error| error.message)?;
+            }
             state.continuous_intent = Some(enabled);
             state.continuous_budget = budget;
             if budget_changed {
@@ -475,6 +482,7 @@ impl ForegroundEngineManager {
             });
             state.continuous_target = Some(request);
             if changed {
+                auto_load_recovery::invalidate(&mut state);
                 clear_weak_holds_for_new_position(&mut state);
             }
             let cancel = current_selected_job(&state).filter(|job| {
@@ -534,6 +542,9 @@ impl ForegroundEngineManager {
     pub fn continuous_primary_action(&self) -> Result<ContinuousPrimaryAction, EngineFailureDto> {
         let state = self.lock();
         match_reservation::require_unreserved(&state)?;
+        if matches!(state.auto_load.snapshot.phase, app_model::AutoLoadPhaseDto::Waiting | app_model::AutoLoadPhaseDto::Running) {
+            return Ok(ContinuousPrimaryAction::Stop);
+        }
         if state.continuous_departing
             || state.finite_admission_pending
             || matches!(state.phase, Phase::Stopping(_))
@@ -586,6 +597,7 @@ impl ForegroundEngineManager {
                 || state.finite_admission_pending
                 || current_selected_job(&state).is_some_and(|job| job.state == AnalysisJobStateDto::Stopping)
                 || validate_continuous_capabilities(&state).is_err()
+                || auto_load_recovery::require_confirmation(&state).is_err()
             {
                 return;
             }
@@ -599,6 +611,7 @@ impl ForegroundEngineManager {
         {
             let mut state = self.lock();
             validate_continuous_capabilities(&state)?;
+            auto_load_recovery::require_confirmation(&state)?;
             if state.continuous_intent != Some(true)
                 || state.continuous_departing
                 || current_selected_job(&state).is_some_and(|job| !job.state.is_limited())
@@ -623,6 +636,7 @@ impl ForegroundEngineManager {
             return;
         }
         if !state.continuous_departing {
+            let _ = auto_load::retire_locked(self, &mut state);
             state.continuous_departing = true;
             state.game_move_publication = None;
             if let Some(identity) = state.game_move.as_ref().map(|slot| slot.identity.clone()) {
@@ -646,6 +660,7 @@ impl ForegroundEngineManager {
             if committed_replacement {
                 // Import changes the position, not the user's authorization after a failure.
                 clear_weak_holds_for_new_position(&mut state);
+                state.auto_load.handback_pending = false;
             } else {
                 state.continuous_safety_hold = true;
             }
@@ -711,6 +726,7 @@ impl ForegroundEngineManager {
             state.operation_kind = operation_kind;
             let run = starting_run(&saved);
             state.phase = Phase::Starting(run.clone());
+            auto_load_recovery::started(&mut state, &run, operation_kind);
             publish_snapshot(&mut state);
             (state.operation, run)
         };
@@ -803,7 +819,7 @@ impl ForegroundEngineManager {
             if manager.inner.current_operation() != operation {
                 return;
             }
-            let _ = manager.start(&profile_id);
+            let _ = manager.begin_start(EngineOperationDto::Restart, &profile_id);
         });
         Ok(())
     }
@@ -931,6 +947,7 @@ impl ForegroundEngineManager {
         &self,
         request: SelectedNodeJobRequest,
     ) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+        self.retire_auto_load()?;
         let old = {
             let mut state = self.lock();
             validate_selected_admission(&state, &request)?;
@@ -1159,6 +1176,7 @@ impl ForegroundEngineManager {
         conditions
             .validate_single_stage()
             .map_err(|message| invalid_task_conditions(&request.run_id, message))?;
+        self.retire_auto_load()?;
         self.start_analysis_task_with_strategy(
             request,
             scope,
@@ -1166,6 +1184,7 @@ impl ForegroundEngineManager {
             None,
             conditions,
             AnalysisTaskTargets::default(),
+            None,
         )
     }
 
@@ -1178,6 +1197,7 @@ impl ForegroundEngineManager {
     ) -> Result<AnalysisTaskDto, EngineFailureDto> {
         AnalysisStageConditionsDto::validate_all_positions_two_stage(&overview_conditions, &deep_conditions)
             .map_err(|message| invalid_task_conditions(&request.run_id, message))?;
+        self.retire_auto_load()?;
         self.start_analysis_task_with_strategy(
             request,
             scope,
@@ -1185,6 +1205,7 @@ impl ForegroundEngineManager {
             Some(overview_conditions),
             deep_conditions,
             AnalysisTaskTargets::default(),
+            None,
         )
     }
 
@@ -1207,6 +1228,7 @@ impl ForegroundEngineManager {
             .and_then(|_| deep_conditions.validate_single_stage())
             .and_then(|_| swing_criteria.validate())
             .map_err(|message| invalid_task_conditions(&request.run_id, message))?;
+        self.retire_auto_load()?;
         self.start_analysis_task_with_strategy(
             request,
             scope,
@@ -1219,6 +1241,7 @@ impl ForegroundEngineManager {
                 swing_comparisons,
                 swing_criteria: Some(swing_criteria),
             },
+            None,
         )
     }
 
@@ -1230,6 +1253,7 @@ impl ForegroundEngineManager {
         overview_conditions: Option<AnalysisStageConditionsDto>,
         conditions: AnalysisStageConditionsDto,
         targets: AnalysisTaskTargets,
+        auto_intent: Option<app_model::AutoLoadSnapshotDto>,
     ) -> Result<AnalysisTaskDto, EngineFailureDto> {
         if request.work_items.is_empty() {
             return Err(empty_whole_game_failure(&request.run_id));
@@ -1242,6 +1266,9 @@ impl ForegroundEngineManager {
         let cancel = AnalysisCancelToken::new();
         let (task, bound_query) = {
             let mut state = self.lock();
+            if let Some(intent) = &auto_intent {
+                auto_load::admit(&state, intent)?;
+            }
             match_reservation::require_unreserved(&state)?;
             game_move::require_idle_move(&state)?;
             runtime_control::require_idle(&state)?;
@@ -1372,6 +1399,11 @@ impl ForegroundEngineManager {
                 terminal: false,
             });
             state.analysis_task = Some(task.clone());
+            if auto_intent.is_some() {
+                state.auto_load.snapshot.task_id = Some(task.task_id.clone());
+                state.auto_load.snapshot.phase = app_model::AutoLoadPhaseDto::Running;
+                state.auto_load.handback_pending = true;
+            }
             publish_event(
                 &mut state,
                 ForegroundEngineEventDto::Job {
@@ -1401,6 +1433,12 @@ impl ForegroundEngineManager {
     ) -> Result<AnalysisTaskDto, EngineFailureDto> {
         let mut state = self.lock();
         match_reservation::require_unreserved(&state)?;
+        if state.auto_load.snapshot.task_id.as_deref() == Some(task_id)
+            && state.auto_load.snapshot.run_id.as_deref() == Some(run_id) {
+            auto_load::retire_locked(self, &mut state)?;
+            publish_snapshot(&mut state);
+            return state.analysis_task.clone().ok_or_else(|| continuous_invalid_state(&state, "Automatic task retired."));
+        }
         let task = state
             .analysis_task
             .as_ref()
@@ -1582,6 +1620,9 @@ impl ForegroundEngineManager {
 
     pub fn invalidate_analysis_task(&self, generation: u64) {
         let mut state = self.lock();
+        if state.auto_load.snapshot.generation != generation {
+            let _ = auto_load::retire_locked(self, &mut state);
+        }
         let Some(task) = state.analysis_task.as_ref() else {
             return;
         };
@@ -1911,6 +1952,7 @@ impl ForegroundEngineManager {
     }
 
     fn reconcile_continuous(&self) {
+        self.reconcile_auto_load_recovery();
         let work = {
             let mut state = self.lock();
             if state.match_reservation.is_some() {
@@ -1918,6 +1960,9 @@ impl ForegroundEngineManager {
             }
             if state.continuous_departing
                 || state.finite_admission_pending
+                || (state.auto_load.snapshot.phase == app_model::AutoLoadPhaseDto::Running
+                    && state.analysis_task.as_ref().is_some_and(|task|
+                        matches!(task.state, AnalysisTaskStateDto::Queued | AnalysisTaskStateDto::Searching | AnalysisTaskStateDto::Pausing)))
                 || state.game_move.is_some()
                 || state.runtime_control.is_some()
                 || state.continuous_target.is_none()
@@ -3514,6 +3559,9 @@ impl Inner {
             )
         });
         if has_data {
+            if started.mode == AnalysisJobModeDto::Continuous && state.auto_load.snapshot.phase != app_model::AutoLoadPhaseDto::Running {
+                state.auto_load.handback_pending = false;
+            }
             state.last_activity = Instant::now();
             state.jobs[index].state = AnalysisJobStateDto::Searching;
         }
@@ -4045,6 +4093,8 @@ fn snapshot_from(state: &ManagerState) -> ForegroundEngineSnapshotDto {
     };
     let mut snapshot = ForegroundEngineSnapshotDto::with_lifecycle(state.revision, lifecycle);
     snapshot.continuous = continuous_snapshot(state);
+    snapshot.auto_load = state.auto_load.snapshot.clone();
+    snapshot.auto_load_recovery = auto_load_recovery::phase(state);
     snapshot.selected_node_job = current_non_terminal_job(state, AnalysisJobLane::SelectedNode);
     snapshot.whole_game_job = current_non_terminal_job(state, AnalysisJobLane::WholeGame);
     snapshot.game_move_job = state.game_move.as_ref().map(|slot| slot.identity.clone());
@@ -4052,6 +4102,8 @@ fn snapshot_from(state: &ManagerState) -> ForegroundEngineSnapshotDto {
 }
 
 fn publish_snapshot(state: &mut ManagerState) {
+    auto_load_recovery::observe_failure(state);
+    auto_load::refresh(state);
     state.revision = state.revision.saturating_add(1);
     let snapshot = snapshot_from(state);
     publish_event(state, ForegroundEngineEventDto::Snapshot { snapshot });
@@ -4534,7 +4586,7 @@ fn finish_selected_node_job(
     state: &mut ManagerState,
     started: &AnalysisJobStartedDto,
     outcome: Option<AnalysisJobOutcomeDto>,
-    frame: Option<app_model::AnalysisFrameDto>,
+    mut frame: Option<app_model::AnalysisFrameDto>,
     failure: Option<EngineFailureDto>,
 ) {
     let Some(job) = state
@@ -4549,6 +4601,9 @@ fn finish_selected_node_job(
     let Some(outcome) = outcome else {
         return;
     };
+    if auto_load_recovery::terminal(state, started, outcome, frame.is_some()) {
+        frame = None;
+    }
     match (mode, outcome) {
         (
             AnalysisJobModeDto::Continuous,
@@ -4864,6 +4919,7 @@ fn clear_weak_holds_for_new_position(state: &mut ManagerState) {
 }
 
 fn clear_resumable_holds(state: &mut ManagerState) {
+    state.auto_load.recovery = auto_load_recovery::Recovery::default();
     state.continuous_limited = None;
     state.continuous_paused = None;
     state.continuous_error = false;
@@ -4907,6 +4963,8 @@ fn continuous_snapshot(state: &ManagerState) -> ContinuousAnalysisSnapshotDto {
         ContinuousAnalysisPhaseDto::Departing
     } else if matches!(state.phase, Phase::Error { .. }) || state.continuous_error {
         ContinuousAnalysisPhaseDto::Error
+    } else if state.auto_load.recovery.required && state.continuous_safety_hold {
+        ContinuousAnalysisPhaseDto::SafetyHold
     } else if state.game_move.is_some() {
         ContinuousAnalysisPhaseDto::Waiting
     } else if current_selected_job(state).is_some_and(|job| job.state == AnalysisJobStateDto::Stopping) {

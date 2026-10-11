@@ -50,6 +50,8 @@ pub struct AppPreferencesDto {
     pub continuous_analysis_enabled: bool,
     #[serde(flatten)]
     pub continuous_budget: ContinuousAnalysisBudgetDto,
+    #[serde(default)]
+    pub auto_load: app_model::AutoLoadPreferencesDto,
     #[serde(default = "default_show_coordinates")]
     pub show_coordinates: bool,
     #[serde(default)]
@@ -179,6 +181,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         allow_double_click: true,
         continuous_analysis_enabled: default_continuous_analysis_enabled(),
         continuous_budget: ContinuousAnalysisBudgetDto::default(),
+        auto_load: app_model::AutoLoadPreferencesDto::default(),
         show_coordinates: default_show_coordinates(),
         show_move_numbers: false,
         show_ownership: default_show_ownership(),
@@ -282,6 +285,7 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
         Ok(contents) => match serde_json::from_str::<AppPreferencesDto>(&contents) {
             Ok(preferences)
                 if preferences.continuous_budget.validate().is_ok()
+                    && preferences.auto_load.validate().is_ok()
                     && preferences.match_defaults.validate().is_ok()
                     && preferences.granular_display.validate().is_ok()
                     && preferences.network.validate().is_ok()
@@ -354,6 +358,7 @@ pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPr
         return Err("Default komi must be finite.".to_string());
     }
     preferences.continuous_budget.validate()?;
+    preferences.auto_load.validate()?;
     let single_stage = preferences
         .task_single_stage_conditions
         .as_ref()
@@ -673,6 +678,7 @@ mod tests {
                 continuous_visits_limit: 123,
                 continuous_stop_on_empty_board: true,
             },
+            auto_load: app_model::AutoLoadPreferencesDto::default(),
             show_coordinates: false,
             show_move_numbers: true,
             show_ownership: false,

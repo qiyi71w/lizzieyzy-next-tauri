@@ -5201,7 +5201,7 @@ exit 9
     let snapshot = manager.snapshot();
     let failure = no_engine_failure(&snapshot.lifecycle)
         .expect("failed recovery Restart must publish snapshot failure");
-    assert_eq!(failure.operation, EngineOperationDto::Start);
+    assert_eq!(failure.operation, EngineOperationDto::Restart);
     assert_eq!(failure.profile_id.as_deref(), Some("profile-1"));
     manager
         .assert_profile_deletable("profile-1")

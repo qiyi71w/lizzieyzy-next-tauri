@@ -770,6 +770,13 @@ impl CurrentSgfDocument {
         Ok(snapshots)
     }
 
+    /// Display filling only: retained SGF primary results are not task completion evidence.
+    pub fn missing_primary_mainline_snapshots(&self) -> Result<Vec<SelectedNodeSnapshotDto>, CurrentGameError> {
+        let mut snapshots = self.first_child_mainline_snapshots()?;
+        snapshots.retain(|snapshot| snapshot.primary_analysis.is_none());
+        Ok(snapshots)
+    }
+
     pub fn analysis_scope_snapshots(
         &self,
         scope: &app_model::AnalysisScopeDto,

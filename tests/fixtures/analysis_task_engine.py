@@ -113,8 +113,22 @@ def search(query):
             active.discard(identity)
             emit(frame(query, visits=4))
         return
+    if (root / "auto-recovery").exists() and ":" not in identity and configured_visits(query) == 1:
+        (root / "recovery-started").touch()
+        while not (root / "recovery-release").exists() and identity in active:
+            time.sleep(0.005)
+        if identity in active:
+            active.discard(identity)
+            emit(invalid_final(query, "semantic") if (root / "recovery-fail").exists() else frame(query))
+        return
     if ":" not in identity and "overrideSettings" in query:
         while identity in active:
+            if (root / "fail-handback").exists():
+                emit(invalid_final(query, "semantic"))
+                return
+            if (root / "hold-ordinary").exists():
+                time.sleep(0.005)
+                continue
             emit(frame(query, True))
             time.sleep(query.get("reportDuringSearchEvery", 0.1))
         return
@@ -170,6 +184,8 @@ for line in sys.stdin:
         threading.Thread(target=finish_cancel, args=(query,), daemon=True).start()
     elif first:
         first = False
+        while (root / "hold-ready").exists():
+            time.sleep(0.005)
         emit(frame(query))
     else:
         with (root / "queries.jsonl").open("a") as log:

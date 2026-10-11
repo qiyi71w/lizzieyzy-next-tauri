@@ -10,6 +10,7 @@ use sgf::{CurrentSgfDocument, DocumentHistory, SgfAnalysisPayload, SgfDocumentEd
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
+mod auto_load;
 #[cfg(test)]
 mod authoring_tests;
 #[cfg(test)]

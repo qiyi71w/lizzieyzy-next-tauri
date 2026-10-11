@@ -431,6 +431,7 @@ pub fn prepare_document_replacement(
     sgf_text: String,
     native_path: Option<String>,
     network_identity: Option<app_model::ProviderRequestIdentityDto>,
+    load_source: Option<app_model::GameLoadSourceDto>,
 ) -> Result<DocumentDepartureAdmissionDto, CurrentGameError> {
     if let Some(identity) = network_identity {
         let operation = preferences
@@ -442,7 +443,7 @@ pub fn prepare_document_replacement(
             })?;
         state.prepare_provider_replacement(&sgf_text, operation.lease(), identity.document_identity)
     } else {
-        state.prepare_replacement(&sgf_text, native_path)
+        state.prepare_loaded_replacement(&sgf_text, native_path, load_source.unwrap_or_default())
     }
 }
 

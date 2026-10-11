@@ -34,6 +34,7 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
         <h2>设置</h2>
         <span>{status}</span>
       </div>
+      <AutoLoadEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       {windowPin ? <fieldset className="preferences-grid">
         <legend>窗口</legend>
         <WindowPinControl control={windowPin} />
@@ -218,6 +219,32 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
       </fieldset>
     </section>
   );
+}
+
+function AutoLoadEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
+  const [edited, setEdited] = useState<{ enabled: boolean; visits: string } | null>(null);
+  const [invalid, setInvalid] = useState(false);
+  useEffect(() => { setEdited(null); setInvalid(false); }, [preferences.autoLoad.enabled, preferences.autoLoad.totalVisits]);
+  const draft = edited ?? { enabled: preferences.autoLoad.enabled, visits: String(preferences.autoLoad.totalVisits) };
+  return <fieldset className="preferences-grid" disabled={disabled}>
+    <legend>{t("autoLoad.title")}</legend>
+    <Toggle label={t("autoLoad.enabled")} checked={draft.enabled} disabled={disabled}
+      onChange={(enabled) => setEdited({ ...draft, enabled })} />
+    <label><span>{t("autoLoad.visits")}</span>
+      <input type="text" inputMode="numeric" value={draft.visits}
+        onChange={(event) => { setEdited({ ...draft, visits: event.target.value }); setInvalid(false); }} />
+    </label>
+    <button type="button" disabled={disabled || edited === null} onClick={() => {
+      const totalVisits = Number(draft.visits);
+      if (!/^\d+$/.test(draft.visits) || !Number.isInteger(totalVisits) || totalVisits < 1 || totalVisits > 4294967295) {
+        setInvalid(true); return;
+      }
+      onChange({ ...preferences, autoLoad: { enabled: draft.enabled, totalVisits } });
+    }}>{t("autoLoad.save")}</button>
+    <button type="button" disabled={disabled || edited === null} onClick={() => { setEdited(null); setInvalid(false); }}>{t("autoLoad.cancelDraft")}</button>
+    <p>{t("autoLoad.boundary")}</p>
+    {invalid ? <p role="alert">{t("autoLoad.invalid")}</p> : null}
+  </fieldset>;
 }
 
 function ReviewAutoplayEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {

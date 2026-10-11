@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { t } from "../i18n/resources";
 import type { SavedThreadPolicyDto } from "../domain/types";
+import type { GameLoadSourceDto } from "../domain/types";
 import type {
   RuntimeThreadsRequestDto,
   RuntimeThreadsSnapshotDto,
@@ -213,12 +214,18 @@ export const nativeCurrentGameUnavailable =
 export async function prepareDocumentReplacement(
   sgfText: string,
   nativePath: string | null,
-  networkIdentity?: ProviderRequestIdentity
+  networkIdentity?: ProviderRequestIdentity,
+  loadSource: GameLoadSourceDto = "excluded",
 ): Promise<DocumentDepartureAdmissionDto> {
   if (!isTauriRuntime()) {
     throw new Error(nativeCurrentGameUnavailable);
   }
-  return invoke<DocumentDepartureAdmissionDto>("prepare_document_replacement", { sgfText, nativePath, networkIdentity: networkIdentity ?? null });
+  return invoke<DocumentDepartureAdmissionDto>("prepare_document_replacement", { sgfText, nativePath, networkIdentity: networkIdentity ?? null, loadSource });
+}
+
+export async function cancelAutoLoad(): Promise<void> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  await invoke("cancel_auto_load");
 }
 
 export async function resolveDocumentReplacement(input: {

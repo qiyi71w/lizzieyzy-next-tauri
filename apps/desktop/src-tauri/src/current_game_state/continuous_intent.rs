@@ -2,6 +2,9 @@ use super::*;
 use engine_manager::{ForegroundEngineConfig, ForegroundEngineManager, InMemoryEngineProfileCatalog};
 use std::sync::Arc;
 
+#[cfg(unix)]
+#[path = "auto_load_tests.rs"]
+mod auto_load_tests;
 #[test]
 fn confirmed_departure_hold_survives_navigation_and_preference_reload() {
     let manager = ForegroundEngineManager::new(

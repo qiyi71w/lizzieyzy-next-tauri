@@ -1,6 +1,7 @@
 import type { FoxKifuState, NetworkSettings, ReadboardSyncPreferences, TencentHistory, YikeSyncPreferences } from "./providers";
 import type { NextMoveReviewMarkerMode } from "./nextMoveReviewMarker";
 import type { AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, ContinuousAnalysisBudgetDto, MatchDefaultsDto, PkSideDefaultsDto, WindowGeometryDto, WorkspaceSharesDto } from "./types";
+import type { AutoLoadPreferencesDto } from "./types";
 import { validReviewAutoplayInterval } from "./reviewAutoplay";
 import { defaultGranularDisplay, readGranularDisplay, type GranularDisplay } from "./granularDisplay";
 
@@ -14,6 +15,7 @@ export type { NextMoveReviewMarkerMode };
 import type { WorkspaceVisibilityDto } from "./types";
 
 export type AppPreferences = ContinuousAnalysisBudgetDto & {
+  autoLoad: AutoLoadPreferencesDto;
   network: NetworkSettings;
   yikeLocator: string | null;
   yikeSync: YikeSyncPreferences;
@@ -142,6 +144,7 @@ export const defaultAppPreferences: AppPreferences = {
   soundEnabled: true,
   scoringRule: "area",
   continuousAnalysisEnabled: true,
+  autoLoad: { enabled: false, totalVisits: 1 },
   recentGamePaths: [],
   recentImageExportDirectory: null,
   continuousTimeLimitEnabled: true,
@@ -205,6 +208,10 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
   const scoreLeadLine = booleanValue(value?.scoreLeadLine, defaultAppPreferences.scoreLeadLine);
   const defaultMaxVisits = integerValue(value?.defaultMaxVisits, defaultAppPreferences.defaultMaxVisits, 1, 1_000_000);
   return {
+    autoLoad: {
+      enabled: booleanValue(value?.autoLoad?.enabled, false),
+      totalVisits: integerValue(value?.autoLoad?.totalVisits, 1, 1, 4294967295),
+    },
     network: value?.network ?? defaultAppPreferences.network,
     yikeLocator: typeof value?.yikeLocator === "string" ? value.yikeLocator : null,
     yikeSync: value?.yikeSync ?? defaultAppPreferences.yikeSync,

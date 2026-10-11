@@ -516,10 +516,19 @@ export type ContinuousAnalysisSnapshotDto = {
   enabled: boolean | null;
   phase: ContinuousAnalysisPhaseDto;
 };
+export type GameLoadSourceDto = "open" | "recent" | "file_delivery" | "clipboard" | "text" | "excluded";
+export type AutoLoadPreferencesDto = { enabled: boolean; totalVisits: number };
+export type AutoLoadSnapshotDto = {
+  phase: "idle" | "waiting" | "running" | "complete" | "not_needed" | "unavailable" | "cancelled" | "failed";
+  load_id: number; generation: number; run_id: string | null; task_id: string | null;
+  total_visits: number; reason: string | null;
+};
 export type ForegroundEngineSnapshotDto = {
   revision: number;
   lifecycle: ForegroundEngineLifecycleDto;
   continuous: ContinuousAnalysisSnapshotDto;
+  auto_load?: AutoLoadSnapshotDto;
+  auto_load_recovery?: "restart_required" | "confirming" | "confirmed" | null;
   selected_node_job?: AnalysisJobStartedDto | null;
   whole_game_job?: AnalysisJobStartedDto | null;
   game_move_job?: GameMoveJobDto | null;
