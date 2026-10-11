@@ -1032,7 +1032,8 @@ mod tests {
         let (dir, path) = temp_prefs();
         let mut settings = sample_preferences();
         settings.continuation = app_model::ContinuationPreferencesDto {
-            mode: app_model::ContinuationModeDto::EveryBeat, interval_seconds: 0.8,
+            mode: app_model::ContinuationModeDto::EveryBeat,
+            interval_seconds: 0.8,
         };
         let original = save_to_path(&path, settings).unwrap();
         assert_eq!(load_from_path(&path).unwrap().preferences, original);
@@ -1052,7 +1053,12 @@ mod tests {
             assert_eq!(load_from_path(&path).unwrap().preferences, original);
         }
         let replacement = serde_json::to_string(&sample_preferences()).unwrap();
-        assert!(atomic_replace_file_with(&path, &replacement, |_, _| Err(io::Error::other("continuation replace failure"))).is_err());
+        assert!(
+            atomic_replace_file_with(&path, &replacement, |_, _| Err(io::Error::other(
+                "continuation replace failure"
+            )))
+            .is_err()
+        );
         assert_eq!(load_from_path(&path).unwrap().preferences, original);
         fs::remove_dir_all(dir).unwrap();
     }

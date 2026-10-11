@@ -19,10 +19,10 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-mod continuous_analysis;
 mod batch_analysis;
-mod engine_continuation;
+mod continuous_analysis;
 mod diagnostic_export;
+mod engine_continuation;
 mod gesture_timing;
 use gesture_timing::board_gesture_timing;
 mod external_sync;
@@ -1350,7 +1350,9 @@ pub fn run() {
                             let _ = emit_handle.emit("foreground-engine://failure", failure);
                         }
                         ForegroundEngineEventDto::Job { mut job } => {
-                            if job.job_id.starts_with("batch:") { continue; }
+                            if job.job_id.starts_with("batch:") {
+                                continue;
+                            }
                             if let Some(state) = emit_handle.try_state::<CurrentGameState>() {
                                 job.current_game = state.attach_from_job_event(&job);
                                 if let Some(trial) = state.attach_trial_from_job_event(&job) {
@@ -1676,7 +1678,11 @@ mod tests {
             if manager.evaluation_snapshot().phase == app_model::EvaluationPhaseDto::Failed {
                 break;
             }
-            assert!(std::time::Instant::now() < deadline, "startup evaluation: {:?}", manager.evaluation_snapshot());
+            assert!(
+                std::time::Instant::now() < deadline,
+                "startup evaluation: {:?}",
+                manager.evaluation_snapshot()
+            );
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let refused = manager.evaluation_snapshot();

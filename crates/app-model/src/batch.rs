@@ -16,13 +16,29 @@ pub struct BatchPreferencesDto {
 }
 impl Default for BatchPreferencesDto {
     fn default() -> Self {
-        let visits = |value| AnalysisStageConditionsDto { total_visits: AnalysisTaskLimitDto { enabled: true, value }, ..Default::default() };
+        let visits = |value| AnalysisStageConditionsDto {
+            total_visits: AnalysisTaskLimitDto { enabled: true, value },
+            ..Default::default()
+        };
         let mut swing_deep = AnalysisStageConditionsDto::default();
         swing_deep.time_seconds.enabled = true;
         swing_deep.total_visits.enabled = false;
-        Self { strategy: AnalysisTaskStrategyDto::SingleStage,
-            scope: AnalysisScopeDto { mode: AnalysisScopeModeDto::FirstChildMainline, current_node: NodePath::default(), branch_choices: vec![], interval: None, to_play: None },
-            normal: visits(100), overview: visits(32), deep: visits(800), swing_overview: visits(32), swing_deep, swing_criteria: Default::default() }
+        Self {
+            strategy: AnalysisTaskStrategyDto::SingleStage,
+            scope: AnalysisScopeDto {
+                mode: AnalysisScopeModeDto::FirstChildMainline,
+                current_node: NodePath::default(),
+                branch_choices: vec![],
+                interval: None,
+                to_play: None,
+            },
+            normal: visits(100),
+            overview: visits(32),
+            deep: visits(800),
+            swing_overview: visits(32),
+            swing_deep,
+            swing_criteria: Default::default(),
+        }
     }
 }
 impl BatchPreferencesDto {
@@ -32,22 +48,44 @@ impl BatchPreferencesDto {
         self.swing_overview.validate_single_stage()?;
         self.swing_deep.validate_single_stage()?;
         self.swing_criteria.validate()?;
-        if !matches!(self.scope.mode, AnalysisScopeModeDto::FirstChildMainline | AnalysisScopeModeDto::AllBranches)
-            || !self.scope.current_node.indices.is_empty() || !self.scope.branch_choices.is_empty() {
+        if !matches!(
+            self.scope.mode,
+            AnalysisScopeModeDto::FirstChildMainline | AnalysisScopeModeDto::AllBranches
+        ) || !self.scope.current_node.indices.is_empty()
+            || !self.scope.branch_choices.is_empty()
+        {
             return Err("Batch scope must resolve from each file, not the current game.".into());
         }
-        if self.scope.interval.as_ref().is_some_and(|v| v.start > v.end) { return Err("The closed interval start exceeds its end.".into()); }
+        if self.scope.interval.as_ref().is_some_and(|v| v.start > v.end) {
+            return Err("The closed interval start exceeds its end.".into());
+        }
         Ok(())
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum BatchRowStateDto { Pending, Waiting, Running, Completed, Failed, Cancelled }
+pub enum BatchRowStateDto {
+    Pending,
+    Waiting,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum BatchOutputStateDto { Unsaved, Saving, Saved, Failed }
+pub enum BatchOutputStateDto {
+    Unsaved,
+    Saving,
+    Saved,
+    Failed,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BatchIdentityDto { pub batch_id: String, pub row_id: String, pub attempt: u64 }
+pub struct BatchIdentityDto {
+    pub batch_id: String,
+    pub row_id: String,
+    pub attempt: u64,
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BatchRowDto {
     pub identity: BatchIdentityDto,
@@ -79,21 +117,40 @@ pub struct BatchSnapshotDto {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum BatchCommandDto {
-    Intake { paths: Vec<String>, conditions: BatchPreferencesDto },
-    Remove { identity: BatchIdentityDto },
-    Reorder { row_ids: Vec<String> },
-    Start { output: BatchOutputAuthorizationDto },
+    Intake {
+        paths: Vec<String>,
+        conditions: BatchPreferencesDto,
+    },
+    Remove {
+        identity: BatchIdentityDto,
+    },
+    Reorder {
+        row_ids: Vec<String>,
+    },
+    Start {
+        output: BatchOutputAuthorizationDto,
+    },
     Continue,
     Pause,
     StopCurrent,
     StopAll,
-    Rerun { identity: BatchIdentityDto },
-    Save { identity: BatchIdentityDto, path: String, overwrite: bool, incomplete: bool },
+    Rerun {
+        identity: BatchIdentityDto,
+    },
+    Save {
+        identity: BatchIdentityDto,
+        path: String,
+        overwrite: bool,
+        incomplete: bool,
+    },
     NewBatch,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum BatchOutputAuthorizationDto {
     SessionOnly,
-    Directory { path: String, confirmed_names: Vec<String> },
+    Directory {
+        path: String,
+        confirmed_names: Vec<String>,
+    },
 }

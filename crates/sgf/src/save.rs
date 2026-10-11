@@ -20,14 +20,29 @@ pub fn write_file_atomic(path: &Path, contents: &[u8]) -> Result<(), String> {
 }
 
 /// Cancellation and publication share this gate. New output never replaces an existing file.
-pub fn save_document_authorized(document: &CurrentSgfDocument, path: &Path, overwrite: bool,
-    cancelled: &parking_lot::Mutex<bool>) -> Result<(), String> {
-    write_with_publication(path, || document.serialize().map_err(|e| e.to_string()), |_| Ok(()), |temporary, target| {
-        let gate = cancelled.lock();
-        if *gate { return Err("Output cancelled before atomic publication".into()); }
-        if overwrite { fs::rename(temporary, target) } else { fs::hard_link(temporary, target) }
+pub fn save_document_authorized(
+    document: &CurrentSgfDocument,
+    path: &Path,
+    overwrite: bool,
+    cancelled: &parking_lot::Mutex<bool>,
+) -> Result<(), String> {
+    write_with_publication(
+        path,
+        || document.serialize().map_err(|e| e.to_string()),
+        |_| Ok(()),
+        |temporary, target| {
+            let gate = cancelled.lock();
+            if *gate {
+                return Err("Output cancelled before atomic publication".into());
+            }
+            if overwrite {
+                fs::rename(temporary, target)
+            } else {
+                fs::hard_link(temporary, target)
+            }
             .map_err(|e| e.to_string())
-    })
+        },
+    )
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -43,7 +58,9 @@ fn write_with<T: AsRef<[u8]>>(
     encode: impl FnOnce() -> Result<T, String>,
     before: impl Fn(Stage) -> io::Result<()>,
 ) -> Result<(), String> {
-    write_with_publication(path, encode, before, |temporary, target| fs::rename(temporary, target).map_err(|e| e.to_string()))
+    write_with_publication(path, encode, before, |temporary, target| {
+        fs::rename(temporary, target).map_err(|e| e.to_string())
+    })
 }
 
 fn write_with_publication<T: AsRef<[u8]>>(
@@ -114,7 +131,8 @@ mod tests {
         let path = dir.join("result.sgf");
         let gate = std::sync::Arc::new(parking_lot::Mutex::new(false));
         let mut held = gate.lock();
-        let writer_gate = gate.clone(); let writer_path = path.clone();
+        let writer_gate = gate.clone();
+        let writer_path = path.clone();
         let writer = std::thread::spawn(move || {
             let document = CurrentSgfDocument::open("(;SZ[9]C[personal])").unwrap();
             save_document_authorized(&document, &writer_path, false, &writer_gate)
@@ -124,9 +142,11 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::yield_now();
         }
-        *held = true; drop(held);
+        *held = true;
+        drop(held);
         assert!(writer.join().unwrap().unwrap_err().contains("cancelled"));
-        assert!(!path.exists()); assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
+        assert!(!path.exists());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
         *gate.lock() = false;
         let document = CurrentSgfDocument::open("(;SZ[9]C[personal])").unwrap();
         save_document_authorized(&document, &path, false, &gate).unwrap();
@@ -138,7 +158,13 @@ mod tests {
         assert!(save_document_authorized(&changed, &path, false, &gate).is_err());
         assert_eq!(fs::read(&path).unwrap(), committed);
         save_document_authorized(&changed, &path, true, &gate).unwrap();
-        assert_eq!(CurrentSgfDocument::open(&fs::read_to_string(&path).unwrap()).unwrap().tree().unwrap(), changed.tree().unwrap());
+        assert_eq!(
+            CurrentSgfDocument::open(&fs::read_to_string(&path).unwrap())
+                .unwrap()
+                .tree()
+                .unwrap(),
+            changed.tree().unwrap()
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

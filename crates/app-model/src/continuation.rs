@@ -17,7 +17,10 @@ pub struct ContinuationPreferencesDto {
 
 impl Default for ContinuationPreferencesDto {
     fn default() -> Self {
-        Self { mode: ContinuationModeDto::LeafOnly, interval_seconds: 1.0 }
+        Self {
+            mode: ContinuationModeDto::LeafOnly,
+            interval_seconds: 1.0,
+        }
     }
 }
 
@@ -25,13 +28,18 @@ impl ContinuationPreferencesDto {
     /// Shares the lossless whole-millisecond representation of review settings.
     pub fn interval_millis(&self) -> Result<u64, String> {
         let millis = (self.interval_seconds * 1000.0).round();
-        if !millis.is_finite() || millis < 1.0 || millis > i32::MAX as f64
-            || millis / 1000.0 != self.interval_seconds {
+        if !millis.is_finite()
+            || millis < 1.0
+            || millis > i32::MAX as f64
+            || millis / 1000.0 != self.interval_seconds
+        {
             return Err("Continuation interval must be positive, finite, and exactly representable in whole milliseconds.".into());
         }
         Ok(millis as u64)
     }
-    pub fn validate(&self) -> Result<(), String> { self.interval_millis().map(|_| ()) }
+    pub fn validate(&self) -> Result<(), String> {
+        self.interval_millis().map(|_| ())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,10 +77,20 @@ mod tests {
             preferences.interval_seconds = seconds;
             assert!(preferences.validate().is_err());
         }
-        for (seconds, millis) in [(0.001, 1), (0.8, 800), (1.001, 1001), (1.005, 1005), (1.25, 1250), (2147483.647, 2147483647)] {
+        for (seconds, millis) in [
+            (0.001, 1),
+            (0.8, 800),
+            (1.001, 1001),
+            (1.005, 1005),
+            (1.25, 1250),
+            (2147483.647, 2147483647),
+        ] {
             preferences.interval_seconds = seconds;
             assert_eq!(preferences.interval_millis().unwrap(), millis);
         }
-        assert_eq!(ContinuationSnapshotDto::default().phase, ContinuationPhaseDto::Stopped);
+        assert_eq!(
+            ContinuationSnapshotDto::default().phase,
+            ContinuationPhaseDto::Stopped
+        );
     }
 }

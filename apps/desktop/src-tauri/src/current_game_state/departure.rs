@@ -51,8 +51,13 @@ impl CurrentGameState {
         source: app_model::GameLoadSourceDto,
     ) -> Result<DocumentDepartureAdmissionDto, CurrentGameError> {
         let admission = self.prepare_replacement(sgf_text, native_path)?;
-        self.holder.lock().expect("current game state")
-            .departure.as_mut().expect("prepared replacement").load_source = source;
+        self.holder
+            .lock()
+            .expect("current game state")
+            .departure
+            .as_mut()
+            .expect("prepared replacement")
+            .load_source = source;
         Ok(admission)
     }
 

@@ -29,11 +29,11 @@ use uuid::Uuid;
 pub use app_model::AnalysisJobEventDto;
 pub use app_model::AnalysisJobLaneDto as AnalysisJobLane;
 
-mod evaluation;
 mod auto_load;
 mod auto_load_recovery;
 mod batch;
 mod continuation;
+mod evaluation;
 pub use continuation::ContinuationAction;
 #[cfg(test)]
 mod evaluation_tests;
@@ -411,7 +411,11 @@ impl ForegroundEngineManager {
     }
 
     pub fn analysis_task_snapshot(&self) -> Option<AnalysisTaskDto> {
-        self.lock().analysis_task.as_ref().filter(|task| !task.job_id.starts_with("batch:")).cloned()
+        self.lock()
+            .analysis_task
+            .as_ref()
+            .filter(|task| !task.job_id.starts_with("batch:"))
+            .cloned()
     }
 
     pub fn subscribe(&self) -> Receiver<ForegroundEngineEventDto> {
@@ -549,7 +553,10 @@ impl ForegroundEngineManager {
     pub fn continuous_primary_action(&self) -> Result<ContinuousPrimaryAction, EngineFailureDto> {
         let state = self.lock();
         match_reservation::require_unreserved(&state)?;
-        if matches!(state.auto_load.snapshot.phase, app_model::AutoLoadPhaseDto::Waiting | app_model::AutoLoadPhaseDto::Running) {
+        if matches!(
+            state.auto_load.snapshot.phase,
+            app_model::AutoLoadPhaseDto::Waiting | app_model::AutoLoadPhaseDto::Running
+        ) {
             return Ok(ContinuousPrimaryAction::Stop);
         }
         if state.continuous_departing
@@ -649,7 +656,12 @@ impl ForegroundEngineManager {
             if let Some(identity) = state.game_move.as_ref().map(|slot| slot.identity.clone()) {
                 game_move::seal_move_for_run(&mut state, &identity.run_id);
             }
-            if let Some(job_id) = state.analysis_task.as_ref().filter(|task| !task.job_id.starts_with("batch:")).map(|task| task.job_id.clone()) {
+            if let Some(job_id) = state
+                .analysis_task
+                .as_ref()
+                .filter(|task| !task.job_id.starts_with("batch:"))
+                .map(|task| task.job_id.clone())
+            {
                 cancel_analysis_task_locked(&mut state, &job_id);
                 state.jobs.retain(|job| !(job.job_id == job_id && job.terminal));
             }
@@ -1026,7 +1038,9 @@ impl ForegroundEngineManager {
         state: &mut ManagerState,
         mut request: SelectedNodeJobRequest,
     ) -> Result<SelectedSubmission, EngineFailureDto> {
-        if !continuation::occupied(state) { batch::admit(state, None)?; }
+        if !continuation::occupied(state) {
+            batch::admit(state, None)?;
+        }
         let run = validate_selected_admission(state, &request)?;
         evaluation::yield_to_foreground(state)?;
         state
@@ -1335,7 +1349,13 @@ impl ForegroundEngineManager {
 
             let task_id = Uuid::new_v4().to_string();
             let job_id = match &batch_identity {
-                Some(id) => format!("batch:{}:{}:{}:{}", id.batch_id, id.row_id, id.attempt, Uuid::new_v4()),
+                Some(id) => format!(
+                    "batch:{}:{}:{}:{}",
+                    id.batch_id,
+                    id.row_id,
+                    id.attempt,
+                    Uuid::new_v4()
+                ),
                 None => Uuid::new_v4().to_string(),
             };
             let query_id = target_query_id(&job_id);
@@ -1413,7 +1433,9 @@ impl ForegroundEngineManager {
                 terminal: false,
             });
             state.analysis_task = Some(task.clone());
-            if let Some(id) = &batch_identity { batch::bind(&mut state, id, &task); }
+            if let Some(id) = &batch_identity {
+                batch::bind(&mut state, id, &task);
+            }
             if auto_intent.is_some() {
                 state.auto_load.snapshot.task_id = Some(task.task_id.clone());
                 state.auto_load.snapshot.phase = app_model::AutoLoadPhaseDto::Running;
@@ -1450,10 +1472,14 @@ impl ForegroundEngineManager {
         match_reservation::require_unreserved(&state)?;
         batch::admit(&state, None)?;
         if state.auto_load.snapshot.task_id.as_deref() == Some(task_id)
-            && state.auto_load.snapshot.run_id.as_deref() == Some(run_id) {
+            && state.auto_load.snapshot.run_id.as_deref() == Some(run_id)
+        {
             auto_load::retire_locked(self, &mut state)?;
             publish_snapshot(&mut state);
-            return state.analysis_task.clone().ok_or_else(|| continuous_invalid_state(&state, "Automatic task retired."));
+            return state
+                .analysis_task
+                .clone()
+                .ok_or_else(|| continuous_invalid_state(&state, "Automatic task retired."));
         }
         let task = state
             .analysis_task
@@ -1637,7 +1663,9 @@ impl ForegroundEngineManager {
 
     pub fn invalidate_analysis_task(&self, generation: u64) {
         let mut state = self.lock();
-        if state.batch.current.is_some() { return; }
+        if state.batch.current.is_some() {
+            return;
+        }
         if state.auto_load.snapshot.generation != generation {
             let _ = auto_load::retire_locked(self, &mut state);
         }
@@ -1718,7 +1746,10 @@ impl ForegroundEngineManager {
         let mut state = self.lock();
         match_reservation::require_unreserved(&state)?;
         if job_id.starts_with("batch:") {
-            return Err(continuous_invalid_state(&state, "Use the batch row Stop action for this private task."));
+            return Err(continuous_invalid_state(
+                &state,
+                "Use the batch row Stop action for this private task.",
+            ));
         }
         if state.analysis_task.as_ref().is_some_and(|task| {
             task.run_id == run_id && task.job_id == job_id && task.state == AnalysisTaskStateDto::Paused
@@ -1985,8 +2016,14 @@ impl ForegroundEngineManager {
                 || continuation::occupied(&state)
                 || batch::occupied(&state.batch)
                 || (state.auto_load.snapshot.phase == app_model::AutoLoadPhaseDto::Running
-                    && state.analysis_task.as_ref().is_some_and(|task|
-                        matches!(task.state, AnalysisTaskStateDto::Queued | AnalysisTaskStateDto::Searching | AnalysisTaskStateDto::Pausing)))
+                    && state.analysis_task.as_ref().is_some_and(|task| {
+                        matches!(
+                            task.state,
+                            AnalysisTaskStateDto::Queued
+                                | AnalysisTaskStateDto::Searching
+                                | AnalysisTaskStateDto::Pausing
+                        )
+                    }))
                 || state.game_move.is_some()
                 || state.runtime_control.is_some()
                 || state.continuous_target.is_none()
@@ -3584,7 +3621,9 @@ impl Inner {
             )
         });
         if has_data {
-            if started.mode == AnalysisJobModeDto::Continuous && state.auto_load.snapshot.phase != app_model::AutoLoadPhaseDto::Running {
+            if started.mode == AnalysisJobModeDto::Continuous
+                && state.auto_load.snapshot.phase != app_model::AutoLoadPhaseDto::Running
+            {
                 state.auto_load.handback_pending = false;
             }
             state.last_activity = Instant::now();
