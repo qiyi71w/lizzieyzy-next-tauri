@@ -147,7 +147,7 @@ export function BatchPanel({ openRequest }: { openRequest: number }) {
       <div className="batch-table"><table><thead><tr><th>{t("batch.source")}</th><th>{t("batch.calculation")}</th><th>{t("batch.result")}</th><th>{t("batch.actions")}</th></tr></thead><tbody>
         {rows.map(row => <tr key={`${row.identity.row_id}:${row.identity.attempt}`}>
           <td>{row.source_path}<small>{row.input_receipt ?? row.document_id}</small><small>{row.identity.row_id} / {row.identity.attempt}</small></td>
-          <td>{t(`batch.state.${row.state}`)} · {t(`batch.${row.conditions.strategy}`)}<small>{row.task?.stage} {row.task?.completed.length}/{row.task?.requested.length} · overview {row.task?.overview_completed.length}</small>
+          <td>{t(`batch.state.${row.state}`)} · {t(`batch.${row.conditions.strategy}`)}<small>{row.task ? <>{t(row.task.stage === "single_stage" ? "batch.single_stage" : `batch.stage.${row.task.stage}`)} {row.task.completed.length}/{row.task.requested.length} · {t("batch.overviewCompleted")} {row.task.overview_completed.length}</> : t("batch.noTaskProgress")}</small>
             <details><summary>{row.preview?.targets.length ?? 0} {t("batch.requested")} / {row.preview?.supporting_targets.length ?? 0} {t("batch.supporting")}</summary>
               <pre>{JSON.stringify({ requested: row.preview?.targets, supporting: row.preview?.supporting_targets, conditions: row.conditions }, null, 2)}</pre></details></td>
           <td>{row.calculation_complete ? t("batch.complete") : t("batch.incomplete")}<small>{t(`batch.${row.output_state}`)}</small><small>{row.saved_path}</small>{row.reason ? <p role="status">{row.reason}</p> : null}</td>
