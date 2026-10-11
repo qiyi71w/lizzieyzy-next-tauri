@@ -298,6 +298,8 @@ R13 automatic-load handback recovery adds a narrower JSONL authorization prerequ
 
 Open 批量分析 from the analysis menu, toolbar or persistent batch control. Add SGF files, confirm per-intake conditions, inspect each file's requested/supporting paths and choose either session-only results or a directory with the displayed names. Start is explicit. Normal defaults to total100; all-position uses overview32/deep800 (minimum500); swing has separate overview32/deep10-second defaults. Settings Save/Cancel does not alter admitted rows or current-game task presets. Browser preview edits settings and exposes native-only file unavailability; it cannot prove file dialogs, drop delivery, filesystem access or engine execution.
 
+Batch row progress uses the R11 resource/fallback path: single-stage, overview and deep labels are localized separately from strategy and budget labels. An existing task shows its unchanged completed/requested counts and overview-completed count; a missing task shows “暂无任务进度”, not zero or a fabricated stage. Calculation, output, row identity and Stop/Save behavior remain independent of this display.
+
 Focused production-boundary checks:
 
 ```bash
