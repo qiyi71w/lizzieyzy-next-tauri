@@ -3812,6 +3812,7 @@ impl Inner {
                             Some(0),
                             None,
                         );
+                        publish_snapshot(state);
                         return None;
                     }
 
@@ -3878,6 +3879,7 @@ impl Inner {
                             Some(0),
                             None,
                         );
+                        publish_snapshot(state);
                         return None;
                     }
                 }
@@ -3898,6 +3900,7 @@ impl Inner {
                             Some(expected.saturating_sub(next_index)),
                             Some(error),
                         );
+                        publish_snapshot(state);
                         return None;
                     }
                 };
@@ -3938,6 +3941,7 @@ impl Inner {
                         .with_job_id(&started.job_id),
                     ),
                 );
+                publish_snapshot(state);
                 None
             }
             Err(_) => None,

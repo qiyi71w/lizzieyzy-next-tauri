@@ -48,6 +48,142 @@ fn setup() -> (LiveFixture, CurrentGameState) {
 }
 
 #[test]
+fn finite_zero_deep_selection_publishes_released_owner_after_terminal_job() {
+    let (engine, state) = setup();
+    engine.manager.set_continuous_preferences(false, app_model::ContinuousAnalysisBudgetDto::default()).unwrap();
+    std::fs::write(engine.directory.join("budget-smoke"), "swing_zero").unwrap();
+    let opened = state.replace("(;SZ[9];B[dd])", None).unwrap();
+    engine.manager.start("test").unwrap();
+    pump(&engine, &state, || matches!(engine.manager.snapshot().lifecycle, app_model::ForegroundEngineLifecycleDto::Ready { .. }));
+    let run_id = match engine.manager.snapshot().lifecycle {
+        app_model::ForegroundEngineLifecycleDto::Ready { run } => run.run_id,
+        other => panic!("expected Ready, got {other:?}"),
+    };
+    let preview = state.preview_analysis_scope(opened.generation, app_model::AnalysisScopeDto {
+        mode: app_model::AnalysisScopeModeDto::FirstChildMainline,
+        current_node: NodePath::default(), branch_choices: Vec::new(),
+        interval: Some(app_model::AnalysisPositionIntervalDto { start: 1, end: 1 }), to_play: None,
+    }, Some(app_model::AnalysisSwingCriteriaDto {
+        move_actors: app_model::AnalysisMoveActorFilterDto::Both,
+        winrate_change_percentage_points: app_model::AnalysisSwingThresholdDto { enabled: true, value: 10.0 },
+        score_change_points: app_model::AnalysisSwingThresholdDto { enabled: false, value: 3.0 },
+    })).unwrap();
+    let task = state.start_swing_analysis_task(&engine.manager, run_id, preview,
+        app_model::AnalysisStageConditionsDto::default(), app_model::AnalysisStageConditionsDto::default()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let mut terminal = false;
+    loop {
+        assert!(Instant::now() < deadline, "zero-deep terminal snapshot was not published");
+        match engine.events.recv_timeout(Duration::from_millis(20)) {
+            Ok(app_model::ForegroundEngineEventDto::Job { job }) => {
+                state.attach_from_job_event(&job);
+                if job.job_id == task.job_id && job.outcome == app_model::AnalysisJobOutcomeDto::Completed {
+                    assert_eq!(job.expected, Some(0));
+                    terminal = true;
+                }
+            }
+            Ok(app_model::ForegroundEngineEventDto::Snapshot { snapshot }) if terminal => {
+                assert!(snapshot.whole_game_job.is_none());
+                assert_eq!(snapshot.continuous.phase, app_model::ContinuousAnalysisPhaseDto::Off);
+                break;
+            }
+            Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(error) => panic!("event stream: {error}"),
+        }
+    }
+    let completed = engine.manager.analysis_task_snapshot().unwrap();
+    assert_eq!(completed.state, app_model::AnalysisTaskStateDto::Completed);
+    assert_eq!(completed.stage, app_model::AnalysisTaskStageDto::Deep);
+    assert_eq!(completed.selected_for_deep, Some(Vec::new()));
+    assert!(completed.completed.is_empty());
+    assert_eq!(completed.overview_completed.len(), 2);
+    assert_eq!(std::fs::read_to_string(engine.directory.join("queries.jsonl")).unwrap().lines().count(), 2);
+    engine.manager.teardown().unwrap();
+}
+
+#[test]
+fn auto_load_final_publishes_complete_before_idle_or_current_target_handback() {
+    for (continuous, total_visits) in [(false, 1), (false, 8), (true, 8)] {
+        let (engine, state) = setup();
+        for marker in ["hold-first", "hold-ordinary"] {
+            std::fs::write(engine.directory.join(marker), "").unwrap();
+        }
+        engine.manager.set_auto_load_preferences(app_model::AutoLoadPreferencesDto {
+            enabled: true, total_visits,
+        }).unwrap();
+        engine.manager.set_continuous_preferences(continuous, app_model::ContinuousAnalysisBudgetDto::default()).unwrap();
+        engine.manager.start("test").unwrap();
+        pump(&engine, &state, || matches!(engine.manager.snapshot().lifecycle, app_model::ForegroundEngineLifecycleDto::Ready { .. }));
+        if total_visits == 1 {
+            std::fs::write(engine.directory.join("finish"), "").unwrap();
+        }
+        let opened = load(&engine, &state, "(;SZ[9]C[personal];B[dd];W[ee])", Source::Open);
+        let task = engine.manager.analysis_task_snapshot().unwrap();
+        let selected = if total_visits == 1 {
+            opened.selected_path.clone()
+        } else {
+            let selected = NodePath { indices: vec![0, 0] };
+            state.select_path(selected.clone(), opened.generation).unwrap();
+            pump(&engine, &state, || engine.directory.join("search-started").exists());
+            std::fs::write(engine.directory.join("finish"), "").unwrap();
+            selected
+        };
+        // Once the child can finish, only consume the real reader event stream.
+        // The one-visit case has no post-load navigation or other command at all.
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let mut attached = Vec::new();
+        let mut completed = false;
+        let settled = loop {
+            assert!(Instant::now() < deadline, "no settled automatic completion event; continuous={continuous}, terminal={completed}");
+            match engine.events.recv_timeout(Duration::from_millis(20)) {
+                Ok(app_model::ForegroundEngineEventDto::Job { job }) => {
+                    if job.job_id == task.job_id {
+                        if job.frame.is_some() {
+                            assert!(!completed, "final frame must precede terminal job");
+                            attached.push(job.node_path.clone());
+                        }
+                        if job.outcome == app_model::AnalysisJobOutcomeDto::Completed {
+                            assert_eq!(attached.len(), 3);
+                            assert!(job.frame.is_none());
+                            completed = true;
+                        }
+                    }
+                    state.attach_from_job_event(&job);
+                }
+                Ok(app_model::ForegroundEngineEventDto::Snapshot { snapshot }) => {
+                    state.reconcile_auto_load();
+                    if snapshot.auto_load.task_id.as_deref() == Some(&task.task_id)
+                        && snapshot.auto_load.phase == AutoPhase::Complete {
+                        assert!(completed, "terminal job must precede settled snapshot");
+                        assert!(snapshot.whole_game_job.is_none());
+                        if !continuous || snapshot.selected_node_job.is_some() { break snapshot; }
+                    }
+                }
+                Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(error) => panic!("event stream: {error}"),
+            }
+        };
+        assert_eq!(attached, vec![NodePath::default(), NodePath { indices: vec![0] }, NodePath { indices: vec![0, 0] }]);
+        let document = CurrentSgfDocument::open(&state.serialize().unwrap()).unwrap();
+        assert!(document.missing_primary_mainline_snapshots().unwrap().is_empty());
+        assert_eq!(document.snapshot(&NodePath::default()).unwrap().personal_comment, "personal");
+        assert_eq!(state.holder.lock().unwrap().current_result().unwrap().selected_path, selected);
+        if continuous {
+            let ordinary = settled.selected_node_job.unwrap();
+            assert_eq!(ordinary.run_id, task.run_id);
+            assert_eq!(ordinary.generation, opened.generation);
+            assert_eq!(ordinary.node_path, selected);
+            assert_eq!(ordinary.mode, app_model::AnalysisJobModeDto::Continuous);
+            assert_ne!(ordinary.job_id, task.job_id);
+        } else {
+            assert_eq!(settled.continuous.phase, app_model::ContinuousAnalysisPhaseDto::Off);
+            assert!(settled.selected_node_job.is_none());
+        }
+        engine.manager.teardown().unwrap();
+    }
+}
+
+#[test]
 fn auto_load_committed_sources_exclusions_reopen_and_no_latent_start() {
     let (engine, state) = setup();
     for source in [Source::Open, Source::Recent, Source::FileDelivery, Source::Clipboard, Source::Text] {
