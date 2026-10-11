@@ -33,6 +33,8 @@ mod evaluation;
 mod auto_load;
 mod auto_load_recovery;
 mod batch;
+mod continuation;
+pub use continuation::ContinuationAction;
 #[cfg(test)]
 mod evaluation_tests;
 mod game_move;
@@ -259,6 +261,7 @@ struct ManagerState {
     analysis_task: Option<AnalysisTaskDto>,
     auto_load: auto_load::Owner,
     batch: batch::Owner,
+    continuation: continuation::Owner,
     subscribers: Vec<Sender<ForegroundEngineEventDto>>,
     continuous_intent: Option<bool>,
     continuous_budget: ContinuousAnalysisBudgetDto,
@@ -326,6 +329,7 @@ impl ForegroundEngineManager {
                     analysis_task: None,
                     auto_load: auto_load::Owner::default(),
                     batch: batch::Owner::default(),
+                    continuation: continuation::Owner::default(),
                     last_activity: Instant::now(),
                     subscribers: Vec::new(),
                     continuous_intent: None,
@@ -773,6 +777,7 @@ impl ForegroundEngineManager {
         let (operation, profile_id) = {
             let mut state = self.lock();
             match_reservation::require_unreserved(&state)?;
+            continuation::invalidate(&mut state, "Foreground Run restarted.");
             let run = match &state.phase {
                 Phase::Ready(run) | Phase::Error { run, .. } => run.clone(),
                 _ => {
@@ -828,6 +833,7 @@ impl ForegroundEngineManager {
     }
 
     pub fn switch_to(&self, profile_id: &str) -> Result<(), EngineFailureDto> {
+        continuation::invalidate(&mut self.lock(), "Foreground Run switch requested.");
         match_reservation::require_unreserved(&self.lock())?;
         if self.switch_preload(profile_id)? {
             return Ok(());
@@ -953,6 +959,7 @@ impl ForegroundEngineManager {
         self.retire_auto_load()?;
         let old = {
             let mut state = self.lock();
+            continuation::require_idle(&state)?;
             batch::admit(&state, None)?;
             validate_selected_admission(&state, &request)?;
             if state.finite_admission_pending {
@@ -1026,7 +1033,7 @@ impl ForegroundEngineManager {
         state: &mut ManagerState,
         mut request: SelectedNodeJobRequest,
     ) -> Result<SelectedSubmission, EngineFailureDto> {
-        batch::admit(state, None)?;
+        if !continuation::occupied(state) { batch::admit(state, None)?; }
         let run = validate_selected_admission(state, &request)?;
         evaluation::yield_to_foreground(state)?;
         state
@@ -1275,6 +1282,7 @@ impl ForegroundEngineManager {
         let cancel = AnalysisCancelToken::new();
         let (task, bound_query) = {
             let mut state = self.lock();
+            continuation::require_idle(&state)?;
             batch::admit(&state, batch_identity.as_ref())?;
             if let Some(intent) = &auto_intent {
                 auto_load::admit(&state, intent)?;
@@ -1980,6 +1988,7 @@ impl ForegroundEngineManager {
             }
             if state.continuous_departing
                 || state.finite_admission_pending
+                || continuation::occupied(&state)
                 || batch::occupied(&state.batch)
                 || (state.auto_load.snapshot.phase == app_model::AutoLoadPhaseDto::Running
                     && state.analysis_task.as_ref().is_some_and(|task|
@@ -2110,6 +2119,7 @@ impl ForegroundEngineManager {
     fn begin_stop(&self, _operation_kind: EngineOperationDto) -> Result<Option<u64>, EngineFailureDto> {
         let mut state = self.lock();
         match_reservation::require_unreserved(&state)?;
+        continuation::invalidate(&mut state, "Foreground Run stopped.");
         self.yield_preloads_locked(&mut state);
         let run = match &state.phase {
             Phase::NoEngine { .. } => return Ok(None),
@@ -4132,6 +4142,7 @@ fn publish_snapshot(state: &mut ManagerState) {
 
 fn publish_event(state: &mut ManagerState, event: ForegroundEngineEventDto) {
     batch::observe(state, &event);
+    continuation::observe(state, &event);
     state
         .subscribers
         .retain(|subscriber| subscriber.send(event.clone()).is_ok());

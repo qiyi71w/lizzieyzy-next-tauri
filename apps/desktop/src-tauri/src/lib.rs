@@ -21,6 +21,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 mod continuous_analysis;
 mod batch_analysis;
+mod engine_continuation;
 mod diagnostic_export;
 mod gesture_timing;
 use gesture_timing::board_gesture_timing;
@@ -1387,6 +1388,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            engine_continuation::continuation_snapshot,
+            engine_continuation::start_engine_continuation,
+            engine_continuation::engine_continuation_beat,
+            engine_continuation::stop_engine_continuation,
+            engine_continuation::load_continuation_preferences,
+            engine_continuation::save_continuation_preferences,
             batch_analysis::batch_snapshot,
             batch_analysis::batch_command,
             batch_analysis::load_batch_preferences,

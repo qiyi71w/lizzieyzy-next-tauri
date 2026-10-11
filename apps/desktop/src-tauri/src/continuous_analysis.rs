@@ -66,6 +66,7 @@ impl PreferencesState {
         preferences.readboard_executable_path = latest.readboard_executable_path.clone();
         preferences.fox_kifu = latest.fox_kifu.clone();
         preferences.batch = latest.batch.clone();
+        preferences.continuation = latest.continuation.clone();
         let saved = manager.commit_continuous_preferences(
             preferences.continuous_analysis_enabled,
             preferences.continuous_budget,
@@ -91,6 +92,17 @@ impl PreferencesState {
         let batch = saved.batch.clone();
         *committed = Some(AppPreferencesLoadResultDto { preferences: saved, recovery: None });
         Ok(batch)
+    }
+
+    pub fn save_continuation(&self, path: &Path, value: app_model::ContinuationPreferencesDto) -> Result<app_model::ContinuationPreferencesDto, String> {
+        value.validate()?;
+        let mut committed = self.0.lock().map_err(|_| "Preferences transaction poisoned")?;
+        let mut preferences = committed.as_ref().ok_or("Load preferences before saving continuation settings.")?.preferences.clone();
+        preferences.continuation = value;
+        let saved = app_preferences::save_to_path(path, preferences)?;
+        let value = saved.continuation.clone();
+        *committed = Some(AppPreferencesLoadResultDto { preferences: saved, recovery: None });
+        Ok(value)
     }
 
     pub fn save_network(

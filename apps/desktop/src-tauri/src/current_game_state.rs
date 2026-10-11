@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
 mod auto_load;
+mod continuation;
 #[cfg(test)]
 mod authoring_tests;
 #[cfg(test)]
@@ -655,6 +656,7 @@ impl CurrentGameState {
         generation: u64,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
+        self.interrupt_continuation();
         holder.ensure_review_access()?;
         if holder.document.is_none() {
             return Err(no_current_game());
@@ -678,6 +680,7 @@ impl CurrentGameState {
 
     pub fn play(&self, path: NodePath, vertex: MoveVertex) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
+        self.interrupt_continuation();
         let result = holder.play(path, vertex)?;
         self.note_recovery(&holder);
         self.follow_continuous_position(&mut holder);
@@ -690,6 +693,7 @@ impl CurrentGameState {
         comment: String,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
+        self.interrupt_continuation();
         let result = holder.set_personal_comment(path, &comment)?;
         self.note_recovery(&holder);
         self.follow_continuous_position(&mut holder);
@@ -703,6 +707,7 @@ impl CurrentGameState {
         komi: f32,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
+        self.interrupt_continuation();
         let result = holder.set_metadata(generation, &black_name, &white_name, komi)?;
         self.note_recovery(&holder);
         self.follow_continuous_position(&mut holder);
@@ -716,6 +721,7 @@ impl CurrentGameState {
         action: app_model::SgfMarkupActionDto,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
+        self.interrupt_continuation();
         let result = holder.edit_markup(path, generation, action)?;
         self.note_recovery(&holder);
         Ok(result)
@@ -727,6 +733,7 @@ impl CurrentGameState {
         generation: u64,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
+        self.interrupt_continuation();
         holder.ensure_editable()?;
         holder.ensure_generation(generation)?;
         let result = holder.remove_variation(path)?;
@@ -741,6 +748,7 @@ impl CurrentGameState {
         generation: u64,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
+        self.interrupt_continuation();
         holder.ensure_editable()?;
         holder.ensure_generation(generation)?;
         let result = holder.promote_to_main(path)?;
@@ -756,6 +764,7 @@ impl CurrentGameState {
         to_play: PlayerColor,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
+        self.interrupt_continuation();
         let result = holder.apply_root_setup(generation, &stones, to_play)?;
         self.note_recovery(&holder);
         self.follow_continuous_position(&mut holder);
@@ -768,6 +777,7 @@ impl CurrentGameState {
         path: NodePath,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
+        self.interrupt_continuation();
         let result = holder.convert_to_root_setup(generation, path)?;
         self.note_recovery(&holder);
         self.follow_continuous_position(&mut holder);
@@ -781,6 +791,7 @@ impl CurrentGameState {
         action: app_model::SgfAuthoringActionDto,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
+        self.interrupt_continuation();
         holder.ensure_editable()?;
         holder.ensure_generation(generation)?;
         if holder.selected_path != path {
@@ -821,6 +832,7 @@ impl CurrentGameState {
 
     pub fn undo(&self, generation: u64) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
+        self.interrupt_continuation();
         let result = holder.undo(generation)?;
         self.note_recovery(&holder);
         self.follow_continuous_position(&mut holder);
@@ -829,6 +841,7 @@ impl CurrentGameState {
 
     pub fn redo(&self, generation: u64) -> Result<CurrentGameResultDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
+        self.interrupt_continuation();
         let result = holder.redo(generation)?;
         self.note_recovery(&holder);
         self.follow_continuous_position(&mut holder);

@@ -13,6 +13,8 @@ use go_core::{Board, RuleError};
 
 #[path = "point_search.rs"]
 mod point_search;
+#[path = "continuation.rs"]
+mod continuation;
 
 #[derive(Debug, Clone)]
 pub struct CurrentSgfDocument {

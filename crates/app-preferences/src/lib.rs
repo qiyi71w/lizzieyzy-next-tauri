@@ -54,6 +54,8 @@ pub struct AppPreferencesDto {
     pub auto_load: app_model::AutoLoadPreferencesDto,
     #[serde(default)]
     pub batch: app_model::BatchPreferencesDto,
+    #[serde(default)]
+    pub continuation: app_model::ContinuationPreferencesDto,
     #[serde(default = "default_show_coordinates")]
     pub show_coordinates: bool,
     #[serde(default)]
@@ -185,6 +187,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         continuous_budget: ContinuousAnalysisBudgetDto::default(),
         auto_load: app_model::AutoLoadPreferencesDto::default(),
         batch: app_model::BatchPreferencesDto::default(),
+        continuation: app_model::ContinuationPreferencesDto::default(),
         show_coordinates: default_show_coordinates(),
         show_move_numbers: false,
         show_ownership: default_show_ownership(),
@@ -290,6 +293,7 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
                 if preferences.continuous_budget.validate().is_ok()
                     && preferences.auto_load.validate().is_ok()
                     && preferences.batch.validate().is_ok()
+                    && preferences.continuation.validate().is_ok()
                     && preferences.match_defaults.validate().is_ok()
                     && preferences.granular_display.validate().is_ok()
                     && preferences.network.validate().is_ok()
@@ -364,6 +368,7 @@ pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPr
     preferences.continuous_budget.validate()?;
     preferences.auto_load.validate()?;
     preferences.batch.validate()?;
+    preferences.continuation.validate()?;
     let single_stage = preferences
         .task_single_stage_conditions
         .as_ref()
@@ -685,6 +690,7 @@ mod tests {
             },
             auto_load: app_model::AutoLoadPreferencesDto::default(),
             batch: app_model::BatchPreferencesDto::default(),
+            continuation: app_model::ContinuationPreferencesDto::default(),
             show_coordinates: false,
             show_move_numbers: true,
             show_ownership: false,
@@ -1019,6 +1025,28 @@ mod tests {
             assert_eq!(load_from_path(&path).unwrap().preferences, original);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn continuation_pair_roundtrips_and_invalid_or_failed_save_preserves_both_fields() {
+        let (dir, path) = temp_prefs();
+        let mut settings = sample_preferences();
+        settings.continuation = app_model::ContinuationPreferencesDto {
+            mode: app_model::ContinuationModeDto::EveryBeat, interval_seconds: 0.8,
+        };
+        let original = save_to_path(&path, settings).unwrap();
+        assert_eq!(load_from_path(&path).unwrap().preferences, original);
+        for interval in [0.0, -1.0, f64::NAN, f64::INFINITY, 0.0001] {
+            let mut invalid = original.clone();
+            invalid.continuation.mode = app_model::ContinuationModeDto::LeafOnly;
+            invalid.continuation.interval_seconds = interval;
+            assert!(save_to_path(&path, invalid).is_err());
+            assert_eq!(load_from_path(&path).unwrap().preferences, original);
+        }
+        let replacement = serde_json::to_string(&sample_preferences()).unwrap();
+        assert!(atomic_replace_file_with(&path, &replacement, |_, _| Err(io::Error::other("continuation replace failure"))).is_err());
+        assert_eq!(load_from_path(&path).unwrap().preferences, original);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

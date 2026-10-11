@@ -17,6 +17,8 @@ mod auto_load;
 pub use auto_load::*;
 mod batch;
 pub use batch::*;
+mod continuation;
+pub use continuation::*;
 mod game_move;
 pub use game_move::*;
 mod match_session;

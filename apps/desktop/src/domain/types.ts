@@ -765,3 +765,11 @@ export type BatchCommandDto =
   | { action: "start"; output: BatchOutputAuthorizationDto }
   | { action: "continue" | "pause" | "stop_current" | "stop_all" | "new_batch" }
   | { action: "save"; identity: BatchIdentityDto; path: string; overwrite: boolean; incomplete: boolean };
+
+export type ContinuationModeDto = "leaf_only" | "every_beat";
+export type ContinuationPreferencesDto = { mode: ContinuationModeDto; intervalSeconds: number };
+export type ContinuationSnapshotDto = {
+  session_id: string | null; phase: "stopped" | "waiting" | "running" | "failed" | "terminal";
+  mode: ContinuationModeDto; run_id: string | null; request_id: string | null;
+  generation: number; node_path: NodePath; reason: string | null; current_game: CurrentGameResultDto | null;
+};

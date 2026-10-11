@@ -17,7 +17,7 @@ fn pump(engine: &LiveFixture, state: &CurrentGameState, done: impl Fn() -> bool)
     }
 }
 
-fn load(engine: &LiveFixture, state: &CurrentGameState, text: &str, source: Source) -> app_model::CurrentGameResultDto {
+pub(super) fn load(engine: &LiveFixture, state: &CurrentGameState, text: &str, source: Source) -> app_model::CurrentGameResultDto {
     let admission = state.prepare_loaded_replacement(text, None, source).unwrap();
     let departure_id = match admission {
         app_model::DocumentDepartureAdmissionDto::Ready { departure_id }

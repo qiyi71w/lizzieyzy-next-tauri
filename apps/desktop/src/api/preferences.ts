@@ -5,6 +5,8 @@ import type { WorkspaceSharesDto, WorkspaceVisibilityDto } from "../domain/types
 import { normalizeWorkspaceShares } from "../domain/preferences";
 import { validateBatchPreferences } from "../domain/batch";
 import type { BatchPreferencesDto } from "../domain/types";
+import type { ContinuationPreferencesDto } from "../domain/types";
+import { validateContinuationPreferences } from "../domain/continuation";
 
 declare global {
   interface Window {
@@ -50,10 +52,11 @@ export async function saveAppPreferences(preferences: AppPreferences): Promise<A
     ?? swingCriteriaError(preferences.taskSwingCriteria);
   if (error) throw new Error(error);
   validateBatchPreferences(preferences.batch);
+  validateContinuationPreferences(preferences.continuation);
   const normalized = normalizeAppPreferences(preferences);
   if (!isTauriRuntime()) {
     const latest = loadBrowserPreferences().preferences;
-    const saved = { ...normalized, batch: latest.batch, workspaceShares: latest.workspaceShares, windowGeometry: latest.windowGeometry, workspaceVisibility: latest.workspaceVisibility, recentGamePaths: latest.recentGamePaths, recentImageExportDirectory: latest.recentImageExportDirectory };
+    const saved = { ...normalized, continuation: latest.continuation, batch: latest.batch, workspaceShares: latest.workspaceShares, windowGeometry: latest.windowGeometry, workspaceVisibility: latest.workspaceVisibility, recentGamePaths: latest.recentGamePaths, recentImageExportDirectory: latest.recentImageExportDirectory };
     saveBrowserPreferences(saved);
     return saved;
   }
@@ -69,6 +72,17 @@ export async function saveBatchPreferences(batch: BatchPreferencesDto): Promise<
   if (isTauriRuntime()) return invoke("save_batch_preferences", { batch });
   saveBrowserPreferences({ ...loadBrowserPreferences().preferences, batch });
   return batch;
+}
+
+export async function loadContinuationPreferences(): Promise<ContinuationPreferencesDto> {
+  if (isTauriRuntime()) return invoke("load_continuation_preferences");
+  return loadBrowserPreferences().preferences.continuation;
+}
+export async function saveContinuationPreferences(value: ContinuationPreferencesDto): Promise<ContinuationPreferencesDto> {
+  validateContinuationPreferences(value);
+  if (isTauriRuntime()) return invoke("save_continuation_preferences", { value });
+  saveBrowserPreferences({ ...loadBrowserPreferences().preferences, continuation: value });
+  return value;
 }
 
 export async function updateWorkspaceShares(shares: WorkspaceSharesDto | null): Promise<WorkspaceSharesDto | null> {
@@ -107,6 +121,7 @@ function loadBrowserPreferences(): AppPreferencesLoadResult {
       ?? swingCriteriaError(preferences.taskSwingCriteria);
     if (error) throw new Error(error);
     validateBatchPreferences(preferences.batch);
+    validateContinuationPreferences(preferences.continuation);
     return { preferences };
   } catch {
     window.localStorage.setItem(browserUnreadableKey, raw);

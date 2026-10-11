@@ -246,6 +246,7 @@ impl ForegroundEngineManager {
                 let Some(index) = state.batch.rows.iter().position(pending) else { state.batch.worker = false; return; };
                 let busy = !state.batch.review_allowed || state.match_reservation.is_some() || state.game_move.is_some() || state.runtime_control.is_some() || state.continuous_departing || state.finite_admission_pending
                     || state.analysis_task.as_ref().is_some_and(|t| matches!(t.state, AnalysisTaskStateDto::Queued | AnalysisTaskStateDto::Searching | AnalysisTaskStateDto::Pausing | AnalysisTaskStateDto::Paused))
+                    || super::continuation::occupied(&state)
                     || state.jobs.iter().any(|j| !j.terminal && j.mode == AnalysisJobModeDto::Finite);
                 if busy {
                     state.batch.rows[index].dto.state = BatchRowStateDto::Waiting;

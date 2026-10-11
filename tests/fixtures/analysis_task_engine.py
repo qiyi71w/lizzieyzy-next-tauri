@@ -22,8 +22,9 @@ def configured_visits(query):
 def frame(query, during=False, visits=None, candidates=None):
     visits = configured_visits(query) if visits is None else visits
     if candidates is None:
-        candidates = [dict(move="D4", order=0, visits=visits, winrate=0.6,
-                           scoreMean=2.5, pv=["D4"])]
+        move = (root / "continuation-move").read_text().strip() if (root / "continuation-move").exists() else "D4"
+        candidates = [] if move == "empty" else [dict(move=move, order=0, visits=visits, winrate=0.6,
+                           scoreMean=2.5, pv=[move])]
     return dict(id=query["id"], turnNumber=0, isDuringSearch=during,
                 rootInfo=dict(visits=visits, winrate=0.6, scoreLead=2.5),
                 moveInfos=candidates)
@@ -126,6 +127,12 @@ def search(query):
             emit(invalid_final(query, "semantic") if (root / "recovery-fail").exists() else frame(query))
         return
     if ":" not in identity and "overrideSettings" in query:
+        late = root / "continuation-late"
+        if late.exists():
+            old = late.read_text().strip()
+            if old in queries:
+                emit(frame(queries[old], True))
+                (root / "continuation-late-sent").touch()
         while identity in active:
             if (root / "fail-handback").exists():
                 emit(invalid_final(query, "semantic"))

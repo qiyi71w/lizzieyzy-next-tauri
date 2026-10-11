@@ -29,6 +29,7 @@ import { ApplicationTeardownDialog } from "./components/ApplicationTeardownDialo
 import { CurrentGameRecoveryDialog } from "./components/CurrentGameRecoveryDialog";
 import { AnalysisTaskPanel, type AnalysisScopeDraft } from "./components/AnalysisTaskPanel";
 import { BatchPanel } from "./components/BatchPanel";
+import { ContinuationPanel } from "./components/ContinuationPanel";
 import { confirmBatchExit } from "./api/batch";
 import { ProviderPanel } from "./components/ProviderPanel";
 import { YikeSyncPanel } from "./components/YikeSyncPanel";
@@ -1785,6 +1786,20 @@ export function App() {
     if (selectedNodeJobRef.current?.mode === "continuous") {
       adoptAutomaticJobToken(selectedNodeJobRef.current);
     }
+  }
+
+  function adoptContinuationGame(result: CurrentGameResultDto) {
+    const previous = currentGameRef.current;
+    if (!previous || result.generation < previous.generation
+      || (result.generation === previous.generation && result.snapshot_seq < previous.snapshot_seq)) return;
+    const moved = result.generation !== previous.generation || !samePath(result.selected_path, previous.selected_path);
+    if (moved) { beginReviewRequest(); clearReviewData(); }
+    adoptCurrentGame(result);
+    pendingSelectedPathRef.current = result.selected_path;
+    setChosenChildren(value => rememberChosenChildren(value, result.selected_path));
+    setDirty(result.dirty);
+    setCurrentMove(result.snapshot.position.move_number);
+    if (moved) soundAcceptedMove(previous.snapshot, result.snapshot);
   }
 
   function adoptTrial(next: TrialSessionDto) {
@@ -4295,6 +4310,7 @@ export function App() {
   return <main ref={workspaceRef} tabIndex={-1} data-focus-owner="workspace" className={`app-shell${preferences.boardTheme === "high-contrast" ? " theme-high-contrast" : ""}${nativeRuntime ? "" : " has-native-runtime-note"}`}>
     {!nativeRuntime ? <p className="native-runtime-note" role="status">{nativeCurrentGameUnavailable}</p> : null}
     <BatchPanel openRequest={batchOpenRequest} />
+    <ContinuationPanel current={currentGame} choices={analysisBranchChoices(chosenChildren)} onCurrent={adoptContinuationGame} onStart={() => setAutoPlaying(false)} />
     <AppChrome
       onBatch={() => setBatchOpenRequest(value => value + 1)}
       onBeforeFunctionSearch={() => { if (workspaceRef.current) chromeSearchSourceRef.current = captureFocusReturn(workspaceRef.current); }}

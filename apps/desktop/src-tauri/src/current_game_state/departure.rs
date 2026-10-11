@@ -133,6 +133,7 @@ impl CurrentGameState {
             _ => return Err(departure_in_progress()),
         }
         holder.edits_blocked = true;
+        self.interrupt_continuation();
         if let Some(manager) = self.analysis_manager.get() {
             manager.begin_continuous_departure();
         }
