@@ -2296,6 +2296,8 @@ impl Inner {
         let probe_id = format!("lifecycle-readiness-{}", run.run_id);
         if !generic {
             let query = AnalysisQuery {
+                include_pv_visits: false,
+                include_moves_ownership: None,
                 id: probe_id.clone(),
                 moves: Vec::new(),
                 initial_stones: Vec::new(),

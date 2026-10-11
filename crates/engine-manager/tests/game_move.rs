@@ -595,6 +595,8 @@ fn match_analysis_request(run_id: &str) -> SelectedNodeJobRequest {
         board_height: 5,
         position_empty: true,
         query: katago_protocol::AnalysisQuery {
+            include_pv_visits: false,
+            include_moves_ownership: None,
             id: "analysis".into(),
             moves: Vec::new(),
             initial_stones: Vec::new(),

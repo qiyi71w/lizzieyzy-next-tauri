@@ -62,6 +62,8 @@ pub struct AppPreferencesDto {
     pub show_candidates: bool,
     #[serde(default = "default_candidate_limit")]
     pub candidate_limit: u32,
+    #[serde(default)]
+    pub granular_display: app_model::GranularDisplayDto,
     #[serde(default = "default_max_visits")]
     pub default_max_visits: u32,
     #[serde(default, alias = "taskConditions", skip_serializing_if = "Option::is_none")]
@@ -183,6 +185,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         show_policy: default_show_policy(),
         show_candidates: default_show_candidates(),
         candidate_limit: default_candidate_limit(),
+        granular_display: app_model::GranularDisplayDto::default(),
         default_max_visits: default_max_visits(),
         task_single_stage_conditions: Some(default_task_single_stage_conditions(default_max_visits())),
         task_overview_conditions: Some(default_task_overview_conditions()),
@@ -280,6 +283,7 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
             Ok(preferences)
                 if preferences.continuous_budget.validate().is_ok()
                     && preferences.match_defaults.validate().is_ok()
+                    && preferences.granular_display.validate().is_ok()
                     && preferences.network.validate().is_ok()
                     && validate_review_autoplay_interval(preferences.review_autoplay_interval_ms).is_ok() =>
             {
@@ -328,6 +332,7 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
 
 pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPreferencesDto, String> {
     validate_review_autoplay_interval(preferences.review_autoplay_interval_ms)?;
+    preferences.granular_display.validate()?;
     preferences.network.validate()?;
     preferences.match_defaults.validate()?;
     if let Some(shares) = preferences.workspace_shares {
@@ -642,6 +647,7 @@ mod tests {
 
     fn sample_preferences() -> AppPreferencesDto {
         AppPreferencesDto {
+            granular_display: app_model::GranularDisplayDto::default(),
             network: app_model::NetworkSettingsDto::default(),
             yike_locator: None,
             yike_sync: app_model::YikeSyncPreferencesDto::default(),

@@ -18,6 +18,8 @@ fn payload(visits: u32) -> SgfAnalysisPayload {
         score_stdev: None,
         pda: None,
         candidates: vec![CandidateMoveDto {
+            pv_visits: None,
+            ownership: None,
             vertex: MoveVertex::Pass,
             visits,
             winrate_black: 0.55,

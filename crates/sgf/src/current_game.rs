@@ -3586,6 +3586,8 @@ mod root_result_history {
             score_stdev: None,
             pda: None,
             candidates: vec![CandidateMoveDto {
+                pv_visits: None,
+                ownership: None,
                 vertex: MoveVertex::Pass,
                 visits,
                 winrate_black: 0.55,
@@ -4018,6 +4020,8 @@ mod continuation_staging {
             score_stdev: None,
             pda: None,
             candidates: vec![app_model::CandidateMoveDto {
+                pv_visits: None,
+                ownership: None,
                 vertex: MoveVertex::Pass,
                 visits,
                 winrate_black: 0.5,

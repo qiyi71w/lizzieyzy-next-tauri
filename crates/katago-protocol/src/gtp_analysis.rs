@@ -152,6 +152,8 @@ pub fn parse_gtp_analysis(
                 candidates.push((
                     m.order.ok_or("missing GTP candidate order")?,
                     CandidateMoveDto {
+                        pv_visits: None,
+                        ownership: None,
                         vertex: m.coordinate.ok_or("missing GTP candidate vertex")?,
                         visits: m.visits.ok_or("missing GTP candidate visits")?,
                         winrate_black: m.winrate.ok_or("missing GTP candidate winrate")?,

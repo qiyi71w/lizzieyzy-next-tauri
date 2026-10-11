@@ -400,6 +400,8 @@ mod tests {
             score_mean_black: Some(1.5),
             score_stdev: Some(0.2),
             candidates: vec![CandidateMoveDto {
+                pv_visits: None,
+                ownership: None,
                 vertex: MoveVertex::Point(PointDto { x: 3, y: 3 }),
                 visits: 32,
                 winrate_black: 0.55,
