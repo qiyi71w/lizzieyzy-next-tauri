@@ -1365,6 +1365,39 @@ fn policy_distinguishes_missing_invalid_changed_unknown_and_late_revisions() {
 }
 
 #[test]
+fn unversioned_environment_requires_remeasurement_without_rewriting_saved_policy() {
+    use app_model::{RecommendationValidityDto as V, ThreadStrategyDto as S};
+    let (f, path) = policy_fixture();
+    let id = policy_measure(&f);
+    let mut saved = policy_save(&f, &path, Some(&id), S::Benchmark).unwrap();
+    let rec = saved.profiles[1].thread_policy.recommendation.as_mut().unwrap();
+    rec.environment = rec.environment.rsplit(':').next().unwrap().to_owned();
+    engine_manager::save_engine_profiles(&path, saved).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let status = f.manager.thread_policy_status("target", None).unwrap();
+    assert_eq!(status.validity, V::Changed);
+    assert_eq!(status.reason, "policy_environment_changed");
+    assert!(policy_save(&f, &path, None, S::Benchmark).is_err());
+    f.manager.start("target").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match f.manager.snapshot().lifecycle {
+            ForegroundEngineLifecycleDto::Error { failure, .. }
+            | ForegroundEngineLifecycleDto::NoEngine {
+                failure: Some(failure),
+            } => {
+                assert!(failure.message.contains("policy_environment_changed"));
+                break;
+            }
+            phase => assert!(Instant::now() < deadline, "{phase:?}"),
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!f.dir.join("launch.json").exists());
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+}
+
+#[test]
 fn saved_policy_reaches_actual_child_only_on_next_authorized_launch() {
     use app_model::ThreadStrategyDto as S;
     let (f, path) = policy_fixture();

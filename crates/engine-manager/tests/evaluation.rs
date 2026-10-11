@@ -316,6 +316,31 @@ fn real_two_saved_ids_recommend_save_launch_and_effective_thread_readback() {
         assert_eq!(read_threads(manager).actual, before_threads);
         if index == 0 {
             assert_eq!(saved.profiles[1].thread_policy.strategy, ThreadStrategyDto::Cfg);
+            // Separate processes model reopening from a different launcher without mutating
+            // the test runner's process-global environment while manager threads are alive.
+            for (key, value, expected) in [
+                ("PR25_UNRELATED_LAUNCHER_SESSION", "session-b", "valid"),
+                ("LD_LIBRARY_PATH", "/policy-smoke-loader-path", "changed"),
+                ("LD_PRELOAD", "/policy-smoke-absent-injected-library", "unknown"),
+            ] {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "real_saved_policy_environment_launch",
+                        "--ignored",
+                        "--exact",
+                        "--nocapture",
+                        "--test-threads=1",
+                    ])
+                    .env("LIZZIEYZY_POLICY_CATALOG", &path)
+                    .env("LIZZIEYZY_POLICY_EXPECTED", expected)
+                    .env(key, value)
+                    .output()
+                    .unwrap();
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                println!("POLICY_ENVIRONMENT_CASE {key} expected={expected}\n{stdout}\n{stderr}");
+                assert!(output.status.success(), "{key}: {stdout}\n{stderr}");
+            }
             manager.restart().unwrap();
         } else {
             manager.switch_to(id).unwrap();
@@ -344,4 +369,63 @@ fn real_two_saved_ids_recommend_save_launch_and_effective_thread_readback() {
     )
     .unwrap();
     println!("REAL_SAVED_POLICY {}", serde_json::to_string(&result).unwrap());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+#[ignore = "isolated subprocess of the real two-ID policy acceptance test"]
+fn real_saved_policy_environment_launch() {
+    let path = PathBuf::from(std::env::var("LIZZIEYZY_POLICY_CATALOG").unwrap());
+    let expected = std::env::var("LIZZIEYZY_POLICY_EXPECTED").unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let owner = Owned(ForegroundEngineManager::new(
+        Arc::new(DiskCatalog(path.clone())),
+        ForegroundEngineConfig::default(),
+    ));
+    let manager = &owner.0;
+    let status = manager.thread_policy_status("a", None).unwrap();
+    let validity = match expected.as_str() {
+        "valid" => RecommendationValidityDto::Valid,
+        "changed" => RecommendationValidityDto::Changed,
+        "unknown" => RecommendationValidityDto::Unknown,
+        _ => panic!("unexpected policy expectation"),
+    };
+    assert_eq!(status.validity, validity, "{status:?}");
+    manager.start("a").unwrap();
+    if validity == RecommendationValidityDto::Valid {
+        let run = wait_ready(manager);
+        let observed = read_threads(manager);
+        assert_eq!(observed.status, RuntimeThreadsStatusDto::Confirmed);
+        assert_eq!(
+            observed.actual,
+            Some(status.policy.recommendation.unwrap().threads)
+        );
+        assert_eq!(observed.run_id.as_deref(), Some(run.run_id.as_str()));
+        let engine = std::env::var("LIZZIEYZY_KATAGO_ENGINE").unwrap();
+        println!(
+            "POLICY_ENVIRONMENT_LAUNCH run={} pid={:?} readback={observed:?}",
+            run.run_id,
+            owned_pid(&engine)
+        );
+    } else {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            match manager.snapshot().lifecycle {
+                ForegroundEngineLifecycleDto::Error { failure, .. }
+                | ForegroundEngineLifecycleDto::NoEngine {
+                    failure: Some(failure),
+                } => {
+                    assert!(failure.message.contains(&status.reason));
+                    println!("POLICY_ENVIRONMENT_REJECT validity={validity:?} failure={failure:?}");
+                    break;
+                }
+                phase => {
+                    assert!(!matches!(phase, ForegroundEngineLifecycleDto::Ready { .. }));
+                    assert!(Instant::now() < deadline, "{phase:?}");
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
 }

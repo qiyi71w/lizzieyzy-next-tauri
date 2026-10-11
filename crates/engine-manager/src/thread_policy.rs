@@ -14,6 +14,7 @@ use std::{
 
 pub(crate) const SOURCE_REVISION: &str =
     "katago:47aadc08518b3e121f22539796c911002f699584:computeEloEffect:recommended:v1";
+const ENVIRONMENT_REVISION: &str = "katago-eigen-env:v2:";
 
 pub(crate) fn input_revision(profile: &EngineProfileDto) -> String {
     digest(&serde_json::to_vec(profile).expect("serializable profile"))
@@ -35,8 +36,8 @@ pub(crate) fn command_revision(spec: &CommandSpec) -> Result<String, String> {
     ))
 }
 
-/// These are observed host/process facts, compared again at Save and launch. No remote probe.
-pub(crate) fn environment() -> Result<String, String> {
+/// Host facts and the pinned CPU engine's effective environment, rechecked at Save and launch.
+pub(crate) fn environment(spec: &CommandSpec) -> Result<String, String> {
     let parallelism = std::thread::available_parallelism()
         .map_err(|_| "policy_environment_unknown")?
         .get();
@@ -54,25 +55,65 @@ pub(crate) fn environment() -> Result<String, String> {
     if host.trim().is_empty() {
         return Err("policy_environment_unknown".into());
     }
-    let mut vars = std::env::vars_os()
-        .map(|(k, v)| (k.to_string_lossy().into_owned(), v.to_string_lossy().into_owned()))
-        .collect::<Vec<_>>();
-    vars.sort();
-    if vars.iter().any(|(k, v)| {
-        matches!(k.as_str(), "LD_PRELOAD" | "LD_AUDIT" | "DYLD_INSERT_LIBRARIES") && !v.is_empty()
-    }) {
-        return Err("policy_environment_unknown".into());
-    }
-    Ok(digest(
-        &serde_json::to_vec(&(
-            std::env::consts::OS,
-            std::env::consts::ARCH,
-            host,
-            parallelism,
-            vars,
-        ))
-        .expect("serializable environment"),
+    let vars = engine_environment(std::env::vars_os(), &spec.env, cfg!(windows))?;
+    Ok(format!(
+        "{ENVIRONMENT_REVISION}{}",
+        digest(
+            &serde_json::to_vec(&(
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                host,
+                parallelism,
+                vars,
+            ))
+            .expect("serializable environment")
+        )
     ))
+}
+
+fn engine_environment(
+    inherited: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    overrides: &[(String, String)],
+    windows: bool,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let mut vars = std::collections::BTreeMap::new();
+    for (key, value) in inherited
+        .into_iter()
+        .chain(overrides.iter().map(|(key, value)| (key.into(), value.into())))
+    {
+        let key = key.to_str().ok_or("policy_environment_unknown")?;
+        let matches_key = |expected: &str| {
+            if windows {
+                key.eq_ignore_ascii_case(expected)
+            } else {
+                key == expected
+            }
+        };
+        // Parent injection also makes this process's qualification unconfirmable, even if
+        // a child override removes it. Never treat injected libraries as ordinary inputs.
+        if ["LD_PRELOAD", "LD_AUDIT", "DYLD_INSERT_LIBRARIES"]
+            .into_iter()
+            .any(matches_key)
+            && !value.is_empty()
+        {
+            return Err("policy_environment_unknown".into());
+        }
+        // Pinned KataGo HomeData reads HOME on Linux; Windows uses the executable directory.
+        // Its Linux libc/loader consume LD_*, GLIBC_TUNABLES and MALLOC_*; Windows DLL search
+        // consumes PATH. Eigen has no OpenMP/OpenBLAS environment controls in this build.
+        let relevant = if windows {
+            matches_key("PATH")
+        } else {
+            key == "HOME" || key.starts_with("LD_") || key == "GLIBC_TUNABLES" || key.starts_with("MALLOC_")
+        };
+        if relevant {
+            vars.insert(
+                if windows { "PATH".into() } else { key.into() },
+                value.to_str().ok_or("policy_environment_unknown")?.into(),
+            );
+        }
+    }
+    Ok(vars)
 }
 
 /// Reuse the release owner's pinned native CPU bytes. A filename/version subprocess is not proof.
@@ -162,7 +203,10 @@ pub(crate) fn validity(
     if rec.target_id != saved.profile_id || rec.input_revision != input_revision(&saved.profile) {
         return (Changed, "policy_input_changed".into());
     }
-    let (Ok(command), Ok(environment)) = (command_revision(spec), environment()) else {
+    if !rec.environment.starts_with(ENVIRONMENT_REVISION) {
+        return (Changed, "policy_environment_changed".into());
+    }
+    let (Ok(command), Ok(environment)) = (command_revision(spec), environment(spec)) else {
         return (Unknown, "policy_environment_unknown".into());
     };
     if command != rec.command_revision || environment != rec.environment {
@@ -266,4 +310,100 @@ pub(crate) fn verify_launch_resources(
         return Err("policy_resources_changed".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::*;
+
+    fn projected(
+        values: &[(&str, &str)],
+        overrides: &[(&str, &str)],
+        windows: bool,
+    ) -> Result<std::collections::BTreeMap<String, String>, String> {
+        engine_environment(
+            values.iter().map(|(key, value)| ((*key).into(), (*value).into())),
+            &overrides
+                .iter()
+                .map(|(key, value)| ((*key).into(), (*value).into()))
+                .collect::<Vec<_>>(),
+            windows,
+        )
+    }
+
+    #[test]
+    fn launcher_metadata_does_not_change_cpu_qualification() {
+        let baseline = projected(&[("HOME", "/home/player")], &[], false).unwrap();
+        assert_eq!(
+            baseline,
+            projected(
+                &[
+                    ("LAUNCHER_SESSION", "new"),
+                    ("HOME", "/home/player"),
+                    ("TERM", "xterm")
+                ],
+                &[],
+                false
+            )
+            .unwrap()
+        );
+        for key in [
+            "HOME",
+            "LD_LIBRARY_PATH",
+            "LD_BIND_NOW",
+            "GLIBC_TUNABLES",
+            "MALLOC_ARENA_MAX",
+        ] {
+            assert_ne!(
+                projected(&[(key, "before")], &[], false),
+                projected(&[(key, "after")], &[], false),
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn effective_overrides_and_windows_case_follow_child_environment() {
+        assert_eq!(
+            projected(&[("HOME", "before")], &[("HOME", "after")], false),
+            projected(&[("HOME", "after")], &[], false)
+        );
+        assert_eq!(
+            projected(&[("Path", "before")], &[("PATH", "after")], true),
+            projected(&[("path", "after")], &[], true)
+        );
+        assert_ne!(
+            projected(&[("Path", "before")], &[], true),
+            projected(&[("PATH", "after")], &[], true)
+        );
+        assert_eq!(
+            projected(&[("HOME", "unused"), ("USERPROFILE", "unused")], &[], true),
+            projected(&[], &[], true)
+        );
+        assert_ne!(projected(&[], &[], false), projected(&[("HOME", "")], &[], false));
+    }
+
+    #[test]
+    fn injection_is_unknown_in_parent_or_explicit_child_environment() {
+        for key in ["LD_PRELOAD", "LD_AUDIT", "DYLD_INSERT_LIBRARIES"] {
+            assert_eq!(
+                projected(&[(key, "library")], &[(key, "")], false),
+                Err("policy_environment_unknown".into())
+            );
+            assert_eq!(
+                projected(&[], &[(key, "library")], false),
+                Err("policy_environment_unknown".into())
+            );
+        }
+        assert!(projected(&[("ld_preload", "library")], &[], true).is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn relevant_non_unicode_is_unknown_not_a_lossy_identity() {
+        use std::os::unix::ffi::OsStringExt;
+        let invalid = std::ffi::OsString::from_vec(vec![0xff]);
+        assert!(engine_environment([("HOME".into(), invalid.clone())], &[], false).is_err());
+        assert!(engine_environment([("LAUNCHER_SESSION".into(), invalid)], &[], false).is_ok());
+    }
 }

@@ -386,8 +386,8 @@ fn execute(
     }
     let command_revision = crate::thread_policy::command_revision(spec)
         .map_err(|_| FailureText::from("policy_environment_unknown"))?;
-    let environment =
-        crate::thread_policy::environment().map_err(|_| FailureText::from("policy_environment_unknown"))?;
+    let environment = crate::thread_policy::environment(spec)
+        .map_err(|_| FailureText::from("policy_environment_unknown"))?;
     let configuration =
         crate::katago_config::Configuration::from_command(spec, Instant::now() + Duration::from_secs(30))
             .map_err(|_| FailureText::from("policy_invalid_config"))?;
@@ -440,7 +440,7 @@ fn execute(
     resources
         .revalidate(Instant::now() + Duration::from_secs(30), &is_retired)
         .map_err(|(_, message)| evaluation_failure_text(weak, id, &message))?;
-    if crate::thread_policy::environment().map_err(|_| FailureText::from("policy_environment_unknown"))?
+    if crate::thread_policy::environment(spec).map_err(|_| FailureText::from("policy_environment_unknown"))?
         != environment
     {
         return Err("policy_environment_changed".into());
