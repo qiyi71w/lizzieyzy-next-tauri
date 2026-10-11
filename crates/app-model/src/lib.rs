@@ -937,7 +937,7 @@ pub enum ForegroundEngineLifecycleDto {
     },
     Switching {
         primary: EngineRunDto,
-        candidate: EngineRunDto,
+        candidate: Box<EngineRunDto>,
         switch_id: String,
     },
     Stopping {
@@ -1587,10 +1587,10 @@ mod foreground_engine_wire {
             game_move_job: None,
             lifecycle: ForegroundEngineLifecycleDto::Switching {
                 primary: run.clone(),
-                candidate: EngineRunDto {
+                candidate: Box::new(EngineRunDto {
                     run_id: "run-c".into(),
                     ..run
-                },
+                }),
                 switch_id: "switch-1".into(),
             },
             selected_node_job: None,

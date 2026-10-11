@@ -450,8 +450,10 @@ fn batch_swing_scope_uses_private_supporting_positions_and_reuses_strategy_sched
     state.replace("(;SZ[19];B[dd];W[pp])", None).unwrap();
     ready(&engine);
     let path = file(&engine, "swing.sgf", "(;SZ[9];B[aa];W[bb];B[cc])");
-    let mut conditions = BatchPreferencesDto::default();
-    conditions.strategy = app_model::AnalysisTaskStrategyDto::SwingSelectedTwoStage;
+    let mut conditions = BatchPreferencesDto {
+        strategy: app_model::AnalysisTaskStrategyDto::SwingSelectedTwoStage,
+        ..Default::default()
+    };
     conditions.scope.interval = Some(app_model::AnalysisPositionIntervalDto { start: 1, end: 3 });
     conditions.swing_deep.time_seconds.enabled = false;
     conditions.swing_deep.total_visits.enabled = true;

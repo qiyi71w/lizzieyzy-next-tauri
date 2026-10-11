@@ -69,7 +69,7 @@ impl ForegroundEngineManager {
             .any(|job| !job.terminal && job.mode == AnalysisJobModeDto::Finite);
         let phase = if !preferences.enabled {
             PhaseDto::Idle
-        } else if run_id.is_none() || !allowed(&state) || busy {
+        } else if run_id.is_none() || !allowed(state) || busy {
             PhaseDto::Unavailable
         } else {
             PhaseDto::Waiting
@@ -168,9 +168,11 @@ impl ForegroundEngineManager {
         self.start_analysis_task_with_strategy(
             request,
             scope,
-            AnalysisTaskStrategyDto::SingleStage,
-            None,
-            conditions,
+            AnalysisTaskPlan {
+                strategy: AnalysisTaskStrategyDto::SingleStage,
+                overview_conditions: None,
+                conditions,
+            },
             AnalysisTaskTargets::default(),
             Some(intent),
             None,

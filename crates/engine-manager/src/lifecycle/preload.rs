@@ -403,7 +403,7 @@ impl ForegroundEngineManager {
             state.switch_seq += 1;
             state.phase = Phase::Switching {
                 primary,
-                candidate: run.clone(),
+                candidate: Box::new(run.clone()),
                 switch_id: state.switch_seq.to_string(),
             };
             publish_snapshot(&mut state);

@@ -177,6 +177,12 @@ struct AnalysisTaskTargets {
     swing_criteria: Option<AnalysisSwingCriteriaDto>,
 }
 
+struct AnalysisTaskPlan {
+    strategy: AnalysisTaskStrategyDto,
+    overview_conditions: Option<AnalysisStageConditionsDto>,
+    conditions: AnalysisStageConditionsDto,
+}
+
 enum WholeGameAdvance {
     Submit {
         started: AnalysisJobStartedDto,
@@ -232,7 +238,7 @@ enum Phase {
     Ready(EngineRunDto),
     Switching {
         primary: EngineRunDto,
-        candidate: EngineRunDto,
+        candidate: Box<EngineRunDto>,
         switch_id: String,
     },
     Stopping(EngineRunDto),
@@ -889,7 +895,7 @@ impl ForegroundEngineManager {
             let candidate = starting_run(&saved);
             state.phase = Phase::Switching {
                 primary,
-                candidate: candidate.clone(),
+                candidate: Box::new(candidate.clone()),
                 switch_id: switch_id.clone(),
             };
             publish_snapshot(&mut state);
@@ -1199,9 +1205,11 @@ impl ForegroundEngineManager {
         self.start_analysis_task_with_strategy(
             request,
             scope,
-            AnalysisTaskStrategyDto::SingleStage,
-            None,
-            conditions,
+            AnalysisTaskPlan {
+                strategy: AnalysisTaskStrategyDto::SingleStage,
+                overview_conditions: None,
+                conditions,
+            },
             AnalysisTaskTargets::default(),
             None,
             None,
@@ -1221,9 +1229,11 @@ impl ForegroundEngineManager {
         self.start_analysis_task_with_strategy(
             request,
             scope,
-            AnalysisTaskStrategyDto::AllPositionsTwoStage,
-            Some(overview_conditions),
-            deep_conditions,
+            AnalysisTaskPlan {
+                strategy: AnalysisTaskStrategyDto::AllPositionsTwoStage,
+                overview_conditions: Some(overview_conditions),
+                conditions: deep_conditions,
+            },
             AnalysisTaskTargets::default(),
             None,
             None,
@@ -1253,9 +1263,11 @@ impl ForegroundEngineManager {
         self.start_analysis_task_with_strategy(
             request,
             scope,
-            AnalysisTaskStrategyDto::SwingSelectedTwoStage,
-            Some(overview_conditions),
-            deep_conditions,
+            AnalysisTaskPlan {
+                strategy: AnalysisTaskStrategyDto::SwingSelectedTwoStage,
+                overview_conditions: Some(overview_conditions),
+                conditions: deep_conditions,
+            },
             AnalysisTaskTargets {
                 requested: Some(requested),
                 supporting,
@@ -1271,13 +1283,16 @@ impl ForegroundEngineManager {
         &self,
         mut request: WholeGameJobRequest,
         scope: AnalysisScopeDto,
-        strategy: AnalysisTaskStrategyDto,
-        overview_conditions: Option<AnalysisStageConditionsDto>,
-        conditions: AnalysisStageConditionsDto,
+        plan: AnalysisTaskPlan,
         targets: AnalysisTaskTargets,
         auto_intent: Option<app_model::AutoLoadSnapshotDto>,
         batch_identity: Option<app_model::BatchIdentityDto>,
     ) -> Result<AnalysisTaskDto, EngineFailureDto> {
+        let AnalysisTaskPlan {
+            strategy,
+            overview_conditions,
+            conditions,
+        } = plan;
         if request.work_items.is_empty() {
             return Err(empty_whole_game_failure(&request.run_id));
         }
@@ -2126,7 +2141,7 @@ impl ForegroundEngineManager {
                 if primary.profile_id == profile_id {
                     Some(primary)
                 } else {
-                    Some(candidate)
+                    Some(candidate.as_ref())
                 }
             }
             Phase::Error { run, .. } => Some(run),

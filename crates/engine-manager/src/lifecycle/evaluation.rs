@@ -637,22 +637,21 @@ fn evaluation_failure_text(weak: &Weak<Inner>, id: &str, text: &str) -> FailureT
     FailureText::unscoped(text)
 }
 
+type ProcessOutput = (
+    Option<i32>,
+    Vec<String>,
+    Duration,
+    Vec<EvaluationMeasurementDto>,
+    Vec<String>,
+);
+
 fn run_process(
     weak: &Weak<Inner>,
     id: &str,
     spec: &crate::CommandSpec,
     timeout: Duration,
     measurement: bool,
-) -> Result<
-    (
-        Option<i32>,
-        Vec<String>,
-        Duration,
-        Vec<EvaluationMeasurementDto>,
-        Vec<String>,
-    ),
-    FailureText,
-> {
+) -> Result<ProcessOutput, FailureText> {
     let (tx, rx) = mpsc::sync_channel(QUEUE_LINES);
     {
         let inner = weak.upgrade().ok_or("Benchmark manager closed")?;
