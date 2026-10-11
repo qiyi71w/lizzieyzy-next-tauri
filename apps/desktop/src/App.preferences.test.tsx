@@ -212,6 +212,11 @@ it("keeps automatic Starting cancellation outside the hidden task sheet and disa
   const publish = backend.subscribeForegroundEngine.mock.calls.at(-1)?.[0];
   await act(async () => publish?.({ revision: 100, lifecycle: { state: "no_engine" }, continuous: { enabled: true, phase: "waiting" },
     auto_load: { phase: "waiting", load_id: 3, generation: 1, run_id: "starting-3", task_id: null, total_visits: 1, reason: null } }));
+  const toggle = buttonNamed(host, "隐藏分析任务面板");
+  await act(async () => toggle.click());
+  expect(document.getElementById(toggle.getAttribute("aria-controls")!)?.hidden).toBe(true);
+  expect(backend.cancelAutoLoad).not.toHaveBeenCalled();
+  expect(buttonNamed(host, "停止本次自动补析").closest("[hidden]")).toBeNull();
   await act(async () => buttonNamed(host, "停止本次自动补析").click());
   expect(backend.cancelAutoLoad).toHaveBeenCalledTimes(1);
   await act(async () => publish?.({ revision: 101, lifecycle: { state: "no_engine" }, continuous: { enabled: true, phase: "safety_hold" },

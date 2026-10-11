@@ -501,6 +501,48 @@ describe("truthful native analysis actions", () => {
     expect(host.querySelector('[aria-label="当前 run 能力"]')?.textContent).toContain("不支持分析");
   });
 
+  it("hides task controls without losing the draft, preview, progress or task ownership", async () => {
+    const host = await renderApp();
+    const ready = await readyEngine(host);
+    await changeNumber(inputNamed(host, "Total visits"), "732");
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    const task = taskRuntime.snapshot!;
+    const toggle = buttonNamed(host, "隐藏分析任务面板");
+    const body = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+    expect(body.hidden).toBe(false);
+    toggle.focus();
+    await act(async () => {
+      toggle.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }));
+    });
+    expect(backend.foregroundEngineContinuousAction).not.toHaveBeenCalled();
+    await act(async () => { toggle.click(); });
+    expect(body.hidden).toBe(true);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(toggle);
+    taskRuntime.snapshot = { ...task, overview_completed: task.requested };
+    await act(async () => { listeners.onSnapshot?.({ ...ready, revision: 9 }); });
+    expect(body.hidden).toBe(true);
+    await act(async () => { buttonNamed(host, "展开分析任务面板").click(); });
+    expect(body.hidden).toBe(false);
+    expect(inputNamed(host, "Total visits").value).toBe("732");
+    expect(body.textContent).toContain("2 requested targets");
+    expect(body.textContent).toContain("overview 2/2");
+    expect(taskRuntime.snapshot?.task_id).toBe(task.task_id);
+    expect(backend.startAnalysisTask).toHaveBeenCalledTimes(1);
+    expect(backend.previewAnalysisScope).toHaveBeenCalledTimes(1);
+    expect(backend.pauseAnalysisTask).not.toHaveBeenCalled();
+    expect(backend.continueAnalysisTask).not.toHaveBeenCalled();
+    expect(backend.cancelKataGoAnalysis).not.toHaveBeenCalled();
+    backend.previewAnalysisScope.mockRejectedValueOnce(new Error("Preview unavailable"));
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    expect(body.querySelector('[role="alert"]')?.textContent).toContain("Preview unavailable");
+    await act(async () => { buttonNamed(host, "隐藏分析任务面板").click(); });
+    await act(async () => { buttonNamed(host, "展开分析任务面板").click(); });
+    expect(body.querySelector('[role="alert"]')?.textContent).toContain("Preview unavailable");
+    expect(inputNamed(host, "Total visits").value).toBe("732");
+  });
+
   it("uses task capability independently and preserves paused work when admission disappears", async () => {
     preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, continuousAnalysisEnabled: true } });
     const host = await renderApp();

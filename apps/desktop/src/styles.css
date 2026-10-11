@@ -1202,6 +1202,12 @@ button[aria-pressed="true"] {
   gap: 6px;
 }
 
+.analysis-task-panel .sgf-tools[hidden] { display: none; }
+
+.analysis-task-heading:has(+ :not([hidden])) {
+  margin-bottom: 6px;
+}
+
 .analysis-task-panel .document-row {
   justify-content: flex-start;
   align-items: center;

@@ -1,3 +1,5 @@
+import { useId, useState } from "react";
+import { t } from "../i18n/resources";
 import type {
   AnalysisMoveActorFilterDto,
   AnalysisScopeModeDto,
@@ -63,6 +65,8 @@ const modes: Array<{ value: AnalysisScopeModeDto; label: string }> = [
 ];
 
 export function AnalysisTaskPanel(props: Props) {
+  const [visible, setVisible] = useState(true);
+  const bodyId = useId();
   const reserved = props.task != null && ["queued", "searching", "pausing", "paused"].includes(props.task.state);
   const pauseable = props.task?.state === "queued" || props.task?.state === "searching";
   const continuable = props.task?.state === "paused";
@@ -102,9 +106,22 @@ export function AnalysisTaskPanel(props: Props) {
 
   return (
     <section className="sheet-row analysis-task-panel" aria-label="Analysis task">
-      <div className="sgf-tools">
+      <div className="document-row analysis-task-heading">
+        <strong>{t("analysis.task.title")}</strong>
+        <button
+          type="button"
+          aria-expanded={visible}
+          aria-controls={bodyId}
+          onClick={() => setVisible((shown) => !shown)}
+          onKeyDown={(event) => {
+            if (event.key === " ") event.stopPropagation();
+          }}
+        >
+          {t(visible ? "analysis.task.hide" : "analysis.task.show")}
+        </button>
+      </div>
+      <div id={bodyId} className="sgf-tools" hidden={!visible}>
         <div className="document-row">
-          <strong>Analysis task</strong>
           <label>
             Strategy
             <select
