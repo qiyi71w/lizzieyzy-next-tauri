@@ -321,11 +321,14 @@ Owner regressions run serial process fixtures:
 ```bash
 cargo test --locked -p app-model -p app-preferences -p sgf -p engine-manager -p lizzieyzy-next-desktop --lib -- --test-threads=1
 cargo test --locked -p lizzieyzy-next-desktop --lib continuation_tests -- --test-threads=1
+cargo test --locked -p engine-manager --test foreground_engine_run --test ordinary_rules -- --test-threads=1
 npm run desktop:test -- src/components/ContinuationPanel.test.tsx src/App.test.tsx src/App.preferences.test.tsx src/api/preferences.test.ts src/domain/shortcuts.test.ts src/hooks/useReviewAutoplay.test.tsx src/VariationReplay.test.tsx
 npm run desktop:build
 ```
 
 `real_cpu_continuation_jsonl_and_gtp_both_modes_stop_undo_save` is opt-in. Set read-only `R13_KATAGO`/`R13_MODEL` and a fresh private `R13_EVIDENCE`; run the desktop-lib test with `--ignored --test-threads=1 --nocapture` and unset `DISPLAY`. It launches both actual adapters with compatible private single-thread configs, follows a nonfirst branch to a legal leaf creation, proves fresh next-position requests, chooses an engine move instead of a recorded pass, stops without late action, undoes the new node, and parses saved SGFs with preserved personal comments/branches. It records Run/readiness, request events, step snapshots, diagnostics and output SGFs. These are real-engine owner tests, not native UI or a GTP whole-game qualification.
+
+Dedicated continuation consumers additionally exercise a malformed live JSONL result, GTP exact-position komi readback failure before analysis, pending and active provider authority, durable user Pause followed by Stop handback, and explicit restart at a newly created current node. They assert reason-bearing failure/no extra move or retry, unchanged SGF after late events, retained healthy Run without ordinary resurrection, and a new session/request plus full first interval after restart. Controlled process fixtures prove these boundaries without substituting for the real-engine or native gates.
 
 The local private Chromium surface checks settings persistence, rejected zero, Cancel restoration, explicit stopped state, Escape and focus return. Windows ticket10 still must exercise actual desktop Start/Stop, close/minimize, external navigation/edit/Undo/load/rules/Run/Match interrupts, engine error and waiting, visible tree/new branches and manual Save/Save As on the integrated candidate. The existing R12/R13 evidence retains its original platform, SHA and resource attribution; it does not certify this new session/commit path.
 
