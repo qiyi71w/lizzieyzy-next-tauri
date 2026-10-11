@@ -174,6 +174,33 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("keeps granular display drafts local through Cancel and failed Apply, then explicitly retries and reopens committed values", async () => {
+  const host = await renderApp();
+  openPreferences(host);
+  const seconds = requiredElement<HTMLInputElement>(host, '[aria-label="延迟秒数"]');
+  changeBudgetNumber(seconds, "2.5");
+  act(() => requiredElement<HTMLButtonElement>(host, '[aria-label="取消显示设置"]').click());
+  expect(seconds.value).toBe("10");
+  expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  changeBudgetNumber(seconds, "0");
+  act(() => requiredElement<HTMLButtonElement>(host, '[aria-label="应用显示设置"]').click());
+  expect(host.textContent).toContain("显示设置无效");
+  expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  changeBudgetNumber(seconds, "2.5");
+  preferencesApi.saveAppPreferences.mockRejectedValueOnce(new Error("disk read-only"));
+  await act(async () => requiredElement<HTMLButtonElement>(host, '[aria-label="应用显示设置"]').click());
+  expect(preferencesStatus(host)).toContain("disk read-only");
+  expect(seconds.value).toBe("2.5");
+  await act(async () => requiredElement<HTMLButtonElement>(host, '[aria-label="应用显示设置"]').click());
+  expect(preferencesStatus(host)).toContain("saved");
+  const saved = preferencesApi.saveAppPreferences.mock.calls.at(-1)![0] as AppPreferences;
+  expect(saved.granularDisplay.delaySeconds).toBe(2.5);
+  expect(saved.allowDoubleClick).toBe(defaultAppPreferences.allowDoubleClick);
+  act(() => buttonNamed(host, "参数").click());
+  openPreferences(host);
+  expect(requiredElement<HTMLInputElement>(host, '[aria-label="延迟秒数"]').value).toBe("2.5");
+});
+
 it("validates autoplay drafts and keeps committed intervals after Cancel and write failure", async () => {
   const host = await renderApp();
   openPreferences(host);

@@ -5,7 +5,7 @@ import type { AnalysisFrameDto, CandidateMoveDto, NodePath, PositionDto, Problem
 import type { ChartPoint } from "../domain/winrateChart";
 import type { ReviewProblem } from "../domain/reviewNavigation";
 import { isPoint, vertexLabel } from "../domain/board";
-import { variationReplayPointSteps } from "../domain/variationReplay";
+import { defaultGranularDisplay, displayVariationSteps, pvVisitsLabel, type GranularDisplay } from "../domain/granularDisplay";
 
 type PolicyPoint = { x: number; y: number; value: number };
 type Pane = "commentary" | "reference";
@@ -34,6 +34,8 @@ type Props = {
   pane?: Pane;
   contentMode?: SubBoardContentMode;
   pvPrefixLength?: number;
+  displayPreferences?: GranularDisplay;
+  hideCandidates?: boolean;
 };
 
 const severityLabel: Record<ProblemMarkerDto["severity"], string> = {
@@ -65,7 +67,9 @@ export function AnalysisPanel({
   onSelectProblem,
   pane = "commentary",
   contentMode = "variation",
-  pvPrefixLength
+  pvPrefixLength,
+  displayPreferences = defaultGranularDisplay,
+  hideCandidates = false
 }: Props) {
   const [leftTab, setLeftTab] = useState<"commentary" | "problems">("commentary");
   const [commentDraft, setCommentDraft] = useState(personalComment);
@@ -76,7 +80,7 @@ export function AnalysisPanel({
   const hasOwnership = (frame?.ownership?.length ?? 0) >= boardWidth * boardHeight;
   const rootScore = frame?.score_mean_black;
 
-  const candidates = frame?.candidates ?? [];
+  const candidates = hideCandidates ? [] : frame?.candidates ?? [];
   const activeCandidateIndex = previewCandidateIndex ?? selectedCandidateIndex ?? 0;
   const activeCandidate = candidates[activeCandidateIndex] ?? candidates[0] ?? null;
 
@@ -160,8 +164,11 @@ export function AnalysisPanel({
               candidate={activeCandidate}
               contentMode={contentMode}
               pvPrefixLength={pvPrefixLength}
+              displayPreferences={displayPreferences}
             />
           </div>
+          {contentMode === "variation" && activeCandidate && displayPreferences.pvVisitsMode !== "off"
+            && activeCandidate.pv_visits?.length !== activeCandidate.pv.length ? <small role="status">{t("display.pvVisitsUnavailable")}</small> : null}
         </section>
       </aside>
     );
@@ -310,7 +317,8 @@ function SubBoardCanvas({
   position,
   candidate,
   contentMode,
-  pvPrefixLength
+  pvPrefixLength,
+  displayPreferences
 }: {
   boardWidth: number;
   boardHeight: number;
@@ -318,6 +326,7 @@ function SubBoardCanvas({
   candidate: CandidateMoveDto | null;
   contentMode: SubBoardContentMode;
   pvPrefixLength?: number;
+  displayPreferences: GranularDisplay;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const size = useElementSize(canvasRef);
@@ -373,10 +382,11 @@ function SubBoardCanvas({
     }
 
     if (contentMode === "variation" && candidate) {
-      let turnColor: "black" | "white" = position?.to_play ?? "black";
-      const visibleSteps = variationReplayPointSteps(candidate).slice(0, pvPrefixLength ?? Number.POSITIVE_INFINITY);
-      for (const [index, point] of visibleSteps.entries()) {
-        if (index > 0) turnColor = turnColor === "black" ? "white" : "black";
+      const visibleSteps = displayVariationSteps(candidate, displayPreferences, pvPrefixLength);
+      for (const step of visibleSteps) {
+        const { point, offset: index } = step;
+        const initialColor = position?.to_play ?? "black";
+        const turnColor = index % 2 === 0 ? initialColor : initialColor === "black" ? "white" : "black";
         const cx = coordX(point.x);
         const cy = coordY(point.y);
         const radius = grid * 0.44;
@@ -391,9 +401,14 @@ function SubBoardCanvas({
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillText(String(index + 1), cx, cy);
+        const visits = pvVisitsLabel(candidate, step.pvIndex, step.lastPvIndex + 1, displayPreferences);
+        if (visits !== null) {
+          ctx.font = `${Math.max(8, grid * 0.22)}px sans-serif`;
+          ctx.fillText(visits, cx, cy + grid * 0.28);
+        }
       }
     }
-  }, [size, boardWidth, boardHeight, position, candidate, contentMode, pvPrefixLength]);
+  }, [size, boardWidth, boardHeight, position, candidate, contentMode, pvPrefixLength, displayPreferences]);
 
   return (
     <canvas

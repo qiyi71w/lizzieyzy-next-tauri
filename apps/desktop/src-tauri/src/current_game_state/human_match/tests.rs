@@ -1009,6 +1009,8 @@ fn continue_survives_analysis_accepted_while_the_dialog_was_open() {
         score_stdev: None,
         pda: None,
         candidates: vec![app_model::CandidateMoveDto {
+            pv_visits: None,
+            ownership: None,
             vertex: MoveVertex::Pass,
             visits: 64,
             winrate_black: 0.5,

@@ -123,6 +123,7 @@ import {
   shouldAcceptFailureEvent
 } from "./domain/foregroundEngine";
 import { loadAppPreferences, saveAppPreferences, updateRecentGameHistory, updateWorkspaceVisibility } from "./api/preferences";
+import { useCandidateVisibility } from "./hooks/useCandidateVisibility";
 import { flushWindowGeometry, freezeWindowGeometry, nativeWindowGeometryUnavailable, resetWindowGeometry, retryWindowGeometry, subscribeWindowGeometryStatus, windowGeometryStatus } from "./api/windowGeometry";
 import { useMainWindowPin } from "./hooks/useMainWindowPin";
 import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition } from "./domain/board";
@@ -331,8 +332,9 @@ export function App() {
   const continuousEngineReady = !matchBlocked && admitsForegroundEngineQuery(engineSnapshot, "continuous_analysis")
     && (!preferences.continuousVisitsLimitEnabled || admitsForegroundEngineJobs(engineSnapshot, "visits_limit"));
   const { showCoordinates, showMoveNumbers } = preferences;
-  const [showBlackCandidates, setShowBlackCandidates] = useState(true);
-  const [showWhiteCandidates, setShowWhiteCandidates] = useState(true);
+  const { showBlackCandidates, showWhiteCandidates } = preferences.granularDisplay;
+  function setShowBlackCandidates(value: boolean) { handlePreferencesChange({ ...preferences, granularDisplay: { ...preferences.granularDisplay, showBlackCandidates: value } }); }
+  function setShowWhiteCandidates(value: boolean) { handlePreferencesChange({ ...preferences, granularDisplay: { ...preferences.granularDisplay, showWhiteCandidates: value } }); }
   const [railVisibilityBusy, setRailVisibilityBusy] = useState(false);
   const railVisibilityBusyRef = useRef(false);
   const r7WritesRef = useRef(new Set<Promise<unknown>>());
@@ -644,8 +646,13 @@ export function App() {
     && shouldPublishReviewPresentation(activeScope, candidatePreview.scope)
     ? candidatePreview.index
     : null;
-  const hideCandidates = !matchBlocked && ((currentPosition.to_play === "black" && !showBlackCandidates)
-    || (currentPosition.to_play === "white" && !showWhiteCandidates));
+  const candidatesEligible = preferences.showCandidates && overlayMode === "candidates"
+    && Boolean(visibleCurrentFrame?.candidates.length)
+    && (currentPosition.to_play === "black" ? showBlackCandidates : showWhiteCandidates);
+  const candidateVisibility = useCandidateVisibility(
+    JSON.stringify([activeScope, matchFrameIdentity, presentationFrame?.job_id, currentPosition.move_number]),
+    candidatesEligible, preferences.granularDisplay);
+  const hideCandidates = !candidateVisibility.visible;
   const activeCandidateIndex = previewCandidateIndex ?? selectedCandidateIndex ?? 0;
   const activeCandidate = visibleCurrentFrame?.candidates[activeCandidateIndex]
     ?? visibleCurrentFrame?.candidates[0]
@@ -658,7 +665,7 @@ export function App() {
   const replayArmed = preferences.variationReplayEnabled && replaySteps.length > 0;
   const replayEligible = replayArmed && (
     (preferences.showCandidates && overlayMode === "candidates" && !hideCandidates)
-    || (preferences.showCandidates && preferences.subBoardContentMode === "variation" && preferences.workspaceVisibility.right)
+    || (preferences.showCandidates && !hideCandidates && preferences.subBoardContentMode === "variation" && preferences.workspaceVisibility.right)
   );
   const replayPrefix = replayArmed
     ? (replayProgress.identity !== replayIdentityKeyValue ? 1 : Math.max(replayProgress.prefix, 1))
@@ -922,11 +929,13 @@ export function App() {
       if (visibleCurrentFrame?.candidates[index]) setSelectedCandidateIndex(index);
     });
     shortcutRegistry.bind("view.coordinates", () => {
+      // Coordinate visibility remains a persisted preference, unlike candidate reveal.
       handlePreferencesChange({ ...preferences, showCoordinates: !preferences.showCoordinates });
     });
     shortcutRegistry.bind("view.move-numbers", () => {
       handlePreferencesChange({ ...preferences, showMoveNumbers: !preferences.showMoveNumbers });
     });
+    shortcutRegistry.bind("view.candidates", candidateVisibility.toggle);
     shortcutRegistry.bind("view.policy", () => {
       void handlePreferencesChange({ ...preferences, showPolicy: !preferences.showPolicy });
     });
@@ -982,6 +991,10 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [
+    candidateVisibility.visible,
+    candidateVisibility.eligible,
+    activeScope,
+    presentationFrame?.job_id,
     matchBlocked,
     matchDialogOpen,
     humanTurn,
@@ -4507,6 +4520,11 @@ export function App() {
           overlayMode={overlayMode}
           onOverlayModeChange={setOverlayMode}
           hideCandidates={hideCandidates}
+          displayPreferences={preferences.granularDisplay}
+          graphPerspective={preferences.graphPerspective}
+          komi={game.summary.komi}
+          onToggleCandidates={candidateVisibility.toggle}
+          candidatesToggleEnabled={candidateVisibility.eligible}
           pvPrefixLength={replayPrefix}
           replayCandidateIndex={activeCandidateIndex}
           onPointClick={handleBoardPoint}
@@ -4568,6 +4586,8 @@ export function App() {
           onSelectNode={(path) => { if (preferences.workspaceVisibility.right) handleReviewNodeSelect(path); }}
           contentMode={preferences.subBoardContentMode}
           pvPrefixLength={replayPrefix}
+          displayPreferences={preferences.granularDisplay}
+          hideCandidates={hideCandidates}
         />
       </aside>
     </Workspace>

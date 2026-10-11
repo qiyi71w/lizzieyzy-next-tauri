@@ -162,6 +162,7 @@ fn parse_candidate(variation: &str, board_width: u8, board_height: u8) -> Option
     let mut policy_prior = None;
     let mut score_mean_black = None;
     let mut pv = Vec::new();
+    let mut pv_visits = None;
     let mut index = 0;
     while index + 1 < tokens.len() {
         let key = tokens[index];
@@ -175,6 +176,10 @@ fn parse_candidate(variation: &str, board_width: u8, board_height: u8) -> Option
                 .iter()
                 .map(|token| gtp_vertex(token, board_width, board_height))
                 .collect();
+            if pv_end < tokens.len() {
+                pv_visits = tokens[pv_end + 1..].iter().map(|token| token.parse::<u32>().ok()).collect::<Option<Vec<_>>>()
+                    .filter(|values| values.len() == pv.len());
+            }
             break;
         }
         let value = tokens[index + 1];
@@ -199,6 +204,8 @@ fn parse_candidate(variation: &str, board_width: u8, board_height: u8) -> Option
         score_mean_black,
         policy_prior,
         pv,
+        pv_visits,
+        ownership: None,
     })
 }
 
@@ -416,6 +423,10 @@ fn format_candidate(candidate: &CandidateMoveDto, board_width: u8, board_height:
     for vertex in pv {
         body.push(' ');
         body.push_str(&vertex_to_gtp(&vertex, board_width, board_height));
+    }
+    if let Some(visits) = candidate.pv_visits.as_ref().filter(|values| values.len() == candidate.pv.len()) {
+        body.push_str(" pvVisits");
+        for value in visits { body.push_str(&format!(" {value}")); }
     }
     body
 }

@@ -1274,6 +1274,20 @@ textarea {
   min-width: 0;
 }
 
+.preferences-panel {
+  max-width: calc(100vw - 40px);
+}
+
+.granular-display-preferences > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .granular-display-preferences { grid-template-columns: minmax(0, 1fr); }
+}
+
 .managed-resources {
   display: grid;
   gap: 8px;

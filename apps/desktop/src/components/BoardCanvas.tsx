@@ -7,7 +7,8 @@ import type { SgfAuthoringActionDto } from "../domain/types";
 import { t } from "../i18n/resources";
 import { isPoint } from "../domain/board";
 import type { NextMoveReviewMarker, NextMoveReviewMarkerMode } from "../domain/nextMoveReviewMarker";
-import { variationReplayPointSteps } from "../domain/variationReplay";
+import { defaultGranularDisplay, displayVariationSteps, pvVisitsLabel, type GranularDisplay } from "../domain/granularDisplay";
+import { drawOwnership, drawCandidateText } from "../domain/renderGranularDisplay";
 import {
   shouldPublishReviewPresentation,
   type ReviewPresentationScope
@@ -43,6 +44,11 @@ type Props = {
   nextMoveMarkers?: NextMoveReviewMarker[];
   pvPrefixLength?: number;
   replayCandidateIndex?: number | null;
+  displayPreferences?: GranularDisplay;
+  graphPerspective?: "black" | "sideToPlay";
+  komi?: number;
+  onToggleCandidates?: () => void;
+  candidatesToggleEnabled?: boolean;
 };
 type PolicyPoint = { x: number; y: number; value: number };
 
@@ -81,7 +87,12 @@ export function BoardCanvas({
   nextMoveMode = "off",
   nextMoveMarkers = [],
   pvPrefixLength,
-  replayCandidateIndex
+  replayCandidateIndex,
+  displayPreferences = defaultGranularDisplay,
+  graphPerspective = "black",
+  komi,
+  onToggleCandidates,
+  candidatesToggleEnabled = false
 }: Props) {
   const ownCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasRef = surfaceRef ?? ownCanvasRef;
@@ -148,7 +159,9 @@ export function BoardCanvas({
     if (overlayModeProp === undefined) setOverlayModeLocal(mode);
   }
   const boardPointCount = position.board_width * position.board_height;
-  const hasOwnership = (analysis?.ownership?.length ?? 0) >= boardPointCount;
+  const ownershipCandidate = selectedCandidateIndex == null ? null : analysis?.candidates[selectedCandidateIndex];
+  const ownership = displayPreferences.useCandidateOwnership && ownershipCandidate ? ownershipCandidate.ownership : analysis?.ownership;
+  const hasOwnership = ownership?.length === boardPointCount;
   const policyPoints = useMemo(
     () => getTopPolicyPoints(analysis?.policy, position.board_width, position.board_height, 12),
     [analysis?.policy, position.board_width, position.board_height]
@@ -181,7 +194,7 @@ export function BoardCanvas({
       if (!isPoint(candidate.vertex)) return false;
       const centerX = offsetX + candidate.vertex.point.x * grid;
       const centerY = offsetY + candidate.vertex.point.y * grid;
-      const radius = grid * (0.18 + Math.min(candidate.visits / Math.max(analysis?.visits ?? 1, 1), 1) * 0.22);
+      const radius = grid * (displayPreferences.showWinrate || displayPreferences.showVisits || displayPreferences.showScore ? 0.45 : 0.18 + Math.min(candidate.visits / Math.max(analysis?.visits ?? 1, 1), 1) * 0.22);
       return Math.hypot(pointerX - centerX, pointerY - centerY) <= radius;
     });
     if (candidateIndex < 0) {
@@ -314,19 +327,8 @@ export function BoardCanvas({
       }
     }
 
-    if (effectiveOverlayMode === "ownership" && hasOwnership && analysis?.ownership) {
-      const cellWidth = Math.max(2, grid * 0.94);
-      const cellHeight = cellWidth;
-      for (let y = 0; y < boardHeight; y += 1) {
-        for (let x = 0; x < boardWidth; x += 1) {
-          const value = normalizeOwnershipValue(analysis.ownership[y * boardWidth + x]);
-          const magnitude = Math.abs(value);
-          if (magnitude < 0.015) continue;
-          const alpha = 0.1 + magnitude * 0.38;
-          ctx.fillStyle = value >= 0 ? `rgba(33,86,199,${alpha})` : `rgba(194,65,12,${alpha})`;
-          ctx.fillRect(coordX(x) - cellWidth / 2, coordY(y) - cellHeight / 2, cellWidth, cellHeight);
-        }
-      }
+    if (effectiveOverlayMode === "ownership" && hasOwnership && ownership && displayPreferences.ownershipStyle === "bigBelow") {
+      drawOwnership(ctx, ownership, position, displayPreferences, grid, coordX, coordY);
     }
 
     const moveByPoint = new Map<string, number>();
@@ -351,6 +353,9 @@ export function BoardCanvas({
         ctx.textBaseline = "middle";
         ctx.fillText(String(moveNumber), cx, cy);
       }
+    }
+    if (effectiveOverlayMode === "ownership" && hasOwnership && ownership && displayPreferences.ownershipStyle !== "bigBelow") {
+      drawOwnership(ctx, ownership, position, displayPreferences, grid, coordX, coordY);
     }
 
     if (scoring) {
@@ -381,15 +386,15 @@ export function BoardCanvas({
 
     if (effectiveOverlayMode === "policy" && hasPolicy) {
       drawPolicyOverlay(ctx, policyPoints, coordX, coordY, grid);
-    } else if (!hideCandidates) {
+    } else if (effectiveOverlayMode === "candidates" && !hideCandidates) {
       const topCandidates = analysis?.candidates ?? [];
       const replayCandidate = topCandidates[replayCandidateIndex ?? selectedCandidateIndex ?? 0] ?? topCandidates[0];
-      const replaySteps = pvPrefixLength == null ? [] : variationReplayPointSteps(replayCandidate).slice(0, pvPrefixLength);
+      const replaySteps = pvPrefixLength == null ? [] : displayVariationSteps(replayCandidate, displayPreferences, pvPrefixLength);
       if (replaySteps.length === 0) {
         for (const [index, candidate] of topCandidates.entries()) {
           if (!isPoint(candidate.vertex)) continue;
           const cx = coordX(candidate.vertex.point.x); const cy = coordY(candidate.vertex.point.y);
-          const radius = grid * (0.18 + Math.min(candidate.visits / Math.max(analysis?.visits ?? 1, 1), 1) * 0.22);
+          const radius = grid * (displayPreferences.showWinrate || displayPreferences.showVisits || displayPreferences.showScore ? 0.45 : 0.18 + Math.min(candidate.visits / Math.max(analysis?.visits ?? 1, 1), 1) * 0.22);
           const isSelected = selectedCandidateIndex === index;
           ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2);
           ctx.fillStyle = isSelected ? "#2156c7" : "rgba(255,255,255,.88)";
@@ -397,16 +402,12 @@ export function BoardCanvas({
           ctx.strokeStyle = isSelected ? "#163f96" : "rgba(42,28,14,.55)";
           ctx.lineWidth = isSelected ? Math.max(1.5, grid * 0.06) : 1;
           ctx.stroke();
-          ctx.fillStyle = isSelected ? "#fff" : "#1a1d21";
-          ctx.font = `${Math.max(10, grid * 0.28)}px "Noto Sans SC", sans-serif`;
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.fillText(String(index + 1), cx, cy);
+          drawCandidateText(ctx, candidate, topCandidates, index, isSelected, displayPreferences, graphPerspective, position, komi, grid, cx, cy);
         }
       } else {
-        let turnColor: "black" | "white" = position.to_play;
-        for (const [index, point] of replaySteps.entries()) {
-          if (index > 0) turnColor = turnColor === "black" ? "white" : "black";
+        for (const step of replaySteps) {
+          const { point, offset: index } = step;
+          const turnColor = index % 2 === 0 ? position.to_play : position.to_play === "black" ? "white" : "black";
           const cx = coordX(point.x);
           const cy = coordY(point.y);
           const radius = grid * 0.45;
@@ -421,6 +422,11 @@ export function BoardCanvas({
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           ctx.fillText(String(index + 1), cx, cy);
+          const visits = pvVisitsLabel(replayCandidate, step.pvIndex, step.lastPvIndex + 1, displayPreferences);
+          if (visits !== null) {
+            ctx.font = `${Math.max(8, grid * 0.22)}px sans-serif`;
+            ctx.fillText(visits, cx, cy + grid * 0.28);
+          }
         }
       }
     }
@@ -485,7 +491,7 @@ export function BoardCanvas({
       ctx.lineWidth = Math.max(1.5, grid * 0.06);
       ctx.stroke();
     }
-  }, [size, position, markup, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, stoneMoveNumbers, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers, pvPrefixLength, replayCandidateIndex, scoring]);
+  }, [size, position, markup, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, stoneMoveNumbers, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers, pvPrefixLength, replayCandidateIndex, scoring, displayPreferences, graphPerspective, komi, ownership]);
 
   const layerHost = document.getElementById("board-layers");
   const overlays = (
@@ -493,6 +499,8 @@ export function BoardCanvas({
       <OverlayButton label="候选" active={effectiveOverlayMode === "candidates"} onClick={() => setOverlayMode("candidates")} />
       <OverlayButton label="领地" active={effectiveOverlayMode === "ownership"} disabled={!hasOwnership} onClick={() => setOverlayMode("ownership")} />
       <OverlayButton label="策略" active={effectiveOverlayMode === "policy"} disabled={!hasPolicy} onClick={() => setOverlayMode("policy")} />
+      {onToggleCandidates ? <button type="button" disabled={!candidatesToggleEnabled} onClick={onToggleCandidates} aria-pressed={!hideCandidates}>{t("action.view.candidates")}</button> : null}
+      {displayPreferences.useCandidateOwnership && ownershipCandidate && !hasOwnership ? <small role="status">{t("display.candidateOwnershipUnavailable")}</small> : null}
     </div>
   );
 
@@ -590,12 +598,6 @@ function boardGeometry(width: number, height: number, boardWidth: number, boardH
 
 function OverlayButton({ label, active, disabled, onClick }: { label: string; active: boolean; disabled?: boolean; onClick: () => void }) {
   return <button type="button" disabled={disabled} aria-pressed={active} onClick={onClick}>{label}</button>;
-}
-
-function normalizeOwnershipValue(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
-  const normalized = Math.abs(value) > 1 ? value / 100 : value;
-  return Math.max(-1, Math.min(1, normalized));
 }
 
 function getTopPolicyPoints(policy: number[] | null | undefined, boardWidth: number, boardHeight: number, limit: number): PolicyPoint[] {

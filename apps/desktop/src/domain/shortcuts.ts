@@ -107,6 +107,7 @@ const CLAIMED_SHORTCUTS: ShortcutDefinition[] = [
   },
   { id: "view.coordinates", label: "坐标", primary: { key: "c" }, aliases: [], focusRule: "focus-safe" },
   { id: "view.move-numbers", label: "手数", primary: { key: "m" }, aliases: [], focusRule: "focus-safe" },
+  { id: "view.candidates", label: "显示／隐藏候选", primary: { key: "f" }, aliases: [], focusRule: "focus-safe" },
   { id: "view.policy", label: "策略网络", primary: { key: "t" }, aliases: [], focusRule: "focus-safe" },
   { id: "view.policy-overlay", label: "策略", primary: { key: "h" }, aliases: [], focusRule: "focus-safe" },
   { id: "review.next-move-marker", label: "下一手标记", primary: { key: "j" }, aliases: [], focusRule: "focus-safe" },

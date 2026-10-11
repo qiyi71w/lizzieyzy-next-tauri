@@ -3,6 +3,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
+mod display;
+pub use display::*;
+
 mod workspace;
 pub use workspace::WorkspaceSharesDto;
 mod window_geometry;
@@ -418,6 +421,10 @@ pub struct CandidateMoveDto {
     pub score_mean_black: Option<f32>,
     pub policy_prior: Option<f32>,
     pub pv: Vec<MoveVertex>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pv_visits: Option<Vec<u32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ownership: Option<Vec<f32>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -596,6 +596,8 @@ fn real_katago_measurement_failure_cancel_and_foreground_handoff() {
             position_empty: true,
             exact_position: Err("JSONL fixture does not require exact GTP history".into()),
             query: katago_protocol::AnalysisQuery {
+                include_pv_visits: false,
+                include_moves_ownership: None,
                 id: "measurement-handoff".into(),
                 moves: vec![],
                 initial_stones: vec![],
@@ -696,6 +698,8 @@ fn startup_task_start_and_explicit_continue_preempt_benchmark_without_releasing_
                 board_height: 9,
                 move_number: 0,
                 query: katago_protocol::AnalysisQuery {
+                    include_pv_visits: false,
+                    include_moves_ownership: None,
                     id: "task".into(),
                     moves: vec![],
                     initial_stones: vec![],
@@ -997,6 +1001,8 @@ fn real_startup_handoff(gtp: bool) {
                 .exact_position(&app_model::NodePath { indices: vec![] })
                 .map_err(|error| error.to_string()),
             query: katago_protocol::AnalysisQuery {
+                include_pv_visits: false,
+                include_moves_ownership: None,
                 id: "startup-handoff".into(),
                 moves: vec![],
                 initial_stones: vec![],

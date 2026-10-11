@@ -2,6 +2,7 @@ import type { FoxKifuState, NetworkSettings, ReadboardSyncPreferences, TencentHi
 import type { NextMoveReviewMarkerMode } from "./nextMoveReviewMarker";
 import type { AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, ContinuousAnalysisBudgetDto, MatchDefaultsDto, PkSideDefaultsDto, WindowGeometryDto, WorkspaceSharesDto } from "./types";
 import { validReviewAutoplayInterval } from "./reviewAutoplay";
+import { defaultGranularDisplay, readGranularDisplay, type GranularDisplay } from "./granularDisplay";
 
 export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
@@ -34,6 +35,7 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   showPolicy: boolean;
   showCandidates: boolean;
   candidateLimit: number;
+  granularDisplay: GranularDisplay;
   defaultMaxVisits: number;
   taskSingleStageConditions: AnalysisStageConditionsDto;
   taskOverviewConditions: AnalysisStageConditionsDto;
@@ -88,6 +90,7 @@ export const defaultAppPreferences: AppPreferences = {
   showPolicy: true,
   showCandidates: true,
   candidateLimit: 8,
+  granularDisplay: defaultGranularDisplay,
   defaultMaxVisits: 800,
   defaultBoardWidth: 19,
   defaultBoardHeight: 19,
@@ -225,6 +228,7 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
     showPolicy: booleanValue(value?.showPolicy, defaultAppPreferences.showPolicy),
     showCandidates: booleanValue(value?.showCandidates, defaultAppPreferences.showCandidates),
     candidateLimit: integerValue(value?.candidateLimit, defaultAppPreferences.candidateLimit, 1, 20),
+    granularDisplay: readGranularDisplay(value?.granularDisplay),
     defaultMaxVisits,
     defaultBoardWidth: integerValue(value?.defaultBoardWidth, defaultAppPreferences.defaultBoardWidth, 2, 25),
     defaultBoardHeight: integerValue(value?.defaultBoardHeight, defaultAppPreferences.defaultBoardHeight, 2, 25),

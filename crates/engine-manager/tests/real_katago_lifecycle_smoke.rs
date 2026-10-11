@@ -194,6 +194,8 @@ fn missing_model_profile(name: &str) -> EngineProfileDto {
 
 fn query(max_visits: u32) -> AnalysisQuery {
     AnalysisQuery {
+        include_pv_visits: false,
+        include_moves_ownership: None,
         id: "placeholder".into(),
         moves: Vec::new(),
         initial_stones: Vec::new(),

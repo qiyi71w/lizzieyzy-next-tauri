@@ -121,6 +121,8 @@ fn job_event(generation: u64, indices: &[u32], visits: u32) -> AnalysisJobEventD
             score_mean_black: Some(2.25),
             score_stdev: Some(0.5),
             candidates: vec![CandidateMoveDto {
+                pv_visits: None,
+                ownership: None,
                 vertex: MoveVertex::Point(PointDto { x: 3, y: 3 }),
                 visits,
                 winrate_black: 0.61,
