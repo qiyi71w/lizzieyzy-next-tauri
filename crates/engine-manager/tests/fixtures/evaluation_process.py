@@ -6,11 +6,14 @@ import pathlib
 import sys
 import time
 
+pathlib.Path("spawned.json").write_text(json.dumps({"argv": sys.argv[1:], "pid": os.getpid()}))
+
 if sys.argv[1] == "version":
     print("KataGo v1.18.2")
     print("Using Eigen(CPU) backend")
     sys.exit(0)
 if sys.argv[1] == "analysis":
+    pathlib.Path("launch.json").write_text(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd(), "pid": os.getpid()}))
     first = True
     for line in sys.stdin:
         query = json.loads(line)
@@ -27,7 +30,7 @@ if sys.argv[1] == "analysis":
     sys.exit(0)
 pathlib.Path("observed.json").write_text(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd(), "pid": os.getpid()}))
 print("benchmark started", flush=True)
-mode = next((arg.split("=", 1)[1] for arg in sys.argv if arg.startswith("testMode=")), "success")
+mode = next((entry.split("=", 1)[1] for arg in sys.argv for entry in arg.split(",") if entry.startswith("testMode=")), "success")
 if mode == "hold":
     while not pathlib.Path("release").exists():
         time.sleep(0.01)

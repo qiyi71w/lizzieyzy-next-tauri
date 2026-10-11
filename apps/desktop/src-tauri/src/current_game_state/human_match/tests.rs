@@ -78,6 +78,7 @@ impl Rig {
         catalog.upsert(SavedEngineProfile {
             profile_id: "engine".into(),
             profile: profile.clone(),
+            thread_policy: Default::default(),
         });
         let manager = ForegroundEngineManager::new(catalog.clone(), config);
         let state = CurrentGameState::default();

@@ -493,6 +493,7 @@ fn ready_manager(
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-1".into(),
         profile,
+        thread_policy: Default::default(),
     });
     let manager = ForegroundEngineManager::new(catalog.clone(), ForegroundEngineConfig::for_tests());
     let events = manager.subscribe();
@@ -548,6 +549,7 @@ fn start_failure_without_assets_stays_no_engine_with_typed_failure() {
                 max_visits: 800,
             }),
         },
+        thread_policy: Default::default(),
     });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
     let events = manager.subscribe();
@@ -574,6 +576,7 @@ fn spawn_without_probe_response_does_not_become_ready() {
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-1".into(),
         profile: setup_profile(&temp, "sleep 2"),
+        thread_policy: Default::default(),
     });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
     let events = manager.subscribe();
@@ -2649,6 +2652,7 @@ fn analysis_task_paused_progress_obeys_semantic_run_and_departure_fences() {
                 program: "/missing/task-engine".into(),
                 ..catalog.get("profile-1").unwrap().profile
             },
+            thread_policy: Default::default(),
         });
         manager.switch_to("broken").unwrap();
         wait_failure(&events, Duration::from_secs(3), |error| {
@@ -2667,6 +2671,7 @@ fn analysis_task_paused_progress_obeys_semantic_run_and_departure_fences() {
                 catalog.upsert(SavedEngineProfile {
                     profile_id: "replacement".into(),
                     profile: catalog.get("profile-1").unwrap().profile,
+                    thread_policy: Default::default(),
                 });
                 manager.switch_to("replacement").unwrap();
                 wait_lifecycle(&manager, Duration::from_secs(3), |state| {
@@ -3386,6 +3391,7 @@ fn unsupported_whole_game_capability_is_rejected_before_protocol_io() {
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-1".into(),
         profile: setup_profile(&temp, &script),
+        thread_policy: Default::default(),
     });
     let manager = ForegroundEngineManager::new(
         catalog,
@@ -4034,10 +4040,12 @@ fn ready_two_profiles(
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-a".into(),
         profile: setup_named_profile(temp, "engine-a", profile_a_script),
+        thread_policy: Default::default(),
     });
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-b".into(),
         profile: setup_named_profile(temp, "engine-b", profile_b_script),
+        thread_policy: Default::default(),
     });
     let manager = ForegroundEngineManager::new(catalog.clone(), ForegroundEngineConfig::for_tests());
     let events = manager.subscribe();
@@ -4081,6 +4089,7 @@ fn durable_reorder_and_failure_preserve_ready_run_launch_and_job_bindings() {
                 .map(|record| SavedEngineProfile {
                     profile_id: record.id,
                     profile: record.profile,
+                    thread_policy: record.thread_policy,
                 })
         }
         fn autoload_profile_id(&self) -> Option<String> {
@@ -4104,11 +4113,13 @@ fn durable_reorder_and_failure_preserve_ready_run_launch_and_job_bindings() {
             engine_manager::EngineProfileRecord {
                 id: "profile-a".into(),
                 preload: false,
+                thread_policy: Default::default(),
                 profile: setup_named_profile(&temp, "a", &hold_after_probe_script()),
             },
             engine_manager::EngineProfileRecord {
                 id: "profile-b".into(),
                 preload: false,
+                thread_policy: Default::default(),
                 profile: setup_named_profile(&temp, "b", &resident_echo_script()),
             },
         ],
@@ -4167,6 +4178,7 @@ fn apply_autoload_without_mark_stays_no_engine() {
                 max_visits: 800,
             }),
         },
+        thread_policy: Default::default(),
     });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
     manager.apply_autoload().unwrap();
@@ -4184,10 +4196,12 @@ fn apply_autoload_starts_only_the_marked_profile_with_a_new_run_identity() {
     catalog.upsert(SavedEngineProfile {
         profile_id: "other".into(),
         profile: setup_profile(&temp, "exit 1"),
+        thread_policy: Default::default(),
     });
     catalog.upsert(SavedEngineProfile {
         profile_id: "marked".into(),
         profile: setup_profile(&temp, &resident_echo_script()),
+        thread_policy: Default::default(),
     });
     catalog.set_autoload_profile_id(Some("marked".into()));
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
@@ -4209,6 +4223,7 @@ fn autoload_asset_failure_stays_no_engine_without_falling_back() {
     catalog.upsert(SavedEngineProfile {
         profile_id: "good".into(),
         profile: setup_profile(&temp, &resident_echo_script()),
+        thread_policy: Default::default(),
     });
     catalog.upsert(SavedEngineProfile {
         profile_id: "bad".into(),
@@ -4223,6 +4238,7 @@ fn autoload_asset_failure_stays_no_engine_without_falling_back() {
                 max_visits: 800,
             }),
         },
+        thread_policy: Default::default(),
     });
     catalog.set_autoload_profile_id(Some("bad".into()));
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
@@ -4257,6 +4273,7 @@ fn successful_start_after_autoload_miss_then_stop_does_not_revive_failure() {
     catalog.upsert(SavedEngineProfile {
         profile_id: "good".into(),
         profile: setup_profile(&temp, &resident_echo_script()),
+        thread_policy: Default::default(),
     });
     catalog.upsert(SavedEngineProfile {
         profile_id: "bad".into(),
@@ -4271,6 +4288,7 @@ fn successful_start_after_autoload_miss_then_stop_does_not_revive_failure() {
                 max_visits: 800,
             }),
         },
+        thread_policy: Default::default(),
     });
     catalog.set_autoload_profile_id(Some("bad".into()));
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
@@ -4308,6 +4326,7 @@ fn later_start_miss_replaces_autoload_snapshot_failure() {
                 max_visits: 800,
             }),
         },
+        thread_policy: Default::default(),
     });
     catalog.upsert(SavedEngineProfile {
         profile_id: "bad-start".into(),
@@ -4322,6 +4341,7 @@ fn later_start_miss_replaces_autoload_snapshot_failure() {
                 max_visits: 800,
             }),
         },
+        thread_policy: Default::default(),
     });
     catalog.set_autoload_profile_id(Some("bad-autoload".into()));
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
@@ -4557,6 +4577,7 @@ fn switch_asset_failure_keeps_ready_a_and_publishes_switch_scoped_failure() {
                 max_visits: 800,
             }),
         },
+        thread_policy: Default::default(),
     });
     let before = manager.snapshot();
     let before_run = run_from_ready(&before.lifecycle).clone();
@@ -4609,6 +4630,7 @@ fn switch_non_file_executable_keeps_ready_a_with_component_kind() {
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-b".into(),
         profile: spawn_fail_profile(&temp, "engine-b-spawn"),
+        thread_policy: Default::default(),
     });
     let before_run = run_from_ready(&manager.snapshot().lifecycle).clone();
     manager.switch_to("profile-b").unwrap();
@@ -4640,6 +4662,7 @@ fn switch_protocol_failure_keeps_ready_a() {
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-b".into(),
         profile: setup_named_profile(&temp, "engine-b-protocol", &protocol_fail_script()),
+        thread_policy: Default::default(),
     });
     let before_run = run_from_ready(&manager.snapshot().lifecycle).clone();
     manager.switch_to("profile-b").unwrap();
@@ -4670,6 +4693,7 @@ fn switch_readiness_exit_keeps_ready_a() {
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-b".into(),
         profile: setup_named_profile(&temp, "engine-b-exit", "read line\nexit 7"),
+        thread_policy: Default::default(),
     });
     let before_run = run_from_ready(&manager.snapshot().lifecycle).clone();
     manager.switch_to("profile-b").unwrap();
@@ -4738,6 +4762,7 @@ fn later_switch_to_c_wins_and_rejects_superseded_b() {
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-c".into(),
         profile: setup_named_profile(&temp, "engine-c", &resident_echo_script()),
+        thread_policy: Default::default(),
     });
     manager.switch_to("profile-b").unwrap();
     let switching_b = wait_snapshot(
@@ -4812,6 +4837,7 @@ fn stop_during_switch_then_b_failure_is_no_engine_without_promoting_b() {
             "engine-b-stop",
             &hold_probe_until_release_script(&release_b),
         ),
+        thread_policy: Default::default(),
     });
     manager.switch_to("profile-b").unwrap();
     wait_snapshot(&events, Duration::from_secs(2), |lifecycle| {
@@ -4879,6 +4905,7 @@ fn stale_a_job_after_failed_switch_does_not_bind_to_b() {
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-b".into(),
         profile: missing_assets_profile("Broken B", &temp),
+        thread_policy: Default::default(),
     });
     manager.switch_to("profile-b").unwrap();
     let switching = wait_snapshot(&events, Duration::from_secs(2), |lifecycle| {
@@ -4912,6 +4939,7 @@ fn autoload_after_teardown_does_not_restore_old_run_snapshot_or_jobs() {
     catalog.upsert(SavedEngineProfile {
         profile_id: "marked".into(),
         profile: setup_profile(&temp, &resident_echo_script()),
+        thread_policy: Default::default(),
     });
     catalog.set_autoload_profile_id(Some("marked".into()));
     let first = ForegroundEngineManager::new(catalog.clone(), ForegroundEngineConfig::for_tests());
@@ -4978,6 +5006,7 @@ fn non_file_executable_stays_no_engine_with_component_kind() {
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-1".into(),
         profile,
+        thread_policy: Default::default(),
     });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
     let events = manager.subscribe();
@@ -5004,12 +5033,13 @@ fn unparseable_readiness_probe_stays_no_engine_with_protocol_kind() {
         profile: setup_profile(
             &temp,
             r#"
-while IFS= read -r line; do
-  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
-  printf 'not-json %s\n' "$id"
-done
-"#,
+    while IFS= read -r line; do
+      id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+      printf 'not-json %s\n' "$id"
+    done
+    "#,
         ),
+        thread_policy: Default::default(),
     });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
     let events = manager.subscribe();
@@ -5034,6 +5064,7 @@ fn stdout_close_before_probe_stays_no_engine_with_readiness_kind() {
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-1".into(),
         profile: setup_profile(&temp, "read line\nexit 0"),
+        thread_policy: Default::default(),
     });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
     let events = manager.subscribe();
@@ -5154,6 +5185,7 @@ exit 9
     catalog.upsert(SavedEngineProfile {
         profile_id: "other".into(),
         profile: setup_profile(&temp, &resident_echo_script()),
+        thread_policy: Default::default(),
     });
     let mut broken = catalog.get("profile-1").unwrap();
     broken.profile.program = "/definitely/missing/katago".into();
@@ -5492,6 +5524,7 @@ fn continuous_cleanup_failure_remains_visible_and_blocks_new_work() {
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-1".into(),
         profile: setup_profile(&temp, &script),
+        thread_policy: Default::default(),
     });
     let mut config = ForegroundEngineConfig::for_tests();
     config.stop_drain_timeout = Duration::ZERO;
@@ -6041,6 +6074,7 @@ fn safety_hold_survives_navigation_readiness_and_authorization_during_departure(
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-1".into(),
         profile: setup_profile(&temp, &streaming_engine_script()),
+        thread_policy: Default::default(),
     });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
     let events = manager.subscribe();
@@ -6432,6 +6466,7 @@ fn actual_child_receives_exact_argv_paths_spaces_chinese_and_empty_argument() {
     catalog.upsert(SavedEngineProfile {
         profile_id: "argv".into(),
         profile: profile.clone(),
+        thread_policy: Default::default(),
     });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
     let events = manager.subscribe();
@@ -6474,6 +6509,7 @@ fn saving_every_profile_field_and_autoload_keeps_live_run_immutable_until_restar
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-1".into(),
         profile: edited.clone(),
+        thread_policy: Default::default(),
     });
     catalog.set_autoload_profile_id(Some("profile-1".into()));
     assert_eq!(manager.snapshot(), before);
@@ -6490,11 +6526,13 @@ fn saving_every_profile_field_and_autoload_keeps_live_run_immutable_until_restar
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-1".into(),
         profile: generic,
+        thread_policy: Default::default(),
     });
     assert_eq!(manager.snapshot(), before);
     catalog.upsert(SavedEngineProfile {
         profile_id: "profile-1".into(),
         profile: edited.clone(),
+        thread_policy: Default::default(),
     });
     manager.restart().unwrap();
     let after = wait_snapshot(
@@ -6534,6 +6572,7 @@ fn gtp_manager(
     catalog.upsert(SavedEngineProfile {
         profile_id: "gtp".into(),
         profile: gtp_profile(temp, mode),
+        thread_policy: Default::default(),
     });
     let manager = ForegroundEngineManager::new(
         catalog.clone(),
@@ -6666,6 +6705,7 @@ fn gtp_idle_eof_or_unsolicited_response_seals_run_until_manual_restart() {
         catalog.upsert(SavedEngineProfile {
             profile_id: "gtp".into(),
             profile: gtp_profile(&temp, "good"),
+            thread_policy: Default::default(),
         });
         assert_eq!(
             manager.snapshot().lifecycle,
@@ -6701,6 +6741,7 @@ fn gtp_cross_protocol_switch_preserves_primary_work_and_latest_intent() {
         catalog.upsert(SavedEngineProfile {
             profile_id: mode.into(),
             profile: gtp_profile(&temp, mode),
+            thread_policy: Default::default(),
         });
     }
     manager.switch_to("badid").unwrap();
@@ -6989,6 +7030,7 @@ time.sleep(30)
     catalog.upsert(SavedEngineProfile {
         profile_id: "private-attempt".into(),
         profile,
+        thread_policy: Default::default(),
     });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
     let events = manager.subscribe();
@@ -7087,6 +7129,7 @@ while True: print("WARN continuous " + "x"*1000,file=sys.stderr,flush=True)
         catalog.upsert(SavedEngineProfile {
             profile_id: id.clone(),
             profile: missing_assets_profile(&id, &temp),
+            thread_policy: Default::default(),
         });
         manager.switch_to(&id).unwrap();
         let failure = wait_failure(&events, Duration::from_secs(2), |failure| {
@@ -7149,6 +7192,7 @@ fn last_primary_tracks_only_successful_promotion_and_survives_stop() {
         catalog.upsert(SavedEngineProfile {
             profile_id: id.into(),
             profile: setup_named_profile(&temp, id, &resident_echo_script()),
+            thread_policy: Default::default(),
         });
     }
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
@@ -7327,6 +7371,7 @@ fn preload_gtp_readiness_keeps_foreground_authority_until_same_run_promotion() {
     catalog.upsert(SavedEngineProfile {
         profile_id: "background".into(),
         profile: gtp_profile(&temp, "stderr"),
+        thread_policy: Default::default(),
     });
     catalog.set_preload("background", true);
     manager.start("gtp").unwrap();
@@ -7371,10 +7416,12 @@ fn held_startup_preload(
     catalog.upsert(SavedEngineProfile {
         profile_id: "a".into(),
         profile: setup_named_profile(&temp, "a", &hold_probe_until_release_script(&release)),
+        thread_policy: Default::default(),
     });
     catalog.upsert(SavedEngineProfile {
         profile_id: "b".into(),
         profile: setup_named_profile(&temp, "b", &resident_echo_script()),
+        thread_policy: Default::default(),
     });
     catalog.set_preload("b", opted_in);
     catalog.set_autoload_profile_id(Some("a".into()));
@@ -7488,6 +7535,7 @@ fn startup_preload_changed_or_deleted_saved_target_cannot_launch_replacement() {
                 .map(|record| SavedEngineProfile {
                     profile_id: record.id,
                     profile: record.profile,
+                    thread_policy: record.thread_policy,
                 })
                 .collect()
         }
@@ -7500,6 +7548,7 @@ fn startup_preload_changed_or_deleted_saved_target_cannot_launch_replacement() {
             id: "b".into(),
             preload: true,
             profile: setup_named_profile(&temp, "b", &resident_echo_script()),
+            thread_policy: Default::default(),
         });
         engine_manager::save_engine_profiles(&path, settings.clone()).unwrap();
         let manager = ForegroundEngineManager::new(
@@ -7563,6 +7612,7 @@ fn preload_preparing_and_ready_retire_when_paused_task_continues() {
         catalog.upsert(SavedEngineProfile {
             profile_id: "b".into(),
             profile: setup_named_profile(&temp, "background", &script),
+            thread_policy: Default::default(),
         });
         catalog.set_preload("b", true);
         manager.prepare_preload("b").unwrap();

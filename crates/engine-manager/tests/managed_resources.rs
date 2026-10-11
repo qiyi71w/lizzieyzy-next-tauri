@@ -137,6 +137,7 @@ fn real_public_acquisition_preserves_selection_and_qualifies_only_on_explicit_st
     catalog.upsert(SavedEngineProfile {
         profile_id: "default".into(),
         profile: profile.clone(),
+        thread_policy: Default::default(),
     });
     let events = manager.subscribe();
     manager.start("default").unwrap();
@@ -178,6 +179,7 @@ fn real_public_acquisition_preserves_selection_and_qualifies_only_on_explicit_st
     catalog.upsert(SavedEngineProfile {
         profile_id: "altered".into(),
         profile,
+        thread_policy: Default::default(),
     });
     manager.switch_to("altered").unwrap();
     let deadline = Instant::now() + Duration::from_secs(90);

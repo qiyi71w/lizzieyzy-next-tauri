@@ -9,6 +9,7 @@ import { ModelInventoryPanel } from "./ModelInventoryPanel";
 import { EngineDiagnosticsPanel } from "./EngineDiagnosticsPanel";
 import { ManagedResourcesPanel } from "./ManagedResourcesPanel";
 import { EngineEvaluationPanel } from "./EngineEvaluationPanel";
+import { threadPolicyMessage } from "./EngineThreadPolicyPanel";
 import { EnginePreloadPanel } from "./EnginePreloadPanel";
 import { RuntimeThreadsPanel } from "./RuntimeThreadsPanel";
 import { RuntimeParametersPanel } from "./RuntimeParametersPanel";
@@ -473,7 +474,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
       {engineFailure && <section role="alert" className="message engine-resource-message">
         <h4>{t("engineResource.failure")}: {engineFailure.kind}</h4>
         <p>{t("engineResource.profile")}: {engineFailure.profile_id} · {t("engineResource.run")}: {engineFailure.run_id}</p>
-        <p>{engineFailure.message}</p>
+        <p>{threadPolicyMessage(engineFailure.message)}</p>
         {engineFailure.diagnostic_summary && <p>{engineFailure.diagnostic_summary}</p>}
         <p>{t("engineResource.repair")}</p>
       </section>}
@@ -504,7 +505,9 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
         </label>
         <p>{t("evaluation.startupHint")}</p>
       </div>
-      {visible && <EngineEvaluationPanel profiles={profiles} disabled={disabled || catalogBusy} />}
+      {visible && <EngineEvaluationPanel profiles={profiles} disabled={disabled || catalogBusy || modelBusy}
+        onPolicyBusyChange={(busy) => { catalogWritePending.current = busy; setCatalogBusy(busy); }}
+        onProfilesSaved={(saved) => { setProfiles(saved); onProfilesChange?.(saved); }} />}
       {visible && <RuntimeThreadsPanel runId={run?.run_id ?? null} disabled={disabled || snapshot.lifecycle.state !== "ready"} />}
       {visible && <RuntimeParametersPanel runId={run?.run_id ?? null} disabled={disabled || snapshot.lifecycle.state !== "ready"} />}
       {assetChecks.length > 0 && (

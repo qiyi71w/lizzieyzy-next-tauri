@@ -63,6 +63,7 @@ impl Rig {
                     }
                 },
             },
+            thread_policy: Default::default(),
         });
         let manager = ForegroundEngineManager::new(catalog.clone(), ForegroundEngineConfig::for_tests());
         manager.start("engine").unwrap();

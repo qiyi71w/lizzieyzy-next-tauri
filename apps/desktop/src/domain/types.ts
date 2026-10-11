@@ -12,6 +12,7 @@ export type EvaluationResultDto = {
   qualified_resource: QualifiedLocalResourceDto;
   elapsed_ms: number;
   measurements: EvaluationMeasurementDto[];
+  recommendation?: ThreadRecommendationDto | null;
 };
 export type EvaluationSnapshotDto = {
   evaluation_id: string | null;
@@ -24,6 +25,23 @@ export type EvaluationSnapshotDto = {
   output_truncated: boolean;
   message: string | null;
   result: EvaluationResultDto | null;
+};
+
+export type ThreadStrategyDto = "cfg" | "benchmark";
+export type SavedThreadPolicyDto = { strategy: ThreadStrategyDto; revision: number; recommendation: ThreadRecommendationDto | null };
+export type ThreadRecommendationDto = {
+  evaluation_id: string; target_id: string; input_revision: string; policy_revision: number;
+  source_revision: string; threads: number; seconds_per_move: string; source_row: string;
+  qualified_resource: QualifiedLocalResourceDto; command_revision: string; environment: string;
+};
+export type RecommendationValidityDto = "none" | "invalid" | "changed" | "unknown" | "valid";
+export type ThreadPolicyStatusDto = {
+  target_id: string; input_revision: string; policy: SavedThreadPolicyDto;
+  validity: RecommendationValidityDto; reason: string; recommendation: ThreadRecommendationDto | null;
+};
+export type ThreadPolicySaveRequestDto = {
+  target_id: string; expected_revision: number; input_revision: string;
+  strategy: ThreadStrategyDto; evaluation_id: string | null;
 };
 
 export type ExportConfirmationDto = { title: string; message: string };
@@ -219,7 +237,7 @@ export type EngineProfileDto = {
   | { adapter_kind: "kata_go_analysis" | "kata_go_gtp"; settings: KataGoSettingsDto }
   | { adapter_kind: "generic_gtp"; settings: Record<string, never> }
 );
-export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto; preload: boolean };
+export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto; preload: boolean; thread_policy?: SavedThreadPolicyDto };
 export type EngineStartupPolicyDto = { mode: "off" } | { mode: "fixed"; profile_id: string } | { mode: "last_primary" };
 export type StartupEvaluationSettingsDto = { enabled: boolean; target_profile_id: string | null };
 export type EngineProfilesSettingsDto = { version: number; selected_profile_id: string; startup: EngineStartupPolicyDto; last_primary_profile_id: string | null; startup_evaluation: StartupEvaluationSettingsDto; profiles: EngineProfileRecordDto[] };
@@ -365,6 +383,7 @@ export type EngineRunDto = {
   profile_id: string;
   adapter_kind: EngineBackendDto;
   profile_snapshot: EngineProfileDto;
+  thread_policy_snapshot?: SavedThreadPolicyDto;
   capability_snapshot?: EngineCapabilitySnapshotDto | null;
   qualified_resource?: QualifiedLocalResourceDto | null;
 };

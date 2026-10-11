@@ -817,6 +817,8 @@ pub struct EngineRunDto {
     pub profile_id: String,
     pub adapter_kind: EngineBackend,
     pub profile_snapshot: EngineProfileDto,
+    #[serde(default)]
+    pub thread_policy_snapshot: SavedThreadPolicyDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability_snapshot: Option<EngineCapabilitySnapshotDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1445,6 +1447,7 @@ mod foreground_engine_wire {
                     profile_id: "profile-1".into(),
                     adapter_kind: EngineBackend::KataGoAnalysis,
                     profile_snapshot: sample_profile(),
+                    thread_policy_snapshot: Default::default(),
                     qualified_resource: Some(Arc::new(QualifiedLocalResourceDto {
                         profile_revision: "resource-revision".into(),
                         resources: vec![],
@@ -1560,6 +1563,7 @@ mod foreground_engine_wire {
             profile_snapshot: sample_profile(),
             capability_snapshot: None,
             qualified_resource: None,
+            thread_policy_snapshot: Default::default(),
         };
         let snapshot = ForegroundEngineSnapshotDto {
             revision: 1,
