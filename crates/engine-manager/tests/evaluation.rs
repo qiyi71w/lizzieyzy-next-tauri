@@ -2,7 +2,7 @@
 use app_model::*;
 use engine_manager::*;
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -66,7 +66,10 @@ fn wait_ready(manager: &ForegroundEngineManager) -> EngineRunDto {
     loop {
         match manager.snapshot().lifecycle {
             ForegroundEngineLifecycleDto::Ready { run } => return run,
-            ForegroundEngineLifecycleDto::Error { failure, .. } => panic!("{failure:?}"),
+            ForegroundEngineLifecycleDto::Error { failure, .. }
+            | ForegroundEngineLifecycleDto::NoEngine {
+                failure: Some(failure),
+            } => panic!("{failure:?}"),
             phase => assert!(Instant::now() < deadline, "{phase:?}"),
         }
         std::thread::sleep(Duration::from_millis(10));
@@ -223,7 +226,7 @@ fn real_two_saved_ids_recommend_save_launch_and_effective_thread_readback() {
     std::fs::create_dir_all(&dir).unwrap();
     let cwd = dir.join(" cwd exact ");
     std::fs::create_dir(&cwd).unwrap();
-    let config = b"numSearchThreads=1\nnumAnalysisThreads=1\nnnCacheSizePowerOfTwo=16\nnnMutexPoolSizePowerOfTwo=12\nmaxVisits=8\nlogToStderr=true\nlogSearchInfo=false\nrules=tromp-taylor\n";
+    let config = b"numSearchThreads=1\nnumAnalysisThreads=1\nnumNNServerThreadsPerModel=1\nnnMaxBatchSize=1\nnnCacheSizePowerOfTwo=16\nnnMutexPoolSizePowerOfTwo=12\nmaxVisits=8\nlogToStderr=true\nlogSearchInfo=false\nlogAllGTPCommunication=false\nlogSearchInfoForChosenMove=false\nrules=tromp-taylor\nhomeDataDir=.\n";
     std::fs::write(cwd.join("engine.cfg"), config).unwrap();
     let mut settings = default_engine_profiles_settings();
     settings.profiles.clear();
