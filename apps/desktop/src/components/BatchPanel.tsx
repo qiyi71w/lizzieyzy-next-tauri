@@ -11,7 +11,7 @@ export function BatchPanel({ openRequest }: { openRequest: number }) {
   const [snapshot, setSnapshot] = useState<BatchSnapshotDto | null>(null);
   const [saved, setSaved] = useState(defaultBatchPreferences);
   const [draft, setDraft] = useState(defaultBatchPreferences);
-  const [paths, setPaths] = useState<string[]>([]);
+  const [pathDraft, setPathDraft] = useState("");
   const [mode, setMode] = useState<"" | "session_only" | "directory">("");
   const [directory, setDirectory] = useState<string | null>(null);
   const [confirmedNames, setConfirmedNames] = useState(false);
@@ -31,7 +31,7 @@ export function BatchPanel({ openRequest }: { openRequest: number }) {
     let stopped = false;
     let release: (() => void) | undefined;
     void loadBatchPreferences().then(value => { if (!stopped) { setSaved(value); setDraft(value); } }).catch(e => { if (!stopped) setError(String(e)); });
-    void listenBatchIntake(value => { setPaths(value); setOpen(true); }).then(fn => { if (stopped) fn(); else release = fn; }).catch(e => { if (!stopped) setError(String(e)); });
+    void listenBatchIntake(value => { setPathDraft(value.join("\n")); setOpen(true); }).then(fn => { if (stopped) fn(); else release = fn; }).catch(e => { if (!stopped) setError(String(e)); });
     return () => { stopped = true; mounted.current = false; release?.(); };
   }, []);
   useEffect(() => {
@@ -56,7 +56,7 @@ export function BatchPanel({ openRequest }: { openRequest: number }) {
     finally { if (mounted.current && sequence === generation.current) setBusy(false); }
   }
   async function addFiles() {
-    try { const selected = await pickBatchFiles(); if (selected.length) { setPaths(selected); setOpen(true); } }
+    try { const selected = await pickBatchFiles(); if (selected.length) { setPathDraft(selected.join("\n")); setOpen(true); } }
     catch (e) { setError(String(e)); }
   }
   async function saveRow(row: BatchRowDto) {
@@ -122,8 +122,8 @@ export function BatchPanel({ openRequest }: { openRequest: number }) {
         <button type="button" onClick={() => { setDraft(saved); setError(null); }}>{t("batch.cancelSettings")}</button>
       </fieldset>
       <div className="batch-fields"><button type="button" disabled={!native || busy} onClick={() => void addFiles()}>{t("batch.add")}</button>
-        <label>{t("batch.paths")}<textarea value={paths.join("\n")} onChange={e => setPaths(e.target.value.split("\n").filter(Boolean))} /></label>
-        <button type="button" disabled={!native || busy || !paths.length} onClick={() => { try { validateBatchPreferences(draft); setConfirmedNames(false); void command({ action: "intake", paths, conditions: draft }).then(ok => { if (ok) setPaths([]); }); } catch(e) { setError(String(e)); } }}>{t("batch.confirmIntake")}</button>
+        <label>{t("batch.paths")}<textarea value={pathDraft} onChange={e => setPathDraft(e.target.value)} /></label>
+        <button type="button" disabled={!native || busy || !pathDraft.length} onClick={() => { try { const paths = pathDraft.split(/\r?\n/).filter(Boolean); if (!paths.length) return; validateBatchPreferences(draft); setConfirmedNames(false); void command({ action: "intake", paths, conditions: draft }).then(ok => { if (ok) setPathDraft(""); }); } catch(e) { setError(String(e)); } }}>{t("batch.confirmIntake")}</button>
       </div>
       {!snapshot?.started ? <fieldset disabled={busy}>
         <legend>{t("batch.output")}</legend>

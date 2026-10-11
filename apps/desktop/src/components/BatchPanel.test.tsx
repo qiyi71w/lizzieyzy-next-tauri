@@ -40,6 +40,51 @@ describe("batch controls", () => {
     expect(button(t("batch.title"))).toBeTruthy();
     act(() => root.unmount()); host.remove();
   });
+  it("preserves multiline edits until confirmed intake and retains the draft on cancellation or failure", async () => {
+    vi.mocked(batchApi.batchNativeAvailable).mockReturnValue(true);
+    const empty: BatchSnapshotDto = { batch_id: "batch-a", rows: [], notices: [], started: false, paused: false, reason: null, output_directory: null };
+    vi.mocked(batchApi.batchSnapshot).mockResolvedValue(empty);
+    const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+    await act(async () => { root.render(<BatchPanel openRequest={1} />); });
+    const button = (label: string) => Array.from(host.querySelectorAll("button")).find(b => b.textContent === label)!;
+    const textarea = host.querySelector("textarea")!;
+    const edit = (value: string) => act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, value);
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const first = "C:\\games\\A with spaces.sgf", second = " /games/B.sgf ";
+    try {
+      edit(first);
+      edit(`${textarea.value}\n`);
+      expect(textarea.value).toBe(`${first}\n`);
+      edit(`${textarea.value}\n`);
+      expect(textarea.value).toBe(`${first}\n\n`);
+      edit(`${textarea.value}${second}`);
+      expect(textarea.value).toBe(`${first}\n\n${second}`);
+      expect(batchApi.batchCommand).not.toHaveBeenCalled();
+      vi.mocked(batchApi.pickBatchFiles).mockResolvedValueOnce([]);
+      await act(async () => button(t("batch.add")).click());
+      expect(textarea.value).toBe(`${first}\n\n${second}`);
+      vi.mocked(batchApi.batchCommand).mockRejectedValueOnce(new Error("intake refused"));
+      await act(async () => button(t("batch.confirmIntake")).click());
+      expect(textarea.value).toBe(`${first}\n\n${second}`);
+      expect(host.querySelector('[role="alert"]')?.textContent).toContain("intake refused");
+      const rows: BatchRowDto[] = [first, second].map((source_path, index) => ({ identity: { batch_id: "batch-a", row_id: `row-${index}`, attempt: 1 }, source_path, output_name: `output-${index}.sgf`, state: "pending", conditions: defaultBatchPreferences(), preview: null, task: null, document_id: null, input_receipt: null, calculation_complete: false, has_result: false, output_state: "unsaved", saved_path: null, incomplete: false, reason: null }));
+      const admitted = { ...empty, rows };
+      vi.mocked(batchApi.batchCommand).mockResolvedValueOnce(admitted);
+      vi.mocked(batchApi.batchSnapshot).mockResolvedValue(admitted);
+      await act(async () => button(t("batch.confirmIntake")).click());
+      expect(batchApi.batchCommand).toHaveBeenLastCalledWith({ action: "intake", paths: [first, second], conditions: defaultBatchPreferences() });
+      expect(textarea.value).toBe("");
+      expect(Array.from(host.querySelectorAll("tbody tr"), row => row.querySelector("td")!.firstChild!.textContent)).toEqual([first, second]);
+      expect(button(t("batch.start")).disabled).toBe(true);
+      expect(batchApi.batchCommand).toHaveBeenCalledTimes(2);
+      vi.mocked(batchApi.pickBatchFiles).mockResolvedValueOnce([second, first]);
+      await act(async () => button(t("batch.add")).click());
+      expect(textarea.value).toBe(`${second}\n${first}`);
+      expect(batchApi.batchCommand).toHaveBeenCalledTimes(2);
+    } finally { act(() => root.unmount()); host.remove(); }
+  });
   it("requires a directory and naming permission before Start and keeps Stop reachable after hiding", async () => {
     vi.mocked(batchApi.batchNativeAvailable).mockReturnValue(true);
     const row: BatchRowDto = { identity: { batch_id: "batch-a", row_id: "row-a", attempt: 1 }, source_path: "/source.sgf", output_name: "source_已分析_batch-a_1.sgf", state: "pending", conditions: defaultBatchPreferences(), preview: null, task: null, document_id: null, input_receipt: null, calculation_complete: false, has_result: false, output_state: "unsaved", saved_path: null, incomplete: false, reason: null };
