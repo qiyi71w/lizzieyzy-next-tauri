@@ -24,6 +24,8 @@ fn payload(engine: &str, visits: u32, x: u8, y: u8) -> SgfAnalysisPayload {
         score_stdev: Some(0.5),
         pda: None,
         candidates: vec![CandidateMoveDto {
+            pv_visits: None,
+            ownership: None,
             vertex: MoveVertex::Point(PointDto { x, y }),
             visits,
             winrate_black: 0.61,
@@ -417,6 +419,8 @@ fn projectable_frame(visits: u32, x: u8, y: u8) -> AnalysisFrameDto {
         score_mean_black: Some(2.25),
         score_stdev: Some(0.5),
         candidates: vec![CandidateMoveDto {
+            pv_visits: None,
+            ownership: None,
             vertex: MoveVertex::Point(PointDto { x, y }),
             visits,
             winrate_black: 0.61,
@@ -830,6 +834,7 @@ fn diagnostic_trace_reports_actual_stronger_weaker_ownership_and_identity_decisi
             working_dir: None,
             adapter: app_model::EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings {}),
         },
+        thread_policy: Default::default(),
     });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
     manager.start("trace").unwrap();

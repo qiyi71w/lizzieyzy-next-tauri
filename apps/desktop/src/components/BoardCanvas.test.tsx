@@ -8,6 +8,7 @@ import type { AnalysisFrameDto, PointDto, PositionDto, SgfAuthoringActionDto } f
 import type { PointSearchScopeDto } from "../domain/types";
 import { BoardCanvas } from "./BoardCanvas";
 import * as backend from "../api/backend";
+import { defaultGranularDisplay } from "../domain/granularDisplay";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -654,3 +655,24 @@ function canvasContext(arc: Mock, stroke: Mock): CanvasRenderingContext2D {
     strokeRect: vi.fn()
   } as unknown as CanvasRenderingContext2D;
 }
+
+it("renders independent ordered text, one komi conversion and an independent rank switch", () => {
+  const host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  const display = { ...defaultGranularDisplay, showOrder: false, scoreMode: "board" as const, textOrder: ["score", "visits", "winrate"] as ["score", "visits", "winrate"] };
+  act(() => root?.render(<BoardCanvas position={{ ...position, to_play: "white" }} analysis={analysis} showCoordinates={false} displayPreferences={display} graphPerspective="sideToPlay" komi={7.5} />));
+  expect(drawText.mock.calls.slice(0, 3).map(call => call[0])).toEqual(["-9.0", "100", "48.0%"]);
+  act(() => root?.render(<BoardCanvas position={position} analysis={analysis} showCoordinates={false} displayPreferences={{ ...display, showWinrate: false, showVisits: false, showScore: false }} />));
+  expect(drawText).not.toHaveBeenCalled();
+  expect(drawArc).toHaveBeenCalled();
+});
+
+it("never substitutes root ownership for a selected candidate lacking its own payload", () => {
+  const host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  const frame = { ...analysis, ownership: Array(81).fill(0.8) };
+  act(() => root?.render(<BoardCanvas position={position} analysis={frame} selectedCandidateIndex={0} overlayMode="ownership" />));
+  expect(host.textContent).toContain("不能用根局面领地代替");
+  const button = [...host.querySelectorAll("button")].find(button => button.textContent === "领地");
+  expect(button?.disabled).toBe(true);
+  act(() => root?.render(<BoardCanvas position={position} analysis={{ ...frame, candidates: [{ ...frame.candidates[0], ownership: Array(81).fill(-0.4) }] }} selectedCandidateIndex={0} overlayMode="ownership" />));
+  expect(host.textContent).not.toContain("不能用根局面领地代替");
+});

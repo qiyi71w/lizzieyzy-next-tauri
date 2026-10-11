@@ -119,6 +119,7 @@ fn real_runtime_threads_same_pid_analysis_pause_reset_and_expiry() {
                 max_visits: 4,
             }),
         },
+        thread_policy: Default::default(),
     });
     let owner = OwnedManager(ForegroundEngineManager::new(
         catalog.clone(),
@@ -283,6 +284,7 @@ fn real_runtime_pair_same_pid_analysis_threads_pause_and_expiry() {
                 max_visits: 4,
             }),
         },
+        thread_policy: Default::default(),
     });
     let owner = OwnedManager(ForegroundEngineManager::new(
         catalog.clone(),

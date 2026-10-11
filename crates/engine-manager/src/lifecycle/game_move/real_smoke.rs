@@ -136,6 +136,7 @@ fn real_exact_move_smoke() {
         catalog.upsert(SavedEngineProfile {
             profile_id: "real".into(),
             profile,
+            thread_policy: Default::default(),
         });
         let manager = ForegroundEngineManager::new(
             catalog.clone(),

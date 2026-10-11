@@ -18,6 +18,12 @@ const THREAD_KEYS: [&str; 3] = [
     "numAnalysisThreads",
 ];
 
+pub(crate) enum PolicyOverride {
+    Absent,
+    Legal,
+    Deleted,
+}
+
 #[derive(Debug)]
 pub(crate) struct ConfigurationError {
     path: Option<PathBuf>,
@@ -80,7 +86,7 @@ impl Configuration {
                     .split_once('=')
                     .ok_or("invalid KataGo CLI config override")?;
                 let key = key.trim();
-                if THREAD_KEYS.contains(&key) {
+                if THREAD_KEYS.contains(&key) || key == "numEigenThreadsPerModel" {
                     result.push(key, value.trim().to_owned(), None, "launch_override")?;
                 }
             }
@@ -216,7 +222,7 @@ impl Configuration {
             if !local_keys.insert(key.to_owned()) {
                 return Err("duplicate key within a KataGo configuration file".into());
             }
-            if THREAD_KEYS.contains(&key) {
+            if THREAD_KEYS.contains(&key) || key == "numEigenThreadsPerModel" {
                 self.push(key, value, Some(path.to_owned()), layer)?;
             }
         }
@@ -231,7 +237,11 @@ impl Configuration {
     ) -> ThreadSourcesDto {
         let mut result = ThreadSourcesDto::default();
         let mut values = HashMap::new();
-        for assignment in &self.assignments {
+        for assignment in self
+            .assignments
+            .iter()
+            .filter(|a| THREAD_KEYS.contains(&a.key.as_str()))
+        {
             if assignment.value.is_empty() {
                 values.remove(assignment.key.as_str());
             } else {
@@ -291,6 +301,59 @@ impl Configuration {
             }
         }
         result
+    }
+
+    pub(crate) fn policy_override(
+        &self,
+        backend: EngineBackend,
+        capture: &AttemptCapture,
+    ) -> Result<PolicyOverride, String> {
+        let sources = self.thread_sources(backend, capture);
+        if let Some(error) = sources.error {
+            return Err(error);
+        }
+        let mut explicit = false;
+        let mut deleted = false;
+        for key in ["numSearchThreads", "numSearchThreadsPerAnalysisThread"] {
+            if key == "numSearchThreadsPerAnalysisThread" && backend != EngineBackend::KataGoAnalysis {
+                continue;
+            }
+            if let Some(a) = self
+                .assignments
+                .iter()
+                .rev()
+                .find(|a| a.key == key && a.layer == "launch_override")
+            {
+                explicit = true;
+                deleted |= a.value.is_empty();
+            }
+        }
+        if explicit {
+            if sources.launch_override.is_some() {
+                return Ok(PolicyOverride::Legal);
+            }
+            if deleted {
+                return Ok(PolicyOverride::Deleted);
+            }
+            return Err("Invalid explicit search-thread override".into());
+        }
+        Ok(PolicyOverride::Absent)
+    }
+
+    pub(crate) fn benchmark_compatible(&self) -> Result<(), String> {
+        // Pinned Eigen benchmark fixes the per-model Eigen worker count to one.
+        // nnMaxBatchSize is ignored by both benchmark and ordinary Eigen launch.
+        if let Some(a) = self
+            .assignments
+            .iter()
+            .rev()
+            .find(|a| a.key == "numEigenThreadsPerModel")
+        {
+            if !a.value.is_empty() && a.value != "1" {
+                return Err("policy_environment_mismatch".into());
+            }
+        }
+        Ok(())
     }
 }
 
@@ -408,6 +471,7 @@ mod tests {
             profile_snapshot: profile,
             capability_snapshot: None,
             qualified_resource: None,
+            thread_policy_snapshot: Default::default(),
         });
         let config = Configuration::from_command(&spec, Instant::now() + Duration::from_secs(2)).unwrap();
         assert_eq!(

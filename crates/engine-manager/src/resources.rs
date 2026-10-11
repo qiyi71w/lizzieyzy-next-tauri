@@ -48,6 +48,14 @@ fn managed_authentication_stage<T>(
 }
 
 impl ResourceSnapshot {
+    pub(crate) fn matches_resources(&self, expected: &[EngineResourceIdentityDto]) -> bool {
+        self.entries.len() == expected.len()
+            && self
+                .entries
+                .iter()
+                .zip(expected)
+                .all(|((_, actual), expected)| same_content(actual, expected))
+    }
     pub(crate) fn capture(
         run: &EngineRunDto,
         spec: &crate::CommandSpec,
@@ -115,6 +123,9 @@ impl ResourceSnapshot {
         managed_root: Option<&Path>,
         is_retired: &(dyn Fn() -> bool + Sync),
     ) -> Result<Self, ResourceError> {
+        if run.adapter_kind != app_model::EngineBackend::GenericGtp {
+            return Self::capture(run, spec, deadline, diagnostics, managed_root, is_retired);
+        }
         let mut snapshot = Self {
             entries: Vec::new(),
             revision: format!(
@@ -330,6 +341,14 @@ impl ResourceSnapshot {
     }
 }
 
+/// Diagnostic path aliases are capture-local, never durable identity keys. The frozen
+/// command/cwd and ordered config contents bind paths; these receipts bind their actual bytes.
+pub(crate) fn same_content(actual: &EngineResourceIdentityDto, expected: &EngineResourceIdentityDto) -> bool {
+    actual.component == expected.component
+        && actual.sha256 == expected.sha256
+        && actual.bytes == expected.bytes
+}
+
 fn component_kind(component: &str) -> EngineFailureKind {
     match component {
         "model" => EngineFailureKind::Model,
@@ -537,6 +556,7 @@ mod tests {
             profile_snapshot: profile,
             capability_snapshot: None,
             qualified_resource: None,
+            thread_policy_snapshot: Default::default(),
         };
         let checks = AtomicUsize::new(0);
         let error = identify(

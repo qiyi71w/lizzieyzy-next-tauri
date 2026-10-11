@@ -19,8 +19,10 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+mod batch_analysis;
 mod continuous_analysis;
 mod diagnostic_export;
+mod engine_continuation;
 mod gesture_timing;
 use gesture_timing::board_gesture_timing;
 mod external_sync;
@@ -89,6 +91,7 @@ impl EngineProfileCatalog for DiskEngineCatalog {
                     .map(|record| SavedEngineProfile {
                         profile_id: record.id,
                         profile: record.profile,
+                        thread_policy: record.thread_policy,
                     })
                     .collect()
             })
@@ -104,6 +107,7 @@ impl EngineProfileCatalog for DiskEngineCatalog {
             .map(|record| SavedEngineProfile {
                 profile_id: record.id,
                 profile: record.profile,
+                thread_policy: record.thread_policy,
             })
     }
 
@@ -652,15 +656,48 @@ fn save_engine_profiles_at_path(
     let saved = persist_engine_profiles(path, settings)?;
     manager.evaluation_snapshot();
     for previous in &current.profiles {
-        if !saved
-            .profiles
-            .iter()
-            .any(|next| next.id == previous.id && next.preload && next.profile == previous.profile)
-        {
+        if !saved.profiles.iter().any(|next| {
+            next.id == previous.id
+                && next.preload
+                && next.profile == previous.profile
+                && next.thread_policy == previous.thread_policy
+        }) {
             manager.invalidate_preload(&previous.id);
         }
     }
     Ok(saved)
+}
+
+#[tauri::command]
+async fn engine_thread_policy_status(
+    manager: State<'_, ForegroundEngineManager>,
+    target_id: String,
+    evaluation_id: Option<String>,
+) -> Result<app_model::ThreadPolicyStatusDto, String> {
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        manager.thread_policy_status(&target_id, evaluation_id.as_deref())
+    })
+    .await
+    .map_err(|_| "policy_worker_failed".to_owned())?
+}
+
+#[tauri::command]
+async fn save_engine_thread_policy(
+    app_handle: AppHandle,
+    manager: State<'_, ForegroundEngineManager>,
+    request: app_model::ThreadPolicySaveRequestDto,
+) -> Result<EngineProfilesSettingsDto, String> {
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _transaction = ENGINE_CATALOG_WRITES
+            .lock()
+            .map_err(|_| "engine catalog lock poisoned")?;
+        let current = load_engine_profiles_from_disk(&app_handle)?;
+        manager.save_thread_policy_at_path(&engine_profile_path(&app_handle)?, current, request)
+    })
+    .await
+    .map_err(|_| "policy_worker_failed".to_owned())?
 }
 
 #[tauri::command]
@@ -1300,6 +1337,7 @@ pub fn run() {
                     match event {
                         ForegroundEngineEventDto::Snapshot { snapshot } => {
                             let _ = emit_handle.emit("foreground-engine://snapshot", snapshot);
+                            emit_handle.state::<CurrentGameState>().reconcile_auto_load();
                         }
                         ForegroundEngineEventDto::Failure { failure } => {
                             if let Some(update) = emit_handle
@@ -1312,6 +1350,9 @@ pub fn run() {
                             let _ = emit_handle.emit("foreground-engine://failure", failure);
                         }
                         ForegroundEngineEventDto::Job { mut job } => {
+                            if job.job_id.starts_with("batch:") {
+                                continue;
+                            }
                             if let Some(state) = emit_handle.try_state::<CurrentGameState>() {
                                 job.current_game = state.attach_from_job_event(&job);
                                 if let Some(trial) = state.attach_trial_from_job_event(&job) {
@@ -1349,6 +1390,19 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            engine_continuation::continuation_snapshot,
+            engine_continuation::start_engine_continuation,
+            engine_continuation::engine_continuation_beat,
+            engine_continuation::stop_engine_continuation,
+            engine_continuation::load_continuation_preferences,
+            engine_continuation::save_continuation_preferences,
+            batch_analysis::batch_snapshot,
+            batch_analysis::batch_command,
+            batch_analysis::load_batch_preferences,
+            batch_analysis::save_batch_preferences,
+            batch_analysis::pick_batch_files,
+            batch_analysis::pick_batch_directory,
+            batch_analysis::pick_batch_save,
             export::export_selected_line,
             export::export_rendered_image,
             external_sync::external_sync_snapshot,
@@ -1458,6 +1512,8 @@ pub fn run() {
             update_workspace_shares,
             load_engine_profiles_settings,
             save_engine_profiles_settings,
+            engine_thread_policy_status,
+            save_engine_thread_policy,
             reorder_engine_profiles_settings,
             models::model_inventory_snapshot,
             models::refresh_model_inventory,
@@ -1510,6 +1566,7 @@ pub fn run() {
             human_match::human_match_analysis_policy,
             foreground_engine_cancel_game_move,
             foreground_engine_continuous_action,
+            continuous_analysis::cancel_auto_load,
             foreground_engine_cancel_job
         ])
         .build(tauri::generate_context!())
@@ -1558,7 +1615,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn startup_benchmark_save_failure_and_recovery_preserve_game_and_retire_execution() {
+    fn startup_unknown_executable_save_failure_and_recovery_preserve_refusal() {
         struct Catalog(PathBuf);
         impl EngineProfileCatalog for Catalog {
             fn get(&self, id: &str) -> Option<SavedEngineProfile> {
@@ -1570,6 +1627,7 @@ mod tests {
                     .map(|record| SavedEngineProfile {
                         profile_id: record.id,
                         profile: record.profile,
+                        thread_policy: record.thread_policy,
                     })
             }
             fn startup_evaluation_target(&self) -> Result<Option<SavedEngineProfile>, String> {
@@ -1617,21 +1675,28 @@ mod tests {
         manager.apply_startup_evaluation();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            if manager.evaluation_snapshot().phase == app_model::EvaluationPhaseDto::Running {
+            if manager.evaluation_snapshot().phase == app_model::EvaluationPhaseDto::Failed {
                 break;
             }
-            assert!(std::time::Instant::now() < deadline);
+            assert!(
+                std::time::Instant::now() < deadline,
+                "startup evaluation: {:?}",
+                manager.evaluation_snapshot()
+            );
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        let refused = manager.evaluation_snapshot();
+        assert_eq!(refused.message.as_deref(), Some("policy_direct_local_unknown"));
+        assert!(refused.process_id.is_none() && refused.result.is_none());
+        assert!(!directory.join("spawned.json").exists());
+        // Running-child retirement belongs to engine-manager's qualified fixture
+        // tests and the opt-in actual CPU startup-evaluation smoke.
         let bytes = std::fs::read(&path).unwrap();
         let mut invalid = settings.clone();
         invalid.profiles[0].profile.name.clear();
         assert!(save_engine_profiles_at_path(&path, &manager, &settings, invalid).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        assert_eq!(
-            manager.evaluation_snapshot().phase,
-            app_model::EvaluationPhaseDto::Running
-        );
+        assert_eq!(manager.evaluation_snapshot(), refused);
         let mut edited = settings.clone();
         edited.profiles[0].profile.name = "Edited target".into();
         save_engine_profiles_at_path(&path, &manager, &settings, edited).unwrap();
@@ -1841,6 +1906,7 @@ for line in sys.stdin:
                     max_visits: 800,
                 }),
             },
+            thread_policy: Default::default(),
         });
         let manager =
             ForegroundEngineManager::new(catalog, engine_manager::ForegroundEngineConfig::for_tests());

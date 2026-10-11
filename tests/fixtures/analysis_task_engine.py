@@ -22,8 +22,9 @@ def configured_visits(query):
 def frame(query, during=False, visits=None, candidates=None):
     visits = configured_visits(query) if visits is None else visits
     if candidates is None:
-        candidates = [dict(move="D4", order=0, visits=visits, winrate=0.6,
-                           scoreMean=2.5, pv=["D4"])]
+        move = (root / "continuation-move").read_text().strip() if (root / "continuation-move").exists() else "D4"
+        candidates = [] if move == "empty" else [dict(move=move, order=0, visits=visits, winrate=0.6,
+                           scoreMean=2.5, pv=[move])]
     return dict(id=query["id"], turnNumber=0, isDuringSearch=during,
                 rootInfo=dict(visits=visits, winrate=0.6, scoreLead=2.5),
                 moveInfos=candidates)
@@ -80,14 +81,19 @@ def search(query):
     identity = query["id"]
     if ":" in identity:
         (root / "search-started").touch()
-    # One-thread fixtures keep the finite task in the engine queue.
-    while (root / "one-thread").exists() and any(x != identity for x in active):
+    # One analysis thread: queued requests cannot displace an earlier search.
+    predecessors = list(queries)[:list(queries).index(identity)]
+    while (root / "one-thread").exists() and any(x in active for x in predecessors):
         if identity not in active:
             return
         time.sleep(0.01)
     if identity not in active:
         return
     mode = (root / "budget-smoke").read_text().strip() if (root / "budget-smoke").exists() else ""
+    if mode == "engine_error":
+        active.discard(identity)
+        emit(dict(id=identity, error="controlled batch engine rejection"))
+        return
     if mode == "unmarked":
         active.discard(identity)
         emit(invalid_final(query, mode))
@@ -113,8 +119,28 @@ def search(query):
             active.discard(identity)
             emit(frame(query, visits=4))
         return
+    if (root / "auto-recovery").exists() and ":" not in identity and configured_visits(query) == 1:
+        (root / "recovery-started").touch()
+        while not (root / "recovery-release").exists() and identity in active:
+            time.sleep(0.005)
+        if identity in active:
+            active.discard(identity)
+            emit(invalid_final(query, "semantic") if (root / "recovery-fail").exists() else frame(query))
+        return
     if ":" not in identity and "overrideSettings" in query:
+        late = root / "continuation-late"
+        if late.exists():
+            old = late.read_text().strip()
+            if old in queries:
+                emit(frame(queries[old], True))
+                (root / "continuation-late-sent").touch()
         while identity in active:
+            if (root / "fail-handback").exists():
+                emit(invalid_final(query, "semantic"))
+                return
+            if (root / "hold-ordinary").exists():
+                time.sleep(0.005)
+                continue
             emit(frame(query, True))
             time.sleep(query.get("reportDuringSearchEvery", 0.1))
         return
@@ -170,6 +196,8 @@ for line in sys.stdin:
         threading.Thread(target=finish_cancel, args=(query,), daemon=True).start()
     elif first:
         first = False
+        while (root / "hold-ready").exists():
+            time.sleep(0.005)
         emit(frame(query))
     else:
         with (root / "queries.jsonl").open("a") as log:

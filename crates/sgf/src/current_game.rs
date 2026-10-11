@@ -11,6 +11,8 @@ use crate::{
 };
 use go_core::{Board, RuleError};
 
+#[path = "continuation.rs"]
+mod continuation;
 #[path = "point_search.rs"]
 mod point_search;
 
@@ -770,6 +772,15 @@ impl CurrentSgfDocument {
         Ok(snapshots)
     }
 
+    /// Display filling only: retained SGF primary results are not task completion evidence.
+    pub fn missing_primary_mainline_snapshots(
+        &self,
+    ) -> Result<Vec<SelectedNodeSnapshotDto>, CurrentGameError> {
+        let mut snapshots = self.first_child_mainline_snapshots()?;
+        snapshots.retain(|snapshot| snapshot.primary_analysis.is_none());
+        Ok(snapshots)
+    }
+
     pub fn analysis_scope_snapshots(
         &self,
         scope: &app_model::AnalysisScopeDto,
@@ -906,6 +917,21 @@ impl CurrentSgfDocument {
 
     pub fn serialize(&self) -> Result<String, CurrentGameError> {
         Ok(serialize_sgf_document(&self.document)?)
+    }
+
+    /// Generated provenance must not replace the user's personal C property.
+    pub fn mark_batch_output(&mut self, receipt: &str, incomplete: bool) -> Result<(), CurrentGameError> {
+        let root = self.node_mut(&NodePath::default())?;
+        root.properties.retain(|property| property.key != "LZBATCH");
+        root.properties.push(SgfProperty {
+            key: "LZBATCH".into(),
+            values: vec![format!(
+                "{};{}",
+                if incomplete { "incomplete" } else { "complete" },
+                receipt
+            )],
+        });
+        Ok(())
     }
 
     /// Serialize one frozen root-to-leaf route without promoting or copying its siblings.
@@ -3586,6 +3612,8 @@ mod root_result_history {
             score_stdev: None,
             pda: None,
             candidates: vec![CandidateMoveDto {
+                pv_visits: None,
+                ownership: None,
                 vertex: MoveVertex::Pass,
                 visits,
                 winrate_black: 0.55,
@@ -4018,6 +4046,8 @@ mod continuation_staging {
             score_stdev: None,
             pda: None,
             candidates: vec![app_model::CandidateMoveDto {
+                pv_visits: None,
+                ownership: None,
                 vertex: MoveVertex::Pass,
                 visits,
                 winrate_black: 0.5,

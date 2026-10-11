@@ -2,6 +2,9 @@ import type { ProviderRequestIdentity } from "../domain/providers";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { t } from "../i18n/resources";
+import type { SavedThreadPolicyDto } from "../domain/types";
+import type { GameLoadSourceDto } from "../domain/types";
 import type {
   RuntimeThreadsRequestDto,
   RuntimeThreadsSnapshotDto,
@@ -211,12 +214,18 @@ export const nativeCurrentGameUnavailable =
 export async function prepareDocumentReplacement(
   sgfText: string,
   nativePath: string | null,
-  networkIdentity?: ProviderRequestIdentity
+  networkIdentity?: ProviderRequestIdentity,
+  loadSource: GameLoadSourceDto = "excluded",
 ): Promise<DocumentDepartureAdmissionDto> {
   if (!isTauriRuntime()) {
     throw new Error(nativeCurrentGameUnavailable);
   }
-  return invoke<DocumentDepartureAdmissionDto>("prepare_document_replacement", { sgfText, nativePath, networkIdentity: networkIdentity ?? null });
+  return invoke<DocumentDepartureAdmissionDto>("prepare_document_replacement", { sgfText, nativePath, networkIdentity: networkIdentity ?? null, loadSource });
+}
+
+export async function cancelAutoLoad(): Promise<void> {
+  if (!isTauriRuntime()) throw new Error(nativeCurrentGameUnavailable);
+  await invoke("cancel_auto_load");
 }
 
 export async function resolveDocumentReplacement(input: {
@@ -585,10 +594,15 @@ export async function saveEngineProfilesSettings(settings: EngineProfilesSetting
     for (const record of current.profiles) {
       const saved = records.get(record.id);
       if (saved) {
+        saved.thread_policy = record.thread_policy;
+        if (saved.thread_policy && JSON.stringify(saved.profile) !== JSON.stringify(record.profile)) {
+          saved.thread_policy = { ...saved.thread_policy, revision: saved.thread_policy.revision + 1 };
+        }
         retained.push(saved);
         records.delete(record.id);
       }
     }
+    for (const record of records.values()) delete record.thread_policy;
     normalized.profiles = [...retained, ...records.values()];
     saveBrowserEngineProfilesSettings(normalized);
     return normalized;
@@ -878,6 +892,25 @@ function decodeLegacyEngineProfile(value: unknown, maxVisits: unknown): EnginePr
   });
 }
 
+function decodeThreadPolicy(value: unknown): SavedThreadPolicyDto | undefined {
+  if (value === undefined) return undefined;
+  const policy = profileObject(value, t("threadPolicy.title"));
+  const invalid = () => { throw new Error(t("threadPolicy.reason.policy_invalid")); };
+  if (Object.keys(policy).some((key) => !["strategy", "revision", "recommendation"].includes(key))
+    || !["cfg", "benchmark"].includes(String(policy.strategy)) || !Number.isSafeInteger(policy.revision) || Number(policy.revision) < 0) invalid();
+  if (policy.recommendation !== null) {
+    const rec = profileObject(policy.recommendation, t("threadPolicy.source"));
+    for (const key of ["evaluation_id", "target_id", "input_revision", "source_revision", "seconds_per_move", "source_row", "command_revision", "environment"]) {
+      if (typeof rec[key] !== "string") invalid();
+    }
+    if (!Number.isInteger(rec.threads) || Number(rec.threads) < 1 || Number(rec.threads) > 4096 || !Number.isSafeInteger(rec.policy_revision) || Number(rec.policy_revision) < 0) invalid();
+    const resource = profileObject(rec.qualified_resource, t("threadPolicy.source"));
+    if (!Array.isArray(resource.resources) || typeof resource.profile_revision !== "string") invalid();
+  }
+  // Browser preview preserves the wire record but never qualifies or executes it.
+  return policy as SavedThreadPolicyDto;
+}
+
 function decodeEngineProfilesSettings(value: unknown, allowLegacy: boolean): EngineProfilesSettingsDto {
   const input = profileObject(value, "Profile catalog");
   const legacy = !("version" in input);
@@ -894,6 +927,7 @@ function decodeEngineProfilesSettings(value: unknown, allowLegacy: boolean): Eng
     return {
       id: profileString(record.id, "Profile ID", true),
       preload: !legacy && record.preload === true,
+      ...(legacy || record.thread_policy === undefined ? {} : { thread_policy: decodeThreadPolicy(record.thread_policy) }),
       profile: legacy ? decodeLegacyEngineProfile(record.profile, record.max_visits) : decodeEngineProfile(record.profile)
     };
   });

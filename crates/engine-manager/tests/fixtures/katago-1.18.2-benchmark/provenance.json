@@ -1,0 +1,35 @@
+{
+  "kind": "original unredacted process streams",
+  "date": "2026-10-10",
+  "platform": "Linux x86_64 WSL2",
+  "source_base": "0c134317410ca6a43454f506bda82ea00c738689",
+  "argv": [
+    "/mnt/d/dev/weiqi/acceptance/r12-shared-assets-20261008/linux-cpu/katago",
+    "benchmark",
+    "-config",
+    "config.cfg",
+    "-model",
+    "/mnt/d/katago/yzy/weights/kata1-b20c256x2-s5303129600-d1228401921.bin.gz",
+    "-t",
+    "1",
+    "-v",
+    "2",
+    "-n",
+    "1"
+  ],
+  "cwd": "/home/dev/dev/weiqi/worktrees/lizzieyzy-next-tauri/r13-metrics-03-20261010/.scratch/metrics-smoke",
+  "config": "numSearchThreads = 1\nnnMaxBatchSize = 1\nlogToStderr = true\n",
+  "engine_sha256": "20c4ede9f39455ab3c019ada7a22a6e4d7696361161feed5c56f2c42d1507bd0",
+  "model_sha256": "7c8a84ed9ee737e9c7e741a08bf242d63db37b648e7f64942f3a8b1b5101e7c2",
+  "exit_code": 0,
+  "stdout_sha256": "abef339acc0de07e5f47fe75749941ed939331fd55ff2cffc52aaac21b909a35",
+  "stderr_sha256": "2fc893f8788086d91ba6f16c22d87caa0823aafb231601af54ad9b9b267c0e76",
+  "sweep": {
+    "argv_difference": "-t 1,2 -v 4; all other arguments, config, cwd and assets unchanged",
+    "exit_code": 0,
+    "stdout_sha256": "96722b00fc99de4ab0d3b4411824fa67ed14b812cba824450fcc7a2e10755443",
+    "stderr_sha256": "95ea2ffa73c7975bf637be91b58917703f256c3744b59662a911659d419076af"
+  },
+  "consumer_fixture": "variations-result.json is the unmodified result serialized by ForegroundEngineManager from variations.txt in original_protocol_and_variations_publish_independent_frozen_rows. Its evaluation/target/revision/resource identities belong to the controlled process run, not the real engine. Rust asserts production rows match this fixture; EngineEvaluationPanel tests consume it through the API wrapper response.",
+  "variations": "variations.txt is synthetic syntax-preserving test variation of the completed stdout row, not observed unequal engine speeds; omitted fields/invalid values intentionally test unavailable data."
+}

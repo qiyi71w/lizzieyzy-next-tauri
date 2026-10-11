@@ -674,6 +674,7 @@ mod tests {
             profile_snapshot: draft.clone(),
             capability_snapshot: None,
             qualified_resource: None,
+            thread_policy_snapshot: Default::default(),
         };
         let sources =
             configuration.thread_sources(run.adapter_kind, &crate::diagnostics::AttemptCapture::new(&run));

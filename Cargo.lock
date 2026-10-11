@@ -3769,9 +3769,12 @@ dependencies = [
  "app-model",
  "encoding_rs",
  "go-core",
+ "parking_lot",
+ "rustix",
  "serde",
  "thiserror 1.0.69",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

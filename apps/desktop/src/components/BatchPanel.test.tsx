@@ -1,0 +1,143 @@
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { BatchPanel } from "./BatchPanel";
+import { defaultBatchPreferences, validateBatchPreferences } from "../domain/batch";
+import { t } from "../i18n/resources";
+import * as batchApi from "../api/batch";
+import type { BatchRowDto, BatchSnapshotDto } from "../domain/types";
+
+vi.mock("../api/batch", () => ({ batchNativeAvailable: vi.fn(() => false), listenBatchIntake: async () => () => {}, batchCommand: vi.fn(), batchSnapshot: vi.fn(), pickBatchDirectory: vi.fn(), pickBatchFiles: vi.fn(), pickBatchSave: vi.fn(), confirmBatchOverwrite: vi.fn() }));
+vi.mock("../api/preferences", () => ({ loadBatchPreferences: async () => defaultBatchPreferences(), saveBatchPreferences: async (value: unknown) => value }));
+
+beforeEach(() => { globalThis.IS_REACT_ACT_ENVIRONMENT = true; vi.clearAllMocks(); vi.mocked(batchApi.batchNativeAvailable).mockReturnValue(false); });
+
+describe("batch controls", () => {
+  it("renders independent defaults, retains disabled limits, and rejects invalid retained values", () => {
+    const settings = defaultBatchPreferences();
+    expect(settings.normal.total_visits.value).toBe(100);
+    expect(settings.deep.total_visits.value).toBe(800);
+    expect(settings.swingDeep.total_visits).toEqual({ enabled: false, value: 800 });
+    expect(settings.swingDeep.leading_candidate_visits).toEqual({ enabled: false, value: 500 });
+    settings.swingDeep.total_visits.value = 0;
+    expect(() => validateBatchPreferences(settings)).toThrow();
+  });
+  it("keeps browser file actions unavailable and Cancel restores the saved strategy without starting work", async () => {
+    const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+    await act(async () => { root.render(<BatchPanel openRequest={1} />); });
+    const button = (label: string) => Array.from(host.querySelectorAll("button")).find(b => b.textContent === label)!;
+    expect(button(t("batch.add")).disabled).toBe(true);
+    expect(button(t("batch.start")).disabled).toBe(true);
+    const select = host.querySelector("select")!;
+    act(() => { select.value = "swing_selected_two_stage"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(host.textContent).toContain(t("batch.actor"));
+    expect(Array.from(host.querySelectorAll('input[type="number"]')).every(input => input.getAttribute("aria-label"))).toBe(true);
+    act(() => button(t("batch.cancelSettings")).click());
+    expect(select.value).toBe("single_stage");
+    act(() => button(t("batch.hide")).click());
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(button(t("batch.title"))).toBeTruthy();
+    act(() => root.unmount()); host.remove();
+  });
+  it("preserves multiline edits until confirmed intake and retains the draft on cancellation or failure", async () => {
+    vi.mocked(batchApi.batchNativeAvailable).mockReturnValue(true);
+    const empty: BatchSnapshotDto = { batch_id: "batch-a", rows: [], notices: [], started: false, paused: false, reason: null, output_directory: null };
+    vi.mocked(batchApi.batchSnapshot).mockResolvedValue(empty);
+    const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+    await act(async () => { root.render(<BatchPanel openRequest={1} />); });
+    const button = (label: string) => Array.from(host.querySelectorAll("button")).find(b => b.textContent === label)!;
+    const textarea = host.querySelector("textarea")!;
+    const edit = (value: string) => act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, value);
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const first = "C:\\games\\A with spaces.sgf", second = " /games/B.sgf ";
+    try {
+      edit(first);
+      edit(`${textarea.value}\n`);
+      expect(textarea.value).toBe(`${first}\n`);
+      edit(`${textarea.value}\n`);
+      expect(textarea.value).toBe(`${first}\n\n`);
+      edit(`${textarea.value}${second}`);
+      expect(textarea.value).toBe(`${first}\n\n${second}`);
+      expect(batchApi.batchCommand).not.toHaveBeenCalled();
+      vi.mocked(batchApi.pickBatchFiles).mockResolvedValueOnce([]);
+      await act(async () => button(t("batch.add")).click());
+      expect(textarea.value).toBe(`${first}\n\n${second}`);
+      vi.mocked(batchApi.batchCommand).mockRejectedValueOnce(new Error("intake refused"));
+      await act(async () => button(t("batch.confirmIntake")).click());
+      expect(textarea.value).toBe(`${first}\n\n${second}`);
+      expect(host.querySelector('[role="alert"]')?.textContent).toContain("intake refused");
+      const rows: BatchRowDto[] = [first, second].map((source_path, index) => ({ identity: { batch_id: "batch-a", row_id: `row-${index}`, attempt: 1 }, source_path, output_name: `output-${index}.sgf`, state: "pending", conditions: defaultBatchPreferences(), preview: null, task: null, document_id: null, input_receipt: null, calculation_complete: false, has_result: false, output_state: "unsaved", saved_path: null, incomplete: false, reason: null }));
+      const admitted = { ...empty, rows };
+      vi.mocked(batchApi.batchCommand).mockResolvedValueOnce(admitted);
+      vi.mocked(batchApi.batchSnapshot).mockResolvedValue(admitted);
+      await act(async () => button(t("batch.confirmIntake")).click());
+      expect(batchApi.batchCommand).toHaveBeenLastCalledWith({ action: "intake", paths: [first, second], conditions: defaultBatchPreferences() });
+      expect(textarea.value).toBe("");
+      expect(Array.from(host.querySelectorAll("tbody tr"), row => row.querySelector("td")!.firstChild!.textContent)).toEqual([first, second]);
+      expect(button(t("batch.start")).disabled).toBe(true);
+      expect(batchApi.batchCommand).toHaveBeenCalledTimes(2);
+      vi.mocked(batchApi.pickBatchFiles).mockResolvedValueOnce([second, first]);
+      await act(async () => button(t("batch.add")).click());
+      expect(textarea.value).toBe(`${second}\n${first}`);
+      expect(batchApi.batchCommand).toHaveBeenCalledTimes(2);
+    } finally { act(() => root.unmount()); host.remove(); }
+  });
+  it("requires a directory and naming permission before Start and keeps Stop reachable after hiding", async () => {
+    vi.mocked(batchApi.batchNativeAvailable).mockReturnValue(true);
+    const row: BatchRowDto = { identity: { batch_id: "batch-a", row_id: "row-a", attempt: 1 }, source_path: "/source.sgf", output_name: "source_已分析_batch-a_1.sgf", state: "pending", conditions: defaultBatchPreferences(), preview: null, task: null, document_id: null, input_receipt: null, calculation_complete: false, has_result: false, output_state: "unsaved", saved_path: null, incomplete: false, reason: null };
+    const snapshot: BatchSnapshotDto = { batch_id: "batch-a", rows: [row], notices: [], started: false, paused: false, reason: null, output_directory: null };
+    vi.mocked(batchApi.batchSnapshot).mockResolvedValue(snapshot);
+    vi.mocked(batchApi.batchCommand).mockResolvedValue({ ...snapshot, started: true });
+    vi.mocked(batchApi.pickBatchDirectory).mockResolvedValue("/authorized-output");
+    const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+    await act(async () => { root.render(<BatchPanel openRequest={1} />); });
+    const button = (label: string) => Array.from(host.querySelectorAll("button")).find(b => b.textContent === label)!;
+    const checkbox = (label: string) => Array.from(host.querySelectorAll("label")).find(l => l.textContent === label)!.querySelector<HTMLInputElement>("input")!;
+    expect(button(t("batch.start")).disabled).toBe(true);
+    await act(async () => checkbox(t("batch.directory")).click());
+    expect(button(t("batch.start")).disabled).toBe(true);
+    await act(async () => button(t("batch.chooseDirectory")).click());
+    expect(host.textContent).toContain(row.output_name);
+    expect(button(t("batch.start")).disabled).toBe(true);
+    await act(async () => checkbox(t("batch.naming")).click());
+    await act(async () => button(t("batch.start")).click());
+    expect(batchApi.batchCommand).toHaveBeenCalledWith({ action: "start", output: { mode: "directory", path: "/authorized-output", confirmed_names: [row.output_name] } });
+    await act(async () => button(t("batch.hide")).click());
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => button(t("batch.stopAll")).click());
+    expect(batchApi.batchCommand).toHaveBeenLastCalledWith({ action: "stop_all" });
+    act(() => root.unmount()); host.remove();
+  });
+  it("requires target-specific overwrite permission, marks partial Save, and ignores a late pre-Stop receipt", async () => {
+    vi.mocked(batchApi.batchNativeAvailable).mockReturnValue(true);
+    const row: BatchRowDto = { identity: { batch_id: "batch-a", row_id: "row-a", attempt: 1 }, source_path: "/source.sgf", output_name: "partial.sgf", state: "cancelled", conditions: defaultBatchPreferences(), preview: null, task: null, document_id: "private-doc", input_receipt: "snapshot", calculation_complete: false, has_result: true, output_state: "unsaved", saved_path: null, incomplete: true, reason: null };
+    const snapshot: BatchSnapshotDto = { batch_id: "batch-a", rows: [row], notices: [], started: true, paused: true, reason: null, output_directory: null };
+    vi.mocked(batchApi.batchSnapshot).mockResolvedValue(snapshot);
+    vi.mocked(batchApi.pickBatchSave).mockResolvedValue("/chosen.sgf");
+    vi.mocked(batchApi.confirmBatchOverwrite).mockResolvedValue(false);
+    const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+    await act(async () => { root.render(<BatchPanel openRequest={1} />); });
+    const button = (label: string) => Array.from(host.querySelectorAll("button")).find(b => b.textContent === label)!;
+    const overwrite = Array.from(host.querySelectorAll("label")).find(l => l.textContent === t("batch.overwrite"))!.querySelector<HTMLInputElement>("input")!;
+    await act(async () => overwrite.click());
+    await act(async () => button(t("batch.partial")).click());
+    expect(batchApi.confirmBatchOverwrite).toHaveBeenCalledWith("/chosen.sgf");
+    expect(batchApi.batchCommand).not.toHaveBeenCalled();
+    expect(overwrite.checked).toBe(false);
+    let finishSave!: (snapshot: BatchSnapshotDto) => void;
+    vi.mocked(batchApi.batchCommand).mockImplementationOnce(() => new Promise(resolve => { finishSave = resolve; }));
+    await act(async () => button(t("batch.partial")).click());
+    expect(batchApi.batchCommand).toHaveBeenCalledWith({ action: "save", identity: row.identity, path: "/chosen.sgf", overwrite: false, incomplete: true });
+    const stopped = { ...snapshot, reason: "Stop acknowledged; pending cancelled" };
+    vi.mocked(batchApi.batchCommand).mockResolvedValueOnce(stopped);
+    vi.mocked(batchApi.batchSnapshot).mockResolvedValue(stopped);
+    await act(async () => button(t("batch.stopAll")).click());
+    await act(async () => finishSave({ ...snapshot, reason: "obsolete pre-Stop receipt" }));
+    expect(host.textContent).toContain(stopped.reason);
+    expect(host.textContent).not.toContain("obsolete pre-Stop receipt");
+    act(() => root.unmount()); host.remove();
+  });
+});

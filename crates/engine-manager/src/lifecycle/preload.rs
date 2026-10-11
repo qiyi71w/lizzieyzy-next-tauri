@@ -83,9 +83,12 @@ impl ForegroundEngineManager {
             if let Some(operation) = startup_operation {
                 if state.operation != operation
                     || state.startup_preload_operation != Some(operation)
-                    || !self.inner.catalog.preload_profiles().iter().any(|current| {
-                        current.profile_id == saved.profile_id && current.profile == saved.profile
-                    })
+                    || !self
+                        .inner
+                        .catalog
+                        .preload_profiles()
+                        .iter()
+                        .any(|current| current == &saved)
                 {
                     return Err(invalid(profile_id, "Startup preload authorization was retired"));
                 }
@@ -313,18 +316,24 @@ impl ForegroundEngineManager {
             )
         };
         let validate = || {
-            if !self
-                .inner
-                .catalog
-                .preload_profiles()
-                .iter()
-                .any(|saved| saved.profile_id == profile_id && saved.profile == run.profile_snapshot)
-            {
+            if !self.inner.catalog.preload_profiles().iter().any(|saved| {
+                saved.profile_id == profile_id
+                    && saved.profile == run.profile_snapshot
+                    && saved.thread_policy == run.thread_policy_snapshot
+            }) {
                 return Err(invalid(
                     profile_id,
                     "Saved profile or preload opt-in changed; prepare again explicitly",
                 ));
             }
+            let mut spec = build_command_spec(&run.profile_snapshot)
+                .map_err(|_| invalid(profile_id, "policy_resources_unknown"))?;
+            crate::thread_policy::apply(
+                &run,
+                &mut spec,
+                self.inner.config.managed_resources_root.as_deref(),
+            )
+            .map_err(|_| invalid(profile_id, "policy_preparation_changed"))?;
             resources
                 .revalidate(Instant::now() + Duration::from_secs(30), &|| {
                     let state = self.lock();
@@ -367,13 +376,11 @@ impl ForegroundEngineManager {
             }) else {
                 return Err(invalid(profile_id, "Preparation was cancelled during validation"));
             };
-            if !self
-                .inner
-                .catalog
-                .preload_profiles()
-                .iter()
-                .any(|saved| saved.profile_id == profile_id && saved.profile == run.profile_snapshot)
-            {
+            if !self.inner.catalog.preload_profiles().iter().any(|saved| {
+                saved.profile_id == profile_id
+                    && saved.profile == run.profile_snapshot
+                    && saved.thread_policy == run.thread_policy_snapshot
+            }) {
                 return Err(invalid(
                     profile_id,
                     "Saved preparation identity changed before promotion",
@@ -396,7 +403,7 @@ impl ForegroundEngineManager {
             state.switch_seq += 1;
             state.phase = Phase::Switching {
                 primary,
-                candidate: run.clone(),
+                candidate: Box::new(run.clone()),
                 switch_id: state.switch_seq.to_string(),
             };
             publish_snapshot(&mut state);

@@ -23,6 +23,7 @@ impl PkRig {
         self.0.catalog.upsert(SavedEngineProfile {
             profile_id: "gnugo".into(),
             profile: profile.clone(),
+            thread_policy: Default::default(),
         });
         profile
     }

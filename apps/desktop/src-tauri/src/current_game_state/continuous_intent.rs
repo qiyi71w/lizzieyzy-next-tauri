@@ -2,6 +2,15 @@ use super::*;
 use engine_manager::{ForegroundEngineConfig, ForegroundEngineManager, InMemoryEngineProfileCatalog};
 use std::sync::Arc;
 
+#[cfg(unix)]
+#[path = "auto_load_tests.rs"]
+mod auto_load_tests;
+#[cfg(unix)]
+#[path = "batch_tests.rs"]
+mod batch_tests;
+#[cfg(unix)]
+#[path = "continuation_tests.rs"]
+mod continuation_tests;
 #[test]
 fn confirmed_departure_hold_survives_navigation_and_preference_reload() {
     let manager = ForegroundEngineManager::new(
@@ -115,6 +124,7 @@ for line in sys.stdin:
         std::fs::write(directory.join("config"), "").unwrap();
         let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
         catalog.upsert(engine_manager::SavedEngineProfile {
+            thread_policy: Default::default(),
             profile_id: "test".into(),
             profile: app_model::EngineProfileDto {
                 name: "test".into(),
@@ -318,6 +328,7 @@ fn run_invalidation_rejects_already_queued_task_progress() {
             "restart" => engine.manager.restart().unwrap(),
             "switch" => {
                 engine.catalog.upsert(engine_manager::SavedEngineProfile {
+                    thread_policy: Default::default(),
                     profile_id: "replacement".into(),
                     profile: app_model::EngineProfileDto {
                         name: "replacement".into(),

@@ -50,6 +50,12 @@ pub struct AppPreferencesDto {
     pub continuous_analysis_enabled: bool,
     #[serde(flatten)]
     pub continuous_budget: ContinuousAnalysisBudgetDto,
+    #[serde(default)]
+    pub auto_load: app_model::AutoLoadPreferencesDto,
+    #[serde(default)]
+    pub batch: app_model::BatchPreferencesDto,
+    #[serde(default)]
+    pub continuation: app_model::ContinuationPreferencesDto,
     #[serde(default = "default_show_coordinates")]
     pub show_coordinates: bool,
     #[serde(default)]
@@ -62,6 +68,8 @@ pub struct AppPreferencesDto {
     pub show_candidates: bool,
     #[serde(default = "default_candidate_limit")]
     pub candidate_limit: u32,
+    #[serde(default)]
+    pub granular_display: app_model::GranularDisplayDto,
     #[serde(default = "default_max_visits")]
     pub default_max_visits: u32,
     #[serde(default, alias = "taskConditions", skip_serializing_if = "Option::is_none")]
@@ -177,12 +185,16 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         allow_double_click: true,
         continuous_analysis_enabled: default_continuous_analysis_enabled(),
         continuous_budget: ContinuousAnalysisBudgetDto::default(),
+        auto_load: app_model::AutoLoadPreferencesDto::default(),
+        batch: app_model::BatchPreferencesDto::default(),
+        continuation: app_model::ContinuationPreferencesDto::default(),
         show_coordinates: default_show_coordinates(),
         show_move_numbers: false,
         show_ownership: default_show_ownership(),
         show_policy: default_show_policy(),
         show_candidates: default_show_candidates(),
         candidate_limit: default_candidate_limit(),
+        granular_display: app_model::GranularDisplayDto::default(),
         default_max_visits: default_max_visits(),
         task_single_stage_conditions: Some(default_task_single_stage_conditions(default_max_visits())),
         task_overview_conditions: Some(default_task_overview_conditions()),
@@ -279,7 +291,11 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
         Ok(contents) => match serde_json::from_str::<AppPreferencesDto>(&contents) {
             Ok(preferences)
                 if preferences.continuous_budget.validate().is_ok()
+                    && preferences.auto_load.validate().is_ok()
+                    && preferences.batch.validate().is_ok()
+                    && preferences.continuation.validate().is_ok()
                     && preferences.match_defaults.validate().is_ok()
+                    && preferences.granular_display.validate().is_ok()
                     && preferences.network.validate().is_ok()
                     && validate_review_autoplay_interval(preferences.review_autoplay_interval_ms).is_ok() =>
             {
@@ -328,6 +344,7 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
 
 pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPreferencesDto, String> {
     validate_review_autoplay_interval(preferences.review_autoplay_interval_ms)?;
+    preferences.granular_display.validate()?;
     preferences.network.validate()?;
     preferences.match_defaults.validate()?;
     if let Some(shares) = preferences.workspace_shares {
@@ -349,6 +366,9 @@ pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPr
         return Err("Default komi must be finite.".to_string());
     }
     preferences.continuous_budget.validate()?;
+    preferences.auto_load.validate()?;
+    preferences.batch.validate()?;
+    preferences.continuation.validate()?;
     let single_stage = preferences
         .task_single_stage_conditions
         .as_ref()
@@ -642,6 +662,7 @@ mod tests {
 
     fn sample_preferences() -> AppPreferencesDto {
         AppPreferencesDto {
+            granular_display: app_model::GranularDisplayDto::default(),
             network: app_model::NetworkSettingsDto::default(),
             yike_locator: None,
             yike_sync: app_model::YikeSyncPreferencesDto::default(),
@@ -667,6 +688,9 @@ mod tests {
                 continuous_visits_limit: 123,
                 continuous_stop_on_empty_board: true,
             },
+            auto_load: app_model::AutoLoadPreferencesDto::default(),
+            batch: app_model::BatchPreferencesDto::default(),
+            continuation: app_model::ContinuationPreferencesDto::default(),
             show_coordinates: false,
             show_move_numbers: true,
             show_ownership: false,
@@ -1001,6 +1025,42 @@ mod tests {
             assert_eq!(load_from_path(&path).unwrap().preferences, original);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn continuation_pair_roundtrips_and_invalid_or_failed_save_preserves_both_fields() {
+        let (dir, path) = temp_prefs();
+        let mut settings = sample_preferences();
+        settings.continuation = app_model::ContinuationPreferencesDto {
+            mode: app_model::ContinuationModeDto::EveryBeat,
+            interval_seconds: 0.8,
+        };
+        let original = save_to_path(&path, settings).unwrap();
+        assert_eq!(load_from_path(&path).unwrap().preferences, original);
+        for interval in [1.001, 1.005, 2147483.647] {
+            let mut fractional = original.clone();
+            fractional.continuation.interval_seconds = interval;
+            let saved = save_to_path(&path, fractional.clone()).unwrap();
+            assert_eq!(saved, fractional);
+            assert_eq!(load_from_path(&path).unwrap().preferences, fractional);
+        }
+        save_to_path(&path, original.clone()).unwrap();
+        for interval in [0.0, -1.0, f64::NAN, f64::INFINITY, 0.0001, 1.0011, 2147483.648] {
+            let mut invalid = original.clone();
+            invalid.continuation.mode = app_model::ContinuationModeDto::LeafOnly;
+            invalid.continuation.interval_seconds = interval;
+            assert!(save_to_path(&path, invalid).is_err());
+            assert_eq!(load_from_path(&path).unwrap().preferences, original);
+        }
+        let replacement = serde_json::to_string(&sample_preferences()).unwrap();
+        assert!(
+            atomic_replace_file_with(&path, &replacement, |_, _| Err(io::Error::other(
+                "continuation replace failure"
+            )))
+            .is_err()
+        );
+        assert_eq!(load_from_path(&path).unwrap().preferences, original);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -3,6 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as PreferencesModule from "./api/preferences";
 import type { AnalysisFrameDto, CurrentGameResultDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
 import { defaultAppPreferences } from "./domain/preferences";
 
@@ -88,7 +89,8 @@ vi.mock("./api/match", () => ({ nativeMatchUnavailable: "Desktop only", humanMat
   humanMatchSnapshot: async () => ({ current: null, match_state: { revision: 0, mode: "human", pk_runs: null, committed_moves: 0, pause_pending: false, rebuild_sides: [], resume_pending: false, phase: "idle", session_id: null, turn: 0, to_play: null, settings: null, run_id: null, job: null, end: null, failure: null, failed_side: null, resources_held: false, committed: false } })
 }));
 
-vi.mock("./api/preferences", () => ({
+vi.mock("./api/preferences", async importOriginal => ({
+  ...await importOriginal<typeof PreferencesModule>(),
   loadAppPreferences: vi.fn(() => Promise.reject(new Error("preferences unavailable in test"))),
   updateWorkspaceShares: vi.fn(async () => undefined),
   saveAppPreferences: vi.fn()

@@ -17,7 +17,7 @@ pub use current_game::{
 };
 pub use exact_position::ExactPosition;
 pub use gib::{import_gib, GibError};
-pub use save::{save_document_atomic, write_file_atomic};
+pub use save::{save_document_atomic, save_document_authorized, write_file_atomic};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SgfDocument {
     pub board_width: u8,

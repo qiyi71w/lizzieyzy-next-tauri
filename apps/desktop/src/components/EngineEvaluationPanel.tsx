@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { cancelEngineEvaluation, getEngineEvaluation, isTauriRuntime, startEngineEvaluation } from "../api/backend";
 import type { EngineProfileRecordDto, EvaluationSnapshotDto } from "../domain/types";
 import { t } from "../i18n/resources";
+import { EngineThreadPolicyPanel, threadPolicyMessage } from "./EngineThreadPolicyPanel";
 
-type Props = { profiles: EngineProfileRecordDto[]; disabled: boolean };
+type Props = { profiles: EngineProfileRecordDto[]; disabled: boolean; onProfilesSaved?: (profiles: EngineProfileRecordDto[]) => void; onPolicyBusyChange?: (busy: boolean) => void };
 
-export function EngineEvaluationPanel({ profiles, disabled }: Props) {
+export function EngineEvaluationPanel({ profiles, disabled, onProfilesSaved, onPolicyBusyChange }: Props) {
   const [target, setTarget] = useState("");
   const [snapshot, setSnapshot] = useState<EvaluationSnapshotDto | null>(null);
   const [pending, setPending] = useState(false);
@@ -81,14 +82,15 @@ export function EngineEvaluationPanel({ profiles, disabled }: Props) {
     }
   }
 
-  const result = snapshot?.result;
+  const result = snapshot?.phase === "completed" ? snapshot.result : null;
+  const policyRecord = profiles.find((record) => record.id === target);
   return <section aria-label={t("evaluation.title")} style={{ overflowWrap: "anywhere" }}>
     <h3>{t("evaluation.title")}</h3>
     <p className="message">{t("evaluation.hint")}</p>
     {!native && <p role="status">{t("evaluation.native")}</p>}
     <div className="engine-run-row">
       <label>{t("evaluation.target")}
-        <select value={target} disabled={pending} onChange={(event) => setTarget(event.target.value)}>
+        <select value={target} disabled={pending || disabled} onChange={(event) => setTarget(event.target.value)}>
           <option value="">—</option>
           {profiles.map((record) => <option key={record.id} value={record.id}>{record.profile.name} ({record.id})</option>)}
         </select>
@@ -99,16 +101,38 @@ export function EngineEvaluationPanel({ profiles, disabled }: Props) {
     <p role="status">{t(`evaluation.${snapshot?.phase ?? "idle"}`)}</p>
     {error && <p role="alert">{error}</p>}
     {snapshot?.target_id && <p>{snapshot.target_id} · {snapshot.input_revision}</p>}
-    {snapshot?.message && <p>{snapshot.message}</p>}
+    {snapshot?.message && <p>{threadPolicyMessage(snapshot.message)}</p>}
     {snapshot && <p>{t("evaluation.exit")}: {snapshot.exit_code ?? "—"}</p>}
-    {result && <dl>
-      <dt>{t("evaluation.speed")}</dt><dd>{result.search_visits_per_second ?? t("evaluation.unavailable")}</dd>
-      <dt>{t("evaluation.elapsed")}</dt><dd>{result.elapsed_ms}</dd>
-      <dt>{t("engineResource.version")}</dt><dd>{result.qualified_resource.version ?? "—"}</dd>
-      {result.qualified_resource.resources.map((resource, index) => <div key={index}>
-        <dt>{resource.component}</dt><dd>{resource.sha256} · {resource.bytes} bytes</dd>
-      </div>)}
-    </dl>}
+    {result && <>
+      <dl>
+        <dt>{t("evaluation.identity")}</dt><dd>{result.evaluation_id} · {result.target_id} · {result.input_revision}</dd>
+        <dt>{t("evaluation.elapsed")}</dt><dd>{result.elapsed_ms}</dd>
+        <dt>{t("engineResource.version")}</dt><dd>{result.qualified_resource.version ?? t("engineResource.unknown")}</dd>
+        <dt>{t("engineResource.backend")}</dt><dd>{result.qualified_resource.backend ?? t("engineResource.unknown")}</dd>
+        {result.qualified_resource.resources.map((resource, index) => <div key={index}>
+          <dt>{resource.component}</dt><dd>{resource.sha256} · {resource.bytes} bytes</dd>
+        </div>)}
+      </dl>
+      <div tabIndex={0} role="region" aria-label={t("evaluation.measurements")} style={{ overflowX: "auto" }}>
+        <table>
+          <caption>{t("evaluation.measurements")}</caption>
+          <thead><tr>
+            <th scope="col">{t("evaluation.threads")}</th>
+            <th scope="col">{t("evaluation.nnSpeed")}</th>
+            <th scope="col">{t("evaluation.speed")}</th>
+          </tr></thead>
+          <tbody>{result.measurements.map((row, index) => <tr key={index}>
+            <th scope="row">{row.measured_threads}</th>
+            <td>{row.nn_evals_per_second ?? t("evaluation.unavailable")}</td>
+            <td>{row.search_visits_per_second ?? t("evaluation.unavailable")}</td>
+          </tr>)}</tbody>
+        </table>
+      </div>
+    </>}
+    {policyRecord && <EngineThreadPolicyPanel key={policyRecord.id} record={policyRecord}
+      evaluationId={result?.target_id === policyRecord.id ? result.evaluation_id : null}
+      disabled={disabled || pending || snapshot?.phase === "running" || snapshot?.phase === "qualifying"}
+      onSaved={onProfilesSaved} onBusyChange={onPolicyBusyChange} />}
     {Boolean(snapshot?.output.length) && <details open>
       <summary>{t("evaluation.output")}</summary>
       <pre tabIndex={0} style={{ maxHeight: "12rem", overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{snapshot?.output.join("\n")}</pre>
@@ -118,6 +142,5 @@ export function EngineEvaluationPanel({ profiles, disabled }: Props) {
 }
 
 function message(error: unknown): string {
-  if (error && typeof error === "object" && "message" in error) return String(error.message);
-  return String(error);
+  return threadPolicyMessage(error);
 }

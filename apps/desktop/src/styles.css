@@ -177,7 +177,6 @@ button[aria-pressed="true"] {
   gap: 8px;
   font-size: 11px;
 }
-.workspace-visibility-controls:has(.human-match-status) { flex-wrap: wrap; }
 .human-match-status {
   display: flex;
   flex: 1 0 100%;
@@ -485,6 +484,7 @@ button[aria-pressed="true"] {
 
 .workspace-visibility-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: 3px 10px;
@@ -960,7 +960,7 @@ button[aria-pressed="true"] {
   display: flex;
   flex-direction: column;
   flex: 1;
-  min-height: 0;
+  min-height: 7rem;
   overflow: hidden;
 }
 
@@ -970,6 +970,7 @@ button[aria-pressed="true"] {
   align-items: center;
   padding: 0 10px;
   height: 28px;
+  flex-shrink: 0;
   background: var(--chrome);
   border-bottom: 1px solid var(--line);
   font-size: 12px;
@@ -979,7 +980,15 @@ button[aria-pressed="true"] {
 
 .table-wrapper {
   flex: 1;
-  overflow-y: auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  scrollbar-gutter: stable;
+}
+
+.candidate-table th, .candidate-table td {
+  white-space: nowrap;
 }
 
 .candidate-table {
@@ -999,6 +1008,7 @@ button[aria-pressed="true"] {
   top: 0;
   border-bottom: 1px solid var(--line);
   font-size: 11px;
+  z-index: 1;
 }
 
 .candidate-table td {
@@ -1013,6 +1023,16 @@ button[aria-pressed="true"] {
   background: var(--accent-weak) !important;
   color: var(--accent) !important;
   font-weight: 600;
+}
+
+.table-wrapper:focus-visible .cand-row.is-focused {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.candidate-empty {
+  padding: 12px 10px;
+  margin: 0;
 }
 
 .rank-badge {
@@ -1182,6 +1202,12 @@ button[aria-pressed="true"] {
   gap: 6px;
 }
 
+.analysis-task-panel .sgf-tools[hidden] { display: none; }
+
+.analysis-task-heading:has(+ :not([hidden])) {
+  margin-bottom: 6px;
+}
+
 .analysis-task-panel .document-row {
   justify-content: flex-start;
   align-items: center;
@@ -1272,6 +1298,20 @@ textarea {
   display: grid;
   gap: 8px;
   min-width: 0;
+}
+
+.preferences-panel {
+  max-width: calc(100vw - 40px);
+}
+
+.granular-display-preferences > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .granular-display-preferences { grid-template-columns: minmax(0, 1fr); }
 }
 
 .managed-resources {

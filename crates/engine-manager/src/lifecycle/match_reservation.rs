@@ -242,6 +242,7 @@ impl ForegroundEngineManager {
     pub fn reserve_match(&self, owner: &str) -> Result<(), EngineFailureDto> {
         let mut state = self.lock();
         require_unreserved(&state)?;
+        super::batch::admit(&state, None)?;
         game_move::require_idle_move(&state)?;
         super::runtime_control::require_idle(&state)?;
         if owner.is_empty()
@@ -256,6 +257,7 @@ impl ForegroundEngineManager {
                 "Match reservation requires a nonempty session and a stable Ready or unloaded foreground.",
             ));
         }
+        super::continuation::invalidate(&mut state, "Match reserved foreground ownership.");
         evaluation::yield_to_foreground(&mut state)?;
         self.yield_preloads_locked(&mut state);
         state.match_reservation = Some(MatchReservation {
@@ -775,6 +777,7 @@ impl ForegroundEngineManager {
                             profile_id: old.profile_id.clone(),
                             adapter_kind: old.adapter_kind,
                             profile_snapshot: old.profile_snapshot.clone(),
+                            thread_policy_snapshot: old.thread_policy_snapshot.clone(),
                             capability_snapshot: None,
                             qualified_resource: None,
                         },

@@ -3,6 +3,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
+mod display;
+pub use display::*;
+
 mod workspace;
 pub use workspace::WorkspaceSharesDto;
 mod window_geometry;
@@ -10,6 +13,12 @@ pub use window_geometry::{WindowGeometryDto, WindowGeometryStatusDto};
 
 mod analysis_task;
 pub use analysis_task::*;
+mod auto_load;
+pub use auto_load::*;
+mod batch;
+pub use batch::*;
+mod continuation;
+pub use continuation::*;
 mod game_move;
 pub use game_move::*;
 mod match_session;
@@ -418,6 +427,10 @@ pub struct CandidateMoveDto {
     pub score_mean_black: Option<f32>,
     pub policy_prior: Option<f32>,
     pub pv: Vec<MoveVertex>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pv_visits: Option<Vec<u32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ownership: Option<Vec<f32>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -810,6 +823,8 @@ pub struct EngineRunDto {
     pub profile_id: String,
     pub adapter_kind: EngineBackend,
     pub profile_snapshot: EngineProfileDto,
+    #[serde(default)]
+    pub thread_policy_snapshot: SavedThreadPolicyDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability_snapshot: Option<EngineCapabilitySnapshotDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -880,6 +895,10 @@ pub struct ForegroundEngineSnapshotDto {
     pub lifecycle: ForegroundEngineLifecycleDto,
     #[serde(default)]
     pub continuous: ContinuousAnalysisSnapshotDto,
+    #[serde(default)]
+    pub auto_load: AutoLoadSnapshotDto,
+    #[serde(default)]
+    pub auto_load_recovery: Option<AutoLoadRecoveryPhaseDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_node_job: Option<AnalysisJobStartedDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -894,6 +913,8 @@ impl ForegroundEngineSnapshotDto {
             revision,
             lifecycle,
             continuous: ContinuousAnalysisSnapshotDto::default(),
+            auto_load: AutoLoadSnapshotDto::default(),
+            auto_load_recovery: None,
             selected_node_job: None,
             whole_game_job: None,
             game_move_job: None,
@@ -916,7 +937,7 @@ pub enum ForegroundEngineLifecycleDto {
     },
     Switching {
         primary: EngineRunDto,
-        candidate: EngineRunDto,
+        candidate: Box<EngineRunDto>,
         switch_id: String,
     },
     Stopping {
@@ -1430,6 +1451,8 @@ mod foreground_engine_wire {
     fn foreground_engine_snapshot_and_failure_keep_snake_case_identities() {
         let snapshot = ForegroundEngineSnapshotDto {
             revision: 4,
+            auto_load: Default::default(),
+            auto_load_recovery: None,
             continuous: ContinuousAnalysisSnapshotDto::default(),
             game_move_job: None,
             lifecycle: ForegroundEngineLifecycleDto::Ready {
@@ -1438,6 +1461,7 @@ mod foreground_engine_wire {
                     profile_id: "profile-1".into(),
                     adapter_kind: EngineBackend::KataGoAnalysis,
                     profile_snapshot: sample_profile(),
+                    thread_policy_snapshot: Default::default(),
                     qualified_resource: Some(Arc::new(QualifiedLocalResourceDto {
                         profile_revision: "resource-revision".into(),
                         resources: vec![],
@@ -1553,17 +1577,20 @@ mod foreground_engine_wire {
             profile_snapshot: sample_profile(),
             capability_snapshot: None,
             qualified_resource: None,
+            thread_policy_snapshot: Default::default(),
         };
         let snapshot = ForegroundEngineSnapshotDto {
             revision: 1,
+            auto_load: Default::default(),
+            auto_load_recovery: None,
             continuous: ContinuousAnalysisSnapshotDto::default(),
             game_move_job: None,
             lifecycle: ForegroundEngineLifecycleDto::Switching {
                 primary: run.clone(),
-                candidate: EngineRunDto {
+                candidate: Box::new(EngineRunDto {
                     run_id: "run-c".into(),
                     ..run
-                },
+                }),
                 switch_id: "switch-1".into(),
             },
             selected_node_job: None,
@@ -1582,6 +1609,8 @@ mod foreground_engine_wire {
     fn no_engine_omits_clean_failure_and_keeps_attempt_scoped_payload() {
         let clean = ForegroundEngineSnapshotDto {
             revision: 1,
+            auto_load: Default::default(),
+            auto_load_recovery: None,
             continuous: ContinuousAnalysisSnapshotDto::default(),
             game_move_job: None,
             lifecycle: ForegroundEngineLifecycleDto::NoEngine { failure: None },
@@ -1609,6 +1638,8 @@ mod foreground_engine_wire {
         };
         let failed = ForegroundEngineSnapshotDto {
             revision: 3,
+            auto_load: Default::default(),
+            auto_load_recovery: None,
             continuous: ContinuousAnalysisSnapshotDto::default(),
             game_move_job: None,
             lifecycle: ForegroundEngineLifecycleDto::NoEngine {

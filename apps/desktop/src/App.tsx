@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { GameLoadSourceDto } from "./domain/types";
+import { cancelAutoLoad } from "./api/backend";
 import { Workspace } from "./workspace/Workspace";
 import { useWorkspace } from "./workspace/useWorkspace";
 import { useReviewAutoplay } from "./hooks/useReviewAutoplay";
@@ -26,6 +28,9 @@ import { AboutDialog } from "./components/AboutDialog";
 import { ApplicationTeardownDialog } from "./components/ApplicationTeardownDialog";
 import { CurrentGameRecoveryDialog } from "./components/CurrentGameRecoveryDialog";
 import { AnalysisTaskPanel, type AnalysisScopeDraft } from "./components/AnalysisTaskPanel";
+import { BatchPanel } from "./components/BatchPanel";
+import { ContinuationPanel } from "./components/ContinuationPanel";
+import { confirmBatchExit } from "./api/batch";
 import { ProviderPanel } from "./components/ProviderPanel";
 import { YikeSyncPanel } from "./components/YikeSyncPanel";
 import { ReadboardSyncPanel } from "./components/ReadboardSyncPanel";
@@ -123,9 +128,10 @@ import {
   shouldAcceptFailureEvent
 } from "./domain/foregroundEngine";
 import { loadAppPreferences, saveAppPreferences, updateRecentGameHistory, updateWorkspaceVisibility } from "./api/preferences";
+import { useCandidateVisibility } from "./hooks/useCandidateVisibility";
 import { flushWindowGeometry, freezeWindowGeometry, nativeWindowGeometryUnavailable, resetWindowGeometry, retryWindowGeometry, subscribeWindowGeometryStatus, windowGeometryStatus } from "./api/windowGeometry";
 import { useMainWindowPin } from "./hooks/useMainWindowPin";
-import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition } from "./domain/board";
+import { clampMoveNumberToPositions, createDemoGame, replayGamePositions, selectExactPosition, vertexKey } from "./domain/board";
 import { continuousBudgetError, defaultAppPreferences, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "./domain/preferences";
 import { buildNextMoveReviewMarkers, cycleNextMoveReviewMarker } from "./domain/nextMoveReviewMarker";
 import { admitsChartSeriesChange, buildWinrateChartModel, displayedWinrate } from "./domain/winrateChart";
@@ -162,8 +168,9 @@ type PendingPreferencesSave = {
   onSaved?: (preferences: AppPreferences) => void;
   onFailed?: (error: unknown) => void;
 };
-type CandidatePreview = { index: number; scope: ReviewPresentationScope; matchFrameIdentity: string | null };
+type CandidatePreview = { vertex: string; identity: string };
 type ReplacementOptions = {
+  loadSource: GameLoadSourceDto;
   networkIdentity?: ProviderRequestIdentity;
   confirmMessage: string;
   fallbackName?: string | null;
@@ -206,6 +213,7 @@ const defaultAnalysisScopeDraft: AnalysisScopeDraft = {
 
 
 export function App() {
+  const [batchOpenRequest, setBatchOpenRequest] = useState(0);
   const mainboardSurfaceRef = useRef<HTMLCanvasElement | null>(null);
   const exportPendingRef = useRef(false);
   const [health, setHealth] = useState<AppHealthDto | null>(null);
@@ -254,7 +262,7 @@ export function App() {
   const [analysisTask, setAnalysisTask] = useState<AnalysisTaskDto | null>(null);
   const [analysisTaskError, setAnalysisTaskError] = useState<string | null>(null);
   const [analysisTaskRequestPending, setAnalysisTaskRequestPending] = useState(false);
-  const [selectedCandidateIndex, setSelectedCandidateIndex] = useState<number | null>(null);
+  const [selectedCandidate, setSelectedCandidate] = useState<CandidatePreview | null>(null);
   const [candidatePreview, setCandidatePreview] = useState<CandidatePreview | null>(null);
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
   const [fallbackFileName, setFallbackFileName] = useState<string | null>(null);
@@ -331,8 +339,9 @@ export function App() {
   const continuousEngineReady = !matchBlocked && admitsForegroundEngineQuery(engineSnapshot, "continuous_analysis")
     && (!preferences.continuousVisitsLimitEnabled || admitsForegroundEngineJobs(engineSnapshot, "visits_limit"));
   const { showCoordinates, showMoveNumbers } = preferences;
-  const [showBlackCandidates, setShowBlackCandidates] = useState(true);
-  const [showWhiteCandidates, setShowWhiteCandidates] = useState(true);
+  const { showBlackCandidates, showWhiteCandidates } = preferences.granularDisplay;
+  function setShowBlackCandidates(value: boolean) { handlePreferencesChange({ ...preferences, granularDisplay: { ...preferences.granularDisplay, showBlackCandidates: value } }); }
+  function setShowWhiteCandidates(value: boolean) { handlePreferencesChange({ ...preferences, granularDisplay: { ...preferences.granularDisplay, showWhiteCandidates: value } }); }
   const [railVisibilityBusy, setRailVisibilityBusy] = useState(false);
   const railVisibilityBusyRef = useRef(false);
   const r7WritesRef = useRef(new Set<Promise<unknown>>());
@@ -560,6 +569,7 @@ export function App() {
           }
         }
         await applyReplacement(demoSgf, null, {
+          loadSource: "excluded",
           confirmMessage: "放弃未保存的棋谱并载入示例？",
           fallbackName: "sample.sgf",
           successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
@@ -633,19 +643,26 @@ export function App() {
     : null;
   const presentationFrame = matchBlocked ? matchFrame : currentFrame;
   const visibleCurrentFrame = useMemo(() => applyPreferencesToFrame(presentationFrame, preferences), [presentationFrame, preferences]);
+  const candidateIdentity = JSON.stringify([activeScope, matchFrameIdentity, presentationFrame?.job_id, currentPosition.move_number]);
+  const candidateIndex = (candidate: CandidatePreview | null, eligible: boolean): number | null => {
+    if (!candidate || candidate.identity !== candidateIdentity || !eligible) return null;
+    const index = visibleCurrentFrame?.candidates.findIndex((item) => vertexKey(item.vertex) === candidate.vertex) ?? -1;
+    return index < 0 ? null : index;
+  };
+  const candidateSelectionEligible = preferences.showCandidates && Boolean(visibleCurrentFrame?.candidates.length)
+    && (currentPosition.to_play === "black" ? showBlackCandidates : showWhiteCandidates);
+  const candidatesEligible = candidateSelectionEligible && overlayMode === "candidates";
+  const candidateVisibility = useCandidateVisibility(
+    candidateIdentity,
+    candidatesEligible, preferences.granularDisplay);
+  const hideCandidates = !candidateVisibility.visible;
+  // Heatmap suppression does not retire the selected ownership target.
+  const selectedCandidateIndex = candidateIndex(selectedCandidate, candidateSelectionEligible && (overlayMode !== "candidates" || !hideCandidates));
+  const previewCandidateIndex = candidateIndex(candidatePreview, !hideCandidates);
   useEffect(() => {
-    setSelectedCandidateIndex(null);
-    setCandidatePreview(null);
-    setReplayProgress({ identity: "", prefix: 0 });
-  }, [matchFrameIdentity]);
-  const previewCandidateIndex = candidatePreview
-    && candidatePreview.matchFrameIdentity === matchFrameIdentity
-    && (matchBlocked ? Boolean(matchFrame) : presentationLive)
-    && shouldPublishReviewPresentation(activeScope, candidatePreview.scope)
-    ? candidatePreview.index
-    : null;
-  const hideCandidates = !matchBlocked && ((currentPosition.to_play === "black" && !showBlackCandidates)
-    || (currentPosition.to_play === "white" && !showWhiteCandidates));
+    if (selectedCandidate && selectedCandidateIndex === null) setSelectedCandidate(null);
+    if (candidatePreview && previewCandidateIndex === null) setCandidatePreview(null);
+  }, [selectedCandidate, selectedCandidateIndex, candidatePreview, previewCandidateIndex]);
   const activeCandidateIndex = previewCandidateIndex ?? selectedCandidateIndex ?? 0;
   const activeCandidate = visibleCurrentFrame?.candidates[activeCandidateIndex]
     ?? visibleCurrentFrame?.candidates[0]
@@ -658,7 +675,7 @@ export function App() {
   const replayArmed = preferences.variationReplayEnabled && replaySteps.length > 0;
   const replayEligible = replayArmed && (
     (preferences.showCandidates && overlayMode === "candidates" && !hideCandidates)
-    || (preferences.showCandidates && preferences.subBoardContentMode === "variation" && preferences.workspaceVisibility.right)
+    || (preferences.showCandidates && !hideCandidates && preferences.subBoardContentMode === "variation" && preferences.workspaceVisibility.right)
   );
   const replayPrefix = replayArmed
     ? (replayProgress.identity !== replayIdentityKeyValue ? 1 : Math.max(replayProgress.prefix, 1))
@@ -757,6 +774,12 @@ export function App() {
     if (departurePending || departurePrompt || continuousPhase === "departing" || continuousPhase === "stopping") {
       return { label: CONTINUOUS_ANALYSIS_STOP_LABEL, disabled: true, title: "正在等待离开或分析取消完成。", status: continuousPhaseStatus(continuousPhase) };
     }
+    if (engineSnapshot.auto_load?.phase === "waiting" || engineSnapshot.auto_load?.phase === "running") {
+      return { label: CONTINUOUS_ANALYSIS_STOP_LABEL, disabled: continuousActionPending, status: t(`autoLoad.${engineSnapshot.auto_load.phase}`) };
+    }
+    if (engineSnapshot.auto_load_recovery && engineSnapshot.auto_load_recovery !== "confirmed") {
+      return { label: CONTINUOUS_ANALYSIS_RESUME_LABEL, disabled: true, status: t(`autoLoad.recovery.${engineSnapshot.auto_load_recovery}`) };
+    }
     if (engineSnapshot.lifecycle.state === "error") {
       return { label: CONTINUOUS_ANALYSIS_RESUME_LABEL, disabled: true, title: "前台引擎运行失败；请先显式重启引擎。", status: "连续分析：引擎失败" };
     }
@@ -804,11 +827,10 @@ export function App() {
     setSelectedCandidateIndex(null);
   }, [currentMove]);
 
-  useEffect(() => {
-    if (!preferences.showCandidates || (selectedCandidateIndex !== null && selectedCandidateIndex >= preferences.candidateLimit)) {
-      setSelectedCandidateIndex(null);
-    }
-  }, [preferences.showCandidates, preferences.candidateLimit, selectedCandidateIndex]);
+  function setSelectedCandidateIndex(index: number | null) {
+    const candidate = index === null || hideCandidates ? null : visibleCurrentFrame?.candidates[index];
+    setSelectedCandidate(candidate ? { vertex: vertexKey(candidate.vertex), identity: candidateIdentity } : null);
+  }
 
   useEffect(() => {
     const openEnabled = nativeRuntime && !historyActionBlocked;
@@ -919,14 +941,16 @@ export function App() {
     });
     shortcutRegistry.bind("review.select-candidate", (event) => {
       const index = Number(event.key) - 1;
-      if (visibleCurrentFrame?.candidates[index]) setSelectedCandidateIndex(index);
+      if (visibleCurrentFrame?.candidates[index]) selectCandidate(index);
     });
     shortcutRegistry.bind("view.coordinates", () => {
+      // Coordinate visibility remains a persisted preference, unlike candidate reveal.
       handlePreferencesChange({ ...preferences, showCoordinates: !preferences.showCoordinates });
     });
     shortcutRegistry.bind("view.move-numbers", () => {
       handlePreferencesChange({ ...preferences, showMoveNumbers: !preferences.showMoveNumbers });
     });
+    shortcutRegistry.bind("view.candidates", candidateVisibility.toggle);
     shortcutRegistry.bind("view.policy", () => {
       void handlePreferencesChange({ ...preferences, showPolicy: !preferences.showPolicy });
     });
@@ -982,6 +1006,10 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [
+    candidateVisibility.visible,
+    candidateVisibility.eligible,
+    activeScope,
+    presentationFrame?.job_id,
     matchBlocked,
     matchDialogOpen,
     humanTurn,
@@ -1119,7 +1147,7 @@ export function App() {
     if (id === "edit.redo") return editReason ?? (!canRedo ? "reason.noRedo" : undefined);
     if (id.startsWith("markup.")) return editReason;
     if (id === "analysis.continuous") return continuousAnalysisAction.disabled ? (!continuousEngineReady ? "reason.engine" : "reason.busy") : undefined;
-    if (id.startsWith("analysis.")) return documentReason ?? (!taskEngineReady ? "reason.engine" : wholeGameRunning ? "reason.busy" : undefined);
+    if (id.startsWith("analysis.")) return documentReason ?? (!taskEngineReady ? "reason.engine" : wholeGameRunning && explicitTaskReserved() ? "reason.busy" : undefined);
     if (id === "review.try-play") return documentReason ?? (trialPending || scoring || scoringPending ? "reason.trial" : undefined);
     if (id === "review.scoring") return editReason;
     if (id === "review.pass") return humanTurn ? undefined : documentReason;
@@ -1760,6 +1788,22 @@ export function App() {
     }
   }
 
+  function adoptContinuationGame(result: CurrentGameResultDto) {
+    // Navigation owns the cursor from dispatch, before its newer snapshot arrives.
+    if (navigatingRef.current) return;
+    const previous = currentGameRef.current;
+    if (!previous || result.generation < previous.generation
+      || (result.generation === previous.generation && result.snapshot_seq < previous.snapshot_seq)) return;
+    const moved = result.generation !== previous.generation || !samePath(result.selected_path, previous.selected_path);
+    if (moved) { beginReviewRequest(); clearReviewData(); }
+    adoptCurrentGame(result);
+    pendingSelectedPathRef.current = result.selected_path;
+    setChosenChildren(value => rememberChosenChildren(value, result.selected_path));
+    setDirty(result.dirty);
+    setCurrentMove(result.snapshot.position.move_number);
+    if (moved) soundAcceptedMove(previous.snapshot, result.snapshot);
+  }
+
   function adoptTrial(next: TrialSessionDto) {
     if (trialRef.current?.session_id !== next.session_id || trialRef.current.revision <= next.revision) {
       trialRef.current = next;
@@ -1960,8 +2004,6 @@ export function App() {
     setPublishedScope(captured);
     setFrames(nextFrames);
     setProblems(nextProblems);
-    setSelectedCandidateIndex(null);
-    setCandidatePreview(null);
     return true;
   }
 
@@ -2186,6 +2228,7 @@ export function App() {
       }
       await enterFileFlow();
       enteredFileFlow = true;
+      if (!await confirmBatchExit()) return;
       if (!await flushWorkspaceBeforeDeparture()) return;
       workspace.owner.freeze(true);
       windowFreezeAttempted = true;
@@ -2395,6 +2438,7 @@ export function App() {
       await activationHandlerRef.current(pending);
     } else {
       await applyReplacement(demoSgf, null, {
+        loadSource: "excluded",
         confirmMessage: "放弃未保存的棋谱并载入示例？",
         fallbackName: "sample.sgf",
         successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
@@ -2486,7 +2530,7 @@ export function App() {
     await enterFileFlow();
 
     try {
-      const admission = await prepareDocumentReplacement(sgfInput, nativePath, options.networkIdentity);
+      const admission = await prepareDocumentReplacement(sgfInput, nativePath, options.networkIdentity, options.loadSource);
       const action: DocumentDepartureActionDto = admission.status === "needs_decision"
         ? await requestDepartureDecision(options.confirmMessage)
         : "discard";
@@ -2507,6 +2551,7 @@ export function App() {
 
   async function handleParseSgf() {
     await applyReplacement(sgfText, null, {
+      loadSource: "text",
       confirmMessage: "放弃未保存的棋谱并载入这段文本？",
       fallbackName: fallbackFileName ?? "imported.sgf",
       successMessage: (projection) =>
@@ -2515,8 +2560,9 @@ export function App() {
     });
   }
 
-  async function replaceImportedGame(document: GameFileImportDto): Promise<boolean> {
+  async function replaceImportedGame(document: GameFileImportDto, loadSource: GameLoadSourceDto): Promise<boolean> {
     return applyReplacement(document.sgf_text, document.native_path ?? null, {
+      loadSource,
       confirmMessage: "放弃未保存的棋谱并打开这个文件？",
       fallbackName: document.format === "gib"
         ? document.display_name.replace(/\.gib$/i, ".sgf")
@@ -2551,7 +2597,7 @@ export function App() {
     if (!path) return;
     await enterFileFlow();
     try {
-      await replaceImportedGame(await readGameFile(path));
+      await replaceImportedGame(await readGameFile(path), "recent");
     } catch (error) {
       setMessage(`Open failed: ${errorMessage(error)}`);
     } finally {
@@ -2587,7 +2633,7 @@ export function App() {
     await enterFileFlow();
     try {
       const document = await readGameFile(delivery.path);
-      await replaceImportedGame(document);
+      await replaceImportedGame(document, "file_delivery");
     } catch (error) {
       setMessage(`Open failed: ${errorMessage(error)}`);
     } finally {
@@ -2607,7 +2653,7 @@ export function App() {
     try {
       const document = await openSgfDocument();
       if (!document) return;
-      await replaceImportedGame(document);
+      await replaceImportedGame(document, "open");
     } catch (error) {
       setMessage(`Open failed: ${errorMessage(error)}`);
     } finally {
@@ -2955,13 +3001,14 @@ export function App() {
       setMessage("浏览器预览只保存连续分析偏好，不会启动分析任务。");
       return;
     }
+    const automaticActive = snapshot.auto_load?.phase === "waiting" || snapshot.auto_load?.phase === "running";
     const continuousAdmitted = admitsForegroundEngineQuery(snapshot, "continuous_analysis")
       && (!committedPreferencesRef.current.continuousVisitsLimitEnabled || admitsForegroundEngineJobs(snapshot, "visits_limit"));
-    if (!continuousAdmitted && snapshot.selected_node_job?.mode !== "continuous") {
+    if (!automaticActive && !continuousAdmitted && snapshot.selected_node_job?.mode !== "continuous") {
       setMessage("当前 run 未验证连续分析或所请求的 ownership、policy、visits 限制能力；已保存的连续分析意图保持不变。");
       return;
     }
-    if ((phase === "time_limited" || phase === "visits_limited" || phase === "paused" || phase === "error" || phase === "safety_hold")
+    if (!automaticActive && (phase === "time_limited" || phase === "visits_limited" || phase === "paused" || phase === "error" || phase === "safety_hold")
       && (!continuousAdmitted || !currentGameRef.current)) {
       setMessage("继续连续分析需要可用的前台引擎和当前棋谱。");
       return;
@@ -3173,6 +3220,11 @@ export function App() {
     }
   }
 
+  function explicitTaskReserved() {
+    const task = analysisTaskRef.current;
+    return isAnalysisTaskReserved(task) && task?.task_id !== engineSnapshotRef.current.auto_load?.task_id;
+  }
+
   async function runAnalysisTask(input: {
     runId: string;
     scope: AnalysisScopeDto;
@@ -3187,7 +3239,7 @@ export function App() {
     if (!nativeRuntime || !game) throw new Error("Analysis task requires a current game.");
     const stages = input.overviewConditions ? [input.conditions, input.overviewConditions] : [input.conditions];
     assertTaskCapabilities(input.runId, input.swingCriteria, stages);
-    if (isAnalysisTaskReserved(analysisTaskRef.current)) {
+    if (explicitTaskReserved()) {
       throw new Error("An analysis task is already active.");
     }
     const conditionsError = input.strategy === "all_positions_two_stage" && input.overviewConditions
@@ -3305,7 +3357,7 @@ export function App() {
     if (trialRef.current || trialTransitionRef.current || scoringRef.current || scoringPendingRef.current) return;
     const run = runFromSnapshot(engineSnapshotRef.current);
     const game = currentGameRef.current;
-    if (!run || !game || !admitsForegroundEngineJobs(engineSnapshotRef.current, "whole_game_analysis") || departurePendingRef.current || isAnalysisTaskReserved(analysisTaskRef.current)) return;
+    if (!run || !game || !admitsForegroundEngineJobs(engineSnapshotRef.current, "whole_game_analysis") || departurePendingRef.current || explicitTaskReserved()) return;
     setAnalysisTaskRequestPending(true);
     setAnalysisTaskError(null);
     try {
@@ -3333,7 +3385,7 @@ export function App() {
     if (trialRef.current || trialTransitionRef.current || scoringRef.current || scoringPendingRef.current) return;
     const run = runFromSnapshot(engineSnapshotRef.current);
     const game = currentGameRef.current;
-    if (!run || !game || !admitsForegroundEngineJobs(engineSnapshotRef.current, "whole_game_analysis") || departurePendingRef.current || isAnalysisTaskReserved(analysisTaskRef.current)) return;
+    if (!run || !game || !admitsForegroundEngineJobs(engineSnapshotRef.current, "whole_game_analysis") || departurePendingRef.current || explicitTaskReserved()) return;
     setAnalysisTaskRequestPending(true);
     setAnalysisTaskError(null);
     try {
@@ -3456,7 +3508,7 @@ export function App() {
       setMessage("当前 run 不支持整谱分析所请求的 ownership、policy 或 visits 限制。");
       return;
     }
-    if (isAnalysisTaskReserved(analysisTaskRef.current)) return;
+    if (explicitTaskReserved()) return;
     if (!nativeRuntime || !game) {
       setMessage(nativeRuntime ? "整局分析需要当前游戏。" : nativeCurrentGameUnavailable);
       return;
@@ -3540,6 +3592,7 @@ export function App() {
     try {
       const imported = await importGameFile(file);
       await applyReplacement(imported.sgf_text, imported.native_path ?? null, {
+        loadSource: "open",
         confirmMessage: "放弃未保存的棋谱并导入这个文件？",
         fallbackName: imported.format === "gib"
           ? imported.display_name.replace(/\.gib$/i, ".sgf")
@@ -3558,6 +3611,7 @@ export function App() {
     const source = providerSourceLabel(result);
     const warningText = result.warnings.length > 0 ? ` ${result.warnings.length} provider warning(s).` : "";
     const applied = await applyReplacement(result.sgf_text, null, {
+      loadSource: "excluded",
       networkIdentity,
       confirmMessage: "放弃未保存的棋谱并载入 Provider 棋谱？",
       fallbackName: providerDocumentName(result),
@@ -3570,6 +3624,7 @@ export function App() {
 
   async function loadSample() {
     await applyReplacement(demoSgf, null, {
+      loadSource: "excluded",
       confirmMessage: "放弃未保存的棋谱并载入示例？",
       fallbackName: "sample.sgf",
       successMessage: (projection) => `Sample SGF restored: ${projection.summary.move_count} moves.`,
@@ -3607,6 +3662,7 @@ export function App() {
     try {
       const sgf = newDocumentSgf(parameters);
       await applyReplacement(sgf, null, {
+        loadSource: "excluded",
         confirmMessage: "放弃未保存的棋谱并新建对局？",
         successMessage: () => `已新建 ${parameters.boardWidth} × ${parameters.boardHeight} 空谱。`,
         failurePrefix: "New game failed"
@@ -3635,6 +3691,7 @@ export function App() {
         return;
       }
       await applyReplacement(text, null, {
+        loadSource: "clipboard",
         confirmMessage: "放弃未保存的棋谱并粘贴剪贴板棋谱？",
         fallbackName: "clipboard.sgf",
         successMessage: (projection) => `已粘贴棋谱: ${projection.summary.move_count} 手。`,
@@ -4230,7 +4287,8 @@ export function App() {
   }
 
   function previewCandidate(index: number | null) {
-    setCandidatePreview(index === null ? null : { index, scope: activeScope, matchFrameIdentity });
+    const candidate = index === null || hideCandidates ? null : visibleCurrentFrame?.candidates[index];
+    setCandidatePreview(candidate ? { vertex: vertexKey(candidate.vertex), identity: candidateIdentity } : null);
     // Java FloatBoard: browsing a candidate variation lets readboard give focus back (`loss`), never per frame.
     const sync = externalSyncRef.current;
     if (index !== null && sync?.source === "readboard" && sync.phase === "syncing" && sync.readboard?.preferences.focus) {
@@ -4254,6 +4312,7 @@ export function App() {
   return <main ref={workspaceRef} tabIndex={-1} data-focus-owner="workspace" className={`app-shell${preferences.boardTheme === "high-contrast" ? " theme-high-contrast" : ""}${nativeRuntime ? "" : " has-native-runtime-note"}`}>
     {!nativeRuntime ? <p className="native-runtime-note" role="status">{nativeCurrentGameUnavailable}</p> : null}
     <AppChrome
+      onBatch={() => setBatchOpenRequest(value => value + 1)}
       onBeforeFunctionSearch={() => { if (workspaceRef.current) chromeSearchSourceRef.current = captureFocusReturn(workspaceRef.current); }}
       onFunctionSearch={() => openFunctionSearch(true)}
       authoringEnabled={authoringEnabled}
@@ -4336,6 +4395,7 @@ export function App() {
       onRailVisibility={(side, visible) => void handleRailVisibility(side, visible)}
       selectedNodeRunning={selectedNodeRunning}
       wholeGameRunning={wholeGameRunning}
+      automaticTaskActive={engineSnapshot.auto_load?.phase === "running"}
       autoPlaying={autoPlaying}
       komi={game.summary.komi}
       onNew={() => void handleNewGame()}
@@ -4447,6 +4507,8 @@ export function App() {
       <details aria-label="当前 run 能力"><summary>当前 run 能力</summary><p>{verifiedEngineCapabilitiesLabel(engineSnapshot)}</p></details>
       {railVisibilityBusy ? <span role="status">正在保存侧栏…</span> : null}
       {railVisibilityError ? <span role="alert">{railVisibilityError}</span> : null}
+    <BatchPanel openRequest={batchOpenRequest} />
+    <ContinuationPanel current={currentGame} choices={analysisBranchChoices(chosenChildren)} onCurrent={adoptContinuationGame} onStart={() => setAutoPlaying(false)} />
     </div>
     <Workspace shares={workspace.shares} onSharesChange={(shares) => { if (!matchOwnsWorkspace()) workspace.setShares(shares); }} disabled={workspace.disabled || matchBlocked}
       visibility={preferences.workspaceVisibility}>
@@ -4507,6 +4569,11 @@ export function App() {
           overlayMode={overlayMode}
           onOverlayModeChange={setOverlayMode}
           hideCandidates={hideCandidates}
+          displayPreferences={preferences.granularDisplay}
+          graphPerspective={preferences.graphPerspective}
+          komi={game.summary.komi}
+          onToggleCandidates={candidateVisibility.toggle}
+          candidatesToggleEnabled={candidateVisibility.eligible}
           pvPrefixLength={replayPrefix}
           replayCandidateIndex={activeCandidateIndex}
           onPointClick={handleBoardPoint}
@@ -4554,6 +4621,7 @@ export function App() {
         <AnalysisPanel
           pane="reference"
           frame={visibleCurrentFrame}
+          presentationIdentity={candidateIdentity}
           problems={reviewProblems}
           boardWidth={game.summary.board_width}
           boardHeight={game.summary.board_height}
@@ -4568,10 +4636,19 @@ export function App() {
           onSelectNode={(path) => { if (preferences.workspaceVisibility.right) handleReviewNodeSelect(path); }}
           contentMode={preferences.subBoardContentMode}
           pvPrefixLength={replayPrefix}
+          displayPreferences={preferences.granularDisplay}
+          hideCandidates={hideCandidates}
         />
       </aside>
     </Workspace>
     <div className="analysis-task-area">
+    {engineSnapshot.auto_load && engineSnapshot.auto_load.phase !== "idle" ? <div className="native-runtime-note" role="status">
+      <span>{t(`autoLoad.${engineSnapshot.auto_load.phase}`)}</span>
+      {engineSnapshot.auto_load.reason ? <span> · {engineSnapshot.auto_load.reason}</span> : null}
+      {engineSnapshot.auto_load.phase === "waiting" || engineSnapshot.auto_load.phase === "running" ?
+        <button type="button" onClick={() => void cancelAutoLoad().catch((error) => setMessage(errorMessage(error)))}>{t("autoLoad.stop")}</button> : null}
+    </div> : null}
+    {engineSnapshot.auto_load_recovery ? <p role="status">{t(`autoLoad.recovery.${engineSnapshot.auto_load_recovery}`)}</p> : null}
     {recoveryProtection.status === "unprotected" ? (
       <div className="recovery-unprotected">
         <span role="status">{recoveryProtection.message}</span>
@@ -4584,6 +4661,7 @@ export function App() {
       draft={analysisScopeDraft}
       preview={analysisScopePreview}
       task={analysisTask}
+      automaticTaskActive={engineSnapshot.auto_load?.phase === "running"}
       canRun={nativeRuntime && taskEngineReady && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending && !departurePending && !departurePrompt}
       busy={matchBlocked || analysisTaskRequestPending}
       error={analysisTaskError}
@@ -4621,6 +4699,7 @@ export function App() {
       selectedNodeRunning={selectedNodeRunning}
       selectedNodeMode={selectedNodeJobRef.current?.mode}
       wholeGameRunning={wholeGameRunning}
+      automaticTaskActive={engineSnapshot.auto_load?.phase === "running"}
       wholeGameProgress={wholeGameProgress}
       continuousAnalysisAction={continuousAnalysisAction}
       onContinuousAnalysis={() => void handleContinuousAnalysisAction()}

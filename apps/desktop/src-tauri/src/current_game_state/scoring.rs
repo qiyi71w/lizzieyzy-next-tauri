@@ -241,6 +241,7 @@ impl CurrentGameState {
         let manager = self.analysis_manager.get();
         let (id, jobs) = {
             let mut holder = self.holder.lock().expect("current game state");
+            self.interrupt_continuation();
             holder.ensure_editable().map_err(|e| e.message)?;
             let document = holder
                 .document

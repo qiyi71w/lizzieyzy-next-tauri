@@ -1,7 +1,13 @@
 import type { FoxKifuState, NetworkSettings, ReadboardSyncPreferences, TencentHistory, YikeSyncPreferences } from "./providers";
 import type { NextMoveReviewMarkerMode } from "./nextMoveReviewMarker";
 import type { AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, ContinuousAnalysisBudgetDto, MatchDefaultsDto, PkSideDefaultsDto, WindowGeometryDto, WorkspaceSharesDto } from "./types";
+import type { AutoLoadPreferencesDto } from "./types";
 import { validReviewAutoplayInterval } from "./reviewAutoplay";
+import { defaultGranularDisplay, readGranularDisplay, type GranularDisplay } from "./granularDisplay";
+import { defaultBatchPreferences } from "./batch";
+import type { BatchPreferencesDto } from "./types";
+import type { ContinuationPreferencesDto } from "./types";
+import { defaultContinuationPreferences } from "./continuation";
 
 export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
@@ -13,6 +19,9 @@ export type { NextMoveReviewMarkerMode };
 import type { WorkspaceVisibilityDto } from "./types";
 
 export type AppPreferences = ContinuousAnalysisBudgetDto & {
+  autoLoad: AutoLoadPreferencesDto;
+  batch: BatchPreferencesDto;
+  continuation: ContinuationPreferencesDto;
   network: NetworkSettings;
   yikeLocator: string | null;
   yikeSync: YikeSyncPreferences;
@@ -34,6 +43,7 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   showPolicy: boolean;
   showCandidates: boolean;
   candidateLimit: number;
+  granularDisplay: GranularDisplay;
   defaultMaxVisits: number;
   taskSingleStageConditions: AnalysisStageConditionsDto;
   taskOverviewConditions: AnalysisStageConditionsDto;
@@ -88,6 +98,7 @@ export const defaultAppPreferences: AppPreferences = {
   showPolicy: true,
   showCandidates: true,
   candidateLimit: 8,
+  granularDisplay: defaultGranularDisplay,
   defaultMaxVisits: 800,
   defaultBoardWidth: 19,
   defaultBoardHeight: 19,
@@ -139,6 +150,9 @@ export const defaultAppPreferences: AppPreferences = {
   soundEnabled: true,
   scoringRule: "area",
   continuousAnalysisEnabled: true,
+  autoLoad: { enabled: false, totalVisits: 1 },
+  batch: defaultBatchPreferences(),
+  continuation: defaultContinuationPreferences(),
   recentGamePaths: [],
   recentImageExportDirectory: null,
   continuousTimeLimitEnabled: true,
@@ -202,6 +216,12 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
   const scoreLeadLine = booleanValue(value?.scoreLeadLine, defaultAppPreferences.scoreLeadLine);
   const defaultMaxVisits = integerValue(value?.defaultMaxVisits, defaultAppPreferences.defaultMaxVisits, 1, 1_000_000);
   return {
+    batch: value?.batch ?? defaultBatchPreferences(),
+    continuation: value?.continuation ?? defaultContinuationPreferences(),
+    autoLoad: {
+      enabled: booleanValue(value?.autoLoad?.enabled, false),
+      totalVisits: integerValue(value?.autoLoad?.totalVisits, 1, 1, 4294967295),
+    },
     network: value?.network ?? defaultAppPreferences.network,
     yikeLocator: typeof value?.yikeLocator === "string" ? value.yikeLocator : null,
     yikeSync: value?.yikeSync ?? defaultAppPreferences.yikeSync,
@@ -225,6 +245,7 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
     showPolicy: booleanValue(value?.showPolicy, defaultAppPreferences.showPolicy),
     showCandidates: booleanValue(value?.showCandidates, defaultAppPreferences.showCandidates),
     candidateLimit: integerValue(value?.candidateLimit, defaultAppPreferences.candidateLimit, 1, 20),
+    granularDisplay: readGranularDisplay(value?.granularDisplay),
     defaultMaxVisits,
     defaultBoardWidth: integerValue(value?.defaultBoardWidth, defaultAppPreferences.defaultBoardWidth, 2, 25),
     defaultBoardHeight: integerValue(value?.defaultBoardHeight, defaultAppPreferences.defaultBoardHeight, 2, 25),

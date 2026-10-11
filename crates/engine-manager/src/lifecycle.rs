@@ -29,7 +29,14 @@ use uuid::Uuid;
 pub use app_model::AnalysisJobEventDto;
 pub use app_model::AnalysisJobLaneDto as AnalysisJobLane;
 
+mod auto_load;
+mod auto_load_recovery;
+mod batch;
+mod continuation;
 mod evaluation;
+pub use continuation::ContinuationAction;
+#[cfg(test)]
+mod evaluation_tests;
 mod game_move;
 mod gtp_analysis;
 mod gtp_control;
@@ -39,6 +46,7 @@ mod preload;
 mod runtime_control;
 mod runtime_parameters;
 mod runtime_threads;
+mod thread_policy;
 pub use game_move::{GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle};
 
 pub trait AnalysisJobCancel: Send + Sync {
@@ -169,6 +177,12 @@ struct AnalysisTaskTargets {
     swing_criteria: Option<AnalysisSwingCriteriaDto>,
 }
 
+struct AnalysisTaskPlan {
+    strategy: AnalysisTaskStrategyDto,
+    overview_conditions: Option<AnalysisStageConditionsDto>,
+    conditions: AnalysisStageConditionsDto,
+}
+
 enum WholeGameAdvance {
     Submit {
         started: AnalysisJobStartedDto,
@@ -224,7 +238,7 @@ enum Phase {
     Ready(EngineRunDto),
     Switching {
         primary: EngineRunDto,
-        candidate: EngineRunDto,
+        candidate: Box<EngineRunDto>,
         switch_id: String,
     },
     Stopping(EngineRunDto),
@@ -251,6 +265,9 @@ struct ManagerState {
     last_activity: Instant,
     jobs: Vec<RegisteredJob>,
     analysis_task: Option<AnalysisTaskDto>,
+    auto_load: auto_load::Owner,
+    batch: batch::Owner,
+    continuation: continuation::Owner,
     subscribers: Vec<Sender<ForegroundEngineEventDto>>,
     continuous_intent: Option<bool>,
     continuous_budget: ContinuousAnalysisBudgetDto,
@@ -316,6 +333,9 @@ impl ForegroundEngineManager {
                     switch_seq: 0,
                     jobs: Vec::new(),
                     analysis_task: None,
+                    auto_load: auto_load::Owner::default(),
+                    batch: batch::Owner::default(),
+                    continuation: continuation::Owner::default(),
                     last_activity: Instant::now(),
                     subscribers: Vec::new(),
                     continuous_intent: None,
@@ -397,7 +417,11 @@ impl ForegroundEngineManager {
     }
 
     pub fn analysis_task_snapshot(&self) -> Option<AnalysisTaskDto> {
-        self.lock().analysis_task.clone()
+        self.lock()
+            .analysis_task
+            .as_ref()
+            .filter(|task| !task.job_id.starts_with("batch:"))
+            .cloned()
     }
 
     pub fn subscribe(&self) -> Receiver<ForegroundEngineEventDto> {
@@ -430,6 +454,9 @@ impl ForegroundEngineManager {
             }
             match_reservation::require_unreserved(&state).map_err(|error| error.message)?;
             let saved = persist()?;
+            if !enabled {
+                auto_load::retire_locked(self, &mut state).map_err(|error| error.message)?;
+            }
             state.continuous_intent = Some(enabled);
             state.continuous_budget = budget;
             if budget_changed {
@@ -472,6 +499,7 @@ impl ForegroundEngineManager {
             });
             state.continuous_target = Some(request);
             if changed {
+                auto_load_recovery::invalidate(&mut state);
                 clear_weak_holds_for_new_position(&mut state);
             }
             let cancel = current_selected_job(&state).filter(|job| {
@@ -531,6 +559,12 @@ impl ForegroundEngineManager {
     pub fn continuous_primary_action(&self) -> Result<ContinuousPrimaryAction, EngineFailureDto> {
         let state = self.lock();
         match_reservation::require_unreserved(&state)?;
+        if matches!(
+            state.auto_load.snapshot.phase,
+            app_model::AutoLoadPhaseDto::Waiting | app_model::AutoLoadPhaseDto::Running
+        ) {
+            return Ok(ContinuousPrimaryAction::Stop);
+        }
         if state.continuous_departing
             || state.finite_admission_pending
             || matches!(state.phase, Phase::Stopping(_))
@@ -583,6 +617,7 @@ impl ForegroundEngineManager {
                 || state.finite_admission_pending
                 || current_selected_job(&state).is_some_and(|job| job.state == AnalysisJobStateDto::Stopping)
                 || validate_continuous_capabilities(&state).is_err()
+                || auto_load_recovery::require_confirmation(&state).is_err()
             {
                 return;
             }
@@ -596,6 +631,7 @@ impl ForegroundEngineManager {
         {
             let mut state = self.lock();
             validate_continuous_capabilities(&state)?;
+            auto_load_recovery::require_confirmation(&state)?;
             if state.continuous_intent != Some(true)
                 || state.continuous_departing
                 || current_selected_job(&state).is_some_and(|job| !job.state.is_limited())
@@ -620,12 +656,18 @@ impl ForegroundEngineManager {
             return;
         }
         if !state.continuous_departing {
+            let _ = auto_load::retire_locked(self, &mut state);
             state.continuous_departing = true;
             state.game_move_publication = None;
             if let Some(identity) = state.game_move.as_ref().map(|slot| slot.identity.clone()) {
                 game_move::seal_move_for_run(&mut state, &identity.run_id);
             }
-            if let Some(job_id) = state.analysis_task.as_ref().map(|task| task.job_id.clone()) {
+            if let Some(job_id) = state
+                .analysis_task
+                .as_ref()
+                .filter(|task| !task.job_id.starts_with("batch:"))
+                .map(|task| task.job_id.clone())
+            {
                 cancel_analysis_task_locked(&mut state, &job_id);
                 state.jobs.retain(|job| !(job.job_id == job_id && job.terminal));
             }
@@ -639,13 +681,7 @@ impl ForegroundEngineManager {
             if state.match_reservation.is_some() {
                 return;
             }
-            state.continuous_departing = false;
-            if committed_replacement {
-                // Import changes the position, not the user's authorization after a failure.
-                clear_weak_holds_for_new_position(&mut state);
-            } else {
-                state.continuous_safety_hold = true;
-            }
+            finish_continuous_departure_locked(&mut state, committed_replacement);
             publish_snapshot(&mut state);
         }
         if committed_replacement {
@@ -708,6 +744,7 @@ impl ForegroundEngineManager {
             state.operation_kind = operation_kind;
             let run = starting_run(&saved);
             state.phase = Phase::Starting(run.clone());
+            auto_load_recovery::started(&mut state, &run, operation_kind);
             publish_snapshot(&mut state);
             (state.operation, run)
         };
@@ -751,6 +788,7 @@ impl ForegroundEngineManager {
         let (operation, profile_id) = {
             let mut state = self.lock();
             match_reservation::require_unreserved(&state)?;
+            continuation::invalidate(&mut state, "Foreground Run restarted.");
             let run = match &state.phase {
                 Phase::Ready(run) | Phase::Error { run, .. } => run.clone(),
                 _ => {
@@ -800,12 +838,13 @@ impl ForegroundEngineManager {
             if manager.inner.current_operation() != operation {
                 return;
             }
-            let _ = manager.start(&profile_id);
+            let _ = manager.begin_start(EngineOperationDto::Restart, &profile_id);
         });
         Ok(())
     }
 
     pub fn switch_to(&self, profile_id: &str) -> Result<(), EngineFailureDto> {
+        continuation::invalidate(&mut self.lock(), "Foreground Run switch requested.");
         match_reservation::require_unreserved(&self.lock())?;
         if self.switch_preload(profile_id)? {
             return Ok(());
@@ -856,7 +895,7 @@ impl ForegroundEngineManager {
             let candidate = starting_run(&saved);
             state.phase = Phase::Switching {
                 primary,
-                candidate: candidate.clone(),
+                candidate: Box::new(candidate.clone()),
                 switch_id: switch_id.clone(),
             };
             publish_snapshot(&mut state);
@@ -928,8 +967,11 @@ impl ForegroundEngineManager {
         &self,
         request: SelectedNodeJobRequest,
     ) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+        self.retire_auto_load()?;
         let old = {
             let mut state = self.lock();
+            continuation::require_idle(&state)?;
+            batch::admit(&state, None)?;
             validate_selected_admission(&state, &request)?;
             if state.finite_admission_pending {
                 return Err(continuous_invalid_state(
@@ -1002,6 +1044,9 @@ impl ForegroundEngineManager {
         state: &mut ManagerState,
         mut request: SelectedNodeJobRequest,
     ) -> Result<SelectedSubmission, EngineFailureDto> {
+        if !continuation::occupied(state) {
+            batch::admit(state, None)?;
+        }
         let run = validate_selected_admission(state, &request)?;
         evaluation::yield_to_foreground(state)?;
         state
@@ -1156,13 +1201,18 @@ impl ForegroundEngineManager {
         conditions
             .validate_single_stage()
             .map_err(|message| invalid_task_conditions(&request.run_id, message))?;
+        self.retire_auto_load()?;
         self.start_analysis_task_with_strategy(
             request,
             scope,
-            AnalysisTaskStrategyDto::SingleStage,
-            None,
-            conditions,
+            AnalysisTaskPlan {
+                strategy: AnalysisTaskStrategyDto::SingleStage,
+                overview_conditions: None,
+                conditions,
+            },
             AnalysisTaskTargets::default(),
+            None,
+            None,
         )
     }
 
@@ -1175,13 +1225,18 @@ impl ForegroundEngineManager {
     ) -> Result<AnalysisTaskDto, EngineFailureDto> {
         AnalysisStageConditionsDto::validate_all_positions_two_stage(&overview_conditions, &deep_conditions)
             .map_err(|message| invalid_task_conditions(&request.run_id, message))?;
+        self.retire_auto_load()?;
         self.start_analysis_task_with_strategy(
             request,
             scope,
-            AnalysisTaskStrategyDto::AllPositionsTwoStage,
-            Some(overview_conditions),
-            deep_conditions,
+            AnalysisTaskPlan {
+                strategy: AnalysisTaskStrategyDto::AllPositionsTwoStage,
+                overview_conditions: Some(overview_conditions),
+                conditions: deep_conditions,
+            },
             AnalysisTaskTargets::default(),
+            None,
+            None,
         )
     }
 
@@ -1204,18 +1259,23 @@ impl ForegroundEngineManager {
             .and_then(|_| deep_conditions.validate_single_stage())
             .and_then(|_| swing_criteria.validate())
             .map_err(|message| invalid_task_conditions(&request.run_id, message))?;
+        self.retire_auto_load()?;
         self.start_analysis_task_with_strategy(
             request,
             scope,
-            AnalysisTaskStrategyDto::SwingSelectedTwoStage,
-            Some(overview_conditions),
-            deep_conditions,
+            AnalysisTaskPlan {
+                strategy: AnalysisTaskStrategyDto::SwingSelectedTwoStage,
+                overview_conditions: Some(overview_conditions),
+                conditions: deep_conditions,
+            },
             AnalysisTaskTargets {
                 requested: Some(requested),
                 supporting,
                 swing_comparisons,
                 swing_criteria: Some(swing_criteria),
             },
+            None,
+            None,
         )
     }
 
@@ -1223,11 +1283,16 @@ impl ForegroundEngineManager {
         &self,
         mut request: WholeGameJobRequest,
         scope: AnalysisScopeDto,
-        strategy: AnalysisTaskStrategyDto,
-        overview_conditions: Option<AnalysisStageConditionsDto>,
-        conditions: AnalysisStageConditionsDto,
+        plan: AnalysisTaskPlan,
         targets: AnalysisTaskTargets,
+        auto_intent: Option<app_model::AutoLoadSnapshotDto>,
+        batch_identity: Option<app_model::BatchIdentityDto>,
     ) -> Result<AnalysisTaskDto, EngineFailureDto> {
+        let AnalysisTaskPlan {
+            strategy,
+            overview_conditions,
+            conditions,
+        } = plan;
         if request.work_items.is_empty() {
             return Err(empty_whole_game_failure(&request.run_id));
         }
@@ -1239,6 +1304,11 @@ impl ForegroundEngineManager {
         let cancel = AnalysisCancelToken::new();
         let (task, bound_query) = {
             let mut state = self.lock();
+            continuation::require_idle(&state)?;
+            batch::admit(&state, batch_identity.as_ref())?;
+            if let Some(intent) = &auto_intent {
+                auto_load::admit(&state, intent)?;
+            }
             match_reservation::require_unreserved(&state)?;
             game_move::require_idle_move(&state)?;
             runtime_control::require_idle(&state)?;
@@ -1293,7 +1363,16 @@ impl ForegroundEngineManager {
             }
 
             let task_id = Uuid::new_v4().to_string();
-            let job_id = Uuid::new_v4().to_string();
+            let job_id = match &batch_identity {
+                Some(id) => format!(
+                    "batch:{}:{}:{}:{}",
+                    id.batch_id,
+                    id.row_id,
+                    id.attempt,
+                    Uuid::new_v4()
+                ),
+                None => Uuid::new_v4().to_string(),
+            };
             let query_id = target_query_id(&job_id);
             let first_node_path = request.work_items[0].node_path.clone();
             let first_board_width = request.work_items[0].board_width;
@@ -1369,6 +1448,14 @@ impl ForegroundEngineManager {
                 terminal: false,
             });
             state.analysis_task = Some(task.clone());
+            if let Some(id) = &batch_identity {
+                batch::bind(&mut state, id, &task);
+            }
+            if auto_intent.is_some() {
+                state.auto_load.snapshot.task_id = Some(task.task_id.clone());
+                state.auto_load.snapshot.phase = app_model::AutoLoadPhaseDto::Running;
+                state.auto_load.handback_pending = true;
+            }
             publish_event(
                 &mut state,
                 ForegroundEngineEventDto::Job {
@@ -1398,6 +1485,17 @@ impl ForegroundEngineManager {
     ) -> Result<AnalysisTaskDto, EngineFailureDto> {
         let mut state = self.lock();
         match_reservation::require_unreserved(&state)?;
+        batch::admit(&state, None)?;
+        if state.auto_load.snapshot.task_id.as_deref() == Some(task_id)
+            && state.auto_load.snapshot.run_id.as_deref() == Some(run_id)
+        {
+            auto_load::retire_locked(self, &mut state)?;
+            publish_snapshot(&mut state);
+            return state
+                .analysis_task
+                .clone()
+                .ok_or_else(|| continuous_invalid_state(&state, "Automatic task retired."));
+        }
         let task = state
             .analysis_task
             .as_ref()
@@ -1434,6 +1532,7 @@ impl ForegroundEngineManager {
         let (task, jsonl) = {
             let mut state = self.lock();
             match_reservation::require_unreserved(&state)?;
+            batch::admit(&state, None)?;
             let task = state
                 .analysis_task
                 .as_ref()
@@ -1579,6 +1678,12 @@ impl ForegroundEngineManager {
 
     pub fn invalidate_analysis_task(&self, generation: u64) {
         let mut state = self.lock();
+        if state.batch.current.is_some() {
+            return;
+        }
+        if state.auto_load.snapshot.generation != generation {
+            let _ = auto_load::retire_locked(self, &mut state);
+        }
         let Some(task) = state.analysis_task.as_ref() else {
             return;
         };
@@ -1655,6 +1760,12 @@ impl ForegroundEngineManager {
     pub fn cancel_job(&self, run_id: &str, job_id: &str) -> Result<(), EngineFailureDto> {
         let mut state = self.lock();
         match_reservation::require_unreserved(&state)?;
+        if job_id.starts_with("batch:") {
+            return Err(continuous_invalid_state(
+                &state,
+                "Use the batch row Stop action for this private task.",
+            ));
+        }
         if state.analysis_task.as_ref().is_some_and(|task| {
             task.run_id == run_id && task.job_id == job_id && task.state == AnalysisTaskStateDto::Paused
         }) {
@@ -1908,13 +2019,26 @@ impl ForegroundEngineManager {
     }
 
     fn reconcile_continuous(&self) {
+        self.reconcile_auto_load_recovery();
         let work = {
             let mut state = self.lock();
             if state.match_reservation.is_some() {
                 return;
             }
             if state.continuous_departing
+                || state.auto_load.snapshot.phase == app_model::AutoLoadPhaseDto::Waiting
                 || state.finite_admission_pending
+                || continuation::occupied(&state)
+                || batch::occupied(&state.batch)
+                || (state.auto_load.snapshot.phase == app_model::AutoLoadPhaseDto::Running
+                    && state.analysis_task.as_ref().is_some_and(|task| {
+                        matches!(
+                            task.state,
+                            AnalysisTaskStateDto::Queued
+                                | AnalysisTaskStateDto::Searching
+                                | AnalysisTaskStateDto::Pausing
+                        )
+                    }))
                 || state.game_move.is_some()
                 || state.runtime_control.is_some()
                 || state.continuous_target.is_none()
@@ -2017,7 +2141,7 @@ impl ForegroundEngineManager {
                 if primary.profile_id == profile_id {
                     Some(primary)
                 } else {
-                    Some(candidate)
+                    Some(candidate.as_ref())
                 }
             }
             Phase::Error { run, .. } => Some(run),
@@ -2041,6 +2165,7 @@ impl ForegroundEngineManager {
     fn begin_stop(&self, _operation_kind: EngineOperationDto) -> Result<Option<u64>, EngineFailureDto> {
         let mut state = self.lock();
         match_reservation::require_unreserved(&state)?;
+        continuation::invalidate(&mut state, "Foreground Run stopped.");
         self.yield_preloads_locked(&mut state);
         let run = match &state.phase {
             Phase::NoEngine { .. } => return Ok(None),
@@ -2172,7 +2297,7 @@ impl Inner {
             return Ok(());
         }
 
-        let spec = build_command_spec(&run.profile_snapshot).map_err(|error| {
+        let mut spec = build_command_spec(&run.profile_snapshot).map_err(|error| {
             failure(
                 kind,
                 EngineFailureKind::Start,
@@ -2182,6 +2307,18 @@ impl Inner {
                 None,
             )
         })?;
+        let requires_recommendation =
+            crate::thread_policy::apply(run, &mut spec, self.config.managed_resources_root.as_deref())
+                .map_err(|message| {
+                    failure(
+                        kind,
+                        EngineFailureKind::Config,
+                        capture.failure_text(&message),
+                        Some(&run.run_id),
+                        Some(&run.profile_id),
+                        None,
+                    )
+                })?;
         let resource_deadline = Instant::now() + Duration::from_secs(30);
         let resources = ResourceSnapshot::capture(
             run,
@@ -2201,6 +2338,18 @@ impl Inner {
                 None,
             )
         })?;
+        if requires_recommendation {
+            crate::thread_policy::verify_launch_resources(run, &resources).map_err(|message| {
+                failure(
+                    kind,
+                    EngineFailureKind::ResourceChanged,
+                    capture.failure_text(&message),
+                    Some(&run.run_id),
+                    Some(&run.profile_id),
+                    None,
+                )
+            })?;
+        }
         if !self.preparation_current(operation, run, background) {
             return Ok(());
         }
@@ -2296,6 +2445,8 @@ impl Inner {
         let probe_id = format!("lifecycle-readiness-{}", run.run_id);
         if !generic {
             let query = AnalysisQuery {
+                include_pv_visits: false,
+                include_moves_ownership: None,
                 id: probe_id.clone(),
                 moves: Vec::new(),
                 initial_stones: Vec::new(),
@@ -3485,6 +3636,11 @@ impl Inner {
             )
         });
         if has_data {
+            if started.mode == AnalysisJobModeDto::Continuous
+                && state.auto_load.snapshot.phase != app_model::AutoLoadPhaseDto::Running
+            {
+                state.auto_load.handback_pending = false;
+            }
             state.last_activity = Instant::now();
             state.jobs[index].state = AnalysisJobStateDto::Searching;
         }
@@ -3704,6 +3860,7 @@ impl Inner {
                             Some(0),
                             None,
                         );
+                        publish_snapshot(state);
                         return None;
                     }
 
@@ -3770,6 +3927,7 @@ impl Inner {
                             Some(0),
                             None,
                         );
+                        publish_snapshot(state);
                         return None;
                     }
                 }
@@ -3790,6 +3948,7 @@ impl Inner {
                             Some(expected.saturating_sub(next_index)),
                             Some(error),
                         );
+                        publish_snapshot(state);
                         return None;
                     }
                 };
@@ -3830,6 +3989,7 @@ impl Inner {
                         .with_job_id(&started.job_id),
                     ),
                 );
+                publish_snapshot(state);
                 None
             }
             Err(_) => None,
@@ -4016,6 +4176,8 @@ fn snapshot_from(state: &ManagerState) -> ForegroundEngineSnapshotDto {
     };
     let mut snapshot = ForegroundEngineSnapshotDto::with_lifecycle(state.revision, lifecycle);
     snapshot.continuous = continuous_snapshot(state);
+    snapshot.auto_load = state.auto_load.snapshot.clone();
+    snapshot.auto_load_recovery = auto_load_recovery::phase(state);
     snapshot.selected_node_job = current_non_terminal_job(state, AnalysisJobLane::SelectedNode);
     snapshot.whole_game_job = current_non_terminal_job(state, AnalysisJobLane::WholeGame);
     snapshot.game_move_job = state.game_move.as_ref().map(|slot| slot.identity.clone());
@@ -4023,12 +4185,16 @@ fn snapshot_from(state: &ManagerState) -> ForegroundEngineSnapshotDto {
 }
 
 fn publish_snapshot(state: &mut ManagerState) {
+    auto_load_recovery::observe_failure(state);
+    auto_load::refresh(state);
     state.revision = state.revision.saturating_add(1);
     let snapshot = snapshot_from(state);
     publish_event(state, ForegroundEngineEventDto::Snapshot { snapshot });
 }
 
 fn publish_event(state: &mut ManagerState, event: ForegroundEngineEventDto) {
+    batch::observe(state, &event);
+    continuation::observe(state, &event);
     state
         .subscribers
         .retain(|subscriber| subscriber.send(event.clone()).is_ok());
@@ -4505,7 +4671,7 @@ fn finish_selected_node_job(
     state: &mut ManagerState,
     started: &AnalysisJobStartedDto,
     outcome: Option<AnalysisJobOutcomeDto>,
-    frame: Option<app_model::AnalysisFrameDto>,
+    mut frame: Option<app_model::AnalysisFrameDto>,
     failure: Option<EngineFailureDto>,
 ) {
     let Some(job) = state
@@ -4520,6 +4686,9 @@ fn finish_selected_node_job(
     let Some(outcome) = outcome else {
         return;
     };
+    if auto_load_recovery::terminal(state, started, outcome, frame.is_some()) {
+        frame = None;
+    }
     match (mode, outcome) {
         (
             AnalysisJobModeDto::Continuous,
@@ -4826,6 +4995,17 @@ fn validate_selected_admission(
     Ok(run)
 }
 
+fn finish_continuous_departure_locked(state: &mut ManagerState, committed_replacement: bool) {
+    state.continuous_departing = false;
+    if committed_replacement {
+        // Import changes the position, not the user's authorization after a failure.
+        clear_weak_holds_for_new_position(state);
+        state.auto_load.handback_pending = false;
+    } else {
+        state.continuous_safety_hold = true;
+    }
+}
+
 fn clear_weak_holds_for_new_position(state: &mut ManagerState) {
     state.continuous_limited = None;
     state.continuous_paused = None;
@@ -4835,6 +5015,7 @@ fn clear_weak_holds_for_new_position(state: &mut ManagerState) {
 }
 
 fn clear_resumable_holds(state: &mut ManagerState) {
+    state.auto_load.recovery = auto_load_recovery::Recovery::default();
     state.continuous_limited = None;
     state.continuous_paused = None;
     state.continuous_error = false;
@@ -4878,6 +5059,8 @@ fn continuous_snapshot(state: &ManagerState) -> ContinuousAnalysisSnapshotDto {
         ContinuousAnalysisPhaseDto::Departing
     } else if matches!(state.phase, Phase::Error { .. }) || state.continuous_error {
         ContinuousAnalysisPhaseDto::Error
+    } else if state.auto_load.recovery.required && state.continuous_safety_hold {
+        ContinuousAnalysisPhaseDto::SafetyHold
     } else if state.game_move.is_some() {
         ContinuousAnalysisPhaseDto::Waiting
     } else if current_selected_job(state).is_some_and(|job| job.state == AnalysisJobStateDto::Stopping) {
@@ -5100,6 +5283,7 @@ fn starting_run(saved: &SavedEngineProfile) -> EngineRunDto {
         profile_id: saved.profile_id.clone(),
         adapter_kind: saved.profile.adapter_kind(),
         profile_snapshot: saved.profile.clone(),
+        thread_policy_snapshot: saved.thread_policy.clone(),
         capability_snapshot: None,
         qualified_resource: None,
     }

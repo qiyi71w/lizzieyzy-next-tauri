@@ -1,10 +1,11 @@
 import { WindowPinControl } from "./WindowPinControl";
 import type { MainWindowPinControl } from "../hooks/useMainWindowPin";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { continuousBudgetError, newGameDefaultsError, type AppPreferences, type BoardTheme, type GraphPerspective, type NextMoveReviewMarkerMode, type ReviewMode, type SubBoardContentMode } from "../domain/preferences";
 import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
 import { parseReviewAutoplaySeconds } from "../domain/reviewAutoplay";
 import { t } from "../i18n/resources";
+import { validGranularDisplay, type GranularDisplay, type CandidateTextField, type OwnershipStyle } from "../domain/granularDisplay";
 
 type Props = {
   windowPin?: MainWindowPinControl;
@@ -33,6 +34,7 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
         <h2>设置</h2>
         <span>{status}</span>
       </div>
+      <AutoLoadEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       {windowPin ? <fieldset className="preferences-grid">
         <legend>窗口</legend>
         <WindowPinControl control={windowPin} />
@@ -219,6 +221,32 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
   );
 }
 
+function AutoLoadEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
+  const [edited, setEdited] = useState<{ enabled: boolean; visits: string } | null>(null);
+  const [invalid, setInvalid] = useState(false);
+  useEffect(() => { setEdited(null); setInvalid(false); }, [preferences.autoLoad.enabled, preferences.autoLoad.totalVisits]);
+  const draft = edited ?? { enabled: preferences.autoLoad.enabled, visits: String(preferences.autoLoad.totalVisits) };
+  return <fieldset className="preferences-grid" disabled={disabled}>
+    <legend>{t("autoLoad.title")}</legend>
+    <Toggle label={t("autoLoad.enabled")} checked={draft.enabled} disabled={disabled}
+      onChange={(enabled) => setEdited({ ...draft, enabled })} />
+    <label><span>{t("autoLoad.visits")}</span>
+      <input type="text" inputMode="numeric" value={draft.visits}
+        onChange={(event) => { setEdited({ ...draft, visits: event.target.value }); setInvalid(false); }} />
+    </label>
+    <button type="button" disabled={disabled || edited === null} onClick={() => {
+      const totalVisits = Number(draft.visits);
+      if (!/^\d+$/.test(draft.visits) || !Number.isInteger(totalVisits) || totalVisits < 1 || totalVisits > 4294967295) {
+        setInvalid(true); return;
+      }
+      onChange({ ...preferences, autoLoad: { enabled: draft.enabled, totalVisits } });
+    }}>{t("autoLoad.save")}</button>
+    <button type="button" disabled={disabled || edited === null} onClick={() => { setEdited(null); setInvalid(false); }}>{t("autoLoad.cancelDraft")}</button>
+    <p>{t("autoLoad.boundary")}</p>
+    {invalid ? <p role="alert">{t("autoLoad.invalid")}</p> : null}
+  </fieldset>;
+}
+
 function ReviewAutoplayEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
   const [edited, setEdited] = useState<string | null>(null);
   const [error, setError] = useState(false);
@@ -246,55 +274,51 @@ function ReviewAutoplayEditor({ preferences, disabled, onChange }: Pick<Props, "
 }
 
 function DisplayPreferencesEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
-  const [edited, setEdited] = useState<{ showCoordinates: boolean; showMoveNumbers: boolean } | null>(null);
-  const draft = edited ?? {
-    showCoordinates: preferences.showCoordinates,
-    showMoveNumbers: preferences.showMoveNumbers
-  };
-
-  function apply() {
-    if (edited === null) return;
-    onChange({
-      ...preferences,
-      showCoordinates: draft.showCoordinates,
-      showMoveNumbers: draft.showMoveNumbers
-    });
-    setEdited(null);
+  type DisplayDraft = Pick<AppPreferences, "showCoordinates" | "showMoveNumbers" | "granularDisplay">;
+  const [edited, setEdited] = useState<DisplayDraft | null>(null);
+  const [error, setError] = useState(false);
+  const draft = edited ?? { showCoordinates: preferences.showCoordinates, showMoveNumbers: preferences.showMoveNumbers, granularDisplay: preferences.granularDisplay };
+  const display = draft.granularDisplay;
+  useEffect(() => {
+    if (edited && edited.showCoordinates === preferences.showCoordinates && edited.showMoveNumbers === preferences.showMoveNumbers
+      && JSON.stringify(edited.granularDisplay) === JSON.stringify(preferences.granularDisplay)) setEdited(null);
+  }, [preferences]);
+  function update(patch: Partial<GranularDisplay>) {
+    setEdited({ ...draft, granularDisplay: { ...display, ...patch } }); setError(false);
   }
-
-  return (
-    <fieldset className="preferences-grid" disabled={disabled}>
-      <legend>棋盘显示</legend>
-      <Toggle
-        label="坐标"
-        checked={draft.showCoordinates}
-        disabled={disabled}
-        onChange={(checked) => setEdited({ ...draft, showCoordinates: checked })}
-      />
-      <Toggle
-        label="全部手数"
-        checked={draft.showMoveNumbers}
-        disabled={disabled}
-        onChange={(checked) => setEdited({ ...draft, showMoveNumbers: checked })}
-      />
-      <button
-        type="button"
-        aria-label="应用显示设置"
-        disabled={disabled || edited === null}
-        onClick={apply}
-      >
-        应用
-      </button>
-      <button
-        type="button"
-        aria-label="取消显示设置"
-        disabled={disabled || edited === null}
-        onClick={() => setEdited(null)}
-      >
-        取消
-      </button>
-    </fieldset>
-  );
+  const booleans = ["showBlackCandidates", "showWhiteCandidates", "showWinrate", "showVisits", "showScore", "showOrder", "emphasizeMax", "useCandidateOwnership"] as const;
+  return <fieldset className="preferences-grid granular-display-preferences" disabled={disabled}>
+    <legend>{t("display.title")}</legend>
+    <Toggle label="坐标" checked={draft.showCoordinates} disabled={disabled} onChange={(checked) => setEdited({ ...draft, showCoordinates: checked })} />
+    <Toggle label="全部手数" checked={draft.showMoveNumbers} disabled={disabled} onChange={(checked) => setEdited({ ...draft, showMoveNumbers: checked })} />
+    <label>{t("display.delayMode")}<select aria-label={t("display.delayMode")} value={display.delayMode} onChange={event => update({ delayMode: event.target.value as GranularDisplay["delayMode"] })}>
+      {(["off", "timed", "manual"] as const).map(mode => <option key={mode} value={mode}>{t(`display.${mode}`)}</option>)}
+    </select></label>
+    <label>{t("display.delaySeconds")}<input aria-label={t("display.delaySeconds")} type="number" step="0.001" value={Number.isNaN(display.delaySeconds) ? "" : display.delaySeconds} onChange={event => update({ delaySeconds: event.target.value === "" ? NaN : Number(event.target.value) })} /></label>
+    {booleans.map(key => <Toggle key={key} label={t(`display.${key}`)} checked={display[key]} disabled={disabled} onChange={checked => update({ [key]: checked })} />)}
+    <label>{t("display.pvVisitsMode")}<select aria-label={t("display.pvVisitsMode")} value={display.pvVisitsMode} onChange={event => update({ pvVisitsMode: event.target.value as GranularDisplay["pvVisitsMode"] })}>
+      <option value="off">{t("display.pvOff")}</option><option value="last">{t("display.last")}</option><option value="all">{t("display.all")}</option>
+    </select></label>
+    {(["pvVisitsThreshold", "pvLength"] as const).map(key => <label key={key}>{t(`display.${key}`)}<input aria-label={t(`display.${key}`)} type="number" step="1" value={Number.isNaN(display[key]) ? "" : display[key]} onChange={event => update({ [key]: event.target.value === "" ? NaN : Number(event.target.value) })} /></label>)}
+    <label>{t("display.scoreMode")}<select aria-label={t("display.scoreMode")} value={display.scoreMode} onChange={event => update({ scoreMode: event.target.value as GranularDisplay["scoreMode"] })}>
+      <option value="lead">{t("display.lead")}</option><option value="board">{t("display.board")}</option>
+    </select></label>
+    {display.textOrder.map((field, index) => <label key={index}>{t("display.textOrder")} {index + 1}<select aria-label={`${t("display.textOrder")} ${index + 1}`} value={field} onChange={event => {
+      const next = [...display.textOrder] as GranularDisplay["textOrder"];
+      const target = event.target.value as CandidateTextField;
+      const old = next.indexOf(target); next[old] = field; next[index] = target; update({ textOrder: next });
+    }}>{(["winrate", "visits", "score"] as const).map(value => <option key={value} value={value}>{t(`display.${value}`)}</option>)}</select></label>)}
+    <label>{t("display.ownershipStyle")}<select aria-label={t("display.ownershipStyle")} value={display.ownershipStyle} onChange={event => update({ ownershipStyle: event.target.value as OwnershipStyle })}>
+      {(["small", "normal", "notOnLive", "bigBelow", "bySize"] as const).map(value => <option key={value} value={value}>{t(`display.${value}`)}</option>)}
+    </select></label>
+    <p role="status">{t("display.rawUnavailable")}</p>
+    {error ? <p role="alert">{t("display.invalid")}</p> : null}
+    <button type="button" aria-label="应用显示设置" disabled={disabled || edited === null} onClick={() => {
+      if (!validGranularDisplay(display)) { setError(true); return; }
+      onChange({ ...preferences, ...draft });
+    }}>{t("display.apply")}</button>
+    <button type="button" aria-label="取消显示设置" disabled={disabled || edited === null} onClick={() => { setEdited(null); setError(false); }}>{t("display.cancel")}</button>
+  </fieldset>;
 }
 
 function NewGameDefaultsEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {

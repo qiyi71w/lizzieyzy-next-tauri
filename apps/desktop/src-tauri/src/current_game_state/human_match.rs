@@ -328,6 +328,7 @@ impl CurrentGameState {
         });
         let (id, baseline, staged, endpoint, position, turns) = {
             let mut holder = self.holder.lock().expect("current game state");
+            self.interrupt_continuation();
             holder
                 .ensure_editable()
                 .map_err(|error| invalid(error.to_string()))?;

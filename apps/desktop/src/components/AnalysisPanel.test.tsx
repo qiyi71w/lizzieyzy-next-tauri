@@ -67,6 +67,89 @@ afterEach(() => {
 });
 
 describe("AnalysisPanel candidate preview", () => {
+  it("preserves the top visible vertex on reorder and clamps long-to-short lists without activation", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const select = vi.fn();
+    const candidates = Array.from({ length: 8 }, (_, x) => ({ ...frame.candidates[0], vertex: { point: { x, y: 0 } } }));
+    const render = (items = candidates) => act(() => root?.render(
+      <AnalysisPanel pane="reference" frame={{ ...frame, candidates: items }} presentationIdentity="scope"
+        problems={[]} boardWidth={9} boardHeight={9} currentMove={0} currentPosition={position}
+        selectedCandidateIndex={null} onSelectCandidate={select} onSelectProblem={() => undefined} />));
+    render();
+    const list = host.querySelector('[role="grid"]') as HTMLElement;
+    Object.defineProperties(list, {
+      clientHeight: { get: () => 80 }, offsetHeight: { get: () => 80 },
+      scrollHeight: { get: () => 20 + host.querySelectorAll(".cand-row").length * 20 }
+    });
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this === list) return new DOMRect(0, 0, 240, 80);
+      if (this.tagName === "THEAD") return new DOMRect(0, 0, 240, 20);
+      const index = [...host.querySelectorAll(".cand-row")].indexOf(this);
+      return new DOMRect(0, 20 + index * 20 - list.scrollTop, 240, 20);
+    });
+    act(() => { list.scrollTop = 60; list.dispatchEvent(new Event("scroll")); });
+    render([candidates[7], ...candidates.slice(0, 7)]);
+    expect(list.scrollTop).toBe(80);
+    expect(host.querySelector('[data-candidate="3:0"]')?.getBoundingClientRect().top).toBe(20);
+    render(candidates.slice(0, 2));
+    expect(list.scrollTop).toBe(0);
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("browses one focus owner without selecting, retains pass focus on reorder, and activates explicitly", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const select = vi.fn();
+    const pass = { ...frame.candidates[0], vertex: "pass" as const, pv: [] };
+    const render = (candidates = [...frame.candidates, pass], identity = "node-a") => act(() => root?.render(
+      <AnalysisPanel pane="reference" frame={{ ...frame, candidates }} presentationIdentity={identity}
+        problems={[]} boardWidth={9} boardHeight={9} currentMove={0} currentPosition={position}
+        selectedCandidateIndex={null} onSelectCandidate={select} onSelectProblem={() => undefined} />));
+    render();
+    const list = host.querySelector('[role="grid"]') as HTMLElement;
+    act(() => list.focus());
+    const focused = () => document.getElementById(list.getAttribute("aria-activedescendant")!)?.getAttribute("aria-label");
+    const outerKey = vi.fn();
+    document.addEventListener("keydown", outerKey);
+    const key = (key: string, extra = {}) => act(() => list.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...extra })));
+    key("ArrowDown");
+    expect(focused()).toBe("G4");
+    key("ArrowLeft");
+    expect(focused()).toBe("C6");
+    key("ArrowRight");
+    expect(focused()).toBe("G4");
+    key("End");
+    expect(focused()).toBe("pass");
+    expect(select).not.toHaveBeenCalled();
+    document.removeEventListener("keydown", outerKey);
+    expect(outerKey).not.toHaveBeenCalled();
+    render([pass, ...frame.candidates]);
+    expect(focused()).toBe("pass");
+    expect(document.activeElement).toBe(list);
+    key("Enter");
+    expect(select).toHaveBeenLastCalledWith(0);
+    key("Home");
+    key("ArrowDown");
+    key(" ");
+    expect(select).toHaveBeenLastCalledWith(1);
+    key("End", { isComposing: true });
+    key("End", { ctrlKey: true });
+    expect(focused()).toBe("C6");
+    expect(select).toHaveBeenCalledTimes(2);
+    render([pass]);
+    expect(focused()).toBe("pass");
+    expect(select).toHaveBeenCalledTimes(2);
+    const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    act(() => list.dispatchEvent(tab));
+    expect(tab.defaultPrevented).toBe(false);
+    render([], "node-b");
+    expect(list.hasAttribute("aria-activedescendant")).toBe(false);
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("暂无可用候选点");
+  });
+
   it("shows missing GTP candidate score as unavailable while preserving candidates, winrate and PV", () => {
     const host = document.createElement("div");
     document.body.append(host);

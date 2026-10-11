@@ -52,6 +52,7 @@ pub(super) fn seal_review_jobs(
     let Some(manager) = manager else {
         return Ok(Vec::new());
     };
+    manager.retire_batch_for_authority()?;
     manager.cancel_current_game_move();
     let jobs = crate::document_departure::jobs_from_snapshot(&manager.snapshot());
     for job in &jobs {
@@ -85,6 +86,7 @@ impl CurrentGameState {
         let manager = self.analysis_manager.get();
         let (id, jobs) = {
             let mut holder = self.holder.lock().expect("current game state");
+            self.interrupt_continuation();
             holder.ensure_editable().map_err(|error| error.message)?;
             let document = holder
                 .document

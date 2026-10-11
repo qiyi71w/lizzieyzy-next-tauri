@@ -58,6 +58,7 @@ fn profile(id: &str, name: &str) -> EngineProfileRecord {
                 max_visits: 800,
             }),
         },
+        thread_policy: Default::default(),
     }
 }
 

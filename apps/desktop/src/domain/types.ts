@@ -1,11 +1,18 @@
 import type { NetworkRoute } from "./providers";
 export type EvaluationPhaseDto = "idle" | "unavailable" | "qualifying" | "running" | "completed" | "failed" | "cancelled" | "yielded" | "retired";
+export type EvaluationMeasurementDto = {
+  measured_threads: number;
+  nn_evals_per_second: number | null;
+  search_visits_per_second: number | null;
+};
 export type EvaluationResultDto = {
+  evaluation_id: string;
   target_id: string;
   input_revision: string;
   qualified_resource: QualifiedLocalResourceDto;
   elapsed_ms: number;
-  search_visits_per_second: number | null;
+  measurements: EvaluationMeasurementDto[];
+  recommendation?: ThreadRecommendationDto | null;
 };
 export type EvaluationSnapshotDto = {
   evaluation_id: string | null;
@@ -18,6 +25,23 @@ export type EvaluationSnapshotDto = {
   output_truncated: boolean;
   message: string | null;
   result: EvaluationResultDto | null;
+};
+
+export type ThreadStrategyDto = "cfg" | "benchmark";
+export type SavedThreadPolicyDto = { strategy: ThreadStrategyDto; revision: number; recommendation: ThreadRecommendationDto | null };
+export type ThreadRecommendationDto = {
+  evaluation_id: string; target_id: string; input_revision: string; policy_revision: number;
+  source_revision: string; threads: number; seconds_per_move: string; source_row: string;
+  qualified_resource: QualifiedLocalResourceDto; command_revision: string; environment: string;
+};
+export type RecommendationValidityDto = "none" | "invalid" | "changed" | "unknown" | "valid";
+export type ThreadPolicyStatusDto = {
+  target_id: string; input_revision: string; policy: SavedThreadPolicyDto;
+  validity: RecommendationValidityDto; reason: string; recommendation: ThreadRecommendationDto | null;
+};
+export type ThreadPolicySaveRequestDto = {
+  target_id: string; expected_revision: number; input_revision: string;
+  strategy: ThreadStrategyDto; evaluation_id: string | null;
 };
 
 export type ExportConfirmationDto = { title: string; message: string };
@@ -199,7 +223,7 @@ export type ApplicationExitOutcomeDto = {
   teardown?: ApplicationTeardownAttemptDto | null;
   recovery_persist_error?: string | null;
 };
-export type CandidateMoveDto = { vertex: MoveVertex; visits: number; winrate_black: number; score_mean_black: number | null; policy_prior?: number | null; pv: MoveVertex[] };
+export type CandidateMoveDto = { vertex: MoveVertex; visits: number; winrate_black: number; score_mean_black: number | null; policy_prior?: number | null; pv: MoveVertex[]; pv_visits?: number[] | null; ownership?: number[] | null };
 export type AnalysisFrameDto = { job_id: string; game_id?: string | null; node_id?: string | null; turn: number; visits: number; winrate_black: number; score_mean_black?: number | null; score_stdev?: number | null; candidates: CandidateMoveDto[]; ownership?: number[] | null; policy?: number[] | null };
 export type ProblemMarkerDto = { turn: number; severity: "info" | "inaccuracy" | "mistake" | "blunder"; winrate_loss: number; score_loss?: number | null; label: string };
 export type EngineBackendDto = "kata_go_analysis" | "kata_go_gtp" | "generic_gtp";
@@ -213,7 +237,7 @@ export type EngineProfileDto = {
   | { adapter_kind: "kata_go_analysis" | "kata_go_gtp"; settings: KataGoSettingsDto }
   | { adapter_kind: "generic_gtp"; settings: Record<string, never> }
 );
-export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto; preload: boolean };
+export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto; preload: boolean; thread_policy?: SavedThreadPolicyDto };
 export type EngineStartupPolicyDto = { mode: "off" } | { mode: "fixed"; profile_id: string } | { mode: "last_primary" };
 export type StartupEvaluationSettingsDto = { enabled: boolean; target_profile_id: string | null };
 export type EngineProfilesSettingsDto = { version: number; selected_profile_id: string; startup: EngineStartupPolicyDto; last_primary_profile_id: string | null; startup_evaluation: StartupEvaluationSettingsDto; profiles: EngineProfileRecordDto[] };
@@ -359,6 +383,7 @@ export type EngineRunDto = {
   profile_id: string;
   adapter_kind: EngineBackendDto;
   profile_snapshot: EngineProfileDto;
+  thread_policy_snapshot?: SavedThreadPolicyDto;
   capability_snapshot?: EngineCapabilitySnapshotDto | null;
   qualified_resource?: QualifiedLocalResourceDto | null;
 };
@@ -491,10 +516,19 @@ export type ContinuousAnalysisSnapshotDto = {
   enabled: boolean | null;
   phase: ContinuousAnalysisPhaseDto;
 };
+export type GameLoadSourceDto = "open" | "recent" | "file_delivery" | "clipboard" | "text" | "excluded";
+export type AutoLoadPreferencesDto = { enabled: boolean; totalVisits: number };
+export type AutoLoadSnapshotDto = {
+  phase: "idle" | "waiting" | "running" | "complete" | "not_needed" | "unavailable" | "cancelled" | "failed";
+  load_id: number; generation: number; run_id: string | null; task_id: string | null;
+  total_visits: number; reason: string | null;
+};
 export type ForegroundEngineSnapshotDto = {
   revision: number;
   lifecycle: ForegroundEngineLifecycleDto;
   continuous: ContinuousAnalysisSnapshotDto;
+  auto_load?: AutoLoadSnapshotDto;
+  auto_load_recovery?: "restart_required" | "confirming" | "confirmed" | null;
   selected_node_job?: AnalysisJobStartedDto | null;
   whole_game_job?: AnalysisJobStartedDto | null;
   game_move_job?: GameMoveJobDto | null;
@@ -706,3 +740,36 @@ export type ManagedOperationDto = {
   repair_hardware: ManagedHardwareDto | null;
 };
 export type ManagedResourcesDto = { catalog: ManagedCatalogDto; operation: ManagedOperationDto | null };
+
+export type BatchPreferencesDto = {
+  strategy: AnalysisTaskStrategyDto; scope: AnalysisScopeDto;
+  normal: AnalysisStageConditionsDto; overview: AnalysisStageConditionsDto; deep: AnalysisStageConditionsDto;
+  swingOverview: AnalysisStageConditionsDto; swingDeep: AnalysisStageConditionsDto; swingCriteria: AnalysisSwingCriteriaDto;
+};
+export type BatchIdentityDto = { batch_id: string; row_id: string; attempt: number };
+export type BatchRowDto = {
+  identity: BatchIdentityDto; source_path: string; output_name: string;
+  state: "pending" | "waiting" | "running" | "completed" | "failed" | "cancelled";
+  conditions: BatchPreferencesDto; preview: AnalysisScopePreviewDto | null; task: AnalysisTaskDto | null;
+  document_id: string | null; input_receipt: string | null; calculation_complete: boolean; has_result: boolean;
+  output_state: "unsaved" | "saving" | "saved" | "failed"; saved_path: string | null; incomplete: boolean; reason: string | null;
+};
+export type BatchSnapshotDto = {
+  batch_id: string; rows: BatchRowDto[]; notices: string[]; started: boolean; paused: boolean; reason: string | null; output_directory: string | null;
+};
+export type BatchOutputAuthorizationDto = { mode: "session_only" } | { mode: "directory"; path: string; confirmed_names: string[] };
+export type BatchCommandDto =
+  | { action: "intake"; paths: string[]; conditions: BatchPreferencesDto }
+  | { action: "remove" | "rerun"; identity: BatchIdentityDto }
+  | { action: "reorder"; row_ids: string[] }
+  | { action: "start"; output: BatchOutputAuthorizationDto }
+  | { action: "continue" | "pause" | "stop_current" | "stop_all" | "new_batch" }
+  | { action: "save"; identity: BatchIdentityDto; path: string; overwrite: boolean; incomplete: boolean };
+
+export type ContinuationModeDto = "leaf_only" | "every_beat";
+export type ContinuationPreferencesDto = { mode: ContinuationModeDto; intervalSeconds: number };
+export type ContinuationSnapshotDto = {
+  session_id: string | null; phase: "stopped" | "waiting" | "running" | "failed" | "terminal";
+  mode: ContinuationModeDto; run_id: string | null; request_id: string | null;
+  generation: number; node_path: NodePath; reason: string | null; current_game: CurrentGameResultDto | null;
+};

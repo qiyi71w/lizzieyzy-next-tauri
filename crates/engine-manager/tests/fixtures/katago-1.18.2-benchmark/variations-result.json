@@ -1,0 +1,78 @@
+{
+  "evaluation_id": "1794319b-b817-490e-8516-e51f81172a01",
+  "target_id": "target",
+  "input_revision": "5c7cc11ab1be0d090d4f4cdf51f997fd21ecd1e6041b7e54c43f2737dffc5e45",
+  "qualified_resource": {
+    "profile_revision": "5c7cc11ab1be0d090d4f4cdf51f997fd21ecd1e6041b7e54c43f2737dffc5e45",
+    "resources": [
+      {
+        "component": "executable",
+        "resolved_path": "[private-1]",
+        "sha256": "c7c5cd77aafd5fb41346585531537b483edc68eaa524a84177cb367539152242",
+        "bytes": 2804
+      },
+      {
+        "component": "config",
+        "resolved_path": "[private-10]",
+        "sha256": "129b4cde6c960bb6d7b4150f3eca070228b475bb410c1ece97ed463a0815fc84",
+        "bytes": 40
+      },
+      {
+        "component": "config",
+        "resolved_path": "[private-11]",
+        "sha256": "96cc1773e03d3727b034630fd06376d218af6e970c352afd313164008b536479",
+        "bytes": 16
+      },
+      {
+        "component": "model",
+        "resolved_path": "[private-12]",
+        "sha256": "9372c470eeadd5ecd9c3c74c2b3cb633f8e2f2fad799250a0f70d652b6b825e4",
+        "bytes": 5
+      },
+      {
+        "component": "config",
+        "resolved_path": "[private-13]",
+        "sha256": "ab2f88d4d82396aef2e958e6d946a45f7ea350cd8dcb05416045536b5e91f67e",
+        "bytes": 16
+      }
+    ],
+    "origin": "local_unknown",
+    "version": "KataGo v1.18.2",
+    "source_commit": null,
+    "backend": "Using Eigen(CPU) backend",
+    "static_zlib_exemption": false
+  },
+  "elapsed_ms": 16,
+  "measurements": [
+    {
+      "measured_threads": 1,
+      "nn_evals_per_second": 87.25,
+      "search_visits_per_second": 123.5
+    },
+    {
+      "measured_threads": 2,
+      "nn_evals_per_second": null,
+      "search_visits_per_second": 250.0
+    },
+    {
+      "measured_threads": 4,
+      "nn_evals_per_second": 310.5,
+      "search_visits_per_second": null
+    },
+    {
+      "measured_threads": 8,
+      "nn_evals_per_second": 411.75,
+      "search_visits_per_second": null
+    },
+    {
+      "measured_threads": 16,
+      "nn_evals_per_second": null,
+      "search_visits_per_second": 500.0
+    },
+    {
+      "measured_threads": 32,
+      "nn_evals_per_second": null,
+      "search_visits_per_second": null
+    }
+  ]
+}

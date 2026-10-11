@@ -8,6 +8,7 @@ pub(super) struct DepartureSession {
     pub id: u64,
     pub phase: DeparturePhase,
     pub target: DepartureTarget,
+    pub load_source: app_model::GameLoadSourceDto,
 }
 
 pub(super) enum DepartureTarget {
@@ -41,6 +42,23 @@ impl CurrentGameState {
             network_lease: None,
             external_start: None,
         })
+    }
+
+    pub fn prepare_loaded_replacement(
+        &self,
+        sgf_text: &str,
+        native_path: Option<String>,
+        source: app_model::GameLoadSourceDto,
+    ) -> Result<DocumentDepartureAdmissionDto, CurrentGameError> {
+        let admission = self.prepare_replacement(sgf_text, native_path)?;
+        self.holder
+            .lock()
+            .expect("current game state")
+            .departure
+            .as_mut()
+            .expect("prepared replacement")
+            .load_source = source;
+        Ok(admission)
     }
 
     pub fn document_identity(&self) -> u64 {
@@ -120,6 +138,7 @@ impl CurrentGameState {
             _ => return Err(departure_in_progress()),
         }
         holder.edits_blocked = true;
+        self.interrupt_continuation();
         if let Some(manager) = self.analysis_manager.get() {
             manager.begin_continuous_departure();
         }
@@ -198,8 +217,14 @@ impl CurrentGameState {
         if let Some(manager) = self.analysis_manager.get() {
             manager.clear_continuous_position();
             self.follow_continuous_position(&mut holder);
-            manager.finish_continuous_departure(true);
+            if session.load_source != app_model::GameLoadSourceDto::Excluded {
+                manager.finish_loaded_replacement(holder.document_identity, holder.generation);
+            } else {
+                manager.finish_continuous_departure(true);
+            }
         }
+        drop(holder);
+        self.reconcile_auto_load();
         Ok(DocumentDepartureOutcomeDto {
             committed: true,
             analysis_stopped: true,
@@ -421,6 +446,7 @@ impl CurrentGameState {
             id: departure_id,
             phase: DeparturePhase::AwaitingDecision,
             target,
+            load_source: app_model::GameLoadSourceDto::Excluded,
         });
         if dirty {
             Ok(DocumentDepartureAdmissionDto::NeedsDecision { departure_id })

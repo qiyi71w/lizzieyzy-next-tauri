@@ -37,6 +37,7 @@ const backend = vi.hoisted(() => ({
   startSelectedNodeAnalysis: vi.fn(),
   cancelSelectedNodeAnalysis: vi.fn(),
   cancelKataGoAnalysis: vi.fn(),
+  cancelAutoLoad: vi.fn(async () => undefined),
   classifyProblems: vi.fn(),
   fakeAnalyze: vi.fn(),
   listenToKataGoAnalysisEvents: vi.fn(),
@@ -172,6 +173,83 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.clearAllMocks();
   vi.restoreAllMocks();
+});
+
+it("saves independent automatic-load drafts only explicitly and retains committed values after cancellation or disk failure", async () => {
+  const host = await renderApp();
+  openPreferences(host);
+  const visits = labeledControl<HTMLInputElement>(host, "自动补析 total visits", "input");
+  const enabled = labeledControl<HTMLInputElement>(host, "为后续载入补齐第一子主线分析", "input");
+  expect(visits.value).toBe("1");
+  expect(enabled.checked).toBe(false);
+  act(() => enabled.click());
+  changeBudgetNumber(visits, "7");
+  act(() => buttonNamed(host, "取消自动补析修改").click());
+  expect(enabled.checked).toBe(false);
+  expect(visits.value).toBe("1");
+  changeBudgetNumber(visits, "0");
+  await act(async () => buttonNamed(host, "保存自动补析设置").click());
+  expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  expect(host.textContent).toContain("请输入 1–4294967295 的正整数");
+  act(() => enabled.click());
+  changeBudgetNumber(visits, "7");
+  preferencesApi.saveAppPreferences.mockRejectedValueOnce(new Error("disk full"));
+  await act(async () => buttonNamed(host, "保存自动补析设置").click());
+  expect(host.textContent).toContain("disk full");
+  expect(visits.value).toBe("7");
+  await act(async () => buttonNamed(host, "保存自动补析设置").click());
+  expect(preferencesApi.saveAppPreferences).toHaveBeenLastCalledWith(expect.objectContaining({
+    autoLoad: { enabled: true, totalVisits: 7 },
+    taskSingleStageConditions: defaultAppPreferences.taskSingleStageConditions,
+    continuousVisitsLimit: defaultAppPreferences.continuousVisitsLimit,
+  }));
+  expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+  expect(backend.startKataGoGameAnalysis).not.toHaveBeenCalled();
+});
+
+it("keeps automatic Starting cancellation outside the hidden task sheet and disables unconfirmed recovery Continue", async () => {
+  const host = await renderApp();
+  const publish = backend.subscribeForegroundEngine.mock.calls.at(-1)?.[0];
+  await act(async () => publish?.({ revision: 100, lifecycle: { state: "no_engine" }, continuous: { enabled: true, phase: "waiting" },
+    auto_load: { phase: "waiting", load_id: 3, generation: 1, run_id: "starting-3", task_id: null, total_visits: 1, reason: null } }));
+  const toggle = buttonNamed(host, "隐藏分析任务面板");
+  await act(async () => toggle.click());
+  expect(document.getElementById(toggle.getAttribute("aria-controls")!)?.hidden).toBe(true);
+  expect(backend.cancelAutoLoad).not.toHaveBeenCalled();
+  expect(buttonNamed(host, "停止本次自动补析").closest("[hidden]")).toBeNull();
+  await act(async () => buttonNamed(host, "停止本次自动补析").click());
+  expect(backend.cancelAutoLoad).toHaveBeenCalledTimes(1);
+  await act(async () => publish?.({ revision: 101, lifecycle: { state: "no_engine" }, continuous: { enabled: true, phase: "safety_hold" },
+    auto_load_recovery: "confirming" }));
+  expect(host.textContent).toContain("新实例正在确认当前谱规则");
+  expect(backend.foregroundEngineContinuousAction).not.toHaveBeenCalled();
+});
+
+it("keeps granular display drafts local through Cancel and failed Apply, then explicitly retries and reopens committed values", async () => {
+  const host = await renderApp();
+  openPreferences(host);
+  const seconds = requiredElement<HTMLInputElement>(host, '[aria-label="延迟秒数"]');
+  changeBudgetNumber(seconds, "2.5");
+  act(() => requiredElement<HTMLButtonElement>(host, '[aria-label="取消显示设置"]').click());
+  expect(seconds.value).toBe("10");
+  expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  changeBudgetNumber(seconds, "0");
+  act(() => requiredElement<HTMLButtonElement>(host, '[aria-label="应用显示设置"]').click());
+  expect(host.textContent).toContain("显示设置无效");
+  expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  changeBudgetNumber(seconds, "2.5");
+  preferencesApi.saveAppPreferences.mockRejectedValueOnce(new Error("disk read-only"));
+  await act(async () => requiredElement<HTMLButtonElement>(host, '[aria-label="应用显示设置"]').click());
+  expect(preferencesStatus(host)).toContain("disk read-only");
+  expect(seconds.value).toBe("2.5");
+  await act(async () => requiredElement<HTMLButtonElement>(host, '[aria-label="应用显示设置"]').click());
+  expect(preferencesStatus(host)).toContain("saved");
+  const saved = preferencesApi.saveAppPreferences.mock.calls.at(-1)![0] as AppPreferences;
+  expect(saved.granularDisplay.delaySeconds).toBe(2.5);
+  expect(saved.allowDoubleClick).toBe(defaultAppPreferences.allowDoubleClick);
+  act(() => buttonNamed(host, "参数").click());
+  openPreferences(host);
+  expect(requiredElement<HTMLInputElement>(host, '[aria-label="延迟秒数"]').value).toBe("2.5");
 });
 
 it("validates autoplay drafts and keeps committed intervals after Cancel and write failure", async () => {

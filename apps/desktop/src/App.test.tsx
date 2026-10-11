@@ -6,10 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnalysisFrameDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureAdmissionDto, FileActivationDeliveryDto, FileActivationRejectionDto, GameDto, MainWindowPinStatusDto, NodePath, RecoveryProtectionDto, RecoveryStartupDto } from "./domain/types";
 import type { CurrentGameSaveResultDto } from "./domain/types";
 import type { AppPreferences } from "./domain/preferences";
+import type * as PreferencesModule from "./api/preferences";
 import type { WorkspaceSharesDto } from "./domain/types";
 import type { WindowGeometryStatusDto } from "./domain/types";
 import type { EngineProfileRecordDto, HumanMatchActionDto, HumanMatchStartDto, MatchAnalysisPolicyDto, MatchTurnDto, MatchUpdateDto } from "./domain/types";
 import * as externalSyncApi from "./api/externalSync";
+import * as batchApi from "./api/batch";
+import * as continuationApi from "./api/continuation";
+import type { ContinuationSnapshotDto } from "./domain/types";
 import type { ExternalSyncSnapshot } from "./domain/providers";
 import type * as ExportModule from "./api/export";
 
@@ -147,7 +151,10 @@ const mainWindowPinApi = vi.hoisted(() => ({
 vi.mock("./api/mainWindowPin", () => mainWindowPinApi);
 
 
-vi.mock("./api/preferences", () => preferencesApi);
+vi.mock("./api/preferences", async importOriginal => ({
+  ...await importOriginal<typeof PreferencesModule>(),
+  ...preferencesApi,
+}));
 
 const engineSetupProfiles = vi.hoisted(() => ({ current: [] as EngineProfileRecordDto[] }));
 vi.mock("./components/EngineSetupPanel", () => ({
@@ -414,6 +421,67 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.clearAllMocks();
   vi.restoreAllMocks();
+});
+
+describe("App workflow toolbar ownership", () => {
+  it("keeps continuation controls keyboard-owned and rejects beats across pending user navigation", async () => {
+    currentGameFixture.mockResolvedValue(branchingGame);
+    vi.spyOn(continuationApi, "continuationNativeAvailable").mockReturnValue(true);
+    const running: ContinuationSnapshotDto = { session_id: "continuation", phase: "running", mode: "leaf_only", run_id: "run", request_id: "request", generation: branchingGame.generation, node_path: branchingGame.selected_path, reason: null, current_game: null };
+    vi.spyOn(continuationApi, "startContinuation").mockResolvedValue(running);
+    vi.spyOn(continuationApi, "stopContinuation").mockResolvedValue({ ...running, phase: "stopped" });
+    let releaseBeat!: (value: ContinuationSnapshotDto) => void;
+    vi.spyOn(continuationApi, "continuationBeat").mockImplementation(() => new Promise(resolve => { releaseBeat = resolve; }));
+    const host = await renderApp();
+    vi.useFakeTimers();
+    try {
+      await act(async () => buttonNamed(host, "引擎续走").click());
+      const panel = requiredElement(host, '[role="dialog"][aria-label="引擎续走"]');
+      backend.selectCurrentGameNode.mockClear();
+      backend.foregroundEngineContinuousAction.mockClear();
+      const save = buttonNamed(panel, "保存续走设置");
+      for (const key of [" ", "Enter", "ArrowUp", "ArrowLeft"]) pressKey(save, key);
+      expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+      expect(backend.foregroundEngineContinuousAction).not.toHaveBeenCalled();
+      const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+      act(() => panel.dispatchEvent(tab));
+      expect(tab.defaultPrevented).toBe(false);
+      await act(async () => buttonNamed(panel, "开始续走").click());
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      let releaseNavigation!: (value: CurrentGameResultDto) => void;
+      backend.selectCurrentGameNode.mockReturnValueOnce(new Promise(resolve => { releaseNavigation = resolve; }));
+      act(() => buttonLabeled(host, "首手").click());
+      const stale = { ...branchingGame, snapshot_seq: branchingGame.snapshot_seq + 1, selected_path: { indices: [0] }, snapshot: { ...branchingGame.snapshot, path: { indices: [0] }, position: { ...emptyPosition, move_number: 1 } } };
+      await act(async () => releaseBeat({ ...running, current_game: stale }));
+      expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("2");
+      const selected = { ...branchingGame, snapshot_seq: branchingGame.snapshot_seq + 2, selected_path: { indices: [] }, snapshot: { ...branchingGame.snapshot, path: { indices: [] }, position: emptyPosition } };
+      await act(async () => releaseNavigation(selected));
+      expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("0");
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      await act(async () => releaseBeat({ ...running, phase: "stopped", current_game: stale }));
+      expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe("0");
+      await act(async () => panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+      expect(continuationApi.stopContinuation).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(buttonNamed(host, "引擎续走"));
+    } finally { vi.useRealTimers(); }
+  });
+  it("opens both workflow dialogs from the workspace toolbar and returns focus without replacing the workspace", async () => {
+    const host = await renderApp();
+    const toolbar = requiredElement<HTMLElement>(host, '.workspace-visibility-controls');
+    const workspace = requiredElement<HTMLElement>(host, '.workspace-scroll');
+    for (const name of ["多文件批量分析", "引擎续走"]) {
+      const opener = buttonNamed(toolbar, name);
+      await act(async () => opener.click());
+      const dialog = requiredElement<HTMLElement>(host, `[role="dialog"][aria-label="${name}"]`);
+      expect(dialog.contains(document.activeElement)).toBe(true);
+      await act(async () => dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+      expect(host.querySelector(`[role="dialog"][aria-label="${name}"]`)).toBeNull();
+      expect(document.activeElement).toBe(opener);
+      expect(requiredElement(host, '.workspace-scroll')).toBe(workspace);
+      expect(toolbar.parentElement).toBe(workspace.parentElement);
+    }
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+  });
 });
 describe("App external source switching", () => {
   it("preserves the original readboard start error when cancellation also fails", async () => {
@@ -684,7 +752,7 @@ describe("App human match ownership", () => {
     fresh.match_state.analysis.frame!.epoch = 3;
     await act(async () => { matchListener?.(fresh); });
     expect(candidateCoordinates(host)).toEqual(["J1"]);
-    expect(requiredElement(host, ".cand-row").classList.contains("is-selected")).toBe(true);
+    expect(requiredElement(host, ".cand-row").classList.contains("is-selected")).toBe(false);
     const completed = { ...fresh, match_state: { ...fresh.match_state, revision: 6, job: null } };
     await act(async () => { matchListener?.(completed); });
     expect(candidateCoordinates(host)).toEqual(["J1"]);
@@ -1341,7 +1409,7 @@ describe("App candidate continuation preview", () => {
 
     expect(miniBoard.dataset.drawn).not.toBe(beforePreview);
     const rows = host.querySelectorAll(".cand-row");
-    expect(rows[0]?.classList.contains("is-selected")).toBe(true);
+    expect(rows[0]?.classList.contains("is-selected")).toBe(false);
     expect(rows[1]?.classList.contains("is-selected")).toBe(false);
     expect(requiredElement<HTMLInputElement>(host, 'input[aria-label="跳转手数"]').value).toBe(currentMove);
     expect(backend.serializeCurrentGame).toHaveBeenCalledTimes(serializedCalls);
@@ -2347,7 +2415,7 @@ describe("App focus-safe review controls", () => {
     await waitForCandidateRows(host);
 
     const [first, second] = candidateRows(host);
-    expect(first?.classList.contains("is-selected")).toBe(true);
+    expect(first?.classList.contains("is-selected")).toBe(false);
 
     pressKey(buttonNamed(host, "坐标"), "1");
     expect(first?.classList.contains("is-selected")).toBe(true);
@@ -2390,6 +2458,7 @@ describe("App focus-safe review controls", () => {
     const blackFilter = requiredElement<HTMLInputElement>(hostKey, ".check-label input");
     expect(blackFilter.checked).toBe(true);
     act(() => blackFilter.click());
+    await flushLast(preferencesApi.saveAppPreferences);
     expect(blackFilter.checked).toBe(false);
   });
 
@@ -2768,6 +2837,7 @@ describe("App document replacement", () => {
       await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
     });
     expect(host.querySelector(".doc-name")?.textContent).toContain("named.sgf");
+    expect(backend.prepareDocumentReplacement).toHaveBeenLastCalledWith("(;SZ[19]PB[Black]PW[White];B[dd])", null, undefined, "open");
   });
 
   it("imports a selected GIB file through the same read-only replacement contract", async () => {
@@ -2799,6 +2869,7 @@ describe("App document replacement", () => {
     });
     expect(backend.importGameFile).toHaveBeenCalledWith(file);
     expect(host.querySelector(".doc-name")?.textContent).toContain("upload.sgf");
+    expect(backend.prepareDocumentReplacement).toHaveBeenLastCalledWith("(;SZ[19]PB[Black]PW[White];B[dd])", null, undefined, "open");
   });
 
   it("routes paste, sample, New, and parse through the shared replacement owner", async () => {
@@ -2831,6 +2902,10 @@ describe("App document replacement", () => {
       await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
     });
     expect(backend.prepareDocumentReplacement.mock.calls.length).toBe(4);
+    expect(backend.prepareDocumentReplacement).toHaveBeenNthCalledWith(1, expect.any(String), null, undefined, "clipboard");
+    expect(backend.prepareDocumentReplacement).toHaveBeenNthCalledWith(2, expect.any(String), null, undefined, "excluded");
+    expect(backend.prepareDocumentReplacement).toHaveBeenNthCalledWith(3, expect.any(String), null, undefined, "excluded");
+    expect(backend.prepareDocumentReplacement).toHaveBeenNthCalledWith(4, expect.any(String), null, undefined, "text");
   });
 
   it("exits keyboard placement after a committed document replacement", async () => {
@@ -2853,6 +2928,23 @@ describe("App document replacement", () => {
 
 
 describe("App application exit", () => {
+  it("cancels batch loss confirmation before current-document departure and permits a later explicit exit", async () => {
+    const warning = vi.spyOn(batchApi, "confirmBatchExit").mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    try {
+      const host = await renderApp();
+      act(() => buttonNamed(host, "文件").click());
+      await act(async () => { buttonNamed(host, "退出").click(); });
+      expect(backend.prepareApplicationExit).not.toHaveBeenCalled();
+      expect(backend.resolveApplicationExit).not.toHaveBeenCalled();
+      expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+      act(() => buttonNamed(host, "文件").click());
+      await act(async () => { buttonNamed(host, "退出").click(); });
+      expect(warning).toHaveBeenCalledTimes(2);
+      expect(backend.prepareApplicationExit).toHaveBeenCalledTimes(1);
+      expect(backend.confirmNativeExit).toHaveBeenCalledTimes(1);
+    } finally { warning.mockRestore(); }
+  });
+
   it("rejects file activation throughout layout flush and releases admission on Cancel close", async () => {
     vi.useFakeTimers();
     try {
@@ -3521,6 +3613,7 @@ describe("App native file activation", () => {
     expect(backend.restoreCurrentGameRecovery).not.toHaveBeenCalled();
     expect(backend.readGameFile).toHaveBeenCalledWith(activatedFile.display_path);
     expect(backend.prepareDocumentReplacement).toHaveBeenCalledTimes(1);
+    expect(backend.prepareDocumentReplacement).toHaveBeenLastCalledWith(activatedFile.sgf_text, activatedFile.native_path, undefined, "file_delivery");
     expect(backend.markFileActivationReady).toHaveBeenCalledTimes(1);
     expect(host.textContent).toContain("open me.sgf");
   });
@@ -3990,6 +4083,7 @@ describe("App recent history", () => {
     await flushLast(backend.readGameFile);
     await flushLast(backend.prepareDocumentReplacement);
     expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).not.toBeNull();
+    expect(backend.prepareDocumentReplacement).toHaveBeenLastCalledWith("(;SZ[9])", path, undefined, "recent");
     act(() => buttonLabeled(host, "Cancel").click());
     await flushLast(backend.resolveDocumentReplacement);
     expect(preferencesApi.updateRecentGameHistory).not.toHaveBeenCalled();

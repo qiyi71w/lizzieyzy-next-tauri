@@ -30,6 +30,10 @@ pub struct AnalysisQuery {
     pub include_ownership: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_policy: Option<bool>,
+    #[serde(default, rename = "includePVVisits")]
+    pub include_pv_visits: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_moves_ownership: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report_during_search_every: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -136,7 +140,7 @@ impl AnalysisResponse {
             && self.move_infos.iter().all(|info| {
                 info.move_.as_deref().is_some_and(valid_vertex)
                     && (0.0..=1.0).contains(&info.winrate)
-                    && info.score_mean.is_finite()
+                    && info.score_mean.is_none_or(f32::is_finite)
                     && info.prior.is_none_or(|value| (0.0..=1.0).contains(&value))
                     && info.pv.iter().all(|vertex| valid_vertex(vertex))
             })
@@ -179,11 +183,15 @@ pub struct MoveInfo {
     #[serde(default)]
     pub winrate: f32,
     #[serde(default)]
-    pub score_mean: f32,
+    pub score_mean: Option<f32>,
     #[serde(default)]
     pub prior: Option<f32>,
     #[serde(default)]
     pub pv: Vec<String>,
+    #[serde(default)]
+    pub pv_visits: Option<Vec<u32>>,
+    #[serde(default)]
+    pub ownership: Option<Vec<f32>>,
 }
 
 #[derive(Debug, Error)]
@@ -333,6 +341,8 @@ pub fn analysis_query_from_game(
         max_visits: options.max_visits,
         include_ownership: options.include_ownership,
         include_policy: options.include_policy,
+        include_pv_visits: true,
+        include_moves_ownership: options.include_ownership,
         report_during_search_every: None,
         override_settings: None,
     })
@@ -380,6 +390,8 @@ pub fn analysis_query_from_position(
         max_visits: options.max_visits,
         include_ownership: options.include_ownership,
         include_policy: options.include_policy,
+        include_pv_visits: true,
+        include_moves_ownership: options.include_ownership,
         report_during_search_every: None,
         override_settings: None,
     })
@@ -417,6 +429,8 @@ pub fn analysis_batch_query_from_game(
         max_visits: options.max_visits,
         include_ownership: options.include_ownership,
         include_policy: options.include_policy,
+        include_pv_visits: true,
+        include_moves_ownership: options.include_ownership,
         report_during_search_every: None,
         override_settings: None,
     })
@@ -536,8 +550,13 @@ pub fn normalize_response(
                     .unwrap_or(MoveVertex::Pass),
                 visits: info.visits,
                 winrate_black: info.winrate,
-                score_mean_black: Some(info.score_mean),
+                score_mean_black: info.score_mean,
                 policy_prior: info.prior,
+                pv_visits: info.pv_visits.filter(|values| values.len() == info.pv.len()),
+                ownership: info.ownership.filter(|values| {
+                    values.len() == usize::from(board_width) * usize::from(board_height)
+                        && values.iter().all(|value| (-1.0..=1.0).contains(value))
+                }),
                 pv: info
                     .pv
                     .iter()

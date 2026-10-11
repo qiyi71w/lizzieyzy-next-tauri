@@ -1,0 +1,18 @@
+.batch-global { display: flex; align-items: center; gap: .6rem; min-width: 0; padding: .25rem .75rem; background: var(--toolbar-bg); color: var(--ink); }
+.batch-global span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-panel { position: fixed; inset: 5vh max(2vw, 12px); z-index: 1500; overflow: auto; padding: 1rem; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); color: var(--ink); box-shadow: 0 12px 60px #0009; }
+.batch-panel header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.batch-panel h2 { margin: 0 0 .75rem; }
+.batch-panel fieldset { min-width: 0; margin: .5rem 0; padding: .7rem; border: 1px solid var(--line-strong); }
+.batch-fields { display: flex; flex-wrap: wrap; gap: .65rem; align-items: center; }
+.batch-panel label { display: inline-flex; gap: .4rem; align-items: center; flex-wrap: wrap; margin-right: .6rem; }
+.batch-panel input[type=number] { width: 7rem; }
+.batch-panel input, .batch-panel textarea, .batch-panel select { color: var(--ink); background: var(--surface); }
+.batch-panel textarea { width: min(50vw, 38rem); min-height: 3.5rem; }
+.batch-panel button { margin: .15rem; }
+.batch-panel button:focus-visible, .batch-panel input:focus-visible, .batch-panel select:focus-visible, .batch-panel textarea:focus-visible { outline: 2px solid var(--accent, #77baff); outline-offset: 2px; }
+.batch-table { overflow-x: auto; }
+.batch-table table { width: 100%; border-collapse: collapse; table-layout: fixed; min-width: 750px; }
+.batch-table th, .batch-table td { text-align: left; vertical-align: top; padding: .6rem; border-bottom: 1px solid var(--line-strong); overflow-wrap: anywhere; }
+.batch-table small { display: block; margin-top: .3rem; }
+.batch-table pre { white-space: pre-wrap; max-height: 15rem; overflow: auto; }

@@ -33,6 +33,7 @@ impl PreferencesState {
             loaded.preferences.continuous_analysis_enabled,
             loaded.preferences.continuous_budget,
         )?;
+        manager.set_auto_load_preferences(loaded.preferences.auto_load)?;
         self.network()
             .commit(loaded.preferences.network.clone(), || Ok(()))?;
         *committed = Some(loaded.clone());
@@ -64,7 +65,9 @@ impl PreferencesState {
         preferences.tencent_history = latest.tencent_history.clone();
         preferences.readboard_executable_path = latest.readboard_executable_path.clone();
         preferences.fox_kifu = latest.fox_kifu.clone();
-        manager.commit_continuous_preferences(
+        preferences.batch = latest.batch.clone();
+        preferences.continuation = latest.continuation.clone();
+        let saved = manager.commit_continuous_preferences(
             preferences.continuous_analysis_enabled,
             preferences.continuous_budget,
             || {
@@ -75,7 +78,53 @@ impl PreferencesState {
                 });
                 Ok(saved)
             },
-        )
+        )?;
+        manager.set_auto_load_preferences(saved.auto_load)?;
+        Ok(saved)
+    }
+
+    pub fn save_batch(
+        &self,
+        path: &Path,
+        batch: app_model::BatchPreferencesDto,
+    ) -> Result<app_model::BatchPreferencesDto, String> {
+        batch.validate()?;
+        let mut committed = self.0.lock().map_err(|_| "Preferences transaction poisoned")?;
+        let mut preferences = committed
+            .as_ref()
+            .ok_or("Load preferences before saving batch settings.")?
+            .preferences
+            .clone();
+        preferences.batch = batch;
+        let saved = app_preferences::save_to_path(path, preferences)?;
+        let batch = saved.batch.clone();
+        *committed = Some(AppPreferencesLoadResultDto {
+            preferences: saved,
+            recovery: None,
+        });
+        Ok(batch)
+    }
+
+    pub fn save_continuation(
+        &self,
+        path: &Path,
+        value: app_model::ContinuationPreferencesDto,
+    ) -> Result<app_model::ContinuationPreferencesDto, String> {
+        value.validate()?;
+        let mut committed = self.0.lock().map_err(|_| "Preferences transaction poisoned")?;
+        let mut preferences = committed
+            .as_ref()
+            .ok_or("Load preferences before saving continuation settings.")?
+            .preferences
+            .clone();
+        preferences.continuation = value;
+        let saved = app_preferences::save_to_path(path, preferences)?;
+        let value = saved.continuation.clone();
+        *committed = Some(AppPreferencesLoadResultDto {
+            preferences: saved,
+            recovery: None,
+        });
+        Ok(value)
     }
 
     pub fn save_network(
@@ -523,6 +572,9 @@ impl PreferencesState {
                         });
                         Ok(saved)
                     })?;
+                if !start {
+                    manager.retire_auto_load().map_err(|failure| failure.message)?;
+                }
                 if start && !finite {
                     manager.authorize_continuous_start();
                 }
@@ -541,6 +593,11 @@ pub fn foreground_engine_continuous_action(
 ) -> Result<AppPreferencesDto, String> {
     let path = super::app_preferences_path(&app)?;
     current_game.run_analysis_action(|| preferences.primary(&path, &manager))
+}
+
+#[tauri::command]
+pub fn cancel_auto_load(manager: State<ForegroundEngineManager>) -> crate::EngineCommandResult<()> {
+    manager.retire_auto_load().map_err(Box::new)
 }
 
 pub fn position_request(

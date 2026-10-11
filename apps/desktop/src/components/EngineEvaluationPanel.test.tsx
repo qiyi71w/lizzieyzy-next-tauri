@@ -6,6 +6,7 @@ import * as backend from "../api/backend";
 import type { EngineProfileRecordDto, EvaluationSnapshotDto } from "../domain/types";
 import { EngineEvaluationPanel } from "./EngineEvaluationPanel";
 import { t } from "../i18n/resources";
+import productionResult from "../../../../crates/engine-manager/tests/fixtures/katago-1.18.2-benchmark/variations-result.json";
 
 const idle: EvaluationSnapshotDto = { evaluation_id: null, target_id: null, input_revision: null, phase: "idle", process_id: null, exit_code: null, output: [], output_truncated: false, message: null, result: null };
 const running: EvaluationSnapshotDto = { ...idle, evaluation_id: "one", target_id: "saved", input_revision: "revision", phase: "running", process_id: 123 };
@@ -42,7 +43,8 @@ it("requires explicit saved target, renders real result and cancels only its eva
   expect(backend.startEngineEvaluation).toHaveBeenCalledWith("saved");
   expect(host.textContent).toContain(t("evaluation.running"));
   vi.mocked(backend.getEngineEvaluation).mockResolvedValue({ ...running, phase: "completed", process_id: null, exit_code: 0,
-    result: { target_id: "saved", input_revision: "revision", elapsed_ms: 1000, search_visits_per_second: null,
+    result: { evaluation_id: "one", target_id: "saved", input_revision: "revision", elapsed_ms: 1000,
+      measurements: [{ measured_threads: 1, nn_evals_per_second: 87.25, search_visits_per_second: null }],
       qualified_resource: { profile_revision: "revision", resources: [], origin: "local_unknown", version: "1.18.2", backend: "Eigen", source_commit: null, static_zlib_exemption: false } } });
   await act(async () => { await vi.advanceTimersByTimeAsync(250); });
   expect(host.textContent).toContain(t("evaluation.completed"));
@@ -70,4 +72,48 @@ it("browser preview cannot fabricate measurements or invoke the runner", async (
   expect(host.querySelector("button")!.disabled).toBe(true);
   expect(backend.startEngineEvaluation).not.toHaveBeenCalled();
   expect(backend.getEngineEvaluation).not.toHaveBeenCalled();
+});
+
+it("renders the production parser DTO as independently paired rows with frozen identity", async () => {
+  const completed: EvaluationSnapshotDto = {
+    ...idle, phase: "completed", evaluation_id: productionResult.evaluation_id,
+    target_id: productionResult.target_id, input_revision: productionResult.input_revision,
+    exit_code: 0, result: productionResult,
+  };
+  vi.mocked(backend.getEngineEvaluation).mockResolvedValue(completed);
+  await render();
+  expect(host.textContent).toContain(t("evaluation.completed"));
+  expect(host.textContent).toContain(productionResult.evaluation_id);
+  expect(host.textContent).toContain(productionResult.input_revision);
+  expect(host.textContent).toContain("Using Eigen(CPU) backend");
+  for (const resource of productionResult.qualified_resource.resources) {
+    expect(host.textContent).toContain(resource.sha256);
+  }
+  expect(Array.from(host.querySelectorAll("thead th"), cell => cell.textContent)).toEqual([
+    t("evaluation.threads"), t("evaluation.nnSpeed"), t("evaluation.speed"),
+  ]);
+  const unavailable = t("evaluation.unavailable");
+  expect(Array.from(host.querySelectorAll("tbody tr"), row =>
+    Array.from(row.children, cell => cell.textContent))).toEqual([
+    ["1", "87.25", "123.5"], ["2", unavailable, "250"],
+    ["4", "310.5", unavailable], ["8", "411.75", unavailable],
+    ["16", unavailable, "500"], ["32", unavailable, unavailable],
+  ]);
+  const region = host.querySelector<HTMLElement>("[role=region]")!;
+  expect(region.getAttribute("aria-label")).toBe(t("evaluation.measurements"));
+  expect(region.tabIndex).toBe(0);
+  region.focus();
+  expect(document.activeElement).toBe(region);
+  // Editor/profile changes cannot relabel the result's own ID, threads or resource tuple.
+  await act(async () => root!.render(<EngineEvaluationPanel profiles={[{
+    ...profiles[0], profile: { ...profiles[0].profile, name: "Later target", argv: ["-t", "64"] },
+  }]} disabled={false} />));
+  expect(host.querySelector("tbody tr")!.textContent).toBe("187.25123.5");
+  expect(host.textContent).toContain(productionResult.input_revision);
+  for (const phase of ["failed", "cancelled", "yielded", "retired"] as const) {
+    vi.mocked(backend.getEngineEvaluation).mockResolvedValue({ ...completed, phase, result: null });
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(host.textContent).toContain(t(`evaluation.${phase}`));
+    expect(host.querySelector("table")).toBeNull();
+  }
 });
