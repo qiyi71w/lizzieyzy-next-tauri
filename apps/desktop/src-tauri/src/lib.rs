@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod continuous_analysis;
+mod batch_analysis;
 mod diagnostic_export;
 mod gesture_timing;
 use gesture_timing::board_gesture_timing;
@@ -1348,6 +1349,7 @@ pub fn run() {
                             let _ = emit_handle.emit("foreground-engine://failure", failure);
                         }
                         ForegroundEngineEventDto::Job { mut job } => {
+                            if job.job_id.starts_with("batch:") { continue; }
                             if let Some(state) = emit_handle.try_state::<CurrentGameState>() {
                                 job.current_game = state.attach_from_job_event(&job);
                                 if let Some(trial) = state.attach_trial_from_job_event(&job) {
@@ -1385,6 +1387,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            batch_analysis::batch_snapshot,
+            batch_analysis::batch_command,
+            batch_analysis::load_batch_preferences,
+            batch_analysis::save_batch_preferences,
+            batch_analysis::pick_batch_files,
+            batch_analysis::pick_batch_directory,
+            batch_analysis::pick_batch_save,
             export::export_selected_line,
             export::export_rendered_image,
             external_sync::external_sync_snapshot,

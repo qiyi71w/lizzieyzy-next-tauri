@@ -21,7 +21,7 @@ pub fn jobs_from_snapshot(snapshot: &ForegroundEngineSnapshotDto) -> Vec<Analysi
     {
         jobs.push(job);
     }
-    if let Some(job) = snapshot.whole_game_job.clone() {
+    if let Some(job) = snapshot.whole_game_job.clone().filter(|job| !job.job_id.starts_with("batch:")) {
         jobs.push(job);
     }
     jobs
@@ -198,6 +198,7 @@ fn stop_application_resources(
     budget: Duration,
 ) -> Vec<String> {
     let deadline = Instant::now() + budget;
+    let batch_drained = manager.shutdown_batch(deadline.saturating_duration_since(Instant::now()));
     let readboard = app.state::<readboard_sidecar::ReadboardRuntime>();
     readboard.begin_teardown();
     app.state::<CurrentGameState>().seal_external_sync_for_exit();
@@ -207,6 +208,7 @@ fn stop_application_resources(
     let drained = network.shutdown(deadline.saturating_duration_since(Instant::now()));
     let mut outstanding =
         stop_foreground_resources(manager, deadline.saturating_duration_since(Instant::now()));
+    if !batch_drained { outstanding.push("batch queue/output publication".into()); }
     let export_drained = app
         .state::<engine_manager::diagnostic_export::DiagnosticExport>()
         .shutdown(

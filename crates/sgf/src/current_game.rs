@@ -915,6 +915,14 @@ impl CurrentSgfDocument {
         Ok(serialize_sgf_document(&self.document)?)
     }
 
+    /// Generated provenance must not replace the user's personal C property.
+    pub fn mark_batch_output(&mut self, receipt: &str, incomplete: bool) -> Result<(), CurrentGameError> {
+        let root = self.node_mut(&NodePath::default())?;
+        root.properties.retain(|property| property.key != "LZBATCH");
+        root.properties.push(SgfProperty { key: "LZBATCH".into(), values: vec![format!("{};{}", if incomplete { "incomplete" } else { "complete" }, receipt)] });
+        Ok(())
+    }
+
     /// Serialize one frozen root-to-leaf route without promoting or copying its siblings.
     pub fn serialize_selected_line(&self, leaf: &NodePath) -> Result<String, CurrentGameError> {
         let mut node = self.root()?;

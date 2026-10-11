@@ -3769,6 +3769,7 @@ dependencies = [
  "app-model",
  "encoding_rs",
  "go-core",
+ "parking_lot",
  "serde",
  "thiserror 1.0.69",
  "uuid",

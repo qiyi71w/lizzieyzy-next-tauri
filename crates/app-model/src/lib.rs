@@ -15,6 +15,8 @@ mod analysis_task;
 pub use analysis_task::*;
 mod auto_load;
 pub use auto_load::*;
+mod batch;
+pub use batch::*;
 mod game_move;
 pub use game_move::*;
 mod match_session;

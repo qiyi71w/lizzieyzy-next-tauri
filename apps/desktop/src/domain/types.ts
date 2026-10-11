@@ -740,3 +740,28 @@ export type ManagedOperationDto = {
   repair_hardware: ManagedHardwareDto | null;
 };
 export type ManagedResourcesDto = { catalog: ManagedCatalogDto; operation: ManagedOperationDto | null };
+
+export type BatchPreferencesDto = {
+  strategy: AnalysisTaskStrategyDto; scope: AnalysisScopeDto;
+  normal: AnalysisStageConditionsDto; overview: AnalysisStageConditionsDto; deep: AnalysisStageConditionsDto;
+  swingOverview: AnalysisStageConditionsDto; swingDeep: AnalysisStageConditionsDto; swingCriteria: AnalysisSwingCriteriaDto;
+};
+export type BatchIdentityDto = { batch_id: string; row_id: string; attempt: number };
+export type BatchRowDto = {
+  identity: BatchIdentityDto; source_path: string; output_name: string;
+  state: "pending" | "waiting" | "running" | "completed" | "failed" | "cancelled";
+  conditions: BatchPreferencesDto; preview: AnalysisScopePreviewDto | null; task: AnalysisTaskDto | null;
+  document_id: string | null; input_receipt: string | null; calculation_complete: boolean; has_result: boolean;
+  output_state: "unsaved" | "saving" | "saved" | "failed"; saved_path: string | null; incomplete: boolean; reason: string | null;
+};
+export type BatchSnapshotDto = {
+  batch_id: string; rows: BatchRowDto[]; notices: string[]; started: boolean; paused: boolean; reason: string | null; output_directory: string | null;
+};
+export type BatchOutputAuthorizationDto = { mode: "session_only" } | { mode: "directory"; path: string; confirmed_names: string[] };
+export type BatchCommandDto =
+  | { action: "intake"; paths: string[]; conditions: BatchPreferencesDto }
+  | { action: "remove" | "rerun"; identity: BatchIdentityDto }
+  | { action: "reorder"; row_ids: string[] }
+  | { action: "start"; output: BatchOutputAuthorizationDto }
+  | { action: "continue" | "pause" | "stop_current" | "stop_all" | "new_batch" }
+  | { action: "save"; identity: BatchIdentityDto; path: string; overwrite: boolean; incomplete: boolean };

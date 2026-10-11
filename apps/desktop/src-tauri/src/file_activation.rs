@@ -191,6 +191,11 @@ pub fn handle_second_instance(app: &AppHandle, args: Vec<String>, cwd: String) {
 }
 
 pub fn handle_file_drop(app: &AppHandle, paths: Vec<PathBuf>) {
+    if paths.len() > 1 {
+        let paths: Vec<String> = paths.iter().map(|p| display_path(p)).collect();
+        let _ = app.emit("batch://intake", paths);
+        return;
+    }
     let owner = app.state::<FileActivationOwner>();
     emit_admission(app, owner.admit_drop(paths));
 }

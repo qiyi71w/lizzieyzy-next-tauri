@@ -242,6 +242,7 @@ impl ForegroundEngineManager {
     pub fn reserve_match(&self, owner: &str) -> Result<(), EngineFailureDto> {
         let mut state = self.lock();
         require_unreserved(&state)?;
+        super::batch::admit(&state, None)?;
         game_move::require_idle_move(&state)?;
         super::runtime_control::require_idle(&state)?;
         if owner.is_empty()

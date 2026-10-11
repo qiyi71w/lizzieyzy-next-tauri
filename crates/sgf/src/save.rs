@@ -19,6 +19,17 @@ pub fn write_file_atomic(path: &Path, contents: &[u8]) -> Result<(), String> {
     write_with(path, || Ok(contents), |_| Ok(()))
 }
 
+/// Cancellation and publication share this gate. New output never replaces an existing file.
+pub fn save_document_authorized(document: &CurrentSgfDocument, path: &Path, overwrite: bool,
+    cancelled: &parking_lot::Mutex<bool>) -> Result<(), String> {
+    write_with_publication(path, || document.serialize().map_err(|e| e.to_string()), |_| Ok(()), |temporary, target| {
+        let gate = cancelled.lock();
+        if *gate { return Err("Output cancelled before atomic publication".into()); }
+        if overwrite { fs::rename(temporary, target) } else { fs::hard_link(temporary, target) }
+            .map_err(|e| e.to_string())
+    })
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Stage {
     Prepare,
@@ -31,6 +42,15 @@ fn write_with<T: AsRef<[u8]>>(
     path: &Path,
     encode: impl FnOnce() -> Result<T, String>,
     before: impl Fn(Stage) -> io::Result<()>,
+) -> Result<(), String> {
+    write_with_publication(path, encode, before, |temporary, target| fs::rename(temporary, target).map_err(|e| e.to_string()))
+}
+
+fn write_with_publication<T: AsRef<[u8]>>(
+    path: &Path,
+    encode: impl FnOnce() -> Result<T, String>,
+    before: impl Fn(Stage) -> io::Result<()>,
+    publish: impl FnOnce(&Path, &Path) -> Result<(), String>,
 ) -> Result<(), String> {
     let commit = || -> Result<(), String> {
         before(Stage::Prepare).map_err(|error| error.to_string())?;
@@ -70,7 +90,7 @@ fn write_with<T: AsRef<[u8]>>(
         drop(file);
         prepared?;
         before(Stage::Replace).map_err(|error| error.to_string())?;
-        fs::rename(&temporary.0, path).map_err(|error| error.to_string())?;
+        publish(&temporary.0, path)?;
         Ok(())
     };
     commit().map_err(|error| format!("failed to write file {}: {error}", path.display()))
@@ -86,6 +106,41 @@ impl Drop for Temporary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authorized_output_linearizes_cancel_and_never_clobbers_without_permission() {
+        let dir = std::env::temp_dir().join(format!("batch-publication-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("result.sgf");
+        let gate = std::sync::Arc::new(parking_lot::Mutex::new(false));
+        let mut held = gate.lock();
+        let writer_gate = gate.clone(); let writer_path = path.clone();
+        let writer = std::thread::spawn(move || {
+            let document = CurrentSgfDocument::open("(;SZ[9]C[personal])").unwrap();
+            save_document_authorized(&document, &writer_path, false, &writer_gate)
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while fs::read_dir(&dir).unwrap().count() == 0 {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        *held = true; drop(held);
+        assert!(writer.join().unwrap().unwrap_err().contains("cancelled"));
+        assert!(!path.exists()); assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
+        *gate.lock() = false;
+        let document = CurrentSgfDocument::open("(;SZ[9]C[personal])").unwrap();
+        save_document_authorized(&document, &path, false, &gate).unwrap();
+        let committed = fs::read(&path).unwrap();
+        *gate.lock() = true;
+        assert_eq!(fs::read(&path).unwrap(), committed);
+        *gate.lock() = false;
+        let changed = CurrentSgfDocument::open("(;SZ[13])").unwrap();
+        assert!(save_document_authorized(&changed, &path, false, &gate).is_err());
+        assert_eq!(fs::read(&path).unwrap(), committed);
+        save_document_authorized(&changed, &path, true, &gate).unwrap();
+        assert_eq!(CurrentSgfDocument::open(&fs::read_to_string(&path).unwrap()).unwrap().tree().unwrap(), changed.tree().unwrap());
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn atomic_save_protects_existing_bytes_at_every_failure_boundary() {

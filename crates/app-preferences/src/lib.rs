@@ -52,6 +52,8 @@ pub struct AppPreferencesDto {
     pub continuous_budget: ContinuousAnalysisBudgetDto,
     #[serde(default)]
     pub auto_load: app_model::AutoLoadPreferencesDto,
+    #[serde(default)]
+    pub batch: app_model::BatchPreferencesDto,
     #[serde(default = "default_show_coordinates")]
     pub show_coordinates: bool,
     #[serde(default)]
@@ -182,6 +184,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         continuous_analysis_enabled: default_continuous_analysis_enabled(),
         continuous_budget: ContinuousAnalysisBudgetDto::default(),
         auto_load: app_model::AutoLoadPreferencesDto::default(),
+        batch: app_model::BatchPreferencesDto::default(),
         show_coordinates: default_show_coordinates(),
         show_move_numbers: false,
         show_ownership: default_show_ownership(),
@@ -286,6 +289,7 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
             Ok(preferences)
                 if preferences.continuous_budget.validate().is_ok()
                     && preferences.auto_load.validate().is_ok()
+                    && preferences.batch.validate().is_ok()
                     && preferences.match_defaults.validate().is_ok()
                     && preferences.granular_display.validate().is_ok()
                     && preferences.network.validate().is_ok()
@@ -359,6 +363,7 @@ pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPr
     }
     preferences.continuous_budget.validate()?;
     preferences.auto_load.validate()?;
+    preferences.batch.validate()?;
     let single_stage = preferences
         .task_single_stage_conditions
         .as_ref()
@@ -679,6 +684,7 @@ mod tests {
                 continuous_stop_on_empty_board: true,
             },
             auto_load: app_model::AutoLoadPreferencesDto::default(),
+            batch: app_model::BatchPreferencesDto::default(),
             show_coordinates: false,
             show_move_numbers: true,
             show_ownership: false,

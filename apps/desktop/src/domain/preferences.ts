@@ -4,6 +4,8 @@ import type { AnalysisStageConditionsDto, AnalysisSwingCriteriaDto, ContinuousAn
 import type { AutoLoadPreferencesDto } from "./types";
 import { validReviewAutoplayInterval } from "./reviewAutoplay";
 import { defaultGranularDisplay, readGranularDisplay, type GranularDisplay } from "./granularDisplay";
+import { defaultBatchPreferences } from "./batch";
+import type { BatchPreferencesDto } from "./types";
 
 export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
@@ -16,6 +18,7 @@ import type { WorkspaceVisibilityDto } from "./types";
 
 export type AppPreferences = ContinuousAnalysisBudgetDto & {
   autoLoad: AutoLoadPreferencesDto;
+  batch: BatchPreferencesDto;
   network: NetworkSettings;
   yikeLocator: string | null;
   yikeSync: YikeSyncPreferences;
@@ -145,6 +148,7 @@ export const defaultAppPreferences: AppPreferences = {
   scoringRule: "area",
   continuousAnalysisEnabled: true,
   autoLoad: { enabled: false, totalVisits: 1 },
+  batch: defaultBatchPreferences(),
   recentGamePaths: [],
   recentImageExportDirectory: null,
   continuousTimeLimitEnabled: true,
@@ -208,6 +212,7 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
   const scoreLeadLine = booleanValue(value?.scoreLeadLine, defaultAppPreferences.scoreLeadLine);
   const defaultMaxVisits = integerValue(value?.defaultMaxVisits, defaultAppPreferences.defaultMaxVisits, 1, 1_000_000);
   return {
+    batch: value?.batch ?? defaultBatchPreferences(),
     autoLoad: {
       enabled: booleanValue(value?.autoLoad?.enabled, false),
       totalVisits: integerValue(value?.autoLoad?.totalVisits, 1, 1, 4294967295),

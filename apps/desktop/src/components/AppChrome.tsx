@@ -142,6 +142,7 @@ type Props = {
   onCopySgf: () => void;
   onPasteSgf: () => void;
   onExit: () => void;
+  onBatch: () => void;
   onUndo: () => void;
   onRedo: () => void;
   canUndo: boolean;
@@ -411,6 +412,7 @@ export function AppChrome(props: Props) {
           <ChromeMenu label="分析" open={openMenu === "analyze"} onToggle={() => setOpenMenu(openMenu === "analyze" ? null : "analyze")}>
             <MenuItem label={props.continuousAnalysisAction.label} onClick={() => run(props.onContinuousAnalysis)} disabled={props.continuousAnalysisAction.disabled} title={props.continuousAnalysisAction.title} />
             <MenuItem label="连续分析预算…" onClick={() => run(() => props.onToggleSheet("prefs"))} />
+            <MenuItem label={t("batch.title")} onClick={() => run(props.onBatch)} />
             <MenuItem label={AI_COMMENTARY_LABEL} disabled title={AI_COMMENTARY_UNAVAILABLE} />
             <div className="menu-sep" role="separator" />
             <MenuItem label="超级鹰眼" disabled title={later} />
@@ -539,6 +541,7 @@ export function AppChrome(props: Props) {
 
       <div className="tool-strip" role="toolbar" aria-label="分析工具">
         <button type="button" className="chrome-btn" data-focus-anchor title={t("search.open")} onPointerDown={props.onBeforeFunctionSearch} onKeyDown={props.onBeforeFunctionSearch} onClick={props.onFunctionSearch}>{t("search.title")}</button>
+        <button type="button" className="chrome-btn" onClick={props.onBatch}>{t("batch.title")}</button>
         <div className="icon-group">
           <IconBtn src={toolbarIcons.newFile} label="新建" onClick={props.onNew} disabled={props.busy} />
           <IconBtn src={toolbarIcons.open} label="打开" onClick={props.onOpen} disabled={openDisabled} title={!nativeAvailable ? nativeUnavailable : undefined} />

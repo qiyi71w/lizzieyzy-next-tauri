@@ -28,6 +28,8 @@ import { AboutDialog } from "./components/AboutDialog";
 import { ApplicationTeardownDialog } from "./components/ApplicationTeardownDialog";
 import { CurrentGameRecoveryDialog } from "./components/CurrentGameRecoveryDialog";
 import { AnalysisTaskPanel, type AnalysisScopeDraft } from "./components/AnalysisTaskPanel";
+import { BatchPanel } from "./components/BatchPanel";
+import { confirmBatchExit } from "./api/batch";
 import { ProviderPanel } from "./components/ProviderPanel";
 import { YikeSyncPanel } from "./components/YikeSyncPanel";
 import { ReadboardSyncPanel } from "./components/ReadboardSyncPanel";
@@ -210,6 +212,7 @@ const defaultAnalysisScopeDraft: AnalysisScopeDraft = {
 
 
 export function App() {
+  const [batchOpenRequest, setBatchOpenRequest] = useState(0);
   const mainboardSurfaceRef = useRef<HTMLCanvasElement | null>(null);
   const exportPendingRef = useRef(false);
   const [health, setHealth] = useState<AppHealthDto | null>(null);
@@ -2208,6 +2211,7 @@ export function App() {
       }
       await enterFileFlow();
       enteredFileFlow = true;
+      if (!await confirmBatchExit()) return;
       if (!await flushWorkspaceBeforeDeparture()) return;
       workspace.owner.freeze(true);
       windowFreezeAttempted = true;
@@ -4290,7 +4294,9 @@ export function App() {
 
   return <main ref={workspaceRef} tabIndex={-1} data-focus-owner="workspace" className={`app-shell${preferences.boardTheme === "high-contrast" ? " theme-high-contrast" : ""}${nativeRuntime ? "" : " has-native-runtime-note"}`}>
     {!nativeRuntime ? <p className="native-runtime-note" role="status">{nativeCurrentGameUnavailable}</p> : null}
+    <BatchPanel openRequest={batchOpenRequest} />
     <AppChrome
+      onBatch={() => setBatchOpenRequest(value => value + 1)}
       onBeforeFunctionSearch={() => { if (workspaceRef.current) chromeSearchSourceRef.current = captureFocusReturn(workspaceRef.current); }}
       onFunctionSearch={() => openFunctionSearch(true)}
       authoringEnabled={authoringEnabled}

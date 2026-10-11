@@ -18,6 +18,7 @@ fn allowed(state: &ManagerState) -> bool {
         && state.continuous_paused.is_none() && !state.continuous_departing
         && state.match_reservation.is_none() && state.game_move.is_none()
         && state.runtime_control.is_none()
+        && !super::batch::occupied(&state.batch)
 }
 
 impl ForegroundEngineManager {
@@ -97,7 +98,7 @@ impl ForegroundEngineManager {
             leading_candidate_visits: app_model::AnalysisTaskLimitDto { enabled: false, value: 1 },
         };
         self.start_analysis_task_with_strategy(request, scope, AnalysisTaskStrategyDto::SingleStage,
-            None, conditions, AnalysisTaskTargets::default(), Some(intent))
+            None, conditions, AnalysisTaskTargets::default(), Some(intent), None)
     }
 }
 

@@ -6,10 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnalysisFrameDto, ApplicationExitOutcomeDto, CurrentGameResultDto, DocumentDepartureAdmissionDto, FileActivationDeliveryDto, FileActivationRejectionDto, GameDto, MainWindowPinStatusDto, NodePath, RecoveryProtectionDto, RecoveryStartupDto } from "./domain/types";
 import type { CurrentGameSaveResultDto } from "./domain/types";
 import type { AppPreferences } from "./domain/preferences";
+import type * as PreferencesModule from "./api/preferences";
 import type { WorkspaceSharesDto } from "./domain/types";
 import type { WindowGeometryStatusDto } from "./domain/types";
 import type { EngineProfileRecordDto, HumanMatchActionDto, HumanMatchStartDto, MatchAnalysisPolicyDto, MatchTurnDto, MatchUpdateDto } from "./domain/types";
 import * as externalSyncApi from "./api/externalSync";
+import * as batchApi from "./api/batch";
 import type { ExternalSyncSnapshot } from "./domain/providers";
 import type * as ExportModule from "./api/export";
 
@@ -147,7 +149,10 @@ const mainWindowPinApi = vi.hoisted(() => ({
 vi.mock("./api/mainWindowPin", () => mainWindowPinApi);
 
 
-vi.mock("./api/preferences", () => preferencesApi);
+vi.mock("./api/preferences", async importOriginal => ({
+  ...await importOriginal<typeof PreferencesModule>(),
+  ...preferencesApi,
+}));
 
 const engineSetupProfiles = vi.hoisted(() => ({ current: [] as EngineProfileRecordDto[] }));
 vi.mock("./components/EngineSetupPanel", () => ({
@@ -2860,6 +2865,23 @@ describe("App document replacement", () => {
 
 
 describe("App application exit", () => {
+  it("cancels batch loss confirmation before current-document departure and permits a later explicit exit", async () => {
+    const warning = vi.spyOn(batchApi, "confirmBatchExit").mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    try {
+      const host = await renderApp();
+      act(() => buttonNamed(host, "文件").click());
+      await act(async () => { buttonNamed(host, "退出").click(); });
+      expect(backend.prepareApplicationExit).not.toHaveBeenCalled();
+      expect(backend.resolveApplicationExit).not.toHaveBeenCalled();
+      expect(backend.confirmNativeExit).not.toHaveBeenCalled();
+      act(() => buttonNamed(host, "文件").click());
+      await act(async () => { buttonNamed(host, "退出").click(); });
+      expect(warning).toHaveBeenCalledTimes(2);
+      expect(backend.prepareApplicationExit).toHaveBeenCalledTimes(1);
+      expect(backend.confirmNativeExit).toHaveBeenCalledTimes(1);
+    } finally { warning.mockRestore(); }
+  });
+
   it("rejects file activation throughout layout flush and releases admission on Cancel close", async () => {
     vi.useFakeTimers();
     try {

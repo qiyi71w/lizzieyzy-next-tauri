@@ -88,6 +88,10 @@ def search(query):
     if identity not in active:
         return
     mode = (root / "budget-smoke").read_text().strip() if (root / "budget-smoke").exists() else ""
+    if mode == "engine_error":
+        active.discard(identity)
+        emit(dict(id=identity, error="controlled batch engine rejection"))
+        return
     if mode == "unmarked":
         active.discard(identity)
         emit(invalid_final(query, mode))

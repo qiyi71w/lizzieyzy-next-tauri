@@ -32,6 +32,7 @@ pub use app_model::AnalysisJobLaneDto as AnalysisJobLane;
 mod evaluation;
 mod auto_load;
 mod auto_load_recovery;
+mod batch;
 #[cfg(test)]
 mod evaluation_tests;
 mod game_move;
@@ -257,6 +258,7 @@ struct ManagerState {
     jobs: Vec<RegisteredJob>,
     analysis_task: Option<AnalysisTaskDto>,
     auto_load: auto_load::Owner,
+    batch: batch::Owner,
     subscribers: Vec<Sender<ForegroundEngineEventDto>>,
     continuous_intent: Option<bool>,
     continuous_budget: ContinuousAnalysisBudgetDto,
@@ -323,6 +325,7 @@ impl ForegroundEngineManager {
                     jobs: Vec::new(),
                     analysis_task: None,
                     auto_load: auto_load::Owner::default(),
+                    batch: batch::Owner::default(),
                     last_activity: Instant::now(),
                     subscribers: Vec::new(),
                     continuous_intent: None,
@@ -404,7 +407,7 @@ impl ForegroundEngineManager {
     }
 
     pub fn analysis_task_snapshot(&self) -> Option<AnalysisTaskDto> {
-        self.lock().analysis_task.clone()
+        self.lock().analysis_task.as_ref().filter(|task| !task.job_id.starts_with("batch:")).cloned()
     }
 
     pub fn subscribe(&self) -> Receiver<ForegroundEngineEventDto> {
@@ -642,7 +645,7 @@ impl ForegroundEngineManager {
             if let Some(identity) = state.game_move.as_ref().map(|slot| slot.identity.clone()) {
                 game_move::seal_move_for_run(&mut state, &identity.run_id);
             }
-            if let Some(job_id) = state.analysis_task.as_ref().map(|task| task.job_id.clone()) {
+            if let Some(job_id) = state.analysis_task.as_ref().filter(|task| !task.job_id.starts_with("batch:")).map(|task| task.job_id.clone()) {
                 cancel_analysis_task_locked(&mut state, &job_id);
                 state.jobs.retain(|job| !(job.job_id == job_id && job.terminal));
             }
@@ -950,6 +953,7 @@ impl ForegroundEngineManager {
         self.retire_auto_load()?;
         let old = {
             let mut state = self.lock();
+            batch::admit(&state, None)?;
             validate_selected_admission(&state, &request)?;
             if state.finite_admission_pending {
                 return Err(continuous_invalid_state(
@@ -1022,6 +1026,7 @@ impl ForegroundEngineManager {
         state: &mut ManagerState,
         mut request: SelectedNodeJobRequest,
     ) -> Result<SelectedSubmission, EngineFailureDto> {
+        batch::admit(state, None)?;
         let run = validate_selected_admission(state, &request)?;
         evaluation::yield_to_foreground(state)?;
         state
@@ -1185,6 +1190,7 @@ impl ForegroundEngineManager {
             conditions,
             AnalysisTaskTargets::default(),
             None,
+            None,
         )
     }
 
@@ -1205,6 +1211,7 @@ impl ForegroundEngineManager {
             Some(overview_conditions),
             deep_conditions,
             AnalysisTaskTargets::default(),
+            None,
             None,
         )
     }
@@ -1242,6 +1249,7 @@ impl ForegroundEngineManager {
                 swing_criteria: Some(swing_criteria),
             },
             None,
+            None,
         )
     }
 
@@ -1254,6 +1262,7 @@ impl ForegroundEngineManager {
         conditions: AnalysisStageConditionsDto,
         targets: AnalysisTaskTargets,
         auto_intent: Option<app_model::AutoLoadSnapshotDto>,
+        batch_identity: Option<app_model::BatchIdentityDto>,
     ) -> Result<AnalysisTaskDto, EngineFailureDto> {
         if request.work_items.is_empty() {
             return Err(empty_whole_game_failure(&request.run_id));
@@ -1266,6 +1275,7 @@ impl ForegroundEngineManager {
         let cancel = AnalysisCancelToken::new();
         let (task, bound_query) = {
             let mut state = self.lock();
+            batch::admit(&state, batch_identity.as_ref())?;
             if let Some(intent) = &auto_intent {
                 auto_load::admit(&state, intent)?;
             }
@@ -1323,7 +1333,10 @@ impl ForegroundEngineManager {
             }
 
             let task_id = Uuid::new_v4().to_string();
-            let job_id = Uuid::new_v4().to_string();
+            let job_id = match &batch_identity {
+                Some(id) => format!("batch:{}:{}:{}:{}", id.batch_id, id.row_id, id.attempt, Uuid::new_v4()),
+                None => Uuid::new_v4().to_string(),
+            };
             let query_id = target_query_id(&job_id);
             let first_node_path = request.work_items[0].node_path.clone();
             let first_board_width = request.work_items[0].board_width;
@@ -1399,6 +1412,7 @@ impl ForegroundEngineManager {
                 terminal: false,
             });
             state.analysis_task = Some(task.clone());
+            if let Some(id) = &batch_identity { batch::bind(&mut state, id, &task); }
             if auto_intent.is_some() {
                 state.auto_load.snapshot.task_id = Some(task.task_id.clone());
                 state.auto_load.snapshot.phase = app_model::AutoLoadPhaseDto::Running;
@@ -1433,6 +1447,7 @@ impl ForegroundEngineManager {
     ) -> Result<AnalysisTaskDto, EngineFailureDto> {
         let mut state = self.lock();
         match_reservation::require_unreserved(&state)?;
+        batch::admit(&state, None)?;
         if state.auto_load.snapshot.task_id.as_deref() == Some(task_id)
             && state.auto_load.snapshot.run_id.as_deref() == Some(run_id) {
             auto_load::retire_locked(self, &mut state)?;
@@ -1475,6 +1490,7 @@ impl ForegroundEngineManager {
         let (task, jsonl) = {
             let mut state = self.lock();
             match_reservation::require_unreserved(&state)?;
+            batch::admit(&state, None)?;
             let task = state
                 .analysis_task
                 .as_ref()
@@ -1620,6 +1636,7 @@ impl ForegroundEngineManager {
 
     pub fn invalidate_analysis_task(&self, generation: u64) {
         let mut state = self.lock();
+        if state.batch.current.is_some() { return; }
         if state.auto_load.snapshot.generation != generation {
             let _ = auto_load::retire_locked(self, &mut state);
         }
@@ -1699,6 +1716,9 @@ impl ForegroundEngineManager {
     pub fn cancel_job(&self, run_id: &str, job_id: &str) -> Result<(), EngineFailureDto> {
         let mut state = self.lock();
         match_reservation::require_unreserved(&state)?;
+        if job_id.starts_with("batch:") {
+            return Err(continuous_invalid_state(&state, "Use the batch row Stop action for this private task."));
+        }
         if state.analysis_task.as_ref().is_some_and(|task| {
             task.run_id == run_id && task.job_id == job_id && task.state == AnalysisTaskStateDto::Paused
         }) {
@@ -1960,6 +1980,7 @@ impl ForegroundEngineManager {
             }
             if state.continuous_departing
                 || state.finite_admission_pending
+                || batch::occupied(&state.batch)
                 || (state.auto_load.snapshot.phase == app_model::AutoLoadPhaseDto::Running
                     && state.analysis_task.as_ref().is_some_and(|task|
                         matches!(task.state, AnalysisTaskStateDto::Queued | AnalysisTaskStateDto::Searching | AnalysisTaskStateDto::Pausing)))
@@ -4110,6 +4131,7 @@ fn publish_snapshot(state: &mut ManagerState) {
 }
 
 fn publish_event(state: &mut ManagerState, event: ForegroundEngineEventDto) {
+    batch::observe(state, &event);
     state
         .subscribers
         .retain(|subscriber| subscriber.send(event.clone()).is_ok());

@@ -13,3 +13,4 @@ go-core = { path = "../go-core" }
 serde.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+parking_lot = "0.12"

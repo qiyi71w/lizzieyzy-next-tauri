@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { continuousBudgetError, defaultAppPreferences, newGameDefaultsError, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "../domain/preferences";
 import type { WorkspaceSharesDto, WorkspaceVisibilityDto } from "../domain/types";
 import { normalizeWorkspaceShares } from "../domain/preferences";
+import { validateBatchPreferences } from "../domain/batch";
+import type { BatchPreferencesDto } from "../domain/types";
 
 declare global {
   interface Window {
@@ -47,14 +49,26 @@ export async function saveAppPreferences(preferences: AppPreferences): Promise<A
     ?? taskConditionsError(preferences.taskSwingDeepConditions)
     ?? swingCriteriaError(preferences.taskSwingCriteria);
   if (error) throw new Error(error);
+  validateBatchPreferences(preferences.batch);
   const normalized = normalizeAppPreferences(preferences);
   if (!isTauriRuntime()) {
     const latest = loadBrowserPreferences().preferences;
-    const saved = { ...normalized, workspaceShares: latest.workspaceShares, windowGeometry: latest.windowGeometry, workspaceVisibility: latest.workspaceVisibility, recentGamePaths: latest.recentGamePaths, recentImageExportDirectory: latest.recentImageExportDirectory };
+    const saved = { ...normalized, batch: latest.batch, workspaceShares: latest.workspaceShares, windowGeometry: latest.windowGeometry, workspaceVisibility: latest.workspaceVisibility, recentGamePaths: latest.recentGamePaths, recentImageExportDirectory: latest.recentImageExportDirectory };
     saveBrowserPreferences(saved);
     return saved;
   }
   return normalizeAppPreferences(await invoke<AppPreferences>("save_app_preferences", { preferences: normalized }));
+}
+
+export async function loadBatchPreferences(): Promise<BatchPreferencesDto> {
+  if (isTauriRuntime()) return invoke("load_batch_preferences");
+  return loadBrowserPreferences().preferences.batch;
+}
+export async function saveBatchPreferences(batch: BatchPreferencesDto): Promise<BatchPreferencesDto> {
+  validateBatchPreferences(batch);
+  if (isTauriRuntime()) return invoke("save_batch_preferences", { batch });
+  saveBrowserPreferences({ ...loadBrowserPreferences().preferences, batch });
+  return batch;
 }
 
 export async function updateWorkspaceShares(shares: WorkspaceSharesDto | null): Promise<WorkspaceSharesDto | null> {
@@ -92,6 +106,7 @@ function loadBrowserPreferences(): AppPreferencesLoadResult {
       ?? taskConditionsError(preferences.taskSwingDeepConditions)
       ?? swingCriteriaError(preferences.taskSwingCriteria);
     if (error) throw new Error(error);
+    validateBatchPreferences(preferences.batch);
     return { preferences };
   } catch {
     window.localStorage.setItem(browserUnreadableKey, raw);
