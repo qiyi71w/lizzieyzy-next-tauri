@@ -10,10 +10,10 @@ use sgf::{CurrentSgfDocument, DocumentHistory, SgfAnalysisPayload, SgfDocumentEd
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
-mod auto_load;
-mod continuation;
 #[cfg(test)]
 mod authoring_tests;
+mod auto_load;
+mod continuation;
 #[cfg(test)]
 mod continuous_intent;
 #[cfg(test)]
@@ -120,9 +120,12 @@ impl CurrentGameState {
     // Called with the holder locked: accepted cursor/edit order is also target order.
     fn follow_continuous_position(&self, holder: &mut CurrentGameHolder) {
         if let Some(manager) = self.analysis_manager.get() {
-            manager.set_batch_review_access(!holder.human_match.blocks()
-                && matches!(holder.trial_mode, trial::TrialMode::Review)
-                && holder.external_sync.active.is_none() && holder.external_sync.starting_id().is_none());
+            manager.set_batch_review_access(
+                !holder.human_match.blocks()
+                    && matches!(holder.trial_mode, trial::TrialMode::Review)
+                    && holder.external_sync.active.is_none()
+                    && holder.external_sync.starting_id().is_none(),
+            );
         }
         if holder.human_match.blocks() {
             return;
@@ -871,7 +874,11 @@ impl CurrentGameState {
     }
 
     pub fn attach_from_job_event(&self, event: &AnalysisJobEventDto) -> Option<CurrentGameResultDto> {
-        if self.analysis_manager.get().is_some_and(|manager| manager.is_batch_job(&event.job_id)) {
+        if self
+            .analysis_manager
+            .get()
+            .is_some_and(|manager| manager.is_batch_job(&event.job_id))
+        {
             return None;
         }
         if !admits_analysis_attachment(event) {

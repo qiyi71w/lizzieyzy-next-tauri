@@ -177,7 +177,10 @@ fn parse_candidate(variation: &str, board_width: u8, board_height: u8) -> Option
                 .map(|token| gtp_vertex(token, board_width, board_height))
                 .collect();
             if pv_end < tokens.len() {
-                pv_visits = tokens[pv_end + 1..].iter().map(|token| token.parse::<u32>().ok()).collect::<Option<Vec<_>>>()
+                pv_visits = tokens[pv_end + 1..]
+                    .iter()
+                    .map(|token| token.parse::<u32>().ok())
+                    .collect::<Option<Vec<_>>>()
                     .filter(|values| values.len() == pv.len());
             }
             break;
@@ -424,9 +427,15 @@ fn format_candidate(candidate: &CandidateMoveDto, board_width: u8, board_height:
         body.push(' ');
         body.push_str(&vertex_to_gtp(&vertex, board_width, board_height));
     }
-    if let Some(visits) = candidate.pv_visits.as_ref().filter(|values| values.len() == candidate.pv.len()) {
+    if let Some(visits) = candidate
+        .pv_visits
+        .as_ref()
+        .filter(|values| values.len() == candidate.pv.len())
+    {
         body.push_str(" pvVisits");
-        for value in visits { body.push_str(&format!(" {value}")); }
+        for value in visits {
+            body.push_str(&format!(" {value}"));
+        }
     }
     body
 }

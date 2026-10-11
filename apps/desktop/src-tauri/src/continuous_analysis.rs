@@ -83,25 +83,47 @@ impl PreferencesState {
         Ok(saved)
     }
 
-    pub fn save_batch(&self, path: &Path, batch: app_model::BatchPreferencesDto) -> Result<app_model::BatchPreferencesDto, String> {
+    pub fn save_batch(
+        &self,
+        path: &Path,
+        batch: app_model::BatchPreferencesDto,
+    ) -> Result<app_model::BatchPreferencesDto, String> {
         batch.validate()?;
         let mut committed = self.0.lock().map_err(|_| "Preferences transaction poisoned")?;
-        let mut preferences = committed.as_ref().ok_or("Load preferences before saving batch settings.")?.preferences.clone();
+        let mut preferences = committed
+            .as_ref()
+            .ok_or("Load preferences before saving batch settings.")?
+            .preferences
+            .clone();
         preferences.batch = batch;
         let saved = app_preferences::save_to_path(path, preferences)?;
         let batch = saved.batch.clone();
-        *committed = Some(AppPreferencesLoadResultDto { preferences: saved, recovery: None });
+        *committed = Some(AppPreferencesLoadResultDto {
+            preferences: saved,
+            recovery: None,
+        });
         Ok(batch)
     }
 
-    pub fn save_continuation(&self, path: &Path, value: app_model::ContinuationPreferencesDto) -> Result<app_model::ContinuationPreferencesDto, String> {
+    pub fn save_continuation(
+        &self,
+        path: &Path,
+        value: app_model::ContinuationPreferencesDto,
+    ) -> Result<app_model::ContinuationPreferencesDto, String> {
         value.validate()?;
         let mut committed = self.0.lock().map_err(|_| "Preferences transaction poisoned")?;
-        let mut preferences = committed.as_ref().ok_or("Load preferences before saving continuation settings.")?.preferences.clone();
+        let mut preferences = committed
+            .as_ref()
+            .ok_or("Load preferences before saving continuation settings.")?
+            .preferences
+            .clone();
         preferences.continuation = value;
         let saved = app_preferences::save_to_path(path, preferences)?;
         let value = saved.continuation.clone();
-        *committed = Some(AppPreferencesLoadResultDto { preferences: saved, recovery: None });
+        *committed = Some(AppPreferencesLoadResultDto {
+            preferences: saved,
+            recovery: None,
+        });
         Ok(value)
     }
 

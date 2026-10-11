@@ -553,8 +553,10 @@ pub fn normalize_response(
                 score_mean_black: info.score_mean,
                 policy_prior: info.prior,
                 pv_visits: info.pv_visits.filter(|values| values.len() == info.pv.len()),
-                ownership: info.ownership.filter(|values| values.len() == usize::from(board_width) * usize::from(board_height)
-                    && values.iter().all(|value| (-1.0..=1.0).contains(value))),
+                ownership: info.ownership.filter(|values| {
+                    values.len() == usize::from(board_width) * usize::from(board_height)
+                        && values.iter().all(|value| (-1.0..=1.0).contains(value))
+                }),
                 pv: info
                     .pv
                     .iter()

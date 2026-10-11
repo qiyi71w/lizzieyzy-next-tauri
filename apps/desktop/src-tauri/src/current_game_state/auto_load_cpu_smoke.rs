@@ -36,81 +36,258 @@ finally:
 "#).unwrap();
     std::fs::set_permissions(&proxy, std::fs::Permissions::from_mode(0o755)).unwrap();
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-    catalog.upsert(engine_manager::SavedEngineProfile { profile_id: "test".into(), thread_policy: Default::default(), profile: app_model::EngineProfileDto { name: "R13 isolated CPU".into(), program: proxy.to_string_lossy().into(), argv: vec![], working_dir: Some(directory.to_string_lossy().into()), adapter: app_model::EngineAdapterSettings::KataGoAnalysis(app_model::KataGoSettings { model_path: Some(model), config_path: Some(directory.join("cpu.cfg").to_string_lossy().into()), max_visits: 8 }) } });
-    let manager = ForegroundEngineManager::new(catalog.clone(), ForegroundEngineConfig { readiness_timeout: Duration::from_secs(120), job_timeout: Duration::from_secs(120), ..Default::default() });
+    catalog.upsert(engine_manager::SavedEngineProfile {
+        profile_id: "test".into(),
+        thread_policy: Default::default(),
+        profile: app_model::EngineProfileDto {
+            name: "R13 isolated CPU".into(),
+            program: proxy.to_string_lossy().into(),
+            argv: vec![],
+            working_dir: Some(directory.to_string_lossy().into()),
+            adapter: app_model::EngineAdapterSettings::KataGoAnalysis(app_model::KataGoSettings {
+                model_path: Some(model),
+                config_path: Some(directory.join("cpu.cfg").to_string_lossy().into()),
+                max_visits: 8,
+            }),
+        },
+    });
+    let manager = ForegroundEngineManager::new(
+        catalog.clone(),
+        ForegroundEngineConfig {
+            readiness_timeout: Duration::from_secs(120),
+            job_timeout: Duration::from_secs(120),
+            ..Default::default()
+        },
+    );
     let events = manager.subscribe();
-    let engine = LiveFixture { directory: directory.clone(), manager, catalog, events };
+    let engine = LiveFixture {
+        directory: directory.clone(),
+        manager,
+        catalog,
+        events,
+    };
     let state = CurrentGameState::default();
     state.connect_analysis_manager(engine.manager.clone());
-    engine.manager.set_auto_load_preferences(app_model::AutoLoadPreferencesDto { enabled: true, total_visits: 8 }).unwrap();
-    engine.manager.set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default()).unwrap();
+    engine
+        .manager
+        .set_auto_load_preferences(app_model::AutoLoadPreferencesDto {
+            enabled: true,
+            total_visits: 8,
+        })
+        .unwrap();
+    engine
+        .manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
     state.replace("(;SZ[9];B[aa])", None).unwrap();
     engine.manager.start("test").unwrap();
-    drive(&engine, &state, || matches!(engine.manager.snapshot().lifecycle, app_model::ForegroundEngineLifecycleDto::Ready { .. }));
+    drive(&engine, &state, || {
+        matches!(
+            engine.manager.snapshot().lifecycle,
+            app_model::ForegroundEngineLifecycleDto::Ready { .. }
+        )
+    });
     let initial = engine.manager.snapshot();
-    std::fs::write(evidence.join("ready.json"), serde_json::to_vec_pretty(&initial).unwrap()).unwrap();
-    drive(&engine, &state, || engine.manager.snapshot().selected_node_job.is_some_and(|job|
-        job.state == app_model::AnalysisJobStateDto::Searching));
+    std::fs::write(
+        evidence.join("ready.json"),
+        serde_json::to_vec_pretty(&initial).unwrap(),
+    )
+    .unwrap();
+    drive(&engine, &state, || {
+        engine
+            .manager
+            .snapshot()
+            .selected_node_job
+            .is_some_and(|job| job.state == app_model::AnalysisJobStateDto::Searching)
+    });
     let prior_ordinary = engine.manager.snapshot().selected_node_job.unwrap();
-    std::fs::write(evidence.join("before-load.json"), serde_json::to_vec_pretty(&engine.manager.snapshot()).unwrap()).unwrap();
-    let opened = load(&engine, &state, "(;SZ[9]RU[Chinese]KM[7.5]AB[aa]PL[W]C[personal];W[];B[cc](;W[dd])(;W[ee]))", Source::Open);
+    std::fs::write(
+        evidence.join("before-load.json"),
+        serde_json::to_vec_pretty(&engine.manager.snapshot()).unwrap(),
+    )
+    .unwrap();
+    let opened = load(
+        &engine,
+        &state,
+        "(;SZ[9]RU[Chinese]KM[7.5]AB[aa]PL[W]C[personal];W[];B[cc](;W[dd])(;W[ee]))",
+        Source::Open,
+    );
     let automatic = engine.manager.analysis_task_snapshot().unwrap();
-    let selected = NodePath { indices: vec![0,0,1] };
+    let selected = NodePath {
+        indices: vec![0, 0, 1],
+    };
     state.select_path(selected.clone(), opened.generation).unwrap();
-    drive(&engine, &state, || CurrentSgfDocument::open(&state.serialize().unwrap()).unwrap().missing_primary_mainline_snapshots().unwrap().is_empty());
-    assert_eq!(state.holder.lock().expect("holder").current_result().unwrap().selected_path, selected);
-    drive(&engine, &state, || CurrentSgfDocument::open(&state.serialize().unwrap()).unwrap().snapshot(&selected).unwrap().primary_analysis.is_some());
+    drive(&engine, &state, || {
+        CurrentSgfDocument::open(&state.serialize().unwrap())
+            .unwrap()
+            .missing_primary_mainline_snapshots()
+            .unwrap()
+            .is_empty()
+    });
+    assert_eq!(
+        state
+            .holder
+            .lock()
+            .expect("holder")
+            .current_result()
+            .unwrap()
+            .selected_path,
+        selected
+    );
+    drive(&engine, &state, || {
+        CurrentSgfDocument::open(&state.serialize().unwrap())
+            .unwrap()
+            .snapshot(&selected)
+            .unwrap()
+            .primary_analysis
+            .is_some()
+    });
     let handback = engine.manager.snapshot();
     assert_eq!(handback.auto_load.phase, AutoPhase::Complete);
-    assert_eq!(engine.manager.analysis_task_snapshot().unwrap().completed.len(), 4);
-    assert_eq!(handback.selected_node_job.as_ref().unwrap().run_id, automatic.run_id);
-    assert_ne!(handback.selected_node_job.as_ref().unwrap().job_id, prior_ordinary.job_id);
-    assert_ne!(handback.selected_node_job.as_ref().unwrap().job_id, automatic.job_id);
+    assert_eq!(
+        engine.manager.analysis_task_snapshot().unwrap().completed.len(),
+        4
+    );
+    assert_eq!(
+        handback.selected_node_job.as_ref().unwrap().run_id,
+        automatic.run_id
+    );
+    assert_ne!(
+        handback.selected_node_job.as_ref().unwrap().job_id,
+        prior_ordinary.job_id
+    );
+    assert_ne!(
+        handback.selected_node_job.as_ref().unwrap().job_id,
+        automatic.job_id
+    );
     assert_eq!(handback.selected_node_job.as_ref().unwrap().node_path, selected);
-    std::fs::write(evidence.join("handback.json"), serde_json::to_vec_pretty(&handback).unwrap()).unwrap();
-    engine.manager.set_continuous_preferences(false, app_model::ContinuousAnalysisBudgetDto::default()).unwrap();
+    std::fs::write(
+        evidence.join("handback.json"),
+        serde_json::to_vec_pretty(&handback).unwrap(),
+    )
+    .unwrap();
+    engine
+        .manager
+        .set_continuous_preferences(false, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
     let save = evidence.join("complete.sgf");
-    state.save_to_path(save.to_string_lossy().into(), selected).unwrap();
+    state
+        .save_to_path(save.to_string_lossy().into(), selected)
+        .unwrap();
     let saved = std::fs::read_to_string(&save).unwrap();
-    assert_eq!(CurrentSgfDocument::open(&saved).unwrap().snapshot(&NodePath::default()).unwrap().personal_comment, "personal");
+    assert_eq!(
+        CurrentSgfDocument::open(&saved)
+            .unwrap()
+            .snapshot(&NodePath::default())
+            .unwrap()
+            .personal_comment,
+        "personal"
+    );
     load(&engine, &state, &saved, Source::Recent);
     assert_eq!(engine.manager.snapshot().auto_load.phase, AutoPhase::NotNeeded);
-    engine.manager.set_auto_load_preferences(app_model::AutoLoadPreferencesDto { enabled: true, total_visits: 100000 }).unwrap();
+    engine
+        .manager
+        .set_auto_load_preferences(app_model::AutoLoadPreferencesDto {
+            enabled: true,
+            total_visits: 100000,
+        })
+        .unwrap();
     load(&engine, &state, "(;SZ[9];B[dd];W[ee])", Source::Text);
     let paused = engine.manager.analysis_task_snapshot().unwrap();
-    engine.manager.pause_analysis_task(&paused.run_id, &paused.task_id).unwrap();
-    drive(&engine, &state, || engine.manager.snapshot().whole_game_job.is_none());
+    engine
+        .manager
+        .pause_analysis_task(&paused.run_id, &paused.task_id)
+        .unwrap();
+    drive(&engine, &state, || {
+        engine.manager.snapshot().whole_game_job.is_none()
+    });
     assert_eq!(engine.manager.snapshot().auto_load.phase, AutoPhase::Cancelled);
-    engine.manager.set_auto_load_preferences(app_model::AutoLoadPreferencesDto { enabled: true, total_visits: 8 }).unwrap();
+    engine
+        .manager
+        .set_auto_load_preferences(app_model::AutoLoadPreferencesDto {
+            enabled: true,
+            total_visits: 8,
+        })
+        .unwrap();
     std::fs::write(directory.join("fail-handback"), "").unwrap();
     load(&engine, &state, "(;SZ[9]RU[Chinese]KM[7.5];B[dd])", Source::Open);
-    engine.manager.set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default()).unwrap();
-    drive(&engine, &state, || engine.manager.snapshot().auto_load_recovery == Some(RecoveryPhase::RestartRequired));
+    engine
+        .manager
+        .set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default())
+        .unwrap();
+    drive(&engine, &state, || {
+        engine.manager.snapshot().auto_load_recovery == Some(RecoveryPhase::RestartRequired)
+    });
     std::fs::remove_file(directory.join("fail-handback")).unwrap();
-    let imported = load(&engine, &state, "(;SZ[13]RU[Chinese-KGS]KM[6.5]AB[aa]PL[W]C[new personal];W[];B[cc])", Source::Text);
+    let imported = load(
+        &engine,
+        &state,
+        "(;SZ[13]RU[Chinese-KGS]KM[6.5]AB[aa]PL[W]C[new personal];W[];B[cc])",
+        Source::Text,
+    );
     let unchanged = state.serialize().unwrap();
     assert!(engine.manager.resume_continuous().is_err());
     engine.manager.restart().unwrap();
-    drive(&engine, &state, || engine.manager.snapshot().auto_load_recovery == Some(RecoveryPhase::Confirmed));
+    drive(&engine, &state, || {
+        engine.manager.snapshot().auto_load_recovery == Some(RecoveryPhase::Confirmed)
+    });
     assert_eq!(state.serialize().unwrap(), unchanged);
-    std::fs::write(evidence.join("confirmed.json"), serde_json::to_vec_pretty(&engine.manager.snapshot()).unwrap()).unwrap();
+    std::fs::write(
+        evidence.join("confirmed.json"),
+        serde_json::to_vec_pretty(&engine.manager.snapshot()).unwrap(),
+    )
+    .unwrap();
     engine.manager.resume_continuous().unwrap();
-    drive(&engine, &state, || engine.manager.snapshot().selected_node_job.as_ref().is_some_and(|j| j.mode == app_model::AnalysisJobModeDto::Continuous && j.generation == imported.generation));
-    drive(&engine, &state, || CurrentSgfDocument::open(&state.serialize().unwrap()).unwrap().snapshot(&imported.selected_path).unwrap().primary_analysis.is_some());
-    std::fs::write(evidence.join("continued.json"), serde_json::to_vec_pretty(&engine.manager.snapshot()).unwrap()).unwrap();
+    drive(&engine, &state, || {
+        engine
+            .manager
+            .snapshot()
+            .selected_node_job
+            .as_ref()
+            .is_some_and(|j| {
+                j.mode == app_model::AnalysisJobModeDto::Continuous && j.generation == imported.generation
+            })
+    });
+    drive(&engine, &state, || {
+        CurrentSgfDocument::open(&state.serialize().unwrap())
+            .unwrap()
+            .snapshot(&imported.selected_path)
+            .unwrap()
+            .primary_analysis
+            .is_some()
+    });
+    std::fs::write(
+        evidence.join("continued.json"),
+        serde_json::to_vec_pretty(&engine.manager.snapshot()).unwrap(),
+    )
+    .unwrap();
     engine.manager.teardown().unwrap();
-    for file in ["queries.jsonl", "responses.jsonl", "engine.stderr", "pids.log", "cpu.cfg"] { std::fs::copy(directory.join(file), evidence.join(file)).unwrap(); }
+    for file in [
+        "queries.jsonl",
+        "responses.jsonl",
+        "engine.stderr",
+        "pids.log",
+        "cpu.cfg",
+    ] {
+        std::fs::copy(directory.join(file), evidence.join(file)).unwrap();
+    }
     std::fs::write(evidence.join("result.txt"), format!("PASS real CPU auto load, exact attachment, browse, Save/reopen, Pause, failed handback, new import, explicit Restart, new-reader terminal receipt, explicit Continue\nbinary={binary}\n")).unwrap();
 }
 
 fn drive(engine: &LiveFixture, state: &CurrentGameState, done: impl Fn() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(150);
     while !done() {
-        assert!(Instant::now() < deadline, "CPU smoke timed out: {:?}", engine.manager.snapshot());
+        assert!(
+            Instant::now() < deadline,
+            "CPU smoke timed out: {:?}",
+            engine.manager.snapshot()
+        );
         match engine.events.recv_timeout(Duration::from_millis(20)) {
-            Ok(app_model::ForegroundEngineEventDto::Job { job }) => { state.attach_from_job_event(&job); }
+            Ok(app_model::ForegroundEngineEventDto::Job { job }) => {
+                state.attach_from_job_event(&job);
+            }
             Ok(app_model::ForegroundEngineEventDto::Snapshot { .. }) => state.reconcile_auto_load(),
-            Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {},
+            Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(error) => panic!("events: {error}"),
         }
     }

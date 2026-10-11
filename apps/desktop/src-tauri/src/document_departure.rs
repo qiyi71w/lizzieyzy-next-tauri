@@ -21,7 +21,11 @@ pub fn jobs_from_snapshot(snapshot: &ForegroundEngineSnapshotDto) -> Vec<Analysi
     {
         jobs.push(job);
     }
-    if let Some(job) = snapshot.whole_game_job.clone().filter(|job| !job.job_id.starts_with("batch:")) {
+    if let Some(job) = snapshot
+        .whole_game_job
+        .clone()
+        .filter(|job| !job.job_id.starts_with("batch:"))
+    {
         jobs.push(job);
     }
     jobs
@@ -208,7 +212,9 @@ fn stop_application_resources(
     let drained = network.shutdown(deadline.saturating_duration_since(Instant::now()));
     let mut outstanding =
         stop_foreground_resources(manager, deadline.saturating_duration_since(Instant::now()));
-    if !batch_drained { outstanding.push("batch queue/output publication".into()); }
+    if !batch_drained {
+        outstanding.push("batch queue/output publication".into());
+    }
     let export_drained = app
         .state::<engine_manager::diagnostic_export::DiagnosticExport>()
         .shutdown(

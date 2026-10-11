@@ -11,10 +11,10 @@ use crate::{
 };
 use go_core::{Board, RuleError};
 
-#[path = "point_search.rs"]
-mod point_search;
 #[path = "continuation.rs"]
 mod continuation;
+#[path = "point_search.rs"]
+mod point_search;
 
 #[derive(Debug, Clone)]
 pub struct CurrentSgfDocument {
@@ -773,7 +773,9 @@ impl CurrentSgfDocument {
     }
 
     /// Display filling only: retained SGF primary results are not task completion evidence.
-    pub fn missing_primary_mainline_snapshots(&self) -> Result<Vec<SelectedNodeSnapshotDto>, CurrentGameError> {
+    pub fn missing_primary_mainline_snapshots(
+        &self,
+    ) -> Result<Vec<SelectedNodeSnapshotDto>, CurrentGameError> {
         let mut snapshots = self.first_child_mainline_snapshots()?;
         snapshots.retain(|snapshot| snapshot.primary_analysis.is_none());
         Ok(snapshots)
@@ -921,7 +923,14 @@ impl CurrentSgfDocument {
     pub fn mark_batch_output(&mut self, receipt: &str, incomplete: bool) -> Result<(), CurrentGameError> {
         let root = self.node_mut(&NodePath::default())?;
         root.properties.retain(|property| property.key != "LZBATCH");
-        root.properties.push(SgfProperty { key: "LZBATCH".into(), values: vec![format!("{};{}", if incomplete { "incomplete" } else { "complete" }, receipt)] });
+        root.properties.push(SgfProperty {
+            key: "LZBATCH".into(),
+            values: vec![format!(
+                "{};{}",
+                if incomplete { "incomplete" } else { "complete" },
+                receipt
+            )],
+        });
         Ok(())
     }
 

@@ -9,7 +9,12 @@ pub struct AutoLoadPreferencesDto {
 }
 
 impl Default for AutoLoadPreferencesDto {
-    fn default() -> Self { Self { enabled: false, total_visits: 1 } }
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            total_visits: 1,
+        }
+    }
 }
 
 impl AutoLoadPreferencesDto {
@@ -61,4 +66,8 @@ pub struct AutoLoadSnapshotDto {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AutoLoadRecoveryPhaseDto { RestartRequired, Confirming, Confirmed }
+pub enum AutoLoadRecoveryPhaseDto {
+    RestartRequired,
+    Confirming,
+    Confirmed,
+}

@@ -32,10 +32,9 @@ pub use catalog::{
     DEFAULT_ENGINE_PROFILE_ID, ENGINE_PROFILES_VERSION,
 };
 pub use lifecycle::{
-    ContinuationAction,
-    AnalysisJobCancel, AnalysisJobEventDto, AnalysisJobLane, ContinuousPrimaryAction, ForegroundEngineConfig,
-    ForegroundEngineManager, GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle, SelectedNodeJobRequest,
-    SwingAnalysisTaskRequest, WholeGameJobRequest, WholeGameWorkItem,
+    AnalysisJobCancel, AnalysisJobEventDto, AnalysisJobLane, ContinuationAction, ContinuousPrimaryAction,
+    ForegroundEngineConfig, ForegroundEngineManager, GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle,
+    SelectedNodeJobRequest, SwingAnalysisTaskRequest, WholeGameJobRequest, WholeGameWorkItem,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

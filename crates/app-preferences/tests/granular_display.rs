@@ -2,7 +2,14 @@ use app_model::{CandidateDelayMode, CandidateScoreMode, CandidateTextField, Owne
 use app_preferences::{default_app_preferences, load_from_path, save_to_path, AppPreferencesDto};
 #[test]
 fn granular_display_roundtrip_invalid_input_and_real_write_failure_preserve_committed_bytes() {
-    let directory = std::env::temp_dir().join(format!("r13-display-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let directory = std::env::temp_dir().join(format!(
+        "r13-display-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
     std::fs::create_dir(&directory).unwrap();
     let path = directory.join("preferences.json");
     let mut preferences = default_app_preferences();
@@ -20,7 +27,11 @@ fn granular_display_roundtrip_invalid_input_and_real_write_failure_preserve_comm
     display.score_mode = CandidateScoreMode::Board;
     display.show_order = false;
     display.emphasize_max = true;
-    display.text_order = [CandidateTextField::Score, CandidateTextField::Winrate, CandidateTextField::Visits];
+    display.text_order = [
+        CandidateTextField::Score,
+        CandidateTextField::Winrate,
+        CandidateTextField::Visits,
+    ];
     display.ownership_style = OwnershipStyle::BySize;
     display.use_candidate_ownership = false;
     save_to_path(&path, preferences.clone()).unwrap();

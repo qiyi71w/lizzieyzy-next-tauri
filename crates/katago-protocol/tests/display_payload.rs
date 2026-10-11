@@ -9,17 +9,26 @@ fn real_display_fields_remain_paired_to_their_candidate() {
     let response: AnalysisResponse = serde_json::from_str(REAL).unwrap();
     assert!(response.has_valid_search_result(9, 9));
     let frame = normalize_response(AnalysisJobId::nil(), response, 9, 9);
-    assert_eq!(frame.candidates[0].pv_visits.as_deref(), Some([7, 2, 1].as_slice()));
+    assert_eq!(
+        frame.candidates[0].pv_visits.as_deref(),
+        Some([7, 2, 1].as_slice())
+    );
     assert_eq!(frame.candidates[0].pv.len(), 3);
     assert_eq!(frame.candidates[0].ownership.as_ref().unwrap().len(), 81);
     assert_ne!(frame.candidates[0].ownership, frame.ownership);
 }
 #[test]
 fn real_unrequested_fields_remain_absent() {
-    let response: AnalysisResponse = serde_json::from_str(include_str!("fixtures/katago-1.18.2-analysis-display-absent.jsonl")).unwrap();
+    let response: AnalysisResponse = serde_json::from_str(include_str!(
+        "fixtures/katago-1.18.2-analysis-display-absent.jsonl"
+    ))
+    .unwrap();
     assert!(response.has_valid_search_result(9, 9));
     let frame = normalize_response(AnalysisJobId::nil(), response, 9, 9);
-    assert!(frame.candidates.iter().all(|candidate| candidate.pv_visits.is_none() && candidate.ownership.is_none()));
+    assert!(frame
+        .candidates
+        .iter()
+        .all(|candidate| candidate.pv_visits.is_none() && candidate.ownership.is_none()));
 }
 #[test]
 fn missing_and_mismatched_optional_fields_do_not_become_zero_or_root_ownership() {
