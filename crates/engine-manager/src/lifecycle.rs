@@ -663,14 +663,7 @@ impl ForegroundEngineManager {
             if state.match_reservation.is_some() {
                 return;
             }
-            state.continuous_departing = false;
-            if committed_replacement {
-                // Import changes the position, not the user's authorization after a failure.
-                clear_weak_holds_for_new_position(&mut state);
-                state.auto_load.handback_pending = false;
-            } else {
-                state.continuous_safety_hold = true;
-            }
+            finish_continuous_departure_locked(&mut state, committed_replacement);
             publish_snapshot(&mut state);
         }
         if committed_replacement {
@@ -1987,6 +1980,7 @@ impl ForegroundEngineManager {
                 return;
             }
             if state.continuous_departing
+                || state.auto_load.snapshot.phase == app_model::AutoLoadPhaseDto::Waiting
                 || state.finite_admission_pending
                 || continuation::occupied(&state)
                 || batch::occupied(&state.batch)
@@ -4945,6 +4939,17 @@ fn validate_selected_admission(
         require_capability(&run, capabilities.visits_limit, "visits limits")?;
     }
     Ok(run)
+}
+
+fn finish_continuous_departure_locked(state: &mut ManagerState, committed_replacement: bool) {
+    state.continuous_departing = false;
+    if committed_replacement {
+        // Import changes the position, not the user's authorization after a failure.
+        clear_weak_holds_for_new_position(state);
+        state.auto_load.handback_pending = false;
+    } else {
+        state.continuous_safety_hold = true;
+    }
 }
 
 fn clear_weak_holds_for_new_position(state: &mut ManagerState) {

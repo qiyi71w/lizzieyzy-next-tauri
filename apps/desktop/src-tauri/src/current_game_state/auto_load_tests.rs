@@ -48,6 +48,81 @@ fn setup() -> (LiveFixture, CurrentGameState) {
 }
 
 #[test]
+fn auto_load_refused_finite_capability_releases_ordinary_without_retry() {
+    let (engine, state) = setup();
+    engine.manager.set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default()).unwrap();
+    engine.manager.start("test").unwrap();
+    pump(&engine, &state, || matches!(engine.manager.snapshot().lifecycle, app_model::ForegroundEngineLifecycleDto::Ready { .. }));
+    let mut capability = match engine.manager.snapshot().lifecycle {
+        app_model::ForegroundEngineLifecycleDto::Ready { run } => run.capability_snapshot.unwrap(),
+        other => panic!("expected Ready, got {other:?}"),
+    };
+    capability.analysis.as_mut().unwrap().whole_game_analysis = false;
+    engine.manager.set_capability_snapshot_for_tests(Some(capability.clone()));
+    let opened = load(&engine, &state, "(;SZ[9];B[dd])", Source::Open);
+    assert_eq!(engine.manager.snapshot().auto_load.phase, AutoPhase::Failed);
+    pump(&engine, &state, || engine.manager.snapshot().selected_node_job.is_some_and(|job|
+        job.generation == opened.generation && job.state == app_model::AnalysisJobStateDto::Searching));
+    capability.analysis.as_mut().unwrap().whole_game_analysis = true;
+    engine.manager.set_capability_snapshot_for_tests(Some(capability));
+    state.reconcile_auto_load();
+    assert_eq!(engine.manager.snapshot().auto_load.phase, AutoPhase::Failed);
+    assert!(engine.manager.analysis_task_snapshot().is_none());
+    engine.manager.teardown().unwrap();
+}
+
+#[test]
+fn auto_load_single_lane_replacement_completes_before_fresh_ordinary_handback() {
+    for starting in [false, true] {
+        let (engine, state) = setup();
+        for marker in ["one-thread", "hold-first", "finish"] {
+            std::fs::write(engine.directory.join(marker), "").unwrap();
+        }
+        engine.manager.set_continuous_preferences(true, app_model::ContinuousAnalysisBudgetDto::default()).unwrap();
+        state.replace("(;SZ[9];B[aa])", None).unwrap();
+        if starting { std::fs::write(engine.directory.join("hold-ready"), "").unwrap(); }
+        engine.manager.start("test").unwrap();
+        let previous = if starting { None } else {
+            pump(&engine, &state, || engine.manager.snapshot().selected_node_job
+                .is_some_and(|job| job.state == app_model::AnalysisJobStateDto::Searching));
+            Some(engine.manager.snapshot().selected_node_job.unwrap().job_id)
+        };
+        let opened = load(&engine, &state, "(;SZ[9]C[personal];B[dd];W[ee])", Source::Recent);
+        let selected = opened.selected_path.clone();
+        if starting {
+            assert_eq!(engine.manager.snapshot().auto_load.phase, AutoPhase::Waiting);
+            std::fs::remove_file(engine.directory.join("hold-ready")).unwrap();
+        }
+        pump(&engine, &state, || engine.manager.snapshot().auto_load.phase == AutoPhase::Complete
+            && engine.manager.snapshot().selected_node_job.is_some_and(|job|
+                job.state == app_model::AnalysisJobStateDto::Searching));
+        let task = engine.manager.analysis_task_snapshot().unwrap();
+        assert_eq!(task.state, app_model::AnalysisTaskStateDto::Completed);
+        assert_eq!(task.completed, vec![NodePath::default(), NodePath { indices: vec![0] }, NodePath { indices: vec![0, 0] }]);
+        let ordinary = engine.manager.snapshot().selected_node_job.unwrap();
+        assert_ne!(previous.as_deref(), Some(ordinary.job_id.as_str()));
+        assert_ne!(ordinary.job_id, task.job_id);
+        assert_eq!(ordinary.run_id, task.run_id);
+        assert_eq!(ordinary.generation, opened.generation);
+        assert_eq!(ordinary.node_path, selected);
+        let document = CurrentSgfDocument::open(&state.serialize().unwrap()).unwrap();
+        assert!(document.missing_primary_mainline_snapshots().unwrap().is_empty());
+        assert_eq!(document.snapshot(&NodePath::default()).unwrap().personal_comment, "personal");
+        assert_eq!(state.holder.lock().unwrap().current_result().unwrap().selected_path, selected);
+        let complete = state.serialize().unwrap();
+        let reopened = load(&engine, &state, &complete, Source::Recent);
+        assert_eq!(engine.manager.snapshot().auto_load.phase, AutoPhase::NotNeeded);
+        pump(&engine, &state, || engine.manager.snapshot().selected_node_job.is_some_and(|job|
+            job.generation == reopened.generation && job.state == app_model::AnalysisJobStateDto::Searching));
+        let excluded = load(&engine, &state, "(;SZ[9];B[cc])", Source::Excluded);
+        assert_eq!(engine.manager.snapshot().auto_load.phase, AutoPhase::NotNeeded);
+        pump(&engine, &state, || engine.manager.snapshot().selected_node_job.is_some_and(|job|
+            job.generation == excluded.generation && job.state == app_model::AnalysisJobStateDto::Searching));
+        engine.manager.teardown().unwrap();
+    }
+}
+
+#[test]
 fn finite_zero_deep_selection_publishes_released_owner_after_terminal_job() {
     let (engine, state) = setup();
     engine.manager.set_continuous_preferences(false, app_model::ContinuousAnalysisBudgetDto::default()).unwrap();

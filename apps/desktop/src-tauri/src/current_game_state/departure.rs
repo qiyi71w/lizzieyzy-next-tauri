@@ -212,9 +212,10 @@ impl CurrentGameState {
         if let Some(manager) = self.analysis_manager.get() {
             manager.clear_continuous_position();
             self.follow_continuous_position(&mut holder);
-            manager.finish_continuous_departure(true);
             if session.load_source != app_model::GameLoadSourceDto::Excluded {
-                manager.commit_auto_load(holder.document_identity, holder.generation);
+                manager.finish_loaded_replacement(holder.document_identity, holder.generation);
+            } else {
+                manager.finish_continuous_departure(true);
             }
         }
         drop(holder);

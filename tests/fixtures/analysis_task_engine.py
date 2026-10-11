@@ -81,8 +81,9 @@ def search(query):
     identity = query["id"]
     if ":" in identity:
         (root / "search-started").touch()
-    # One-thread fixtures keep the finite task in the engine queue.
-    while (root / "one-thread").exists() and any(x != identity for x in active):
+    # One analysis thread: queued requests cannot displace an earlier search.
+    predecessors = list(queries)[:list(queries).index(identity)]
+    while (root / "one-thread").exists() and any(x in active for x in predecessors):
         if identity not in active:
             return
         time.sleep(0.01)

@@ -29,9 +29,20 @@ impl ForegroundEngineManager {
         Ok(())
     }
 
-    /// Called under the current-document lock, after a successful independent replacement.
-    pub fn commit_auto_load(&self, load_id: u64, generation: u64) {
-        let mut state = self.lock();
+
+    /// Release the committed document's departure fence and reserve its finite
+    /// work before any reader or caller may reconcile ordinary analysis.
+    pub fn finish_loaded_replacement(&self, load_id: u64, generation: u64) {
+        {
+            let mut state = self.lock();
+            if state.match_reservation.is_some() { return; }
+            finish_continuous_departure_locked(&mut state, true);
+            self.commit_auto_load_locked(&mut state, load_id, generation);
+        }
+        self.reconcile_continuous();
+    }
+
+    fn commit_auto_load_locked(&self, state: &mut ManagerState, load_id: u64, generation: u64) {
         let preferences = state.auto_load.preferences;
         let run_id = match &state.phase {
             Phase::Ready(run) | Phase::Starting(run) => Some(run.run_id.clone()),
@@ -49,7 +60,7 @@ impl ForegroundEngineManager {
             total_visits: preferences.total_visits,
             reason: (phase == PhaseDto::Unavailable).then(|| "No eligible foreground authority at load; use explicit analysis.".into()),
         };
-        publish_snapshot(&mut state);
+        publish_snapshot(state);
     }
 
     pub fn pending_auto_load(&self) -> Option<AutoLoadSnapshotDto> {
@@ -66,6 +77,8 @@ impl ForegroundEngineManager {
         state.auto_load.snapshot.phase = if reason.is_some() { PhaseDto::Failed } else { PhaseDto::NotNeeded };
         state.auto_load.snapshot.reason = reason;
         publish_snapshot(&mut state);
+        drop(state);
+        self.reconcile_continuous();
     }
 
     /// Explicit consumers (including future batch/continuation) retire, then drain, before admission.
