@@ -130,9 +130,10 @@ fn batch_output_conflict_retains_computation_and_retry_save_never_recomputes_or_
     let state = CurrentGameState::default(); state.connect_analysis_manager(engine.manager.clone());
     state.replace("(;SZ[19]C[current])", None).unwrap(); ready(&engine);
     let one = file(&engine, "one.sgf", "(;SZ[9]C[source];B[aa])");
-    let two = file(&engine, "two.sgf", "(;SZ[9];B[bb])");
+    let two = file(&engine, "two.sgf", "(;SZ[13]C[pending source];B[bb])");
     let before = std::fs::read(&one).unwrap();
-    let preview = engine.manager.batch_command(Command::Intake { paths: vec![one.clone(), two], conditions: Default::default() }).unwrap();
+    let before_two = std::fs::read(&two).unwrap();
+    let preview = engine.manager.batch_command(Command::Intake { paths: vec![one.clone(), two.clone()], conditions: Default::default() }).unwrap();
     let collision = engine.directory.join(&preview.rows[0].output_name);
     std::fs::write(&collision, "existing output").unwrap();
     start(&engine, true);
@@ -141,17 +142,40 @@ fn batch_output_conflict_retains_computation_and_retry_save_never_recomputes_or_
     assert_eq!(failed.rows[1].state, RowState::Pending);
     assert_eq!(std::fs::read_to_string(&collision).unwrap(), "existing output");
     let queries = std::fs::read(engine.directory.join("queries.jsonl")).unwrap();
-    assert!(engine.manager.batch_command(Command::Save { identity: failed.rows[0].identity.clone(), path: one.clone(), overwrite: true, incomplete: false }).is_err());
+    let alias = engine.directory.join("source-alias.sgf");
+    std::os::unix::fs::symlink(&two, &alias).unwrap();
+    let directory_alias = engine.directory.join("directory-alias");
+    std::os::unix::fs::symlink(&engine.directory, &directory_alias).unwrap();
+    for target in [one.clone(), two.clone(), alias.to_string_lossy().into_owned(), directory_alias.join("one.sgf").to_string_lossy().into_owned(), directory_alias.join("two.sgf").to_string_lossy().into_owned()] {
+        assert!(engine.manager.batch_command(Command::Save { identity: failed.rows[0].identity.clone(), path: target.clone(), overwrite: true, incomplete: false }).is_err(), "queued source accepted: {target}");
+        assert_eq!(std::fs::read(&one).unwrap(), before);
+        assert_eq!(std::fs::read(&two).unwrap(), before_two);
+        let rejected = engine.manager.batch_snapshot();
+        assert_eq!(rejected.rows[0].state, RowState::Completed);
+        assert_eq!(rejected.rows[0].output_state, OutputState::Failed);
+        assert_eq!(rejected.rows[0].task, failed.rows[0].task);
+        assert_eq!(rejected.rows[1], failed.rows[1]);
+    }
     let saved = engine.manager.batch_command(Command::Save { identity: failed.rows[0].identity.clone(), path: collision.to_string_lossy().into_owned(), overwrite: true, incomplete: false }).unwrap();
     assert_eq!(saved.rows[0].output_state, OutputState::Saved);
     assert_eq!(std::fs::read(engine.directory.join("queries.jsonl")).unwrap(), queries);
     assert_eq!(std::fs::read(one).unwrap(), before);
+    let output = sgf::CurrentSgfDocument::open(&std::fs::read_to_string(&collision).unwrap()).unwrap();
+    assert_eq!(output.board_width(), 9);
+    assert!(output.snapshot(&NodePath::default()).unwrap().primary_analysis.is_some());
     let mut stale = saved.rows[0].identity.clone(); stale.attempt += 1;
     assert!(engine.manager.batch_command(Command::Save { identity: stale, path: engine.directory.join("late.sgf").to_string_lossy().into_owned(), overwrite: false, incomplete: false }).is_err());
     assert!(!engine.directory.join("late.sgf").exists());
+    engine.manager.batch_command(Command::Continue).unwrap();
+    let completed = wait_batch(&engine, &state, |s| s.rows[1].output_state == OutputState::Saved);
+    let pending_output = sgf::CurrentSgfDocument::open(&std::fs::read_to_string(completed.rows[1].saved_path.as_ref().unwrap()).unwrap()).unwrap();
+    assert_eq!(pending_output.board_width(), 13);
+    assert_eq!(pending_output.snapshot(&NodePath::default()).unwrap().personal_comment, "pending source");
+    assert!(pending_output.snapshot(&NodePath::default()).unwrap().primary_analysis.is_some());
+    assert_eq!(std::fs::read(&two).unwrap(), before_two);
     engine.manager.batch_command(Command::StopAll).unwrap();
     assert!(collision.exists());
-    assert_eq!(engine.manager.batch_snapshot().rows[1].state, RowState::Cancelled);
+    assert!(engine.manager.shutdown_batch(Duration::from_secs(2)));
 }
 
 #[test]

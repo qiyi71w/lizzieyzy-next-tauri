@@ -386,14 +386,16 @@ impl ForegroundEngineManager {
             (document, row.gate.clone(), row.dto.input_receipt.clone().unwrap_or_default())
         };
         let result = (|| {
-            let source = {
-                let mut state = self.lock();
-                row_mut(&mut state.batch, id)?.dto.source_path.clone()
-            };
             let parent = path.parent().ok_or("Output needs a parent directory")?;
             let resolved = std::fs::canonicalize(parent).map_err(|e| e.to_string())?.join(path.file_name().ok_or("Output needs a file name")?);
             let actual = std::fs::canonicalize(&resolved).unwrap_or(resolved);
-            if actual == Path::new(&source) { return Err("The source file is never a batch output target.".into()); }
+            {
+                let mut state = self.lock();
+                row_mut(&mut state.batch, id)?;
+                if state.batch.rows.iter().any(|row| actual == Path::new(&row.dto.source_path)) {
+                    return Err("A batch source file is never a batch output target.".into());
+                }
+            }
             document.mark_batch_output(&format!("{}:{}:{};{receipt}", id.batch_id, id.row_id, id.attempt), incomplete).map_err(|e| e.to_string())?;
             sgf::save_document_authorized(&document, path, overwrite, &gate)
         })();
