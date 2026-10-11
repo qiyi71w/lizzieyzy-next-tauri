@@ -420,6 +420,26 @@ afterEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
 });
+
+describe("App workflow toolbar ownership", () => {
+  it("opens both workflow dialogs from the workspace toolbar and returns focus without replacing the workspace", async () => {
+    const host = await renderApp();
+    const toolbar = requiredElement<HTMLElement>(host, '.workspace-visibility-controls');
+    const workspace = requiredElement<HTMLElement>(host, '.workspace-scroll');
+    for (const name of ["多文件批量分析", "引擎续走"]) {
+      const opener = buttonNamed(toolbar, name);
+      await act(async () => opener.click());
+      const dialog = requiredElement<HTMLElement>(host, `[role="dialog"][aria-label="${name}"]`);
+      expect(dialog.contains(document.activeElement)).toBe(true);
+      await act(async () => dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+      expect(host.querySelector(`[role="dialog"][aria-label="${name}"]`)).toBeNull();
+      expect(document.activeElement).toBe(opener);
+      expect(requiredElement(host, '.workspace-scroll')).toBe(workspace);
+      expect(toolbar.parentElement).toBe(workspace.parentElement);
+    }
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+  });
+});
 describe("App external source switching", () => {
   it("preserves the original readboard start error when cancellation also fails", async () => {
     vi.spyOn(externalSyncApi, "subscribeExternalSync").mockResolvedValue(() => undefined);

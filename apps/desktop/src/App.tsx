@@ -4309,8 +4309,6 @@ export function App() {
 
   return <main ref={workspaceRef} tabIndex={-1} data-focus-owner="workspace" className={`app-shell${preferences.boardTheme === "high-contrast" ? " theme-high-contrast" : ""}${nativeRuntime ? "" : " has-native-runtime-note"}`}>
     {!nativeRuntime ? <p className="native-runtime-note" role="status">{nativeCurrentGameUnavailable}</p> : null}
-    <BatchPanel openRequest={batchOpenRequest} />
-    <ContinuationPanel current={currentGame} choices={analysisBranchChoices(chosenChildren)} onCurrent={adoptContinuationGame} onStart={() => setAutoPlaying(false)} />
     <AppChrome
       onBatch={() => setBatchOpenRequest(value => value + 1)}
       onBeforeFunctionSearch={() => { if (workspaceRef.current) chromeSearchSourceRef.current = captureFocusReturn(workspaceRef.current); }}
@@ -4507,6 +4505,8 @@ export function App() {
       <details aria-label="当前 run 能力"><summary>当前 run 能力</summary><p>{verifiedEngineCapabilitiesLabel(engineSnapshot)}</p></details>
       {railVisibilityBusy ? <span role="status">正在保存侧栏…</span> : null}
       {railVisibilityError ? <span role="alert">{railVisibilityError}</span> : null}
+    <BatchPanel openRequest={batchOpenRequest} />
+    <ContinuationPanel current={currentGame} choices={analysisBranchChoices(chosenChildren)} onCurrent={adoptContinuationGame} onStart={() => setAutoPlaying(false)} />
     </div>
     <Workspace shares={workspace.shares} onSharesChange={(shares) => { if (!matchOwnsWorkspace()) workspace.setShares(shares); }} disabled={workspace.disabled || matchBlocked}
       visibility={preferences.workspaceVisibility}>

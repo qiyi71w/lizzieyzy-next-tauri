@@ -177,7 +177,6 @@ button[aria-pressed="true"] {
   gap: 8px;
   font-size: 11px;
 }
-.workspace-visibility-controls:has(.human-match-status) { flex-wrap: wrap; }
 .human-match-status {
   display: flex;
   flex: 1 0 100%;
@@ -485,6 +484,7 @@ button[aria-pressed="true"] {
 
 .workspace-visibility-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: 3px 10px;
