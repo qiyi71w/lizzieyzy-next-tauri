@@ -22,6 +22,7 @@ mod lifecycle;
 pub mod managed;
 pub mod models;
 mod resources;
+mod thread_policy;
 
 pub use catalog::{
     default_engine_profile_record, default_engine_profiles_settings, load_engine_profiles,

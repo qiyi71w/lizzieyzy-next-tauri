@@ -11,6 +11,68 @@ pub struct StartupEvaluationSettingsDto {
     pub target_profile_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadStrategyDto {
+    #[default]
+    Cfg,
+    Benchmark,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SavedThreadPolicyDto {
+    pub strategy: ThreadStrategyDto,
+    pub revision: u64,
+    pub recommendation: Option<ThreadRecommendationDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThreadRecommendationDto {
+    pub evaluation_id: String,
+    pub target_id: String,
+    pub input_revision: String,
+    pub policy_revision: u64,
+    pub source_revision: String,
+    pub threads: u32,
+    pub seconds_per_move: String,
+    pub source_row: String,
+    pub qualified_resource: QualifiedLocalResourceDto,
+    pub command_revision: String,
+    pub environment: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecommendationValidityDto {
+    None,
+    Invalid,
+    Changed,
+    Unknown,
+    Valid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadPolicyStatusDto {
+    pub target_id: String,
+    pub input_revision: String,
+    pub policy: SavedThreadPolicyDto,
+    pub validity: RecommendationValidityDto,
+    pub reason: String,
+    pub recommendation: Option<ThreadRecommendationDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThreadPolicySaveRequestDto {
+    pub target_id: String,
+    pub expected_revision: u64,
+    pub input_revision: String,
+    pub strategy: ThreadStrategyDto,
+    pub evaluation_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvaluationPhaseDto {
@@ -33,7 +95,7 @@ pub struct EvaluationMeasurementDto {
     pub search_visits_per_second: Option<f64>,
 }
 
-/// Actual benchmark observations only; never a recommendation or durable policy.
+/// Actual benchmark observations and an optional source-qualified draft recommendation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvaluationResultDto {
     pub evaluation_id: String,
@@ -42,6 +104,8 @@ pub struct EvaluationResultDto {
     pub qualified_resource: QualifiedLocalResourceDto,
     pub elapsed_ms: u64,
     pub measurements: Vec<EvaluationMeasurementDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommendation: Option<ThreadRecommendationDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

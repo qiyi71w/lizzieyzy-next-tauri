@@ -30,6 +30,8 @@ pub use app_model::AnalysisJobEventDto;
 pub use app_model::AnalysisJobLaneDto as AnalysisJobLane;
 
 mod evaluation;
+#[cfg(test)]
+mod evaluation_tests;
 mod game_move;
 mod gtp_analysis;
 mod gtp_control;
@@ -39,6 +41,7 @@ mod preload;
 mod runtime_control;
 mod runtime_parameters;
 mod runtime_threads;
+mod thread_policy;
 pub use game_move::{GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle};
 
 pub trait AnalysisJobCancel: Send + Sync {
@@ -2172,7 +2175,7 @@ impl Inner {
             return Ok(());
         }
 
-        let spec = build_command_spec(&run.profile_snapshot).map_err(|error| {
+        let mut spec = build_command_spec(&run.profile_snapshot).map_err(|error| {
             failure(
                 kind,
                 EngineFailureKind::Start,
@@ -2182,6 +2185,18 @@ impl Inner {
                 None,
             )
         })?;
+        let requires_recommendation =
+            crate::thread_policy::apply(run, &mut spec, self.config.managed_resources_root.as_deref())
+                .map_err(|message| {
+                    failure(
+                        kind,
+                        EngineFailureKind::Config,
+                        capture.failure_text(&message),
+                        Some(&run.run_id),
+                        Some(&run.profile_id),
+                        None,
+                    )
+                })?;
         let resource_deadline = Instant::now() + Duration::from_secs(30);
         let resources = ResourceSnapshot::capture(
             run,
@@ -2201,6 +2216,18 @@ impl Inner {
                 None,
             )
         })?;
+        if requires_recommendation {
+            crate::thread_policy::verify_launch_resources(run, &resources).map_err(|message| {
+                failure(
+                    kind,
+                    EngineFailureKind::ResourceChanged,
+                    capture.failure_text(&message),
+                    Some(&run.run_id),
+                    Some(&run.profile_id),
+                    None,
+                )
+            })?;
+        }
         if !self.preparation_current(operation, run, background) {
             return Ok(());
         }
@@ -5100,6 +5127,7 @@ fn starting_run(saved: &SavedEngineProfile) -> EngineRunDto {
         profile_id: saved.profile_id.clone(),
         adapter_kind: saved.profile.adapter_kind(),
         profile_snapshot: saved.profile.clone(),
+        thread_policy_snapshot: saved.thread_policy.clone(),
         capability_snapshot: None,
         qualified_resource: None,
     }

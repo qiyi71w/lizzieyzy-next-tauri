@@ -115,6 +115,7 @@ for line in sys.stdin:
         std::fs::write(directory.join("config"), "").unwrap();
         let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
         catalog.upsert(engine_manager::SavedEngineProfile {
+            thread_policy: Default::default(),
             profile_id: "test".into(),
             profile: app_model::EngineProfileDto {
                 name: "test".into(),
@@ -318,6 +319,7 @@ fn run_invalidation_rejects_already_queued_task_progress() {
             "restart" => engine.manager.restart().unwrap(),
             "switch" => {
                 engine.catalog.upsert(engine_manager::SavedEngineProfile {
+                    thread_policy: Default::default(),
                     profile_id: "replacement".into(),
                     profile: app_model::EngineProfileDto {
                         name: "replacement".into(),

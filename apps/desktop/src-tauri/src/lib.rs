@@ -89,6 +89,7 @@ impl EngineProfileCatalog for DiskEngineCatalog {
                     .map(|record| SavedEngineProfile {
                         profile_id: record.id,
                         profile: record.profile,
+                        thread_policy: record.thread_policy,
                     })
                     .collect()
             })
@@ -104,6 +105,7 @@ impl EngineProfileCatalog for DiskEngineCatalog {
             .map(|record| SavedEngineProfile {
                 profile_id: record.id,
                 profile: record.profile,
+                thread_policy: record.thread_policy,
             })
     }
 
@@ -652,15 +654,48 @@ fn save_engine_profiles_at_path(
     let saved = persist_engine_profiles(path, settings)?;
     manager.evaluation_snapshot();
     for previous in &current.profiles {
-        if !saved
-            .profiles
-            .iter()
-            .any(|next| next.id == previous.id && next.preload && next.profile == previous.profile)
-        {
+        if !saved.profiles.iter().any(|next| {
+            next.id == previous.id
+                && next.preload
+                && next.profile == previous.profile
+                && next.thread_policy == previous.thread_policy
+        }) {
             manager.invalidate_preload(&previous.id);
         }
     }
     Ok(saved)
+}
+
+#[tauri::command]
+async fn engine_thread_policy_status(
+    manager: State<'_, ForegroundEngineManager>,
+    target_id: String,
+    evaluation_id: Option<String>,
+) -> Result<app_model::ThreadPolicyStatusDto, String> {
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        manager.thread_policy_status(&target_id, evaluation_id.as_deref())
+    })
+    .await
+    .map_err(|_| "policy_worker_failed".to_owned())?
+}
+
+#[tauri::command]
+async fn save_engine_thread_policy(
+    app_handle: AppHandle,
+    manager: State<'_, ForegroundEngineManager>,
+    request: app_model::ThreadPolicySaveRequestDto,
+) -> Result<EngineProfilesSettingsDto, String> {
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _transaction = ENGINE_CATALOG_WRITES
+            .lock()
+            .map_err(|_| "engine catalog lock poisoned")?;
+        let current = load_engine_profiles_from_disk(&app_handle)?;
+        manager.save_thread_policy_at_path(&engine_profile_path(&app_handle)?, current, request)
+    })
+    .await
+    .map_err(|_| "policy_worker_failed".to_owned())?
 }
 
 #[tauri::command]
@@ -1458,6 +1493,8 @@ pub fn run() {
             update_workspace_shares,
             load_engine_profiles_settings,
             save_engine_profiles_settings,
+            engine_thread_policy_status,
+            save_engine_thread_policy,
             reorder_engine_profiles_settings,
             models::model_inventory_snapshot,
             models::refresh_model_inventory,
@@ -1570,6 +1607,7 @@ mod tests {
                     .map(|record| SavedEngineProfile {
                         profile_id: record.id,
                         profile: record.profile,
+                        thread_policy: record.thread_policy,
                     })
             }
             fn startup_evaluation_target(&self) -> Result<Option<SavedEngineProfile>, String> {
@@ -1841,6 +1879,7 @@ for line in sys.stdin:
                     max_visits: 800,
                 }),
             },
+            thread_policy: Default::default(),
         });
         let manager =
             ForegroundEngineManager::new(catalog, engine_manager::ForegroundEngineConfig::for_tests());

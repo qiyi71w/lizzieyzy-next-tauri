@@ -70,6 +70,7 @@ impl Rig {
                 working_dir: Some(dir.to_string_lossy().into()),
                 adapter,
             },
+            thread_policy: Default::default(),
         });
         let mut second = catalog.get("engine").unwrap();
         second.profile_id = "second".into();

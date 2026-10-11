@@ -830,6 +830,7 @@ fn diagnostic_trace_reports_actual_stronger_weaker_ownership_and_identity_decisi
             working_dir: None,
             adapter: app_model::EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings {}),
         },
+        thread_policy: Default::default(),
     });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
     manager.start("trace").unwrap();

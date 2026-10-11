@@ -102,6 +102,7 @@ fn real_retained_selection_launches_without_rewriting_profile_inputs() {
     catalog.upsert(SavedEngineProfile {
         profile_id: "local-sample".into(),
         profile: profile.clone(),
+        thread_policy: Default::default(),
     });
     let manager = ForegroundEngineManager::new(
         catalog,

@@ -13,6 +13,7 @@ pub const ENGINE_PROFILES_VERSION: u32 = 2;
 pub struct SavedEngineProfile {
     pub profile_id: String,
     pub profile: EngineProfileDto,
+    pub thread_policy: app_model::SavedThreadPolicyDto,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,6 +23,8 @@ pub struct EngineProfileRecord {
     pub profile: EngineProfileDto,
     #[serde(default)]
     pub preload: bool,
+    #[serde(default)]
+    pub thread_policy: app_model::SavedThreadPolicyDto,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,6 +62,7 @@ impl EngineProfilesSettings {
         Ok(Some(SavedEngineProfile {
             profile_id: target.id.clone(),
             profile: target.profile.clone(),
+            thread_policy: target.thread_policy.clone(),
         }))
     }
 }
@@ -221,6 +225,7 @@ pub fn default_engine_profile_record() -> EngineProfileRecord {
     EngineProfileRecord {
         id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
         preload: false,
+        thread_policy: Default::default(),
         profile: EngineProfileDto {
             name: "Local KataGo".to_string(),
             program: String::new(),
@@ -282,6 +287,7 @@ pub fn parse_engine_profiles(contents: &str) -> Result<EngineProfilesSettings, S
                     Ok(EngineProfileRecord {
                         id: record.id,
                         preload: false,
+                        thread_policy: Default::default(),
                         profile: record.profile.migrate(record.max_visits)?,
                     })
                 })
@@ -299,6 +305,7 @@ pub fn parse_engine_profiles(contents: &str) -> Result<EngineProfilesSettings, S
             profiles: vec![EngineProfileRecord {
                 id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
                 preload: false,
+                thread_policy: Default::default(),
                 profile: legacy.profile.migrate(legacy.max_visits)?,
             }],
         }
@@ -339,6 +346,10 @@ pub fn prepare_engine_profiles_save(
     let mut settings = normalize_engine_profiles(settings)?;
     // This identity belongs to graceful exit, never a stale settings form.
     settings.last_primary_profile_id = current.last_primary_profile_id.clone();
+    // Ordinary profile forms cannot manufacture or overwrite this narrow transaction owner.
+    for record in &mut settings.profiles {
+        record.thread_policy = Default::default();
+    }
     let mut destination = 0;
     for existing in &current.profiles {
         if let Some(offset) = settings.profiles[destination..]
@@ -346,6 +357,14 @@ pub fn prepare_engine_profiles_save(
             .position(|record| record.id == existing.id)
         {
             settings.profiles[destination..=destination + offset].rotate_right(1);
+            settings.profiles[destination].thread_policy = existing.thread_policy.clone();
+            if settings.profiles[destination].profile != existing.profile {
+                settings.profiles[destination].thread_policy.revision = existing
+                    .thread_policy
+                    .revision
+                    .checked_add(1)
+                    .ok_or("policy_revision_exhausted")?;
+            }
             destination += 1;
         }
     }

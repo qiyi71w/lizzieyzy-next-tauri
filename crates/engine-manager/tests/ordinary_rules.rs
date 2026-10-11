@@ -31,10 +31,12 @@ fn real_katago_gtp_rules_and_exact_selected_positions() {
                 max_visits: 4,
             }),
         },
+        thread_policy: Default::default(),
     });
     catalog.upsert(SavedEngineProfile {
         profile_id: "prepared-gtp".into(),
         profile: catalog.get("gtp").unwrap().profile,
+        thread_policy: Default::default(),
     });
     catalog.set_preload("prepared-gtp", true);
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::default());
@@ -336,6 +338,7 @@ mod controlled {
                         max_visits: 4,
                     }),
                 },
+                thread_policy: Default::default(),
             });
             let manager = ForegroundEngineManager::new(catalog.clone(), ForegroundEngineConfig::for_tests());
             let mut rig = Self {
