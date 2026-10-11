@@ -190,30 +190,40 @@ fn legacy_policy_defaults_without_eager_write_and_cfg_write_failure_preserves_ca
 #[cfg(target_os = "linux")]
 fn owned_pid(engine: &str) -> (u32, String) {
     let executable = std::fs::canonicalize(engine).unwrap();
-    let mut found = Vec::new();
-    for task in std::fs::read_dir("/proc/self/task").unwrap() {
-        if let Ok(children) = std::fs::read_to_string(task.unwrap().path().join("children")) {
-            for pid in children.split_whitespace() {
-                if std::fs::read_link(format!("/proc/{pid}/exe")).ok().as_ref() == Some(&executable) {
-                    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
-                    found.push((
-                        pid.parse().unwrap(),
-                        stat.rsplit_once(')')
-                            .unwrap()
-                            .1
-                            .split_whitespace()
-                            .nth(19)
-                            .unwrap()
-                            .to_owned(),
-                    ));
+    // Ready promotion precedes the existing two-second old-resident drain.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut found = Vec::new();
+        for task in std::fs::read_dir("/proc/self/task").unwrap() {
+            if let Ok(children) = std::fs::read_to_string(task.unwrap().path().join("children")) {
+                for pid in children.split_whitespace() {
+                    if std::fs::read_link(format!("/proc/{pid}/exe")).ok().as_ref() == Some(&executable) {
+                        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+                        found.push((
+                            pid.parse().unwrap(),
+                            stat.rsplit_once(')')
+                                .unwrap()
+                                .1
+                                .split_whitespace()
+                                .nth(19)
+                                .unwrap()
+                                .to_owned(),
+                        ));
+                    }
                 }
             }
         }
+        found.sort();
+        found.dedup();
+        if found.len() == 1 {
+            return found.pop().unwrap();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "expected one manager-owned resident after drain, found {found:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
     }
-    found.sort();
-    found.dedup();
-    assert_eq!(found.len(), 1, "one manager-owned real resident");
-    found.pop().unwrap()
 }
 
 #[test]
