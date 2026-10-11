@@ -1036,7 +1036,15 @@ mod tests {
         };
         let original = save_to_path(&path, settings).unwrap();
         assert_eq!(load_from_path(&path).unwrap().preferences, original);
-        for interval in [0.0, -1.0, f64::NAN, f64::INFINITY, 0.0001] {
+        for interval in [1.001, 1.005, 2147483.647] {
+            let mut fractional = original.clone();
+            fractional.continuation.interval_seconds = interval;
+            let saved = save_to_path(&path, fractional.clone()).unwrap();
+            assert_eq!(saved, fractional);
+            assert_eq!(load_from_path(&path).unwrap().preferences, fractional);
+        }
+        save_to_path(&path, original.clone()).unwrap();
+        for interval in [0.0, -1.0, f64::NAN, f64::INFINITY, 0.0001, 1.0011, 2147483.648] {
             let mut invalid = original.clone();
             invalid.continuation.mode = app_model::ContinuationModeDto::LeafOnly;
             invalid.continuation.interval_seconds = interval;

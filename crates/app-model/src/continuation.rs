@@ -24,9 +24,9 @@ impl Default for ContinuationPreferencesDto {
 impl ContinuationPreferencesDto {
     /// Shares the lossless whole-millisecond representation of review settings.
     pub fn interval_millis(&self) -> Result<u64, String> {
-        let millis = self.interval_seconds * 1000.0;
+        let millis = (self.interval_seconds * 1000.0).round();
         if !millis.is_finite() || millis < 1.0 || millis > i32::MAX as f64
-            || millis.fract() != 0.0 || millis / 1000.0 != self.interval_seconds {
+            || millis / 1000.0 != self.interval_seconds {
             return Err("Continuation interval must be positive, finite, and exactly representable in whole milliseconds.".into());
         }
         Ok(millis as u64)
@@ -65,11 +65,11 @@ mod tests {
     fn continuation_settings_reject_lossy_or_nonpositive_intervals() {
         let mut preferences = ContinuationPreferencesDto::default();
         assert_eq!(preferences.interval_millis().unwrap(), 1000);
-        for seconds in [0.0, -1.0, f64::NAN, f64::INFINITY, 0.0001, 2147483.648] {
+        for seconds in [0.0, -1.0, f64::NAN, f64::INFINITY, 0.0001, 1.0011, 2147483.648] {
             preferences.interval_seconds = seconds;
             assert!(preferences.validate().is_err());
         }
-        for (seconds, millis) in [(0.001, 1), (0.8, 800), (1.25, 1250)] {
+        for (seconds, millis) in [(0.001, 1), (0.8, 800), (1.001, 1001), (1.005, 1005), (1.25, 1250), (2147483.647, 2147483647)] {
             preferences.interval_seconds = seconds;
             assert_eq!(preferences.interval_millis().unwrap(), millis);
         }

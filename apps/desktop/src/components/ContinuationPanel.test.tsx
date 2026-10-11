@@ -12,8 +12,8 @@ vi.mock("../api/preferences", () => ({ loadContinuationPreferences: vi.fn(), sav
 beforeEach(() => { globalThis.IS_REACT_ACT_ENVIRONMENT = true; vi.clearAllMocks(); vi.mocked(preferences.loadContinuationPreferences).mockResolvedValue(defaultContinuationPreferences()); vi.mocked(preferences.saveContinuationPreferences).mockImplementation(async value => { validateContinuationPreferences(value); return value; }); });
 it("requires finite exactly representable positive seconds", () => {
   expect(defaultContinuationPreferences()).toEqual({ mode: "leaf_only", intervalSeconds: 1 });
-  for (const value of [0, -1, NaN, Infinity, 0.0001]) expect(() => validateContinuationPreferences({ mode: "every_beat", intervalSeconds: value })).toThrow();
-  expect(() => validateContinuationPreferences({ mode: "every_beat", intervalSeconds: 0.8 })).not.toThrow();
+  for (const value of [0, -1, NaN, Infinity, 0.0001, 1.0011, 2147483.648]) expect(() => validateContinuationPreferences({ mode: "every_beat", intervalSeconds: value })).toThrow();
+  for (const value of [0.001, 0.8, 1.001, 1.005, 1.25, 2147483.647]) expect(() => validateContinuationPreferences({ mode: "every_beat", intervalSeconds: value })).not.toThrow();
 });
 it("keeps Save, Cancel, failure and reopen stopped and restores focus", async () => {
   const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);

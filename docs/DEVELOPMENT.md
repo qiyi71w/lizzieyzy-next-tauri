@@ -316,6 +316,8 @@ Remaining native10 responsibility on the integrated candidate: menu/file multi-s
 
 Open 引擎续走, choose leaf-only or every-beat, save the independent minimum interval, then explicitly Start on a qualified ordinary Ready review Run. Save/Cancel/reopen never start. The first beat also waits the entire interval. Missing fresh candidates wait with Stop reachable. Stop retains completed moves; new variations use ordinary Undo and manual Save/Save As. Browser preview exercises settings and accessibility only and leaves native Start unavailable.
 
+Interval boundary checks cover 1.001→1001ms, 1.005→1005ms and the inclusive 2147483.647-second ceiling in both validators and durable preferences. Save/reload must retain the original seconds; zero, negative, nonfinite, fractional-millisecond and overflow values must leave the saved mode/interval pair unchanged. Focus these checks with `cargo test --locked -p app-model -p app-preferences continuation -- --test-threads=1` and the existing `ContinuationPanel.test.tsx` domain/control tests.
+
 Owner regressions run serial process fixtures:
 
 ```bash
