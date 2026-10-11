@@ -1,0 +1,10 @@
+numSearchThreads =  1: 1 / 1 positions, visits/s = 123.5 nnEvals/s = 87.25 nnBatches/s = 7.59 avgBatchSize = 1.00 (0.3 secs) (EloDiff baseline)
+numSearchThreads =  2: 1 / 1 positions, visits/s = 250 (0.3 secs) (EloDiff +180)
+numSearchThreads =  4: 1 / 1 positions, nnEvals/s = 310.5 (0.3 secs) (EloDiff +190)
+numSearchThreads =  8: 1 / 1 positions, visits/s = NaN nnEvals/s = 411.75 (0.3 secs) (EloDiff +200)
+numSearchThreads = 16: 1 / 1 positions, visits/s = 500 nnEvals/s = invalid (0.3 secs) (EloDiff +210)
+numSearchThreads = 32: 1 / 1 positions, visits/s = -1 nnEvals/s = inf (0.3 secs) (EloDiff +220)
+numSearchThreads = 64: 0 / 1 positions, visits/s = 999 nnEvals/s = 888 (0.3 secs)
+numSearchThreads = 64: 1 / 1 positions, visits/s = 999 nnEvals/s = 888
+numSearchThreads = 64: 1 / 1 positions, playouts/s = 999 nnEvals/s = 888 (0.3 secs)
+numSearchThreads = 64: 1 / 1 positions, visits/s = 999 visits/s = 777 nnEvals/s = 888 (0.3 secs)

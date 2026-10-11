@@ -40,7 +40,23 @@ if mode == "help":
 if mode == "privacy":
     print('token="private-first-line', flush=True)
     print('private-second-line" /home/private-owner/model.bin \x1b[31m', flush=True)
+if mode in ("raw", "sweep", "variations"):
+    filename = {"raw": "stdout.txt", "sweep": "sweep-stdout.txt", "variations": "variations.txt"}[mode]
+    sys.stdout.buffer.write((pathlib.Path(__file__).parent / "katago-1.18.2-benchmark" / filename).read_bytes())
+    sys.stdout.flush()
+    # Rows must survive diagnostic-tail eviction without being paired across rows.
+    for i in range(150):
+        print("trailing diagnostic", flush=True)
+    sys.exit(0)
+if mode in ("truncated", "overlong", "incomplete"):
+    row = "numSearchThreads = 1: 1 / 1 positions, visits/s = 123 nnEvals/s = 87 (0.3 secs)"
+    if mode == "overlong":
+        row += " " * 2048 + "\n"
+    elif mode == "incomplete":
+        row = "numSearchThreads = 1: 0 / 1 positions, visits/s = 123 nnEvals/s = 87 (0.3 secs)\n"
+    sys.stdout.write(row)
+    sys.exit(0)
 if mode == "burst":
     for i in range(300):
         print("x" * 4096, flush=True)
-print("numSearchThreads = 1: 1 / 1 positions, visits/s = " + ("unavailable" if mode == "missing" else "123.5"), flush=True)
+print("numSearchThreads = 1: 1 / 1 positions, visits/s = " + ("unavailable" if mode == "missing" else "123.5") + " nnEvals/s = 87.25 (0.3 secs)", flush=True)

@@ -187,7 +187,7 @@ fn startup_authorization_is_frozen_one_shot_and_not_editor_selection() {
     let result = f.wait(|s| s.phase == Phase::Completed);
     assert_eq!(result.target_id.as_deref(), Some("target"));
     assert_eq!(
-        result.result.as_ref().unwrap().search_visits_per_second,
+        result.result.as_ref().unwrap().measurements[0].search_visits_per_second,
         Some(123.5)
     );
     f.manager.apply_startup_evaluation();
@@ -302,7 +302,10 @@ fn saved_target_preserves_argv_all_configs_workdir_and_returns_real_result() {
     let result = done.result.unwrap();
     assert_eq!(result.target_id, "target");
     assert_eq!(Some(result.input_revision.clone()), admitted.input_revision);
-    assert_eq!(result.search_visits_per_second, Some(123.5));
+    assert_eq!(result.evaluation_id, admitted.evaluation_id.unwrap());
+    assert_eq!(result.measurements[0].search_visits_per_second, Some(123.5));
+    assert_eq!(result.measurements[0].nn_evals_per_second, Some(87.25));
+    assert_eq!(result.measurements[0].measured_threads, 1);
     assert!(
         result
             .qualified_resource
@@ -343,7 +346,7 @@ fn canonical_display_sanitization_preserves_raw_measurement_and_isolated_identit
     ] {
         assert!(!display.contains(secret), "{display}");
     }
-    assert_eq!(done.result.unwrap().search_visits_per_second, Some(123.5));
+    assert_eq!(done.result.unwrap().measurements[0].search_visits_per_second, Some(123.5));
     assert_eq!(f.manager.last_primary_profile_id(), None);
     assert!(f.manager.diagnostic_snapshots().is_empty());
 }
@@ -364,7 +367,7 @@ fn failure_missing_metrics_and_bounded_output_are_truthful() {
         f.wait(|s| s.phase == Phase::Completed)
             .result
             .unwrap()
-            .search_visits_per_second,
+            .measurements[0].search_visits_per_second,
         None
     );
     let f = Fixture::new("burst");
@@ -372,6 +375,61 @@ fn failure_missing_metrics_and_bounded_output_are_truthful() {
     let done = f.wait(|s| s.phase == Phase::Completed);
     assert!(done.output_truncated);
     assert!(done.output.iter().map(String::len).sum::<usize>() <= 8192);
+}
+
+#[test]
+fn original_protocol_and_variations_publish_independent_frozen_rows() {
+    for (mode, expected) in [
+        ("raw", vec![(1, Some(7.59), Some(7.59))]),
+        ("sweep", vec![(1, Some(7.54), Some(7.54)), (2, Some(12.83), Some(12.83))]),
+        ("variations", vec![
+            (1, Some(123.5), Some(87.25)), (2, Some(250.0), None),
+            (4, None, Some(310.5)), (8, None, Some(411.75)),
+            (16, Some(500.0), None), (32, None, None),
+        ]),
+    ] {
+        let f = Fixture::new(mode);
+        let admitted = f.manager.start_evaluation("target").unwrap();
+        let done = f.wait(|s| matches!(s.phase, Phase::Completed | Phase::Failed));
+        assert_eq!(done.phase, Phase::Completed, "{done:?}");
+        let result = done.result.as_ref().unwrap();
+        assert_eq!(result.evaluation_id, admitted.evaluation_id.unwrap());
+        assert_eq!(result.input_revision, admitted.input_revision.unwrap());
+        assert_eq!(result.target_id, "target");
+        assert_eq!(result.qualified_resource.profile_revision, result.input_revision);
+        assert_eq!(result.qualified_resource.backend.as_deref(), Some("Using Eigen(CPU) backend"));
+        assert!(result.qualified_resource.resources.iter().any(|r| r.component == "model"));
+        let rows: Vec<_> = result.measurements.iter().map(|r|
+            (r.measured_threads, r.search_visits_per_second, r.nn_evals_per_second)
+        ).collect();
+        assert_eq!(rows, expected);
+        let wire = serde_json::to_string(&done).unwrap();
+        assert_eq!(serde_json::from_str::<EvaluationSnapshotDto>(&wire).unwrap(), done);
+        if mode == "variations" {
+            let consumer: app_model::EvaluationResultDto = serde_json::from_str(include_str!(
+                "fixtures/katago-1.18.2-benchmark/variations-result.json"
+            )).unwrap();
+            assert_eq!(result.measurements, consumer.measurements);
+        }
+        assert!(done.output_truncated, "diagnostic tail eviction must not drop measurement rows");
+        // A later edit cannot relabel this immutable result, and retires the public slot.
+        f.catalog.0.lock().as_mut().unwrap().profile.name = "edited after measurement".into();
+        let retired = f.manager.evaluation_snapshot();
+        assert_eq!(retired.phase, Phase::Retired);
+        assert!(retired.result.is_none());
+        assert_eq!(result.measurements.iter().map(|r| (r.measured_threads, r.search_visits_per_second, r.nn_evals_per_second)).collect::<Vec<_>>(), expected);
+    }
+}
+
+#[test]
+fn truncated_overlong_and_unfinished_rows_never_complete_measurement() {
+    for mode in ["truncated", "overlong", "incomplete"] {
+        let f = Fixture::new(mode);
+        f.manager.start_evaluation("target").unwrap();
+        let done = f.wait(|s| matches!(s.phase, Phase::Completed | Phase::Failed));
+        assert_eq!(done.phase, Phase::Failed, "{mode}: {done:?}");
+        assert!(done.result.is_none());
+    }
 }
 
 #[test]
@@ -527,7 +585,12 @@ fn real_katago_measurement_failure_cancel_and_foreground_handoff() {
         assert!(Instant::now() < deadline, "{s:?}");
         std::thread::sleep(Duration::from_millis(50));
     };
-    assert!(success.result.as_ref().unwrap().search_visits_per_second.unwrap() > 0.0);
+    let result = success.result.as_ref().unwrap();
+    assert_eq!(result.evaluation_id, success.evaluation_id.as_deref().unwrap());
+    assert_eq!(result.measurements.len(), 1);
+    assert_eq!(result.measurements[0].measured_threads, 1);
+    assert!(result.measurements[0].search_visits_per_second.unwrap() > 0.0);
+    assert!(result.measurements[0].nn_evals_per_second.unwrap() > 0.0);
     assert_eq!(success.exit_code, Some(0));
     println!("REAL_SUCCESS {}", serde_json::to_string(&success).unwrap());
     f.catalog
@@ -791,7 +854,7 @@ fn real_managed_evaluation_qualifies_both_adapters_without_primary_authority() {
             .resources
             .iter()
             .any(|r| r.component == "managed_receipt"));
-        assert!(result.search_visits_per_second.unwrap() > 0.0);
+        assert!(result.measurements[0].search_visits_per_second.unwrap() > 0.0);
         assert_eq!(f.catalog.get("target"), Some(saved));
         assert_eq!(f.manager.last_primary_profile_id(), None);
         assert!(f.manager.diagnostic_snapshots().is_empty());
@@ -899,7 +962,7 @@ fn real_startup_handoff(gtp: bool) {
     f.manager.apply_startup_evaluation();
     let done = f.wait(|s| matches!(s.phase, Phase::Completed | Phase::Failed));
     assert_eq!(done.phase, Phase::Completed, "{done:?}");
-    assert!(done.result.as_ref().unwrap().search_visits_per_second.unwrap() > 0.0);
+    assert!(done.result.as_ref().unwrap().measurements[0].search_visits_per_second.unwrap() > 0.0);
     assert_eq!(done.target_id.as_deref(), Some("target"));
     assert_eq!(std::fs::read(&path).unwrap(), before);
     println!("REAL_STARTUP_RESULT {}", serde_json::to_string(&done).unwrap());

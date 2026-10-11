@@ -25,14 +25,23 @@ pub enum EvaluationPhaseDto {
     Retired,
 }
 
+/// One complete protocol row; unavailable metrics are independent, never inferred.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EvaluationMeasurementDto {
+    pub measured_threads: u32,
+    pub nn_evals_per_second: Option<f64>,
+    pub search_visits_per_second: Option<f64>,
+}
+
 /// Actual benchmark observations only; never a recommendation or durable policy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvaluationResultDto {
+    pub evaluation_id: String,
     pub target_id: String,
     pub input_revision: String,
     pub qualified_resource: QualifiedLocalResourceDto,
     pub elapsed_ms: u64,
-    pub search_visits_per_second: Option<f64>,
+    pub measurements: Vec<EvaluationMeasurementDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -81,7 +81,7 @@ export function EngineEvaluationPanel({ profiles, disabled }: Props) {
     }
   }
 
-  const result = snapshot?.result;
+  const result = snapshot?.phase === "completed" ? snapshot.result : null;
   return <section aria-label={t("evaluation.title")} style={{ overflowWrap: "anywhere" }}>
     <h3>{t("evaluation.title")}</h3>
     <p className="message">{t("evaluation.hint")}</p>
@@ -101,14 +101,32 @@ export function EngineEvaluationPanel({ profiles, disabled }: Props) {
     {snapshot?.target_id && <p>{snapshot.target_id} · {snapshot.input_revision}</p>}
     {snapshot?.message && <p>{snapshot.message}</p>}
     {snapshot && <p>{t("evaluation.exit")}: {snapshot.exit_code ?? "—"}</p>}
-    {result && <dl>
-      <dt>{t("evaluation.speed")}</dt><dd>{result.search_visits_per_second ?? t("evaluation.unavailable")}</dd>
-      <dt>{t("evaluation.elapsed")}</dt><dd>{result.elapsed_ms}</dd>
-      <dt>{t("engineResource.version")}</dt><dd>{result.qualified_resource.version ?? "—"}</dd>
-      {result.qualified_resource.resources.map((resource, index) => <div key={index}>
-        <dt>{resource.component}</dt><dd>{resource.sha256} · {resource.bytes} bytes</dd>
-      </div>)}
-    </dl>}
+    {result && <>
+      <dl>
+        <dt>{t("evaluation.identity")}</dt><dd>{result.evaluation_id} · {result.target_id} · {result.input_revision}</dd>
+        <dt>{t("evaluation.elapsed")}</dt><dd>{result.elapsed_ms}</dd>
+        <dt>{t("engineResource.version")}</dt><dd>{result.qualified_resource.version ?? t("engineResource.unknown")}</dd>
+        <dt>{t("engineResource.backend")}</dt><dd>{result.qualified_resource.backend ?? t("engineResource.unknown")}</dd>
+        {result.qualified_resource.resources.map((resource, index) => <div key={index}>
+          <dt>{resource.component}</dt><dd>{resource.sha256} · {resource.bytes} bytes</dd>
+        </div>)}
+      </dl>
+      <div tabIndex={0} role="region" aria-label={t("evaluation.measurements")} style={{ overflowX: "auto" }}>
+        <table>
+          <caption>{t("evaluation.measurements")}</caption>
+          <thead><tr>
+            <th scope="col">{t("evaluation.threads")}</th>
+            <th scope="col">{t("evaluation.nnSpeed")}</th>
+            <th scope="col">{t("evaluation.speed")}</th>
+          </tr></thead>
+          <tbody>{result.measurements.map((row, index) => <tr key={index}>
+            <th scope="row">{row.measured_threads}</th>
+            <td>{row.nn_evals_per_second ?? t("evaluation.unavailable")}</td>
+            <td>{row.search_visits_per_second ?? t("evaluation.unavailable")}</td>
+          </tr>)}</tbody>
+        </table>
+      </div>
+    </>}
     {Boolean(snapshot?.output.length) && <details open>
       <summary>{t("evaluation.output")}</summary>
       <pre tabIndex={0} style={{ maxHeight: "12rem", overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{snapshot?.output.join("\n")}</pre>

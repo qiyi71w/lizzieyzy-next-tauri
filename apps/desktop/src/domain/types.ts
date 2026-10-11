@@ -1,11 +1,17 @@
 import type { NetworkRoute } from "./providers";
 export type EvaluationPhaseDto = "idle" | "unavailable" | "qualifying" | "running" | "completed" | "failed" | "cancelled" | "yielded" | "retired";
+export type EvaluationMeasurementDto = {
+  measured_threads: number;
+  nn_evals_per_second: number | null;
+  search_visits_per_second: number | null;
+};
 export type EvaluationResultDto = {
+  evaluation_id: string;
   target_id: string;
   input_revision: string;
   qualified_resource: QualifiedLocalResourceDto;
   elapsed_ms: number;
-  search_visits_per_second: number | null;
+  measurements: EvaluationMeasurementDto[];
 };
 export type EvaluationSnapshotDto = {
   evaluation_id: string | null;

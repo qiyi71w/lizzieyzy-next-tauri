@@ -1,5 +1,5 @@
 use super::*;
-use app_model::{EvaluationPhaseDto as PhaseDto, EvaluationResultDto, EvaluationSnapshotDto};
+use app_model::{EvaluationMeasurementDto, EvaluationPhaseDto as PhaseDto, EvaluationResultDto, EvaluationSnapshotDto};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -371,7 +371,7 @@ fn execute(
         working_dir: spec.working_dir.clone(),
         env: spec.env.clone(),
     };
-    let (probe_exit, version_lines, _) = run_process(weak, id, &probe, Duration::from_secs(10), false)?;
+    let (probe_exit, version_lines, _, _) = run_process(weak, id, &probe, Duration::from_secs(10), false)?;
     if probe_exit != Some(0) {
         return Err("Benchmark binary version probe failed".into());
     }
@@ -388,14 +388,14 @@ fn execute(
         .revalidate(Instant::now() + Duration::from_secs(30), &is_retired)
         .map_err(|(_, message)| evaluation_failure_text(weak, id, &message))?;
     spec.args[0] = "benchmark".into();
-    let (exit_code, output, elapsed) = run_process(weak, id, spec, MEASUREMENT_TIMEOUT, true)?;
+    let (exit_code, output, elapsed, measurements) = run_process(weak, id, spec, MEASUREMENT_TIMEOUT, true)?;
     if exit_code != Some(0) {
         return Err(FailureText::from("Benchmark failed (exit code ")
             .then(evaluation_failure_text(weak, id, &format!("{exit_code:?}")))
             .then("); no measurement available. ")
             .then(evaluation_failure_text(weak, id, &output.join("\n"))));
     }
-    if !output.iter().any(|line| completed_row(line).is_some()) {
+    if measurements.is_empty() {
         return Err("Benchmark exited without a completed measurement; result unavailable".into());
     }
     resources
@@ -413,11 +413,12 @@ fn execute(
         return Ok(());
     }
     slot.snapshot.result = Some(EvaluationResultDto {
+        evaluation_id: id.into(),
         target_id: saved.profile_id.clone(),
         input_revision: qualified.profile_revision.clone(),
         qualified_resource: qualified,
         elapsed_ms: elapsed.as_millis() as u64,
-        search_visits_per_second: search_speed(&output),
+        measurements,
     });
     slot.snapshot.phase = PhaseDto::Completed;
     slot.snapshot.message = Some(
@@ -427,33 +428,56 @@ fn execute(
     Ok(())
 }
 
-// A single reported search speed is meaningful. A multi-thread sweep has multiple
-// observations; do not invent a scalar recommendation by selecting its fastest row.
-fn search_speed(lines: &[String]) -> Option<f64> {
-    let values: Vec<f64> = lines
-        .iter()
-        .filter_map(|line| {
-            let rest = completed_row(line)?;
-            rest.split_whitespace()
-                .next()?
-                .parse::<f64>()
-                .ok()
-                .filter(|value| value.is_finite() && *value > 0.0)
-        })
-        .collect();
-    (values.len() == 1).then(|| values[0])
-}
-
-fn completed_row(line: &str) -> Option<&str> {
+// Parse each completed raw row independently, before display sanitization or tail eviction.
+// Only the admitted 1.18.2 visits/s grammar is supported; playouts are not visits.
+fn completed_row(line: &str) -> Option<EvaluationMeasurementDto> {
     let line = line.trim().strip_prefix("numSearchThreads =")?;
     let (threads, row) = line.split_once(':')?;
-    if threads.trim().parse::<u32>().ok()? == 0 {
-        return None;
-    }
-    let (progress, metric) = row.split_once(" positions, visits/s = ")?;
+    let measured_threads = threads.trim().parse::<u32>().ok().filter(|n| *n > 0)?;
+    let (progress, metrics) = row.split_once(" positions,")?;
     let (done, total) = progress.split_once('/')?;
     let total = total.trim().parse::<u32>().ok()?;
-    (total > 0 && done.trim().parse::<u32>().ok()? == total).then_some(metric)
+    if total == 0 || done.trim().parse::<u32>().ok()? != total {
+        return None;
+    }
+    // The closing elapsed marker distinguishes a whole row from a truncated prefix.
+    let (metrics, suffix) = metrics.split_once(" (")?;
+    let (seconds, suffix) = suffix.split_once(" secs)")?;
+    seconds.parse::<f64>().ok().filter(|n| n.is_finite() && *n >= 0.0)?;
+    let suffix = suffix.trim();
+    if !suffix.is_empty() {
+        let elo = suffix.strip_prefix("(EloDiff ")?.strip_suffix(')')?;
+        if elo != "baseline" {
+            elo.parse::<i32>().ok()?;
+        }
+    }
+    let mut row = EvaluationMeasurementDto {
+        measured_threads,
+        nn_evals_per_second: None,
+        search_visits_per_second: None,
+    };
+    let mut fields = metrics.split_whitespace();
+    let mut seen = 0u8;
+    while let Some(key) = fields.next() {
+        let bit = match key {
+            "visits/s" => 1,
+            "nnEvals/s" => 2,
+            "nnBatches/s" => 4,
+            "avgBatchSize" => 8,
+            _ => return None,
+        };
+        if seen & bit != 0 || fields.next()? != "=" {
+            return None;
+        }
+        seen |= bit;
+        let value = fields.next()?.parse::<f64>().ok().filter(|n| n.is_finite() && *n > 0.0);
+        match key {
+            "visits/s" => row.search_visits_per_second = value,
+            "nnEvals/s" => row.nn_evals_per_second = value,
+            _ => {}
+        }
+    }
+    Some(row)
 }
 
 struct OutputLine {
@@ -496,7 +520,7 @@ fn read_output(mut reader: impl Read + Send + 'static, tx: SyncSender<Result<Out
                 if !line.is_empty() {
                     let _ = tx.send(Ok(OutputLine {
                         text: String::from_utf8_lossy(&line).into_owned(),
-                        truncated,
+                        truncated: true,
                     }));
                 }
                 return;
@@ -520,7 +544,7 @@ fn run_process(
     spec: &crate::CommandSpec,
     timeout: Duration,
     measurement: bool,
-) -> Result<(Option<i32>, Vec<String>, Duration), FailureText> {
+) -> Result<(Option<i32>, Vec<String>, Duration, Vec<EvaluationMeasurementDto>), FailureText> {
     let (tx, rx) = mpsc::sync_channel(QUEUE_LINES);
     {
         let inner = weak.upgrade().ok_or("Benchmark manager closed")?;
@@ -550,6 +574,7 @@ fn run_process(
     let start = Instant::now();
     let mut raw = Vec::<String>::new();
     let mut raw_bytes = 0;
+    let mut measurements = Vec::new();
     let mut exited = None;
     loop {
         let line = rx.recv_timeout(Duration::from_millis(20));
@@ -566,6 +591,14 @@ fn run_process(
         }
         if let Ok(line) = line {
             let line = line.map_err(|_| "Unable to read benchmark output; measurement unavailable")?;
+            if measurement && !line.truncated {
+                if let Some(row) = completed_row(&line.text) {
+                    if measurements.len() >= 128 {
+                        return Err("Benchmark exceeds 128 measurement rows; result unavailable".into());
+                    }
+                    measurements.push(row);
+                }
+            }
             if measurement {
                 slot.snapshot.output_truncated |= line.truncated;
                 // Sanitize only the display copy; completed-row parsing consumes raw bytes below.
@@ -594,7 +627,7 @@ fn run_process(
         }
         if let Some(code) = exited {
             if disconnected {
-                return Ok((code, raw, start.elapsed()));
+                return Ok((code, raw, start.elapsed(), measurements));
             }
         }
         if start.elapsed() >= timeout {
@@ -617,7 +650,7 @@ mod tests {
 
     #[test]
     fn pipe_read_failure_after_output_is_not_successful_eof() {
-        let row = b"numSearchThreads = 1: 1/1 positions, visits/s = 2.5\n";
+        let row = b"numSearchThreads = 1: 1/1 positions, visits/s = 2.5 (0.4 secs)\n";
         let (tx, rx) = mpsc::sync_channel(QUEUE_LINES);
         read_output(std::io::Cursor::new(row).chain(FailedPipe), tx);
         let first = rx.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
