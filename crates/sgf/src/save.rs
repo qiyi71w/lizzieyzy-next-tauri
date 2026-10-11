@@ -20,14 +20,88 @@ pub fn write_file_atomic(path: &Path, contents: &[u8]) -> Result<(), String> {
 }
 
 /// Cancellation and publication share this gate. New output never replaces an existing file.
-pub fn save_document_authorized(document: &CurrentSgfDocument, path: &Path, overwrite: bool,
-    cancelled: &parking_lot::Mutex<bool>) -> Result<(), String> {
-    write_with_publication(path, || document.serialize().map_err(|e| e.to_string()), |_| Ok(()), |temporary, target| {
-        let gate = cancelled.lock();
-        if *gate { return Err("Output cancelled before atomic publication".into()); }
-        if overwrite { fs::rename(temporary, target) } else { fs::hard_link(temporary, target) }
+pub fn save_document_authorized(
+    document: &CurrentSgfDocument,
+    path: &Path,
+    overwrite: bool,
+    cancelled: &parking_lot::Mutex<bool>,
+) -> Result<(), String> {
+    write_with_publication(
+        path,
+        || document.serialize().map_err(|e| e.to_string()),
+        |_| Ok(()),
+        |temporary, target| {
+            let gate = cancelled.lock();
+            if *gate {
+                return Err("Output cancelled before atomic publication".into());
+            }
+            if overwrite {
+                fs::rename(temporary, target)
+            } else {
+                publish_noreplace(temporary, target)
+            }
             .map_err(|e| e.to_string())
+        },
+    )
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn publish_noreplace(temporary: &Path, target: &Path) -> io::Result<()> {
+    use rustix::fs::{renameat_with, RenameFlags, CWD};
+    publish_with_link_fallback(temporary, target, || {
+        renameat_with(CWD, temporary, CWD, target, RenameFlags::NOREPLACE)
     })
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn publish_with_link_fallback(
+    temporary: &Path,
+    target: &Path,
+    rename: impl FnOnce() -> Result<(), rustix::io::Errno>,
+) -> io::Result<()> {
+    match rename() {
+        // Some kernels/filesystems (including WSL DrvFS) lack exclusive rename.
+        // Hard linking still publishes the complete staged bytes without replacing.
+        Err(rustix::io::Errno::NOSYS | rustix::io::Errno::INVAL | rustix::io::Errno::OPNOTSUPP) => {
+            fs::hard_link(temporary, target)
+        }
+        result => result.map_err(Into::into),
+    }
+}
+
+#[cfg(windows)]
+fn publish_noreplace(temporary: &Path, target: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+
+    // Canonicalizing the shared parent supplies an extended-length absolute path
+    // without following an existing destination file or changing its identity.
+    let parent = fs::canonicalize(temporary.parent().unwrap_or(Path::new(".")))?;
+    let wide = |path: &Path| -> io::Result<Vec<u16>> {
+        let name = path
+            .file_name()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Output needs a file name"))?;
+        let mut value: Vec<u16> = parent.join(name).as_os_str().encode_wide().collect();
+        if value.contains(&0) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Path contains NUL"));
+        }
+        value.push(0);
+        Ok(value)
+    };
+    let source = wide(temporary)?;
+    let destination = wide(target)?;
+    // Both NUL-terminated paths live through this synchronous call. Zero flags
+    // prohibit replacement and cross-volume copy/delete fallback.
+    if unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), 0) } == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+fn publish_noreplace(temporary: &Path, target: &Path) -> io::Result<()> {
+    fs::hard_link(temporary, target)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -43,7 +117,9 @@ fn write_with<T: AsRef<[u8]>>(
     encode: impl FnOnce() -> Result<T, String>,
     before: impl Fn(Stage) -> io::Result<()>,
 ) -> Result<(), String> {
-    write_with_publication(path, encode, before, |temporary, target| fs::rename(temporary, target).map_err(|e| e.to_string()))
+    write_with_publication(path, encode, before, |temporary, target| {
+        fs::rename(temporary, target).map_err(|e| e.to_string())
+    })
 }
 
 fn write_with_publication<T: AsRef<[u8]>>(
@@ -108,13 +184,88 @@ mod tests {
     use super::*;
 
     #[test]
+    fn authorized_publishers_have_one_complete_winner_and_preserve_directories() {
+        let dir = std::env::temp_dir().join(format!("batch-race-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let target = dir.join("result-中文.sgf");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let writers: Vec<_> = ["(;SZ[9]C[first])", "(;SZ[13]C[second])"]
+            .into_iter()
+            .map(|text| {
+                let target = target.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let document = CurrentSgfDocument::open(text).unwrap();
+                    let expected = document.serialize().unwrap();
+                    barrier.wait();
+                    (
+                        save_document_authorized(&document, &target, false, &parking_lot::Mutex::new(false)),
+                        expected,
+                    )
+                })
+            })
+            .collect();
+        let results: Vec<_> = writers.into_iter().map(|writer| writer.join().unwrap()).collect();
+        assert_eq!(results.iter().filter(|(result, _)| result.is_ok()).count(), 1);
+        let winner = &results.iter().find(|(result, _)| result.is_ok()).unwrap().1;
+        assert_eq!(fs::read_to_string(&target).unwrap(), *winner);
+        CurrentSgfDocument::open(winner).unwrap();
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        fs::remove_file(&target).unwrap();
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("keep"), b"protected").unwrap();
+        let document = CurrentSgfDocument::open("(;SZ[9])").unwrap();
+        assert!(
+            save_document_authorized(&document, &target, false, &parking_lot::Mutex::new(false)).is_err()
+        );
+        assert_eq!(fs::read(target.join("keep")).unwrap(), b"protected");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn unavailable_exclusive_rename_uses_atomic_link_but_other_errors_do_not() {
+        use rustix::io::Errno;
+        let dir = std::env::temp_dir().join(format!("batch-fallback-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let target = dir.join("result.sgf");
+        for error in [Errno::NOSYS, Errno::INVAL, Errno::OPNOTSUPP] {
+            let publish = |temporary: &Path, target: &Path| {
+                publish_with_link_fallback(temporary, target, || Err(error)).map_err(|e| e.to_string())
+            };
+            write_with_publication(&target, || Ok(b"complete"), |_| Ok(()), publish).unwrap();
+            assert_eq!(fs::read(&target).unwrap(), b"complete");
+            assert!(write_with_publication(&target, || Ok(b"loser"), |_| Ok(()), publish).is_err());
+            assert_eq!(fs::read(&target).unwrap(), b"complete");
+            assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+            fs::remove_file(&target).unwrap();
+        }
+        for error in [Errno::EXIST, Errno::ACCESS, Errno::PERM, Errno::IO, Errno::XDEV] {
+            let result = write_with_publication(
+                &target,
+                || Ok(b"must not publish"),
+                |_| Ok(()),
+                |temporary, target| {
+                    publish_with_link_fallback(temporary, target, || Err(error)).map_err(|e| e.to_string())
+                },
+            );
+            assert!(result.is_err());
+            assert!(!target.exists());
+            assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn authorized_output_linearizes_cancel_and_never_clobbers_without_permission() {
         let dir = std::env::temp_dir().join(format!("batch-publication-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&dir).unwrap();
         let path = dir.join("result.sgf");
         let gate = std::sync::Arc::new(parking_lot::Mutex::new(false));
         let mut held = gate.lock();
-        let writer_gate = gate.clone(); let writer_path = path.clone();
+        let writer_gate = gate.clone();
+        let writer_path = path.clone();
         let writer = std::thread::spawn(move || {
             let document = CurrentSgfDocument::open("(;SZ[9]C[personal])").unwrap();
             save_document_authorized(&document, &writer_path, false, &writer_gate)
@@ -124,9 +275,11 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::yield_now();
         }
-        *held = true; drop(held);
+        *held = true;
+        drop(held);
         assert!(writer.join().unwrap().unwrap_err().contains("cancelled"));
-        assert!(!path.exists()); assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
+        assert!(!path.exists());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
         *gate.lock() = false;
         let document = CurrentSgfDocument::open("(;SZ[9]C[personal])").unwrap();
         save_document_authorized(&document, &path, false, &gate).unwrap();
@@ -138,7 +291,13 @@ mod tests {
         assert!(save_document_authorized(&changed, &path, false, &gate).is_err());
         assert_eq!(fs::read(&path).unwrap(), committed);
         save_document_authorized(&changed, &path, true, &gate).unwrap();
-        assert_eq!(CurrentSgfDocument::open(&fs::read_to_string(&path).unwrap()).unwrap().tree().unwrap(), changed.tree().unwrap());
+        assert_eq!(
+            CurrentSgfDocument::open(&fs::read_to_string(&path).unwrap())
+                .unwrap()
+                .tree()
+                .unwrap(),
+            changed.tree().unwrap()
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
