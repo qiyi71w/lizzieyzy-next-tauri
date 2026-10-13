@@ -22,6 +22,8 @@ The migration is planned as complete user workflows:
 
 Each workflow crosses the Rust domain, Rust wire DTO, Tauri gateway, TypeScript API wrapper, React state, UI, and focused evidence that it actually needs. A layer-only milestone is not a migrated workflow.
 
+Finite analysis task responsibility extraction keeps the existing workflows and migration scope: the manager's private `lifecycle::analysis_task` implementation owns finite execution, and `useAnalysisTasks` owns task interaction state behind the existing UI/IPC boundary. [Explicit Analysis Tasks](ARCHITECTURE_NEXT.md#explicit-analysis-tasks) records their shared-owner contracts. This internal cutover introduces no user-data migration, new capability or Parity status change; candidate-specific verification remains distinct from installed/release acceptance and the remaining R13 work.
+
 ## Sources Of Truth
 
 - [JAVA_CAPABILITY_INVENTORY.md](JAVA_CAPABILITY_INVENTORY.md) is the exhaustive capability census: Entry Points, defaults, persistence, failure behavior, source references, and runtime-check status against Migration Baseline v1.
