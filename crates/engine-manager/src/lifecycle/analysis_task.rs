@@ -929,7 +929,9 @@ impl Inner {
     }
 }
 
-pub(super) fn whole_game_progress_counts(job: &RegisteredJob) -> (Option<usize>, Option<usize>, Option<usize>) {
+pub(super) fn whole_game_progress_counts(
+    job: &RegisteredJob,
+) -> (Option<usize>, Option<usize>, Option<usize>) {
     let expected = job.expected;
     let completed = Some(job.current_index);
     let remaining = expected.map(|expected| expected.saturating_sub(job.current_index));

@@ -4047,4 +4047,3 @@ fn failure(
         diagnostic_summary: diagnostic_summary.map(FailureText::into_string),
     }
 }
-
