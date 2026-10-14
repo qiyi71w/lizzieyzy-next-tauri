@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyAutoMoveRank, classifyPlayedMove, isBlunderBarRank } from "./moveRank";
+import { classifyMoveRank as classifyAutoMoveRank, classifyPlayedMove, isBlunderBarRank } from "./moveRank";
 
 describe("Java Auto Move Rank", () => {
   it("uses inclusive winrate-only boundaries", () => {

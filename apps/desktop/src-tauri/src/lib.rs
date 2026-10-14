@@ -542,8 +542,8 @@ fn trial_start_finite(
 }
 
 #[tauri::command]
-fn classify_problems(frames: Vec<AnalysisFrameDto>) -> Vec<app_model::ProblemMarkerDto> {
-    analysis_core::classify_problem_markers(&frames)
+fn classify_problems(frames: Vec<AnalysisFrameDto>, settings: app_model::MoveRankPreferencesDto) -> Vec<app_model::ProblemMarkerDto> {
+    analysis_core::classify_problem_markers(&frames, &settings)
 }
 
 #[tauri::command]

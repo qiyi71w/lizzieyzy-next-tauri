@@ -8,6 +8,8 @@ import { defaultBatchPreferences } from "./batch";
 import type { BatchPreferencesDto } from "./types";
 import type { ContinuationPreferencesDto } from "./types";
 import { defaultContinuationPreferences } from "./continuation";
+import type { MoveRankPreferencesDto } from "./types";
+import { defaultMoveRankPreferences, readMoveRankPreferences } from "./moveRank";
 
 export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
@@ -44,6 +46,7 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   showCandidates: boolean;
   candidateLimit: number;
   granularDisplay: GranularDisplay;
+  moveRank: MoveRankPreferencesDto;
   defaultMaxVisits: number;
   taskSingleStageConditions: AnalysisStageConditionsDto;
   taskOverviewConditions: AnalysisStageConditionsDto;
@@ -99,6 +102,7 @@ export const defaultAppPreferences: AppPreferences = {
   showCandidates: true,
   candidateLimit: 8,
   granularDisplay: defaultGranularDisplay,
+  moveRank: defaultMoveRankPreferences,
   defaultMaxVisits: 800,
   defaultBoardWidth: 19,
   defaultBoardHeight: 19,
@@ -246,6 +250,7 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
     showCandidates: booleanValue(value?.showCandidates, defaultAppPreferences.showCandidates),
     candidateLimit: integerValue(value?.candidateLimit, defaultAppPreferences.candidateLimit, 1, 20),
     granularDisplay: readGranularDisplay(value?.granularDisplay),
+    moveRank: readMoveRankPreferences(value?.moveRank),
     defaultMaxVisits,
     defaultBoardWidth: integerValue(value?.defaultBoardWidth, defaultAppPreferences.defaultBoardWidth, 2, 25),
     defaultBoardHeight: integerValue(value?.defaultBoardHeight, defaultAppPreferences.defaultBoardHeight, 2, 25),

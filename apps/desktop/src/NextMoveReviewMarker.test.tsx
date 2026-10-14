@@ -99,9 +99,6 @@ vi.mock("./api/preferences", async (importOriginal) => {
 
 vi.mock("./components/EngineSetupPanel", () => ({ EngineSetupPanel: () => null }));
 vi.mock("./components/ProviderPanel", () => ({ ProviderPanel: () => null }));
-vi.mock("./components/WinrateChart", () => ({
-  WinrateChart: () => <canvas aria-label="胜率走势" />
-}));
 
 import { App } from "./App";
 
@@ -323,6 +320,46 @@ describe("下一手标记", () => {
     act(() => buttonNamed(host, "快捷键参考(?)").click());
     expect(host.textContent).toContain("下一手标记");
     expect(host.textContent).toMatch(/\bJ\b/);
+  });
+  it("commits custom grading to marker, chart and navigation together; Cancel/failure/reopen retain the committed result", async () => {
+    let saved = { ...defaultAppPreferences, blunderBar: true, nextMoveReviewMarker: "graded" as const };
+    preferencesApi.loadAppPreferences.mockImplementation(async () => ({ preferences: saved }));
+    preferencesApi.saveAppPreferences.mockImplementation(async (value: AppPreferences) => { saved = value as typeof saved; return value; });
+    let host = await renderApp();
+    const ranks = () => requiredElement<HTMLElement>(host, ".winrate-chart-shell").dataset.barRanks;
+    expect(markersOf(host)[0].rank).toBe("mistake");
+    expect(ranks()).toContain("mistake");
+    openPreferences(host);
+    const selectMode = (mode: string) => act(() => {
+      const select = requiredElement<HTMLSelectElement>(host, 'select[aria-label="评级判定"]');
+      select.value = mode; select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    selectMode("score");
+    expect(markersOf(host)[0].rank).toBe("mistake");
+    act(() => buttonNamed(host, "取消评级修改").click());
+    expect(requiredElement<HTMLSelectElement>(host, 'select[aria-label="评级判定"]').value).toBe("auto");
+    selectMode("score");
+    preferencesApi.saveAppPreferences.mockRejectedValueOnce(new Error("disk full"));
+    act(() => buttonNamed(host, "应用评级设置").click());
+    await act(async () => { await preferencesApi.saveAppPreferences.mock.results.at(-1)?.value.catch(() => undefined); });
+    expect(markersOf(host)[0].rank).toBe("mistake");
+    expect(ranks()).toContain("mistake");
+    expect(host.textContent).toContain("disk full");
+    act(() => buttonNamed(host, "应用评级设置").click());
+    await flushLast(preferencesApi.saveAppPreferences);
+    expect(markersOf(host)[0].rank).toBe("best");
+    expect(ranks()).toBe("");
+    host = await renderApp();
+    expect(markersOf(host)[0].rank).toBe("best");
+    expect(ranks()).toBe("");
+    openPreferences(host);
+    act(() => buttonNamed(host, "恢复评级默认值").click());
+    expect(markersOf(host)[0].rank).toBe("best");
+    act(() => buttonNamed(host, "应用评级设置").click());
+    await flushLast(preferencesApi.saveAppPreferences);
+    expect(saved.moveRank).toEqual(defaultAppPreferences.moveRank);
+    expect(markersOf(host)[0].rank).toBe("mistake");
+    expect(ranks()).toContain("mistake");
   });
 });
 

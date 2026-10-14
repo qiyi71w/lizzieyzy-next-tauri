@@ -5,6 +5,8 @@ use uuid::Uuid;
 
 mod display;
 pub use display::*;
+mod move_rank;
+pub use move_rank::{MoveRankMode, MoveRankPreferencesDto};
 
 mod workspace;
 pub use workspace::WorkspaceSharesDto;
