@@ -547,6 +547,7 @@ export type LocalFocusPointDto = { vertex: MoveVertex; target_visits: number; vi
 export type LocalFocusSnapshotDto = {
   run_id: string | null; job_id: string | null; generation: number | null; node_path: NodePath | null;
   points: LocalFocusPointDto[]; withdrawal_pending: boolean;
+  actual_interval_centiseconds?: number | null;
 };
 export type LocalFocusActionDto = { action: "add"; vertex: MoveVertex; max_visits: number } | { action: "remove"; vertex: MoveVertex } | { action: "clear" };
 export type LocalFocusRequestDto = { run_id: string; job_id: string; generation: number; node_path: NodePath } & LocalFocusActionDto;

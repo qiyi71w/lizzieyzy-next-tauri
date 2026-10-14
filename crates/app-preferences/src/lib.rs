@@ -76,6 +76,8 @@ pub struct AppPreferencesDto {
     pub move_rank: app_model::MoveRankPreferencesDto,
     #[serde(default)]
     pub local_focus: app_model::LocalFocusPreferencesDto,
+    #[serde(default)]
+    pub analysis_refresh_interval_centiseconds: app_model::AnalysisRefreshIntervalDto,
     #[serde(default = "default_max_visits")]
     pub default_max_visits: u32,
     #[serde(default = "default_flash_analysis_visits")]
@@ -206,6 +208,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         granular_display: app_model::GranularDisplayDto::default(),
         move_rank: app_model::MoveRankPreferencesDto::default(),
         local_focus: app_model::LocalFocusPreferencesDto::default(),
+        analysis_refresh_interval_centiseconds: app_model::AnalysisRefreshIntervalDto::default(),
         default_max_visits: default_max_visits(),
         flash_analysis_visits: default_flash_analysis_visits(),
         task_single_stage_conditions: Some(default_task_single_stage_conditions(default_max_visits())),
@@ -326,6 +329,7 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
                     && preferences.granular_display.validate().is_ok()
                     && preferences.move_rank.validate().is_ok()
                     && preferences.local_focus.validate().is_ok()
+                    && preferences.analysis_refresh_interval_centiseconds.validate().is_ok()
                     && preferences.network.validate().is_ok()
                     && preferences.flash_analysis_visits > 0
                     && validate_review_autoplay_interval(preferences.review_autoplay_interval_ms).is_ok() =>
@@ -378,6 +382,7 @@ pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPr
     preferences.granular_display.validate()?;
     preferences.move_rank.validate()?;
     preferences.local_focus.validate()?;
+    preferences.analysis_refresh_interval_centiseconds.validate()?;
     preferences.network.validate()?;
     preferences.match_defaults.validate()?;
     if let Some(shares) = preferences.workspace_shares {
@@ -705,6 +710,7 @@ mod tests {
             granular_display: app_model::GranularDisplayDto::default(),
             move_rank: app_model::MoveRankPreferencesDto::default(),
             local_focus: app_model::LocalFocusPreferencesDto::default(),
+            analysis_refresh_interval_centiseconds: app_model::AnalysisRefreshIntervalDto::default(),
             network: app_model::NetworkSettingsDto::default(),
             yike_locator: None,
             yike_sync: app_model::YikeSyncPreferencesDto::default(),
@@ -1069,6 +1075,35 @@ mod tests {
             assert_eq!(load_from_path(&path).unwrap().preferences, original);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn analysis_refresh_interval_defaults_validates_and_reopens_atomically() {
+        let (dir, path) = temp_prefs();
+        let mut old = serde_json::to_value(sample_preferences()).unwrap();
+        old.as_object_mut().unwrap().remove("analysisRefreshIntervalCentiseconds");
+        fs::write(&path, old.to_string()).unwrap();
+        let mut settings = load_from_path(&path).unwrap().preferences;
+        assert_eq!(settings.analysis_refresh_interval_centiseconds.0, 10);
+        for value in [17, 9_007_199_254_740_991] {
+            settings.analysis_refresh_interval_centiseconds = app_model::AnalysisRefreshIntervalDto(value);
+            settings = save_to_path(&path, settings).unwrap();
+            assert_eq!(load_from_path(&path).unwrap().preferences, settings);
+        }
+        let durable = fs::read(&path).unwrap();
+        for value in [serde_json::json!(0), serde_json::json!(-1), serde_json::json!(1.5), serde_json::json!(9_007_199_254_740_992u64), serde_json::json!("17"), serde_json::json!(null)] {
+            let mut input = serde_json::to_value(&settings).unwrap();
+            input["analysisRefreshIntervalCentiseconds"] = value;
+            if let Ok(invalid) = serde_json::from_value(input) {
+                assert!(save_to_path(&path, invalid).is_err());
+            }
+            assert_eq!(fs::read(&path).unwrap(), durable);
+        }
+        let mut changed = settings.clone();
+        changed.analysis_refresh_interval_centiseconds = app_model::AnalysisRefreshIntervalDto(37);
+        assert!(atomic_replace_file_with(&path, &serde_json::to_string(&changed).unwrap(), |_, _| Err(io::Error::other("refresh replace failure"))).is_err());
+        assert_eq!(load_from_path(&path).unwrap().preferences, settings);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

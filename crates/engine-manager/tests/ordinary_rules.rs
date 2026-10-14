@@ -1271,6 +1271,81 @@ mod controlled {
     }
 
     #[test]
+    fn analysis_refresh_update_drains_old_intent_preserves_job_and_pause() {
+        let rig = focus_rig("analysis_focus_update_hold");
+        let events = rig.manager.subscribe();
+        let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };
+        rig.manager.commit_continuous_preferences(true, budget, Some(AnalysisRefreshIntervalDto(17)), || Ok(())).unwrap();
+        rig.manager.follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        let first = event(&events, AnalysisJobOutcomeDto::Progress);
+        assert_eq!(rig.manager.snapshot().local_focus.actual_interval_centiseconds, Some(17));
+        let request = |action| LocalFocusRequestDto { run_id: first.run_id.clone(), job_id: first.job_id.clone(), generation: 7, node_path: first.node_path.clone(), action };
+        let before = rig.manager.snapshot();
+        assert!(rig.manager.commit_continuous_preferences(true, budget, Some(AnalysisRefreshIntervalDto(37)), || Err::<(), _>("disk failure".into())).is_err());
+        assert_eq!(rig.manager.snapshot(), before);
+        assert!(rig.manager.commit_continuous_preferences::<()>(true, budget, Some(AnalysisRefreshIntervalDto(0)), || panic!("invalid value must not persist")).is_err());
+        assert_eq!(rig.manager.local_focus_publication(&first), Ok(false));
+        rig.manager.local_focus_action(request(LocalFocusActionDto::Add { vertex: MoveVertex::Point(PointDto { x: 3, y: 5 }), max_visits: 500 })).unwrap();
+        rig.held(); // Old stream final arrived, but the Stop final remains held.
+        rig.manager.commit_continuous_preferences(true, budget, Some(AnalysisRefreshIntervalDto(37)), || Ok(())).unwrap();
+        let pending = rig.manager.snapshot();
+        assert!(pending.local_focus.points.is_empty());
+        assert!(pending.local_focus.withdrawal_pending);
+        assert_eq!(pending.local_focus.actual_interval_centiseconds, Some(17));
+        assert!(rig.manager.local_focus_publication(&first).is_err());
+        let trace = std::fs::read_to_string(rig.dir.join("trace")).unwrap();
+        assert_eq!(trace.matches("kata-analyze").count(), 2);
+        assert!(!trace.contains("interval 37"));
+        std::fs::write(rig.dir.join("release"), "").unwrap();
+        let next = event(&events, AnalysisJobOutcomeDto::Progress);
+        assert_eq!(next.job_id, first.job_id);
+        assert_eq!(next.run_id, first.run_id);
+        assert_eq!(rig.manager.snapshot().local_focus.actual_interval_centiseconds, Some(37));
+        assert_eq!(rig.manager.local_focus_publication(&next), Ok(true));
+        let trace = std::fs::read_to_string(rig.dir.join("trace")).unwrap();
+        assert_eq!(trace.matches("loadsgf").count(), 1);
+        assert_eq!(trace.matches("kata-get-rules").count(), 1);
+        assert!(trace.contains("kata-analyze B interval 17 rootInfo true ownership true"));
+        assert!(trace.contains("kata-analyze B interval 37 rootInfo true ownership true"));
+        assert!(!trace.contains("focus D4"));
+        rig.manager.set_continuous_preferences(false, budget).unwrap();
+        event(&events, AnalysisJobOutcomeDto::Cancelled);
+        let paused_trace = std::fs::read_to_string(rig.dir.join("trace")).unwrap();
+        rig.manager.commit_continuous_preferences(false, budget, Some(AnalysisRefreshIntervalDto(41)), || Ok(())).unwrap();
+        assert_eq!(rig.manager.snapshot().continuous.phase, ContinuousAnalysisPhaseDto::Off);
+        assert_eq!(rig.manager.snapshot().local_focus.actual_interval_centiseconds, None);
+        assert_eq!(std::fs::read_to_string(rig.dir.join("trace")).unwrap(), paused_trace);
+        rig.manager.set_continuous_preferences(true, budget).unwrap();
+        event(&events, AnalysisJobOutcomeDto::Progress);
+        assert_eq!(rig.manager.snapshot().local_focus.actual_interval_centiseconds, Some(41));
+        assert!(rig.manager.snapshot().local_focus.points.is_empty());
+    }
+
+    #[test]
+    fn analysis_refresh_save_does_not_preempt_finite_or_leased_continuous() {
+        for measured in [false, true] {
+            let rig = focus_rig("analysis_focus_live");
+            let events = rig.manager.subscribe();
+            let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, ..Default::default() };
+            rig.manager.set_continuous_preferences(false, budget).unwrap();
+            let lease = measured.then(|| rig.manager.begin_setup_operation().unwrap());
+            let mut request = selected(&rig, 7, if measured { AnalysisJobModeDto::Continuous } else { AnalysisJobModeDto::Finite });
+            request.query.max_visits = Some(100000);
+            let started = if let Some(lease) = &lease { rig.manager.start_measured_selected_node_job(request, lease).unwrap() }
+                else { rig.manager.start_selected_node_job(request).unwrap() };
+            let progress = event(&events, AnalysisJobOutcomeDto::Progress);
+            let before = std::fs::read_to_string(rig.dir.join("trace")).unwrap();
+            rig.manager.commit_continuous_preferences(false, budget, Some(AnalysisRefreshIntervalDto(29)), || Ok(())).unwrap();
+            assert_eq!(rig.manager.snapshot().selected_node_job.unwrap().job_id, started.job_id);
+            assert_eq!(rig.manager.local_focus_publication(&progress), Ok(false));
+            assert_eq!(rig.manager.snapshot().local_focus.actual_interval_centiseconds, None);
+            assert_eq!(std::fs::read_to_string(rig.dir.join("trace")).unwrap(), before);
+            if let Some(lease) = &lease { lease.check().unwrap(); }
+            rig.manager.teardown().unwrap();
+        }
+    }
+
+    #[test]
     fn local_focus_queued_remove_waits_for_final_and_never_revives_after_pause() {
         let rig = focus_rig("analysis_focus_update_hold");
         let events = rig.manager.subscribe();

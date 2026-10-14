@@ -255,6 +255,7 @@ struct ManagerState {
     batch: batch::Owner,
     continuation: continuation::Owner,
     local_focus: local_focus::Owner,
+    analysis_refresh_interval: app_model::AnalysisRefreshIntervalDto,
     subscribers: Vec<Sender<ForegroundEngineEventDto>>,
     continuous_intent: Option<bool>,
     continuous_budget: ContinuousAnalysisBudgetDto,
@@ -329,6 +330,7 @@ impl ForegroundEngineManager {
                     batch: batch::Owner::default(),
                     continuation: continuation::Owner::default(),
                     local_focus: local_focus::Owner::default(),
+                    analysis_refresh_interval: app_model::AnalysisRefreshIntervalDto::default(),
                     last_activity: Instant::now(),
                     subscribers: Vec::new(),
                     continuous_intent: None,
@@ -420,7 +422,7 @@ impl ForegroundEngineManager {
         enabled: bool,
         budget: ContinuousAnalysisBudgetDto,
     ) -> Result<(), String> {
-        self.commit_continuous_preferences(enabled, budget, || Ok(()))
+        self.commit_continuous_preferences(enabled, budget, None, || Ok(()))
     }
 
     /// Holds admission through persistence and intent installation. The callback must not
@@ -429,17 +431,25 @@ impl ForegroundEngineManager {
         &self,
         enabled: bool,
         budget: ContinuousAnalysisBudgetDto,
+        interval: Option<app_model::AnalysisRefreshIntervalDto>,
         persist: impl FnOnce() -> Result<T, String>,
     ) -> Result<T, String> {
         budget.validate()?;
+        if let Some(interval) = interval { interval.validate()?; }
         let saved = {
             let mut state = self.lock();
             let budget_changed = state.continuous_budget != budget;
             if state.continuous_intent == Some(enabled) && !budget_changed {
-                return persist();
+                let saved = persist()?;
+                if let Some(interval) = interval {
+                    local_focus::set_refresh_interval(&mut state, interval);
+                    publish_snapshot(&mut state);
+                }
+                return Ok(saved);
             }
             match_reservation::require_unreserved(&state).map_err(|error| error.message)?;
             let saved = persist()?;
+            if let Some(interval) = interval { local_focus::set_refresh_interval(&mut state, interval); }
             if !enabled {
                 auto_load::retire_locked(self, &mut state).map_err(|error| error.message)?;
             }

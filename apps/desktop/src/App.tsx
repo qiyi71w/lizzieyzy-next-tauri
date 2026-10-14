@@ -4310,6 +4310,8 @@ export function App() {
         windowPin={windowPin}
         preferences={preferences}
         status={preferencesStatus}
+        actualRefreshInterval={localFocus?.actual_interval_centiseconds}
+        refreshIntervalPending={localFocus?.withdrawal_pending}
         disabled={!preferencesLoaded || continuousActionPending || workspace.frozen}
         scoreLeadAvailable={chartModel.scoreAvailable}
         onChange={(nextPreferences) => void handlePreferencesChange(nextPreferences)}

@@ -30,9 +30,11 @@ impl PreferencesState {
         }
         let loaded = app_preferences::load_from_path(path)?;
         manager.set_retain_node_analysis(loaded.preferences.retain_node_analysis);
-        manager.set_continuous_preferences(
+        manager.commit_continuous_preferences(
             loaded.preferences.continuous_analysis_enabled,
             loaded.preferences.continuous_budget,
+            Some(loaded.preferences.analysis_refresh_interval_centiseconds),
+            || Ok(()),
         )?;
         manager.set_auto_load_preferences(loaded.preferences.auto_load)?;
         self.network()
@@ -71,6 +73,7 @@ impl PreferencesState {
         let saved = manager.commit_continuous_preferences(
             preferences.continuous_analysis_enabled,
             preferences.continuous_budget,
+            Some(preferences.analysis_refresh_interval_centiseconds),
             || {
                 let saved = app_preferences::save_to_path(path, preferences)?;
                 manager.set_retain_node_analysis(saved.retain_node_analysis);
@@ -566,7 +569,7 @@ impl PreferencesState {
                     .is_some_and(|job| job.mode == AnalysisJobModeDto::Finite);
                 preferences.continuous_analysis_enabled = start;
                 preferences =
-                    manager.commit_continuous_preferences(start, preferences.continuous_budget, || {
+                    manager.commit_continuous_preferences(start, preferences.continuous_budget, None, || {
                         let saved = app_preferences::save_to_path(path, preferences)?;
                         *committed = Some(AppPreferencesLoadResultDto {
                             preferences: saved.clone(),
