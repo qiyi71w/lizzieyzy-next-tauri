@@ -1596,6 +1596,52 @@ describe("truthful native analysis actions", () => {
       .toContain("ended by time + leading candidate visits");
   });
 
+  it.each(["whole", "part", "branches"])("reconciles %s flash completion received before the start response", async (entry) => {
+    const host = await renderApp();
+    const ready = await readyEngine(host);
+    const start = backend.startAnalysisTask.getMockImplementation()!;
+    const preview = backend.previewAnalysisScope.getMockImplementation()!;
+    backend.previewAnalysisScope.mockImplementation(async (input) => {
+      const result = await preview(input);
+      return { ...result, targets: result.targets.slice(0, 1) };
+    });
+    backend.startAnalysisTask.mockImplementationOnce(async (input) => {
+      const started = await start(input);
+      taskRuntime.snapshot = { ...started, state: "completed", completed: started.requested };
+      listeners.onSnapshot?.({ ...ready, revision: ready.revision + 1 });
+      return { ...started, state: "queued", completed: [] };
+    });
+    if (entry === "whole") {
+      await act(async () => { buttonNamed(host, "闪电分析").click(); });
+    } else {
+      openAnalyzeMenu(host);
+      await act(async () => { buttonNamed(host, entry === "part" ? "闪电分析部分范围…" : "闪电分析全部分支").click(); });
+      if (entry === "part") await act(async () => { buttonNamed(host, "Start task").click(); });
+    }
+    expect(host.querySelector('[data-analysis-task-state="completed"]')?.textContent).toContain("1/1 completed");
+    expect(backend.startAnalysisTask).toHaveBeenCalledTimes(1);
+    await act(async () => { buttonNamed(host, "闪电分析").click(); });
+    expect(backend.startAnalysisTask).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a delayed forced flash snapshot after the Run changes", async () => {
+    const host = await renderApp();
+    const ready = await readyEngine(host);
+    if (ready.lifecycle.state !== "ready") throw new Error("ready expected");
+    const replacementRun = { ...ready.lifecycle.run, run_id: "replacement" };
+    let release!: (task: AnalysisTaskDto) => void;
+    backend.analysisTaskSnapshot.mockImplementationOnce(() => new Promise<AnalysisTaskDto>((resolve) => { release = resolve; }));
+    await act(async () => { buttonNamed(host, "闪电分析").click(); });
+    const oldTask = taskRuntime.snapshot!;
+    taskRuntime.snapshot = { ...oldTask, state: "invalidated", reason: "Run replaced" };
+    await act(async () => { listeners.onSnapshot?.({ ...ready, revision: ready.revision + 1, lifecycle: { state: "ready", run: replacementRun } }); });
+    await act(async () => { release({ ...oldTask, state: "completed", completed: oldTask.requested }); });
+    expect(host.querySelector('[data-analysis-task-state="completed"]')).toBeNull();
+    expect(host.querySelector('[data-analysis-task-state="invalidated"]')).not.toBeNull();
+    await act(async () => { buttonNamed(host, "闪电分析").click(); });
+    expect(backend.startAnalysisTask).toHaveBeenLastCalledWith(expect.objectContaining({ runId: "replacement" }));
+  });
+
   it("isolates partial flash from the ordinary draft and resolves blank endpoints including zero", async () => {
     preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, flashAnalysisVisits: 7 } });
     const host = await renderApp();
