@@ -543,6 +543,7 @@ pub fn normalize_response(
             .move_infos
             .into_iter()
             .map(|info| CandidateMoveDto {
+                order: info.order,
                 vertex: info
                     .move_
                     .as_deref()

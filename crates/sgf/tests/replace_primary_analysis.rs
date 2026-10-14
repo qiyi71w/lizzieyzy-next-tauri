@@ -18,6 +18,7 @@ fn replacement_payload(engine_name: &str, visits: u32, x: u8, y: u8) -> SgfAnaly
         score_stdev: Some(0.5),
         pda: None,
         candidates: vec![CandidateMoveDto {
+            order: None,
             pv_visits: None,
             ownership: None,
             vertex: MoveVertex::Point(PointDto { x, y }),

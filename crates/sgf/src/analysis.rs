@@ -180,6 +180,7 @@ fn parse_candidate(variation: &str, board_width: u8, board_height: u8) -> Option
     }
     let mut coordinate = None;
     let mut visits = 0;
+    let mut order = None;
     let mut winrate_black = 0.0;
     let mut policy_prior = None;
     let mut score_mean_black = None;
@@ -211,6 +212,7 @@ fn parse_candidate(variation: &str, board_width: u8, board_height: u8) -> Option
         match key {
             "move" => coordinate = Some(gtp_vertex(value, board_width, board_height)),
             "visits" => visits = parse_playouts(value),
+            "order" => order = value.parse().ok(),
             "winrate" => winrate_black = parse_playouts(value) as f32 / 10_000.0,
             "prior" => policy_prior = Some(parse_prior(value)),
             "scoreMean" => score_mean_black = parse_f32(value),
@@ -223,6 +225,7 @@ fn parse_candidate(variation: &str, board_width: u8, board_height: u8) -> Option
         pv.push(vertex.clone());
     }
     Some(CandidateMoveDto {
+        order,
         vertex,
         visits,
         winrate_black,
@@ -433,6 +436,9 @@ fn format_candidate(candidate: &CandidateMoveDto, board_width: u8, board_height:
         candidate.visits,
         (candidate.winrate_black * 10_000.0).round() as i32,
     );
+    if let Some(order) = candidate.order {
+        body.push_str(&format!(" order {order}"));
+    }
     if let Some(prior) = candidate.policy_prior {
         body.push_str(&format!(" prior {}", (prior * 10_000.0).round() as i32));
     }

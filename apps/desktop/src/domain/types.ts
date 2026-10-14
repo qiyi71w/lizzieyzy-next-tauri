@@ -229,7 +229,7 @@ export type ApplicationExitOutcomeDto = {
   teardown?: ApplicationTeardownAttemptDto | null;
   recovery_persist_error?: string | null;
 };
-export type CandidateMoveDto = { vertex: MoveVertex; visits: number; winrate_black: number; score_mean_black: number | null; policy_prior?: number | null; pv: MoveVertex[]; pv_visits?: number[] | null; ownership?: number[] | null };
+export type CandidateMoveDto = { order?: number | null; vertex: MoveVertex; visits: number; winrate_black: number; score_mean_black: number | null; policy_prior?: number | null; pv: MoveVertex[]; pv_visits?: number[] | null; ownership?: number[] | null };
 export type AnalysisFrameDto = { job_id: string; game_id?: string | null; node_id?: string | null; turn: number; visits: number; winrate_black: number; score_mean_black?: number | null; score_stdev?: number | null; candidates: CandidateMoveDto[]; ownership?: number[] | null; policy?: number[] | null };
 export type ProblemMarkerDto = { turn: number; severity: "info" | "inaccuracy" | "mistake" | "blunder"; winrate_loss: number; score_loss?: number | null; label: string };
 export type EngineBackendDto = "kata_go_analysis" | "kata_go_gtp" | "generic_gtp";
@@ -542,7 +542,16 @@ export type AutoLoadSnapshotDto = {
   load_id: number; generation: number; run_id: string | null; task_id: string | null;
   total_visits: number; reason: string | null;
 };
+export type LocalFocusPreferencesDto = { maxVisits: number; showOutline: boolean; outlineOpacity: number };
+export type LocalFocusPointDto = { vertex: MoveVertex; target_visits: number; visits: number; status: "active" | "completed" | "blocked" | "expired" | "stopped" };
+export type LocalFocusSnapshotDto = {
+  run_id: string | null; job_id: string | null; generation: number | null; node_path: NodePath | null;
+  points: LocalFocusPointDto[]; withdrawal_pending: boolean;
+};
+export type LocalFocusActionDto = { action: "add"; vertex: MoveVertex; max_visits: number } | { action: "remove"; vertex: MoveVertex } | { action: "clear" };
+export type LocalFocusRequestDto = { run_id: string; job_id: string; generation: number; node_path: NodePath } & LocalFocusActionDto;
 export type ForegroundEngineSnapshotDto = {
+  local_focus?: LocalFocusSnapshotDto;
   revision: number;
   lifecycle: ForegroundEngineLifecycleDto;
   continuous: ContinuousAnalysisSnapshotDto;
@@ -582,6 +591,7 @@ export type AnalysisPublicationScopeDto = {
   node_path: NodePath;
 };
 export type AnalysisJobEventDto = {
+  local_focus_output?: { command: number; lineage: number } | null;
   run_id: string;
   job_id: string;
   lane: AnalysisJobLaneDto;

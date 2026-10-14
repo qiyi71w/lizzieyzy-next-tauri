@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as PreferencesModule from "./api/preferences";
-import type { CurrentGameResultDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, NodePath } from "./domain/types";
+import type { AnalysisFrameDto, CurrentGameResultDto, EngineFailureDto, ForegroundEngineSnapshotDto, GameDto, NodePath } from "./domain/types";
 
 const listeners: {
   onSnapshot?: (snapshot: ForegroundEngineSnapshotDto) => void;
@@ -768,6 +768,8 @@ describe("foreground engine lifecycle UI", () => {
       await backend.startSelectedNodeAnalysis.mock.results[1]?.value;
     });
     await act(async () => {
+      const frame: AnalysisFrameDto = { job_id: "job-old", turn: 0, visits: 64, winrate_black: 0.11, score_mean_black: -9,
+        candidates: [{ vertex: { point: { x: 0, y: 0 } }, visits: 64, winrate_black: 0.11, score_mean_black: -9, pv: [] }] };
       listeners.onJob?.({
         run_id: "run-1",
         job_id: "job-old",
@@ -776,18 +778,14 @@ describe("foreground engine lifecycle UI", () => {
         generation: 1,
         node_path: { indices: [] },
         outcome: "completed",
-        frame: {
-          job_id: "job-old",
-          turn: 0,
-          visits: 64,
-          winrate_black: 0.11,
-          score_mean_black: -9,
-          candidates: [{ vertex: { point: { x: 0, y: 0 } }, visits: 64, winrate_black: 0.11, score_mean_black: -9, pv: [] }]
-        }
+        frame,
+        current_game: { ...initialGame, snapshot_seq: 2, dirty: true, snapshot: { ...initialGame.snapshot, primary_analysis: frame } }
       });
     });
     expect(host.querySelector(".cand-row")).toBeNull();
     await act(async () => {
+      const frame: AnalysisFrameDto = { job_id: "job-new", turn: 0, visits: 32, winrate_black: 0.71, score_mean_black: 4,
+        candidates: [{ vertex: { point: { x: 2, y: 3 } }, visits: 32, winrate_black: 0.71, score_mean_black: 4, pv: [] }] };
       listeners.onJob?.({
         run_id: "run-1",
         job_id: "job-new",
@@ -796,14 +794,8 @@ describe("foreground engine lifecycle UI", () => {
         generation: 1,
         node_path: { indices: [] },
         outcome: "completed",
-        frame: {
-          job_id: "job-new",
-          turn: 0,
-          visits: 32,
-          winrate_black: 0.71,
-          score_mean_black: 4,
-          candidates: [{ vertex: { point: { x: 2, y: 3 } }, visits: 32, winrate_black: 0.71, score_mean_black: 4, pv: [] }]
-        }
+        frame,
+        current_game: { ...initialGame, snapshot_seq: 3, dirty: true, snapshot: { ...initialGame.snapshot, primary_analysis: frame } }
       });
       await backend.classifyProblems.mock.results.at(-1)?.value;
     });

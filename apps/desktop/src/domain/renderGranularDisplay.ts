@@ -36,7 +36,7 @@ export function drawCandidateText(ctx: CanvasRenderingContext2D, candidate: Cand
   if (preferences.showOrder) {
     ctx.fillStyle = normalColor;
     ctx.font = `bold ${Math.max(9, grid * 0.23)}px sans-serif`;
-    ctx.fillText(String(index + 1), x - grid * 0.32, y - grid * 0.32);
+    ctx.fillText(String((candidate.order ?? index) + 1), x - grid * 0.32, y - grid * 0.32);
   }
   const maxVisits = Math.max(...candidates.map(move => move.visits));
   const maxWinrate = Math.max(...candidates.map(move => flip ? 1 - move.winrate_black : move.winrate_black));

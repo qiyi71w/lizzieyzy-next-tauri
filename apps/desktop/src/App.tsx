@@ -1,3 +1,6 @@
+import { localFocusAction } from "./api/localFocus";
+import { focusFilteredCandidates, sameFocusVertex } from "./domain/localFocus";
+import type { LocalFocusPointDto } from "./domain/types";
 import { classifyProblemFrames } from "./domain/moveRank";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { GameLoadSourceDto } from "./domain/types";
@@ -625,7 +628,9 @@ export function App() {
     ? JSON.stringify([matchState.session_id, matchState.turn, matchState.analysis.epoch, matchState.run_id, matchFrame.job_id, currentGame?.generation, selectedPathKey])
     : null;
   const presentationFrame = matchBlocked ? matchFrame : currentFrame;
-  const visibleCurrentFrame = useMemo(() => applyPreferencesToFrame(presentationFrame, preferences), [presentationFrame, preferences]);
+  const localFocus = engineSnapshot.local_focus;
+  const focusPoints = useMemo(() => localFocus?.generation === reviewGame?.generation && localFocus?.node_path && samePath(localFocus.node_path, selectedPath) ? localFocus.points : [], [localFocus, reviewGame?.generation, selectedPathKey]);
+  const visibleCurrentFrame = useMemo(() => applyPreferencesToFrame(presentationFrame, preferences, focusPoints), [presentationFrame, preferences, focusPoints]);
   const candidateIdentity = JSON.stringify([activeScope, matchFrameIdentity, presentationFrame?.job_id, currentPosition.move_number]);
   const candidateIndex = (candidate: CandidatePreview | null, eligible: boolean): number | null => {
     if (!candidate || candidate.identity !== candidateIdentity || !eligible) return null;
@@ -824,6 +829,9 @@ export function App() {
   const historyActionBlocked = documentFlowBusy || externalBlocked || editActionPending;
   const authoringEnabled = nativeRuntime && Boolean(currentGame) && !historyActionBlocked && !trial && !trialPending && !scoring && !scoringPending;
   const pointSearchEnabled = authoringEnabled && markupTool === "play" && !authorMode && !engineSnapshot.game_move_job && !workspace.frozen;
+  const focusEnabled = authoringEnabled && !externalBlocked && !workspace.frozen
+    && engineSnapshot.lifecycle.state === "ready" && engineSnapshot.lifecycle.run.capability_snapshot?.focus === "supported"
+    && engineSnapshot.selected_node_job?.mode === "continuous" && engineSnapshot.selected_node_job.state === "searching";
   const pointSearchEnabledRef = useRef(pointSearchEnabled);
   pointSearchEnabledRef.current = pointSearchEnabled;
   const pointSearchSerialRef = useRef(0);
@@ -2885,7 +2893,12 @@ export function App() {
         clearSelectedNodeRunning(job.job_id);
         return;
       }
-      adoptCurrentGame(attached);
+      // The attachment receipt describes the analyzed node, not the user's cursor.
+      // A finite job may finish after navigation; only the current node can replace
+      // the selected snapshot. The accepted result remains available on revisit.
+      if (currentGameRef.current && samePath(currentGameRef.current.selected_path, job.node_path)) {
+        adoptCurrentGame(attached);
+      }
       setDirty(attached.dirty);
       rememberWholeGameFrame(job.node_path, frame);
       if (publishReviewPresentation(captured, [frame])) {
@@ -3451,6 +3464,22 @@ export function App() {
       const feedback = `${t("authoring.failed")}${errorMessage(error)}`;
       setBoardIntentFeedback(feedback); setMessage(feedback);
     } finally { editActionPendingRef.current = false; setEditActionPending(false); }
+  }
+
+  async function handleFocusPoint(point: PointDto | null, captured: ReviewPresentationScope) {
+    const owner = engineSnapshotRef.current.local_focus;
+    const before = currentGameRef.current;
+    if (!before || !owner?.run_id || !owner.job_id || owner.generation !== before.generation || !owner.node_path
+      || !samePath(owner.node_path, before.selected_path) || !shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) {
+      setBoardIntentFeedback(t("authoring.stale")); return;
+    }
+    const vertex = point ? { point } : null;
+    const removing = vertex && owner.points.some((watched) => sameFocusVertex(watched.vertex, vertex));
+    if (vertex && !removing && !focusEnabled) { setBoardIntentFeedback(t("focus.unavailable")); return; }
+    try {
+      await localFocusAction({ run_id: owner.run_id, job_id: owner.job_id, generation: before.generation, node_path: before.selected_path,
+        ...(vertex ? removing ? { action: "remove", vertex } : { action: "add", vertex, max_visits: committedPreferencesRef.current.localFocus.maxVisits } : { action: "clear" }) });
+    } catch (error) { setBoardIntentFeedback(errorMessage(error)); }
   }
 
   async function handlePointSearch(point: PointDto, scope: PointSearchScopeDto, captured: ReviewPresentationScope) {
@@ -4052,6 +4081,12 @@ export function App() {
           authoringEnabled={authoringEnabled}
           onAuthoring={(action, captured) => void commitAuthoring(action, captured)}
           onFlashCurrentNode={() => void handleQuickAnalysisTask("current_node")}
+          focusPoints={rootSetupDraft || scoring ? [] : focusPoints}
+          focusPreferences={preferences.localFocus}
+          focusAnalysis={presentationFrame}
+          focusGrading={preferences.moveRank}
+          focusEnabled={focusEnabled}
+          onFocusPoint={(point, captured) => void handleFocusPoint(point, captured)}
           onGestureRefused={setBoardIntentFeedback}
           keyboardPlacement={keyboardPlacement}
           nextMoveMode={rootSetupDraft || scoring ? "off" : preferences.nextMoveReviewMarker}
@@ -4115,6 +4150,11 @@ export function App() {
       </aside>
     </Workspace>
     <div className="analysis-task-area">
+    {focusPoints.length > 0 || localFocus?.withdrawal_pending ? <div role="status" aria-label={t("focus.title")}>
+      <span>{t(localFocus?.withdrawal_pending ? "focus.withdrawing" : "focus.confirmed")}</span>
+      {focusPoints.map((point) => <span key={vertexKey(point.vertex)}> · {vertexKey(point.vertex)} {t(`focus.${point.status}`)} {point.visits}/{point.target_visits}</span>)}
+      <button type="button" onClick={() => void handleFocusPoint(null, activeScope)}>{t("focus.clear")}</button>
+    </div> : null}
     {engineSnapshot.auto_load && engineSnapshot.auto_load.phase !== "idle" ? <div className="native-runtime-note" role="status">
       <span>{t(`autoLoad.${engineSnapshot.auto_load.phase}`)}</span>
       {engineSnapshot.auto_load.reason ? <span> · {engineSnapshot.auto_load.reason}</span> : null}
@@ -4454,11 +4494,11 @@ function currentMatchAnalysisFrame(match: MatchSnapshotDto | null, current: Curr
   return envelope.frame;
 }
 
-function applyPreferencesToFrame(frame: AnalysisFrameDto | undefined, preferences: AppPreferences): AnalysisFrameDto | undefined {
+function applyPreferencesToFrame(frame: AnalysisFrameDto | undefined, preferences: AppPreferences, watched: readonly LocalFocusPointDto[] = []): AnalysisFrameDto | undefined {
   if (!frame) return undefined;
   return {
     ...frame,
-    candidates: preferences.showCandidates ? frame.candidates.slice(0, preferences.candidateLimit) : [],
+    candidates: preferences.showCandidates ? focusFilteredCandidates(frame, preferences.candidateLimit, watched) : [],
     ownership: preferences.showOwnership ? frame.ownership : null,
     policy: preferences.showPolicy ? frame.policy : null
   };

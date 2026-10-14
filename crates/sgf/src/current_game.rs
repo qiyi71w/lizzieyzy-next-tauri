@@ -3612,6 +3612,7 @@ mod root_result_history {
             score_stdev: None,
             pda: None,
             candidates: vec![CandidateMoveDto {
+                order: None,
                 pv_visits: None,
                 ownership: None,
                 vertex: MoveVertex::Pass,
@@ -4046,6 +4047,7 @@ mod continuation_staging {
             score_stdev: None,
             pda: None,
             candidates: vec![app_model::CandidateMoveDto {
+                order: None,
                 pv_visits: None,
                 ownership: None,
                 vertex: MoveVertex::Pass,

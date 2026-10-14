@@ -32,6 +32,7 @@ fn projectable_frame(visits: u32, x: u8, y: u8) -> app_model::AnalysisFrameDto {
         score_mean_black: Some(2.25),
         score_stdev: None,
         candidates: vec![app_model::CandidateMoveDto {
+            order: None,
             pv_visits: None,
             ownership: None,
             vertex: MoveVertex::Point(PointDto { x, y }),
@@ -54,21 +55,19 @@ fn job_event(
     indices: &[u32],
     frame: Option<app_model::AnalysisFrameDto>,
 ) -> AnalysisJobEventDto {
-    AnalysisJobEventDto {
-        run_id: "run-1".into(),
-        job_id: job_id.into(),
-        lane,
-        mode: AnalysisJobModeDto::Finite,
-        generation,
-        node_path: path(indices),
-        outcome,
-        completed: None,
-        expected: None,
-        remaining: None,
-        frame,
-        failure: None,
-        current_game: None,
-    }
+    AnalysisJobEventDto { local_focus_output: None, run_id: "run-1".into(),
+    job_id: job_id.into(),
+    lane,
+    mode: AnalysisJobModeDto::Finite,
+    generation,
+    node_path: path(indices),
+    outcome,
+    completed: None,
+    expected: None,
+    remaining: None,
+    frame,
+    failure: None,
+    current_game: None, }
 }
 
 fn continuous_event(

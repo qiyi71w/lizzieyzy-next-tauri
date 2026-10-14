@@ -8,6 +8,7 @@ import { t } from "../i18n/resources";
 import { validGranularDisplay, type GranularDisplay, type CandidateTextField, type OwnershipStyle } from "../domain/granularDisplay";
 import { defaultMoveRankPreferences, readMoveRankPreferences, validMoveRankPreferences } from "../domain/moveRank";
 import type { MoveRankPreferencesDto } from "../domain/types";
+import { validLocalFocusPreferences } from "../domain/localFocus";
 
 type Props = {
   windowPin?: MainWindowPinControl;
@@ -39,6 +40,7 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
       <AutoLoadEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       <NodeAnalysisReuseEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       <MoveRankEditor preferences={preferences} disabled={disabled} onChange={onChange} />
+      <LocalFocusEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       <FlashVisitsEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       {windowPin ? <fieldset className="preferences-grid">
         <legend>窗口</legend>
@@ -338,6 +340,24 @@ function MoveRankEditor({ preferences, disabled, onChange }: Pick<Props, "prefer
     }}>{t("rank.apply")}</button>
     <button type="button" disabled={disabled || edited === null} onClick={() => { setEdited(null); setError(false); }}>{t("rank.cancel")}</button>
     <button type="button" onClick={() => { setEdited(readMoveRankPreferences(defaultMoveRankPreferences)); setError(false); }}>{t("rank.restore")}</button>
+  </fieldset>;
+}
+
+function LocalFocusEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
+  const [edited, setEdited] = useState<AppPreferences["localFocus"] | null>(null);
+  const [error, setError] = useState(false);
+  const draft = edited ?? preferences.localFocus;
+  useEffect(() => {
+    if (edited && JSON.stringify(edited) === JSON.stringify(preferences.localFocus)) setEdited(null);
+  }, [preferences.localFocus]);
+  return <fieldset className="preferences-grid" disabled={disabled}>
+    <legend>{t("focus.title")}</legend><p>{t("focus.help")}</p>
+    <label>{t("focus.visits")}<input type="number" min={1} step={1} value={Number.isFinite(draft.maxVisits) ? draft.maxVisits : ""} onChange={event => { setEdited({ ...draft, maxVisits: event.target.value === "" ? NaN : Number(event.target.value) }); setError(false); }} /></label>
+    <Toggle label={t("focus.outline")} checked={draft.showOutline} onChange={showOutline => setEdited({ ...draft, showOutline })} />
+    <label>{t("focus.opacity")}<input type="number" min={0} max={100} step={1} value={Number.isFinite(draft.outlineOpacity) ? draft.outlineOpacity : ""} onChange={event => { setEdited({ ...draft, outlineOpacity: event.target.value === "" ? NaN : Number(event.target.value) }); setError(false); }} /></label>
+    {error ? <p role="alert">{t("focus.invalid")}</p> : null}
+    <button type="button" disabled={disabled || edited === null} onClick={() => { if (!validLocalFocusPreferences(draft)) { setError(true); return; } onChange({ ...preferences, localFocus: draft }); }}>{t("focus.apply")}</button>
+    <button type="button" disabled={disabled || edited === null} onClick={() => { setEdited(null); setError(false); }}>{t("focus.cancel")}</button>
   </fieldset>;
 }
 

@@ -895,6 +895,16 @@ impl CurrentGameState {
         action()
     }
 
+    pub fn local_focus_action(&self, manager: &engine_manager::ForegroundEngineManager, request: app_model::LocalFocusRequestDto) -> Result<app_model::LocalFocusSnapshotDto, String> {
+        let holder = self.holder.lock().expect("current game state");
+        if holder.departure.is_some() || holder.edits_blocked || holder.human_match.blocks()
+            || !matches!(holder.trial_mode, trial::TrialMode::Review)
+            || holder.generation != request.generation || holder.selected_path != request.node_path {
+            return Err("Focus requires the current ordinary review position".into());
+        }
+        manager.local_focus_action(request)
+    }
+
     pub fn attach_from_job_event(&self, event: &AnalysisJobEventDto) -> Option<CurrentGameResultDto> {
         if self
             .analysis_manager
@@ -955,6 +965,18 @@ impl CurrentGameState {
                 }
             }
         }
+        let focus_lineage = match self.analysis_manager.get().map(|manager| manager.local_focus_publication(event)) {
+            Some(Err(())) => {
+                self.trace_adoption(event, "rejected-retired-focus-output", None);
+                return None;
+            }
+            Some(Ok(focus)) => focus,
+            None => false,
+        };
+        if focus_lineage {
+            let position = holder.document.as_ref()?.exact_position(&event.node_path).ok()?;
+            if !SgfAnalysisPayload::is_complete_frame(frame, &position, true) { return None; }
+        }
         // Ordinary reuse only: Task attachment and the unconditional holder
         // replacement seam retain priority over this presentation policy.
         let context = self.analysis_manager.get()
@@ -968,6 +990,7 @@ impl CurrentGameState {
                 return None;
             }
             if holder.generation == event.generation
+                && !focus_lineage
                 && self.analysis_manager.get().is_some_and(|manager| manager.retain_node_analysis())
                 && holder.ordinary_analysis_contexts.get(&event.node_path.indices) == Some(context)
             {

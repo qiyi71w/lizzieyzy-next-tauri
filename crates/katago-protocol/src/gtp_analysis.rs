@@ -152,6 +152,7 @@ pub fn parse_gtp_analysis(
                 candidates.push((
                     m.order.ok_or("missing GTP candidate order")?,
                     CandidateMoveDto {
+                        order: m.order,
                         pv_visits: None,
                         ownership: None,
                         vertex: m.coordinate.ok_or("missing GTP candidate vertex")?,

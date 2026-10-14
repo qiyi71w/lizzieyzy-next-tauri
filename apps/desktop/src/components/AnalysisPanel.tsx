@@ -227,7 +227,7 @@ export function AnalysisPanel({
                         }}
                       >
                         <td role="gridcell">
-                          <span className={`rank-badge rank-${index + 1}`}>{index + 1}</span>
+                          <span className={`rank-badge rank-${(candidate.order ?? index) + 1}`}>{(candidate.order ?? index) + 1}</span>
                         </td>
                         <td role="gridcell" className="cand-coord">{moveText}</td>
                         <td role="gridcell" className="cand-winrate">{winrateText}</td>

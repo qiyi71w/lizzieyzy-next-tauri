@@ -13,6 +13,8 @@ import {
   shouldPublishReviewPresentation,
   type ReviewPresentationScope
 } from "../domain/reviewPresentation";
+import type { LocalFocusPointDto, LocalFocusPreferencesDto, MoveRankPreferencesDto } from "../domain/types";
+import { focusQuality, sameFocusVertex } from "../domain/localFocus";
 
 export type OverlayMode = "candidates" | "ownership" | "policy";
 
@@ -36,6 +38,12 @@ type Props = {
   authoringEnabled?: boolean;
   onAuthoring?: (action: SgfAuthoringActionDto, captured: ReviewPresentationScope) => void;
   onFlashCurrentNode?: () => void;
+  focusPoints?: LocalFocusPointDto[];
+  focusPreferences?: LocalFocusPreferencesDto;
+  focusAnalysis?: AnalysisFrameDto;
+  focusGrading?: MoveRankPreferencesDto;
+  focusEnabled?: boolean;
+  onFocusPoint?: (point: PointDto, captured: ReviewPresentationScope) => void;
   onGestureRefused?: (message: string) => void;
   keyboardPlacement?: boolean;
   scoring?: ScoringSessionDto | null;
@@ -81,6 +89,12 @@ export function BoardCanvas({
   authoringEnabled = false,
   onAuthoring,
   onFlashCurrentNode,
+  focusPoints = [],
+  focusPreferences,
+  focusAnalysis,
+  focusGrading,
+  focusEnabled = false,
+  onFocusPoint,
   onGestureRefused,
   keyboardPlacement = false,
   onCandidatePreview,
@@ -441,6 +455,20 @@ export function BoardCanvas({
         }
       }
     }
+    if (focusPreferences?.showOutline && focusGrading) {
+      ctx.save();
+      ctx.globalAlpha = focusPreferences.outlineOpacity / 100;
+      for (const watched of focusPoints) {
+        if (!isPoint(watched.vertex)) continue;
+        const quality = focusQuality(focusAnalysis, watched.vertex, position.to_play, focusGrading);
+        ctx.beginPath();
+        ctx.arc(coordX(watched.vertex.point.x), coordY(watched.vertex.point.y), grid * 0.48, 0, Math.PI * 2);
+        ctx.strokeStyle = quality ? NEXT_MOVE_RANK_FILL[quality] : "#808080";
+        ctx.lineWidth = Math.max(2, grid * 0.075);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
 
     for (const marker of nextMoveMode === "off" ? [] : nextMoveMarkers) {
       const cx = coordX(marker.point.x);
@@ -502,7 +530,7 @@ export function BoardCanvas({
       ctx.lineWidth = Math.max(1.5, grid * 0.06);
       ctx.stroke();
     }
-  }, [size, position, markup, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, stoneMoveNumbers, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers, pvPrefixLength, replayCandidateIndex, scoring, displayPreferences, graphPerspective, komi, ownership]);
+  }, [size, position, markup, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, stoneMoveNumbers, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers, pvPrefixLength, replayCandidateIndex, scoring, displayPreferences, graphPerspective, komi, ownership, focusPoints, focusPreferences, focusAnalysis, focusGrading]);
 
   const layerHost = document.getElementById("board-layers");
   const overlays = (
@@ -559,7 +587,7 @@ export function BoardCanvas({
       onPointerCancel={() => { clickClassification.cancel(); cancelDrag(); }}
       onLostPointerCapture={cancelDrag}
       onContextMenu={(event) => {
-        if ((!authoringEnabled || !onAuthoring) && (!pointSearchEnabled || !onPointSearch) && !onFlashCurrentNode) return;
+        if ((!authoringEnabled || !onAuthoring) && (!pointSearchEnabled || !onPointSearch) && !onFlashCurrentNode && !onFocusPoint) return;
         if (!previewScope) return;
         event.preventDefault(); clickClassification.cancel(); cancelDrag(); cancelCandidatePreview();
         const point = pointerPoint(event);
@@ -576,6 +604,11 @@ export function BoardCanvas({
       }}
     />
     {context ? <div ref={contextRef} role="menu" aria-label={t("authoring.context")} className="menu-pop" style={{ position: "fixed", left: context.left, top: context.top, maxHeight: "100vh", overflowY: "auto", zIndex: 1000 }}>
+      {onFocusPoint ? <button type="button" role="menuitem" className="menu-item" disabled={!focusEnabled && !focusPoints.some((point) => sameFocusVertex(point.vertex, { point: context.point }))} onClick={() => {
+        const captured = context; setContext(null);
+        if (!samePreviewScope(previewScope, captured.scope)) { onGestureRefused?.(t("authoring.stale")); return; }
+        onFocusPoint(captured.point, captured.scope);
+      }}>{t(focusPoints.some((point) => sameFocusVertex(point.vertex, { point: context.point })) ? "focus.remove" : "focus.add")}</button> : null}
       {onFlashCurrentNode ? <button type="button" role="menuitem" className="menu-item" onClick={() => {
         const captured = context; setContext(null);
         if (!samePreviewScope(previewScope, captured.scope)) { onGestureRefused?.(t("authoring.stale")); return; }

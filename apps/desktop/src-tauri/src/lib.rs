@@ -1140,6 +1140,11 @@ fn readboard_error(error: readboard_sidecar::ReadboardSidecarError) -> ProviderE
     }
 }
 #[tauri::command]
+fn local_focus_action(manager: State<'_, ForegroundEngineManager>, current_game: State<'_, CurrentGameState>, request: app_model::LocalFocusRequestDto) -> Result<app_model::LocalFocusSnapshotDto, String> {
+    current_game.local_focus_action(&manager, request)
+}
+
+#[tauri::command]
 fn foreground_engine_snapshot(manager: State<'_, ForegroundEngineManager>) -> ForegroundEngineSnapshotDto {
     manager.snapshot()
 }
@@ -1546,6 +1551,7 @@ pub fn run() {
             continue_analysis_task,
             katago_cancel_analysis,
             foreground_engine_snapshot,
+            local_focus_action,
             engine_diagnostic_snapshots,
             diagnostic_export::estimate_diagnostic_export,
             diagnostic_export::diagnostic_export_status,
