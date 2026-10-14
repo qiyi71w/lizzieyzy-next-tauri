@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { t } from "../i18n/resources";
 import type {
   AnalysisMoveActorFilterDto,
@@ -42,6 +42,9 @@ export type AnalysisScopeDraft = {
 };
 
 type Props = {
+  openRequest: number;
+  resetDisabled: boolean;
+  onResetDraft: () => void;
   flashActive?: boolean;
   onDismissFlash?: () => void;
   draft: AnalysisScopeDraft;
@@ -69,6 +72,13 @@ const modes: Array<{ value: AnalysisScopeModeDto; label: string }> = [
 export function AnalysisTaskPanel(props: Props) {
   const [visible, setVisible] = useState(true);
   const bodyId = useId();
+  const panelRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!props.openRequest) return;
+    setVisible(true);
+    panelRef.current?.focus();
+    panelRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [props.openRequest]);
   useEffect(() => { if (props.flashActive) setVisible(true); }, [props.flashActive]);
   const reserved = props.task != null && ["queued", "searching", "pausing", "paused"].includes(props.task.state);
   const pauseable = props.task?.state === "queued" || props.task?.state === "searching";
@@ -108,7 +118,7 @@ export function AnalysisTaskPanel(props: Props) {
   }
 
   return (
-    <section className="sheet-row analysis-task-panel" aria-label="Analysis task">
+    <section ref={panelRef} tabIndex={-1} className="sheet-row analysis-task-panel" aria-label="Analysis task">
       <div className="document-row analysis-task-heading">
         <strong>{t("analysis.task.title")}</strong>
         <button
@@ -326,6 +336,7 @@ export function AnalysisTaskPanel(props: Props) {
           <button type="button" onClick={props.onPause} disabled={props.busy || !pauseable}>Pause task</button>
           <button type="button" onClick={props.onContinue} disabled={!props.canRun || props.busy || !continuable}>Continue task</button>
           <button type="button" onClick={props.onCancel} disabled={props.busy || !reserved}>Cancel task</button>
+          <button type="button" onClick={props.onResetDraft} disabled={props.resetDisabled}>重置草稿</button>
         </div>
         {props.preview ? (
           <p role="status">

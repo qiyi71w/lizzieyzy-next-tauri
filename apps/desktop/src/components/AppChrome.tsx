@@ -80,6 +80,9 @@ type Props = {
   engineSwitcher: EngineSwitcherProps;
   onEngineCommand: (kind: "once" | "game") => void;
   onQuickAnalysis: () => void;
+  onAutomaticAnalysis: () => void;
+  canCancelExplicitTask: boolean;
+  onCancelExplicitTask: () => void;
   onFlashPart?: () => void;
   onFlashBranches?: () => void;
   onAllPositionsAnalysis: () => void;
@@ -138,7 +141,6 @@ type Props = {
   onParse: () => void;
   onFakeAnalyze: () => void;
   onCancelSelectedNode: () => void;
-  onCancelWholeGame: () => void;
   onAbout: () => void;
   onOpenShortcutReference: () => void;
   onCopySgf: () => void;
@@ -421,7 +423,7 @@ export function AppChrome(props: Props) {
             <MenuItem label="死活" disabled title={later} />
             <MenuItem label={SELECTED_NODE_ANALYSIS_LABEL} onClick={() => run(() => props.onEngineCommand("once"))} disabled={!props.engineReady} />
             <MenuItem label={FIRST_CHILD_MAINLINE_ANALYSIS_LABEL} onClick={() => run(() => props.onEngineCommand("game"))} disabled={!props.taskEngineReady || (props.wholeGameRunning && !props.automaticTaskActive)} />
-            <MenuItem label={AUTO_ANALYZE_LABEL} disabled title={later} />
+            <MenuItem label={AUTO_ANALYZE_LABEL} onClick={() => run(props.onAutomaticAnalysis)} />
             <MenuItem label={actionLabelFromRegistry("analysis.all-positions", "批量分析")} onClick={() => run(props.onAllPositionsAnalysis)} disabled={!props.taskEngineReady || (props.wholeGameRunning && !props.automaticTaskActive)} />
             <MenuItem label={actionLabelFromRegistry("analysis.quick", LIGHTNING_ANALYSIS_MENU_LABEL)} onClick={() => run(props.onQuickAnalysis)} disabled={props.busy || props.matchBlocked || (props.wholeGameRunning && !props.automaticTaskActive)} />
             <MenuItem label="闪电分析部分范围…" onClick={() => run(() => props.onFlashPart?.())} disabled={props.busy || props.matchBlocked || (props.wholeGameRunning && !props.automaticTaskActive)} />
@@ -431,7 +433,7 @@ export function AppChrome(props: Props) {
             <MenuItem label="形势判断" onClick={() => run(() => props.onOverlayMode("ownership"))} disabled={props.matchBlocked} />
             <div className="menu-sep" role="separator" />
             <MenuItem label="取消此手分析" onClick={() => run(props.onCancelSelectedNode)} disabled={!props.selectedNodeRunning} />
-            <MenuItem label="取消整局分析" onClick={() => run(props.onCancelWholeGame)} disabled={!props.wholeGameRunning} />
+            <MenuItem label="取消当前分析任务" onClick={() => run(props.onCancelExplicitTask)} disabled={!props.canCancelExplicitTask} />
             <MenuItem label="清除分析信息(此手)" disabled title={later} />
           </ChromeMenu>
           <ChromeMenu label="编辑" open={openMenu === "edit"} onToggle={() => setOpenMenu(openMenu === "edit" ? null : "edit")}>
@@ -656,6 +658,7 @@ export function BottomBar(props: {
   onAnalyzeOnce: () => void;
   onAnalyzeGame: () => void;
   onQuickAnalysis: () => void;
+  onAutomaticAnalysis: () => void;
   onCancelSelectedNode: () => void;
   onCancelWholeGame: () => void;
   onSync: () => void;
@@ -694,6 +697,7 @@ export function BottomBar(props: {
       <button type="button" className="chrome-btn" onClick={props.onSync} disabled={props.matchBlocked}>同步</button>
       <button type="button" className="chrome-btn" onClick={props.onEstimate} disabled={props.matchBlocked}>Kata评估</button>
       <button type="button" className="chrome-btn" onClick={props.onQuickAnalysis} disabled={props.matchBlocked || (props.wholeGameRunning && !props.automaticTaskActive)}>{LIGHTNING_ANALYSIS_TOOLBAR_LABEL}</button>
+      <button type="button" className="chrome-btn" onClick={props.onAutomaticAnalysis}>{AUTO_ANALYZE_LABEL}</button>
       {props.onBrowserDemoAnalyze ? (
         <button type="button" className="chrome-btn" onClick={props.onBrowserDemoAnalyze}>{BROWSER_DEMO_ANALYSIS_LABEL}</button>
       ) : null}
