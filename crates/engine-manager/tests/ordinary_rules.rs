@@ -50,7 +50,8 @@ fn real_cpu_same_tree_focus_add_remove_clear_budget() {
     let mut command = first.local_focus_output.unwrap().command;
     std::fs::write(std::path::Path::new(&workdir).join("focus-initial-diagnostics.json"), serde_json::to_vec_pretty(&manager.diagnostic_snapshots()).unwrap()).unwrap();
     let vertex = MoveVertex::Point(PointDto { x: 3, y: 5 });
-    for action in [LocalFocusActionDto::Add { vertex: vertex.clone(), max_visits: 1000000 }, LocalFocusActionDto::Remove { vertex: vertex.clone() }, LocalFocusActionDto::Add { vertex, max_visits: 1000000 }, LocalFocusActionDto::Clear] {
+    let second_vertex = MoveVertex::Point(PointDto { x: 4, y: 4 });
+    for action in [LocalFocusActionDto::Add { vertex: vertex.clone(), max_visits: 1000000 }, LocalFocusActionDto::Add { vertex: second_vertex.clone(), max_visits: 1000000 }, LocalFocusActionDto::Remove { vertex: vertex.clone() }, LocalFocusActionDto::Remove { vertex: second_vertex }, LocalFocusActionDto::Add { vertex, max_visits: 1000000 }, LocalFocusActionDto::Clear] {
         let receipt = manager.local_focus_action(LocalFocusRequestDto { run_id: first.run_id.clone(), job_id: first.job_id.clone(), generation: 7, node_path: path.clone(), action }).unwrap();
         assert!(receipt.withdrawal_pending);
         let frame = next(Some(command));
@@ -1388,7 +1389,7 @@ mod controlled {
         assert_eq!(trace.matches("loadsgf").count(), 1, "{trace}");
         assert_eq!(trace.matches("kata-get-rules").count(), 1, "{trace}");
         assert!(trace.contains("focus D4 0.5"), "{trace}");
-        assert!(trace.contains("focus D4 0.25 focus E4 0.25"), "{trace}");
+        assert!(trace.contains("focus D4,E4 0.5"), "{trace}");
         assert!(trace.contains("focus E4 0.5"), "{trace}");
         assert_eq!(trace.matches("kata-analyze").count(), 6, "{trace}");
         assert_eq!(trace.matches(" stop\n").count(), 6, "{trace}");
