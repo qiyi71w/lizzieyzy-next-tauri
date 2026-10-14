@@ -29,6 +29,7 @@ impl PreferencesState {
             return Ok(loaded.clone());
         }
         let loaded = app_preferences::load_from_path(path)?;
+        manager.set_retain_node_analysis(loaded.preferences.retain_node_analysis);
         manager.set_continuous_preferences(
             loaded.preferences.continuous_analysis_enabled,
             loaded.preferences.continuous_budget,
@@ -72,6 +73,7 @@ impl PreferencesState {
             preferences.continuous_budget,
             || {
                 let saved = app_preferences::save_to_path(path, preferences)?;
+                manager.set_retain_node_analysis(saved.retain_node_analysis);
                 *committed = Some(AppPreferencesLoadResultDto {
                     preferences: saved.clone(),
                     recovery: None,

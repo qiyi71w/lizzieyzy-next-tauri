@@ -48,6 +48,8 @@ pub struct AppPreferencesDto {
     pub allow_double_click: bool,
     #[serde(default = "default_continuous_analysis_enabled")]
     pub continuous_analysis_enabled: bool,
+    #[serde(default = "default_continuous_analysis_enabled")]
+    pub retain_node_analysis: bool,
     #[serde(flatten)]
     pub continuous_budget: ContinuousAnalysisBudgetDto,
     #[serde(default)]
@@ -186,6 +188,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         allow_drag: false,
         allow_double_click: true,
         continuous_analysis_enabled: default_continuous_analysis_enabled(),
+        retain_node_analysis: true,
         continuous_budget: ContinuousAnalysisBudgetDto::default(),
         auto_load: app_model::AutoLoadPreferencesDto::default(),
         batch: app_model::BatchPreferencesDto::default(),
@@ -687,6 +690,7 @@ mod tests {
             allow_drag: false,
             allow_double_click: true,
             continuous_analysis_enabled: false,
+            retain_node_analysis: true,
             continuous_budget: ContinuousAnalysisBudgetDto {
                 continuous_time_limit_enabled: false,
                 continuous_time_limit_seconds: 7,

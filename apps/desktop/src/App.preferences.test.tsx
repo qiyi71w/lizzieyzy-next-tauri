@@ -252,6 +252,33 @@ it("keeps granular display drafts local through Cancel and failed Apply, then ex
   expect(requiredElement<HTMLInputElement>(host, '[aria-label="延迟秒数"]').value).toBe("2.5");
 });
 
+it("keeps node reuse drafts local on Cancel and failure and reopens only committed settings", async () => {
+  const host = await renderApp();
+  openPreferences(host);
+  const toggle = () => labeledCheckbox(host, "保留节点较充分的分析结果");
+  expect(toggle().checked).toBe(true);
+  act(() => toggle().click());
+  expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  act(() => buttonNamed(host, "取消结果复用设置").click());
+  expect(toggle().checked).toBe(true);
+  act(() => toggle().click());
+  preferencesApi.saveAppPreferences.mockRejectedValueOnce(new Error("reuse disk read-only"));
+  await act(async () => buttonNamed(host, "应用结果复用设置").click());
+  expect(preferencesStatus(host)).toContain("reuse disk read-only");
+  expect(toggle().checked).toBe(false);
+  act(() => buttonNamed(host, "参数").click());
+  openPreferences(host);
+  expect(toggle().checked).toBe(true);
+  act(() => toggle().click());
+  await act(async () => buttonNamed(host, "应用结果复用设置").click());
+  const saved = preferencesApi.saveAppPreferences.mock.calls.at(-1)![0] as AppPreferences;
+  expect(saved.retainNodeAnalysis).toBe(false);
+  expect(saved.moveRank).toEqual(defaultAppPreferences.moveRank);
+  act(() => buttonNamed(host, "参数").click());
+  openPreferences(host);
+  expect(toggle().checked).toBe(false);
+});
+
 it("validates autoplay drafts and keeps committed intervals after Cancel and write failure", async () => {
   const host = await renderApp();
   openPreferences(host);

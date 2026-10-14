@@ -2837,9 +2837,15 @@ export function App() {
         clearSelectedNodeRunning(job.job_id);
         return;
       }
-      const frame = job.frame;
+      const attached = job.current_game;
+      const frame = attached?.snapshot.primary_analysis;
+      if (!attached || !frame || !isCurrentGameSnapshot(attached) || !samePath(attached.selected_path, job.node_path)) {
+        clearSelectedNodeRunning(job.job_id);
+        return;
+      }
+      adoptCurrentGame(attached);
+      setDirty(attached.dirty);
       rememberWholeGameFrame(job.node_path, frame);
-      if (admitsAnalysisAttachment(job)) void refreshCurrentGameAfterAttach();
       if (publishReviewPresentation(captured, [frame])) {
         setMessage(`KataGo analysis completed for move ${frame.turn} with ${frame.visits} visits.`);
       }

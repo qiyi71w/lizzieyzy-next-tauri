@@ -7,7 +7,7 @@ use app_model::{
     StoneDto, TrialSessionDto,
 };
 use sgf::{CurrentSgfDocument, DocumentHistory, SgfAnalysisPayload, SgfDocumentEdit, TrialLine};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 #[cfg(test)]
@@ -99,6 +99,7 @@ struct CurrentGameHolder {
     document_identity: u64,
     snapshot_seq: u64,
     analysis_target: Option<(u64, NodePath)>,
+    ordinary_analysis_contexts: HashMap<Vec<u32>, std::sync::Arc<engine_manager::OrdinaryAnalysisContext>>,
     trial_mode: trial::TrialMode,
     next_trial_id: u64,
     next_trial_revision: u64,
@@ -908,7 +909,6 @@ impl CurrentGameState {
                 }
             }
         }
-        let payload = SgfAnalysisPayload::from_frame(frame, "KataGo");
         let mut holder = self.holder.lock().expect("current game state");
         if holder.human_match.blocks() || !matches!(holder.trial_mode, trial::TrialMode::Review) {
             self.trace_adoption(event, "rejected-owner-reservation", None);
@@ -935,6 +935,34 @@ impl CurrentGameState {
                 }
             }
         }
+        // Ordinary reuse only: Task attachment and the unconditional holder
+        // replacement seam retain priority over this presentation policy.
+        let context = self.analysis_manager.get()
+            .filter(|_| event.lane == app_model::AnalysisJobLaneDto::SelectedNode)
+            .and_then(|manager| manager.ordinary_analysis_context(event));
+        if let Some(context) = context.as_ref() {
+            let document = holder.document.as_ref()?;
+            let position = document.exact_position(&event.node_path).ok()?;
+            if !SgfAnalysisPayload::is_complete_frame(frame, &position, context.ownership_requested()) {
+                self.trace_adoption(event, "rejected-incomplete-ordinary-result", None);
+                return None;
+            }
+            if holder.generation == event.generation
+                && self.analysis_manager.get().is_some_and(|manager| manager.retain_node_analysis())
+                && holder.ordinary_analysis_contexts.get(&event.node_path.indices) == Some(context)
+            {
+                let snapshot = document.snapshot(&event.node_path).ok()?;
+                if snapshot.primary_analysis.as_ref().is_some_and(|old| {
+                    old.visits > frame.visits
+                        && SgfAnalysisPayload::is_complete_frame(old, &position, context.ownership_requested())
+                }) {
+                    self.trace_adoption(event, "retained-stronger-comparable-result", snapshot.primary_analysis.as_ref());
+                    // No incoming adoption: keep the already displayed result,
+                    // including its live-only policy, without splicing new maps.
+                    return None;
+                }
+            }
+        }
         let cached = self
             .analysis_manager
             .get()
@@ -942,6 +970,7 @@ impl CurrentGameState {
             .and_then(|_| holder.document.as_ref())
             .and_then(|document| document.snapshot(&event.node_path).ok())
             .and_then(|snapshot| snapshot.primary_analysis);
+        let payload = SgfAnalysisPayload::from_frame(frame, "KataGo");
         let result = holder.attach_primary_analysis(event.generation, event.node_path.clone(), payload);
         let mut result = match result {
             Ok(result) => result,
@@ -950,6 +979,9 @@ impl CurrentGameState {
                 return None;
             }
         };
+        if let Some(context) = context {
+            holder.ordinary_analysis_contexts.insert(event.node_path.indices.clone(), context);
+        }
         if self
             .analysis_manager
             .get()
@@ -1374,6 +1406,9 @@ impl CurrentGameHolder {
             .ok_or_else(no_current_game)?
             .replace_primary_analysis(&path, &payload)?
             .1;
+        // Task, unknown-source, and explicit whole-slot replacement retire the
+        // previous ordinary comparability proof, even when the bytes match.
+        self.ordinary_analysis_contexts.remove(&path.indices);
         if changed {
             self.mark_nonhistory_change();
             self.bump_snapshot();
