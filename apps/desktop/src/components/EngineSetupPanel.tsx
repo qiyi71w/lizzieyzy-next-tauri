@@ -519,6 +519,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, documentGen
         </label>
         <p>{t("evaluation.startupHint")}</p>
       </div>
+      </fieldset>
       {visible && <EngineEvaluationPanel profiles={profiles} currentRun={run} disabled={disabled || catalogBusy || modelBusy}
         beginOperation={beginModelOperation} endOperation={endModelOperation}
         onPolicyBusyChange={(busy) => { catalogWritePending.current = busy; setCatalogBusy(busy); }}
@@ -526,8 +527,9 @@ export function EngineSetupPanel({ disabled = false, visible = true, documentGen
       {visible && <MeasuredReportPanel target={profiles.find((profile) => profile.id === selectedProfileId)}
         documentGeneration={documentGeneration} documentNode={documentNode}
         inputRevision={JSON.stringify([selectedProfileId, profileName, enginePath, adapterKind, argv, modelPath, configPath, workingDir, maxVisits])}
-        disabled={disabled || catalogBusy} beginOperation={beginModelOperation} endOperation={endModelOperation}
+        disabled={disabled || catalogBusy || modelBusy} beginOperation={beginModelOperation} endOperation={endModelOperation}
         onProfilesSaved={(saved) => { setProfiles(saved); onProfilesChange?.(saved); }} />}
+      <fieldset disabled={disabled || modelBusy} style={{ border: 0, padding: 0, minWidth: 0 }}>
       {visible && <RuntimeThreadsPanel runId={run?.run_id ?? null} disabled={disabled || snapshot.lifecycle.state !== "ready"} />}
       {visible && <RuntimeParametersPanel runId={run?.run_id ?? null} disabled={disabled || snapshot.lifecycle.state !== "ready"} />}
       {assetChecks.length > 0 && (
