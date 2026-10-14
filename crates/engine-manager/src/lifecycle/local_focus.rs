@@ -167,7 +167,8 @@ impl ForegroundEngineManager {
 
 pub(super) fn reconcile(state: &mut ManagerState) {
     let Some(id) = state.local_focus.identity.as_ref() else { return; };
-    let same_position = state.continuous_target.as_ref().is_some_and(|target| target.run_id == id.run_id && target.generation == id.generation && target.node_path == id.node_path);
+    // The saved target is Run-neutral; the bound owner is checked against the live Run below.
+    let same_position = state.continuous_target.as_ref().is_some_and(|target| target.generation == id.generation && target.node_path == id.node_path);
     if !same_position || admitting_run(&state.phase, &id.run_id).is_none() || state.continuous_departing
         || state.jobs.iter().any(|job| !job.terminal && job.mode == AnalysisJobModeDto::Finite) {
         state.local_focus = Owner::default();
