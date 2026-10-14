@@ -84,7 +84,7 @@ impl SetupLease {
         loop {
             self.check()?;
             let owner = self.manager.inner.measured.lock().expect("setup owner");
-            if !owner.event_loop_samples.is_empty() {
+            if owner.event_loop_samples.len() >= 2 {
                 // Retain pre-t0 observations to prove the eventual window was covered.
                 return Ok(());
             }
