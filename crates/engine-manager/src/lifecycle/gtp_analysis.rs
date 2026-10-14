@@ -296,9 +296,9 @@ impl ForegroundEngineManager {
             let mut state = self.lock();
             let eligible = started.mode == AnalysisJobModeDto::Continuous
                 && !state.continuous_departing
+                && admitting_run(&state.phase, &started.run_id).is_some()
                 && state.continuous_target.as_ref().is_some_and(|target|
-                    target.run_id == started.run_id && target.generation == started.generation
-                        && target.node_path == started.node_path);
+                    target.generation == started.generation && target.node_path == started.node_path);
             if eligible {
                 state.local_focus.bind(started);
                 state.local_focus.height = request.board_height;

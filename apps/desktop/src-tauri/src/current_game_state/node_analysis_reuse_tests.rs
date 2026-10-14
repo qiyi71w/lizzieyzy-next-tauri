@@ -204,8 +204,6 @@ fn local_focus_production_parser_replaces_stronger_whole_slot_and_preserves_seco
     resource.resources.iter_mut().find(|resource| resource.component == "executable").unwrap().sha256 = "20c4ede9f39455ab3c019ada7a22a6e4d7696361161feed5c56f2c42d1507bd0".into();
     engine.manager.set_qualified_resource_for_tests(resource);
     engine.manager.set_continuous_preferences(true, budget).unwrap();
-    let request = crate::bind_selected_node_job(&state, run.run_id.clone(), opened.generation, NodePath::default(), AnalysisJobModeDto::Continuous, None).unwrap();
-    engine.manager.follow_continuous_position(request);
     let next = || loop {
         if let ForegroundEngineEventDto::Job { job } = engine.events.recv_timeout(Duration::from_secs(5)).unwrap() {
             assert!(!matches!(job.outcome, AnalysisJobOutcomeDto::Failed | AnalysisJobOutcomeDto::Timeout), "{job:?}");
@@ -213,6 +211,8 @@ fn local_focus_production_parser_replaces_stronger_whole_slot_and_preserves_seco
         }
     };
     let high = next();
+    assert!(high.local_focus_output.is_some(), "the current-game run-neutral target owns ordinary focus");
+    assert_eq!(engine.manager.snapshot().local_focus.job_id.as_deref(), Some(high.job_id.as_str()));
     assert_eq!(state.attach_from_job_event(&high).unwrap().snapshot.primary_analysis.unwrap().visits, 10000);
     let before = state.serialize().unwrap();
     std::fs::write(engine.directory.join("analysis-frame"), payload(1000, "E5", "-0.3")).unwrap();
