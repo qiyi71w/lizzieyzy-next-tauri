@@ -1,3 +1,4 @@
+/// <reference lib="esnext.promise" />
 // @vitest-environment jsdom
 
 import { act } from "react";
@@ -9,6 +10,9 @@ import * as backend from "../api/backend";
 import type { ForegroundEngineSnapshotDto } from "../domain/types";
 import * as models from "../api/models";
 import type { ModelInventoryDto } from "../domain/types";
+import * as measured from "../api/measuredReport";
+import type { EvaluationSnapshotDto, MeasuredReviewDto } from "../domain/types";
+import { t } from "../i18n/resources";
 
 let root: Root | null = null;
 let host: HTMLDivElement;
@@ -25,6 +29,7 @@ afterEach(async () => {
   root = null;
   host.remove();
   vi.restoreAllMocks();
+  vi.useRealTimers();
   localStorage.clear();
 });
 
@@ -470,4 +475,59 @@ it("saves preload opt-in explicitly and keeps browser preparation unavailable", 
   expect(prepare.disabled).toBe(true);
   await click("重新加载配置");
   expect((field("允许此配置后台预加载（保存后生效）") as HTMLInputElement).checked).toBe(true);
+});
+
+it("keeps report Cancel reachable while the composed editor and competing benchmark are locked", async () => {
+  vi.spyOn(backend, "isTauriRuntime").mockReturnValue(true);
+  const pending = Promise.withResolvers<MeasuredReviewDto>();
+  const review = vi.spyOn(measured, "reviewMeasuredReport").mockReturnValue(pending.promise);
+  const retire = vi.spyOn(measured, "retireMeasuredReport").mockResolvedValue();
+  vi.spyOn(measured, "waitForMeasuredWorker").mockResolvedValue();
+  await render();
+  const file = new File(['{}'], "report.json", { type: "application/json" });
+  Object.defineProperty(file, "text", { value: async () => '{}' });
+  const upload = host.querySelector<HTMLInputElement>('input[accept="application/json,.json"]')!;
+  await act(async () => { Object.defineProperty(upload, "files", { value: [file] }); upload.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(review).toHaveBeenCalledTimes(1);
+  expect(field("名称").matches(":disabled")).toBe(true);
+  expect(upload.matches(":disabled")).toBe(true);
+  const benchmark = Array.from(host.querySelectorAll("button")).find(b => b.textContent === t("evaluation.start"))!;
+  expect(benchmark.matches(":disabled")).toBe(true);
+  const cancel = Array.from(host.querySelectorAll("button")).find(b => b.textContent === t("measured.cancel"))!;
+  expect(cancel.matches(":disabled")).toBe(false);
+  retire.mockClear();
+  await click(t("measured.cancel"));
+  expect(retire).toHaveBeenCalledTimes(1);
+  expect(field("名称").matches(":disabled")).toBe(true);
+  await act(async () => pending.reject(new Error("retired after worker exit")));
+  expect(field("名称").matches(":disabled")).toBe(false);
+  expect(host.textContent).not.toContain("Paired ratios:");
+});
+
+it("keeps active benchmark Cancel reachable without admitting editor or report work", async () => {
+  vi.useFakeTimers();
+  vi.spyOn(backend, "isTauriRuntime").mockReturnValue(true);
+  const idle: EvaluationSnapshotDto = { evaluation_id: null, target_id: null, input_revision: null, phase: "idle", process_id: null, exit_code: null, output: [], output_truncated: false, message: null, result: null };
+  const running: EvaluationSnapshotDto = { ...idle, evaluation_id: "owned", target_id: "default", input_revision: "revision", phase: "running", process_id: 123 };
+  let snapshot = idle;
+  vi.spyOn(backend, "getEngineEvaluation").mockImplementation(async () => snapshot);
+  const start = vi.spyOn(backend, "startEngineEvaluation").mockImplementation(async () => { snapshot = running; return running; });
+  const cancel = vi.spyOn(backend, "cancelEngineEvaluation").mockImplementation(async () => { snapshot = { ...running, phase: "cancelled", process_id: null }; return snapshot; });
+  vi.spyOn(measured, "measuredReportBusy").mockResolvedValue(false);
+  vi.spyOn(measured, "retireMeasuredReport").mockResolvedValue();
+  await render();
+  const target = host.querySelector<HTMLSelectElement>('section[aria-label="本地性能评估 Benchmark"] select')!;
+  await change(target, "default");
+  await click(t("evaluation.start"));
+  expect(start).toHaveBeenCalledTimes(1);
+  expect(field("名称").matches(":disabled")).toBe(true);
+  expect(host.querySelector('input[accept="application/json,.json"]')!.matches(":disabled")).toBe(true);
+  const cancelButton = Array.from(host.querySelectorAll("button")).find(b => b.textContent === t("evaluation.cancel"))!;
+  expect(cancelButton.matches(":disabled")).toBe(false);
+  await click(t("evaluation.start"));
+  expect(start).toHaveBeenCalledTimes(1);
+  await click(t("evaluation.cancel"));
+  expect(cancel).toHaveBeenCalledWith("owned");
+  await act(async () => vi.advanceTimersByTimeAsync(300));
+  expect(field("名称").matches(":disabled")).toBe(false);
 });
