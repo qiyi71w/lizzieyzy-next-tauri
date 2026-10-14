@@ -5557,7 +5557,7 @@ fn continuous_preferences_failed_persistence_preserves_intent_and_budget() {
     changed_budget.continuous_visits_limit += 1;
 
     let error = manager
-        .commit_continuous_preferences(true, changed_budget, || {
+        .commit_continuous_preferences(true, changed_budget, None, || {
             // Writing to a directory exercises a real failed persistence operation.
             std::fs::write(temp.path(), "preferences").map_err(|error| error.to_string())
         })
@@ -5571,7 +5571,7 @@ fn continuous_preferences_failed_persistence_preserves_intent_and_budget() {
     manager.set_continuous_preferences(false, budget).unwrap();
     manager.abort_reserved_match("persistence-rollback").unwrap();
     let saved = manager
-        .commit_continuous_preferences(true, changed_budget, || {
+        .commit_continuous_preferences(true, changed_budget, None, || {
             std::fs::write(temp.path().join("preferences"), "saved").map_err(|error| error.to_string())?;
             Ok("saved")
         })

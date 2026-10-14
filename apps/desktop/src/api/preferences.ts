@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { continuousBudgetError, defaultAppPreferences, newGameDefaultsError, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "../domain/preferences";
 import type { WorkspaceSharesDto, WorkspaceVisibilityDto } from "../domain/types";
 import { normalizeWorkspaceShares } from "../domain/preferences";
+import { analysisRefreshIntervalError } from "../domain/preferences";
 import { validateBatchPreferences } from "../domain/batch";
 import type { BatchPreferencesDto } from "../domain/types";
 import type { ContinuationPreferencesDto } from "../domain/types";
@@ -55,6 +56,7 @@ export async function saveAppPreferences(preferences: AppPreferences): Promise<A
     throw new Error("Review autoplay interval is not safely representable in whole milliseconds.");
   }
   const error = newGameDefaultsError(preferences)
+    ?? analysisRefreshIntervalError(preferences.analysisRefreshIntervalCentiseconds)
     ?? continuousBudgetError(preferences)
     ?? flashVisitsError(preferences.flashAnalysisVisits)
     ?? taskConditionsError(preferences.taskSingleStageConditions)
@@ -125,6 +127,7 @@ function loadBrowserPreferences(): AppPreferencesLoadResult {
   try {
     const preferences = normalizeAppPreferences(JSON.parse(raw) as Partial<AppPreferences>);
     const error = newGameDefaultsError(preferences)
+      ?? analysisRefreshIntervalError(preferences.analysisRefreshIntervalCentiseconds)
       ?? continuousBudgetError(preferences)
       ?? flashVisitsError(preferences.flashAnalysisVisits)
       ?? taskConditionsError(preferences.taskSingleStageConditions)

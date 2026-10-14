@@ -303,6 +303,12 @@ impl ForegroundEngineManager {
                 state.local_focus.bind(started);
                 state.local_focus.height = request.board_height;
                 state.local_focus.color = color;
+                state.local_focus.refresh_eligible = admitting_run(&state.phase, &started.run_id)
+                    .is_some_and(|run| run.qualified_resource.as_deref()
+                        .is_some_and(crate::thread_policy::direct_local));
+                if state.local_focus.refresh_eligible {
+                    state.local_focus.interval = state.analysis_refresh_interval;
+                }
             }
             eligible
         };

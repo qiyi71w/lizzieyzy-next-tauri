@@ -9,11 +9,14 @@ import { validGranularDisplay, type GranularDisplay, type CandidateTextField, ty
 import { defaultMoveRankPreferences, readMoveRankPreferences, validMoveRankPreferences } from "../domain/moveRank";
 import type { MoveRankPreferencesDto } from "../domain/types";
 import { validLocalFocusPreferences } from "../domain/localFocus";
+import { analysisRefreshIntervalError } from "../domain/preferences";
 
 type Props = {
   windowPin?: MainWindowPinControl;
   preferences: AppPreferences;
   status: string;
+  actualRefreshInterval?: number | null;
+  refreshIntervalPending?: boolean;
   disabled?: boolean;
   scoreLeadAvailable?: boolean;
   onChange: (preferences: AppPreferences) => void;
@@ -26,7 +29,7 @@ type Props = {
   onRailVisibility: (side: "left" | "right", visible: boolean) => void;
 };
 
-export function PreferencesPanel({ preferences, status, disabled = false, scoreLeadAvailable = true, onChange, onRestoreWorkspace, workspaceDisabled, windowGeometryStatus, windowGeometryDisabled, onResetWindowGeometry, railVisibilityDisabled = false, onRailVisibility, windowPin }: Props) {
+export function PreferencesPanel({ preferences, status, actualRefreshInterval, refreshIntervalPending, disabled = false, scoreLeadAvailable = true, onChange, onRestoreWorkspace, workspaceDisabled, windowGeometryStatus, windowGeometryDisabled, onResetWindowGeometry, railVisibilityDisabled = false, onRailVisibility, windowPin }: Props) {
   function update(patch: Partial<AppPreferences>) {
     onChange({ ...preferences, ...patch });
   }
@@ -40,6 +43,7 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
       <AutoLoadEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       <NodeAnalysisReuseEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       <MoveRankEditor preferences={preferences} disabled={disabled} onChange={onChange} />
+      <AnalysisRefreshEditor preferences={preferences} disabled={disabled} onChange={onChange} actualRefreshInterval={actualRefreshInterval} refreshIntervalPending={refreshIntervalPending} />
       <LocalFocusEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       <FlashVisitsEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       {windowPin ? <fieldset className="preferences-grid">
@@ -340,6 +344,33 @@ function MoveRankEditor({ preferences, disabled, onChange }: Pick<Props, "prefer
     }}>{t("rank.apply")}</button>
     <button type="button" disabled={disabled || edited === null} onClick={() => { setEdited(null); setError(false); }}>{t("rank.cancel")}</button>
     <button type="button" onClick={() => { setEdited(readMoveRankPreferences(defaultMoveRankPreferences)); setError(false); }}>{t("rank.restore")}</button>
+  </fieldset>;
+}
+
+function AnalysisRefreshEditor({ preferences, disabled, onChange, actualRefreshInterval, refreshIntervalPending }: Pick<Props, "preferences" | "disabled" | "onChange" | "actualRefreshInterval" | "refreshIntervalPending">) {
+  const [edited, setEdited] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+  const saved = preferences.analysisRefreshIntervalCentiseconds;
+  const value = Number(edited ?? saved);
+  const valid = /^\d+$/.test(edited ?? String(saved)) && !analysisRefreshIntervalError(value);
+  useEffect(() => {
+    if (edited !== null && Number(edited) === saved) setEdited(null);
+  }, [saved]);
+  return <fieldset className="preferences-grid" disabled={disabled}>
+    <legend>{t("refresh.title")}</legend>
+    <label>{t("refresh.interval")}<input type="number" min={1} step={1} value={edited ?? String(saved)}
+      onChange={event => { setEdited(event.target.value); setError(false); }} /></label>
+    {valid ? <p>{t("refresh.conversion").replace("{value}", (BigInt(value) * 10n).toString())}</p> : null}
+    <p>{t("refresh.help")}</p>
+    <p role="status">{t("refresh.saved").replace("{value}", String(saved))} · {actualRefreshInterval == null
+      ? t("refresh.inactive") : t("refresh.actual").replace("{value}", String(actualRefreshInterval))}
+      {refreshIntervalPending || actualRefreshInterval !== saved ? ` · ${t("refresh.pending")}` : ""}</p>
+    {error ? <p role="alert">{t("refresh.invalid")}</p> : null}
+    <button type="button" disabled={disabled || edited === null} onClick={() => {
+      if (!valid) { setError(true); return; }
+      onChange({ ...preferences, analysisRefreshIntervalCentiseconds: value });
+    }}>{t("refresh.apply")}</button>
+    <button type="button" disabled={disabled || edited === null} onClick={() => { setEdited(null); setError(false); }}>{t("refresh.cancel")}</button>
   </fieldset>;
 }
 

@@ -13,6 +13,11 @@ import { defaultMoveRankPreferences, readMoveRankPreferences } from "./moveRank"
 import { defaultLocalFocusPreferences } from "./localFocus";
 import type { LocalFocusPreferencesDto } from "./types";
 
+export function analysisRefreshIntervalError(value: number): string | null {
+  return Number.isSafeInteger(value) && value > 0 ? null
+    : "Analysis refresh interval must be a positive exact JSON integer in centiseconds.";
+}
+
 export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
 export type GraphPerspective = "black" | "sideToPlay";
@@ -50,6 +55,7 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   granularDisplay: GranularDisplay;
   moveRank: MoveRankPreferencesDto;
   localFocus: LocalFocusPreferencesDto;
+  analysisRefreshIntervalCentiseconds: number;
   defaultMaxVisits: number;
   flashAnalysisVisits: number;
   taskSingleStageConditions: AnalysisStageConditionsDto;
@@ -109,6 +115,7 @@ export const defaultAppPreferences: AppPreferences = {
   granularDisplay: defaultGranularDisplay,
   moveRank: defaultMoveRankPreferences,
   localFocus: defaultLocalFocusPreferences,
+  analysisRefreshIntervalCentiseconds: 10,
   defaultMaxVisits: 800,
   flashAnalysisVisits: 1,
   defaultBoardWidth: 19,
@@ -260,6 +267,7 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
     granularDisplay: readGranularDisplay(value?.granularDisplay),
     moveRank: readMoveRankPreferences(value?.moveRank),
     localFocus: { ...defaultLocalFocusPreferences, ...value?.localFocus },
+    analysisRefreshIntervalCentiseconds: value?.analysisRefreshIntervalCentiseconds === undefined ? 10 : value.analysisRefreshIntervalCentiseconds,
     defaultMaxVisits,
     flashAnalysisVisits: value?.flashAnalysisVisits === undefined ? 1 : value.flashAnalysisVisits,
     defaultBoardWidth: integerValue(value?.defaultBoardWidth, defaultAppPreferences.defaultBoardWidth, 2, 25),

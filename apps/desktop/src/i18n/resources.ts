@@ -1,5 +1,16 @@
 // Complete compatibility resource. New consumers add their keys here before use.
 export const baseResources = {
+  "refresh.title": "本地分析结果刷新间隔",
+  "refresh.interval": "刷新间隔（厘秒）",
+  "refresh.conversion": "相当于 {value} 毫秒（1 厘秒 = 10 毫秒）",
+  "refresh.help": "普通本地 GTP 与同树重点分析共用。应用成功后清除旧关注意图，安全更新同一搜索树，保留结果及累计预算；不会解除暂停或抢占任务。",
+  "refresh.saved": "已保存：{value} 厘秒",
+  "refresh.actual": "当前普通分析实际：{value} 厘秒",
+  "refresh.inactive": "当前无已绑定的普通本地分析流",
+  "refresh.pending": "等待安全更新或下一次合法普通分析；不会自动启动或重试",
+  "refresh.invalid": "请输入可精确序列化的正整数厘秒（不超过 9007199254740991）。",
+  "refresh.apply": "应用刷新间隔",
+  "refresh.cancel": "取消刷新间隔",
   "focus.title": "同树重点分析",
   "focus.help": "关注点会更新当前普通分析结果；多点平分总计 50% 的搜索增益。完成或暂停后仍保留关注圈，离开局面后清除关注。",
   "focus.visits": "关注点目标计算量",

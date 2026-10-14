@@ -203,7 +203,13 @@ fn local_focus_production_parser_replaces_stronger_whole_slot_and_preserves_seco
     let mut resource = (*run.qualified_resource.unwrap()).clone();
     resource.resources.iter_mut().find(|resource| resource.component == "executable").unwrap().sha256 = "20c4ede9f39455ab3c019ada7a22a6e4d7696361161feed5c56f2c42d1507bd0".into();
     engine.manager.set_qualified_resource_for_tests(resource);
-    engine.manager.set_continuous_preferences(true, budget).unwrap();
+    let preferences = crate::continuous_analysis::PreferencesState::default();
+    let prefs_path = engine.directory.join("refresh-preferences.json");
+    let mut settings = preferences.load(&prefs_path, &engine.manager).unwrap().preferences;
+    settings.continuous_analysis_enabled = true;
+    settings.continuous_budget = budget;
+    settings.analysis_refresh_interval_centiseconds = app_model::AnalysisRefreshIntervalDto(17);
+    let mut settings = preferences.save(&prefs_path, &engine.manager, settings).unwrap();
     let request = crate::bind_selected_node_job(&state, run.run_id.clone(), opened.generation, NodePath::default(), AnalysisJobModeDto::Continuous, None).unwrap();
     engine.manager.follow_continuous_position(request);
     let next = || loop {
@@ -213,6 +219,7 @@ fn local_focus_production_parser_replaces_stronger_whole_slot_and_preserves_seco
         }
     };
     let high = next();
+    assert_eq!(engine.manager.snapshot().local_focus.actual_interval_centiseconds, Some(17));
     assert_eq!(state.attach_from_job_event(&high).unwrap().snapshot.primary_analysis.unwrap().visits, 10000);
     let before = state.serialize().unwrap();
     std::fs::write(engine.directory.join("analysis-frame"), payload(1000, "E5", "-0.3")).unwrap();
@@ -241,8 +248,20 @@ fn local_focus_production_parser_replaces_stronger_whole_slot_and_preserves_seco
     assert!(primary.ownership.unwrap().iter().all(|value| (*value + 0.3).abs() < 0.001));
     assert_eq!(adopted.snapshot.secondary_analysis.unwrap().visits, 999);
     std::fs::write(engine.directory.join("analysis-frame"), "info move F6 visits 1000 winrate 0.6 order 0 pv F6 rootInfo visits 1000 winrate 0.6").unwrap();
-    engine.manager.local_focus_action(app_model::LocalFocusRequestDto { run_id: high.run_id.clone(), job_id: high.job_id.clone(), generation: high.generation, node_path: high.node_path.clone(), action: app_model::LocalFocusActionDto::Clear }).unwrap();
+    let retained = state.serialize().unwrap();
+    settings.analysis_refresh_interval_centiseconds = app_model::AnalysisRefreshIntervalDto(37);
+    let before_failure = engine.manager.snapshot().local_focus;
+    assert!(preferences.save(&engine.directory, &engine.manager, settings.clone()).is_err());
+    assert_eq!(engine.manager.snapshot().local_focus, before_failure);
+    assert_eq!(app_preferences::load_from_path(&prefs_path).unwrap().preferences.analysis_refresh_interval_centiseconds.0, 17);
+    preferences.save(&prefs_path, &engine.manager, settings).unwrap();
+    assert!(engine.manager.snapshot().local_focus.points.is_empty());
+    assert!(state.attach_from_job_event(&low).is_none());
+    assert_eq!(state.serialize().unwrap(), retained);
     let same_tree = next();
+    assert_eq!(same_tree.job_id, high.job_id);
+    assert_eq!(engine.manager.snapshot().local_focus.actual_interval_centiseconds, Some(37));
+    assert_eq!(app_preferences::load_from_path(&prefs_path).unwrap().preferences.analysis_refresh_interval_centiseconds.0, 37);
     let continued = state.attach_from_job_event(&same_tree).unwrap();
     assert!(continued.snapshot.primary_analysis.unwrap().ownership.unwrap().iter().all(|value| (*value + 0.3).abs() < 0.001));
     loop {

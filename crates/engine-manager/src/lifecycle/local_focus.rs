@@ -13,6 +13,9 @@ pub(super) struct Owner {
     pub(super) height: u8,
     pub(super) color: &'static str,
     pending: bool,
+    pub(super) interval: app_model::AnalysisRefreshIntervalDto,
+    pub(super) refresh_eligible: bool,
+    actual_interval: Option<u64>,
 }
 impl Owner {
     pub(super) fn owns_job(&self, run_id: &str, job_id: &str) -> bool {
@@ -35,6 +38,7 @@ impl Owner {
             node_path: self.identity.as_ref().map(|id| id.node_path.clone()),
             points: self.points.iter().map(|point| point.value.clone()).collect(),
             withdrawal_pending: self.pending,
+            actual_interval_centiseconds: self.actual_interval,
         }
     }
     fn change(&mut self) {
@@ -48,7 +52,7 @@ impl Owner {
         self.points.iter().filter(|point| point.value.status == Status::Active).map(|point| &point.value.vertex)
     }
     pub(super) fn command(&self, color: &str) -> String {
-        let mut command = format!("kata-analyze {color} interval 10 rootInfo true ownership true");
+        let mut command = format!("kata-analyze {color} interval {} rootInfo true ownership true", self.interval.0);
         let count = self.active().count();
         if count > 0 {
             let probability = 0.5 / count as f64;
@@ -92,11 +96,12 @@ impl Owner {
     pub(super) fn applied(&mut self, command: u32, revision: u64) {
         self.applied = revision;
         if self.revision == revision {
+            self.actual_interval = self.refresh_eligible.then_some(self.interval.0);
             self.output = Some(LocalFocusOutputDto { command, lineage: self.lineage });
             self.pending = false;
         }
     }
-    pub(super) fn drained(&mut self) { self.pending = false; }
+    pub(super) fn drained(&mut self) { self.pending = false; self.actual_interval = None; }
 }
 
 impl ForegroundEngineManager {
@@ -177,6 +182,24 @@ pub(super) fn reconcile(state: &mut ManagerState) {
         for point in &mut state.local_focus.points {
             if point.value.status == Status::Active { point.value.status = Status::Stopped; }
         }
+    }
+}
+
+pub(super) fn set_refresh_interval(state: &mut ManagerState, interval: app_model::AnalysisRefreshIntervalDto) {
+    if state.analysis_refresh_interval == interval { return; }
+    state.analysis_refresh_interval = interval;
+    if !state.local_focus.refresh_eligible { return; }
+    let running = state.local_focus.identity.as_ref().is_some_and(|id|
+        state.jobs.iter().any(|job| job.job_id == id.job_id && !job.terminal
+            && job.disposition == JobDisposition::Running));
+    let owner = &mut state.local_focus;
+    owner.points.clear();
+    owner.output = None;
+    owner.interval = interval;
+    if running {
+        // The existing ordinary worker drains both finals and rebinds in-place.
+        // No new job, position restore, budget, or timer is created here.
+        owner.change();
     }
 }
 
