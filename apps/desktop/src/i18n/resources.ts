@@ -1,5 +1,10 @@
 // Complete compatibility resource. New consumers add their keys here before use.
 export const baseResources = {
+  "reuse.title": "节点分析结果复用",
+  "reuse.enabled": "保留节点较充分的分析结果",
+  "reuse.help": "仅在已确认来源和局面相同的普通分析中保留较高计算量的完整结果。关闭只影响后续结果采纳，不清除显示或棋谱，不停止计算；显式分析任务仍按自己的预算执行。",
+  "reuse.apply": "应用结果复用设置",
+  "reuse.cancel": "取消结果复用设置",
   "rank.title": "落子评级标准",
   "rank.help": "五条边界按损失从小到大排列，可相等；达到边界归较严重级。应用后同时用于下一手标记、胜率图和问题导航。",
   "rank.mode": "评级判定",

@@ -37,6 +37,7 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
         <span>{status}</span>
       </div>
       <AutoLoadEditor preferences={preferences} disabled={disabled} onChange={onChange} />
+      <NodeAnalysisReuseEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       <MoveRankEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       <FlashVisitsEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       {windowPin ? <fieldset className="preferences-grid">
@@ -291,6 +292,20 @@ function ReviewAutoplayEditor({ preferences, disabled, onChange }: Pick<Props, "
       setEdited(null); setError(false);
     }}>{t("review.autoplay.cancel")}</button>
   </div>;
+}
+
+function NodeAnalysisReuseEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
+  const [edited, setEdited] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (edited === preferences.retainNodeAnalysis) setEdited(null);
+  }, [preferences.retainNodeAnalysis]);
+  return <fieldset className="preferences-grid" disabled={disabled}>
+    <legend>{t("reuse.title")}</legend>
+    <Toggle label={t("reuse.enabled")} checked={edited ?? preferences.retainNodeAnalysis} disabled={disabled} onChange={setEdited} />
+    <p>{t("reuse.help")}</p>
+    <button type="button" disabled={disabled || edited === null} onClick={() => onChange({ ...preferences, retainNodeAnalysis: edited ?? preferences.retainNodeAnalysis })}>{t("reuse.apply")}</button>
+    <button type="button" disabled={disabled || edited === null} onClick={() => setEdited(null)}>{t("reuse.cancel")}</button>
+  </fieldset>;
 }
 
 function MoveRankEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {

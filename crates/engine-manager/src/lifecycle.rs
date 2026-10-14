@@ -54,6 +54,8 @@ mod runtime_control;
 mod runtime_parameters;
 mod runtime_threads;
 mod thread_policy;
+mod analysis_reuse;
+pub use analysis_reuse::OrdinaryAnalysisContext;
 pub use game_move::{GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle};
 
 pub trait AnalysisJobCancel: Send + Sync {
@@ -183,6 +185,7 @@ struct RegisteredJob {
     lane: AnalysisJobLane,
     mode: AnalysisJobModeDto,
     continuous_budget: Option<ContinuousAnalysisBudgetDto>,
+    ordinary_context: Option<Arc<OrdinaryAnalysisContext>>,
     state: AnalysisJobStateDto,
     cancel_deadline: Option<Instant>,
     cleanup_deadline: Option<Instant>,
@@ -268,6 +271,7 @@ struct ManagerState {
     evaluation: Option<evaluation::EvaluationSlot>,
     startup_evaluation: Option<Result<Option<SavedEngineProfile>, String>>,
     evaluation_notice: app_model::EvaluationSnapshotDto,
+    last_ordinary_context: Option<(app_model::AnalysisPublicationScopeDto, Arc<OrdinaryAnalysisContext>)>,
     runtime_control: Option<runtime_control::Slot>,
     runtime_threads: Option<app_model::RuntimeThreadsSnapshotDto>,
     runtime_parameters: Option<app_model::RuntimeParametersSnapshotDto>,
@@ -280,6 +284,7 @@ struct Inner {
     diagnostics: Mutex<std::collections::VecDeque<AttemptCapture>>,
     evaluation_worker: Arc<std::sync::atomic::AtomicBool>,
     runtime_control_writer: Arc<std::sync::atomic::AtomicBool>,
+    retain_node_analysis: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Clone)]
@@ -298,6 +303,7 @@ impl ForegroundEngineManager {
                 diagnostics: Mutex::new(std::collections::VecDeque::new()),
                 evaluation_worker: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 runtime_control_writer: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                retain_node_analysis: std::sync::atomic::AtomicBool::new(true),
                 state: Mutex::new(ManagerState {
                     revision: 0,
                     phase: Phase::NoEngine { failure: None },
@@ -335,6 +341,7 @@ impl ForegroundEngineManager {
                     match_reservation: None,
                     retiring: Vec::new(),
                     evaluation: None,
+                    last_ordinary_context: None,
                     startup_evaluation,
                     evaluation_notice: Default::default(),
                     runtime_control: None,
@@ -898,6 +905,7 @@ impl ForegroundEngineManager {
         let job_id = Uuid::new_v4().to_string();
         self.yield_preloads_locked(&mut state);
         state.jobs.push(RegisteredJob {
+            ordinary_context: None,
             job_id: job_id.clone(),
             query_id: job_id.clone(),
             submitted: true,
@@ -1031,6 +1039,8 @@ impl ForegroundEngineManager {
         };
         let board_width = request.board_width;
         let board_height = request.board_height;
+        let ordinary_context = analysis_reuse::capture(state, &run, &request);
+        state.last_ordinary_context = None;
         let (command, run_id, node_path) = if run.adapter_kind == EngineBackend::KataGoGtp {
             (
                 SelectedCommand::Gtp(Box::new(request)),
@@ -1055,6 +1065,7 @@ impl ForegroundEngineManager {
         };
         self.yield_preloads_locked(state);
         state.jobs.push(RegisteredJob {
+            ordinary_context,
             query_id: job_id.clone(),
             job_id,
             run_id,
@@ -3427,6 +3438,11 @@ fn finish_selected_node_job(
     let mode = job.mode;
     let Some(outcome) = outcome else {
         return;
+    };
+    state.last_ordinary_context = if frame.is_some() && job.submitted {
+        job.ordinary_context.as_ref().map(|context| (started.publication_scope(), context.clone()))
+    } else {
+        None
     };
     if auto_load_recovery::terminal(state, started, outcome, frame.is_some()) {
         frame = None;

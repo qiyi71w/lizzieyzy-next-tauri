@@ -184,8 +184,10 @@ const fourMovePv: AnalysisFrameDto["candidates"] = [
 ];
 
 let root: Root | null = null;
+let snapshotSeq = 1;
 
 beforeEach(() => {
+  snapshotSeq = 1;
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   vi.spyOn(HTMLCanvasElement.prototype, "clientWidth", "get").mockReturnValue(240);
   vi.spyOn(HTMLCanvasElement.prototype, "clientHeight", "get").mockReturnValue(240);
@@ -196,6 +198,7 @@ beforeEach(() => {
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
   backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => ({
     ...initialGame,
+    snapshot_seq: ++snapshotSeq,
     selected_path: path,
     snapshot: {
       path,
@@ -325,6 +328,26 @@ describe("one active Variation Replay across eligible boards", () => {
 
   it("shows the first PV move immediately on both eligible surfaces, then advances once per interval and idles armed", async () => {
     const host = await renderAnalyzedApp();
+    const savedPath = "/tmp/replay.sgf";
+    backend.saveCurrentGame.mockResolvedValueOnce({
+      saved_path: savedPath,
+      captured_generation: initialGame.generation,
+      captured_snapshot_seq: snapshotSeq,
+      current_game: {
+        ...initialGame,
+        snapshot_seq: ++snapshotSeq,
+        dirty: false,
+        native_path: savedPath,
+        snapshot: { ...initialGame.snapshot, primary_analysis: analysisFrame() }
+      }
+    });
+    await act(async () => {
+      (host.querySelector('button[aria-label="保存"]') as HTMLButtonElement).click();
+      await Promise.resolve();
+      await backend.saveCurrentGame.mock.results.at(-1)?.value;
+    });
+    expect(backend.saveCurrentGame).toHaveBeenCalledOnce();
+    expect(host.querySelector(".doc-name")?.textContent?.endsWith(" *")).toBe(false);
     hideCoordinates(host);
     backend.selectCurrentGameNode.mockClear();
     backend.playCurrentGame.mockClear();
@@ -354,6 +377,7 @@ describe("one active Variation Replay across eligible boards", () => {
     expect(mainBoardNumbers(host)).toEqual(["1", "2", "3", "4"]);
     expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
     expect(backend.playCurrentGame).not.toHaveBeenCalled();
+    expect(host.querySelector(".doc-name")?.textContent?.endsWith(" *")).toBe(false);
   });
 
   it("resets on a new candidate or PV sequence and keeps progress for statistics-only updates", async () => {
@@ -628,7 +652,14 @@ async function completeSelectedNode(jobId: string, path: NodePath, frame: Analys
       generation: 1,
       node_path: path,
       outcome: "completed",
-      frame
+      frame,
+      current_game: {
+        ...initialGame,
+        snapshot_seq: ++snapshotSeq,
+        dirty: true,
+        selected_path: path,
+        snapshot: { ...initialGame.snapshot, path, primary_analysis: frame }
+      }
     });
     await backend.classifyProblems.mock.results.at(-1)?.value;
   });

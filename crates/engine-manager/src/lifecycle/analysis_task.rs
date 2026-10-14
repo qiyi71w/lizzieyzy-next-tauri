@@ -313,6 +313,7 @@ impl ForegroundEngineManager {
             let expected = request.work_items.len();
             self.yield_preloads_locked(&mut state);
             state.jobs.push(RegisteredJob {
+                ordinary_context: None,
                 job_id: job_id.clone(),
                 query_id,
                 run_id: request.run_id.clone(),

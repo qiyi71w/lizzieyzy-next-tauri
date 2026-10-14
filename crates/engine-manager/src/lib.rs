@@ -34,6 +34,7 @@ pub use catalog::{
 pub use lifecycle::{
     AnalysisJobCancel, AnalysisJobEventDto, AnalysisJobLane, ContinuationAction, ContinuousPrimaryAction,
     ForegroundEngineConfig, ForegroundEngineManager, GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle,
+    OrdinaryAnalysisContext,
     SelectedNodeJobRequest, SwingAnalysisTaskRequest, WholeGameJobRequest, WholeGameWorkItem,
 };
 

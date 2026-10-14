@@ -72,6 +72,7 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   soundEnabled: boolean;
   scoringRule: ScoringRule;
   continuousAnalysisEnabled: boolean;
+  retainNodeAnalysis: boolean;
   defaultBoardWidth: number;
   defaultBoardHeight: number;
   defaultKomi: number;
@@ -156,6 +157,7 @@ export const defaultAppPreferences: AppPreferences = {
   soundEnabled: true,
   scoringRule: "area",
   continuousAnalysisEnabled: true,
+  retainNodeAnalysis: true,
   autoLoad: { enabled: false, totalVisits: 1 },
   batch: defaultBatchPreferences(),
   continuation: defaultContinuationPreferences(),
@@ -296,6 +298,7 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
     soundEnabled: booleanValue(value?.soundEnabled, defaultAppPreferences.soundEnabled),
     scoringRule: value?.scoringRule === "territory" ? "territory" : "area",
     continuousAnalysisEnabled: booleanValue(value?.continuousAnalysisEnabled, defaultAppPreferences.continuousAnalysisEnabled),
+    retainNodeAnalysis: booleanValue(value?.retainNodeAnalysis, defaultAppPreferences.retainNodeAnalysis),
     recentGamePaths: Array.isArray(value?.recentGamePaths) ? value.recentGamePaths : [],
     recentImageExportDirectory: typeof value?.recentImageExportDirectory === "string" ? value.recentImageExportDirectory : null,
     continuousTimeLimitEnabled: booleanValue(value?.continuousTimeLimitEnabled, defaultAppPreferences.continuousTimeLimitEnabled),

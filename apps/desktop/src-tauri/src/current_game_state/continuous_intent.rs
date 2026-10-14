@@ -11,6 +11,9 @@ mod batch_tests;
 #[cfg(unix)]
 #[path = "continuation_tests.rs"]
 mod continuation_tests;
+#[cfg(unix)]
+#[path = "node_analysis_reuse_tests.rs"]
+mod node_analysis_reuse_tests;
 #[test]
 fn confirmed_departure_hold_survives_navigation_and_preference_reload() {
     let manager = ForegroundEngineManager::new(

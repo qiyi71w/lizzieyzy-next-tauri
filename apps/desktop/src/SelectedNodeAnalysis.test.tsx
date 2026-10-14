@@ -311,34 +311,20 @@ describe("selected-node analysis presentation", () => {
     const ownership = Array.from({ length: 81 }, () => 0.25);
     const policy = Array.from({ length: 81 }, () => 0);
     policy[3 + 3 * 9] = 0.4;
+    const frame: AnalysisFrameDto = {
+      job_id: "job-1", turn: 0, visits: 48, winrate_black: 0.61,
+      score_mean_black: 2.7, score_stdev: 8.2,
+      candidates: [{ vertex: { point: { x: 3, y: 3 } }, visits: 40,
+        winrate_black: 0.62, score_mean_black: 2.8,
+        pv: [{ point: { x: 3, y: 3 } }, { point: { x: 2, y: 2 } }] }],
+      ownership, policy
+    };
     await act(async () => {
       listeners.onJob?.({
-        run_id: "run-1",
-        job_id: "job-1",
-        lane: "selected_node",
-        mode: "finite",
-        generation: 1,
-        node_path: { indices: [] },
-        outcome: "completed",
-        frame: {
-          job_id: "job-1",
-          turn: 0,
-          visits: 48,
-          winrate_black: 0.61,
-          score_mean_black: 2.7,
-          score_stdev: 8.2,
-          candidates: [
-            {
-              vertex: { point: { x: 3, y: 3 } },
-              visits: 40,
-              winrate_black: 0.62,
-              score_mean_black: 2.8,
-              pv: [{ point: { x: 3, y: 3 } }, { point: { x: 2, y: 2 } }]
-            }
-          ],
-          ownership,
-          policy
-        }
+        run_id: "run-1", job_id: "job-1", lane: "selected_node", mode: "finite",
+        generation: 1, node_path: { indices: [] }, outcome: "completed", frame,
+        current_game: { ...initialGame, snapshot_seq: 2, dirty: true,
+          snapshot: { ...initialGame.snapshot, primary_analysis: frame } }
       });
       await Promise.all([
         backend.classifyProblems.mock.results.at(-1)?.value,
@@ -478,6 +464,26 @@ async function publishContinuousProgress(
 }
 
 describe("authoritative finite selected-node completion", () => {
+  it("keeps the accepted display when ordinary retention declines a weaker finite result", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await publishContinuousProgress(1000);
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("1,000");
+    await act(async () => {
+      buttonNamed(host, "分析当前节点").click();
+      await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
+    });
+    await act(async () => {
+      listeners.onJob?.({
+        run_id: "run-1", job_id: "job-1", lane: "selected_node", mode: "finite",
+        generation: 1, node_path: { indices: [] }, outcome: "completed",
+        frame: { ...continuousFrame(10), job_id: "job-1" }, current_game: null
+      });
+    });
+    expect(host.querySelector(".cand-visits")?.textContent).toBe("1,000");
+    expect(host.textContent).not.toContain("此手分析中");
+  });
+
   it("keeps an early terminal result when the finite invoke resolves after Started, Completed, and the empty snapshot", async () => {
     let resolveStart!: (job: {
       run_id: string; job_id: string; lane: "selected_node"; mode: "finite"; state: "queued";
@@ -497,7 +503,9 @@ describe("authoritative finite selected-node completion", () => {
       });
       listeners.onJob?.({
         run_id: "run-1", job_id: "job-finite", lane: "selected_node", mode: "finite",
-        generation: 1, node_path: { indices: [] }, outcome: "completed", frame
+        generation: 1, node_path: { indices: [] }, outcome: "completed", frame,
+        current_game: { ...initialGame, snapshot_seq: 2, dirty: true,
+          snapshot: { ...initialGame.snapshot, primary_analysis: frame } }
       });
       emitContinuousSnapshot("waiting", { job: false });
       resolveStart({
