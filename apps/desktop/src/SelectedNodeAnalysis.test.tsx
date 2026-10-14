@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
+import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as PreferencesModule from "./api/preferences";
@@ -11,6 +11,14 @@ const listeners: {
   onSnapshot?: (snapshot: ForegroundEngineSnapshotDto) => void;
   onJob?: (job: unknown) => void;
 } = {};
+const measurementSetup = vi.hoisted(() => vi.fn());
+vi.mock("./components/EngineSetupPanel", async importOriginal => {
+  const original = await importOriginal<typeof import("./components/EngineSetupPanel")>();
+  return { EngineSetupPanel: (props: ComponentProps<typeof original.EngineSetupPanel>) => {
+    measurementSetup(props);
+    return <original.EngineSetupPanel {...props} />;
+  } };
+});
 const currentGameFixture = vi.hoisted(() => vi.fn());
 const backend = vi.hoisted(() => ({
   getHealth: vi.fn(() => Promise.resolve({ status: "ok" })),
@@ -946,5 +954,44 @@ describe("authoritative continuous selected-node analysis", () => {
 
     expect(host.querySelector(".cand-visits")?.textContent).toBe("12");
     expect(buttonNamed(host, "取消整局")).toBeUndefined();
+  });
+});
+
+describe("authoritative measurement document publication", () => {
+  it("adopts committed fixtures immediately, retains them after hiding, and fences late invocations and snapshots", async () => {
+    const host = await renderApp();
+    const setup = () => measurementSetup.mock.lastCall?.[0] as ComponentProps<typeof import("./components/EngineSetupPanel").EngineSetupPanel>;
+    const publish = setup().onMeasurementStart!();
+    const result: CurrentGameResultDto = {
+      ...initialGame, generation: 40, snapshot_seq: 2, dirty: true, native_path: null,
+      tree: { properties: [{ key: "SZ", values: ["13"] }], children: [] },
+      snapshot: { ...initialGame.snapshot, position: { ...emptyPosition, board_width: 13, board_height: 13 }, personal_comment: "measured fixture" }
+    };
+    const update = { operation_id: "operation-1", row_id: "row-1", run_id: "run-1", current_game: result,
+      serialized: "(;SZ[13]C[measured fixture])", projection: { summary: { ...initialProjection.summary, board_width: 13, board_height: 13 }, moves: [] } };
+    act(() => publish(update));
+    expect(setup().documentGeneration).toBe(40);
+    expect(setup().documentNode).toEqual(result.selected_path);
+    act(() => buttonNamed(host, "文件").click());
+    act(() => buttonNamed(host, "导入棋谱…").click());
+    expect((host.querySelector('textarea[aria-label="棋谱载入文本"]') as HTMLTextAreaElement).value).toBe(update.serialized);
+    expect((host.querySelector('textarea[aria-label="个人评论"]') as HTMLTextAreaElement).value).toBe("measured fixture");
+    expect(host.querySelector(".sgf-tools .document-row strong")?.textContent).toBe("measurement-fixture.sgf *");
+    expect(host.querySelector('.sgf-tools .document-row strong')?.getAttribute("title")).toBe("measurement-fixture.sgf");
+    // Report UI is already hidden: committed publication is independent of its receipt lifetime.
+    expect(setup().visible).toBe(false);
+    const saved = { ...update, current_game: { ...result, generation: 41, snapshot_seq: 3, dirty: false, native_path: "/fixtures/accepted.sgf" } };
+    act(() => publish(saved));
+    expect(host.querySelector(".sgf-tools .document-row strong")?.textContent).toBe("accepted.sgf");
+    expect(host.querySelector('.sgf-tools .document-row strong')?.getAttribute("title")).toBe("/fixtures/accepted.sgf");
+    act(() => publish(update));
+    expect(setup().documentGeneration).toBe(41);
+    const next = setup().onMeasurementStart!();
+    act(() => publish({ ...update, current_game: { ...result, generation: 99 } }));
+    expect(setup().documentGeneration).toBe(41);
+    act(() => next({ ...update, operation_id: "operation-2", current_game: { ...result, generation: 42, snapshot_seq: 4 } }));
+    expect(setup().documentGeneration).toBe(42);
+    act(() => next({ ...update, operation_id: "wrong-operation", current_game: { ...result, generation: 100 } }));
+    expect(setup().documentGeneration).toBe(42);
   });
 });

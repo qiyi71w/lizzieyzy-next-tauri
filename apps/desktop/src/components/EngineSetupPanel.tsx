@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { checkEngineAssets, loadEngineProfilesSettings, reorderEngineProfilesSettings, saveEngineProfilesSettings } from "../api/backend";
 import type { AssetCheckDto, EngineBackendDto, EngineFailureDto, EngineProfileDto, EngineProfileRecordDto, EngineStartupPolicyDto, StartupEvaluationSettingsDto, ForegroundEngineSnapshotDto } from "../domain/types";
-import type { NodePath } from "../domain/types";
+import type { ApplicationMeasurementDocumentDto, NodePath } from "../domain/types";
 import { profileHasPendingChanges, runFromSnapshot, verifiedEngineCapabilitiesLabel } from "../domain/foregroundEngine";
 import { t } from "../i18n/resources";
 import { EngineResourceDetails } from "./EngineResourceDetails";
@@ -24,9 +24,10 @@ type Props = {
   engineSnapshot?: ForegroundEngineSnapshotDto | null;
   engineFailure?: EngineFailureDto | null;
   onProfilesChange?: (profiles: EngineProfileRecordDto[]) => void;
+  onMeasurementStart?: () => (document: ApplicationMeasurementDocumentDto) => void;
 };
 
-export function EngineSetupPanel({ disabled = false, visible = true, documentGeneration = null, documentNode = { indices: [] }, engineSnapshot = null, engineFailure = null, onProfilesChange }: Props) {
+export function EngineSetupPanel({ disabled = false, visible = true, documentGeneration = null, documentNode = { indices: [] }, engineSnapshot = null, engineFailure = null, onProfilesChange, onMeasurementStart }: Props) {
   const [profiles, setProfiles] = useState<EngineProfileRecordDto[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState("default");
   const [profileName, setProfileName] = useState("Local KataGo");
@@ -526,6 +527,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, documentGen
         onProfilesSaved={(saved) => { setProfiles(saved); onProfilesChange?.(saved); }} />}
       {visible && <MeasuredReportPanel target={profiles.find((profile) => profile.id === selectedProfileId)}
         documentGeneration={documentGeneration} documentNode={documentNode}
+        onMeasurementStart={onMeasurementStart}
         inputRevision={JSON.stringify([selectedProfileId, profileName, enginePath, adapterKind, argv, modelPath, configPath, workingDir, maxVisits])}
         disabled={disabled || catalogBusy || modelBusy} beginOperation={beginModelOperation} endOperation={endModelOperation}
         onProfilesSaved={(saved) => { setProfiles(saved); onProfilesChange?.(saved); }} />}

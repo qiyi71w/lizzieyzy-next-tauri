@@ -150,6 +150,7 @@ import {
 import { newDocumentSgf, type NewDocumentParameters } from "./domain/newDocument";
 import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, FileActivationDeliveryDto, ForegroundEngineSnapshotDto, GameDto, GameFileImportDto, MoveVertex, NodePath, PlayerColor, PointDto, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, ScoringActionDto, ScoringSessionDto, SelectedNodeSnapshotDto, SgfMarkupActionDto, SgfMarkupToolDto, SgfTreeNodeDto, StoneDto, TrialSessionDto, WindowGeometryStatusDto } from "./domain/types";
 
+import type { ApplicationMeasurementDocumentDto } from "./domain/types";
 import type { PointSearchScopeDto, SgfAuthoringActionDto, SgfTransformDto } from "./domain/types";
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
 const demoGame = createDemoGame();
@@ -255,6 +256,7 @@ export function App() {
   const [chosenChildren, setChosenChildren] = useState<Map<string, number>>(() => new Map());
   const navigatingRef = useRef(false);
   const documentGenerationRef = useRef(0);
+  const measurementInvocationRef = useRef(0);
   const pendingSelectedPathRef = useRef<NodePath | null>(null);
   const queuedSelectionRef = useRef<{ path: NodePath; generation: number; forward: boolean } | null>(null);
   const pendingBoardIntentRef = useRef<string | null>(null);
@@ -2288,6 +2290,39 @@ export function App() {
     tasks.retireDocument();
   }
 
+  function beginMeasurementDocuments(): (update: ApplicationMeasurementDocumentDto) => void {
+    const invocation = ++measurementInvocationRef.current;
+    let operationId: string | null = null;
+    return (update) => {
+      if (invocation !== measurementInvocationRef.current) return;
+      operationId ??= update.operation_id;
+      if (update.operation_id !== operationId || !update.row_id || !update.run_id) return;
+      const result = update.current_game;
+      const previous = currentGameRef.current;
+      if (previous && (result.generation < previous.generation ||
+          (result.generation === previous.generation && result.snapshot_seq <= previous.snapshot_seq))) return;
+      // A committed fixture remains authoritative even if its report is cancelled or the sheet closes.
+      trialRef.current = null;
+      setTrial(null);
+      scoringRef.current = null;
+      setScoring(null);
+      clearLocalAnalysisSession();
+      adoptCurrentGame(result);
+      beginReviewRequest();
+      pendingSelectedPathRef.current = result.selected_path;
+      setChosenChildren(chosenFromPath(result.selected_path));
+      setSgfText(update.serialized);
+      setCurrentFilePath(result.native_path ?? null);
+      setFallbackFileName(result.native_path ? null : "measurement-fixture.sgf");
+      setDirty(result.dirty);
+      setGame(update.projection);
+      setPositions(replayGamePositions(update.projection));
+      setCurrentMove(result.snapshot.position.move_number);
+      presentCurrentGameAnalysis(result);
+      setKeyboardPlacement(false);
+    };
+  }
+
   async function adoptCommittedReplacement(
     result: CurrentGameResultDto,
     sgfInput: string,
@@ -4207,6 +4242,7 @@ export function App() {
       <div hidden={sheet !== "engine"}>
         <EngineSetupPanel
           visible={sheet === "engine"}
+          onMeasurementStart={beginMeasurementDocuments}
           documentGeneration={currentGame?.generation ?? null}
           documentNode={currentGame?.selected_path ?? { indices: [] }}
           disabled={matchBlocked}

@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { isTauriRuntime } from "../api/backend";
 import { applyMeasuredReport, waitForMeasuredWorker, previewMeasuredScene, restoreMeasuredReport, retireMeasuredReport, reviewMeasuredReport, startMeasuredScene } from "../api/measuredReport";
 import { measureWithWebViewProbe } from "../api/measurementProbe";
-import type { AnalysisScopePreviewDto, EngineProfileRecordDto, MeasuredReviewDto, MeasuredSceneDto, NodePath } from "../domain/types";
+import type { ApplicationMeasurementDocumentDto, AnalysisScopePreviewDto, EngineProfileRecordDto, MeasuredReviewDto, MeasuredSceneDto, NodePath } from "../domain/types";
 import { t } from "../i18n/resources";
 
-type Props = { target?: EngineProfileRecordDto; documentGeneration: number | null; documentNode: NodePath; inputRevision: string; disabled: boolean; beginOperation: () => boolean; endOperation: () => void; onProfilesSaved: (profiles: EngineProfileRecordDto[]) => void };
-export function MeasuredReportPanel({ target, documentGeneration, documentNode, inputRevision, disabled, beginOperation, endOperation, onProfilesSaved }: Props) {
+type Props = { target?: EngineProfileRecordDto; documentGeneration: number | null; documentNode: NodePath; inputRevision: string; disabled: boolean; beginOperation: () => boolean; endOperation: () => void; onProfilesSaved: (profiles: EngineProfileRecordDto[]) => void; onMeasurementStart?: () => (document: ApplicationMeasurementDocumentDto) => void };
+export function MeasuredReportPanel({ target, documentGeneration, documentNode, inputRevision, disabled, beginOperation, endOperation, onProfilesSaved, onMeasurementStart }: Props) {
   const [review, setReview] = useState<MeasuredReviewDto | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [pending, setPending] = useState(false);
@@ -117,7 +117,9 @@ export function MeasuredReportPanel({ target, documentGeneration, documentNode, 
       for (const [key, value] of Object.entries(candidate)) { if (typeof value === "number") parameters[key] = value; }
       const text = await fixture.text();
       if (!current()) return;
-      const report = await measureWithWebViewProbe({ target_id: captured.id, scene: measurementScene, candidate_parameters: parameters, pairs, budget: sceneBudget, fixture_sgf: text, replace_current_document: true });
+      if (!onMeasurementStart) throw new Error("Authoritative measurement document consumer is unavailable");
+      const onDocument = onMeasurementStart();
+      const report = await measureWithWebViewProbe({ target_id: captured.id, scene: measurementScene, candidate_parameters: parameters, pairs, budget: sceneBudget, fixture_sgf: text, replace_current_document: true }, onDocument);
       if (!current()) return;
       const serialized = JSON.stringify(report.report, null, 2);
       setMeasurementReport(serialized);

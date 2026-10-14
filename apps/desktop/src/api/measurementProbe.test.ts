@@ -17,7 +17,7 @@ it("records schedule/execute times and confirms the final flush for the exact ro
   vi.spyOn(api, "measurementProgress").mockImplementation(async () => ({ ...progress }));
   const submit = vi.spyOn(api, "submitMeasurementProbe").mockResolvedValue();
   const retire = vi.spyOn(api, "retireMeasuredReport").mockResolvedValue();
-  const result = measureWithWebViewProbe(request);
+  const result = measureWithWebViewProbe(request, vi.fn());
   await vi.advanceTimersByTimeAsync(50);
   progress.sampling = false; progress.closing = true;
   await vi.advanceTimersByTimeAsync(30);
@@ -46,7 +46,7 @@ it("retires hidden measurements once and never substitutes a successful report",
   vi.spyOn(api, "measurementProgress").mockResolvedValue(null);
   vi.spyOn(api, "submitMeasurementProbe").mockResolvedValue();
   const retire = vi.spyOn(api, "retireMeasuredReport").mockResolvedValue();
-  const result = measureWithWebViewProbe(request);
+  const result = measureWithWebViewProbe(request, vi.fn());
   hidden.mockReturnValue(true);
   await vi.advanceTimersByTimeAsync(100);
   expect(retire).toHaveBeenCalledTimes(1);
@@ -65,7 +65,7 @@ it("retains the actual send/receive bounds when progress delivery is delayed", a
   vi.spyOn(api, "measurementProgress").mockReturnValue(delayed.promise);
   const submit = vi.spyOn(api, "submitMeasurementProbe").mockResolvedValue();
   vi.spyOn(api, "retireMeasuredReport").mockResolvedValue();
-  const result = measureWithWebViewProbe(request);
+  const result = measureWithWebViewProbe(request, vi.fn());
   await vi.advanceTimersByTimeAsync(10);
   now = 140;
   delayed.resolve({ operation_id: "operation", row_id: "row", scene: "live", round: 1, candidate: false, sampling: true, closing: false, backend_clock_ms: 8 });

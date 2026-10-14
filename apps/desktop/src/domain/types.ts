@@ -794,3 +794,4 @@ export type ApplicationMeasurementRequestDto = {
 export type ApplicationMeasurementProbeDto = { operation_id: string; row_id: string; samples_seconds: number[]; sample_times_ms: [number, number][]; clock_exchange_ms: [number, number, number]; finished: boolean };
 export type ApplicationMeasurementProgressDto = { operation_id: string; row_id: string; scene: MeasuredSceneDto; round: number; candidate: boolean; sampling: boolean; closing: boolean; backend_clock_ms: number };
 export type ApplicationMeasurementResultDto = { report: unknown; evidence: unknown };
+export type ApplicationMeasurementDocumentDto = { operation_id: string; row_id: string; run_id: string; current_game: CurrentGameResultDto; serialized: string; projection: GameDto };

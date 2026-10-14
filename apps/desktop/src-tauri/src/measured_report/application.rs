@@ -26,14 +26,15 @@ pub async fn measure_application(
     app: AppHandle,
     manager: State<'_, ForegroundEngineManager>,
     request: ApplicationMeasurementRequestDto,
+    documents: tauri::ipc::Channel<ApplicationMeasurementDocumentDto>,
 ) -> Result<ApplicationMeasurementResultDto, String> {
     let manager = manager.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || execute(&app, &manager, request))
+    tauri::async_runtime::spawn_blocking(move || execute(&app, &manager, request, &documents))
         .await
         .map_err(|_| "Application measurement worker failed".to_string())?
 }
 
-fn reset_fixture(current: &crate::CurrentGameState, fixture: &str) -> Result<CurrentGameResultDto, String> {
+fn reset_fixture(current: &crate::CurrentGameState, fixture: &str, publish: &dyn Fn(&CurrentGameResultDto) -> Result<(), String>) -> Result<CurrentGameResultDto, String> {
     let admission = current
         .prepare_replacement(fixture, None)
         .map_err(|e| e.to_string())?;
@@ -44,11 +45,13 @@ fn reset_fixture(current: &crate::CurrentGameState, fixture: &str) -> Result<Cur
     current
         .begin_protected_commit(id, &[])
         .map_err(|e| e.to_string())?;
-    current
+    let result = current
         .commit_replacement(id)
         .map_err(|e| e.to_string())?
         .current
-        .ok_or("Fixture document was not committed".into())
+        .ok_or("Fixture document was not committed")?;
+    publish(&result)?;
+    Ok(result)
 }
 fn scope(
     current: &crate::CurrentGameState,
@@ -72,6 +75,7 @@ fn execute(
     app: &AppHandle,
     manager: &ForegroundEngineManager,
     request: ApplicationMeasurementRequestDto,
+    documents: &tauri::ipc::Channel<ApplicationMeasurementDocumentDto>,
 ) -> Result<ApplicationMeasurementResultDto, String> {
     measurement::validate_request(&request)?;
     let lease = manager.begin_setup_operation()?;
@@ -112,10 +116,19 @@ fn execute(
             let sampler = MemorySampler::start(manager)?;
             let start = Instant::now();
             let run = manager.start_independent_measured_scene(&request.target_id, request.scene, &lease)?;
+            let publish = |committed: &CurrentGameResultDto| {
+                let progress = manager.measurement_progress().ok_or("Measurement row unavailable")?;
+                let (current_game, serialized, projection) = current.capture_measurement_document(committed)?;
+                documents.send(ApplicationMeasurementDocumentDto {
+                    operation_id: progress.operation_id, row_id: progress.row_id,
+                    run_id: run.run_id.clone(), current_game, serialized, projection,
+                }).map_err(|error| error.to_string())
+            };
             let observation: Result<(Value, f64), String> = (|| {
                 // Every independent process warms on the actual application path, then a new
                 // document identity prevents retained SGF results from satisfying the timed row.
-                let warm = reset_fixture(&current, &request.fixture_sgf)?;
+                lease.check()?;
+                let warm = reset_fixture(&current, &request.fixture_sgf, &publish)?;
                 exercise(
                     &current,
                     manager,
@@ -125,10 +138,12 @@ fn execute(
                     request.budget,
                     false,
                     &request.fixture_sgf,
+                    &publish,
                 )?;
                 let named_backend=run.qualified_resource.as_ref().and_then(|resource|resource.backend.as_deref()).filter(|backend|matches!(*backend,"CUDA"|"TensorRT"|"OpenCL")).ok_or("Owned application launch did not prove a named GPU backend; CPU receipts cannot qualify")?;
                 cold.push(json!({"round":round,"candidate":candidate,"backend":named_backend}));
-                let game = reset_fixture(&current, &request.fixture_sgf)?;
+                lease.check()?;
+                let game = reset_fixture(&current, &request.fixture_sgf, &publish)?;
                 let count = if request.scene == MeasuredSceneDto::Live {
                     1
                 } else {
@@ -149,6 +164,7 @@ fn execute(
                     request.budget,
                     true,
                     &request.fixture_sgf,
+                    &publish,
                 )?;
                 Ok((row, warmup_seconds))
             })();
@@ -207,6 +223,7 @@ fn exercise(
     budget: u32,
     timed: bool,
     fixture: &str,
+    publish: &dyn Fn(&CurrentGameResultDto) -> Result<(), String>,
 ) -> Result<Value, String> {
     manager.measured_begin_observation(lease)?;
     let started = Instant::now();
@@ -264,7 +281,8 @@ fn exercise(
     }
     let mut response_seconds = 0.0;
     if timed {
-        let probe_game = reset_fixture(current, fixture)?;
+        lease.check()?;
+        let probe_game = reset_fixture(current, fixture, publish)?;
         manager.measured_begin_observation(lease)?;
         let (probe_id, _, probe_task) = dispatch(current, manager, lease, run, &probe_game, i32::MAX as u32)?;
         loop {

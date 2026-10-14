@@ -94,3 +94,14 @@ pub struct ApplicationMeasurementResultDto {
     pub report: serde_json::Value,
     pub evidence: serde_json::Value,
 }
+
+/// One coherent committed fixture, delivered independently of report success or cancellation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplicationMeasurementDocumentDto {
+    pub operation_id: String,
+    pub row_id: String,
+    pub run_id: String,
+    pub current_game: crate::CurrentGameResultDto,
+    pub serialized: String,
+    pub projection: crate::GameDto,
+}
