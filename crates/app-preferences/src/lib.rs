@@ -74,6 +74,8 @@ pub struct AppPreferencesDto {
     pub move_rank: app_model::MoveRankPreferencesDto,
     #[serde(default = "default_max_visits")]
     pub default_max_visits: u32,
+    #[serde(default = "default_flash_analysis_visits")]
+    pub flash_analysis_visits: u32,
     #[serde(default, alias = "taskConditions", skip_serializing_if = "Option::is_none")]
     pub task_single_stage_conditions: Option<AnalysisStageConditionsDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -199,6 +201,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         granular_display: app_model::GranularDisplayDto::default(),
         move_rank: app_model::MoveRankPreferencesDto::default(),
         default_max_visits: default_max_visits(),
+        flash_analysis_visits: default_flash_analysis_visits(),
         task_single_stage_conditions: Some(default_task_single_stage_conditions(default_max_visits())),
         task_overview_conditions: Some(default_task_overview_conditions()),
         task_deep_conditions: Some(default_task_deep_conditions(default_max_visits())),
@@ -301,6 +304,7 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
                     && preferences.granular_display.validate().is_ok()
                     && preferences.move_rank.validate().is_ok()
                     && preferences.network.validate().is_ok()
+                    && preferences.flash_analysis_visits > 0
                     && validate_review_autoplay_interval(preferences.review_autoplay_interval_ms).is_ok() =>
             {
                 let preferences = normalize_app_preferences(preferences);
@@ -371,6 +375,9 @@ pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPr
         return Err("Default komi must be finite.".to_string());
     }
     preferences.continuous_budget.validate()?;
+    if preferences.flash_analysis_visits == 0 {
+        return Err("Explicit flash visits must be a positive integer.".to_string());
+    }
     preferences.auto_load.validate()?;
     preferences.batch.validate()?;
     preferences.continuation.validate()?;
@@ -510,6 +517,10 @@ fn default_candidate_limit() -> u32 {
 
 fn default_max_visits() -> u32 {
     800
+}
+
+fn default_flash_analysis_visits() -> u32 {
+    1
 }
 
 fn default_task_single_stage_conditions(total_visits: u32) -> AnalysisStageConditionsDto {
@@ -704,6 +715,7 @@ mod tests {
             show_candidates: false,
             candidate_limit: 3,
             default_max_visits: 200,
+            flash_analysis_visits: 7,
             task_single_stage_conditions: Some(default_task_single_stage_conditions(200)),
             task_overview_conditions: Some(default_task_overview_conditions()),
             task_deep_conditions: Some(default_task_deep_conditions(800)),

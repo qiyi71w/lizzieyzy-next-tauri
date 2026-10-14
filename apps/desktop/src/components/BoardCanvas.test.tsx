@@ -79,6 +79,23 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("offers current-node flash on empty intersections without placing stones and refuses stale context", () => {
+  const onFlashCurrentNode = vi.fn();
+  const onPointClick = vi.fn();
+  const onGestureRefused = vi.fn();
+  const { canvas, host, rerender } = renderBoard({ onFlashCurrentNode, onPointClick, onGestureRefused, previewScope: initialPreviewScope });
+  canvas.getBoundingClientRect = () => new DOMRect(0, 0, 500, 500);
+  act(() => canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 159, clientY: 159 })));
+  act(() => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent === "闪电分析本手")!.click());
+  expect(onFlashCurrentNode).toHaveBeenCalledExactlyOnceWith();
+  expect(onPointClick).not.toHaveBeenCalled();
+  act(() => canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 159, clientY: 159 })));
+  rerender(position, { ...initialPreviewScope, generation: 2 });
+  act(() => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent === "闪电分析本手")!.click());
+  expect(onFlashCurrentNode).toHaveBeenCalledTimes(1);
+  expect(onGestureRefused).toHaveBeenCalledTimes(1);
+});
+
 it("keeps rectangular corner stones inside the canvas and maps their clicks to the same vertices", () => {
   const corners: PointDto[] = [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 0, y: 2 }, { x: 4, y: 2 }];
   const rectangular: PositionDto = {
@@ -515,6 +532,7 @@ function renderBoard({
   nextMoveMode,
   nextMoveMarkers,
   keyboardPlacement,
+  onFlashCurrentNode,
   allowDrag, allowDoubleClick, authoringEnabled, onAuthoring, onGestureRefused, pointSearchEnabled, onPointSearch
 }: {
   onPointClick?: (point: PointDto) => void;
@@ -532,6 +550,7 @@ function renderBoard({
   onPointSearch?: (point: PointDto, scope: PointSearchScopeDto, captured: ReviewPresentationScope) => void;
   authoringEnabled?: boolean;
   onAuthoring?: (action: SgfAuthoringActionDto, captured: ReviewPresentationScope) => void;
+  onFlashCurrentNode?: () => void;
   onGestureRefused?: (message: string) => void;
 }) {
   const host = document.createElement("div");
@@ -555,6 +574,7 @@ function renderBoard({
         onPointSearch={onPointSearch}
         authoringEnabled={authoringEnabled}
         onAuthoring={onAuthoring}
+        onFlashCurrentNode={onFlashCurrentNode}
         onGestureRefused={onGestureRefused}
       />
     ));

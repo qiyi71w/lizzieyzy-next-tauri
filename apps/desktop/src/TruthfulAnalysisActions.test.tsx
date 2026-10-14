@@ -480,7 +480,7 @@ describe("truthful native analysis actions", () => {
       } } });
     });
     openAnalyzeMenu(host);
-    for (const label of ["分析当前节点", "分析第一子主线", "闪电分析", "试复盘 / 闪电分析(Ctrl+B)", "Preview scope", "Start task", "Continue task"]) {
+    for (const label of ["分析当前节点", "分析第一子主线", "Preview scope", "Start task", "Continue task"]) {
       expect(buttonNamed(host, label).disabled).toBe(true);
       act(() => buttonNamed(host, label).click());
     }
@@ -627,13 +627,13 @@ describe("truthful native analysis actions", () => {
     expect(buttonNamed(host, "分析第一子主线").disabled).toBe(true);
     expect(buttonNamed(host, "AI 解说").disabled).toBe(true);
     expect(buttonNamed(host, "AI 解说").title).toMatch(/尚未接入/);
-    expect(buttonNamed(host, "闪电分析").disabled).toBe(true);
+    expect(buttonNamed(host, "闪电分析").disabled).toBe(false);
     expect(host.querySelector('button[aria-label="闪电分析"]')).toBeInstanceOf(HTMLButtonElement);
-    expect((host.querySelector('button[aria-label="闪电分析"]') as HTMLButtonElement).disabled).toBe(true);
+    expect((host.querySelector('button[aria-label="闪电分析"]') as HTMLButtonElement).disabled).toBe(false);
 
     openAnalyzeMenu(host);
     const lightning = buttonNamed(host, "试复盘 / 闪电分析(Ctrl+B)");
-    expect(lightning.disabled).toBe(true);
+    expect(lightning.disabled).toBe(false);
     const autoAnalyze = buttonNamed(host, "自动分析");
     expect(autoAnalyze.disabled).toBe(true);
     expect(autoAnalyze.textContent).toBe("自动分析");
@@ -653,6 +653,7 @@ describe("truthful native analysis actions", () => {
     expect(backend.fakeAnalyze).not.toHaveBeenCalled();
     expect(backend.startSelectedNodeAnalysis).not.toHaveBeenCalled();
     expect(backend.startKataGoGameAnalysis).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("不会自动重试");
   });
 
   it("binds current-node and first-child-mainline actions to independent manager-backed commands", async () => {
@@ -1593,6 +1594,80 @@ describe("truthful native analysis actions", () => {
     });
     expect(host.querySelector('[data-analysis-task-state="completed"]')?.textContent)
       .toContain("ended by time + leading candidate visits");
+  });
+
+  it("isolates partial flash from the ordinary draft and resolves blank endpoints including zero", async () => {
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, flashAnalysisVisits: 7 } });
+    const host = await renderApp();
+    await readyEngine(host);
+    const scope = host.querySelector('select[aria-label="Analysis scope"]') as HTMLSelectElement;
+    const side = host.querySelector('select[aria-label="Side to play"]') as HTMLSelectElement;
+    await act(async () => { scope.value = "all_branches"; scope.dispatchEvent(new Event("change", { bubbles: true })); });
+    await act(async () => { side.value = "white"; side.dispatchEvent(new Event("change", { bubbles: true })); });
+    openAnalyzeMenu(host);
+    await act(async () => { buttonNamed(host, "闪电分析部分范围…").click(); });
+    expect(scope.value).toBe("first_child_mainline");
+    expect(side.value).toBe("both");
+    expect(scope.disabled).toBe(true);
+    expect(backend.previewAnalysisScope).toHaveBeenLastCalledWith(expect.objectContaining({ scope: expect.objectContaining({ interval: { start: 0, end: 1 } }) }));
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+    await act(async () => { buttonNamed(host, "取消闪电范围 / 返回普通任务").click(); });
+    expect(scope.value).toBe("all_branches");
+    expect(side.value).toBe("white");
+    expect((host.querySelector('select[aria-label="Analysis strategy"]') as HTMLSelectElement).value).toBe("all_positions_two_stage");
+    openAnalyzeMenu(host);
+    await act(async () => { buttonNamed(host, "闪电分析部分范围…").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    expect(backend.startAnalysisTask).toHaveBeenLastCalledWith(expect.objectContaining({
+      strategy: "single_stage", preview: expect.objectContaining({ scope: expect.objectContaining({ mode: "first_child_mainline", interval: { start: 0, end: 1 }, to_play: null }) }),
+      conditions: { time_seconds: { enabled: false, value: 10 }, total_visits: { enabled: true, value: 7 }, leading_candidate_visits: { enabled: false, value: 500 } }
+    }));
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  });
+
+  it("rejects out-of-range flash intervals and a changed Run until explicit recapture", async () => {
+    const host = await renderApp();
+    const ready = await readyEngine(host);
+    openAnalyzeMenu(host);
+    await act(async () => { buttonNamed(host, "闪电分析部分范围…").click(); });
+    const end = host.querySelector('input[aria-label="Position interval end"]') as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(end, "9");
+      end.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    expect(host.textContent).toContain("within 0–1");
+    expect(buttonNamed(host, "Start task").disabled).toBe(true);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(end, "");
+      end.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    if (ready.lifecycle.state !== "ready") throw new Error("ready expected");
+    const replacementRun = { ...ready.lifecycle.run, run_id: "replacement" };
+    await act(async () => { listeners.onSnapshot?.({ ...ready, revision: 9, lifecycle: { state: "ready", run: replacementRun } }); });
+    expect(buttonNamed(host, "Start task").disabled).toBe(true);
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("Preview again and confirm");
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    expect(backend.startAnalysisTask).toHaveBeenCalledWith(expect.objectContaining({ runId: "replacement" }));
+  });
+
+  it("captures all branches with only committed flash visits and leaves a conflicting ordinary draft unchanged", async () => {
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: { ...defaultAppPreferences, flashAnalysisVisits: 3 } });
+    const host = await renderApp();
+    await readyEngine(host);
+    const side = host.querySelector('select[aria-label="Side to play"]') as HTMLSelectElement;
+    await act(async () => { side.value = "white"; side.dispatchEvent(new Event("change", { bubbles: true })); });
+    openAnalyzeMenu(host);
+    await act(async () => { buttonNamed(host, "闪电分析全部分支").click(); });
+    expect(taskRuntime.snapshot?.scope).toEqual({ mode: "all_branches", current_node: { indices: [] }, branch_choices: [], interval: null, to_play: null });
+    expect(taskRuntime.snapshot?.strategy).toBe("single_stage");
+    expect(taskRuntime.snapshot?.conditions.total_visits).toEqual({ enabled: true, value: 3 });
+    expect(side.value).toBe("white");
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
   });
 
 });

@@ -31,6 +31,11 @@ const browserPreferencesKey = "lizzieyzy-next-app-preferences";
 const browserUnreadableKey = `${browserPreferencesKey}.unreadable`;
 const isTauriRuntime = () => typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
 
+function flashVisitsError(value: number): string | null {
+  return Number.isInteger(value) && value > 0 && value <= 4294967295
+    ? null : "Explicit flash visits must be a positive integer no greater than 4294967295.";
+}
+
 export async function loadAppPreferences(): Promise<AppPreferencesLoadResult> {
   if (!isTauriRuntime()) return loadBrowserPreferences();
   const result = await invoke<AppPreferencesLoadResult>("load_app_preferences");
@@ -49,6 +54,7 @@ export async function saveAppPreferences(preferences: AppPreferences): Promise<A
   }
   const error = newGameDefaultsError(preferences)
     ?? continuousBudgetError(preferences)
+    ?? flashVisitsError(preferences.flashAnalysisVisits)
     ?? taskConditionsError(preferences.taskSingleStageConditions)
     ?? taskStageConditionsError(preferences.taskOverviewConditions, preferences.taskDeepConditions)
     ?? taskConditionsError(preferences.taskSwingOverviewConditions)
@@ -118,6 +124,7 @@ function loadBrowserPreferences(): AppPreferencesLoadResult {
     const preferences = normalizeAppPreferences(JSON.parse(raw) as Partial<AppPreferences>);
     const error = newGameDefaultsError(preferences)
       ?? continuousBudgetError(preferences)
+      ?? flashVisitsError(preferences.flashAnalysisVisits)
       ?? taskConditionsError(preferences.taskSingleStageConditions)
       ?? taskStageConditionsError(preferences.taskOverviewConditions, preferences.taskDeepConditions)
       ?? taskConditionsError(preferences.taskSwingOverviewConditions)
