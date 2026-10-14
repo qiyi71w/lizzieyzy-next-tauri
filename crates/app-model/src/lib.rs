@@ -425,6 +425,8 @@ impl std::error::Error for CurrentGameError {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CandidateMoveDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<u32>,
     pub vertex: MoveVertex,
     pub visits: u32,
     pub winrate_black: f32,
@@ -912,6 +914,8 @@ pub struct ContinuousAnalysisSnapshotDto {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ForegroundEngineSnapshotDto {
+    #[serde(default)]
+    pub local_focus: LocalFocusSnapshotDto,
     pub revision: u64,
     pub lifecycle: ForegroundEngineLifecycleDto,
     #[serde(default)]
@@ -933,6 +937,7 @@ impl ForegroundEngineSnapshotDto {
         Self {
             revision,
             lifecycle,
+            local_focus: LocalFocusSnapshotDto::default(),
             continuous: ContinuousAnalysisSnapshotDto::default(),
             auto_load: AutoLoadSnapshotDto::default(),
             auto_load_recovery: None,
@@ -987,6 +992,8 @@ pub struct AppHealthDto {
     pub notes: Vec<String>,
 }
 
+mod local_focus;
+pub use local_focus::*;
 mod network;
 pub use network::*;
 mod yike;
@@ -1471,6 +1478,7 @@ mod foreground_engine_wire {
     #[test]
     fn foreground_engine_snapshot_and_failure_keep_snake_case_identities() {
         let snapshot = ForegroundEngineSnapshotDto {
+            local_focus: Default::default(),
             revision: 4,
             auto_load: Default::default(),
             auto_load_recovery: None,
@@ -1598,6 +1606,7 @@ mod foreground_engine_wire {
         qualified_resource: None,
         thread_policy_snapshot: Default::default(), };
         let snapshot = ForegroundEngineSnapshotDto {
+            local_focus: Default::default(),
             revision: 1,
             auto_load: Default::default(),
             auto_load_recovery: None,
@@ -1624,6 +1633,7 @@ mod foreground_engine_wire {
     #[test]
     fn no_engine_omits_clean_failure_and_keeps_attempt_scoped_payload() {
         let clean = ForegroundEngineSnapshotDto {
+            local_focus: Default::default(),
             revision: 1,
             auto_load: Default::default(),
             auto_load_recovery: None,
@@ -1653,6 +1663,7 @@ mod foreground_engine_wire {
             diagnostic_summary: None,
         };
         let failed = ForegroundEngineSnapshotDto {
+            local_focus: Default::default(),
             revision: 3,
             auto_load: Default::default(),
             auto_load_recovery: None,

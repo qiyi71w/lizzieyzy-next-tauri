@@ -24,6 +24,7 @@ fn payload(engine: &str, visits: u32, x: u8, y: u8) -> SgfAnalysisPayload {
         score_stdev: Some(0.5),
         pda: None,
         candidates: vec![CandidateMoveDto {
+            order: None,
             pv_visits: None,
             ownership: None,
             vertex: MoveVertex::Point(PointDto { x, y }),
@@ -419,6 +420,7 @@ fn projectable_frame(visits: u32, x: u8, y: u8) -> AnalysisFrameDto {
         score_mean_black: Some(2.25),
         score_stdev: Some(0.5),
         candidates: vec![CandidateMoveDto {
+            order: None,
             pv_visits: None,
             ownership: None,
             vertex: MoveVertex::Point(PointDto { x, y }),
@@ -440,21 +442,19 @@ fn job_event(
     indices: &[u32],
     frame: Option<AnalysisFrameDto>,
 ) -> AnalysisJobEventDto {
-    AnalysisJobEventDto {
-        run_id: "run-1".into(),
-        job_id: "job-1".into(),
-        lane,
-        mode: AnalysisJobModeDto::Finite,
-        generation,
-        node_path: path(indices),
-        outcome,
-        completed: None,
-        expected: None,
-        remaining: None,
-        frame,
-        failure: None,
-        current_game: None,
-    }
+    AnalysisJobEventDto { local_focus_output: None, run_id: "run-1".into(),
+    job_id: "job-1".into(),
+    lane,
+    mode: AnalysisJobModeDto::Finite,
+    generation,
+    node_path: path(indices),
+    outcome,
+    completed: None,
+    expected: None,
+    remaining: None,
+    frame,
+    failure: None,
+    current_game: None, }
 }
 
 fn continuous_job_event(

@@ -1,6 +1,7 @@
 use super::*;
 use app_model::{AnalysisJobOutcomeDto, ForegroundEngineEventDto, ForegroundEngineLifecycleDto};
 use std::time::{Duration, Instant};
+use engine_manager::EngineProfileCatalog;
 
 fn fixture() -> (LiveFixture, CurrentGameState, String, u64) {
     let engine = LiveFixture::new();
@@ -174,6 +175,108 @@ fn ordinary_reuse_incompatible_context_and_explicit_replacement_take_priority() 
     assert_eq!(child_result.snapshot.primary_analysis.unwrap().visits, 10000);
     let root = state.select_path(NodePath::default(), generation).unwrap();
     assert_eq!(root.snapshot.secondary_analysis.unwrap().visits, 999);
+}
+
+#[test]
+fn local_focus_production_parser_replaces_stronger_whole_slot_and_preserves_secondary() {
+    let engine = LiveFixture::new();
+    std::fs::write(engine.directory.join("engine"), concat!("#!/usr/bin/env python3\n", include_str!("../../../../../crates/engine-manager/tests/fixtures/rules_process.py"))).unwrap();
+    std::fs::write(engine.directory.join("mode"), "analysis_focus_payload").unwrap();
+    let mut profile = engine.catalog.get("test").unwrap();
+    profile.profile.adapter = app_model::EngineAdapterSettings::KataGoGtp(app_model::KataGoSettings { model_path: Some("model".into()), config_path: Some("config".into()), max_visits: 100000 });
+    engine.catalog.upsert(profile);
+    let payload = |visits, point, value| format!("info move {point} visits {visits} winrate 0.6 order 0 pv {point} rootInfo visits {visits} winrate 0.6 ownership {}", vec![value; 81].join(" "));
+    std::fs::write(engine.directory.join("analysis-frame"), payload(10000, "D4", "0.8")).unwrap();
+    let state = CurrentGameState::default();
+    state.connect_analysis_manager(engine.manager.clone());
+    let budget = app_model::ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: true, continuous_time_limit_seconds: 2, ..Default::default() };
+    engine.manager.set_continuous_preferences(false, budget).unwrap();
+    let opened = state.replace("(;SZ[9]RU[Chinese]KM[7.5]C[personal]LZOP2[Secondary 50.0 999\nmove E5 visits 999 winrate 5000 pv E5];B[dd])", None).unwrap();
+    state.select_path(NodePath::default(), opened.generation).unwrap();
+    engine.manager.start("test").unwrap();
+    let until = Instant::now() + Duration::from_secs(5);
+    let run = loop {
+        if let ForegroundEngineLifecycleDto::Ready { run } = engine.manager.snapshot().lifecycle { break run; }
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let mut resource = (*run.qualified_resource.unwrap()).clone();
+    resource.resources.iter_mut().find(|resource| resource.component == "executable").unwrap().sha256 = "20c4ede9f39455ab3c019ada7a22a6e4d7696361161feed5c56f2c42d1507bd0".into();
+    engine.manager.set_qualified_resource_for_tests(resource);
+    engine.manager.set_continuous_preferences(true, budget).unwrap();
+    let request = crate::bind_selected_node_job(&state, run.run_id.clone(), opened.generation, NodePath::default(), AnalysisJobModeDto::Continuous, None).unwrap();
+    engine.manager.follow_continuous_position(request);
+    let next = || loop {
+        if let ForegroundEngineEventDto::Job { job } = engine.events.recv_timeout(Duration::from_secs(5)).unwrap() {
+            assert!(!matches!(job.outcome, AnalysisJobOutcomeDto::Failed | AnalysisJobOutcomeDto::Timeout), "{job:?}");
+            if job.outcome == AnalysisJobOutcomeDto::Progress { break job; }
+        }
+    };
+    let high = next();
+    assert_eq!(state.attach_from_job_event(&high).unwrap().snapshot.primary_analysis.unwrap().visits, 10000);
+    let before = state.serialize().unwrap();
+    std::fs::write(engine.directory.join("analysis-frame"), payload(1000, "E5", "-0.3")).unwrap();
+    engine.manager.local_focus_action(app_model::LocalFocusRequestDto { run_id: high.run_id.clone(), job_id: high.job_id.clone(), generation: high.generation, node_path: high.node_path.clone(), action: app_model::LocalFocusActionDto::Add { vertex: MoveVertex::Point(app_model::PointDto { x: 4, y: 4 }), max_visits: 5000 } }).unwrap();
+    assert_eq!(state.serialize().unwrap(), before, "intent does not overwrite the displayed cache");
+    assert!(state.attach_from_job_event(&high).is_none(), "retired output cannot publish");
+    let low = next();
+    let mut retired_run = low.clone();
+    retired_run.run_id = uuid::Uuid::new_v4().to_string();
+    let mut retired_board = low.clone();
+    retired_board.generation += 1;
+    let mut retired_node = low.clone();
+    retired_node.node_path = NodePath { indices: vec![0] };
+    let mut retired_lineage = low.clone();
+    retired_lineage.local_focus_output.as_mut().unwrap().lineage += 1;
+    for stale in [retired_run, retired_board, retired_node, retired_lineage] {
+        assert!(state.attach_from_job_event(&stale).is_none());
+        assert_eq!(state.serialize().unwrap(), before);
+    }
+    let adopted = state.attach_from_job_event(&low).unwrap();
+    let primary = adopted.snapshot.primary_analysis.unwrap();
+    assert_eq!(primary.visits, 1000);
+    assert_eq!(primary.candidates.len(), 1);
+    assert_eq!(primary.candidates[0].order, Some(0));
+    assert_eq!(primary.candidates[0].vertex, MoveVertex::Point(app_model::PointDto { x: 4, y: 4 }));
+    assert!(primary.ownership.unwrap().iter().all(|value| (*value + 0.3).abs() < 0.001));
+    assert_eq!(adopted.snapshot.secondary_analysis.unwrap().visits, 999);
+    std::fs::write(engine.directory.join("analysis-frame"), "info move F6 visits 1000 winrate 0.6 order 0 pv F6 rootInfo visits 1000 winrate 0.6").unwrap();
+    engine.manager.local_focus_action(app_model::LocalFocusRequestDto { run_id: high.run_id.clone(), job_id: high.job_id.clone(), generation: high.generation, node_path: high.node_path.clone(), action: app_model::LocalFocusActionDto::Clear }).unwrap();
+    let same_tree = next();
+    let continued = state.attach_from_job_event(&same_tree).unwrap();
+    assert!(continued.snapshot.primary_analysis.unwrap().ownership.unwrap().iter().all(|value| (*value + 0.3).abs() < 0.001));
+    loop {
+        if let ForegroundEngineEventDto::Job { job } = engine.events.recv_timeout(Duration::from_secs(5)).unwrap() {
+            if job.outcome == AnalysisJobOutcomeDto::TimeLimited {
+                let final_result = state.attach_from_job_event(&job).expect("fully drained current limited result remains attachable");
+                let final_frame = final_result.snapshot.primary_analysis.unwrap();
+                assert_eq!(final_frame.visits, 32);
+                assert_eq!(final_frame.winrate_black, 0.01);
+                assert!(final_frame.ownership.unwrap().iter().all(|value| (*value + 0.3).abs() < 0.001));
+                break;
+            }
+        }
+    }
+    let finite = crate::bind_selected_node_job(&state, high.run_id.clone(), high.generation, NodePath::default(), AnalysisJobModeDto::Finite, Some(16)).unwrap();
+    let started = engine.manager.start_selected_node_job(finite).unwrap();
+    loop {
+        if let ForegroundEngineEventDto::Job { job } = engine.events.recv_timeout(Duration::from_secs(5)).unwrap() {
+            if job.job_id == started.job_id && job.outcome == AnalysisJobOutcomeDto::Completed {
+                assert!(job.frame.as_ref().unwrap().ownership.is_none(), "new tree cannot inherit the previous tree map");
+                assert!(state.attach_from_job_event(&job).unwrap().snapshot.primary_analysis.unwrap().ownership.is_none(), "new tree clears stored ownership instead of splicing it");
+                break;
+            }
+        }
+    }
+    assert!(engine.manager.snapshot().local_focus.points.is_empty());
+    let path = engine.directory.join("focus.sgf");
+    state.save_to_path(path.to_string_lossy().into(), NodePath::default()).unwrap();
+    let bytes = std::fs::read_to_string(path).unwrap();
+    let reopened = CurrentSgfDocument::open(&bytes).unwrap().snapshot(&NodePath::default()).unwrap();
+    assert_eq!(reopened.primary_analysis.unwrap().visits, 1000);
+    assert_eq!(reopened.secondary_analysis.unwrap().visits, 999);
+    assert!(!bytes.contains("target_visits"));
+    assert!(!bytes.contains("withdrawal_pending"));
 }
 
 #[test]

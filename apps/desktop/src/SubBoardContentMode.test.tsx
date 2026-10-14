@@ -408,7 +408,9 @@ async function completeSelectedNode(jobId: string, path: NodePath, frame: Analys
       generation: 1,
       node_path: path,
       outcome: "completed",
-      frame
+      frame,
+      current_game: { ...initialGame, snapshot_seq: 2, dirty: true, selected_path: path,
+        snapshot: { ...initialGame.snapshot, path, primary_analysis: frame } }
     });
     await backend.classifyProblems.mock.results.at(-1)?.value;
   });

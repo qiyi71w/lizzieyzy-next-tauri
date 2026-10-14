@@ -1,3 +1,4 @@
+import { validLocalFocusPreferences } from "../domain/localFocus";
 import { validMoveRankPreferences } from "../domain/moveRank";
 import { validReviewAutoplayInterval } from "../domain/reviewAutoplay";
 import { invoke } from "@tauri-apps/api/core";
@@ -46,6 +47,7 @@ export async function loadAppPreferences(): Promise<AppPreferencesLoadResult> {
 }
 
 export async function saveAppPreferences(preferences: AppPreferences): Promise<AppPreferences> {
+  if (!validLocalFocusPreferences(preferences.localFocus)) throw new Error("Focus visits must be positive and opacity must be 0–100.");
   if (!validMoveRankPreferences(preferences.moveRank)) {
     throw new Error("Move Rank thresholds must be finite and nondecreasing.");
   }

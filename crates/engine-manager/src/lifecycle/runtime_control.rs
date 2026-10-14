@@ -190,9 +190,15 @@ impl Transaction {
         }
         let deadline = self.deadline;
         thread::spawn(move || {
-            let mut guard = stdin.lock().expect("engine stdin lock");
-            // Check again after waiting for stdin. A retired request cannot write into a newer Run.
-            let state = manager.lock();
+            let (state, mut guard) = match manager.lock_gtp_writer(&stdin, deadline) {
+                Ok(guards) => guards,
+                Err(message) => {
+                    writer_busy.store(false, Ordering::Release);
+                    let _ = sender.send(Err(message));
+                    return;
+                }
+            };
+            // Lock order matches teardown; contention never retains ManagerState.
             let valid = state
                 .runtime_control
                 .as_ref()

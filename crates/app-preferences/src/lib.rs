@@ -74,6 +74,8 @@ pub struct AppPreferencesDto {
     pub granular_display: app_model::GranularDisplayDto,
     #[serde(default)]
     pub move_rank: app_model::MoveRankPreferencesDto,
+    #[serde(default)]
+    pub local_focus: app_model::LocalFocusPreferencesDto,
     #[serde(default = "default_max_visits")]
     pub default_max_visits: u32,
     #[serde(default = "default_flash_analysis_visits")]
@@ -203,6 +205,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         candidate_limit: default_candidate_limit(),
         granular_display: app_model::GranularDisplayDto::default(),
         move_rank: app_model::MoveRankPreferencesDto::default(),
+        local_focus: app_model::LocalFocusPreferencesDto::default(),
         default_max_visits: default_max_visits(),
         flash_analysis_visits: default_flash_analysis_visits(),
         task_single_stage_conditions: Some(default_task_single_stage_conditions(default_max_visits())),
@@ -295,9 +298,25 @@ pub fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPrefe
     preferences
 }
 
+fn parse_preferences(contents: &str) -> Result<AppPreferencesDto, serde_json::Error> {
+    let mut value: serde_json::Value = serde_json::from_str(contents)?;
+    if value.get("localFocus").is_none() {
+        let legacy = value.get("ui").unwrap_or(&value);
+        let visits = legacy.get("tracking-analysis-max-visits")
+            .or_else(|| legacy.get("tracking-engine-max-visits"))
+            .and_then(serde_json::Value::as_u64).filter(|value| *value > 0 && *value <= u32::MAX as u64).unwrap_or(500);
+        let outline = legacy.get("show-tracking-point-outline").and_then(serde_json::Value::as_bool).unwrap_or(true);
+        let opacity = legacy.get("tracking-point-outline-opacity").and_then(serde_json::Value::as_i64).unwrap_or(92).clamp(0, 100);
+        if let Some(object) = value.as_object_mut() {
+            object.insert("localFocus".into(), serde_json::json!({"maxVisits": visits, "showOutline": outline, "outlineOpacity": opacity}));
+        }
+    }
+    serde_json::from_value(value)
+}
+
 pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String> {
     match fs::read_to_string(path) {
-        Ok(contents) => match serde_json::from_str::<AppPreferencesDto>(&contents) {
+        Ok(contents) => match parse_preferences(&contents) {
             Ok(preferences)
                 if preferences.continuous_budget.validate().is_ok()
                     && preferences.auto_load.validate().is_ok()
@@ -306,6 +325,7 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
                     && preferences.match_defaults.validate().is_ok()
                     && preferences.granular_display.validate().is_ok()
                     && preferences.move_rank.validate().is_ok()
+                    && preferences.local_focus.validate().is_ok()
                     && preferences.network.validate().is_ok()
                     && preferences.flash_analysis_visits > 0
                     && validate_review_autoplay_interval(preferences.review_autoplay_interval_ms).is_ok() =>
@@ -357,6 +377,7 @@ pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPr
     validate_review_autoplay_interval(preferences.review_autoplay_interval_ms)?;
     preferences.granular_display.validate()?;
     preferences.move_rank.validate()?;
+    preferences.local_focus.validate()?;
     preferences.network.validate()?;
     preferences.match_defaults.validate()?;
     if let Some(shares) = preferences.workspace_shares {
@@ -683,6 +704,7 @@ mod tests {
         AppPreferencesDto {
             granular_display: app_model::GranularDisplayDto::default(),
             move_rank: app_model::MoveRankPreferencesDto::default(),
+            local_focus: app_model::LocalFocusPreferencesDto::default(),
             network: app_model::NetworkSettingsDto::default(),
             yike_locator: None,
             yike_sync: app_model::YikeSyncPreferencesDto::default(),
@@ -1047,6 +1069,32 @@ mod tests {
             assert_eq!(load_from_path(&path).unwrap().preferences, original);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_focus_migrates_positive_legacy_visits_and_saves_only_ordinary_settings() {
+        for (legacy, expected) in [(937, 937), (0, 500), (-5, 500)] {
+            let (dir, path) = temp_prefs();
+            let mut value = serde_json::to_value(sample_preferences()).unwrap();
+            value.as_object_mut().unwrap().remove("localFocus");
+            value["ui"] = serde_json::json!({"tracking-analysis-max-visits": legacy, "show-tracking-point-outline": false, "tracking-point-outline-opacity": 92, "tracking-point-fill-color": "obsolete"});
+            fs::write(&path, value.to_string()).unwrap();
+            let loaded = load_from_path(&path).unwrap().preferences;
+            assert_eq!(loaded.local_focus.max_visits, expected);
+            assert!(!loaded.local_focus.show_outline);
+            let saved = save_to_path(&path, loaded).unwrap();
+            assert_eq!(load_from_path(&path).unwrap().preferences, saved);
+            assert!(!fs::read_to_string(&path).unwrap().contains("tracking-point-fill"));
+            let mut invalid = saved.clone();
+            invalid.local_focus.max_visits = 0;
+            assert!(save_to_path(&path, invalid).is_err());
+            assert_eq!(load_from_path(&path).unwrap().preferences, saved);
+            let mut replacement = saved.clone();
+            replacement.local_focus.max_visits = 1200;
+            assert!(atomic_replace_file_with(&path, &serde_json::to_string(&replacement).unwrap(), |_, _| Err(io::Error::other("focus replace failure"))).is_err());
+            assert_eq!(load_from_path(&path).unwrap().preferences, saved);
+            fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     #[test]

@@ -92,6 +92,8 @@ for raw in sys.stdin:
         print(f"={number}", flush=True)
         if mode == "analysis_invalid":
             print("info move D4 visits 2 winrate NaN", flush=True)
+        elif mode == "analysis_focus_payload":
+            print(pathlib.Path("analysis-frame").read_text(), flush=True)
         else:
             print(analysis_frame(0.6 + stream_count / 100), flush=True)
         if mode == "analysis_closed_stdout":
@@ -104,6 +106,9 @@ for raw in sys.stdin:
         print(analysis_frame(0.01), flush=True)
         print("", flush=True)
         if focus_stream and mode == "analysis_focus_final":
+            pathlib.Path("held").write_text(number)
+            while not pathlib.Path("release").exists(): time.sleep(0.005)
+        if mode == "analysis_focus_update_hold" and stream_count > 1:
             pathlib.Path("held").write_text(number)
             while not pathlib.Path("release").exists(): time.sleep(0.005)
         if mode == "analysis_hold_stop":

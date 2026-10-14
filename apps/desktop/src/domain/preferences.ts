@@ -10,6 +10,8 @@ import type { ContinuationPreferencesDto } from "./types";
 import { defaultContinuationPreferences } from "./continuation";
 import type { MoveRankPreferencesDto } from "./types";
 import { defaultMoveRankPreferences, readMoveRankPreferences } from "./moveRank";
+import { defaultLocalFocusPreferences } from "./localFocus";
+import type { LocalFocusPreferencesDto } from "./types";
 
 export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
@@ -47,6 +49,7 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   candidateLimit: number;
   granularDisplay: GranularDisplay;
   moveRank: MoveRankPreferencesDto;
+  localFocus: LocalFocusPreferencesDto;
   defaultMaxVisits: number;
   flashAnalysisVisits: number;
   taskSingleStageConditions: AnalysisStageConditionsDto;
@@ -105,6 +108,7 @@ export const defaultAppPreferences: AppPreferences = {
   candidateLimit: 8,
   granularDisplay: defaultGranularDisplay,
   moveRank: defaultMoveRankPreferences,
+  localFocus: defaultLocalFocusPreferences,
   defaultMaxVisits: 800,
   flashAnalysisVisits: 1,
   defaultBoardWidth: 19,
@@ -255,6 +259,7 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
     candidateLimit: integerValue(value?.candidateLimit, defaultAppPreferences.candidateLimit, 1, 20),
     granularDisplay: readGranularDisplay(value?.granularDisplay),
     moveRank: readMoveRankPreferences(value?.moveRank),
+    localFocus: { ...defaultLocalFocusPreferences, ...value?.localFocus },
     defaultMaxVisits,
     flashAnalysisVisits: value?.flashAnalysisVisits === undefined ? 1 : value.flashAnalysisVisits,
     defaultBoardWidth: integerValue(value?.defaultBoardWidth, defaultAppPreferences.defaultBoardWidth, 2, 25),

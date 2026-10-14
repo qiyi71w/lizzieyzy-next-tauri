@@ -9,6 +9,8 @@ import type { PointSearchScopeDto } from "../domain/types";
 import { BoardCanvas } from "./BoardCanvas";
 import * as backend from "../api/backend";
 import { defaultGranularDisplay } from "../domain/granularDisplay";
+import { defaultLocalFocusPreferences } from "../domain/localFocus";
+import { defaultMoveRankPreferences } from "../domain/moveRank";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -695,4 +697,55 @@ it("never substitutes root ownership for a selected candidate lacking its own pa
   expect(button?.disabled).toBe(true);
   act(() => root?.render(<BoardCanvas position={position} analysis={{ ...frame, candidates: [{ ...frame.candidates[0], ownership: Array(81).fill(-0.4) }] }} selectedCandidateIndex={0} overlayMode="ownership" />));
   expect(host.textContent).not.toContain("不能用根局面领地代替");
+});
+
+it("toggles watched outlines without changing ordinary candidate text or dispatching focus", () => {
+  const host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  const onFocusPoint = vi.fn();
+  const watched = [{ vertex: analysis.candidates[1].vertex, target_visits: 500, visits: 500, status: "completed" as const }];
+  const render = (showOutline: boolean) => act(() => root?.render(<BoardCanvas position={position} analysis={analysis} showCoordinates={false}
+    focusPoints={watched} focusPreferences={{ ...defaultLocalFocusPreferences, showOutline }} focusGrading={defaultMoveRankPreferences}
+    focusAnalysis={analysis} onFocusPoint={onFocusPoint} />));
+  render(true);
+  expect(drawStroke.mock.calls.some(([color]) => color === "#808080")).toBe(true);
+  const text = drawText.mock.calls.map(([label]) => label);
+  drawStroke.mockClear();
+  render(false);
+  expect(drawText.mock.calls.map(([label]) => label)).toEqual(text);
+  expect(drawStroke.mock.calls.some(([color]) => color === "#808080")).toBe(false);
+  expect(onFocusPoint).not.toHaveBeenCalled();
+});
+
+it("allows watched removal during Pause and rejects context-retired focus input", () => {
+  const host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  const onFocusPoint = vi.fn();
+  const onPointClick = vi.fn();
+  const onGestureRefused = vi.fn();
+  const point = { x: 4, y: 4 };
+  const render = (enabled: boolean, watched: boolean, scope = initialPreviewScope) => act(() => root?.render(
+    <BoardCanvas position={position} previewScope={scope} focusEnabled={enabled}
+      focusPoints={watched ? [{ vertex: { point }, target_visits: 500, visits: 42, status: "stopped" }] : []}
+      onFocusPoint={onFocusPoint} onPointClick={onPointClick} onGestureRefused={onGestureRefused} />
+  ));
+  render(false, false);
+  const canvas = host.querySelector("canvas")!;
+  setCanvasBounds(canvas);
+  const open = () => act(() => canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, ...renderedPoint(4, 4) })));
+  const action = (label: string) => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent === label)!;
+  open();
+  expect(action("关注此点").disabled).toBe(true);
+  render(true, false);
+  act(() => action("关注此点").click());
+  expect(onFocusPoint).toHaveBeenCalledExactlyOnceWith(point, initialPreviewScope);
+  expect(onPointClick).not.toHaveBeenCalled();
+  render(false, true);
+  open();
+  expect(action("移除关注").disabled).toBe(false);
+  act(() => action("移除关注").click());
+  expect(onFocusPoint).toHaveBeenCalledTimes(2);
+  open();
+  render(false, true, { ...initialPreviewScope, generation: 2 });
+  act(() => action("移除关注").click());
+  expect(onFocusPoint).toHaveBeenCalledTimes(2);
+  expect(onGestureRefused).toHaveBeenCalledOnce();
 });

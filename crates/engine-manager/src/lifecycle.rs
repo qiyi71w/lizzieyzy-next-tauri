@@ -47,6 +47,7 @@ pub use continuation::ContinuationAction;
 mod evaluation_tests;
 mod game_move;
 mod gtp_analysis;
+mod local_focus;
 mod gtp_control;
 mod match_reservation;
 mod ordinary_rules;
@@ -253,6 +254,7 @@ struct ManagerState {
     auto_load: auto_load::Owner,
     batch: batch::Owner,
     continuation: continuation::Owner,
+    local_focus: local_focus::Owner,
     subscribers: Vec<Sender<ForegroundEngineEventDto>>,
     continuous_intent: Option<bool>,
     continuous_budget: ContinuousAnalysisBudgetDto,
@@ -326,6 +328,7 @@ impl ForegroundEngineManager {
                     auto_load: auto_load::Owner::default(),
                     batch: batch::Owner::default(),
                     continuation: continuation::Owner::default(),
+                    local_focus: local_focus::Owner::default(),
                     last_activity: Instant::now(),
                     subscribers: Vec::new(),
                     continuous_intent: None,
@@ -3320,6 +3323,7 @@ fn snapshot_from(state: &ManagerState) -> ForegroundEngineSnapshotDto {
     };
     let mut snapshot = ForegroundEngineSnapshotDto::with_lifecycle(state.revision, lifecycle);
     snapshot.continuous = continuous_snapshot(state);
+    snapshot.local_focus = state.local_focus.snapshot();
     snapshot.auto_load = state.auto_load.snapshot.clone();
     snapshot.auto_load_recovery = auto_load_recovery::phase(state);
     snapshot.selected_node_job = current_non_terminal_job(state, AnalysisJobLane::SelectedNode);
@@ -3329,6 +3333,7 @@ fn snapshot_from(state: &ManagerState) -> ForegroundEngineSnapshotDto {
 }
 
 fn publish_snapshot(state: &mut ManagerState) {
+    local_focus::reconcile(state);
     auto_load_recovery::observe_failure(state);
     auto_load::refresh(state);
     state.revision = state.revision.saturating_add(1);
@@ -3336,7 +3341,12 @@ fn publish_snapshot(state: &mut ManagerState) {
     publish_event(state, ForegroundEngineEventDto::Snapshot { snapshot });
 }
 
-fn publish_event(state: &mut ManagerState, event: ForegroundEngineEventDto) {
+fn publish_event(state: &mut ManagerState, mut event: ForegroundEngineEventDto) {
+    if let ForegroundEngineEventDto::Job { job } = &mut event {
+        if state.local_focus.owns_job(&job.run_id, &job.job_id) {
+            job.local_focus_output = state.local_focus.output;
+        }
+    }
     batch::observe(state, &event);
     continuation::observe(state, &event);
     state
@@ -3420,21 +3430,19 @@ fn selected_node_job_event(
     frame: Option<app_model::AnalysisFrameDto>,
     failure: Option<EngineFailureDto>,
 ) -> AnalysisJobEventDto {
-    AnalysisJobEventDto {
-        run_id: started.run_id.clone(),
-        job_id: started.job_id.clone(),
-        lane: started.lane,
-        mode: started.mode,
-        generation: started.generation,
-        node_path: started.node_path.clone(),
-        outcome,
-        completed: None,
-        expected: None,
-        remaining: None,
-        frame,
-        failure,
-        current_game: None,
-    }
+    AnalysisJobEventDto { local_focus_output: None, run_id: started.run_id.clone(),
+    job_id: started.job_id.clone(),
+    lane: started.lane,
+    mode: started.mode,
+    generation: started.generation,
+    node_path: started.node_path.clone(),
+    outcome,
+    completed: None,
+    expected: None,
+    remaining: None,
+    frame,
+    failure,
+    current_game: None, }
 }
 
 fn started_from(job: &RegisteredJob) -> AnalysisJobStartedDto {

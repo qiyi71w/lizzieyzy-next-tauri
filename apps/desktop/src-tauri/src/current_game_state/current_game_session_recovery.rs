@@ -20,6 +20,7 @@ fn payload() -> SgfAnalysisPayload {
         score_stdev: Some(0.5),
         pda: None,
         candidates: vec![CandidateMoveDto {
+            order: None,
             pv_visits: None,
             ownership: None,
             vertex: MoveVertex::Point(PointDto { x: 3, y: 3 }),

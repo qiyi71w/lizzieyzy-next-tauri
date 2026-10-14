@@ -965,21 +965,19 @@ pub(super) fn whole_game_job_event(
     frame: Option<app_model::AnalysisFrameDto>,
     failure: Option<EngineFailureDto>,
 ) -> AnalysisJobEventDto {
-    AnalysisJobEventDto {
-        run_id: started.run_id.clone(),
-        job_id: started.job_id.clone(),
-        lane: started.lane,
-        mode: started.mode,
-        generation: started.generation,
-        node_path,
-        outcome,
-        completed,
-        expected,
-        remaining,
-        frame,
-        failure,
-        current_game: None,
-    }
+    AnalysisJobEventDto { local_focus_output: None, run_id: started.run_id.clone(),
+    job_id: started.job_id.clone(),
+    lane: started.lane,
+    mode: started.mode,
+    generation: started.generation,
+    node_path,
+    outcome,
+    completed,
+    expected,
+    remaining,
+    frame,
+    failure,
+    current_game: None, }
 }
 
 fn target_query_id(job_id: &str) -> String {
