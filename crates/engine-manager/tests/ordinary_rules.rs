@@ -1307,6 +1307,28 @@ mod controlled {
     }
 
     #[test]
+    fn leased_continuous_progress_reaches_budget_without_ordinary_focus_owner() {
+        let rig = focus_rig("analysis_focus_live");
+        let events = rig.manager.subscribe();
+        let budget = ContinuousAnalysisBudgetDto { continuous_time_limit_enabled: false, continuous_visits_limit_enabled: true, continuous_visits_limit: 32, ..Default::default() };
+        rig.manager.set_continuous_preferences(false, budget).unwrap();
+        let lease = rig.manager.begin_setup_operation().unwrap();
+        let started = rig.manager.start_measured_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Continuous), &lease).unwrap();
+        let progress = event(&events, AnalysisJobOutcomeDto::Progress);
+        assert_eq!(progress.job_id, started.job_id);
+        assert!(progress.frame.as_ref().unwrap().visits >= 32);
+        assert!(progress.local_focus_output.is_none());
+        assert_eq!(rig.manager.local_focus_publication(&progress), Ok(false));
+        assert!(rig.manager.snapshot().local_focus.job_id.is_none());
+        let completed = event(&events, AnalysisJobOutcomeDto::VisitsLimited);
+        assert_eq!(completed.job_id, started.job_id);
+        assert!(completed.frame.unwrap().visits >= 32);
+        assert!(completed.local_focus_output.is_none());
+        assert!(lease.check().is_ok());
+        rig.manager.teardown().unwrap();
+    }
+
+    #[test]
     fn local_focus_limit_keeps_complete_final_publishable_until_context_retirement() {
         let rig = focus_rig("analysis_focus_live");
         let events = rig.manager.subscribe();

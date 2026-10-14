@@ -289,13 +289,23 @@ impl ForegroundEngineManager {
             app_model::PlayerColor::Black => "B",
             app_model::PlayerColor::White => "W",
         };
-        let continuous = started.mode == AnalysisJobModeDto::Continuous;
-        if continuous {
+        // Freeze ownership for this stream invocation. A retired ordinary owner
+        // must keep rejecting output rather than fall back to an unfenced stream.
+        // Explicit leased Continuous jobs do not own the ordinary target.
+        let focus_owned = {
             let mut state = self.lock();
-            state.local_focus.bind(started);
-            state.local_focus.height = request.board_height;
-            state.local_focus.color = color;
-        }
+            let eligible = started.mode == AnalysisJobModeDto::Continuous
+                && !state.continuous_departing
+                && state.continuous_target.as_ref().is_some_and(|target|
+                    target.run_id == started.run_id && target.generation == started.generation
+                        && target.node_path == started.node_path);
+            if eligible {
+                state.local_focus.bind(started);
+                state.local_focus.height = request.board_height;
+                state.local_focus.color = color;
+            }
+            eligible
+        };
         let began = Instant::now();
         let mut last: Option<AnalysisFrameDto> = None;
         let outcome = 'ordinary: loop {
@@ -336,7 +346,7 @@ impl ForegroundEngineManager {
                         // Check the output owner before parsing and again before publishing.
                         {
                             let state = self.lock();
-                            if continuous && (!state.local_focus.matches(started) || state.local_focus.output.map(|output| output.command) != Some(stream.id)) { continue; }
+                            if focus_owned && (!state.local_focus.matches(started) || state.local_focus.output.map(|output| output.command) != Some(stream.id)) { continue; }
                         }
                         let mut frame = katago_protocol::parse_gtp_analysis(
                             &line, Uuid::parse_str(&started.job_id).map_err(|error| error.to_string())?,
@@ -344,14 +354,14 @@ impl ForegroundEngineManager {
                         )?;
                         let mut state = self.lock();
                         if admitting_run(&state.phase, &started.run_id).is_none()
-                            || (continuous && (!state.local_focus.matches(started)
+                            || (focus_owned && (!state.local_focus.matches(started)
                             || state.local_focus.output.map(|output| output.command) != Some(stream.id))) { continue; }
                         retain_same_tree_maps(&mut frame, last.as_ref());
                         let Some(job) = state.jobs.iter_mut().find(|job| job.job_id == started.job_id && !job.terminal && job.disposition == JobDisposition::Running) else { continue; };
                         job.state = AnalysisJobStateDto::Searching;
                         state.last_activity = Instant::now();
                         publish_event(&mut state, ForegroundEngineEventDto::Job { job: selected_node_job_event(started, AnalysisJobOutcomeDto::Progress, Some(frame.clone()), None) });
-                        if continuous { state.local_focus.observe(Some(&frame), Instant::now()); }
+                        if focus_owned { state.local_focus.observe(Some(&frame), Instant::now()); }
                         publish_snapshot(&mut state);
                         last = Some(frame);
                     }
@@ -363,7 +373,7 @@ impl ForegroundEngineManager {
             };
             let final_line = self.drain_analysis_stream(started, &stream, header)?;
             let mut state = self.lock();
-            let final_eligible = continuous && state.local_focus.matches(started) && state.local_focus.output.is_some_and(|output| output.command == stream.id && output.lineage > 0);
+            let final_eligible = focus_owned && state.local_focus.matches(started) && state.local_focus.output.is_some_and(|output| output.command == stream.id && output.lineage > 0);
             if final_eligible && state.jobs.iter().any(|job| job.job_id == started.job_id && job.disposition == JobDisposition::Running && !job.terminal) {
                 if let Some(line) = final_line {
                     let mut frame = katago_protocol::parse_gtp_analysis(&line, Uuid::parse_str(&started.job_id).map_err(|error| error.to_string())?, request.board_width, request.board_height, position.dto().moves.len() as u32)?;
