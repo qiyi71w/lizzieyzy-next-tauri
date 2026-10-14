@@ -647,6 +647,34 @@ export function App() {
     ?? null;
   const replaySteps = variationReplayPointSteps(replayCandidate);
   const replayIdentityKeyValue = `${matchFrameIdentity ?? "review"}:${variationReplayIdentityKey(variationReplayIdentity(selectedPath, replayCandidate))}`;
+  const previewInputOwnerRef = useRef<{ element: HTMLElement; identity: string; reference: boolean } | null>(null);
+  const referenceInputIdentity = `${candidateIdentity}:${replayIdentityKeyValue}`;
+  useEffect(() => { previewInputOwnerRef.current = null; }, [candidateIdentity, hideCandidates, preferences.workspaceVisibility.right, preferences.subBoardContentMode]);
+  useEffect(() => {
+    if (previewInputOwnerRef.current?.reference) previewInputOwnerRef.current = null;
+  }, [referenceInputIdentity]);
+  useEffect(() => {
+    function releaseInput(event: Event) {
+      const owner = previewInputOwnerRef.current;
+      if (owner && (!(event.target instanceof Node) || !owner.element.contains(event.target))) {
+        previewInputOwnerRef.current = null;
+      }
+    }
+    window.addEventListener("focusin", releaseInput);
+    window.addEventListener("blur", releaseInput);
+    return () => {
+      window.removeEventListener("focusin", releaseInput);
+      window.removeEventListener("blur", releaseInput);
+    };
+  }, []);
+  function previewOwnsPage() {
+    if (previewCandidateIndex !== null && !hideCandidates && overlayMode === "candidates") return true;
+    const owner = previewInputOwnerRef.current;
+    return owner !== null && !hideCandidates && preferences.workspaceVisibility.right
+      && owner.element.isConnected && !owner.element.closest("[hidden]")
+      && owner.identity === (owner.reference ? referenceInputIdentity : candidateIdentity)
+      && (!owner.reference || preferences.subBoardContentMode === "variation");
+  }
   const replayArmed = preferences.variationReplayEnabled && replaySteps.length > 0;
   const replayEligible = replayArmed && (
     (preferences.showCandidates && overlayMode === "candidates" && !hideCandidates)
@@ -909,9 +937,11 @@ export function App() {
       handleMoveSelect(reviewMax);
     });
     shortcutRegistry.bind("review.back-10", () => {
+      if (previewOwnsPage()) return;
       handleMoveSelect(Math.max(0, reviewIndex - 10));
     });
     shortcutRegistry.bind("review.forward-10", () => {
+      if (previewOwnsPage()) return;
       handleMoveSelect(Math.min(reviewMax, reviewIndex + 10));
     });
     shortcutRegistry.bind("review.select-candidate", (event) => {
@@ -981,6 +1011,8 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [
+    previewCandidateIndex,
+    referenceInputIdentity,
     candidateVisibility.visible,
     candidateVisibility.eligible,
     activeScope,
@@ -4029,6 +4061,10 @@ export function App() {
           currentPosition={currentPosition}
           selectedCandidateIndex={selectedCandidateIndex}
           previewCandidateIndex={previewCandidateIndex}
+          onPreviewInputOwnerChange={(element, active, reference) => {
+            if (active) previewInputOwnerRef.current = { element, reference, identity: reference ? referenceInputIdentity : candidateIdentity };
+            else if (previewInputOwnerRef.current?.element === element) previewInputOwnerRef.current = null;
+          }}
           onSelectCandidate={(index) => { if (preferences.workspaceVisibility.right) selectCandidate(index); }}
           onSelectProblem={(problem) => { if (preferences.workspaceVisibility.right) handleProblemSelect(problem); }}
           selectedPath={selectedPath}

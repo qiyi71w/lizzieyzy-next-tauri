@@ -225,6 +225,15 @@ export function BoardCanvas({
     clearTimeout(previewTimerRef.current);
   }, []);
   useEffect(() => {
+    const releasePreview = () => cancelCandidatePreview();
+    window.addEventListener("focusin", releasePreview);
+    window.addEventListener("blur", releasePreview);
+    return () => {
+      window.removeEventListener("focusin", releasePreview);
+      window.removeEventListener("blur", releasePreview);
+    };
+  }, []);
+  useEffect(() => {
     setKeyboardPoint((current) => {
       if (!current) return null;
       const next = {

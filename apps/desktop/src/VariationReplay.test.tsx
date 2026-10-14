@@ -232,6 +232,83 @@ afterEach(() => {
 });
 
 describe("one active Variation Replay across eligible boards", () => {
+  it("keeps preview-owned Page input off the current game and releases it to workspace", async () => {
+    const path = { indices: Array<number>(20).fill(0) };
+    let tree: CurrentGameResultDto["tree"] = { properties: [], children: [] };
+    for (let index = 20; index > 0; index -= 1) {
+      tree = { properties: [{ key: index % 2 ? "B" : "W", values: ["aa"] }], children: index === 20 ? [] : [tree] };
+    }
+    preferencesApi.loadAppPreferences.mockResolvedValue({ preferences: {
+      ...defaultAppPreferences, granularDisplay: { ...defaultAppPreferences.granularDisplay, pvLength: 0 }
+    } });
+    const longPv = Array.from({ length: 40 }, (_, index) => ({ point: { x: index % 9, y: Math.floor(index / 9) } }));
+    currentGameFixture.mockResolvedValue({
+      ...initialGame, tree: { properties: [], children: [tree] }, selected_path: path,
+      snapshot: { ...initialGame.snapshot, path, position: { ...emptyPosition, move_number: 20 }, primary_analysis: analysisFrame({ candidates: [{ ...fourMovePv[0], vertex: longPv[0], pv: longPv }] }) }
+    });
+    const host = await renderApp();
+    const grid = host.querySelector<HTMLElement>('[role="grid"]')!;
+    act(() => grid.focus());
+    await act(async () => { grid.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true, cancelable: true })); });
+    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    expect(host.querySelector(".doc-name")?.textContent?.endsWith(" *")).toBe(false);
+    const reference = host.querySelector<HTMLElement>(".subboard-section")!;
+    act(() => reference.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })));
+    for (const key of ["PageUp", "PageDown"]) {
+      await act(async () => { reference.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); });
+    }
+    expect(subBoardNumbers(host)).toHaveLength(40);
+    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    await enableReplay(host);
+    act(() => reference.focus());
+    await act(async () => { reference.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true })); });
+    expect(subBoardNumbers(host)).toEqual(["1"]);
+    for (let index = 1; index < 40; index += 1) await advanceReplay(500);
+    await act(async () => { reference.dispatchEvent(new KeyboardEvent("keydown", { key: "PageDown", bubbles: true })); });
+    expect(subBoardNumbers(host)).toHaveLength(40);
+    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    const workspace = host.querySelector<HTMLElement>('canvas[aria-label="棋盘"]')!;
+    act(() => workspace.focus());
+    const canvas = workspace as HTMLCanvasElement;
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, left: 0, top: 0, width: 240, height: 240, right: 240, bottom: 240, toJSON() {} });
+    act(() => canvas.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, clientX: 33, clientY: 33 })));
+    await advanceReplay(120);
+    await act(async () => { workspace.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true })); });
+    expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+    act(() => canvas.dispatchEvent(new MouseEvent("pointerout", { bubbles: true })));
+    // An old dwell cancelled by focus departure must not reclaim Page input.
+    act(() => canvas.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, clientX: 33, clientY: 33 })));
+    act(() => reference.focus());
+    act(() => workspace.focus());
+    await advanceReplay(500);
+    await act(async () => { workspace.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true, cancelable: true })); });
+    expect(backend.selectCurrentGameNode).toHaveBeenCalledWith({ indices: Array<number>(10).fill(0) }, 1);
+  });
+
+  it.each(["pointer exit", "workspace focus", "hide", "replacement", "Stop"])("releases reference Page ownership on %s despite pending replay", async (release) => {
+    const host = await renderAnalyzedApp();
+    await enableReplay(host);
+    const reference = host.querySelector<HTMLElement>(".subboard-section")!;
+    act(() => reference.focus());
+    if (release === "pointer exit") {
+      act(() => reference.dispatchEvent(new MouseEvent("pointerout", { bubbles: true })));
+    } else if (release === "workspace focus") {
+      act(() => host.querySelector<HTMLElement>('canvas[aria-label="棋盘"]')!.focus());
+    } else if (release === "replacement") {
+      await startWholeGame(host);
+      await emitWholeGameProgress({ indices: [] }, analysisFrame({ job_id: "job-wg", candidates: [{ ...fourMovePv[0], pv: [{ point: { x: 7, y: 7 } }] }] }));
+    } else {
+      act(() => buttonNamed(host, "显示").click());
+      act(() => menuCheck(host, release === "hide" ? "选点列表面板" : "变化回放").click());
+      await flushLast(preferencesApi.saveAppPreferences);
+      if (release === "Stop") act(() => host.querySelector<HTMLElement>('canvas[aria-label="棋盘"]')!.focus());
+    }
+    await advanceReplay(650);
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "PageDown", bubbles: true, cancelable: true })); });
+    expect(backend.selectCurrentGameNode).toHaveBeenCalledWith({ indices: [0] }, 1);
+    expect(backend.playCurrentGame).not.toHaveBeenCalled();
+  });
+
   it("starts disabled and shows the full PV on Variation Sub-Board", async () => {
     const host = await renderApp();
     await readyEngine(host);
