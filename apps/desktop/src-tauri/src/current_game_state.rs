@@ -376,6 +376,21 @@ impl CurrentGameState {
         })
     }
 
+    /// Capture only the exact committed measurement fixture; never mix a newer document's artifacts.
+    pub(crate) fn capture_measurement_document(
+        &self,
+        expected: &CurrentGameResultDto,
+    ) -> Result<(CurrentGameResultDto, String, GameDto), String> {
+        let holder = self.holder.lock().expect("current game state");
+        if holder.generation != expected.generation || holder.snapshot_seq != expected.snapshot_seq {
+            return Err("Measurement fixture was superseded before publication".into());
+        }
+        let document = holder.document.as_ref().ok_or("No current measurement fixture")?;
+        Ok((holder.current_result().map_err(|error| error.to_string())?,
+            document.serialize().map_err(|error| error.to_string())?,
+            document.mainline_projection()))
+    }
+
     pub fn mainline_projection(&self) -> Result<GameDto, CurrentGameError> {
         self.with_document(|document| Ok(document.mainline_projection()))
     }

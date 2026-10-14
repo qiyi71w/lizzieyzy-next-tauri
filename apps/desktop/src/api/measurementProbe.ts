@@ -1,8 +1,8 @@
 import { measureApplication, measurementProgress, retireMeasuredReport, submitMeasurementProbe } from "./measuredReport";
-import type { ApplicationMeasurementProgressDto, ApplicationMeasurementRequestDto, ApplicationMeasurementResultDto } from "../domain/types";
+import type { ApplicationMeasurementDocumentDto, ApplicationMeasurementProgressDto, ApplicationMeasurementRequestDto, ApplicationMeasurementResultDto } from "../domain/types";
 
 /** Samples the actual WebView timer; never substitutes engine timing or synthetic delays. */
-export async function measureWithWebViewProbe(request: ApplicationMeasurementRequestDto): Promise<ApplicationMeasurementResultDto> {
+export async function measureWithWebViewProbe(request: ApplicationMeasurementRequestDto, onDocument: (document: ApplicationMeasurementDocumentDto) => void): Promise<ApplicationMeasurementResultDto> {
   if (document.hidden) throw new Error("Application measurement requires a visible WebView");
   let progress: ApplicationMeasurementProgressDto | null = null;
   let samples: number[] = [];
@@ -54,7 +54,7 @@ export async function measureWithWebViewProbe(request: ApplicationMeasurementReq
     }
   }, 10);
   try {
-    const report = await measureApplication(request);
+    const report = await measureApplication(request, onDocument);
     if (failure) throw failure;
     return report;
   } finally {

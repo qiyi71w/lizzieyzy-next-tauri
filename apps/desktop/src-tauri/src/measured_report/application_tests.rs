@@ -5,6 +5,31 @@ use std::sync::{
 };
 
 #[test]
+fn measurement_fixture_publication_is_committed_and_coherent_even_when_delivery_fails() {
+    let current = crate::CurrentGameState::default();
+    let seen = std::cell::RefCell::new(Vec::new());
+    let fixture = "(;GM[1]FF[4]SZ[9]KM[7.5];B[dd];W[ff])";
+    let first = reset_fixture(&current, fixture, &|result| {
+        let captured = current.capture_measurement_document(result)?;
+        assert_eq!(&captured.0, result);
+        assert_eq!(captured.2.summary.board_width, 9);
+        assert_eq!(captured.2.moves.len(), 2);
+        assert!(captured.1.contains("SZ[9]"));
+        seen.borrow_mut().push(captured);
+        Ok(())
+    }).unwrap();
+    assert_eq!(seen.borrow().len(), 1);
+    let failed = reset_fixture(&current, "(;SZ[13])", &|result| {
+        assert!(result.generation > first.generation);
+        assert_eq!(current.capture_measurement_document(result)?.2.summary.board_width, 13);
+        Err("WebView closed after commit".into())
+    });
+    assert!(failed.unwrap_err().contains("WebView closed"));
+    assert_eq!(current.mainline_projection().unwrap().summary.board_width, 13);
+    assert!(current.capture_measurement_document(&first).is_err());
+}
+
+#[test]
 #[ignore = "requires named real CPU resources; does not qualify GPU reports or WebView timing"]
 fn real_application_measurement_scene_smoke() {
     assert_eq!(std::env::var("LIZZIEYZY_REAL_KATAGO").as_deref(), Ok("1"));
@@ -88,8 +113,8 @@ fn real_application_measurement_scene_smoke() {
                 let run = manager.start_independent_measured_scene("measurement-cpu", scene, &lease)?;
                 assert!(manager.reserve_match("unrelated-match").is_err());
                 let fixture = "(;GM[1]FF[4]SZ[9]KM[7.5]RU[Chinese];B[dd];W[ff])";
-                let game = reset_fixture(&current, fixture)?;
-                let row = exercise(&current, &manager, &lease, &run, &game, 8, true, fixture);
+                let game = reset_fixture(&current, fixture, &|_| Ok(()))?;
+                let row = exercise(&current, &manager, &lease, &run, &game, 8, true, fixture, &|_| Ok(()));
                 let stopped = manager.stop_measured_scene(&run.run_id);
                 let row = row?;
                 stopped?;
