@@ -13,31 +13,27 @@ fn real_katago_gtp_rules_and_exact_selected_positions() {
         .join(format!("promotion-layer-{}.cfg", uuid::Uuid::new_v4()));
     std::fs::write(&layer, "numSearchThreads=2\n").unwrap();
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-    catalog.upsert(SavedEngineProfile {
-        profile_id: "gtp".into(),
-        profile: EngineProfileDto {
-            name: "explicit KataGo GTP".into(),
-            program: std::env::var("LIZZIEYZY_KATAGO_ENGINE").unwrap(),
-            argv: vec![
-                "-config".into(),
-                layer.file_name().unwrap().to_string_lossy().into_owned(),
-                "-override-config".into(),
-                "numSearchThreads=1".into(),
-            ],
-            working_dir: Some(std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap()),
-            adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings {
-                model_path: Some(std::env::var("LIZZIEYZY_KATAGO_MODEL").unwrap()),
-                config_path: Some(std::env::var("LIZZIEYZY_KATAGO_CONFIG").unwrap()),
-                max_visits: 4,
-            }),
-        },
-        thread_policy: Default::default(),
-    });
-    catalog.upsert(SavedEngineProfile {
-        profile_id: "prepared-gtp".into(),
-        profile: catalog.get("gtp").unwrap().profile,
-        thread_policy: Default::default(),
-    });
+    catalog.upsert(SavedEngineProfile { measured_scenes: Default::default(), profile_id: "gtp".into(),
+    profile: EngineProfileDto {
+        name: "explicit KataGo GTP".into(),
+        program: std::env::var("LIZZIEYZY_KATAGO_ENGINE").unwrap(),
+        argv: vec![
+            "-config".into(),
+            layer.file_name().unwrap().to_string_lossy().into_owned(),
+            "-override-config".into(),
+            "numSearchThreads=1".into(),
+        ],
+        working_dir: Some(std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap()),
+        adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings {
+            model_path: Some(std::env::var("LIZZIEYZY_KATAGO_MODEL").unwrap()),
+            config_path: Some(std::env::var("LIZZIEYZY_KATAGO_CONFIG").unwrap()),
+            max_visits: 4,
+        }),
+    },
+    thread_policy: Default::default(), });
+    catalog.upsert(SavedEngineProfile { measured_scenes: Default::default(), profile_id: "prepared-gtp".into(),
+    profile: catalog.get("gtp").unwrap().profile,
+    thread_policy: Default::default(), });
     catalog.set_preload("prepared-gtp", true);
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::default());
     manager.start("gtp").unwrap();
@@ -325,21 +321,19 @@ mod controlled {
             .unwrap();
             std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
             let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-            catalog.upsert(SavedEngineProfile {
-                profile_id: "gtp".into(),
-                profile: EngineProfileDto {
-                    name: "controlled GTP".into(),
-                    program: executable.to_string_lossy().into(),
-                    argv: vec![],
-                    working_dir: Some(dir.to_string_lossy().into()),
-                    adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings {
-                        model_path: Some("model".into()),
-                        config_path: Some("config".into()),
-                        max_visits: 4,
-                    }),
-                },
-                thread_policy: Default::default(),
-            });
+            catalog.upsert(SavedEngineProfile { measured_scenes: Default::default(), profile_id: "gtp".into(),
+            profile: EngineProfileDto {
+                name: "controlled GTP".into(),
+                program: executable.to_string_lossy().into(),
+                argv: vec![],
+                working_dir: Some(dir.to_string_lossy().into()),
+                adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings {
+                    model_path: Some("model".into()),
+                    config_path: Some("config".into()),
+                    max_visits: 4,
+                }),
+            },
+            thread_policy: Default::default(), });
             let manager = ForegroundEngineManager::new(catalog.clone(), ForegroundEngineConfig::for_tests());
             let mut rig = Self {
                 manager,

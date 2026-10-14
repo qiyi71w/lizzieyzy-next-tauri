@@ -113,6 +113,7 @@ impl ForegroundEngineManager {
         self.retire_auto_load()?;
         let old = {
             let mut state = self.lock();
+            if self.measured_reservation(){return Err(continuous_invalid_state(&state,"A measurement scene owns the engine; explicitly Stop before continuation Start."));}
             if state.continuation.epoch != epoch || request.mode != AnalysisJobModeDto::Continuous {
                 return Err(continuous_invalid_state(
                     &state,

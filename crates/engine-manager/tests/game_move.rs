@@ -57,21 +57,19 @@ impl Rig {
             EngineAdapterSettings::GenericGtp(GenericGtpSettings {})
         };
         let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-        catalog.upsert(SavedEngineProfile {
-            profile_id: "engine".into(),
-            profile: EngineProfileDto {
-                name: "pipe fixture".into(),
-                program: executable.to_string_lossy().into(),
-                argv: if kata {
-                    vec![]
-                } else {
-                    GNU_ARGS.map(String::from).into()
-                },
-                working_dir: Some(dir.to_string_lossy().into()),
-                adapter,
+        catalog.upsert(SavedEngineProfile { measured_scenes: Default::default(), profile_id: "engine".into(),
+        profile: EngineProfileDto {
+            name: "pipe fixture".into(),
+            program: executable.to_string_lossy().into(),
+            argv: if kata {
+                vec![]
+            } else {
+                GNU_ARGS.map(String::from).into()
             },
-            thread_policy: Default::default(),
-        });
+            working_dir: Some(dir.to_string_lossy().into()),
+            adapter,
+        },
+        thread_policy: Default::default(), });
         let mut second = catalog.get("engine").unwrap();
         second.profile_id = "second".into();
         catalog.upsert(second);

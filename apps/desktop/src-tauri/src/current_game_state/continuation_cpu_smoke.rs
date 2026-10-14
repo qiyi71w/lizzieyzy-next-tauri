@@ -20,6 +20,7 @@ fn real_cpu_continuation_jsonl_and_gtp_both_modes_stop_undo_save() {
             max_visits: 8,
         };
         catalog.upsert(engine_manager::SavedEngineProfile {
+            measured_scenes: Default::default(),
             profile_id: "test".into(),
             thread_policy: Default::default(),
             profile: app_model::EngineProfileDto {

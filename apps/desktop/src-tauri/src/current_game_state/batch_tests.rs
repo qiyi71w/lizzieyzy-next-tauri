@@ -811,6 +811,7 @@ fn real_cpu_batch_multiple_documents_and_two_stage_outputs() {
     std::fs::write(&config, "numAnalysisThreads = 1\nnumSearchThreads = 1\nnnCacheSizePowerOfTwo = 16\nnnMutexPoolSizePowerOfTwo = 12\nmaxVisits = 8\nlogToStderr = true\nlogSearchInfo = false\n").unwrap();
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     catalog.upsert(engine_manager::SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: "test".into(),
         thread_policy: Default::default(),
         profile: app_model::EngineProfileDto {

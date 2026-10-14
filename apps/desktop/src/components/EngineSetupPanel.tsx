@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { checkEngineAssets, loadEngineProfilesSettings, reorderEngineProfilesSettings, saveEngineProfilesSettings } from "../api/backend";
 import type { AssetCheckDto, EngineBackendDto, EngineFailureDto, EngineProfileDto, EngineProfileRecordDto, EngineStartupPolicyDto, StartupEvaluationSettingsDto, ForegroundEngineSnapshotDto } from "../domain/types";
+import type { NodePath } from "../domain/types";
 import { profileHasPendingChanges, runFromSnapshot, verifiedEngineCapabilitiesLabel } from "../domain/foregroundEngine";
 import { t } from "../i18n/resources";
 import { EngineResourceDetails } from "./EngineResourceDetails";
@@ -13,16 +14,19 @@ import { threadPolicyMessage } from "./EngineThreadPolicyPanel";
 import { EnginePreloadPanel } from "./EnginePreloadPanel";
 import { RuntimeThreadsPanel } from "./RuntimeThreadsPanel";
 import { RuntimeParametersPanel } from "./RuntimeParametersPanel";
+import { MeasuredReportPanel } from "./MeasuredReportPanel";
 
 type Props = {
   disabled?: boolean;
   visible?: boolean;
+  documentGeneration?: number | null;
+  documentNode?: NodePath;
   engineSnapshot?: ForegroundEngineSnapshotDto | null;
   engineFailure?: EngineFailureDto | null;
   onProfilesChange?: (profiles: EngineProfileRecordDto[]) => void;
 };
 
-export function EngineSetupPanel({ disabled = false, visible = true, engineSnapshot = null, engineFailure = null, onProfilesChange }: Props) {
+export function EngineSetupPanel({ disabled = false, visible = true, documentGeneration = null, documentNode = { indices: [] }, engineSnapshot = null, engineFailure = null, onProfilesChange }: Props) {
   const [profiles, setProfiles] = useState<EngineProfileRecordDto[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState("default");
   const [profileName, setProfileName] = useState("Local KataGo");
@@ -45,6 +49,10 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
   const modelOperation = useRef(false);
   const [modelBusy, setModelBusy] = useState(false);
   const editingProfile = profiles.find((record) => record.id === selectedProfileId)?.profile;
+  const assetInputKey = JSON.stringify([visible, selectedProfileId, profileName, enginePath, adapterKind, argv, modelPath, configPath, workingDir, maxVisits]);
+  const assetOwner = useRef({ key: assetInputKey, generation: 0, mounted: true });
+  if (assetOwner.current.key !== assetInputKey) { assetOwner.current.key = assetInputKey; assetOwner.current.generation++; }
+  useEffect(() => { assetOwner.current.mounted = true; return () => { assetOwner.current.mounted = false; assetOwner.current.generation++; }; }, []);
 
   function beginModelOperation() {
     if (disabled || catalogWritePending.current || modelOperation.current) return false;
@@ -307,12 +315,18 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
   }
 
   async function handleCheckAssets() {
+    if (!beginModelOperation()) return;
+    const generation = assetOwner.current.generation;
+    const current = () => assetOwner.current.mounted && assetOwner.current.generation === generation;
     try {
       const checks = await checkEngineAssets(buildProfile());
+      if (!current()) return;
       setAssetChecks(checks);
       setProfileStatus(assetStatus(checks));
     } catch (error) {
-      setProfileStatus(`Check failed: ${errorMessage(error)}`);
+      if (current()) setProfileStatus(`Check failed: ${errorMessage(error)}`);
+    } finally {
+      endModelOperation();
     }
   }
 
@@ -487,7 +501,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
         : null}
         <button onClick={() => void handleSaveProfile()} disabled={!canSave || catalogBusy}>保存配置</button>
         <button type="button" onClick={() => void handleReloadProfiles()} disabled={catalogBusy}>重新加载配置</button>
-        <button onClick={() => void handleCheckAssets()} disabled={disabled}>检查资源</button>
+        <button onClick={() => void handleCheckAssets()} disabled={disabled || catalogBusy || modelBusy}>检查资源</button>
       </div>
       {pendingChanges ? <p className="message" role="status">存在待应用更改。只有显式 Restart 才会替换当前 Foreground Engine Run。</p> : null}
       <p className="message">{profileStatus}</p>
@@ -506,7 +520,13 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
         <p>{t("evaluation.startupHint")}</p>
       </div>
       {visible && <EngineEvaluationPanel profiles={profiles} currentRun={run} disabled={disabled || catalogBusy || modelBusy}
+        beginOperation={beginModelOperation} endOperation={endModelOperation}
         onPolicyBusyChange={(busy) => { catalogWritePending.current = busy; setCatalogBusy(busy); }}
+        onProfilesSaved={(saved) => { setProfiles(saved); onProfilesChange?.(saved); }} />}
+      {visible && <MeasuredReportPanel target={profiles.find((profile) => profile.id === selectedProfileId)}
+        documentGeneration={documentGeneration} documentNode={documentNode}
+        inputRevision={JSON.stringify([selectedProfileId, profileName, enginePath, adapterKind, argv, modelPath, configPath, workingDir, maxVisits])}
+        disabled={disabled || catalogBusy} beginOperation={beginModelOperation} endOperation={endModelOperation}
         onProfilesSaved={(saved) => { setProfiles(saved); onProfilesChange?.(saved); }} />}
       {visible && <RuntimeThreadsPanel runId={run?.run_id ?? null} disabled={disabled || snapshot.lifecycle.state !== "ready"} />}
       {visible && <RuntimeParametersPanel runId={run?.run_id ?? null} disabled={disabled || snapshot.lifecycle.state !== "ready"} />}

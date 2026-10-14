@@ -142,15 +142,13 @@ pub(crate) fn capture(
     spec: &CommandSpec,
     managed_root: Option<&Path>,
 ) -> Result<QualifiedLocalResourceDto, String> {
-    let run = EngineRunDto {
-        run_id: "policy-qualification".into(),
-        profile_id: saved.profile_id.clone(),
-        adapter_kind: saved.profile.adapter_kind(),
-        profile_snapshot: saved.profile.clone(),
-        thread_policy_snapshot: saved.thread_policy.clone(),
-        capability_snapshot: None,
-        qualified_resource: None,
-    };
+    let run = EngineRunDto { measured_scenes_snapshot: Default::default(), measured_scene: None, run_id: "policy-qualification".into(),
+    profile_id: saved.profile_id.clone(),
+    adapter_kind: saved.profile.adapter_kind(),
+    profile_snapshot: saved.profile.clone(),
+    thread_policy_snapshot: saved.thread_policy.clone(),
+    capability_snapshot: None,
+    qualified_resource: None, };
     let diagnostics = AttemptCapture::new(&run);
     let deadline = Instant::now() + Duration::from_secs(30);
     let configuration = Configuration::from_command(spec, deadline).map_err(|_| "policy_invalid_config")?;
@@ -247,11 +245,9 @@ pub(crate) fn apply(
     if matches!(explicit, PolicyOverride::Legal) {
         return Ok(false);
     }
-    let saved = SavedEngineProfile {
-        profile_id: run.profile_id.clone(),
-        profile: run.profile_snapshot.clone(),
-        thread_policy: run.thread_policy_snapshot.clone(),
-    };
+    let saved = SavedEngineProfile { measured_scenes: Default::default(), profile_id: run.profile_id.clone(),
+    profile: run.profile_snapshot.clone(),
+    thread_policy: run.thread_policy_snapshot.clone(), };
     let (valid, reason) = validity(
         &saved,
         saved.thread_policy.recommendation.as_ref(),

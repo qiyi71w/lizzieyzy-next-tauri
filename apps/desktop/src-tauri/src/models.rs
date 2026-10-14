@@ -25,10 +25,14 @@ pub fn saved_paths(settings: &engine_manager::EngineProfilesSettings) -> Vec<Mod
 #[tauri::command]
 pub async fn model_inventory_snapshot(app: AppHandle) -> Result<ModelInventoryDto, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let manager = app.state::<engine_manager::ForegroundEngineManager>();
+        let lease = manager.begin_setup_operation()?;
         let settings = super::load_engine_profiles_from_disk(&app)?;
         let inventory = app.state::<ModelInventory>();
-        inventory.remember_saved(&saved_paths(&settings))?;
-        inventory.snapshot()
+        lease.commit(|| inventory.remember_saved(&saved_paths(&settings)))?;
+        let result = inventory.snapshot()?;
+        lease.check()?;
+        Ok(result)
     })
     .await
     .map_err(|_| "model_inventory_worker_failed".to_string())?
@@ -39,7 +43,13 @@ pub async fn refresh_model_inventory(
     app: AppHandle,
     paths: Vec<ModelPathDto>,
 ) -> Result<ModelInventoryDto, String> {
-    tauri::async_runtime::spawn_blocking(move || app.state::<ModelInventory>().refresh(&paths))
+    tauri::async_runtime::spawn_blocking(move || {
+        let manager = app.state::<engine_manager::ForegroundEngineManager>();
+        let lease = manager.begin_setup_operation()?;
+        let result = app.state::<ModelInventory>().refresh(&paths)?;
+        lease.check()?;
+        Ok(result)
+    })
         .await
         .map_err(|_| "model_inventory_worker_failed".to_string())?
 }
@@ -49,7 +59,13 @@ pub async fn select_installed_model(
     app: AppHandle,
     request: ModelSelectionRequestDto,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || app.state::<ModelInventory>().select(&request))
+    tauri::async_runtime::spawn_blocking(move || {
+        let manager = app.state::<engine_manager::ForegroundEngineManager>();
+        let lease = manager.begin_setup_operation()?;
+        let result = app.state::<ModelInventory>().select(&request)?;
+        lease.check()?;
+        Ok(result)
+    })
         .await
         .map_err(|_| "model_inventory_worker_failed".to_string())?
 }

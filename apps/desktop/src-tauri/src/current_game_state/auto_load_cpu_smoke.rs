@@ -37,6 +37,7 @@ finally:
     std::fs::set_permissions(&proxy, std::fs::Permissions::from_mode(0o755)).unwrap();
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     catalog.upsert(engine_manager::SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: "test".into(),
         thread_policy: Default::default(),
         profile: app_model::EngineProfileDto {

@@ -81,7 +81,15 @@ impl ForegroundEngineManager {
         })
     }
 
-    pub fn start_analysis_task(
+    pub fn start_analysis_task(&self,request:WholeGameJobRequest,scope:AnalysisScopeDto,conditions:AnalysisStageConditionsDto)->Result<AnalysisTaskDto,EngineFailureDto>{
+        if self.measured_reservation(){return Err(invalid_task_conditions(&request.run_id,"A leased measurement scene owns this Run; explicitly Stop before ordinary Task admission".into()));}
+        self.start_analysis_task_owned(request,scope,conditions)
+    }
+    pub fn start_measured_analysis_task(&self,request:WholeGameJobRequest,scope:AnalysisScopeDto,conditions:AnalysisStageConditionsDto,lease:&measured_report::SetupLease)->Result<AnalysisTaskDto,EngineFailureDto>{
+        lease.check().map_err(|message|invalid_task_conditions(&request.run_id,message))?;
+        self.start_analysis_task_owned(request,scope,conditions)
+    }
+    fn start_analysis_task_owned(
         &self,
         request: WholeGameJobRequest,
         scope: AnalysisScopeDto,
@@ -112,6 +120,7 @@ impl ForegroundEngineManager {
         overview_conditions: AnalysisStageConditionsDto,
         deep_conditions: AnalysisStageConditionsDto,
     ) -> Result<AnalysisTaskDto, EngineFailureDto> {
+        if self.measured_reservation(){return Err(invalid_task_conditions(&request.run_id,"A leased measurement scene owns this Run; explicitly Stop before ordinary Task admission".into()));}
         AnalysisStageConditionsDto::validate_all_positions_two_stage(&overview_conditions, &deep_conditions)
             .map_err(|message| invalid_task_conditions(&request.run_id, message))?;
         self.retire_auto_load()?;
@@ -143,6 +152,7 @@ impl ForegroundEngineManager {
             overview_conditions,
             deep_conditions,
         } = request;
+        if self.measured_reservation(){return Err(invalid_task_conditions(&request.run_id,"A leased measurement scene owns this Run; explicitly Stop before ordinary Task admission".into()));}
         overview_conditions
             .validate_single_stage()
             .and_then(|_| deep_conditions.validate_single_stage())
@@ -418,6 +428,7 @@ impl ForegroundEngineManager {
         task_id: &str,
         generation: u64,
     ) -> Result<AnalysisTaskDto, EngineFailureDto> {
+        if self.measured_reservation(){return Err(invalid_task_conditions(run_id,"A leased measurement scene owns this Run; explicitly Stop before Continue".into()));}
         let (task, jsonl) = {
             let mut state = self.lock();
             match_reservation::require_unreserved(&state)?;
@@ -639,6 +650,10 @@ impl Inner {
                     if state.jobs[job_index].disposition == JobDisposition::Running {
                         state.jobs[job_index].state = AnalysisJobStateDto::Searching;
                         mark_analysis_task_searching(state, &started.job_id);
+                        if during && response.root_info.as_ref().is_some_and(|root|root.visits>0) && current_admitting_run(&state.phase).is_some_and(|run|run.measured_scene==Some(app_model::MeasuredSceneDto::WholeGame)) {
+                            // Legal in-flight data proves response-probe activity only, never a completed/adopted visit budget.
+                            self.measured_note_search_progress(run_id,&started.job_id,started.generation);
+                        }
                     }
                 }
 

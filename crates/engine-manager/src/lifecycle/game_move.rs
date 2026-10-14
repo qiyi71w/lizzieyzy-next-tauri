@@ -393,6 +393,7 @@ impl ForegroundEngineManager {
         mode: MoveMode,
         analysis_job: Option<&str>,
     ) -> Result<GameMoveHandle, EngineFailureDto> {
+        if analysis_job.is_none() && self.measured_reservation(){return Err(continuous_invalid_state(&self.lock(),"A leased measurement scene cannot serve an ordinary or Match move"));}
         let analysis_restore = analysis_job.is_some();
         let job_uuid = Uuid::new_v4();
         let identity = GameMoveJobDto {

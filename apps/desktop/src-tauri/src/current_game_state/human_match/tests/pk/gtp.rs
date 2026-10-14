@@ -20,11 +20,9 @@ impl PkRig {
         profile.name = "controlled gnugo".into();
         profile.argv = GNU.map(String::from).into();
         profile.adapter = EngineAdapterSettings::GenericGtp(GenericGtpSettings {});
-        self.0.catalog.upsert(SavedEngineProfile {
-            profile_id: "gnugo".into(),
-            profile: profile.clone(),
-            thread_policy: Default::default(),
-        });
+        self.0.catalog.upsert(SavedEngineProfile { measured_scenes: Default::default(), profile_id: "gnugo".into(),
+        profile: profile.clone(),
+        thread_policy: Default::default(), });
         profile
     }
     fn sides_request(&self, black_gtp: bool, white_gtp: bool) -> (HumanMatchStartDto, [EngineProfileDto; 2]) {

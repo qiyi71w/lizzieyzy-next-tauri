@@ -549,15 +549,13 @@ mod tests {
         let profile = crate::default_engine_profiles_settings().profiles[0]
             .profile
             .clone();
-        let run = EngineRunDto {
-            run_id: "retired-resource".into(),
-            profile_id: "target".into(),
-            adapter_kind: profile.adapter_kind(),
-            profile_snapshot: profile,
-            capability_snapshot: None,
-            qualified_resource: None,
-            thread_policy_snapshot: Default::default(),
-        };
+        let run = EngineRunDto { measured_scenes_snapshot: Default::default(), measured_scene: None, run_id: "retired-resource".into(),
+        profile_id: "target".into(),
+        adapter_kind: profile.adapter_kind(),
+        profile_snapshot: profile,
+        capability_snapshot: None,
+        qualified_resource: None,
+        thread_policy_snapshot: Default::default(), };
         let checks = AtomicUsize::new(0);
         let error = identify(
             &path,

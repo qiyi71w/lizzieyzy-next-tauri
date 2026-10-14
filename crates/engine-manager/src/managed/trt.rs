@@ -381,7 +381,7 @@ fn classify(output: &str) -> ManagedHardwareDto {
         reason: reason.into(),
     }
 }
-fn inventory_output(mut command: std::process::Command) -> Result<String, &'static str> {
+pub(crate) fn inventory_output(mut command: std::process::Command) -> Result<String, &'static str> {
     command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -675,6 +675,8 @@ mod tests {
             capability_snapshot: None,
             qualified_resource: None,
             thread_policy_snapshot: Default::default(),
+            measured_scenes_snapshot: Default::default(),
+            measured_scene: None,
         };
         let sources =
             configuration.thread_sources(run.adapter_kind, &crate::diagnostics::AttemptCapture::new(&run));
