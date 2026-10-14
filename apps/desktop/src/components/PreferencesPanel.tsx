@@ -6,6 +6,8 @@ import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
 import { parseReviewAutoplaySeconds } from "../domain/reviewAutoplay";
 import { t } from "../i18n/resources";
 import { validGranularDisplay, type GranularDisplay, type CandidateTextField, type OwnershipStyle } from "../domain/granularDisplay";
+import { defaultMoveRankPreferences, readMoveRankPreferences, validMoveRankPreferences } from "../domain/moveRank";
+import type { MoveRankPreferencesDto } from "../domain/types";
 
 type Props = {
   windowPin?: MainWindowPinControl;
@@ -35,6 +37,7 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
         <span>{status}</span>
       </div>
       <AutoLoadEditor preferences={preferences} disabled={disabled} onChange={onChange} />
+      <MoveRankEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       {windowPin ? <fieldset className="preferences-grid">
         <legend>窗口</legend>
         <WindowPinControl control={windowPin} />
@@ -271,6 +274,39 @@ function ReviewAutoplayEditor({ preferences, disabled, onChange }: Pick<Props, "
       setEdited(null); setError(false);
     }}>{t("review.autoplay.cancel")}</button>
   </div>;
+}
+
+function MoveRankEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
+  const [edited, setEdited] = useState<MoveRankPreferencesDto | null>(null);
+  const [error, setError] = useState(false);
+  const draft = edited ?? preferences.moveRank;
+  useEffect(() => {
+    if (edited && JSON.stringify(edited) === JSON.stringify(preferences.moveRank)) setEdited(null);
+  }, [preferences.moveRank]);
+  return <fieldset className="preferences-grid move-rank-preferences" disabled={disabled}>
+    <legend>{t("rank.title")}</legend>
+    <p>{t("rank.help")}</p>
+    <label>{t("rank.mode")}<select aria-label={t("rank.mode")} value={draft.mode} onChange={event => {
+      setEdited({ ...draft, mode: event.target.value as MoveRankPreferencesDto["mode"] }); setError(false);
+    }}>{(["auto", "score", "winrate", "combined"] as const).map(mode => <option key={mode} value={mode}>{t(`rank.${mode}`)}</option>)}</select></label>
+    {(["winrateThresholdsPp", "scoreThresholds"] as const).map(key => <fieldset key={key}>
+      <legend>{t(`rank.${key}`)}</legend>
+      {([1, 2, 3, 4, 5] as const).map((level, index) => <label key={level}>{t(`rank.level${level}`)}<input
+        aria-label={`${t(`rank.${key}`)} ${index + 1}`} type="number" step="any"
+        value={Number.isFinite(draft[key][index]) ? draft[key][index] : ""} onChange={event => {
+          const values = [...draft[key]] as MoveRankPreferencesDto[typeof key];
+          values[index] = event.target.value === "" ? NaN : Number(event.target.value);
+          setEdited({ ...draft, [key]: values }); setError(false);
+        }} /></label>)}
+    </fieldset>)}
+    {error ? <p role="alert">{t("rank.invalid")}</p> : null}
+    <button type="button" disabled={disabled || edited === null} onClick={() => {
+      if (!validMoveRankPreferences(draft)) { setError(true); return; }
+      onChange({ ...preferences, moveRank: draft });
+    }}>{t("rank.apply")}</button>
+    <button type="button" disabled={disabled || edited === null} onClick={() => { setEdited(null); setError(false); }}>{t("rank.cancel")}</button>
+    <button type="button" onClick={() => { setEdited(readMoveRankPreferences(defaultMoveRankPreferences)); setError(false); }}>{t("rank.restore")}</button>
+  </fieldset>;
 }
 
 function DisplayPreferencesEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {

@@ -1,5 +1,5 @@
 import { classifyPlayedMove, type MoveRank, type PlayerColor } from "./moveRank";
-import type { PointDto, SgfTreeNodeDto } from "./types";
+import type { MoveRankPreferencesDto, PointDto, SgfTreeNodeDto } from "./types";
 import { displayedPrimaryAnalysis } from "./winrateChart";
 
 export type NextMoveReviewMarkerMode = "off" | "variations" | "graded";
@@ -19,6 +19,7 @@ export function cycleNextMoveReviewMarker(mode: NextMoveReviewMarkerMode): NextM
 
 export function buildNextMoveReviewMarkers(input: {
   mode: NextMoveReviewMarkerMode;
+  moveRank?: MoveRankPreferencesDto;
   selectedNode: SgfTreeNodeDto | null;
   selectedIsRoot: boolean;
   toPlay: PlayerColor;
@@ -40,7 +41,7 @@ export function buildNextMoveReviewMarkers(input: {
     if (point.x < 0 || point.y < 0 || point.x >= input.boardWidth || point.y >= input.boardHeight) continue;
     const primary = index === 0;
     const rank = input.mode === "graded" && primary
-      ? classifyPlayedMove(parentAnalysis, displayedPrimaryAnalysis(child, false), input.toPlay)
+      ? classifyPlayedMove(parentAnalysis, displayedPrimaryAnalysis(child, false), input.toPlay, input.moveRank)
       : null;
     markers.push({ point, primary, rank });
   }

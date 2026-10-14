@@ -1,4 +1,4 @@
-import type { NodePath, ProblemMarkerDto } from "./types";
+import type { MoveRankPreferencesDto, NodePath, ProblemMarkerDto } from "./types";
 import type { ChartPoint } from "./winrateChart";
 import { classifyPlayedMove, isBlunderBarRank } from "./moveRank";
 
@@ -6,13 +6,13 @@ export type ReviewProblem = ProblemMarkerDto & { path?: NodePath };
 
 // Only adjacent analyzed positions establish a played move's loss. A gap,
 // setup or annotation must not be blamed on an unrelated move number.
-export function reviewLineProblems(points: ChartPoint[]): ReviewProblem[] {
+export function reviewLineProblems(points: ChartPoint[], settings?: MoveRankPreferencesDto): ReviewProblem[] {
   const problems: ReviewProblem[] = [];
   for (let index = 1; index < points.length; index += 1) {
     const parent = points[index - 1];
     const child = points[index];
     if (!child.isMove || !parent.analysis || !child.analysis) continue;
-    const severity = classifyPlayedMove(parent.analysis, child.analysis, parent.toPlay);
+    const severity = classifyPlayedMove(parent.analysis, child.analysis, parent.toPlay, settings);
     if (!severity || !isBlunderBarRank(severity)) continue;
     const sign = parent.toPlay === "black" ? 1 : -1;
     problems.push({

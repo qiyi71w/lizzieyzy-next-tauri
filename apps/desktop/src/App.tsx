@@ -1,3 +1,4 @@
+import { classifyProblemFrames } from "./domain/moveRank";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { GameLoadSourceDto } from "./domain/types";
 import { cancelAutoLoad } from "./api/backend";
@@ -47,7 +48,6 @@ import {
   authorCurrentGame,
   cancelSelectedNodeAnalysis,
   convertToRootSetup,
-  classifyProblems,
   fakeAnalyze,
   findCurrentGameRecordedPoint,
   enterTrial,
@@ -148,7 +148,7 @@ import {
   variationReplayPointSteps
 } from "./domain/variationReplay";
 import { newDocumentSgf, type NewDocumentParameters } from "./domain/newDocument";
-import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, FileActivationDeliveryDto, ForegroundEngineSnapshotDto, GameDto, GameFileImportDto, MoveVertex, NodePath, PlayerColor, PointDto, PositionDto, ProblemMarkerDto, RecoveryProtectionDto, RecoveryStartupDto, ScoringActionDto, ScoringSessionDto, SelectedNodeSnapshotDto, SgfMarkupActionDto, SgfMarkupToolDto, SgfTreeNodeDto, StoneDto, TrialSessionDto, WindowGeometryStatusDto } from "./domain/types";
+import type { AnalysisFrameDto, AnalysisJobEventDto, AnalysisJobStartedDto, AppHealthDto, ApplicationExitActionDto, ApplicationExitOutcomeDto, ContinuousAnalysisPhaseDto, CurrentGameResultDto, DocumentDepartureActionDto, EngineProfileDto, EngineProfileRecordDto, EngineFailureDto, FileActivationDeliveryDto, ForegroundEngineSnapshotDto, GameDto, GameFileImportDto, MoveVertex, NodePath, PlayerColor, PointDto, PositionDto, RecoveryProtectionDto, RecoveryStartupDto, ScoringActionDto, ScoringSessionDto, SelectedNodeSnapshotDto, SgfMarkupActionDto, SgfMarkupToolDto, SgfTreeNodeDto, StoneDto, TrialSessionDto, WindowGeometryStatusDto } from "./domain/types";
 
 import type { PointSearchScopeDto, SgfAuthoringActionDto, SgfTransformDto } from "./domain/types";
 const demoSgf = "(;GM[1]FF[4]SZ[19]KM[7.5]PB[李昌镐]PW[芮乃伟]RE[B+R];B[pd];W[dd];B[pp];W[dp];B[jq];W[qj];B[nc];W[fc];B[qf];W[cn];B[cp];W[do];B[co];W[dn];B[fq];W[eq];B[fp];W[gp];B[gq];W[hp])";
@@ -183,7 +183,6 @@ export function App() {
   const [positions, setPositions] = useState<PositionDto[]>(() => replayGamePositions(demoGame));
   const [currentMove, setCurrentMove] = useState(() => demoGame.moves.length);
   const [frames, setFrames] = useState<AnalysisFrameDto[]>([]);
-  const [problems, setProblems] = useState<ProblemMarkerDto[]>([]);
   const [sgfText, setSgfText] = useState(demoSgf);
   const [message, setMessage] = useState(
     isTauriRuntime() ? "谱面已就绪。打开棋谱或载入示例开始复盘。" : nativeCurrentGameUnavailable
@@ -601,7 +600,7 @@ export function App() {
   }), [reviewGame?.generation, selectedPathKey, activeRequestToken]);
   const presentationLive = publishedScope !== null && shouldPublishReviewPresentation(activeScope, publishedScope);
   const visibleFrames = useMemo(() => presentationLive ? frames : [], [presentationLive, frames]);
-  const visibleProblems = useMemo(() => presentationLive ? problems : [], [presentationLive, problems]);
+  const visibleProblems = useMemo(() => classifyProblemFrames(visibleFrames, preferences.moveRank), [visibleFrames, preferences.moveRank]);
   const treeFrame = reviewGame?.snapshot.primary_analysis ?? undefined;
   const currentFrame = useMemo(
     () => {
@@ -738,8 +737,8 @@ export function App() {
     settings: preferences
   }), [reviewGame, chosenChildren, selectedPath.indices.length, currentMove, currentPosition.to_play, preferences]);
   const reviewMax = currentGame ? chartModel.points.at(-1)?.moveNumber ?? 0 : maxMove;
-  const reviewProblems = useMemo(() => reviewGame ? reviewLineProblems(chartModel.points) : visibleProblems,
-    [reviewGame, chartModel.points, visibleProblems]);
+  const reviewProblems = useMemo(() => reviewGame ? reviewLineProblems(chartModel.points, preferences.moveRank) : visibleProblems,
+    [reviewGame, chartModel.points, visibleProblems, preferences.moveRank]);
   const currentChartPoint = chartModel.points.find((point) => samePath(point.path, selectedPath));
   const chartWinrate = currentChartPoint
     ? displayedWinrate(currentChartPoint, chartModel.perspective, chartModel.selectedToPlay)
@@ -747,12 +746,13 @@ export function App() {
   const chartTitleSide = chartModel.perspective === "sideToPlay" && chartModel.selectedToPlay === "white" ? "白" : "黑";
   const nextMoveMarkers = useMemo(() => buildNextMoveReviewMarkers({
     mode: preferences.nextMoveReviewMarker,
+    moveRank: preferences.moveRank,
     selectedNode,
     selectedIsRoot: selectedPath.indices.length === 0,
     toPlay: currentPosition.to_play,
     boardWidth: currentPosition.board_width,
     boardHeight: currentPosition.board_height
-  }), [preferences.nextMoveReviewMarker, selectedNode, selectedPath.indices.length, currentPosition.to_play, currentPosition.board_width, currentPosition.board_height]);
+  }), [preferences.nextMoveReviewMarker, preferences.moveRank, selectedNode, selectedPath.indices.length, currentPosition.to_play, currentPosition.board_width, currentPosition.board_height]);
   const documentDirty = currentGame?.dirty ?? dirty;
   const recoveryDiscardRetryPending = recoveryPrompt !== null
     && recoveryProtection.status === "unprotected"
@@ -1959,13 +1959,11 @@ export function App() {
 
   function publishReviewPresentation(
     captured: ReviewPresentationScope,
-    nextFrames: AnalysisFrameDto[],
-    nextProblems: ProblemMarkerDto[]
+    nextFrames: AnalysisFrameDto[]
   ): boolean {
     if (!shouldPublishReviewPresentation(activeScopeFromRefs(), captured)) return false;
     setPublishedScope(captured);
     setFrames(nextFrames);
-    setProblems(nextProblems);
     return true;
   }
 
@@ -1994,9 +1992,7 @@ export function App() {
       selectedPath: [...result.selected_path.indices],
       requestToken: activeRequestTokenRef.current
     };
-    void classifyProblems([frame])
-      .then((classified) => publishReviewPresentation(captured, [frame], classified))
-      .catch((error) => setMessage(`分析结果读取失败: ${errorMessage(error)}`));
+    publishReviewPresentation(captured, [frame]);
   }
 
 
@@ -2314,7 +2310,6 @@ export function App() {
     setGame(artifacts.projection);
     setCurrentMove(result.snapshot.position.move_number);
     setFrames([]);
-    setProblems([]);
     setSelectedCandidateIndex(null);
     presentCurrentGameAnalysis(result);
     setKeyboardPlacement(false);
@@ -2472,7 +2467,6 @@ export function App() {
         setPositions(replayed);
         setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
         setFrames([]);
-        setProblems([]);
         setSelectedCandidateIndex(null);
         setKeyboardPlacement(false);
         await abandonAnalysisSessions();
@@ -2695,8 +2689,7 @@ export function App() {
     const captured = beginReviewRequest();
     try {
       const [parsed, result, replayed] = await Promise.all([parseSgfSummary(sgfText), fakeAnalyze(sgfText), replaySgfPositions(sgfText)]);
-      const classified = await classifyProblems(result);
-      if (!publishReviewPresentation(captured, result, classified)) return;
+      if (!publishReviewPresentation(captured, result)) return;
       setGame(parsed);
       setPositions(replayed);
       setCurrentMove(replayed.at(-1)?.move_number ?? parsed.moves.length);
@@ -2739,8 +2732,7 @@ export function App() {
         selectedPath: [...path.indices],
         requestToken: token
       },
-      [frame],
-      []
+      [frame]
     );
   }
 
@@ -2774,7 +2766,7 @@ export function App() {
       requestToken: job.job_id
     };
     // Problem markers compare successive positions, not progress within one position.
-    if (!publishReviewPresentation(captured, [frame], [])) return;
+    if (!publishReviewPresentation(captured, [frame])) return;
     setMessage(`连续分析：${frame.visits} visits。`);
   }
 
@@ -2848,17 +2840,10 @@ export function App() {
       const frame = job.frame;
       rememberWholeGameFrame(job.node_path, frame);
       if (admitsAnalysisAttachment(job)) void refreshCurrentGameAfterAttach();
-      void (async () => {
-        try {
-          const classified = await classifyProblems([frame]);
-          if (!publishReviewPresentation(captured, [frame], classified)) return;
-          setMessage(`KataGo analysis completed for move ${frame.turn} with ${frame.visits} visits.`);
-        } catch (error) {
-          setMessage(`KataGo analysis failed: ${errorMessage(error)}`);
-        } finally {
-          clearSelectedNodeRunning(job.job_id);
-        }
-      })();
+      if (publishReviewPresentation(captured, [frame])) {
+        setMessage(`KataGo analysis completed for move ${frame.turn} with ${frame.visits} visits.`);
+      }
+      clearSelectedNodeRunning(job.job_id);
       return;
     }
     if (job.outcome === "cancelled" || job.outcome === "superseded" || job.outcome === "timeout" || job.outcome === "failed") {
@@ -3735,7 +3720,6 @@ export function App() {
 
   function clearReviewData() {
     setFrames([]);
-    setProblems([]);
     setSelectedCandidateIndex(null);
     setCandidatePreview(null);
     setPublishedScope(null);

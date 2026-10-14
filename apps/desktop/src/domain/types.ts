@@ -1,3 +1,9 @@
+export type MoveRankMode = "auto" | "score" | "winrate" | "combined";
+export type MoveRankPreferencesDto = {
+  mode: MoveRankMode;
+  winrateThresholdsPp: [number, number, number, number, number];
+  scoreThresholds: [number, number, number, number, number];
+};
 import type { NetworkRoute } from "./providers";
 export type EvaluationPhaseDto = "idle" | "unavailable" | "qualifying" | "running" | "completed" | "failed" | "cancelled" | "yielded" | "retired";
 export type EvaluationMeasurementDto = {

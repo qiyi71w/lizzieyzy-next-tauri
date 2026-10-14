@@ -1,3 +1,5 @@
+import { classifyProblemFrames } from "../domain/moveRank";
+import type { MoveRankPreferencesDto } from "../domain/types";
 import type { ProviderRequestIdentity } from "../domain/providers";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -778,12 +780,12 @@ export async function replaySgfPositions(sgfText: string): Promise<PositionDto[]
   }
 }
 
-export async function classifyProblems(frames: AnalysisFrameDto[]): Promise<ProblemMarkerDto[]> {
-  if (!isTauriRuntime()) return classifyProblemFrames(frames);
+export async function classifyProblems(frames: AnalysisFrameDto[], settings: MoveRankPreferencesDto): Promise<ProblemMarkerDto[]> {
+  if (!isTauriRuntime()) return classifyProblemFrames(frames, settings);
   try {
-    return await invoke<ProblemMarkerDto[]>("classify_problems", { frames });
+    return await invoke<ProblemMarkerDto[]>("classify_problems", { frames, settings });
   } catch {
-    return classifyProblemFrames(frames);
+    return classifyProblemFrames(frames, settings);
   }
 }
 
@@ -1200,23 +1202,6 @@ function buildCandidates(game: GameDto, turn: number, winrate: number): Candidat
   return candidates;
 }
 
-function classifyProblemFrames(frames: AnalysisFrameDto[]): ProblemMarkerDto[] {
-  return frames
-    .slice(1)
-    .map((frame, index) => {
-      const previous = frames[index];
-      const loss = Math.max(0, previous.winrate_black - frame.winrate_black);
-      return { frame, loss };
-    })
-    .filter(({ loss }) => loss >= 0.045)
-    .map(({ frame, loss }) => ({
-      turn: frame.turn,
-      severity: loss >= 0.12 ? "blunder" : loss >= 0.085 ? "mistake" : "inaccuracy",
-      winrate_loss: loss,
-      score_loss: loss * 28,
-      label: loss >= 0.12 ? "Major drop" : loss >= 0.085 ? "Mistake" : "Inaccuracy"
-    }));
-}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
