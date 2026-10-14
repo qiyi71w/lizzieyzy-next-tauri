@@ -4215,6 +4215,8 @@ export function App() {
       <div hidden={sheet !== "engine"}>
         <EngineSetupPanel
           visible={sheet === "engine"}
+          documentGeneration={currentGame?.generation ?? null}
+          documentNode={currentGame?.selected_path ?? { indices: [] }}
           disabled={matchBlocked}
           engineSnapshot={engineSnapshot}
           engineFailure={visibleEngineFailure}

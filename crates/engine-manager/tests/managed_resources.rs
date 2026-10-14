@@ -134,11 +134,9 @@ fn real_public_acquisition_preserves_selection_and_qualifies_only_on_explicit_st
         config_path: Some(installed.config_path.clone()),
         max_visits: 1,
     });
-    catalog.upsert(SavedEngineProfile {
-        profile_id: "default".into(),
-        profile: profile.clone(),
-        thread_policy: Default::default(),
-    });
+    catalog.upsert(SavedEngineProfile { measured_scenes: Default::default(), profile_id: "default".into(),
+    profile: profile.clone(),
+    thread_policy: Default::default(), });
     let events = manager.subscribe();
     manager.start("default").unwrap();
     let deadline = Instant::now() + Duration::from_secs(310);
@@ -176,11 +174,9 @@ fn real_public_acquisition_preserves_selection_and_qualifies_only_on_explicit_st
     assert_eq!(std::fs::read(&profile_path).unwrap(), saved_bytes);
     let config_bytes = std::fs::read(&installed.config_path).unwrap();
     std::fs::write(&installed.config_path, b"numAnalysisThreads = 999\n").unwrap();
-    catalog.upsert(SavedEngineProfile {
-        profile_id: "altered".into(),
-        profile,
-        thread_policy: Default::default(),
-    });
+    catalog.upsert(SavedEngineProfile { measured_scenes: Default::default(), profile_id: "altered".into(),
+    profile,
+    thread_policy: Default::default(), });
     manager.switch_to("altered").unwrap();
     let deadline = Instant::now() + Duration::from_secs(90);
     loop {

@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { t } from "../i18n/resources";
-import type { SavedThreadPolicyDto } from "../domain/types";
+import type { AcceptedMeasuredSceneDto, MeasuredScenesDto, SavedThreadPolicyDto } from "../domain/types";
 import type { GameLoadSourceDto } from "../domain/types";
 import type {
   RuntimeThreadsRequestDto,
@@ -597,6 +597,7 @@ export async function saveEngineProfilesSettings(settings: EngineProfilesSetting
       const saved = records.get(record.id);
       if (saved) {
         saved.thread_policy = record.thread_policy;
+        saved.measured_scenes = record.measured_scenes;
         if (saved.thread_policy && JSON.stringify(saved.profile) !== JSON.stringify(record.profile)) {
           saved.thread_policy = { ...saved.thread_policy, revision: saved.thread_policy.revision + 1 };
         }
@@ -913,6 +914,20 @@ function decodeThreadPolicy(value: unknown): SavedThreadPolicyDto | undefined {
   return policy as SavedThreadPolicyDto;
 }
 
+function decodeMeasuredScenes(value: unknown): MeasuredScenesDto {
+  const scenes = profileObject(value, "Measured scenes");
+  const revision = scenes.revision ?? 0;
+  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0) throw new Error("Invalid measured scene revision.");
+  const scene = (value: unknown): AcceptedMeasuredSceneDto | null => {
+    if (value === undefined || value === null) return null;
+    const accepted = profileObject(value, "Accepted measured scene");
+    if (!("report" in accepted) || typeof accepted.profile_revision !== "string" || typeof accepted.accepted_at !== "string" || typeof accepted.policy_revision !== "number" || !Number.isSafeInteger(accepted.policy_revision) || accepted.policy_revision < 0) throw new Error("Invalid measured scene evidence.");
+    return { report: accepted.report, profile_revision: accepted.profile_revision, policy_revision: accepted.policy_revision, accepted_at: accepted.accepted_at };
+  };
+  // Preservation is not qualification: browser preview never executes or applies these reports.
+  return { revision, live: scene(scenes.live), whole_game: scene(scenes.whole_game) };
+}
+
 function decodeEngineProfilesSettings(value: unknown, allowLegacy: boolean): EngineProfilesSettingsDto {
   const input = profileObject(value, "Profile catalog");
   const legacy = !("version" in input);
@@ -930,6 +945,7 @@ function decodeEngineProfilesSettings(value: unknown, allowLegacy: boolean): Eng
       id: profileString(record.id, "Profile ID", true),
       preload: !legacy && record.preload === true,
       ...(legacy || record.thread_policy === undefined ? {} : { thread_policy: decodeThreadPolicy(record.thread_policy) }),
+      ...(legacy || record.measured_scenes === undefined ? {} : { measured_scenes: decodeMeasuredScenes(record.measured_scenes) }),
       profile: legacy ? decodeLegacyEngineProfile(record.profile, record.max_visits) : decodeEngineProfile(record.profile)
     };
   });

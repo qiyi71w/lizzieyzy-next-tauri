@@ -3,10 +3,11 @@ import { cancelEngineEvaluation, getEngineEvaluation, isTauriRuntime, startEngin
 import type { EngineProfileRecordDto, EngineRunDto, EvaluationSnapshotDto } from "../domain/types";
 import { t } from "../i18n/resources";
 import { EngineThreadPolicyPanel, threadPolicyMessage } from "./EngineThreadPolicyPanel";
+import { measuredReportBusy, waitForMeasuredWorker } from "../api/measuredReport";
 
-type Props = { profiles: EngineProfileRecordDto[]; disabled: boolean; currentRun?: EngineRunDto | null; onProfilesSaved?: (profiles: EngineProfileRecordDto[]) => void; onPolicyBusyChange?: (busy: boolean) => void };
+type Props = { profiles: EngineProfileRecordDto[]; disabled: boolean; currentRun?: EngineRunDto | null; onProfilesSaved?: (profiles: EngineProfileRecordDto[]) => void; onPolicyBusyChange?: (busy: boolean) => void; beginOperation?: () => boolean; endOperation?: () => void };
 
-export function EngineEvaluationPanel({ profiles, disabled, currentRun = null, onProfilesSaved, onPolicyBusyChange }: Props) {
+export function EngineEvaluationPanel({ profiles, disabled, currentRun = null, onProfilesSaved, onPolicyBusyChange, beginOperation, endOperation }: Props) {
   const [target, setTarget] = useState("");
   const [publication, setPublication] = useState<{ snapshot: EvaluationSnapshotDto; scope: string } | null>(null);
   const [pending, setPending] = useState(false);
@@ -14,6 +15,9 @@ export function EngineEvaluationPanel({ profiles, disabled, currentRun = null, o
   const owner = useRef<{ mounted: boolean; generation: number; id: string | null; revision: string | null; pending: boolean }>({ mounted: false, generation: 0, id: null, revision: null, pending: false });
   const retired = useRef(new Set<string>());
   const adoptingObservedTarget = useRef(false);
+  const setupOwned = useRef(false);
+  const setupCallbacks = useRef({ beginOperation, endOperation });
+  setupCallbacks.current = { beginOperation, endOperation };
   const policyRecord = profiles.find((record) => record.id === target);
   const inputKey = JSON.stringify(target ? policyRecord?.profile : profiles.map((record) => [record.id, record.profile]));
   const scope = JSON.stringify([target, inputKey]);
@@ -39,6 +43,7 @@ export function EngineEvaluationPanel({ profiles, disabled, currentRun = null, o
       const generation = state.generation;
       try {
         const next = await getEngineEvaluation();
+        if (setupOwned.current && !(await measuredReportBusy())) { setupOwned.current = false; setupCallbacks.current.endOperation?.(); }
         if (!stopped && !state.pending && generation === state.generation
           && (!target || next.target_id === target)
           && (!next.evaluation_id || !retired.current.has(next.evaluation_id))
@@ -63,11 +68,17 @@ export function EngineEvaluationPanel({ profiles, disabled, currentRun = null, o
         void cancelEngineEvaluation(state.id).catch(() => undefined);
       }
       adoptingObservedTarget.current = false;
+      if (setupOwned.current) void (async () => {
+        try { await waitForMeasuredWorker(); }
+        finally { if (setupOwned.current) { setupOwned.current = false; setupCallbacks.current.endOperation?.(); } }
+      })().catch(() => undefined);
     };
   }, [native, target, inputKey]);
 
   async function start() {
     if (!native || owner.current.pending || !policyRecord || disabled) return;
+    if (setupOwned.current || setupCallbacks.current.beginOperation && !setupCallbacks.current.beginOperation()) return;
+    setupOwned.current = true;
     const state = owner.current;
     const generation = ++state.generation;
     if (state.id) retired.current.add(state.id);

@@ -21,6 +21,7 @@ mod katago_config;
 mod lifecycle;
 pub mod managed;
 pub mod models;
+pub mod measured_report;
 mod resources;
 mod thread_policy;
 
@@ -31,6 +32,7 @@ pub use catalog::{
     EngineProfileRecord, EngineProfilesSettings, InMemoryEngineProfileCatalog, SavedEngineProfile,
     DEFAULT_ENGINE_PROFILE_ID, ENGINE_PROFILES_VERSION,
 };
+pub use lifecycle::measured_report::{apply_to_catalog as apply_measured_to_catalog, restore_catalog as restore_measured_catalog, SetupLease};
 pub use lifecycle::{
     AnalysisJobCancel, AnalysisJobEventDto, AnalysisJobLane, ContinuationAction, ContinuousPrimaryAction,
     ForegroundEngineConfig, ForegroundEngineManager, GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle,

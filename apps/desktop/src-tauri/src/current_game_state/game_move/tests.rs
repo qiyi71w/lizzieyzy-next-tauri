@@ -43,28 +43,26 @@ impl Rig {
         .unwrap();
         std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o755)).unwrap();
         let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-        catalog.upsert(SavedEngineProfile {
-            profile_id: "engine".into(),
-            profile: EngineProfileDto {
-                name: "fixture".into(),
-                program: engine.to_string_lossy().into(),
-                argv: vec![],
-                working_dir: Some(directory.to_string_lossy().into()),
-                adapter: {
-                    let settings = KataGoSettings {
-                        model_path: Some("model".into()),
-                        config_path: Some("config".into()),
-                        max_visits: 8,
-                    };
-                    if gtp {
-                        EngineAdapterSettings::KataGoGtp(settings)
-                    } else {
-                        EngineAdapterSettings::KataGoAnalysis(settings)
-                    }
-                },
+        catalog.upsert(SavedEngineProfile { measured_scenes: Default::default(), profile_id: "engine".into(),
+        profile: EngineProfileDto {
+            name: "fixture".into(),
+            program: engine.to_string_lossy().into(),
+            argv: vec![],
+            working_dir: Some(directory.to_string_lossy().into()),
+            adapter: {
+                let settings = KataGoSettings {
+                    model_path: Some("model".into()),
+                    config_path: Some("config".into()),
+                    max_visits: 8,
+                };
+                if gtp {
+                    EngineAdapterSettings::KataGoGtp(settings)
+                } else {
+                    EngineAdapterSettings::KataGoAnalysis(settings)
+                }
             },
-            thread_policy: Default::default(),
-        });
+        },
+        thread_policy: Default::default(), });
         let manager = ForegroundEngineManager::new(catalog.clone(), ForegroundEngineConfig::for_tests());
         manager.start("engine").unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);

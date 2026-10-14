@@ -94,6 +94,8 @@ mod tests {
     fn ordinary_reuse_context_captures_runtime_and_excludes_only_budgets() {
         let manager = ForegroundEngineManager::new(Arc::new(crate::InMemoryEngineProfileCatalog::new()), ForegroundEngineConfig::for_tests());
         let run = EngineRunDto {
+            measured_scene: None,
+            measured_scenes_snapshot: Default::default(),
             run_id: "run".into(), profile_id: "profile".into(), adapter_kind: EngineBackend::KataGoGtp,
             profile_snapshot: app_model::EngineProfileDto {
                 name: "test".into(), program: "test".into(), argv: vec![], working_dir: None,

@@ -437,12 +437,19 @@ impl CurrentGameState {
         Ok(scope_preview(&admission, scope))
     }
 
-    pub fn start_analysis_task(
+    pub fn start_analysis_task(&self,manager:&engine_manager::ForegroundEngineManager,run_id:String,preview:app_model::AnalysisScopePreviewDto,conditions:app_model::AnalysisStageConditionsDto)->crate::EngineCommandResult<app_model::AnalysisTaskDto>{
+        self.start_analysis_task_with_lease(manager,run_id,preview,conditions,None)
+    }
+    pub(crate) fn start_measured_analysis_task(&self,manager:&engine_manager::ForegroundEngineManager,run_id:String,preview:app_model::AnalysisScopePreviewDto,conditions:app_model::AnalysisStageConditionsDto,lease:&engine_manager::SetupLease)->crate::EngineCommandResult<app_model::AnalysisTaskDto>{
+        self.start_analysis_task_with_lease(manager,run_id,preview,conditions,Some(lease))
+    }
+    fn start_analysis_task_with_lease(
         &self,
         manager: &engine_manager::ForegroundEngineManager,
         run_id: String,
         preview: app_model::AnalysisScopePreviewDto,
         conditions: app_model::AnalysisStageConditionsDto,
+        lease: Option<&engine_manager::SetupLease>,
     ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
         let invalid = |message| {
             Box::new(crate::job_failure(
@@ -452,6 +459,7 @@ impl CurrentGameState {
             ))
         };
         conditions.validate_single_stage().map_err(invalid)?;
+        if lease.is_none(){manager.retire_setup_for_foreground().map_err(invalid)?;}
         // Keep semantic revalidation and manager admission under the same owner lock.
         let holder = self.holder.lock().expect("current game state");
         let admitted = holder
@@ -463,17 +471,11 @@ impl CurrentGameState {
             ));
         }
         let work_items = crate::whole_game_work_items(&admitted, conditions.total_visits.value, &run_id)?;
-        manager
-            .start_analysis_task(
-                engine_manager::WholeGameJobRequest {
-                    run_id,
-                    generation: admitted.generation,
-                    work_items,
-                },
-                preview.scope,
-                conditions,
-            )
-            .map_err(Box::new)
+        let request=engine_manager::WholeGameJobRequest{run_id,generation:admitted.generation,work_items};
+        match lease {
+            Some(lease)=>manager.start_measured_analysis_task(request,preview.scope,conditions,lease),
+            None=>manager.start_analysis_task(request,preview.scope,conditions),
+        }.map_err(Box::new)
     }
 
     pub fn start_all_positions_analysis_task(
@@ -496,6 +498,7 @@ impl CurrentGameState {
             &deep_conditions,
         )
         .map_err(invalid)?;
+        manager.retire_setup_for_foreground().map_err(invalid)?;
         let holder = self.holder.lock().expect("current game state");
         let admitted = holder
             .analysis_scope_admission(preview.generation, &preview.scope, None)
@@ -543,6 +546,7 @@ impl CurrentGameState {
             .clone()
             .ok_or_else(|| invalid("Swing-selected analysis requires swing criteria.".into()))?;
         criteria.validate().map_err(invalid)?;
+        manager.retire_setup_for_foreground().map_err(invalid)?;
         let holder = self.holder.lock().expect("current game state");
         let admitted = holder
             .analysis_scope_admission(preview.generation, &preview.scope, Some(&criteria))
@@ -593,6 +597,7 @@ impl CurrentGameState {
         run_id: &str,
         task_id: &str,
     ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
+        manager.retire_setup_for_foreground().map_err(|message|Box::new(crate::job_failure(run_id,app_model::EngineFailureKind::InvalidState,message)))?;
         let holder = self.holder.lock().expect("current game state");
         holder.ensure_review_access().map_err(|error| {
             crate::job_failure(run_id, app_model::EngineFailureKind::InvalidState, error.message)
@@ -998,6 +1003,10 @@ impl CurrentGameState {
                 Some(_) => "accepted-equal-visits-update",
             };
             self.trace_adoption(event, reason, cached.as_ref());
+        }
+        if let Some(manager) = self.analysis_manager.get().filter(|manager| manager.measured_observing(&event.run_id)) {
+            // Retention returns before attach_primary_analysis; this point observes only adopted input.
+            manager.measured_note_adopted(event);
         }
         if let Some(analysis) = result.snapshot.primary_analysis.as_mut() {
             // Global policy is a live search output; Java LZ stores candidates and ownership.

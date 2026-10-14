@@ -1,7 +1,7 @@
 //! Explicit resource acquisition and target-pinned runtime maintenance. Neither edits profiles.
 mod catalog;
 mod package;
-mod trt;
+pub(crate) mod trt;
 pub(crate) mod trust;
 use app_model::*;
 pub use catalog::{catalog_snapshot, DEFAULT_MODEL_FILE};

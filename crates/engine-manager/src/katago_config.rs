@@ -5,7 +5,6 @@ use app_model::{EngineBackend, ThreadSourceEntryDto, ThreadSourcesDto};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
-    fs::File,
     io::Read,
     path::{Path, PathBuf},
     time::Instant,
@@ -72,31 +71,42 @@ impl Configuration {
             analysis_threads_flag: None,
         };
         let cwd = Path::new(spec.working_dir.as_deref().unwrap_or("."));
-        for pair in spec.args.windows(2).filter(|pair| pair[0] == "-config") {
-            result.visit(&cwd.join(&pair[1]), deadline, &mut Vec::new(), "saved")?;
+        let mut arguments=spec.args.iter();
+        while let Some(flag)=arguments.next(){
+            if matches!(flag.as_str(),"-config"|"--config"|"-override-config"|"--override-config"|"-model"|"--model"|"-weights"|"--weights"|"-analysis-threads"){
+                let value=arguments.next().ok_or("KataGo command flag lacks a value")?;
+                if matches!(flag.as_str(),"-config"|"--config"){result.visit(&cwd.join(value),deadline,&mut Vec::new(),"saved")?;}
+                if flag=="-analysis-threads"{result.analysis_threads_flag=Some(value.clone());}
+            }
         }
         if result.files.is_empty() {
             return Err("KataGo configuration roots are missing".into());
         }
         // KataGo applies all config files before all override-config arguments, irrespective
         // of their textual interleaving with -config. Empty CLI values delete that key.
-        for pair in spec.args.windows(2).filter(|pair| pair[0] == "-override-config") {
-            for entry in pair[1].split(',') {
-                let (key, value) = entry
-                    .split_once('=')
-                    .ok_or("invalid KataGo CLI config override")?;
-                let key = key.trim();
-                if THREAD_KEYS.contains(&key) || key == "numEigenThreadsPerModel" {
-                    result.push(key, value.trim().to_owned(), None, "launch_override")?;
+        let mut arguments=spec.args.iter();
+        while let Some(flag)=arguments.next(){
+            if matches!(flag.as_str(),"-config"|"--config"|"-override-config"|"--override-config"|"-model"|"--model"|"-weights"|"--weights"|"-analysis-threads"){
+                let value=arguments.next().ok_or("KataGo command flag lacks a value")?;
+                if matches!(flag.as_str(),"-override-config"|"--override-config"){
+                    for entry in value.split(','){
+                        let (key,value)=entry.split_once('=').ok_or("invalid KataGo CLI config override")?;
+                        result.push(key.trim(),value.trim().to_owned(),None,"launch_override")?;
+                    }
                 }
             }
         }
-        result.analysis_threads_flag = spec
-            .args
-            .windows(2)
-            .find(|pair| pair[0] == "-analysis-threads")
-            .map(|pair| pair[1].clone());
         Ok(result)
+    }
+
+    pub(crate) fn effective_values(&self, inline_only: bool) -> std::collections::BTreeMap<String, String> {
+        let mut values = std::collections::BTreeMap::new();
+        for assignment in &self.assignments {
+            if !inline_only || assignment.layer == "launch_override" {
+                values.insert(assignment.key.clone(), assignment.value.clone());
+            }
+        }
+        values
     }
 
     /// Resource-only consumers (including managed adoption) use exactly the same traversal.
@@ -165,13 +175,16 @@ impl Configuration {
         if stack.contains(&canonical) {
             return Err("KataGo configuration include cycle".into());
         }
-        let file = File::open(path).map_err(|_| "KataGo configuration cannot be read")?;
-        if file
-            .metadata()
-            .map_err(|_| "KataGo configuration metadata unavailable")?
-            .len()
-            > MAX_BYTES
-        {
+        #[cfg(unix)]
+        let file = {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(path)
+        }.map_err(|_| "KataGo configuration cannot be read")?;
+        #[cfg(not(unix))]
+        let file = std::fs::File::open(path).map_err(|_| "KataGo configuration cannot be read")?;
+        let metadata=file.metadata().map_err(|_| "KataGo configuration metadata unavailable")?;
+        if !metadata.is_file(){return Err("KataGo configuration must be a regular file".into());}
+        if metadata.len() > MAX_BYTES {
             return Err("KataGo configuration exceeds 4 MiB".into());
         }
         let mut text = String::new();
@@ -222,9 +235,7 @@ impl Configuration {
             if !local_keys.insert(key.to_owned()) {
                 return Err("duplicate key within a KataGo configuration file".into());
             }
-            if THREAD_KEYS.contains(&key) || key == "numEigenThreadsPerModel" {
-                self.push(key, value, Some(path.to_owned()), layer)?;
-            }
+            self.push(key, value, Some(path.to_owned()), layer)?;
         }
         stack.pop();
         Ok(())
@@ -464,15 +475,13 @@ mod tests {
                 max_visits: 4,
             }),
         };
-        let capture = AttemptCapture::new(&EngineRunDto {
-            run_id: "source-run".into(),
-            profile_id: "source-profile".into(),
-            adapter_kind: EngineBackend::KataGoAnalysis,
-            profile_snapshot: profile,
-            capability_snapshot: None,
-            qualified_resource: None,
-            thread_policy_snapshot: Default::default(),
-        });
+        let capture = AttemptCapture::new(&EngineRunDto { measured_scenes_snapshot: Default::default(), measured_scene: None, run_id: "source-run".into(),
+        profile_id: "source-profile".into(),
+        adapter_kind: EngineBackend::KataGoAnalysis,
+        profile_snapshot: profile,
+        capability_snapshot: None,
+        qualified_resource: None,
+        thread_policy_snapshot: Default::default(), });
         let config = Configuration::from_command(&spec, Instant::now() + Duration::from_secs(2)).unwrap();
         assert_eq!(
             config

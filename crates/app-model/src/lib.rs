@@ -29,6 +29,8 @@ mod managed_resources;
 pub use managed_resources::*;
 mod evaluation;
 pub use evaluation::*;
+mod measured_report;
+pub use measured_report::*;
 mod runtime_threads;
 pub use runtime_threads::*;
 mod runtime_parameters;
@@ -840,6 +842,10 @@ pub struct EngineRunDto {
     pub profile_snapshot: EngineProfileDto,
     #[serde(default)]
     pub thread_policy_snapshot: SavedThreadPolicyDto,
+    #[serde(default)]
+    pub measured_scenes_snapshot: MeasuredScenesDto,
+    #[serde(default)]
+    pub measured_scene: Option<MeasuredSceneDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability_snapshot: Option<EngineCapabilitySnapshotDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1471,42 +1477,40 @@ mod foreground_engine_wire {
             continuous: ContinuousAnalysisSnapshotDto::default(),
             game_move_job: None,
             lifecycle: ForegroundEngineLifecycleDto::Ready {
-                run: EngineRunDto {
-                    run_id: "run-1".into(),
-                    profile_id: "profile-1".into(),
+                run: EngineRunDto { measured_scenes_snapshot: Default::default(), measured_scene: None, run_id: "run-1".into(),
+                profile_id: "profile-1".into(),
+                adapter_kind: EngineBackend::KataGoAnalysis,
+                profile_snapshot: sample_profile(),
+                thread_policy_snapshot: Default::default(),
+                qualified_resource: Some(Arc::new(QualifiedLocalResourceDto {
+                    profile_revision: "resource-revision".into(),
+                    resources: vec![],
+                    origin: "local_unknown".into(),
+                    version: Some("1.18.2".into()),
+                    source_commit: None,
+                    backend: None,
+                    static_zlib_exemption: false,
+                    thread_sources: None,
+                })),
+                capability_snapshot: Some(EngineCapabilitySnapshotDto {
                     adapter_kind: EngineBackend::KataGoAnalysis,
-                    profile_snapshot: sample_profile(),
-                    thread_policy_snapshot: Default::default(),
-                    qualified_resource: Some(Arc::new(QualifiedLocalResourceDto {
-                        profile_revision: "resource-revision".into(),
-                        resources: vec![],
-                        origin: "local_unknown".into(),
-                        version: Some("1.18.2".into()),
-                        source_commit: None,
-                        backend: None,
-                        static_zlib_exemption: false,
-                        thread_sources: None,
-                    })),
-                    capability_snapshot: Some(EngineCapabilitySnapshotDto {
-                        adapter_kind: EngineBackend::KataGoAnalysis,
-                        focus: FocusCapabilityDto::Unchecked,
-                        game_move: true,
-                        gtp: None,
-                        analysis: Some(EngineAnalysisCapabilitiesDto {
-                            selected_node_analysis: true,
-                            continuous_analysis: true,
-                            whole_game_analysis: true,
-                            candidates: true,
-                            pv: true,
-                            winrate: true,
-                            root_score: true,
-                            ownership: true,
-                            policy: true,
-                            visits_limit: true,
-                            protocol_cancel: true,
-                        }),
+                    focus: FocusCapabilityDto::Unchecked,
+                    game_move: true,
+                    gtp: None,
+                    analysis: Some(EngineAnalysisCapabilitiesDto {
+                        selected_node_analysis: true,
+                        continuous_analysis: true,
+                        whole_game_analysis: true,
+                        candidates: true,
+                        pv: true,
+                        winrate: true,
+                        root_score: true,
+                        ownership: true,
+                        policy: true,
+                        visits_limit: true,
+                        protocol_cancel: true,
                     }),
-                },
+                }), },
             },
             selected_node_job: Some(AnalysisJobStartedDto {
                 run_id: "run-1".into(),
@@ -1586,15 +1590,13 @@ mod foreground_engine_wire {
 
     #[test]
     fn foreground_engine_lifecycle_tagged_union_includes_switching_variant() {
-        let run = EngineRunDto {
-            run_id: "run-b".into(),
-            profile_id: "profile-b".into(),
-            adapter_kind: EngineBackend::KataGoAnalysis,
-            profile_snapshot: sample_profile(),
-            capability_snapshot: None,
-            qualified_resource: None,
-            thread_policy_snapshot: Default::default(),
-        };
+        let run = EngineRunDto { measured_scenes_snapshot: Default::default(), measured_scene: None, run_id: "run-b".into(),
+        profile_id: "profile-b".into(),
+        adapter_kind: EngineBackend::KataGoAnalysis,
+        profile_snapshot: sample_profile(),
+        capability_snapshot: None,
+        qualified_resource: None,
+        thread_policy_snapshot: Default::default(), };
         let snapshot = ForegroundEngineSnapshotDto {
             revision: 1,
             auto_load: Default::default(),
@@ -1603,10 +1605,8 @@ mod foreground_engine_wire {
             game_move_job: None,
             lifecycle: ForegroundEngineLifecycleDto::Switching {
                 primary: run.clone(),
-                candidate: Box::new(EngineRunDto {
-                    run_id: "run-c".into(),
-                    ..run
-                }),
+                candidate: Box::new(EngineRunDto { measured_scenes_snapshot: Default::default(), measured_scene: None, run_id: "run-c".into(),
+                ..run }),
                 switch_id: "switch-1".into(),
             },
             selected_node_job: None,

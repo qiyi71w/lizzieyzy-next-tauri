@@ -64,11 +64,9 @@ impl Fixture {
             working_dir: Some(dir.to_string_lossy().into()),
             adapter: EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings::default()),
         };
-        let catalog = Arc::new(Catalog(Mutex::new(Some(SavedEngineProfile {
-            profile_id: "target".into(),
-            profile,
-            thread_policy: Default::default(),
-        }))));
+        let catalog = Arc::new(Catalog(Mutex::new(Some(SavedEngineProfile { measured_scenes: Default::default(), profile_id: "target".into(),
+        profile,
+        thread_policy: Default::default(), }))));
         let manager = ForegroundEngineManager::new(catalog.clone(), ForegroundEngineConfig::for_tests());
         Self {
             dir,
@@ -112,11 +110,9 @@ impl EngineProfileCatalog for DiskStartupCatalog {
             .profiles
             .into_iter()
             .find(|record| record.id == id)
-            .map(|record| SavedEngineProfile {
-                profile_id: record.id,
-                profile: record.profile,
-                thread_policy: record.thread_policy,
-            })
+            .map(|record| SavedEngineProfile { measured_scenes: Default::default(), profile_id: record.id,
+            profile: record.profile,
+            thread_policy: record.thread_policy, })
     }
     fn autoload_profile_id(&self) -> Option<String> {
         engine_manager::load_engine_profiles(&self.0)
@@ -135,11 +131,9 @@ impl EngineProfileCatalog for DiskStartupCatalog {
             .into_iter()
             .flat_map(|settings| settings.profiles)
             .filter(|record| record.preload)
-            .map(|record| SavedEngineProfile {
-                profile_id: record.id,
-                profile: record.profile,
-                thread_policy: record.thread_policy,
-            })
+            .map(|record| SavedEngineProfile { measured_scenes: Default::default(), profile_id: record.id,
+            profile: record.profile,
+            thread_policy: record.thread_policy, })
             .collect()
     }
 }
@@ -153,6 +147,7 @@ impl Fixture {
             profile: saved.profile,
             preload: false,
             thread_policy: Default::default(),
+            measured_scenes: Default::default(),
         });
         settings.startup_evaluation = app_model::StartupEvaluationSettingsDto {
             enabled,
@@ -606,29 +601,27 @@ fn real_katago_measurement_failure_cancel_and_foreground_handoff() {
             ..ForegroundEngineConfig::default()
         },
     );
-    let original = SavedEngineProfile {
-        profile_id: "target".into(),
-        profile: EngineProfileDto {
-            name: "Real measured target".into(),
-            program: engine,
-            argv: vec![
-                "gtp".into(),
-                "-config".into(),
-                config.clone(),
-                "-model".into(),
-                model.clone(),
-                "-t".into(),
-                "1".into(),
-                "-v".into(),
-                "2".into(),
-                "-n".into(),
-                "1".into(),
-            ],
-            working_dir: Some(workdir),
-            adapter: EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings::default()),
-        },
-        thread_policy: Default::default(),
-    };
+    let original = SavedEngineProfile { measured_scenes: Default::default(), profile_id: "target".into(),
+    profile: EngineProfileDto {
+        name: "Real measured target".into(),
+        program: engine,
+        argv: vec![
+            "gtp".into(),
+            "-config".into(),
+            config.clone(),
+            "-model".into(),
+            model.clone(),
+            "-t".into(),
+            "1".into(),
+            "-v".into(),
+            "2".into(),
+            "-n".into(),
+            "1".into(),
+        ],
+        working_dir: Some(workdir),
+        adapter: EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings::default()),
+    },
+    thread_policy: Default::default(), };
     *f.catalog.0.lock() = Some(original.clone());
     f.manager.start_evaluation("target").unwrap();
     let deadline = Instant::now() + Duration::from_secs(120);
@@ -885,16 +878,14 @@ fn real_managed_evaluation_qualifies_both_adapters_without_primary_authority() {
         EngineAdapterSettings::KataGoAnalysis(settings.clone()),
         EngineAdapterSettings::KataGoGtp(settings),
     ] {
-        let saved = SavedEngineProfile {
-        profile_id: "target".into(),
+        let saved = SavedEngineProfile { measured_scenes: Default::default(), profile_id: "target".into(),
         profile: EngineProfileDto {
             name: "Managed explicit evaluation".into(), program: installed.program.clone(),
             argv: vec!["-t".into(), "1".into(), "-v".into(), "2".into(), "-n".into(), "1".into(),
                 "-override-config".into(), "numAnalysisThreads=1,numSearchThreads=1,nnMaxBatchSize=1,nnCacheSizePowerOfTwo=16,nnMutexPoolSizePowerOfTwo=12".into()],
             working_dir: Some(f.dir.to_string_lossy().into_owned()), adapter,
         },
-        thread_policy: Default::default(),
-        };
+        thread_policy: Default::default(), };
         *f.catalog.0.lock() = Some(saved.clone());
         let qualifying = f.manager.start_evaluation("target").unwrap();
         assert_eq!(qualifying.phase, Phase::Qualifying);

@@ -825,17 +825,15 @@ fn diagnostic_trace_reports_actual_stronger_weaker_ownership_and_identity_decisi
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-    catalog.upsert(SavedEngineProfile {
-        profile_id: "trace".into(),
-        profile: app_model::EngineProfileDto {
-            name: "Trace fixture".into(),
-            program: "/definitely-missing-diagnostic-fixture".into(),
-            argv: vec![],
-            working_dir: None,
-            adapter: app_model::EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings {}),
-        },
-        thread_policy: Default::default(),
-    });
+    catalog.upsert(SavedEngineProfile { measured_scenes: Default::default(), profile_id: "trace".into(),
+    profile: app_model::EngineProfileDto {
+        name: "Trace fixture".into(),
+        program: "/definitely-missing-diagnostic-fixture".into(),
+        argv: vec![],
+        working_dir: None,
+        adapter: app_model::EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings {}),
+    },
+    thread_policy: Default::default(), });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
     manager.start("trace").unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);

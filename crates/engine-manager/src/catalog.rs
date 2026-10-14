@@ -14,6 +14,7 @@ pub struct SavedEngineProfile {
     pub profile_id: String,
     pub profile: EngineProfileDto,
     pub thread_policy: app_model::SavedThreadPolicyDto,
+    pub measured_scenes: app_model::MeasuredScenesDto,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +26,8 @@ pub struct EngineProfileRecord {
     pub preload: bool,
     #[serde(default)]
     pub thread_policy: app_model::SavedThreadPolicyDto,
+    #[serde(default)]
+    pub measured_scenes: app_model::MeasuredScenesDto,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,11 +62,9 @@ impl EngineProfilesSettings {
             .as_deref()
             .and_then(|id| self.profiles.iter().find(|record| record.id == id))
             .ok_or("Startup evaluation unavailable: select an existing saved target")?;
-        Ok(Some(SavedEngineProfile {
-            profile_id: target.id.clone(),
-            profile: target.profile.clone(),
-            thread_policy: target.thread_policy.clone(),
-        }))
+        Ok(Some(SavedEngineProfile { measured_scenes: target.measured_scenes.clone(), profile_id: target.id.clone(),
+        profile: target.profile.clone(),
+        thread_policy: target.thread_policy.clone(), }))
     }
 }
 
@@ -222,22 +223,20 @@ pub fn default_engine_profiles_settings() -> EngineProfilesSettings {
 }
 
 pub fn default_engine_profile_record() -> EngineProfileRecord {
-    EngineProfileRecord {
-        id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
-        preload: false,
-        thread_policy: Default::default(),
-        profile: EngineProfileDto {
-            name: "Local KataGo".to_string(),
-            program: String::new(),
-            argv: Vec::new(),
-            working_dir: None,
-            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
-                model_path: None,
-                config_path: None,
-                max_visits: 800,
-            }),
-        },
-    }
+    EngineProfileRecord { measured_scenes: Default::default(), id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
+    preload: false,
+    thread_policy: Default::default(),
+    profile: EngineProfileDto {
+        name: "Local KataGo".to_string(),
+        program: String::new(),
+        argv: Vec::new(),
+        working_dir: None,
+        adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+            model_path: None,
+            config_path: None,
+            max_visits: 800,
+        }),
+    }, }
 }
 
 pub fn load_engine_profiles(path: &Path) -> Result<EngineProfilesSettings, String> {
@@ -284,12 +283,10 @@ pub fn parse_engine_profiles(contents: &str) -> Result<EngineProfilesSettings, S
                 .profiles
                 .into_iter()
                 .map(|record| {
-                    Ok(EngineProfileRecord {
-                        id: record.id,
-                        preload: false,
-                        thread_policy: Default::default(),
-                        profile: record.profile.migrate(record.max_visits)?,
-                    })
+                    Ok(EngineProfileRecord { measured_scenes: Default::default(), id: record.id,
+                    preload: false,
+                    thread_policy: Default::default(),
+                    profile: record.profile.migrate(record.max_visits)?, })
                 })
                 .collect::<Result<_, String>>()?,
         }
@@ -306,6 +303,7 @@ pub fn parse_engine_profiles(contents: &str) -> Result<EngineProfilesSettings, S
                 id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
                 preload: false,
                 thread_policy: Default::default(),
+                measured_scenes: Default::default(),
                 profile: legacy.profile.migrate(legacy.max_visits)?,
             }],
         }
@@ -349,6 +347,7 @@ pub fn prepare_engine_profiles_save(
     // Ordinary profile forms cannot manufacture or overwrite this narrow transaction owner.
     for record in &mut settings.profiles {
         record.thread_policy = Default::default();
+        record.measured_scenes = Default::default();
     }
     let mut destination = 0;
     for existing in &current.profiles {
@@ -358,6 +357,7 @@ pub fn prepare_engine_profiles_save(
         {
             settings.profiles[destination..=destination + offset].rotate_right(1);
             settings.profiles[destination].thread_policy = existing.thread_policy.clone();
+            settings.profiles[destination].measured_scenes = existing.measured_scenes.clone();
             if settings.profiles[destination].profile != existing.profile {
                 settings.profiles[destination].thread_policy.revision = existing
                     .thread_policy

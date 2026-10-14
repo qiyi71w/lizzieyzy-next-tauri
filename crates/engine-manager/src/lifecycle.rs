@@ -41,6 +41,7 @@ mod auto_load_recovery;
 mod batch;
 mod continuation;
 mod evaluation;
+pub mod measured_report;
 pub use continuation::ContinuationAction;
 #[cfg(test)]
 mod evaluation_tests;
@@ -285,6 +286,7 @@ struct Inner {
     evaluation_worker: Arc<std::sync::atomic::AtomicBool>,
     runtime_control_writer: Arc<std::sync::atomic::AtomicBool>,
     retain_node_analysis: std::sync::atomic::AtomicBool,
+    measured: Mutex<measured_report::Owner>,
 }
 
 #[derive(Clone)]
@@ -304,6 +306,7 @@ impl ForegroundEngineManager {
                 evaluation_worker: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 runtime_control_writer: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 retain_node_analysis: std::sync::atomic::AtomicBool::new(true),
+                measured: Mutex::new(measured_report::Owner::default()),
                 state: Mutex::new(ManagerState {
                     revision: 0,
                     phase: Phase::NoEngine { failure: None },
@@ -677,6 +680,15 @@ impl ForegroundEngineManager {
         operation_kind: EngineOperationDto,
         profile_id: &str,
     ) -> Result<(), EngineFailureDto> {
+        if matches!(operation_kind,EngineOperationDto::Start|EngineOperationDto::Restart) {
+            self.retire_setup_for_foreground().map_err(|_|continuous_invalid_state(&self.lock(),"Setup worker must finish actual cleanup before foreground Start"))?;
+        } else if self.setup_operation_busy() {
+            return Err(continuous_invalid_state(&self.lock(),"Setup measurement owns foreground admission"));
+        }
+        self.begin_start_scene(operation_kind, profile_id, None)
+    }
+
+    fn begin_start_scene(&self, operation_kind: EngineOperationDto, profile_id: &str, scene: Option<app_model::MeasuredSceneDto>) -> Result<(), EngineFailureDto> {
         match_reservation::require_unreserved(&self.lock())?;
         let saved = match self.inner.catalog.get(profile_id) {
             Some(saved) => saved,
@@ -710,7 +722,14 @@ impl ForegroundEngineManager {
             self.yield_preloads_locked(&mut state);
             state.operation += 1;
             state.operation_kind = operation_kind;
-            let run = starting_run(&saved);
+            let mut run = starting_run(&saved);
+            run.measured_scene = scene.or_else(|| {
+                (matches!(operation_kind, EngineOperationDto::Start | EngineOperationDto::Restart)
+                    && run.adapter_kind == EngineBackend::KataGoGtp).then_some(app_model::MeasuredSceneDto::Live)
+            });
+            if run.measured_scene == Some(app_model::MeasuredSceneDto::WholeGame) {
+                run.adapter_kind = EngineBackend::KataGoAnalysis;
+            }
             state.phase = Phase::Starting(run.clone());
             auto_load_recovery::started(&mut state, &run, operation_kind);
             publish_snapshot(&mut state);
@@ -932,7 +951,15 @@ impl ForegroundEngineManager {
         Ok(job_id)
     }
 
-    pub fn start_selected_node_job(
+    pub fn start_selected_node_job(&self,request:SelectedNodeJobRequest)->Result<AnalysisJobStartedDto,EngineFailureDto>{
+        if self.measured_reservation(){self.retire_setup_for_foreground().map_err(|_|continuous_invalid_state(&self.lock(),"Measurement cleanup must finish before foreground analysis"))?;}
+        self.start_selected_node_job_owned(request)
+    }
+    pub fn start_measured_selected_node_job(&self,request:SelectedNodeJobRequest,lease:&measured_report::SetupLease)->Result<AnalysisJobStartedDto,EngineFailureDto>{
+        lease.check().map_err(|_|continuous_invalid_state(&self.lock(),"Measurement lease retired"))?;
+        self.start_selected_node_job_owned(request)
+    }
+    fn start_selected_node_job_owned(
         &self,
         request: SelectedNodeJobRequest,
     ) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
@@ -1452,9 +1479,13 @@ impl ForegroundEngineManager {
     }
 
     fn reconcile_continuous(&self) {
+        if self.measured_reservation(){return;}
         self.reconcile_auto_load_recovery();
         let work = {
             let mut state = self.lock();
+            if current_admitting_run(&state.phase).is_some_and(|run| run.measured_scene == Some(app_model::MeasuredSceneDto::WholeGame)) {
+                return;
+            }
             if state.match_reservation.is_some() {
                 return;
             }
@@ -1730,7 +1761,13 @@ impl Inner {
             return Ok(());
         }
 
-        let mut spec = build_command_spec(&run.profile_snapshot).map_err(|error| {
+        let mut launch_profile = run.profile_snapshot.clone();
+        if run.measured_scene == Some(app_model::MeasuredSceneDto::WholeGame) {
+            if let app_model::EngineAdapterSettings::KataGoGtp(settings) = &launch_profile.adapter {
+                launch_profile.adapter = app_model::EngineAdapterSettings::KataGoAnalysis(settings.clone());
+            }
+        }
+        let mut spec = build_command_spec(&launch_profile).map_err(|error| {
             failure(
                 kind,
                 EngineFailureKind::Start,
@@ -1752,6 +1789,7 @@ impl Inner {
                         None,
                     )
                 })?;
+        measured_report::apply_launch(self, run, &mut spec, &capture, operation, background);
         let resource_deadline = Instant::now() + Duration::from_secs(30);
         let resources = ResourceSnapshot::capture(
             run,
@@ -3633,6 +3671,9 @@ fn validate_selected_admission(
     state: &ManagerState,
     request: &SelectedNodeJobRequest,
 ) -> Result<EngineRunDto, EngineFailureDto> {
+    if current_admitting_run(&state.phase).is_some_and(|run| run.measured_scene == Some(app_model::MeasuredSceneDto::WholeGame)) {
+        return Err(continuous_invalid_state(state, "An independent whole-game scene cannot serve ordinary, quick or HumanSL analysis"));
+    }
     match_reservation::require_unreserved(state)?;
     game_move::require_idle_move(state)?;
     runtime_control::require_idle(state)?;
@@ -4005,15 +4046,13 @@ fn current_run_id(phase: &Phase) -> Option<String> {
 }
 
 fn starting_run(saved: &SavedEngineProfile) -> EngineRunDto {
-    EngineRunDto {
-        run_id: Uuid::new_v4().to_string(),
-        profile_id: saved.profile_id.clone(),
-        adapter_kind: saved.profile.adapter_kind(),
-        profile_snapshot: saved.profile.clone(),
-        thread_policy_snapshot: saved.thread_policy.clone(),
-        capability_snapshot: None,
-        qualified_resource: None,
-    }
+    EngineRunDto { measured_scenes_snapshot: saved.measured_scenes.clone(), measured_scene: None, run_id: Uuid::new_v4().to_string(),
+    profile_id: saved.profile_id.clone(),
+    adapter_kind: saved.profile.adapter_kind(),
+    profile_snapshot: saved.profile.clone(),
+    thread_policy_snapshot: saved.thread_policy.clone(),
+    capability_snapshot: None,
+    qualified_resource: None, }
 }
 
 fn diagnostic_text_for_state(state: &ManagerState, run_id: &str, text: &str) -> FailureText {

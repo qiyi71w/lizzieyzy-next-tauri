@@ -7,6 +7,7 @@ import * as backend from "../api/backend";
 import type { EngineProfileRecordDto, EvaluationSnapshotDto } from "../domain/types";
 import { EngineEvaluationPanel } from "./EngineEvaluationPanel";
 import { t } from "../i18n/resources";
+import * as measuredReport from "../api/measuredReport";
 import productionResult from "../../../../crates/engine-manager/tests/fixtures/katago-1.18.2-benchmark/variations-result.json";
 
 const idle: EvaluationSnapshotDto = { evaluation_id: null, target_id: null, input_revision: null, phase: "idle", process_id: null, exit_code: null, output: [], output_truncated: false, message: null, result: null };
@@ -23,6 +24,7 @@ beforeEach(() => {
   vi.spyOn(backend, "getEngineEvaluation").mockResolvedValue(idle);
   vi.spyOn(backend, "startEngineEvaluation").mockResolvedValue(running);
   vi.spyOn(backend, "cancelEngineEvaluation").mockResolvedValue({ ...running, phase: "cancelled", process_id: null });
+  vi.spyOn(measuredReport, "measuredReportBusy").mockResolvedValue(false);
 });
 afterEach(async () => {
   await act(async () => root?.unmount()); root = null;
