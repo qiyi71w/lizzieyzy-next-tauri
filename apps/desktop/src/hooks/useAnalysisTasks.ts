@@ -331,12 +331,16 @@ export function useAnalysisTasks(input: Host) {
     } : null;
   }
 
-  async function refreshAnalysisTaskSnapshot(force = false) {
+  async function refreshAnalysisTaskSnapshot(force = false, started?: AnalysisTaskDto) {
     if (!nativeRuntime || (analysisTaskActionInFlightRef.current && !force)) return analysisTaskRef.current;
     const request = ++analysisTaskSnapshotRequestRef.current;
     try {
       const next = await analysisTaskSnapshot();
-      if (request === analysisTaskSnapshotRequestRef.current) adoptAnalysisTask(next);
+      if (request === analysisTaskSnapshotRequestRef.current
+        && (!started || (started.generation === host.current.currentGame()?.generation
+          && started.run_id === runFromSnapshot(host.current.engineSnapshot())?.run_id
+          && next?.task_id === started.task_id && next.run_id === started.run_id
+          && next.generation === started.generation))) adoptAnalysisTask(next);
       return next;
     } catch {
       return null;
@@ -453,7 +457,8 @@ export function useAnalysisTasks(input: Host) {
     setAnalysisScopePreview(preview);
     adoptAnalysisTask(started);
     host.current.message(`Analysis task ${started.state}: ${analysisTaskProgress(started)} completed.`);
-    void refreshAnalysisTaskSnapshot();
+    // A fast task may complete while its start action suppresses event-driven reads.
+    void refreshAnalysisTaskSnapshot(true, started);
   }
 
   async function handleStartAnalysisTask() {
