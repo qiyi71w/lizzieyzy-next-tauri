@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
 import * as backend from "../api/backend";
 import * as api from "../api/threadPolicy";
-import type { EngineProfileRecordDto, ThreadPolicyStatusDto } from "../domain/types";
+import type { EngineProfileRecordDto, EngineProfilesSettingsDto, EngineRunDto, RuntimeThreadsSnapshotDto, ThreadPolicyStatusDto } from "../domain/types";
 import { EngineThreadPolicyPanel } from "./EngineThreadPolicyPanel";
 import { t } from "../i18n/resources";
 
@@ -87,4 +87,44 @@ it("browser preview exposes native qualification limits while draft Cancel stays
   button("cancel").focus(); expect(document.activeElement).toBe(button("cancel"));
   await click("cancel"); expect(host.querySelector("select")!.value).toBe("cfg");
   expect(api.getThreadPolicyStatus).not.toHaveBeenCalled();
+});
+
+it("keeps recommendation, saved strategy, launch and actual readback independent", async () => {
+  const resource = { profile_revision: "run-revision", resources: [], origin: "local_unknown", version: "1.18.2", backend: "Eigen", source_commit: null, static_zlib_exemption: false,
+    thread_sources: { entries: [], saved: 2, launch_override: 6, effective: 6, analysis_threads: 1, error: null } };
+  const recommendation = { evaluation_id: "evaluation-a", target_id: "a", input_revision: "input-a", policy_revision: 3, source_revision: "upstream", threads: 4, seconds_per_move: "5", source_row: "recommended", qualified_resource: resource, command_revision: "command", environment: "environment" };
+  vi.mocked(api.getThreadPolicyStatus).mockResolvedValue({ ...qualified, recommendation });
+  const run: EngineRunDto = { run_id: "run-b", profile_id: "b", adapter_kind: "generic_gtp", profile_snapshot: b.profile, qualified_resource: resource };
+  const runtime: RuntimeThreadsSnapshotDto = { run_id: "run-b", profile_revision: "run-revision", supported: true, reason: null, minimum: 1, maximum: 4096, sources: resource.thread_sources, request_id: "read", requested: 8, actual: 8, temporary: true, status: "confirmed", failure: null };
+  const read = vi.spyOn(backend, "getRuntimeThreads").mockResolvedValue(runtime);
+  await act(async () => root.render(<EngineThreadPolicyPanel record={a} evaluationId="evaluation-a" disabled={false} currentRun={run} />));
+  expect([...host.querySelectorAll("dd")].map(node => node.textContent)).toEqual([
+    `4 · ${t("threadPolicy.valid")}`, t("threadPolicy.cfg"), "6 · Engine B (b) · run-b", `8 · ${t("threads.confirmed")}`,
+  ]);
+  await choose("benchmark");
+  expect(host.querySelectorAll("dd")[1].textContent).toBe(t("threadPolicy.cfg"));
+  const next = Promise.withResolvers<RuntimeThreadsSnapshotDto>();
+  read.mockReturnValue(next.promise);
+  await act(async () => root.render(<EngineThreadPolicyPanel record={a} evaluationId="evaluation-a" disabled={false} currentRun={{ ...run, run_id: "new-run" }} />));
+  expect(host.querySelectorAll("dd")[3].textContent).toContain(t("evaluation.unavailable"));
+  await act(async () => next.resolve(runtime));
+  expect(host.querySelectorAll("dd")[3].textContent).not.toContain("8");
+});
+
+it("rejects qualification and save feedback from an earlier saved input revision", async () => {
+  const stale = Promise.withResolvers<ThreadPolicyStatusDto>();
+  vi.mocked(api.getThreadPolicyStatus).mockReturnValueOnce(stale.promise).mockResolvedValue({ ...qualified, validity: "changed" });
+  await render();
+  const changed = { ...a, profile: { ...a.profile, argv: ["-t", "3"] } };
+  await render(changed);
+  await act(async () => stale.resolve(qualified));
+  expect(host.textContent).toContain(t("threadPolicy.changed"));
+  expect(host.textContent).not.toContain(t("threadPolicy.valid"));
+  const saving = Promise.withResolvers<EngineProfilesSettingsDto>();
+  vi.mocked(api.saveThreadPolicy).mockReturnValueOnce(saving.promise);
+  await click("save");
+  await render({ ...changed, profile: { ...changed.profile, argv: ["-t", "5"] } });
+  await act(async () => saving.reject(new Error("OLD SAVE ERROR")));
+  expect(host.textContent).not.toContain("OLD SAVE ERROR");
+  expect(published).not.toHaveBeenCalled();
 });

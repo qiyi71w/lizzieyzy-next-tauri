@@ -505,7 +505,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
         </label>
         <p>{t("evaluation.startupHint")}</p>
       </div>
-      {visible && <EngineEvaluationPanel profiles={profiles} disabled={disabled || catalogBusy || modelBusy}
+      {visible && <EngineEvaluationPanel profiles={profiles} currentRun={run} disabled={disabled || catalogBusy || modelBusy}
         onPolicyBusyChange={(busy) => { catalogWritePending.current = busy; setCatalogBusy(busy); }}
         onProfilesSaved={(saved) => { setProfiles(saved); onProfilesChange?.(saved); }} />}
       {visible && <RuntimeThreadsPanel runId={run?.run_id ?? null} disabled={disabled || snapshot.lifecycle.state !== "ready"} />}
