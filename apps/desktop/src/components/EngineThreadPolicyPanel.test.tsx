@@ -61,10 +61,12 @@ it.each(["none", "invalid", "changed", "unknown"] as const)("shows %s qualificat
   vi.mocked(api.getThreadPolicyStatus).mockResolvedValue({ ...qualified, validity, reason: "policy_resources_changed" });
   await render(); await choose("benchmark");
   expect(host.textContent).toContain(t(`threadPolicy.${validity}`));
-  expect(button("save").disabled).toBe(true);
+  expect(button("save").getAttribute("aria-disabled")).toBe("true");
+  await click("save");
+  expect(api.saveThreadPolicy).not.toHaveBeenCalled();
   expect(host.querySelector("select")!.value).toBe("benchmark");
   await choose("cfg");
-  expect(button("save").disabled).toBe(false);
+  expect(button("save").getAttribute("aria-disabled")).toBe("false");
 });
 
 it("fences a late A qualification after switching to B and reports B's identity", async () => {
@@ -75,7 +77,7 @@ it("fences a late A qualification after switching to B and reports B's identity"
   await act(async () => pending.resolve(qualified));
   expect(host.textContent).toContain("Engine B (b)");
   expect(host.textContent).toContain(t("threadPolicy.unknown"));
-  await choose("benchmark"); expect(button("save").disabled).toBe(true);
+  await choose("benchmark"); expect(button("save").getAttribute("aria-disabled")).toBe("true");
   expect(api.saveThreadPolicy).not.toHaveBeenCalled();
 });
 
@@ -83,7 +85,7 @@ it("browser preview exposes native qualification limits while draft Cancel stays
   vi.mocked(backend.isTauriRuntime).mockReturnValue(false);
   await render(); await choose("benchmark");
   expect(host.textContent).toContain(t("threadPolicy.reason.policy_native_only"));
-  expect(button("save").disabled).toBe(true);
+  expect(button("save").getAttribute("aria-disabled")).toBe("true");
   button("cancel").focus(); expect(document.activeElement).toBe(button("cancel"));
   await click("cancel"); expect(host.querySelector("select")!.value).toBe("cfg");
   expect(api.getThreadPolicyStatus).not.toHaveBeenCalled();
@@ -127,4 +129,20 @@ it("rejects qualification and save feedback from an earlier saved input revision
   await act(async () => saving.reject(new Error("OLD SAVE ERROR")));
   expect(host.textContent).not.toContain("OLD SAVE ERROR");
   expect(published).not.toHaveBeenCalled();
+});
+
+it("retains the focused Save control while post-save qualification is pending", async () => {
+  await render();
+  const qualification = Promise.withResolvers<ThreadPolicyStatusDto>();
+  vi.mocked(api.getThreadPolicyStatus).mockReturnValueOnce(qualification.promise);
+  button("save").focus();
+  await click("save");
+  expect(document.activeElement).toBe(button("save"));
+  expect(button("save").disabled).toBe(false);
+  expect(button("save").getAttribute("aria-disabled")).toBe("true");
+  await click("save");
+  expect(api.saveThreadPolicy).toHaveBeenCalledTimes(1);
+  await act(async () => qualification.resolve(qualified));
+  expect(document.activeElement).toBe(button("save"));
+  expect(button("save").getAttribute("aria-disabled")).toBe("false");
 });

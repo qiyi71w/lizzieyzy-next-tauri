@@ -116,8 +116,8 @@ export function EngineThreadPolicyPanel({ record, evaluationId, disabled, curren
       <p>{t(`threadPolicy.${status.validity}`)} — {threadPolicyMessage(status.reason)}</p>
       {status.recommendation && <p>{t("threadPolicy.source")}: {status.recommendation.source_revision} / {status.recommendation.seconds_per_move} / {status.recommendation.threads}<br />{status.recommendation.source_row}</p>}
     </div> : <p role="status">{native ? t("threadPolicy.loading") : threadPolicyMessage("policy_native_only")}</p>}
-    <button type="button" disabled={!native || (!status && !pending) || (disabled && !pending) || (strategy === "benchmark" && status?.validity !== "valid")}
-      aria-disabled={pending} onClick={() => void save()}>{t("threadPolicy.save")}</button>
+    <button type="button" aria-disabled={!native || !status || disabled || pending || (strategy === "benchmark" && status.validity !== "valid")}
+      onClick={() => void save()}>{t("threadPolicy.save")}</button>
     <button type="button" aria-disabled={pending} onClick={() => { if (!pending) { setStrategy(record.thread_policy?.strategy ?? "cfg"); setFeedback(""); } }}>{t("threadPolicy.cancel")}</button>
     <button type="button" disabled={!native} aria-disabled={pending} onClick={() => { if (!pending) setRefresh((value) => value + 1); }}>{t("threadPolicy.refresh")}</button>
     {feedback && <p role="alert">{feedback}</p>}
