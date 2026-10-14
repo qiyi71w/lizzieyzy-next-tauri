@@ -791,6 +791,6 @@ export type ApplicationMeasurementRequestDto = {
   target_id: string; scene: MeasuredSceneDto; candidate_parameters: Record<string, number>;
   pairs: number; budget: number; fixture_sgf: string; replace_current_document: boolean;
 };
-export type ApplicationMeasurementProbeDto = { operation_id: string; row_id: string; samples_seconds: number[]; sample_times_ms: [number, number][]; finished: boolean };
-export type ApplicationMeasurementProgressDto = { operation_id: string; row_id: string; scene: MeasuredSceneDto; round: number; candidate: boolean; sampling: boolean; closing: boolean };
+export type ApplicationMeasurementProbeDto = { operation_id: string; row_id: string; samples_seconds: number[]; sample_times_ms: [number, number][]; clock_exchange_ms: [number, number, number]; finished: boolean };
+export type ApplicationMeasurementProgressDto = { operation_id: string; row_id: string; scene: MeasuredSceneDto; round: number; candidate: boolean; sampling: boolean; closing: boolean; backend_clock_ms: number };
 export type ApplicationMeasurementResultDto = { report: unknown; evidence: unknown };

@@ -21,6 +21,9 @@ pub(super) struct Owner {
     )>,
     event_loop_samples: Vec<f64>,
     event_loop_times: Vec<[f64; 2]>,
+    row_clock: Option<Instant>,
+    clock_exchanges: Vec<[f64; 3]>,
+    sample_window: Option<[f64; 2]>,
     first_adopted: Option<Instant>,
     probe_finished: bool,
     search_progress: Option<(String, u64)>,
@@ -54,6 +57,7 @@ impl SetupLease {
             candidate,
             sampling: false,
             closing: false,
+            backend_clock_ms: 0.0,
         };
         let mut owner = self.manager.inner.measured.lock().expect("setup owner");
         if owner.generation != self.generation {
@@ -62,6 +66,9 @@ impl SetupLease {
         owner.measurement = Some((target.to_owned(), progress.clone(), parameters));
         owner.event_loop_samples.clear();
         owner.event_loop_times.clear();
+        owner.row_clock = Some(Instant::now());
+        owner.clock_exchanges.clear();
+        owner.sample_window = None;
         owner.probe_finished = false;
         Ok(progress)
     }
@@ -76,10 +83,9 @@ impl SetupLease {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             self.check()?;
-            let mut owner = self.manager.inner.measured.lock().expect("setup owner");
+            let owner = self.manager.inner.measured.lock().expect("setup owner");
             if !owner.event_loop_samples.is_empty() {
-                owner.event_loop_samples.clear();
-                owner.event_loop_times.clear();
+                // Retain pre-t0 observations to prove the eventual window was covered.
                 return Ok(());
             }
             drop(owner);
@@ -102,14 +108,12 @@ impl SetupLease {
             self.check()?;
             let owner = self.manager.inner.measured.lock().expect("setup owner");
             if owner.probe_finished {
-                if owner.event_loop_samples.is_empty() {
-                    return Err("No actual WebView samples inside timed window".into());
-                }
-                let mut sorted = owner.event_loop_samples.clone();
-                sorted.sort_by(f64::total_cmp);
-                let p95 = sorted[(sorted.len() * 95).div_ceil(100) - 1];
-                return Ok(
-                    serde_json::json!({"p95Seconds":p95,"samplesSeconds":owner.event_loop_samples,"scheduleAndExecuteMonotonicMs":owner.event_loop_times,"sampleCount":sorted.len()}),
+                return report::measurement::window_samples(
+                    &owner.event_loop_times,
+                    &owner.clock_exchanges,
+                    owner
+                        .sample_window
+                        .ok_or("Actual measurement window was not recorded")?,
                 );
             }
             drop(owner);
@@ -118,6 +122,16 @@ impl SetupLease {
             }
             thread::sleep(Duration::from_millis(5));
         }
+    }
+    pub fn mark_sample_window(&self, start: Instant, end: Instant) -> Result<(), String> {
+        self.check()?;
+        let mut owner = self.manager.inner.measured.lock().expect("setup owner");
+        let origin = owner.row_clock.ok_or("No measurement clock")?;
+        owner.sample_window = Some([
+            start.duration_since(origin).as_secs_f64() * 1000.0,
+            end.duration_since(origin).as_secs_f64() * 1000.0,
+        ]);
+        Ok(())
     }
     pub fn check(&self) -> Result<(), String> {
         if self.cancelled.load(Ordering::Acquire) {
@@ -223,13 +237,12 @@ impl ForegroundEngineManager {
         Ok(result)
     }
     pub fn measurement_progress(&self) -> Option<app_model::ApplicationMeasurementProgressDto> {
-        self.inner
-            .measured
-            .lock()
-            .expect("setup owner")
-            .measurement
-            .as_ref()
-            .map(|(_, progress, _)| progress.clone())
+        let owner = self.inner.measured.lock().expect("setup owner");
+        owner.measurement.as_ref().map(|(_, progress, _)| {
+            let mut progress = progress.clone();
+            progress.backend_clock_ms = owner.row_clock.expect("row clock").elapsed().as_secs_f64() * 1000.0;
+            progress
+        })
     }
     pub fn measurement_probe(&self, probe: app_model::ApplicationMeasurementProbeDto) -> Result<(), String> {
         let mut owner = self.inner.measured.lock().expect("setup owner");
@@ -252,6 +265,9 @@ impl ForegroundEngineManager {
         if probe.samples_seconds.len() > 1000
             || probe.samples_seconds.iter().any(|v| !v.is_finite() || *v < 0.0)
             || owner.event_loop_samples.len() + probe.samples_seconds.len() > 360000
+            || owner.clock_exchanges.len() >= 360000
+            || probe.clock_exchange_ms.iter().any(|v| !v.is_finite() || *v < 0.0)
+            || probe.clock_exchange_ms[2] < probe.clock_exchange_ms[0]
             || probe.sample_times_ms.len() != probe.samples_seconds.len()
             || probe
                 .sample_times_ms
@@ -269,6 +285,7 @@ impl ForegroundEngineManager {
         }
         owner.event_loop_samples.extend(probe.samples_seconds);
         owner.event_loop_times.extend(probe.sample_times_ms);
+        owner.clock_exchanges.push(probe.clock_exchange_ms);
         owner.probe_finished |= probe.finished;
         Ok(())
     }

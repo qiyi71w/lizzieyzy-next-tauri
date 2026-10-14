@@ -7,6 +7,7 @@ export async function measureWithWebViewProbe(request: ApplicationMeasurementReq
   let progress: ApplicationMeasurementProgressDto | null = null;
   let samples: number[] = [];
   let sampleTimes: [number, number][] = [];
+  let clockExchange: [number, number, number] | null = null;
   let querying = false;
   let sending = false;
   let closedRow: string | null = null;
@@ -22,19 +23,22 @@ export async function measureWithWebViewProbe(request: ApplicationMeasurementReq
     if (progress?.sampling) { samples.push(delay); sampleTimes.push([expected, now]); }
     if (!querying) {
       querying = true;
+      const sent = performance.now();
       void measurementProgress().then((next) => {
         if (!active) return;
+        const received = performance.now();
+        clockExchange = next ? [sent, next.backend_clock_ms, received] : null;
         if (next?.row_id !== progress?.row_id || next?.sampling && !progress?.sampling) { samples = []; sampleTimes = []; previous = performance.now(); }
         progress = next;
       }).catch((error: unknown) => { failure = error; }).finally(() => { querying = false; });
     }
-    if (!sending && progress && closedRow !== progress.row_id && (samples.length > 0 || progress.closing)) {
+    if (!sending && progress && clockExchange && closedRow !== progress.row_id && (samples.length > 0 || progress.closing)) {
       sending = true;
       const captured = progress;
       const capturedSamples = samples;
       const capturedTimes = sampleTimes;
       samples = []; sampleTimes = [];
-      void submitMeasurementProbe({ operation_id: captured.operation_id, row_id: captured.row_id, samples_seconds: capturedSamples, sample_times_ms: capturedTimes, finished: captured.closing })
+      void submitMeasurementProbe({ operation_id: captured.operation_id, row_id: captured.row_id, samples_seconds: capturedSamples, sample_times_ms: capturedTimes, clock_exchange_ms: clockExchange, finished: captured.closing })
         .then(() => { if (captured.closing) closedRow = captured.row_id; })
         .catch(async (error: unknown) => {
           const latest = await measurementProgress();

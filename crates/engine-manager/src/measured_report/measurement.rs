@@ -147,3 +147,94 @@ pub fn assemble(
         evidence: json!({"coldAndSampling":cold,"ramStatus":"experimental-unmeasured","gpuMetric":"sampled lifecycle total GPU, not continuous peak or per-process"}),
     })
 }
+
+/// Correlate independent monotonic clocks through causally bracketed IPC exchanges.
+/// No midpoint or polling delay is treated as an exact clock offset.
+pub fn window_samples(times: &[[f64; 2]], exchanges: &[[f64; 3]], window: [f64; 2]) -> Result<Value, String> {
+    let [start, end] = window;
+    if !start.is_finite() || !end.is_finite() || start >= end || exchanges.is_empty() || times.is_empty() {
+        return Err("WebView measurement window is unavailable".into());
+    }
+    let mut lower = f64::NEG_INFINITY;
+    let mut upper = f64::INFINITY;
+    for &[sent, backend, received] in exchanges {
+        if !sent.is_finite()
+            || !backend.is_finite()
+            || !received.is_finite()
+            || sent < 0.0
+            || backend < 0.0
+            || received < sent
+        {
+            return Err("Invalid WebView clock exchange".into());
+        }
+        lower = lower.max(backend - received);
+        upper = upper.min(backend - sent);
+    }
+    if lower > upper || !exchanges.iter().any(|e| e[1] <= start) || !exchanges.iter().any(|e| e[1] >= end) {
+        return Err("WebView clocks do not bracket the actual measurement window".into());
+    }
+    if times.iter().any(|t| !t[0].is_finite() || !t[1].is_finite())
+        || times.windows(2).any(|w| w[0][1] >= w[1][1])
+    {
+        return Err("WebView timer observations are not ordered".into());
+    }
+    if times[0][0] + upper > start || times.last().unwrap()[1] + lower < end {
+        return Err("WebView samples do not cover the actual measurement window".into());
+    }
+    let mut included = Vec::new();
+    let mut samples = Vec::new();
+    for (index, &[scheduled, actual]) in times.iter().enumerate() {
+        // Both endpoints must be provably inside, including the entire delay.
+        if scheduled + lower >= start && actual + upper <= end {
+            included.push(index);
+            samples.push((actual - scheduled).max(0.0) / 1000.0);
+        }
+    }
+    if samples.is_empty() {
+        return Err("No clock-qualified WebView samples inside actual measurement window".into());
+    }
+    let mut sorted = samples.clone();
+    sorted.sort_by(f64::total_cmp);
+    Ok(
+        json!({"p95Seconds":sorted[(sorted.len()*95).div_ceil(100)-1],"samplesSeconds":samples,"sampleCount":sorted.len(),"excludedSampleCount":times.len()-included.len(),"scheduleAndExecuteMonotonicMs":times,"clockExchangesMs":exchanges,"backendWindowMs":window,"backendMinusWebViewOffsetBoundsMs":[lower,upper],"includedSampleIndices":included,"boundaryPolicy":"only complete timer intervals provably inside exact backend boundaries; raw observations retain excluded boundary intervals"}),
+    )
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+    #[test]
+    fn delayed_polling_does_not_extend_the_measured_window() {
+        let times = [[0.0, 0.0], [10.0, 12.0], [22.0, 24.0], [34.0, 40.0], [50.0, 95.0]];
+        let result = window_samples(
+            &times,
+            &[[0.0, 100.0, 0.0], [100.0, 200.0, 100.0]],
+            [105.0, 145.0],
+        )
+        .unwrap();
+        assert_eq!(result["includedSampleIndices"], json!([1, 2, 3]));
+        assert_eq!(result["p95Seconds"], json!(0.006));
+    }
+    #[test]
+    fn uncertain_boundary_samples_are_not_assigned_a_midpoint() {
+        let result = window_samples(
+            &[[0.0, 0.0], [10.0, 12.0], [22.0, 24.0], [34.0, 40.0], [50.0, 60.0]],
+            &[[0.0, 100.0, 4.0], [60.0, 160.0, 64.0]],
+            [109.0, 139.0],
+        )
+        .unwrap();
+        assert_eq!(result["includedSampleIndices"], json!([2]));
+        assert_eq!(result["backendMinusWebViewOffsetBoundsMs"], json!([96.0, 100.0]));
+    }
+    #[test]
+    fn missing_coverage_or_incompatible_clocks_is_unavailable() {
+        assert!(window_samples(&[[10.0, 12.0]], &[[0.0, 100.0, 0.0]], [105.0, 145.0]).is_err());
+        assert!(window_samples(
+            &[[0.0, 0.0], [100.0, 100.0]],
+            &[[0.0, 100.0, 0.0], [100.0, 201.0, 100.0]],
+            [105.0, 145.0]
+        )
+        .is_err());
+        assert!(window_samples(&[], &[], [0.0, 1.0]).is_err());
+    }
+}

@@ -71,6 +71,8 @@ pub struct ApplicationMeasurementProbeDto {
     pub row_id: String,
     pub samples_seconds: Vec<f64>,
     pub sample_times_ms: Vec<[f64; 2]>,
+    /// WebView send, backend row clock, WebView receive (all milliseconds).
+    pub clock_exchange_ms: [f64; 3],
     pub finished: bool,
 }
 
@@ -83,6 +85,8 @@ pub struct ApplicationMeasurementProgressDto {
     pub candidate: bool,
     pub sampling: bool,
     pub closing: bool,
+    /// Monotonic milliseconds since this row was admitted, sampled while serving this response.
+    pub backend_clock_ms: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

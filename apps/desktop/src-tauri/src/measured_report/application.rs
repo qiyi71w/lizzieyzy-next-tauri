@@ -216,6 +216,12 @@ fn exercise(
     let mut processes = 0;
     let adopted = loop {
         lease.check()?;
+        if matches!(
+            manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::Error { .. } | ForegroundEngineLifecycleDto::NoEngine { .. }
+        ) {
+            return Err("Measurement engine exited or failed before completion".into());
+        }
         if Instant::now() >= deadline {
             return Err("Application measurement completion timed out".into());
         }
@@ -267,6 +273,12 @@ fn exercise(
                 return Err("Independent response probe did not produce active search".into());
             }
             let snapshot = manager.snapshot();
+            if matches!(
+                snapshot.lifecycle,
+                ForegroundEngineLifecycleDto::Error { .. } | ForegroundEngineLifecycleDto::NoEngine { .. }
+            ) {
+                return Err("Measurement engine exited or failed before response probe".into());
+            }
             let searching = if let Some(task_id) = &probe_task {
                 manager.analysis_task_snapshot().is_some_and(|task| {
                     &task.task_id == task_id && task.state == AnalysisTaskStateDto::Searching
@@ -296,7 +308,9 @@ fn exercise(
         } else {
             manager.stop_measured_scene(&run.run_id)?;
         }
-        response_seconds = response.elapsed().as_secs_f64();
+        let finished = Instant::now();
+        response_seconds = finished.duration_since(response).as_secs_f64();
+        lease.mark_sample_window(started, finished)?;
     }
     let mut row =
         json!({"seconds":seconds,"responseSeconds":response_seconds,"maxEngineProcesses":processes});

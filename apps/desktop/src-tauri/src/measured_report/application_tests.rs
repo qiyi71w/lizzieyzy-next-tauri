@@ -73,6 +73,18 @@ fn real_application_measurement_scene_smoke() {
         let result = (|| -> Result<(), String> {
             for scene in [MeasuredSceneDto::Live, MeasuredSceneDto::WholeGame] {
                 let lease = manager.begin_setup_operation()?;
+                let parameters = if scene == MeasuredSceneDto::Live {
+                    serde_json::json!({"numSearchThreads":2,"nnMaxBatchSize":8})
+                } else {
+                    serde_json::json!({"numAnalysisThreads":1,"numSearchThreadsPerAnalysisThread":2,"nnMaxBatchSize":8})
+                };
+                lease.begin_row(
+                    "measurement-cpu",
+                    scene,
+                    1,
+                    false,
+                    serde_json::from_value(parameters).unwrap(),
+                )?;
                 let run = manager.start_independent_measured_scene("measurement-cpu", scene, &lease)?;
                 assert!(manager.reserve_match("unrelated-match").is_err());
                 let fixture = "(;GM[1]FF[4]SZ[9]KM[7.5]RU[Chinese];B[dd];W[ff])";
