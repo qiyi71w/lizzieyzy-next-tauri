@@ -11,6 +11,7 @@ commands += ["kata-set-param", "kata-get-param"]
 threads = 1
 pathlib.Path("pid").write_text(str(os.getpid()))
 stream_count = 0
+focus_stream = False
 def analysis_frame(winrate):
     return f"info move D4 visits 32 winrate {winrate} order 0 pv D4 E5 rootInfo visits 32 winrate {winrate}"
 text = ""
@@ -77,6 +78,16 @@ for raw in sys.stdin:
         elif behavior == "invalid": body = "NaN"
         else: body = str(threads)
     elif name == "kata-analyze":
+        focus_stream = "focus" in command.split()
+        if focus_stream and mode in ("analysis_focus_hold", "analysis_focus_uncertain"):
+            pathlib.Path("held").write_text(number)
+            while not pathlib.Path("release").exists(): time.sleep(0.005)
+            if mode == "analysis_focus_uncertain":
+                print(f"?{number} internal failure\n", flush=True)
+                continue
+        if "focus" in command.split() and not mode.startswith("analysis_focus"):
+            print(f"?{number} Could not parse analyze arguments or arguments out of range\n", flush=True)
+            continue
         stream_count += 1
         print(f"={number}", flush=True)
         if mode == "analysis_invalid":
@@ -92,6 +103,9 @@ for raw in sys.stdin:
     elif name == "stop":
         print(analysis_frame(0.01), flush=True)
         print("", flush=True)
+        if focus_stream and mode == "analysis_focus_final":
+            pathlib.Path("held").write_text(number)
+            while not pathlib.Path("release").exists(): time.sleep(0.005)
         if mode == "analysis_hold_stop":
             print(f"={int(number)-20}\n", flush=True)
             pathlib.Path("held").write_text(number)

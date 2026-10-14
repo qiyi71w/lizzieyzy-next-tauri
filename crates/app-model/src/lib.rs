@@ -763,11 +763,24 @@ pub struct EnginePreloadDto {
 pub struct EngineCapabilitySnapshotDto {
     pub adapter_kind: EngineBackend,
     pub analysis: Option<EngineAnalysisCapabilitiesDto>,
+    #[serde(default)]
+    pub focus: FocusCapabilityDto,
     /// Adapter implementation is available; each request still requires exact admission.
     #[serde(default)]
     pub game_move: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gtp: Option<EngineGtpFactsDto>,
+}
+
+/// Observed only on this process incarnation; never inferred from version/discovery.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FocusCapabilityDto {
+    #[default]
+    Unchecked,
+    Supported,
+    Unsupported,
+    Uncertain,
 }
 
 /// Observed protocol facts only; command discovery does not admit game operations.
@@ -1474,6 +1487,7 @@ mod foreground_engine_wire {
                     })),
                     capability_snapshot: Some(EngineCapabilitySnapshotDto {
                         adapter_kind: EngineBackend::KataGoAnalysis,
+                        focus: FocusCapabilityDto::Unchecked,
                         game_move: true,
                         gtp: None,
                         analysis: Some(EngineAnalysisCapabilitiesDto {

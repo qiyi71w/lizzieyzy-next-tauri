@@ -97,7 +97,14 @@ export function verifiedEngineCapabilitiesLabel(snapshot: ForegroundEngineSnapsh
     ["winrate", "胜率"], ["root_score", "分数"], ["ownership", "ownership"],
     ["policy", "policy"], ["visits_limit", "visits 限制"], ["protocol_cancel", "协议取消"]
   ];
-  return `当前 run 已验证：${labels.map(([key, label]) => `${label} ${capabilities.analysis![key] ? "支持" : "不支持"}`).join(" · ")}。${verifiedGameMoveCapabilitiesLabel(snapshot)}`;
+  const focus = capabilities.focus ?? "unchecked";
+  const focusLabel = {
+    unchecked: "重点分析尚未探测（需要普通本地、已确认局面和空闲 owner）",
+    supported: "重点分析协议支持（当前 Run 已完成真实 probe 与 stop/final）",
+    unsupported: "重点分析语法不支持；普通分析可用，请使用兼容的完整引擎包",
+    uncertain: "重点分析通信不确定；当前 binding 失败，未缓存为不支持"
+  }[focus];
+  return `当前 run 已验证：${labels.map(([key, label]) => `${label} ${capabilities.analysis![key] ? "支持" : "不支持"}`).join(" · ")}。${focusLabel}。${verifiedGameMoveCapabilitiesLabel(snapshot)}`;
 }
 
 export function canStopForegroundEngine(snapshot: ForegroundEngineSnapshotDto): boolean {

@@ -3,6 +3,8 @@ use super::*;
 use app_model::{AnalysisFrameDto, ComputeBudgetDto, EngineGtpFactsDto, GameMoveRequestDto};
 use std::sync::mpsc::RecvTimeoutError;
 
+mod focus;
+
 pub(super) fn capabilities(
     run: &EngineRunDto,
     facts: &EngineGtpFactsDto,
@@ -84,7 +86,7 @@ impl ForegroundEngineManager {
         body: &str,
         stream: bool,
     ) -> Result<Command, String> {
-        let (id, response) = {
+        let (id, response, stdin) = {
             let mut state = self.lock();
             if owned_live(&state, &started.run_id).is_none() {
                 return Err("analysis Run retired".into());
@@ -97,14 +99,55 @@ impl ForegroundEngineManager {
             let response = state
                 .gtp_dispatch
                 .register(&started.run_id, id, &started.job_id, stream)?;
-            (id, response)
+            let stdin = engine_stdin(&state, &started.run_id).ok_or("analysis stdin retired")?;
+            (id, response, stdin)
         };
         let (sender, written) = mpsc::sync_channel(1);
         let manager = self.clone();
         let run_id = started.run_id.clone();
+        let job_id = started.job_id.clone();
         let payload = format!("{id} {body}");
         thread::spawn(move || {
-            let result = manager.write_live_jsonl(&run_id, &payload);
+            let mut guard = stdin.lock().expect("engine stdin lock");
+            let state = manager.lock();
+            let valid = owned_live(&state, &run_id).is_some()
+                && state.jobs.iter().any(|job| {
+                    job.job_id == job_id
+                        && job.run_id == run_id
+                        && !job.terminal
+                        && (!stream || job.disposition == JobDisposition::Running)
+                });
+            drop(state);
+            let result = if !valid {
+                Err(failure(
+                    EngineOperationDto::Job,
+                    EngineFailureKind::Cancellation,
+                    "queued analysis command retired before write".into(),
+                    Some(&run_id),
+                    None,
+                    None,
+                ))
+            } else if let Some(writer) = guard.as_mut() {
+                write_jsonl(writer, &payload).map_err(|_| {
+                    failure(
+                        EngineOperationDto::Job,
+                        EngineFailureKind::Protocol,
+                        "analysis write failed".into(),
+                        Some(&run_id),
+                        None,
+                        None,
+                    )
+                })
+            } else {
+                Err(failure(
+                    EngineOperationDto::Job,
+                    EngineFailureKind::Protocol,
+                    "analysis stdin closed".into(),
+                    Some(&run_id),
+                    None,
+                    None,
+                ))
+            };
             let _ = sender.send(result);
         });
         Ok(Command {
@@ -119,18 +162,29 @@ impl ForegroundEngineManager {
         thread::spawn(move || {
             let result = manager.run_gtp_analysis(&started, &request);
             if let Err(error) = result {
-                let message = match error.message {
-                    AnalysisFailureText::Public(text) => text,
-                    AnalysisFailureText::Dynamic(text) => {
-                        manager.inner.diagnostic_text(&started.run_id, &text)
-                    }
-                    AnalysisFailureText::Context(context, text) => FailureText::from(context)
-                        .then(": ")
-                        .then(manager.inner.diagnostic_text(&started.run_id, &text)),
-                };
-                manager
-                    .inner
-                    .fail_analysis_run(&started.run_id, error.kind, message);
+                if error.kind == EngineFailureKind::Cancellation {
+                    let mut state = manager.lock();
+                    let outcome = state
+                        .jobs
+                        .iter()
+                        .find(|job| job.job_id == started.job_id)
+                        .map(|job| stopped_outcome(job.disposition));
+                    finish_selected_node_job(&mut state, &started, outcome, None, None);
+                    publish_snapshot(&mut state);
+                } else {
+                    let message = match error.message {
+                        AnalysisFailureText::Public(text) => text,
+                        AnalysisFailureText::Dynamic(text) => {
+                            manager.inner.diagnostic_text(&started.run_id, &text)
+                        }
+                        AnalysisFailureText::Context(context, text) => FailureText::from(context)
+                            .then(": ")
+                            .then(manager.inner.diagnostic_text(&started.run_id, &text)),
+                    };
+                    manager
+                        .inner
+                        .fail_analysis_run(&started.run_id, error.kind, message);
+                }
             }
             manager
                 .lock()
@@ -176,6 +230,7 @@ impl ForegroundEngineManager {
             publish_snapshot(&mut state);
             return Ok(());
         }
+        self.probe_focus(started, request)?;
         {
             let mut state = self.lock();
             let Some(job) = state

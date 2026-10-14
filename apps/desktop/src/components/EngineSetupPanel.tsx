@@ -469,7 +469,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
         : adapterKind === "kata_go_gtp" ? t("engineRules.boundary")
         : "静态 adapter 上限：KataGoAnalysis 可提供单点、连续、整谱/task、候选/PV、胜率/分数、ownership/policy、visits 限制与协议取消；实际能力以当前 run 验证结果为准。"}</p>
       {adapterKind === "generic_gtp" ? <p className="message" role="status">启动后验证 GTP v2、引擎名称、版本与命令列表；保存配置不会验证协议或改变当前 run。</p> : null}
-      <p className="message" aria-label="当前 run 能力">{verifiedEngineCapabilitiesLabel(snapshot)}</p>
+      <p className="message engine-resource-message" aria-label="当前 run 能力">{verifiedEngineCapabilitiesLabel(snapshot)}</p>
       <EngineResourceDetails run={run} />
       {engineFailure && <section role="alert" className="message engine-resource-message">
         <h4>{t("engineResource.failure")}: {engineFailure.kind}</h4>
