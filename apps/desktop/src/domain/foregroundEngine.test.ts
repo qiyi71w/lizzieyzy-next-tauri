@@ -66,6 +66,20 @@ it("admits explicitly qualified GTP main analysis without policy, not whole-game
   expect(admitsForegroundEngineQuery(snapshot(3, { state: "ready", run }))).toBe(true);
 });
 
+it("discloses focus qualification without disabling ordinary analysis or accepting stale capability", () => {
+  const states = ["unchecked", "supported", "unsupported", "uncertain"] as const;
+  const labels = ["尚未探测", "已完成真实 probe", "普通分析可用", "通信不确定"];
+  for (const [index, focus] of states.entries()) {
+    const current = snapshot(index + 2, { state: "ready", run: {
+      ...run, capability_snapshot: { ...run.capability_snapshot!, focus }
+    } });
+    expect(verifiedEngineCapabilitiesLabel(current)).toContain(labels[index]);
+    expect(admitsForegroundEngineQuery(current)).toBe(true);
+    const stale = snapshot(1, { state: "ready", run });
+    expect(mergeForegroundEngineSnapshot(current, stale)).toEqual(current);
+  }
+});
+
 describe("verified game move disclosure", () => {
   it("requires qualification even when GTP advertises genmove and setup commands", () => {
     const gtpRun: EngineRunDto = {

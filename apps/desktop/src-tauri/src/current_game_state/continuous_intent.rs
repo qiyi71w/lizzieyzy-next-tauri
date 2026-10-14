@@ -879,6 +879,7 @@ fn swing_selected_missing_required_score_fails_without_fake_deep_search() {
         .manager
         .set_capability_snapshot_for_tests(Some(EngineCapabilitySnapshotDto {
             adapter_kind: EngineBackend::KataGoAnalysis,
+            focus: Default::default(),
             game_move: true,
             gtp: None,
             analysis: Some(app_model::EngineAnalysisCapabilitiesDto {
@@ -909,6 +910,7 @@ fn swing_selected_missing_required_score_fails_without_fake_deep_search() {
         .manager
         .set_capability_snapshot_for_tests(Some(EngineCapabilitySnapshotDto {
             adapter_kind: EngineBackend::KataGoAnalysis,
+            focus: Default::default(),
             game_move: true,
             gtp: None,
             analysis: Some(app_model::EngineAnalysisCapabilitiesDto {

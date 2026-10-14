@@ -1167,6 +1167,161 @@ mod controlled {
         }
     }
 
+    fn focus_rig(mode: &str) -> Rig {
+        let rig = Rig::new(mode);
+        let ForegroundEngineLifecycleDto::Ready { run } = rig.manager.snapshot().lifecycle else {
+            panic!()
+        };
+        let mut resource = (*run.qualified_resource.unwrap()).clone();
+        // Only the process is substituted; admission, writer, parser and publication are production.
+        resource
+            .resources
+            .iter_mut()
+            .find(|r| r.component == "executable")
+            .unwrap()
+            .sha256 = "20c4ede9f39455ab3c019ada7a22a6e4d7696361161feed5c56f2c42d1507bd0".into();
+        rig.manager.set_qualified_resource_for_tests(resource);
+        rig
+    }
+
+    fn focus_status(rig: &Rig) -> FocusCapabilityDto {
+        let run = match rig.manager.snapshot().lifecycle {
+            ForegroundEngineLifecycleDto::Ready { run } | ForegroundEngineLifecycleDto::Error { run, .. } => {
+                run
+            }
+            other => panic!("{other:?}"),
+        };
+        run.capability_snapshot.unwrap().focus
+    }
+
+    #[test]
+    fn focus_unknown_or_remote_executable_does_not_probe_or_interrupt_ordinary() {
+        let rig = Rig::new("analysis_focus_hold");
+        let events = rig.manager.subscribe();
+        rig.manager
+            .start_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Finite))
+            .unwrap();
+        event(&events, AnalysisJobOutcomeDto::Completed);
+        assert_eq!(focus_status(&rig), FocusCapabilityDto::Unchecked);
+        assert!(!std::fs::read_to_string(rig.dir.join("trace"))
+            .unwrap()
+            .contains("focus pass"));
+    }
+
+    #[test]
+    fn focus_old_incarnation_cannot_qualify_replacement_run() {
+        let rig = focus_rig("analysis_focus_hold");
+        rig.manager
+            .start_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Finite))
+            .unwrap();
+        rig.held();
+        rig.manager.stop().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !matches!(
+            rig.manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::NoEngine { .. }
+        ) {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        rig.manager.start("gtp").unwrap();
+        assert_ne!(ready(&rig.manager), rig.run);
+        std::fs::write(rig.dir.join("release"), "").unwrap();
+        assert_eq!(focus_status(&rig), FocusCapabilityDto::Unchecked);
+        assert!(rig.manager.snapshot().selected_node_job.is_none());
+    }
+
+    #[test]
+    fn focus_supported_only_after_complete_stop_final_then_ordinary_remains_usable() {
+        let rig = focus_rig("analysis_focus_final");
+        let events = rig.manager.subscribe();
+        rig.manager
+            .start_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Finite))
+            .unwrap();
+        rig.held();
+        assert_eq!(focus_status(&rig), FocusCapabilityDto::Unchecked);
+        assert!(!events
+            .try_iter()
+            .any(|e| matches!(e, ForegroundEngineEventDto::Job { job } if job.frame.is_some())));
+        std::fs::write(rig.dir.join("release"), "").unwrap();
+        let completed = event(&events, AnalysisJobOutcomeDto::Completed);
+        assert_eq!(completed.frame.unwrap().winrate_black, 0.62);
+        assert_eq!(focus_status(&rig), FocusCapabilityDto::Supported);
+        let trace = std::fs::read_to_string(rig.dir.join("trace")).unwrap();
+        assert!(trace.contains("rootInfo true focus pass 0"));
+        assert_eq!(trace.matches(" stop\n").count(), 2);
+        assert_eq!(trace.matches("loadsgf").count(), 1);
+    }
+
+    #[test]
+    fn focus_syntax_rejection_is_cached_only_for_this_run_and_keeps_ordinary_analysis() {
+        let rig = focus_rig("analysis");
+        let events = rig.manager.subscribe();
+        for _ in 0..2 {
+            rig.manager
+                .start_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Finite))
+                .unwrap();
+            event(&events, AnalysisJobOutcomeDto::Completed);
+            assert_eq!(focus_status(&rig), FocusCapabilityDto::Unsupported);
+        }
+        assert_eq!(
+            std::fs::read_to_string(rig.dir.join("trace"))
+                .unwrap()
+                .matches("focus pass 0")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn focus_uncertain_failure_is_not_unsupported_and_does_not_start_ordinary() {
+        let rig = focus_rig("analysis_focus_uncertain");
+        rig.manager
+            .start_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Finite))
+            .unwrap();
+        rig.held();
+        std::fs::write(rig.dir.join("release"), "").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !matches!(
+            rig.manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::Error { .. }
+        ) {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(focus_status(&rig), FocusCapabilityDto::Uncertain);
+        assert_eq!(
+            std::fs::read_to_string(rig.dir.join("trace"))
+                .unwrap()
+                .matches("kata-analyze")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn focus_late_success_cannot_change_pause_or_publish_capability_or_start_ponder() {
+        let rig = focus_rig("analysis_focus_hold");
+        let events = rig.manager.subscribe();
+        let budget = ContinuousAnalysisBudgetDto::default();
+        rig.manager.set_continuous_preferences(true, budget).unwrap();
+        rig.manager
+            .follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        rig.held();
+        rig.manager.set_continuous_preferences(false, budget).unwrap();
+        std::fs::write(rig.dir.join("release"), "").unwrap();
+        event(&events, AnalysisJobOutcomeDto::Cancelled);
+        assert_eq!(focus_status(&rig), FocusCapabilityDto::Unchecked);
+        assert_eq!(rig.manager.snapshot().continuous.enabled, Some(false));
+        assert_eq!(
+            std::fs::read_to_string(rig.dir.join("trace"))
+                .unwrap()
+                .matches("kata-analyze")
+                .count(),
+            1
+        );
+    }
+
     #[test]
     fn rich_analysis_uses_exact_restore_same_run_and_preserves_absent_fields() {
         let rig = Rig::new("analysis");

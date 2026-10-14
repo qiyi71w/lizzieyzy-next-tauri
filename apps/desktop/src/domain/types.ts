@@ -308,6 +308,7 @@ export type EngineGtpFactsDto = {
 export type EngineCapabilitySnapshotDto = {
   adapter_kind: EngineBackendDto;
   analysis?: EngineAnalysisCapabilitiesDto | null;
+  focus?: "unchecked" | "supported" | "unsupported" | "uncertain";
   game_move?: boolean;
   gtp?: EngineGtpFactsDto | null;
 };

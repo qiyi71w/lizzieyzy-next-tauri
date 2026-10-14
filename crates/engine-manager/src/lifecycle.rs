@@ -1311,6 +1311,17 @@ impl ForegroundEngineManager {
         }
     }
 
+    /// Controlled-transport tests substitute only the captured process resource identity.
+    #[doc(hidden)]
+    pub fn set_qualified_resource_for_tests(&self, resource: app_model::QualifiedLocalResourceDto) {
+        let mut state = self.lock();
+        if state.match_reservation.is_none() {
+            if let Phase::Ready(run) = &mut state.phase {
+                run.qualified_resource = Some(Arc::new(resource));
+            }
+        }
+    }
+
     fn abandon_job(&self, run_id: &str, job_id: &str, published: EngineFailureDto) {
         let mut state = self.lock();
         let Some(started) = state
@@ -1910,6 +1921,7 @@ impl Inner {
         capture.readiness_confirmed();
         let capabilities = EngineCapabilitySnapshotDto {
             adapter_kind: run.adapter_kind,
+            focus: app_model::FocusCapabilityDto::Unchecked,
             game_move: !generic
                 || gtp.as_ref().is_some_and(|facts| {
                     crate::game_move_protocol::qualified_gtp_launch(&run.profile_snapshot, facts)

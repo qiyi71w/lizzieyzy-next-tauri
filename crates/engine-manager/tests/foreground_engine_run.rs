@@ -1217,6 +1217,7 @@ fn selected_node_unsupported_capability_does_not_write_protocol() {
     let before = std::fs::read_to_string(&log).unwrap_or_default();
     manager.set_capability_snapshot_for_tests(Some(EngineCapabilitySnapshotDto {
         adapter_kind: EngineBackend::KataGoAnalysis,
+        focus: Default::default(),
         game_move: true,
         gtp: None,
         analysis: Some(EngineAnalysisCapabilitiesDto {
@@ -1248,6 +1249,7 @@ fn admission_missing_analysis_preserves_active_lanes_and_protocol() {
         None,
         Some(EngineCapabilitySnapshotDto {
             adapter_kind: EngineBackend::GenericGtp,
+            focus: Default::default(),
             game_move: false,
             gtp: None,
             analysis: None,
@@ -1343,6 +1345,7 @@ fn admission_continue_rechecks_capabilities_without_replacing_paused_task() {
         None,
         Some(EngineCapabilitySnapshotDto {
             adapter_kind: EngineBackend::GenericGtp,
+            focus: Default::default(),
             game_move: false,
             analysis: None,
             gtp: None,

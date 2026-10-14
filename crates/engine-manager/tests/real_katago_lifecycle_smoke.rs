@@ -300,6 +300,15 @@ fn real_import_restart_recovery(gtp: bool) {
     let old = wait_job(&events, Duration::from_secs(30), |job| {
         job.outcome == AnalysisJobOutcomeDto::Progress
     });
+    if gtp {
+        let run = run_from_ready(&manager.snapshot().lifecycle).clone();
+        let focus = run.capability_snapshot.as_ref().unwrap().focus;
+        assert!(matches!(
+            focus,
+            FocusCapabilityDto::Supported | FocusCapabilityDto::Unsupported
+        ));
+        println!("FOCUS-PROBE-RESULT {}", serde_json::to_string(&run).unwrap());
+    }
     kill_owned_katago(&first.profile_snapshot);
     wait_current(&manager, Duration::from_secs(30), |phase| {
         matches!(phase, ForegroundEngineLifecycleDto::Error { .. })
@@ -339,6 +348,12 @@ fn real_import_restart_recovery(gtp: bool) {
     });
     let restarted = run_from_ready(&restarted.lifecycle).clone();
     assert_ne!(restarted.run_id, first.run_id);
+    if gtp {
+        assert_eq!(
+            restarted.capability_snapshot.as_ref().unwrap().focus,
+            FocusCapabilityDto::Unchecked
+        );
+    }
     assert_eq!(
         manager.snapshot().continuous.phase,
         ContinuousAnalysisPhaseDto::SafetyHold
@@ -408,6 +423,15 @@ fn real_import_restart_recovery(gtp: bool) {
         run_from_ready(&manager.snapshot().lifecycle).run_id,
         restarted.run_id
     );
+    if gtp {
+        println!(
+            "FOCUS-RESTART-PAUSE {}",
+            serde_json::to_string(&manager.snapshot()).unwrap()
+        );
+        for capture in manager.diagnostic_snapshots() {
+            println!("FOCUS-PROTOCOL {}", serde_json::to_string(&capture).unwrap());
+        }
+    }
     assert_eq!(document.serialize().unwrap(), before);
     println!(
         "RECOVERY adapter={:?} old={} new={} generation=2 user_continue=true personal_c_preserved=true",
