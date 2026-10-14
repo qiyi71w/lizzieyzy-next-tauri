@@ -78,6 +78,9 @@ for raw in sys.stdin:
         elif behavior == "invalid": body = "NaN"
         else: body = str(threads)
     elif name == "kata-analyze":
+        if command.split().count("focus") > 1:
+            print(f"?{number} Could not parse analyze arguments or arguments out of range\n", flush=True)
+            continue
         focus_stream = "focus" in command.split()
         if focus_stream and mode in ("analysis_focus_hold", "analysis_focus_uncertain"):
             pathlib.Path("held").write_text(number)

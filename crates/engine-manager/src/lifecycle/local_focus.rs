@@ -1,5 +1,6 @@
 use super::*;
 use app_model::{LocalFocusActionDto, LocalFocusOutputDto, LocalFocusPointDto, LocalFocusPointStatusDto as Status, LocalFocusRequestDto, LocalFocusSnapshotDto, MoveVertex};
+use std::fmt::Write;
 
 struct Point { value: LocalFocusPointDto, progressed: Instant }
 #[derive(Default)]
@@ -49,16 +50,18 @@ impl Owner {
     }
     pub(super) fn command(&self, color: &str) -> String {
         let mut command = format!("kata-analyze {color} interval 10 rootInfo true ownership true");
-        let count = self.active().count();
-        if count > 0 {
-            let probability = 0.5 / count as f64;
-            for vertex in self.active() {
-                let vertex = match vertex {
-                    MoveVertex::Pass => "pass".into(),
-                    MoveVertex::Point(point) => format!("{}{}", (b'A' + point.x + u8::from(point.x >= 8)) as char, self.height - point.y),
-                };
-                command.push_str(&format!(" focus {vertex} {probability}"));
+        let mut active = self.active().peekable();
+        if active.peek().is_some() {
+            command.push_str(" focus ");
+            for (index, vertex) in active.enumerate() {
+                if index > 0 { command.push(','); }
+                match vertex {
+                    MoveVertex::Pass => command.push_str("pass"),
+                    MoveVertex::Point(point) => write!(command, "{}{}", (b'A' + point.x + u8::from(point.x >= 8)) as char, self.height - point.y).expect("writing to String"),
+                }
             }
+            // The engine equally weights this single move list by default.
+            command.push_str(" 0.5");
         }
         command
     }
@@ -192,7 +195,7 @@ mod tests {
         for (x, status) in [(3, Status::Active), (4, Status::Active), (5, Status::Blocked)] {
             owner.points.push(Point { value: LocalFocusPointDto { vertex: MoveVertex::Point(app_model::PointDto { x, y: 5 }), target_visits: 500, visits: 0, status }, progressed: now });
         }
-        assert!(owner.command("B").contains("focus D4 0.25 focus E4 0.25"));
+        assert!(owner.command("B").contains("focus D4,E4 0.5"));
         let frame = katago_protocol::parse_gtp_analysis("info move D4 visits 100 winrate 0.5 order 0 pv D4 rootInfo visits 10000 winrate 0.5", Uuid::nil(), 9, 9, 0).unwrap();
         assert!(!owner.observe(Some(&frame), now + Duration::from_secs(4)));
         assert!(!owner.observe(Some(&frame), now + Duration::from_secs(8)));

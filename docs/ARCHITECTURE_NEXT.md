@@ -808,6 +808,8 @@ Focused checks: `cargo test --locked -p engine-manager --test ordinary_rules` an
 
 `local_focus_action` accepts Add/Remove/Clear against the current Run/job/document generation/node. The existing ordinary worker owns the watched set, active subset, per-point high-water clock, stream command and lineage. Active points equally divide probability 0.5. Only strict growth of that point's current-tree visits refreshes its clock; strictly more than eight seconds without growth expires it. Illegal points remain blocked, completed points remain watched, and Pause stops activity without removing circles. A changed position or Run retires intent. Resume never automatically reapplies stopped points.
 
+The admitted KataGo grammar carries the active set in one `focus <comma-separated moves> 0.5` clause. Omitted per-move weights are equal to one, so the engine divides the total probability equally; an empty active set omits the clause entirely.
+
 Focus ownership is captured once when the worker binds the matching ordinary continuous target. Continuous mode alone does not grant that ownership: explicitly leased measurement streams retain their normal parser, progress and completion path without focus metadata. Once bound, an ordinary worker keeps its output fence for the entire invocation, including after context retirement.
 
 The current-game target is Run-neutral: it retains document generation and exact node across engine startup. Admission binds a cloned request to the actual admitting Run. Focus checks target generation/node separately from the bound owner's live Run identity, so neither an empty target Run nor a stale target Run substitutes for actual process authority.
