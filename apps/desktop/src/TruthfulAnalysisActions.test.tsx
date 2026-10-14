@@ -380,6 +380,117 @@ function canvasContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
 }
 
 describe("truthful native analysis actions", () => {
+  it.each(["自动分析", "重置草稿"])("retires the flash overlay through %s without starting work", async (entry) => {
+    const host = await renderApp();
+    await readyEngine(host);
+    const scope = host.querySelector('select[aria-label="Analysis scope"]') as HTMLSelectElement;
+    await act(async () => { scope.value = "all_branches"; scope.dispatchEvent(new Event("change", { bubbles: true })); });
+    openAnalyzeMenu(host);
+    await act(async () => { buttonNamed(host, "闪电分析部分范围…").click(); });
+    expect(scope.disabled).toBe(true);
+    await act(async () => { buttonNamed(host, entry).click(); });
+    expect(scope.disabled).toBe(false);
+    expect(scope.value).toBe(entry === "自动分析" ? "all_branches" : "first_child_mainline");
+    expect(inputNamed(host, "Total visits").value).toBe("800");
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+  });
+
+  it("does not expose explicit menu Cancel for automatic-load or a bare Batch job", async () => {
+    const host = await renderApp();
+    const ready = await readyEngine(host);
+    openAnalyzeMenu(host);
+    expect(buttonNamed(host, "取消当前分析任务").disabled).toBe(true);
+    await act(async () => { buttonNamed(host, "分析").click(); });
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    const task = taskRuntime.snapshot!;
+    await act(async () => { listeners.onSnapshot?.({ ...ready, revision: 3,
+      auto_load: { phase: "running", load_id: 1, generation: 1, run_id: "run-1", task_id: task.task_id, total_visits: 1, reason: null }
+    }); });
+    openAnalyzeMenu(host);
+    expect(buttonNamed(host, "取消当前分析任务").disabled).toBe(true);
+    await act(async () => { buttonNamed(host, "取消当前分析任务").click(); });
+    taskRuntime.snapshot = null;
+    await act(async () => { listeners.onSnapshot?.({ ...ready, revision: 4,
+      whole_game_job: { run_id: "run-1", job_id: "batch:owned", lane: "whole_game", mode: "finite", state: "searching", generation: 1, node_path: { indices: [] } }
+    }); });
+    expect(buttonNamed(host, "取消当前分析任务").disabled).toBe(true);
+    expect(backend.cancelKataGoAnalysis).not.toHaveBeenCalled();
+  });
+  it("opens the same ordinary draft from menu and bottom bar without starting or clearing its preview", async () => {
+    const host = await renderApp();
+    await readyEngine(host);
+    await changeNumber(inputNamed(host, "Total visits"), "734");
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    const panel = host.querySelector('[aria-label="Analysis task"]') as HTMLElement;
+    const toggle = panel.querySelector('button[aria-expanded]') as HTMLButtonElement;
+    await act(async () => { toggle.click(); });
+    openAnalyzeMenu(host);
+    await act(async () => { buttonNamed(host, "自动分析").click(); });
+    expect(document.activeElement).toBe(panel);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(inputNamed(host, "Total visits").value).toBe("734");
+    expect(buttonNamed(host, "Start task").disabled).toBe(false);
+    await act(async () => { toggle.click(); });
+    await act(async () => { buttonNamed(host, "自动分析").click(); });
+    expect(document.activeElement).toBe(panel);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(backend.startAnalysisTask).not.toHaveBeenCalled();
+    expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  });
+
+  it("resets only the draft to committed strategy groups while preserving the running task", async () => {
+    const conditions = (visits: number): AnalysisStageConditionsDto => ({
+      time_seconds: { enabled: false, value: 17 }, total_visits: { enabled: true, value: visits },
+      leading_candidate_visits: { enabled: false, value: 29 }
+    });
+    preferencesApi.loadAppPreferences.mockResolvedValueOnce({ preferences: {
+      ...defaultAppPreferences, taskSingleStageConditions: conditions(91),
+      taskOverviewConditions: conditions(43), taskDeepConditions: conditions(701),
+      taskSwingOverviewConditions: conditions(67), taskSwingDeepConditions: conditions(903),
+      taskSwingCriteria: { move_actors: "white", winrate_change_percentage_points: { enabled: true, value: 8 }, score_change_points: { enabled: true, value: 6 } }
+    } });
+    const host = await renderApp();
+    await readyEngine(host);
+    await act(async () => { buttonNamed(host, "Preview scope").click(); });
+    await act(async () => { buttonNamed(host, "Start task").click(); });
+    const running = structuredClone(taskRuntime.snapshot);
+    await changeNumber(inputNamed(host, "Total visits"), "999");
+    const scope = host.querySelector('select[aria-label="Analysis scope"]') as HTMLSelectElement;
+    await act(async () => { scope.value = "all_branches"; scope.dispatchEvent(new Event("change", { bubbles: true })); });
+    await act(async () => { inputNamed(host, "Use position interval").click(); });
+    await changeNumber(inputNamed(host, "Position interval start"), "2");
+    await changeNumber(inputNamed(host, "Position interval end"), "7");
+    const side = host.querySelector('select[aria-label="Side to play"]') as HTMLSelectElement;
+    await act(async () => { side.value = "black"; side.dispatchEvent(new Event("change", { bubbles: true })); });
+    await act(async () => { buttonNamed(host, "重置草稿").click(); });
+    expect(scope.value).toBe("first_child_mainline");
+    expect(inputNamed(host, "Use position interval").checked).toBe(false);
+    expect(inputNamed(host, "Position interval start").value).toBe("0");
+    expect(inputNamed(host, "Position interval end").value).toBe("0");
+    expect(side.value).toBe("both");
+    expect(inputNamed(host, "Total visits").value).toBe("701");
+    expect(inputNamed(host, "Overview total visits").value).toBe("43");
+    const strategy = host.querySelector('select[aria-label="Analysis strategy"]') as HTMLSelectElement;
+    expect(strategy.value).toBe("all_positions_two_stage");
+    await act(async () => { strategy.value = "swing_selected_two_stage"; strategy.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(inputNamed(host, "Total visits").value).toBe("903");
+    expect(inputNamed(host, "Overview total visits").value).toBe("67");
+    expect((host.querySelector('select[aria-label="Swing move actor"]') as HTMLSelectElement).value).toBe("white");
+    expect(inputNamed(host, "Winrate swing threshold").value).toBe("8");
+    expect(inputNamed(host, "Score swing threshold").value).toBe("6");
+    expect(inputNamed(host, "Enable score swing threshold").checked).toBe(true);
+    expect(inputNamed(host, "Enable winrate swing threshold").checked).toBe(true);
+    await act(async () => { strategy.value = "single_stage"; strategy.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(inputNamed(host, "Total visits").value).toBe("91");
+    expect(taskRuntime.snapshot).toEqual(running);
+    expect(backend.startAnalysisTask).toHaveBeenCalledTimes(1);
+    expect(backend.cancelKataGoAnalysis).not.toHaveBeenCalled();
+    openAnalyzeMenu(host);
+    await act(async () => { buttonNamed(host, "取消当前分析任务").click(); });
+    expect(backend.cancelKataGoAnalysis).toHaveBeenCalledWith("run-1", running?.job_id);
+    expect(inputNamed(host, "Total visits").value).toBe("91");
+  });
   it("refuses queries missing requested ownership before jobs or durable task changes", async () => {
     const host = await renderApp();
     const ready = await readyEngine(host);
@@ -635,7 +746,7 @@ describe("truthful native analysis actions", () => {
     const lightning = buttonNamed(host, "试复盘 / 闪电分析(Ctrl+B)");
     expect(lightning.disabled).toBe(false);
     const autoAnalyze = buttonNamed(host, "自动分析");
-    expect(autoAnalyze.disabled).toBe(true);
+    expect(autoAnalyze.disabled).toBe(false);
     expect(autoAnalyze.textContent).toBe("自动分析");
     expect(host.textContent).not.toContain("自动分析(A)");
     expect(buttonNamed(host, "分析当前节点").textContent).not.toMatch(/Space|空格|\(A\)/i);
@@ -834,6 +945,9 @@ describe("truthful native analysis actions", () => {
       rejectTaskSave = reject;
     }));
     await act(async () => { buttonNamed(host, "Start task").click(); });
+    expect(buttonNamed(host, "重置草稿").disabled).toBe(true);
+    await act(async () => { buttonNamed(host, "重置草稿").click(); });
+    expect(inputNamed(host, "Total visits").value).toBe("500");
     await act(async () => { buttonNamed(host, "显示").click(); });
     const candidates = Array.from(host.querySelectorAll('[role="menuitemcheckbox"]'))
       .find((item) => item.textContent?.includes("候选")) as HTMLElement;
@@ -852,6 +966,9 @@ describe("truthful native analysis actions", () => {
       taskDeepConditions: defaultAppPreferences.taskDeepConditions,
       showCandidates: false
     }));
+    expect(inputNamed(host, "Total visits").value).toBe("500");
+    await act(async () => { buttonNamed(host, "重置草稿").click(); });
+    expect(inputNamed(host, "Total visits").value).toBe("800");
   });
 
   it("validates and persists independent OR task conditions before starting", async () => {
@@ -938,6 +1055,9 @@ describe("truthful native analysis actions", () => {
     const host = await renderApp();
     const time = inputNamed(host, "Search time seconds");
     await changeNumber(time, "27");
+    expect(buttonNamed(host, "重置草稿").disabled).toBe(true);
+    await act(async () => { buttonNamed(host, "重置草稿").click(); });
+    expect(time.value).toBe("27");
 
     await act(async () => {
       resolveLoad({
@@ -956,6 +1076,10 @@ describe("truthful native analysis actions", () => {
     expect(time.value).toBe("27");
     expect(inputNamed(host, "Total visits").value).toBe("800");
     expect(inputNamed(host, "Leading candidate visits").value).toBe("500");
+    expect(buttonNamed(host, "重置草稿").disabled).toBe(false);
+    await act(async () => { buttonNamed(host, "重置草稿").click(); });
+    expect(time.value).toBe("15");
+    expect(inputNamed(host, "Total visits").value).toBe("640");
   });
 
 

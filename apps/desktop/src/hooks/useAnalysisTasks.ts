@@ -18,6 +18,7 @@ type Host = {
   departurePending: () => boolean;
   departurePrompt: () => boolean;
   preferenceSaveBusy: () => boolean;
+  preferencesLoaded: () => boolean;
   savePreferences: (patch: Partial<AppPreferences>) => Promise<AppPreferences>;
   resolveMaxVisits: (requested: number) => number;
   message: (message: string) => void;
@@ -638,6 +639,24 @@ export function useAnalysisTasks(input: Host) {
     setAnalysisTaskError(null);
   }
 
+  function resetDraft() {
+    if (!host.current.preferencesLoaded() || host.current.preferenceSaveBusy()) return;
+    const saved = host.current.committedPreferences();
+    dismissFlash();
+    analysisConditionsDraftEditedRef.current = true;
+    setAnalysisScopeDraft({
+      ...defaultAnalysisScopeDraft,
+      ...analysisTaskStageDraft(saved.taskOverviewConditions, saved.taskDeepConditions),
+      ...swingCriteriaDraft(saved.taskSwingCriteria),
+      singleTimeEnabled: saved.taskSingleStageConditions.time_seconds.enabled,
+      singleTimeSeconds: String(saved.taskSingleStageConditions.time_seconds.value),
+      singleTotalVisitsEnabled: saved.taskSingleStageConditions.total_visits.enabled,
+      singleTotalVisits: String(saved.taskSingleStageConditions.total_visits.value),
+      singleLeadingCandidateVisitsEnabled: saved.taskSingleStageConditions.leading_candidate_visits.enabled,
+      singleLeadingCandidateVisits: String(saved.taskSingleStageConditions.leading_candidate_visits.value)
+    });
+  }
+
   async function handleAllPositionsAnalysisTask() {
     if (host.current.matchOwnsWorkspace()) return;
     if (host.current.trialActive() || host.current.scoringActive()) return;
@@ -787,10 +806,10 @@ export function useAnalysisTasks(input: Host) {
       host.current.message(errorMessage(error));
     }
   }
-  async function handleCancelWholeGameAnalysis() {
+  async function handleCancelWholeGameAnalysis(explicitOnly = false) {
     if (analysisTaskActionInFlightRef.current) return;
     const task = analysisTaskRef.current;
-    const pending = wholeGameJobRef.current;
+    const pending = explicitOnly ? null : wholeGameJobRef.current;
     const activeTask = isAnalysisTaskReserved(task) ? task : null;
     const runId = pending?.run_id ?? activeTask?.run_id;
     const jobId = pending?.job_id ?? activeTask?.job_id;
@@ -819,6 +838,9 @@ export function useAnalysisTasks(input: Host) {
     start: handleStartAnalysisTask,
     quick: handleQuickAnalysisTask,
     dismissFlash,
+    enterOrdinary: () => { if (flashDraft) dismissFlash(); else ++flashRequestRef.current; },
+    resetDraft,
+    cancelExplicit: () => explicitTaskReserved() ? handleCancelWholeGameAnalysis(true) : Promise.resolve(),
     allPositions: handleAllPositionsAnalysisTask,
     pause: handlePauseAnalysisTask,
     continue: handleContinueAnalysisTask,

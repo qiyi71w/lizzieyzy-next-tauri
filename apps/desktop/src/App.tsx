@@ -387,6 +387,7 @@ export function App() {
     departurePending: () => departurePendingRef.current,
     departurePrompt: () => Boolean(departurePrompt),
     preferenceSaveBusy: () => Boolean(preferencesSaveInFlightRef.current || pendingPreferencesSaveRef.current || continuousActionInFlightRef.current),
+    preferencesLoaded: () => preferencesLoadSettledRef.current,
     savePreferences: (patch) => new Promise<AppPreferences>((resolve, reject) => {
       const pending = queuePreferencesSave(committedPreferencesRef.current, patch);
       pending.onSaved = resolve;
@@ -404,6 +405,11 @@ export function App() {
     start: handleStartAnalysisTask, quick: handleQuickAnalysisTask, allPositions: handleAllPositionsAnalysisTask,
     pause: handlePauseAnalysisTask, continue: handleContinueAnalysisTask, cancel: handleCancelWholeGameAnalysis,
     startLegacy: handleAnalyzeKataGoGame, explicitTaskReserved, refresh: refreshAnalysisTaskSnapshot } = tasks;
+  const [automaticTaskOpenRequest, setAutomaticTaskOpenRequest] = useState(0);
+  function openAutomaticTask() {
+    tasks.enterOrdinary();
+    setAutomaticTaskOpenRequest((request) => request + 1);
+  }
 
   useEffect(() => {
     if (!nativeRuntime) return;
@@ -3793,6 +3799,9 @@ export function App() {
       }}
       onEngineCommand={handleEngineCommand}
       onQuickAnalysis={() => void handleQuickAnalysisTask()}
+      onAutomaticAnalysis={openAutomaticTask}
+      canCancelExplicitTask={explicitTaskReserved() && !analysisTaskRequestPending && !matchBlocked}
+      onCancelExplicitTask={() => void tasks.cancelExplicit()}
       onFlashPart={() => void handleQuickAnalysisTask("part")}
       onFlashBranches={() => void handleQuickAnalysisTask("all_branches")}
       onAllPositionsAnalysis={() => void handleAllPositionsAnalysisTask()}
@@ -3848,7 +3857,6 @@ export function App() {
       onParse={() => void handleParseSgf()}
       onFakeAnalyze={() => void handleFakeAnalyze()}
       onCancelSelectedNode={() => void handleCancelSelectedNodeAnalysis()}
-      onCancelWholeGame={() => void handleCancelWholeGameAnalysis()}
       onAbout={openAbout}
       onOpenShortcutReference={() => setShortcutReferenceOpen(true)}
       onCopySgf={() => void handleCopySgf()}
@@ -4088,6 +4096,9 @@ export function App() {
       </div>
     ) : null}
     <AnalysisTaskPanel
+      openRequest={automaticTaskOpenRequest}
+      resetDisabled={!preferencesLoaded || Boolean(preferencesSaveInFlightRef.current || pendingPreferencesSaveRef.current || continuousActionInFlightRef.current)}
+      onResetDraft={tasks.resetDraft}
       flashActive={tasks.view.flashActive}
       onDismissFlash={tasks.dismissFlash}
       draft={analysisScopeDraft}
@@ -4138,6 +4149,7 @@ export function App() {
       onAnalyzeOnce={() => handleEngineCommand("once")}
       onAnalyzeGame={() => handleEngineCommand("game")}
       onQuickAnalysis={() => void handleQuickAnalysisTask()}
+      onAutomaticAnalysis={openAutomaticTask}
       onCancelSelectedNode={() => void handleCancelSelectedNodeAnalysis()}
       onCancelWholeGame={() => void handleCancelWholeGameAnalysis()}
       onSync={() => toggleSheet("sync")}
