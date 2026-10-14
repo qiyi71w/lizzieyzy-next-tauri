@@ -20,7 +20,7 @@ export async function measureWithWebViewProbe(request: ApplicationMeasurementReq
     const delay = Math.max(0, now - expected) / 1000;
     previous = now;
     if (document.hidden) failure = new Error("WebView hidden during application measurement");
-    if (progress?.sampling) { samples.push(delay); sampleTimes.push([expected, now]); }
+    if (progress?.sampling || progress?.closing) { samples.push(delay); sampleTimes.push([expected, now]); }
     if (!querying) {
       querying = true;
       const sent = performance.now();

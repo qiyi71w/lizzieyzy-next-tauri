@@ -22,6 +22,8 @@ it("records schedule/execute times and confirms the final flush for the exact ro
   progress.sampling = false; progress.closing = true;
   await vi.advanceTimersByTimeAsync(30);
   expect(submit.mock.calls.some(([probe]) => probe.finished)).toBe(true);
+  const finalProbe = submit.mock.calls.find(([probe]) => probe.finished)?.[0];
+  expect(finalProbe?.sample_times_ms.length).toBeGreaterThan(0);
   for (const [probe] of submit.mock.calls) {
     expect(probe.operation_id).toBe("operation"); expect(probe.row_id).toBe("row");
     expect(probe.sample_times_ms).toHaveLength(probe.samples_seconds.length);

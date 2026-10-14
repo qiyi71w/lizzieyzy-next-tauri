@@ -187,6 +187,7 @@ fn real_cpu_node_analysis_reuse_smoke() {
     std::fs::write(&config, "rules = chinese\nnumSearchThreads = 1\nnnMaxBatchSize = 1\nnnCacheSizePowerOfTwo = 16\nnnMutexPoolSizePowerOfTwo = 10\nlogDir = logs\nlogAllGTPCommunication = true\nlogSearchInfo = true\nlogToStderr = true\n").unwrap();
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     catalog.upsert(engine_manager::SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: "real-reuse".into(), thread_policy: Default::default(),
         profile: app_model::EngineProfileDto {
             name: "Real CPU reuse smoke".into(), program: binary, argv: vec![],
