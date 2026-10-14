@@ -615,6 +615,25 @@ button[aria-pressed="true"] {
 
 .board-overlays button:focus-visible { outline-offset: -3px; }
 
+.board-overlays-raw {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.board-overlays-raw button {
+  min-width: 0;
+  border-bottom: 1px solid var(--hud-border);
+}
+.board-overlays-raw .board-overlay-action,
+.board-overlays-raw small {
+  grid-column: 1 / -1;
+  border-right: 0;
+}
+.board-overlays-raw small {
+  padding: 6px;
+  color: var(--hud-text);
+  overflow-wrap: anywhere;
+}
+
 /* 比分概览卡片 */
 .score-summary-card {
   display: grid;

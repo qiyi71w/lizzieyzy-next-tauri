@@ -58,7 +58,7 @@ mod runtime_threads;
 mod thread_policy;
 mod analysis_reuse;
 pub use analysis_reuse::OrdinaryAnalysisContext;
-pub use game_move::{GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle};
+pub use game_move::{GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle, RawNetHandle};
 
 pub trait AnalysisJobCancel: Send + Sync {
     fn cancel(&self);

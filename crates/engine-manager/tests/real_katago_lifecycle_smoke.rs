@@ -1161,6 +1161,7 @@ fn real_katago_startup_modes_reopen_durable_catalog() {
                 profile: profile.clone(),
                 preload: false,
                 thread_policy: Default::default(),
+                measured_scenes: Default::default(),
             },
             engine_manager::EngineProfileRecord {
                 id: "b".into(),
@@ -1170,6 +1171,7 @@ fn real_katago_startup_modes_reopen_durable_catalog() {
                 },
                 preload: false,
                 thread_policy: Default::default(),
+                measured_scenes: Default::default(),
             },
         ],
     };

@@ -445,6 +445,16 @@ export type OrdinaryRulesSnapshotDto = {
   stones: StoneDto[];
   true_final_move: MoveDto | null;
 };
+export type RawNetRequestDto = { run_id: string; generation: number; node_path: NodePath };
+export type RawNetSnapshotDto = {
+  confirmation: OrdinaryRulesSnapshotDto;
+  resource: QualifiedLocalResourceDto;
+  document_identity: number;
+  board_revision: number;
+  slot: "main_board";
+  ownership: number[] | null;
+  unavailable: string | null;
+};
 export type GameMoveDto = { kind: "move"; vertex: MoveVertex } | { kind: "resign" };
 export type GameMoveResultDto = GameMoveJobDto & {
   result: GameMoveDto;

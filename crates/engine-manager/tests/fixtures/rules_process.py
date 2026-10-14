@@ -77,6 +77,21 @@ for raw in sys.stdin:
         elif behavior == "mismatch": body = "4096"
         elif behavior == "invalid": body = "NaN"
         else: body = str(threads)
+    elif name == "kata-raw-nn":
+        behavior = pathlib.Path("raw-mode").read_text() if pathlib.Path("raw-mode").exists() else "valid"
+        if behavior == "rejected":
+            print(f"?{number} unsupported raw command\n", flush=True)
+            continue
+        body = "policy\nNAN\nwhiteOwnership\n" + "\n".join(" ".join(["0.25"] * 9) for _ in range(9))
+        if behavior == "missing": body = "policy\nNAN"
+        if behavior == "invalid": body = body.replace("0.25", "NaN", 1)
+        print(f"={number} {body}", flush=True)
+        if behavior in ("hold-final", "timeout", "eof"):
+            pathlib.Path("raw-held").write_text(number)
+            if behavior == "eof": sys.exit(4)
+            while not pathlib.Path("raw-release").exists(): time.sleep(0.005)
+        print("", flush=True)
+        continue
     elif name == "kata-analyze":
         if command.split().count("focus") > 1:
             print(f"?{number} Could not parse analyze arguments or arguments out of range\n", flush=True)

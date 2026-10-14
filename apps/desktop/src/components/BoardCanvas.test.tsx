@@ -749,3 +749,41 @@ it("allows watched removal during Pause and rejects context-retired focus input"
   expect(onFocusPoint).toHaveBeenCalledTimes(2);
   expect(onGestureRefused).toHaveBeenCalledOnce();
 });
+
+it("paints raw ownership through all independent styles without ordinary fallback or display-triggered compute", () => {
+  const host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  const context = canvasContext(drawArc, drawStroke);
+  const painted: { color: string; width: number }[] = [];
+  context.fillRect = (_x, _y, width) => { painted.push({ color: String(context.fillStyle), width }); };
+  vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue(context);
+  const onComputeRawNet = vi.fn();
+  const rectangular = { ...position, board_width: 2, board_height: 1, to_play: "white" as const };
+  const frame = { ...analysis, ownership: [-0.8, -0.8], candidates: [] };
+  const render = (style: typeof defaultGranularDisplay.rawNetOwnershipStyle, rawOwnership: number[] | null = [0.8, 0]) => {
+    painted.length = 0;
+    act(() => root?.render(<BoardCanvas position={rectangular} analysis={frame} overlayMode="raw_net"
+      rawOwnership={rawOwnership} onComputeRawNet={onComputeRawNet}
+      displayPreferences={{ ...defaultGranularDisplay, ownershipStyle: "small", rawNetOwnershipStyle: style }} />));
+    return painted.filter(point => point.color.startsWith("rgba("));
+  };
+  const big = render("bigBelow");
+  expect(big).toHaveLength(1);
+  expect(big[0].color).toContain("rgba(0,0,0,");
+  const grid = big[0].width;
+  for (const [style, ratio] of [["small", 0.25], ["normal", 0.5], ["notOnLive", 0.5], ["bySize", 0.48]] as const) {
+    const cells = render(style);
+    expect(cells).toHaveLength(1);
+    expect(cells[0].width).toBeCloseTo(grid * ratio);
+    expect(cells[0].color).toContain("rgba(0,0,0,");
+  }
+  expect(render("bigBelow", null)).toHaveLength(0);
+  expect(host.querySelector('[role="status"]')?.textContent).toContain("不可用");
+  expect(render("bigBelow", [0.8])).toHaveLength(0);
+  expect(render("bigBelow", [NaN, 0])).toHaveLength(0);
+  const rawButton = [...host.querySelectorAll("button")].find(button => button.textContent === "Raw-net 领地")!;
+  act(() => rawButton.click());
+  expect(onComputeRawNet).not.toHaveBeenCalled();
+  const compute = [...host.querySelectorAll("button")].find(button => button.textContent === "计算／刷新 Raw-net")!;
+  act(() => compute.click());
+  expect(onComputeRawNet).toHaveBeenCalledOnce();
+});

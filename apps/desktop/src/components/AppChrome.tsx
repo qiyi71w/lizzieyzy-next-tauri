@@ -20,7 +20,8 @@ import {
 } from "../domain/analysisActions";
 
 export type SheetId = "sgf" | "engine" | "sync" | "prefs";
-export type OverlayMode = "candidates" | "ownership" | "policy";
+export type { OverlayMode } from "./BoardCanvas";
+import type { OverlayMode } from "./BoardCanvas";
 
 export type EngineCommands = {
   analyzeOnce: () => void;

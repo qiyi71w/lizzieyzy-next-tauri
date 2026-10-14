@@ -17,6 +17,7 @@ pub mod diagnostic_export;
 pub mod diagnostics;
 mod game_move_protocol;
 mod gtp;
+mod raw_net;
 mod katago_config;
 mod lifecycle;
 pub mod managed;
@@ -37,6 +38,7 @@ pub use lifecycle::{
     AnalysisJobCancel, AnalysisJobEventDto, AnalysisJobLane, ContinuationAction, ContinuousPrimaryAction,
     ForegroundEngineConfig, ForegroundEngineManager, GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle,
     OrdinaryAnalysisContext,
+    RawNetHandle,
     SelectedNodeJobRequest, SwingAnalysisTaskRequest, WholeGameJobRequest, WholeGameWorkItem,
 };
 

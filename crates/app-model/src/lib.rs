@@ -23,6 +23,8 @@ mod continuation;
 pub use continuation::*;
 mod game_move;
 pub use game_move::*;
+mod raw_net;
+pub use raw_net::*;
 mod match_session;
 pub use match_session::*;
 mod managed_resources;

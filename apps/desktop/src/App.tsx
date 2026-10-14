@@ -8,6 +8,7 @@ import { cancelAutoLoad } from "./api/backend";
 import { Workspace } from "./workspace/Workspace";
 import { useWorkspace } from "./workspace/useWorkspace";
 import { useReviewAutoplay } from "./hooks/useReviewAutoplay";
+import { useRawNet } from "./hooks/useRawNet";
 import { acceptedMoveSound } from "./domain/acceptedMoveSound";
 import { playMoveSound } from "./domain/moveSound";
 import { BoardCanvas } from "./components/BoardCanvas";
@@ -610,6 +611,12 @@ export function App() {
     selectedPath: selectedPath.indices,
     requestToken: activeRequestToken
   }), [reviewGame?.generation, selectedPathKey, activeRequestToken]);
+  const rawRun = engineSnapshot.lifecycle.state === "ready" ? engineSnapshot.lifecycle.run : null;
+  const rawRequest = nativeRuntime && rawRun && currentGame && !matchBlocked && !externalBlocked
+    && !trial && !trialPending && !scoring && !scoringPending && !departurePending && !rootSetupDraft
+    ? { run_id: rawRun.run_id, generation: currentGame.generation, node_path: currentGame.selected_path }
+    : null;
+  const rawNet = useRawNet(JSON.stringify([activeScope, rawRequest, Boolean(rootSetupDraft)]), rawRequest);
   const presentationLive = publishedScope !== null && shouldPublishReviewPresentation(activeScope, publishedScope);
   const visibleFrames = useMemo(() => presentationLive ? frames : [], [presentationLive, frames]);
   const visibleProblems = useMemo(() => classifyProblemFrames(visibleFrames, preferences.moveRank), [visibleFrames, preferences.moveRank]);
@@ -4065,6 +4072,10 @@ export function App() {
           showMoveNumbers={showMoveNumbers}
           overlayMode={overlayMode}
           onOverlayModeChange={setOverlayMode}
+          rawOwnership={rawNet.payload?.ownership}
+          rawPending={rawNet.pending}
+          rawError={rawNet.error}
+          onComputeRawNet={() => void rawNet.compute()}
           hideCandidates={hideCandidates}
           displayPreferences={preferences.granularDisplay}
           graphPerspective={preferences.graphPerspective}

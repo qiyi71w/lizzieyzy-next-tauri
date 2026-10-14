@@ -430,7 +430,10 @@ function DisplayPreferencesEditor({ preferences, disabled, onChange }: Pick<Prop
     <label>{t("display.ownershipStyle")}<select aria-label={t("display.ownershipStyle")} value={display.ownershipStyle} onChange={event => update({ ownershipStyle: event.target.value as OwnershipStyle })}>
       {(["small", "normal", "notOnLive", "bigBelow", "bySize"] as const).map(value => <option key={value} value={value}>{t(`display.${value}`)}</option>)}
     </select></label>
-    <p role="status">{t("display.rawUnavailable")}</p>
+    <label>{t("display.rawStyle")}<select aria-label={t("display.rawStyle")} value={display.rawNetOwnershipStyle} onChange={event => update({ rawNetOwnershipStyle: event.target.value as OwnershipStyle })}>
+      {(["small", "normal", "notOnLive", "bigBelow", "bySize"] as const).map(value => <option key={value} value={value}>{t(`display.${value}`)}</option>)}
+    </select></label>
+    <p>{t("display.rawHint")}</p>
     {error ? <p role="alert">{t("display.invalid")}</p> : null}
     <button type="button" aria-label="应用显示设置" disabled={disabled || edited === null} onClick={() => {
       if (!validGranularDisplay(display)) { setError(true); return; }

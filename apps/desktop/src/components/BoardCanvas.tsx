@@ -16,7 +16,7 @@ import {
 import type { LocalFocusPointDto, LocalFocusPreferencesDto, MoveRankPreferencesDto } from "../domain/types";
 import { focusQuality, sameFocusVertex } from "../domain/localFocus";
 
-export type OverlayMode = "candidates" | "ownership" | "policy";
+export type OverlayMode = "candidates" | "ownership" | "policy" | "raw_net";
 
 type Props = {
   surfaceRef?: React.MutableRefObject<HTMLCanvasElement | null>;
@@ -29,6 +29,10 @@ type Props = {
   showMoveNumbers?: boolean;
   overlayMode?: OverlayMode;
   onOverlayModeChange?: (mode: OverlayMode) => void;
+  rawOwnership?: number[] | null;
+  rawPending?: boolean;
+  rawError?: string;
+  onComputeRawNet?: () => void;
   hideCandidates?: boolean;
   onPointClick?: (point: PointDto) => void;
   allowDrag?: boolean;
@@ -80,6 +84,10 @@ export function BoardCanvas({
   showMoveNumbers = false,
   overlayMode: overlayModeProp,
   onOverlayModeChange,
+  rawOwnership,
+  rawPending = false,
+  rawError = "",
+  onComputeRawNet,
   hideCandidates = false,
   onPointClick,
   allowDrag = false,
@@ -184,6 +192,12 @@ export function BoardCanvas({
   );
   const hasPolicy = policyPoints.length > 0;
   const effectiveOverlayMode = overlayMode === "ownership" && !hasOwnership ? "candidates" : overlayMode === "policy" && !hasPolicy ? "candidates" : overlayMode;
+  const rawMode = effectiveOverlayMode === "raw_net";
+  const heatmap = rawMode ? rawOwnership : effectiveOverlayMode === "ownership" ? ownership : null;
+  const hasHeatmap = heatmap?.length === boardPointCount && heatmap.every(value => Number.isFinite(value) && Math.abs(value) <= 1);
+  const heatmapPreferences = useMemo(() => rawMode
+    ? { ...displayPreferences, ownershipStyle: displayPreferences.rawNetOwnershipStyle }
+    : displayPreferences, [rawMode, displayPreferences]);
 
   function cancelCandidatePreview() {
     if (previewTimerRef.current !== undefined) {
@@ -352,8 +366,8 @@ export function BoardCanvas({
       }
     }
 
-    if (effectiveOverlayMode === "ownership" && hasOwnership && ownership && displayPreferences.ownershipStyle === "bigBelow") {
-      drawOwnership(ctx, ownership, position, displayPreferences, grid, coordX, coordY);
+    if (hasHeatmap && heatmap && heatmapPreferences.ownershipStyle === "bigBelow") {
+      drawOwnership(ctx, heatmap, position, heatmapPreferences, grid, coordX, coordY);
     }
 
     const moveByPoint = new Map<string, number>();
@@ -379,8 +393,8 @@ export function BoardCanvas({
         ctx.fillText(String(moveNumber), cx, cy);
       }
     }
-    if (effectiveOverlayMode === "ownership" && hasOwnership && ownership && displayPreferences.ownershipStyle !== "bigBelow") {
-      drawOwnership(ctx, ownership, position, displayPreferences, grid, coordX, coordY);
+    if (hasHeatmap && heatmap && heatmapPreferences.ownershipStyle !== "bigBelow") {
+      drawOwnership(ctx, heatmap, position, heatmapPreferences, grid, coordX, coordY);
     }
 
     if (scoring) {
@@ -530,15 +544,20 @@ export function BoardCanvas({
       ctx.lineWidth = Math.max(1.5, grid * 0.06);
       ctx.stroke();
     }
-  }, [size, position, markup, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, stoneMoveNumbers, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers, pvPrefixLength, replayCandidateIndex, scoring, displayPreferences, graphPerspective, komi, ownership, focusPoints, focusPreferences, focusAnalysis, focusGrading]);
+  }, [size, position, markup, analysis, selectedCandidateIndex, effectiveOverlayMode, hasOwnership, hasPolicy, policyPoints, stoneMoveNumbers, showCoordinates, showMoveNumbers, hideCandidates, keyboardPoint, nextMoveMode, nextMoveMarkers, pvPrefixLength, replayCandidateIndex, scoring, displayPreferences, graphPerspective, komi, ownership, focusPoints, focusPreferences, focusAnalysis, focusGrading, heatmap, hasHeatmap, heatmapPreferences]);
 
   const layerHost = document.getElementById("board-layers");
   const overlays = (
-    <div className="board-overlays" aria-label="棋盘图层">
+    <div className={`board-overlays${onComputeRawNet ? " board-overlays-raw" : ""}`} aria-label="棋盘图层">
       <OverlayButton label="候选" active={effectiveOverlayMode === "candidates"} onClick={() => setOverlayMode("candidates")} />
       <OverlayButton label="领地" active={effectiveOverlayMode === "ownership"} disabled={!hasOwnership} onClick={() => setOverlayMode("ownership")} />
       <OverlayButton label="策略" active={effectiveOverlayMode === "policy"} disabled={!hasPolicy} onClick={() => setOverlayMode("policy")} />
-      {onToggleCandidates ? <button type="button" disabled={!candidatesToggleEnabled} onClick={onToggleCandidates} aria-pressed={!hideCandidates}>{t("action.view.candidates")}</button> : null}
+      {onComputeRawNet ? <>
+        <OverlayButton label={t("display.rawLabel")} active={rawMode} onClick={() => setOverlayMode(rawMode ? "candidates" : "raw_net")} />
+        <button className="board-overlay-action" type="button" disabled={rawPending} onClick={onComputeRawNet}>{t(rawPending ? "display.rawComputing" : "display.rawCompute")}</button>
+        {rawMode || rawError || rawPending ? <small role="status">{rawPending ? t("display.rawComputing") : rawError || (hasHeatmap && rawMode ? t("display.rawAvailable") : t("display.rawUnavailable"))}</small> : null}
+      </> : null}
+      {onToggleCandidates ? <button className="board-overlay-action" type="button" disabled={!candidatesToggleEnabled} onClick={onToggleCandidates} aria-pressed={!hideCandidates}>{t("action.view.candidates")}</button> : null}
       {displayPreferences.useCandidateOwnership && ownershipCandidate && !hasOwnership ? <small role="status">{t("display.candidateOwnershipUnavailable")}</small> : null}
     </div>
   );
