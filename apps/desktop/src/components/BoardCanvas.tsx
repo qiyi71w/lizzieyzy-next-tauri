@@ -35,6 +35,7 @@ type Props = {
   onPointSearch?: (point: PointDto, scope: PointSearchScopeDto, captured: ReviewPresentationScope) => void;
   authoringEnabled?: boolean;
   onAuthoring?: (action: SgfAuthoringActionDto, captured: ReviewPresentationScope) => void;
+  onFlashCurrentNode?: () => void;
   onGestureRefused?: (message: string) => void;
   keyboardPlacement?: boolean;
   scoring?: ScoringSessionDto | null;
@@ -79,6 +80,7 @@ export function BoardCanvas({
   onPointSearch,
   authoringEnabled = false,
   onAuthoring,
+  onFlashCurrentNode,
   onGestureRefused,
   keyboardPlacement = false,
   onCandidatePreview,
@@ -557,7 +559,7 @@ export function BoardCanvas({
       onPointerCancel={() => { clickClassification.cancel(); cancelDrag(); }}
       onLostPointerCapture={cancelDrag}
       onContextMenu={(event) => {
-        if ((!authoringEnabled || !onAuthoring) && (!pointSearchEnabled || !onPointSearch)) return;
+        if ((!authoringEnabled || !onAuthoring) && (!pointSearchEnabled || !onPointSearch) && !onFlashCurrentNode) return;
         if (!previewScope) return;
         event.preventDefault(); clickClassification.cancel(); cancelDrag(); cancelCandidatePreview();
         const point = pointerPoint(event);
@@ -574,6 +576,11 @@ export function BoardCanvas({
       }}
     />
     {context ? <div ref={contextRef} role="menu" aria-label={t("authoring.context")} className="menu-pop" style={{ position: "fixed", left: context.left, top: context.top, maxHeight: "100vh", overflowY: "auto", zIndex: 1000 }}>
+      {onFlashCurrentNode ? <button type="button" role="menuitem" className="menu-item" onClick={() => {
+        const captured = context; setContext(null);
+        if (!samePreviewScope(previewScope, captured.scope)) { onGestureRefused?.(t("authoring.stale")); return; }
+        onFlashCurrentNode();
+      }}>闪电分析本手</button> : null}
       <button type="button" role="menuitem" className="menu-item" disabled={!pointSearchEnabled} title={!pointSearchEnabled ? t("review.point.unavailable") : undefined} onClick={() => {
         const captured = context; setContext(null);
         if (!samePreviewScope(previewScope, captured.scope)) { onGestureRefused?.(t("authoring.stale")); return; }

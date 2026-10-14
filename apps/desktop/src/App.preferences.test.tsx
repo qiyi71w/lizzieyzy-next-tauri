@@ -207,6 +207,32 @@ it("saves independent automatic-load drafts only explicitly and retains committe
   expect(backend.startKataGoGameAnalysis).not.toHaveBeenCalled();
 });
 
+it("saves explicit flash visits independently without starting or retrying analysis", async () => {
+  const host = await renderApp();
+  openPreferences(host);
+  const visits = requiredElement<HTMLInputElement>(host, '[aria-label="Explicit flash visits"]');
+  expect(visits.value).toBe("1");
+  changeBudgetNumber(visits, "9");
+  act(() => buttonNamed(host, "取消闪电设置").click());
+  expect(visits.value).toBe("1");
+  expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
+  changeBudgetNumber(visits, "0");
+  expect(buttonNamed(host, "保存闪电设置").disabled).toBe(true);
+  changeBudgetNumber(visits, "9");
+  preferencesApi.saveAppPreferences.mockRejectedValueOnce(new Error("flash disk full"));
+  await act(async () => buttonNamed(host, "保存闪电设置").click());
+  expect(host.textContent).toContain("flash disk full");
+  expect(visits.value).toBe("9");
+  await act(async () => buttonNamed(host, "保存闪电设置").click());
+  expect(preferencesApi.saveAppPreferences).toHaveBeenLastCalledWith(expect.objectContaining({
+    flashAnalysisVisits: 9, autoLoad: { enabled: false, totalVisits: 1 },
+    taskSingleStageConditions: defaultAppPreferences.taskSingleStageConditions
+  }));
+  expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+  expect(backend.startKataGoGameAnalysis).not.toHaveBeenCalled();
+});
+
+
 it("keeps automatic Starting cancellation outside the hidden task sheet and disables unconfirmed recovery Continue", async () => {
   const host = await renderApp();
   const publish = backend.subscribeForegroundEngine.mock.calls.at(-1)?.[0];

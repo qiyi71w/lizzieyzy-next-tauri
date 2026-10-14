@@ -396,6 +396,7 @@ export function App() {
     resolveMaxVisits: (requested) => resolveAnalysisMaxVisits(requested, preferences),
     message: setMessage,
     acceptFrame: rememberWholeGameFrame,
+    openEngineSettings: () => setSheet("engine"),
     refreshAttachment: refreshCurrentGameAfterAttach
   });
   const { wholeGameRunning, wholeGameProgress, analysisScopeDraft, analysisScopePreview,
@@ -3802,6 +3803,8 @@ export function App() {
       }}
       onEngineCommand={handleEngineCommand}
       onQuickAnalysis={() => void handleQuickAnalysisTask()}
+      onFlashPart={() => void handleQuickAnalysisTask("part")}
+      onFlashBranches={() => void handleQuickAnalysisTask("all_branches")}
       onAllPositionsAnalysis={() => void handleAllPositionsAnalysisTask()}
       continuousAnalysisAction={continuousAnalysisAction}
       onContinuousAnalysis={() => void handleContinuousAnalysisAction()}
@@ -4015,6 +4018,7 @@ export function App() {
           onPointSearch={(point, scope, captured) => void handlePointSearch(point, scope, captured)}
           authoringEnabled={authoringEnabled}
           onAuthoring={(action, captured) => void commitAuthoring(action, captured)}
+          onFlashCurrentNode={() => void handleQuickAnalysisTask("current_node")}
           onGestureRefused={setBoardIntentFeedback}
           keyboardPlacement={keyboardPlacement}
           nextMoveMode={rootSetupDraft || scoring ? "off" : preferences.nextMoveReviewMarker}
@@ -4094,8 +4098,10 @@ export function App() {
       </div>
     ) : null}
     <AnalysisTaskPanel
+      flashActive={tasks.view.flashActive}
+      onDismissFlash={tasks.dismissFlash}
       draft={analysisScopeDraft}
-      preview={analysisScopePreview}
+      preview={analysisScopePreview?.generation === currentGame?.generation ? analysisScopePreview : null}
       task={analysisTask}
       automaticTaskActive={engineSnapshot.auto_load?.phase === "running"}
       canRun={nativeRuntime && taskEngineReady && Boolean(currentGame) && !trial && !trialPending && !scoring && !scoringPending && !departurePending && !departurePrompt}

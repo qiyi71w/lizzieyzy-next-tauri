@@ -35,6 +35,7 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
         <span>{status}</span>
       </div>
       <AutoLoadEditor preferences={preferences} disabled={disabled} onChange={onChange} />
+      <FlashVisitsEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       {windowPin ? <fieldset className="preferences-grid">
         <legend>窗口</legend>
         <WindowPinControl control={windowPin} />
@@ -219,6 +220,22 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
       </fieldset>
     </section>
   );
+}
+
+function FlashVisitsEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
+  const [edited, setEdited] = useState<string | null>(null);
+  const value = edited ?? String(preferences.flashAnalysisVisits);
+  const visits = Number(value);
+  const valid = value.trim() !== "" && Number.isInteger(visits) && visits > 0 && visits <= 4294967295;
+  useEffect(() => { setEdited(null); }, [preferences.flashAnalysisVisits]);
+  return <fieldset className="preferences-grid" disabled={disabled}>
+    <legend>显式闪电分析</legend>
+    <label>显式闪电 visits<input aria-label="Explicit flash visits" type="number" min={1} max={4294967295} step={1} value={value} onChange={(event) => setEdited(event.target.value)} /></label>
+    <span>仅影响下次显式闪电请求；保存不会开始或重试分析。</span>
+    {!valid ? <span role="alert">Visits 必须是 1–4294967295 的整数。</span> : null}
+    <button type="button" disabled={!valid || edited === null} onClick={() => onChange({ ...preferences, flashAnalysisVisits: visits })}>保存闪电设置</button>
+    <button type="button" onClick={() => setEdited(null)}>取消闪电设置</button>
+  </fieldset>;
 }
 
 function AutoLoadEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {

@@ -45,6 +45,7 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   candidateLimit: number;
   granularDisplay: GranularDisplay;
   defaultMaxVisits: number;
+  flashAnalysisVisits: number;
   taskSingleStageConditions: AnalysisStageConditionsDto;
   taskOverviewConditions: AnalysisStageConditionsDto;
   taskDeepConditions: AnalysisStageConditionsDto;
@@ -100,6 +101,7 @@ export const defaultAppPreferences: AppPreferences = {
   candidateLimit: 8,
   granularDisplay: defaultGranularDisplay,
   defaultMaxVisits: 800,
+  flashAnalysisVisits: 1,
   defaultBoardWidth: 19,
   defaultBoardHeight: 19,
   defaultKomi: 7.5,
@@ -247,6 +249,7 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
     candidateLimit: integerValue(value?.candidateLimit, defaultAppPreferences.candidateLimit, 1, 20),
     granularDisplay: readGranularDisplay(value?.granularDisplay),
     defaultMaxVisits,
+    flashAnalysisVisits: value?.flashAnalysisVisits === undefined ? 1 : value.flashAnalysisVisits,
     defaultBoardWidth: integerValue(value?.defaultBoardWidth, defaultAppPreferences.defaultBoardWidth, 2, 25),
     defaultBoardHeight: integerValue(value?.defaultBoardHeight, defaultAppPreferences.defaultBoardHeight, 2, 25),
     defaultKomi: finiteValue(value?.defaultKomi, defaultAppPreferences.defaultKomi),
