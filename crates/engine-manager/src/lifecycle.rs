@@ -1341,6 +1341,7 @@ impl ForegroundEngineManager {
         if admitting_run(&state.phase, run_id).is_some_and(|run| run.adapter_kind == EngineBackend::KataGoGtp)
         {
             // The registered stream worker owns Stop and both terminal barriers.
+            state.gtp_dispatch.wake_stream(run_id, job_id);
             return Ok(());
         }
         let manager = self.clone();

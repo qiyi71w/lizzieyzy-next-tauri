@@ -10,6 +10,7 @@ struct Pending {
     request: String,
     stream: bool,
     sender: SyncSender<String>,
+    worker: Option<std::thread::Thread>,
 }
 
 #[derive(Default)]
@@ -41,6 +42,7 @@ impl Dispatch {
                 request: request.into(),
                 stream,
                 sender,
+                worker: stream.then(std::thread::current),
             },
         );
         self.issued_through
@@ -50,14 +52,31 @@ impl Dispatch {
         Ok(receiver)
     }
 
+    /// Out-of-band notification: never occupies a protocol queue slot or satisfies a fence.
+    pub(super) fn wake_stream(&self, run: &str, request: &str) {
+        for ((owner, _), pending) in &self.pending {
+            if owner == run && pending.request == request {
+                if let Some(worker) = &pending.worker { worker.unpark(); }
+            }
+        }
+    }
+
     pub(super) fn retire(&mut self, run: &str, request: &str) {
-        self.pending
-            .retain(|(owner, _), pending| owner != run || pending.request != request);
+        self.pending.retain(|(owner, _), pending| {
+            if owner != run || pending.request != request { return true; }
+            // The manager lock remains held until removal; the worker rechecks it before receiving.
+            if let Some(worker) = &pending.worker { worker.unpark(); }
+            false
+        });
         // Keep the framing cursor until its delimiter: its remaining lines must be discarded.
     }
 
     pub(super) fn retire_run(&mut self, run: &str) {
-        self.pending.retain(|(owner, _), _| owner != run);
+        self.pending.retain(|(owner, _), pending| {
+            if owner != run { return true; }
+            if let Some(worker) = &pending.worker { worker.unpark(); }
+            false
+        });
         self.active.remove(run);
         self.issued_through.remove(run);
     }
@@ -88,10 +107,9 @@ impl Dispatch {
         let key = (run.to_owned(), id);
         if let Some(pending) = self.pending.get(&key) {
             if pending.stream || !crate::gtp::is_analysis_stream_record(line) {
-                pending
-                    .sender
-                    .try_send(line.to_owned())
-                    .map_err(|_| "GTP request exceeded its bounded response queue")?;
+                let sent = pending.sender.try_send(line.to_owned());
+                if let Some(worker) = &pending.worker { worker.unpark(); }
+                sent.map_err(|_| "GTP request exceeded its bounded response queue")?;
             }
         }
         if line.is_empty() {
@@ -187,5 +205,82 @@ mod tests {
         assert!(dispatch.route("run", "=102").is_err());
         dispatch.route("run", "").unwrap();
         assert!(first.try_recv().is_err());
+    }
+    #[test]
+    fn stream_wake_preserves_full_queue_and_retirement_disconnects() {
+        use std::{sync::Arc, thread, time::Duration};
+        use parking_lot::Mutex;
+        for action in ["wake", "retire", "retire_run", "data"] {
+            let dispatch = Arc::new(Mutex::new(Dispatch::default()));
+            let (ready, ready_rx) = mpsc::sync_channel(1);
+            let enter = Arc::new(std::sync::Barrier::new(2));
+            let worker_enter = enter.clone();
+            let (done, done_rx) = mpsc::sync_channel(1);
+            let owned = dispatch.clone();
+            let worker = thread::spawn(move || {
+                let receiver = {
+                    let mut dispatch = owned.lock();
+                    let receiver = dispatch.register("run", 1, "job", true).unwrap();
+                    if action == "wake" {
+                        dispatch.route("run", "=1").unwrap();
+                        for _ in 1..QUEUE_LINES { dispatch.route("run", "info queued").unwrap(); }
+                    }
+                    receiver
+                };
+                if action == "wake" { thread::park(); } // Consume the earlier data notification.
+                ready.send(()).unwrap();
+                worker_enter.wait();
+                thread::park(); // The action happens before wait entry; no periodic fallback.
+                let _state = owned.lock();
+                let lines = receiver.try_iter().collect::<Vec<_>>();
+                done.send((lines, receiver.try_recv())).unwrap();
+            });
+            ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            {
+                let mut dispatch = dispatch.lock();
+                match action {
+                    "wake" => { dispatch.wake_stream("run", "job"); dispatch.wake_stream("run", "job"); }
+                    "retire" => dispatch.retire("run", "job"),
+                    "retire_run" => dispatch.retire_run("run"),
+                    "data" => dispatch.route("run", "=1").unwrap(),
+                    _ => unreachable!(),
+                }
+            }
+            enter.wait();
+            let result = done_rx.recv_timeout(Duration::from_secs(2));
+            worker.thread().unpark();
+            worker.join().unwrap();
+            let (lines, ending) = result.expect("stream notification lost before wait entry");
+            match action {
+                "wake" => { assert_eq!(lines.len(), QUEUE_LINES); assert_eq!(lines[0], "=1"); assert_eq!(ending, Err(mpsc::TryRecvError::Empty)); }
+                "data" => { assert_eq!(lines, ["=1"]); assert_eq!(ending, Err(mpsc::TryRecvError::Empty)); }
+                _ => { assert!(lines.is_empty()); assert_eq!(ending, Err(mpsc::TryRecvError::Disconnected)); }
+            }
+        }
+    }
+
+    #[test]
+    fn wake_targets_only_exact_stream_owner() {
+        use std::{sync::Arc, thread, time::Duration};
+        use parking_lot::Mutex;
+        let dispatch = Arc::new(Mutex::new(Dispatch::default()));
+        let (ready, ready_rx) = mpsc::sync_channel(1);
+        let (done, done_rx) = mpsc::sync_channel(1);
+        let owned = dispatch.clone();
+        let worker = thread::spawn(move || {
+            let _receiver = owned.lock().register("run", 1, "job", true).unwrap();
+            ready.send(()).unwrap();
+            thread::park();
+            done.send(()).unwrap();
+        });
+        ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        { let dispatch = dispatch.lock(); dispatch.wake_stream("other-run", "job"); dispatch.wake_stream("run", "other-job"); }
+        let unrelated = done_rx.recv_timeout(Duration::from_millis(100));
+        dispatch.lock().wake_stream("run", "job");
+        let matching = if unrelated.is_err() { done_rx.recv_timeout(Duration::from_secs(2)) } else { Ok(()) };
+        worker.thread().unpark();
+        worker.join().unwrap();
+        assert!(matches!(unrelated, Err(mpsc::RecvTimeoutError::Timeout)));
+        matching.expect("exact stream owner was not notified");
     }
 }

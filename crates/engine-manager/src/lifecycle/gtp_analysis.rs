@@ -1,7 +1,7 @@
 //! Named KataGo GTP analysis on the existing Run, reader, command IDs and exact restore.
 use super::*;
 use app_model::{AnalysisFrameDto, ComputeBudgetDto, EngineGtpFactsDto, GameMoveRequestDto};
-use std::sync::mpsc::RecvTimeoutError;
+use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
 
 mod focus;
 
@@ -345,7 +345,9 @@ impl ForegroundEngineManager {
                     if state.local_focus.revision != state.local_focus.applied { break None; }
                 }
                 drop(state);
-                match stream.response.recv_timeout(Duration::from_millis(20)) {
+                // unpark retains a token when cancellation/data races this empty check.
+                // Every wake returns through the authoritative state/budget/focus checks above.
+                match stream.response.try_recv() {
                     Ok(line) => {
                         if !header { require_stream_header(stream.id, &line)?; header = true; continue; }
                         if line.is_empty() { return Err("KataGo analysis ended without the requested stop barrier".into()); }
@@ -371,10 +373,11 @@ impl ForegroundEngineManager {
                         publish_snapshot(&mut state);
                         last = Some(frame);
                     }
-                    Err(RecvTimeoutError::Timeout) => {
+                    Err(TryRecvError::Empty) => {
                         if !header && Instant::now() >= header_deadline { return Err(response_error(RecvTimeoutError::Timeout, "KataGo analysis header")); }
+                        thread::park_timeout(Duration::from_millis(20));
                     }
-                    Err(RecvTimeoutError::Disconnected) => return Err("KataGo analysis response disconnected".into()),
+                    Err(TryRecvError::Disconnected) => return Err("KataGo analysis response disconnected".into()),
                 }
             };
             let final_line = self.drain_analysis_stream(started, &stream, header)?;
@@ -462,8 +465,7 @@ fn stopped_outcome(disposition: JobDisposition) -> AnalysisJobOutcomeDto {
 mod writer_tests {
     use super::*;
 
-    #[test]
-    fn contended_writer_releases_state_and_retired_queued_analyze_never_emits() {
+    fn ready_fixture() -> (std::path::PathBuf, ForegroundEngineManager, EngineRunDto) {
         let directory = std::env::temp_dir().join(format!("focus-writer-{}", Uuid::new_v4()));
         std::fs::create_dir(&directory).unwrap();
         std::fs::write(directory.join("mode"), "analysis").unwrap();
@@ -485,6 +487,48 @@ mod writer_tests {
             assert!(Instant::now() < deadline, "{:?}", manager.snapshot());
             thread::sleep(Duration::from_millis(2));
         };
+        (directory, manager, run)
+    }
+
+    #[test]
+    fn cancellation_at_wait_entry_wakes_registered_stream_without_protocol_data() {
+        let (directory, manager, run) = ready_fixture();
+        let job = manager.register_job(&run.run_id, AnalysisJobLane::SelectedNode, Arc::new(AnalysisCancelToken::new())).unwrap();
+        let (registered, registered_rx) = mpsc::sync_channel(1);
+        let enter = Arc::new(std::sync::Barrier::new(2));
+        let worker_enter = enter.clone();
+        let (done, done_rx) = mpsc::sync_channel(1);
+        let worker_manager = manager.clone();
+        let worker_run = run.run_id.clone();
+        let worker_job = job.clone();
+        let worker = thread::spawn(move || {
+            let response = worker_manager.lock().gtp_dispatch.register(&worker_run, 900, &worker_job, true).unwrap();
+            registered.send(()).unwrap();
+            worker_enter.wait();
+            // No fallback timeout: cancellation must leave a wake token even before wait entry.
+            thread::park();
+            let state = worker_manager.lock();
+            let cancelled = state.jobs.iter().any(|job| job.job_id == worker_job && job.disposition == JobDisposition::Cancelled);
+            done.send((cancelled, response.try_recv())).unwrap();
+        });
+        registered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(manager.cancel_job("other-run", &job).is_err());
+        assert!(manager.cancel_job(&run.run_id, "other-job").is_err());
+        manager.cancel_job(&run.run_id, &job).unwrap();
+        enter.wait();
+        let result = done_rx.recv_timeout(Duration::from_secs(2));
+        worker.thread().unpark(); // Cleanup even on the unfixed implementation.
+        worker.join().unwrap();
+        manager.teardown().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+        let (cancelled, line) = result.expect("committed cancellation did not wake the registered stream");
+        assert!(cancelled);
+        assert_eq!(line, Err(mpsc::TryRecvError::Empty), "wake must not be a protocol response");
+    }
+
+    #[test]
+    fn contended_writer_releases_state_and_retired_queued_analyze_never_emits() {
+        let (directory, manager, run) = ready_fixture();
         let id = manager.register_job(&run.run_id, AnalysisJobLane::SelectedNode, Arc::new(AnalysisCancelToken::new())).unwrap();
         let started = { let state = manager.lock(); started_from(state.jobs.iter().find(|job| job.job_id == id).unwrap()) };
         let stdin = engine_stdin(&manager.lock(), &run.run_id).unwrap();

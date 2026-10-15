@@ -1638,6 +1638,7 @@ mod controlled {
         assert_eq!(first.frame.as_ref().unwrap().winrate_black, 0.61);
         rig.manager.set_continuous_preferences(false, budget).unwrap();
         rig.held();
+        rig.manager.cancel_job(&first.run_id, &first.job_id).unwrap();
         assert_eq!(
             rig.manager.snapshot().selected_node_job.unwrap().state,
             AnalysisJobStateDto::Stopping
@@ -1660,6 +1661,8 @@ mod controlled {
                 .count(),
             1
         );
+        assert_eq!(std::fs::read_to_string(rig.dir.join("trace")).unwrap().lines()
+            .filter(|line| line.split_once(' ').is_some_and(|(_, body)| body == "stop")).count(), 1);
         rig.manager.set_continuous_preferences(true, budget).unwrap();
         let next = event(&events, AnalysisJobOutcomeDto::Progress);
         assert_eq!(next.generation, 8);
@@ -1668,6 +1671,8 @@ mod controlled {
         assert_eq!(ready(&rig.manager), rig.run);
         rig.manager.set_continuous_preferences(false, budget).unwrap();
         event(&events, AnalysisJobOutcomeDto::Cancelled);
+        assert_eq!(std::fs::read_to_string(rig.dir.join("trace")).unwrap().lines()
+            .filter(|line| line.split_once(' ').is_some_and(|(_, body)| body == "stop")).count(), 2);
     }
     #[test]
     fn ready_gtp_reader_starts_the_existing_enabled_target() {
