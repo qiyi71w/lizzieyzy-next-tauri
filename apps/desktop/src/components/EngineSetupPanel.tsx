@@ -28,6 +28,57 @@ type Props = {
 };
 
 export function EngineSetupPanel({ disabled = false, visible = true, documentGeneration = null, documentNode = { indices: [] }, engineSnapshot = null, engineFailure = null, onProfilesChange, onMeasurementStart }: Props) {
+  const panelRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!visible || !panel) return;
+    let pending: number | null = null;
+    const cancelReveal = () => {
+      if (pending !== null) cancelAnimationFrame(pending);
+      pending = null;
+    };
+    const revealFocus = (event: FocusEvent) => {
+      cancelReveal();
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      // Native focus first scrolls wide fields; a reverse Tab may leave a
+      // smaller control clipped by the document rather than the settings sheet.
+      pending = requestAnimationFrame(() => {
+        pending = null;
+        const page = document.scrollingElement;
+        if (!page || !panel.isConnected || !panel.contains(target)
+          || document.activeElement !== target || !target.getClientRects().length) return;
+        const rect = target.getBoundingClientRect();
+        const style = getComputedStyle(target);
+        const outline = style.outlineStyle === "none" ? 0
+          : Math.max(0, (parseFloat(style.outlineWidth) || 0) + (parseFloat(style.outlineOffset) || 0));
+        const left = rect.left - outline;
+        const right = rect.right + outline;
+        let visibleLeft = 0;
+        let visibleRight = document.documentElement.clientWidth;
+        for (let ancestor = target.parentElement; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement) {
+          if (!/^(auto|scroll|hidden|clip)$/.test(getComputedStyle(ancestor).overflowX)) continue;
+          const bounds = ancestor.getBoundingClientRect();
+          const clipLeft = bounds.left + ancestor.clientLeft;
+          const clipRight = clipLeft + ancestor.clientWidth;
+          // Moving the document cannot repair clipping inside a nested owner.
+          if (left < clipLeft || right > clipRight) return;
+          visibleLeft = Math.max(visibleLeft, clipLeft);
+          visibleRight = Math.min(visibleRight, clipRight);
+        }
+        if (right - left > visibleRight - visibleLeft) return;
+        if (left < visibleLeft) page.scrollLeft += Math.floor(left - visibleLeft);
+        else if (right > visibleRight) page.scrollLeft += Math.ceil(right - visibleRight);
+      });
+    };
+    panel.addEventListener("focusin", revealFocus);
+    panel.addEventListener("focusout", cancelReveal);
+    return () => {
+      cancelReveal();
+      panel.removeEventListener("focusin", revealFocus);
+      panel.removeEventListener("focusout", cancelReveal);
+    };
+  }, [visible]);
   const [profiles, setProfiles] = useState<EngineProfileRecordDto[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState("default");
   const [profileName, setProfileName] = useState("Local KataGo");
@@ -355,7 +406,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, documentGen
   }
 
   return (
-    <section className="engine-setup-panel" aria-label="引擎设置" data-focus-owner="engine" tabIndex={-1}>
+    <section ref={panelRef} className="engine-setup-panel" aria-label="引擎设置" data-focus-owner="engine" tabIndex={-1}>
       <EngineDiagnosticsPanel engineSnapshot={snapshot} disabled={disabled} />
       <fieldset disabled={disabled || modelBusy} style={{ border: 0, padding: 0, minWidth: 0 }}>
       <div className="engine-run-row">

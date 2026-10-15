@@ -63,6 +63,86 @@ async function render(snapshot: ForegroundEngineSnapshotDto | null = null) {
   await act(async () => { root!.render(<EngineSetupPanel engineSnapshot={snapshot} />); });
 }
 
+describe("engine settings horizontal focus visibility", () => {
+  let scrollingElementDescriptor: PropertyDescriptor | undefined;
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    scrollingElementDescriptor = Object.getOwnPropertyDescriptor(document, "scrollingElement");
+    Object.defineProperty(document, "scrollingElement", { configurable: true, get: () => document.documentElement });
+    vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(945);
+    document.documentElement.scrollLeft = 25;
+    document.documentElement.scrollTop = 15;
+    host.style.overflowX = "auto";
+    host.scrollTop = 1596;
+    host.scrollLeft = 0;
+    vi.spyOn(host, "clientWidth", "get").mockReturnValue(1085);
+    vi.spyOn(host, "getBoundingClientRect").mockImplementation(() => new DOMRect(-document.documentElement.scrollLeft, 400, 1100, 240));
+  });
+  afterEach(() => {
+    if (scrollingElementDescriptor) Object.defineProperty(document, "scrollingElement", scrollingElementDescriptor);
+    else Reflect.deleteProperty(document, "scrollingElement");
+    document.documentElement.scrollLeft = 0;
+    document.documentElement.scrollTop = 0;
+  });
+
+  async function focusControl(left: number, width: number) {
+    await render();
+    const button = Array.from(host.querySelectorAll("button")).find((element) => element.textContent === "保存配置")!;
+    button.style.outlineStyle = "solid";
+    button.style.outlineWidth = "2px";
+    button.style.outlineOffset = "1px";
+    const bounds = () => new DOMRect(left - document.documentElement.scrollLeft, 572, width, 27);
+    vi.spyOn(button, "getBoundingClientRect").mockImplementation(bounds);
+    vi.spyOn(button, "getClientRects").mockImplementation(() => Object.assign([bounds()], { item: () => bounds() }));
+    button.focus();
+    return button;
+  }
+
+  it.each([
+    { name: "left-clipped reverse focus", left: 12, width: 172, scroll: 9 },
+    { name: "right-clipped focus", left: 900, width: 172, scroll: 130 },
+    { name: "already visible focus", left: 200, width: 172, scroll: 25 },
+    { name: "a field wider than the viewport", left: 25, width: 1057, scroll: 25 }
+  ])("reveals $name without moving vertical or nested scroll owners", async ({ left, width, scroll }) => {
+    const button = await focusControl(left, width);
+    await act(async () => { vi.advanceTimersToNextFrame(); });
+    expect(document.documentElement.scrollLeft).toBe(scroll);
+    expect(document.documentElement.scrollTop).toBe(15);
+    expect(host.scrollTop).toBe(1596);
+    expect(host.scrollLeft).toBe(0);
+    expect(document.activeElement).toBe(button);
+    if (width < 945) {
+      expect(button.getBoundingClientRect().left - 3).toBeGreaterThanOrEqual(0);
+      expect(button.getBoundingClientRect().right + 3).toBeLessThanOrEqual(945);
+    }
+  });
+
+  it("does not move the page to compensate for clipping inside another scroll owner", async () => {
+    await focusControl(12, 172);
+    vi.spyOn(host, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 400, 1100, 240));
+    await act(async () => { vi.advanceTimersToNextFrame(); });
+    expect(document.documentElement.scrollLeft).toBe(25);
+  });
+
+  it.each(["focus departure", "unmount", "hidden panel"])("retires pending reveal after %s", async (retirement) => {
+    await focusControl(12, 172);
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    try {
+      if (retirement === "focus departure") outside.focus();
+      else if (retirement === "unmount") {
+        await act(async () => { root!.unmount(); });
+        root = null;
+      } else await act(async () => { root!.render(<EngineSetupPanel visible={false} />); });
+      await act(async () => { vi.advanceTimersToNextFrame(); });
+      expect(document.documentElement.scrollLeft).toBe(25);
+      if (retirement === "focus departure") expect(document.activeElement).toBe(outside);
+    } finally {
+      outside.remove();
+    }
+  });
+});
+
 describe("engine profile configuration editor", () => {
   it("persists startup evaluation independently, preserving drafts and failed-save bytes without running", async () => {
     const start = vi.spyOn(backend, "startEngineEvaluation");
