@@ -34,7 +34,11 @@ pub async fn measure_application(
         .map_err(|_| "Application measurement worker failed".to_string())?
 }
 
-fn reset_fixture(current: &crate::CurrentGameState, fixture: &str, publish: &dyn Fn(&CurrentGameResultDto) -> Result<(), String>) -> Result<CurrentGameResultDto, String> {
+fn reset_fixture(
+    current: &crate::CurrentGameState,
+    fixture: &str,
+    publish: &dyn Fn(&CurrentGameResultDto) -> Result<(), String>,
+) -> Result<CurrentGameResultDto, String> {
     let admission = current
         .prepare_replacement(fixture, None)
         .map_err(|e| e.to_string())?;
@@ -117,12 +121,21 @@ fn execute(
             let start = Instant::now();
             let run = manager.start_independent_measured_scene(&request.target_id, request.scene, &lease)?;
             let publish = |committed: &CurrentGameResultDto| {
-                let progress = manager.measurement_progress().ok_or("Measurement row unavailable")?;
-                let (current_game, serialized, projection) = current.capture_measurement_document(committed)?;
-                documents.send(ApplicationMeasurementDocumentDto {
-                    operation_id: progress.operation_id, row_id: progress.row_id,
-                    run_id: run.run_id.clone(), current_game, serialized, projection,
-                }).map_err(|error| error.to_string())
+                let progress = manager
+                    .measurement_progress()
+                    .ok_or("Measurement row unavailable")?;
+                let (current_game, serialized, projection) =
+                    current.capture_measurement_document(committed)?;
+                documents
+                    .send(ApplicationMeasurementDocumentDto {
+                        operation_id: progress.operation_id,
+                        row_id: progress.row_id,
+                        run_id: run.run_id.clone(),
+                        current_game,
+                        serialized,
+                        projection,
+                    })
+                    .map_err(|error| error.to_string())
             };
             let observation: Result<(Value, f64), String> = (|| {
                 // Every independent process warms on the actual application path, then a new
@@ -135,9 +148,11 @@ fn execute(
                     &lease,
                     &run,
                     &warm,
-                    request.budget,
-                    false,
-                    &request.fixture_sgf,
+                    ExercisePlan {
+                        budget: request.budget,
+                        timed: false,
+                        fixture: &request.fixture_sgf,
+                    },
                     &publish,
                 )?;
                 let named_backend=run.qualified_resource.as_ref().and_then(|resource|resource.backend.as_deref()).filter(|backend|matches!(*backend,"CUDA"|"TensorRT"|"OpenCL")).ok_or("Owned application launch did not prove a named GPU backend; CPU receipts cannot qualify")?;
@@ -161,9 +176,11 @@ fn execute(
                     &lease,
                     &run,
                     &game,
-                    request.budget,
-                    true,
-                    &request.fixture_sgf,
+                    ExercisePlan {
+                        budget: request.budget,
+                        timed: true,
+                        fixture: &request.fixture_sgf,
+                    },
                     &publish,
                 )?;
                 Ok((row, warmup_seconds))
@@ -214,17 +231,26 @@ fn execute(
     )
 }
 
+struct ExercisePlan<'a> {
+    budget: u32,
+    timed: bool,
+    fixture: &'a str,
+}
+
 fn exercise(
     current: &crate::CurrentGameState,
     manager: &ForegroundEngineManager,
     lease: &SetupLease,
     run: &EngineRunDto,
     game: &CurrentGameResultDto,
-    budget: u32,
-    timed: bool,
-    fixture: &str,
+    plan: ExercisePlan<'_>,
     publish: &dyn Fn(&CurrentGameResultDto) -> Result<(), String>,
 ) -> Result<Value, String> {
+    let ExercisePlan {
+        budget,
+        timed,
+        fixture,
+    } = plan;
     manager.measured_begin_observation(lease)?;
     let started = Instant::now();
     let deadline = started + Duration::from_secs(900);

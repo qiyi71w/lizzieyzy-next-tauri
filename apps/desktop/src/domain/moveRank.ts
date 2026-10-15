@@ -1,4 +1,4 @@
-import type { AnalysisFrameDto, MoveRankPreferencesDto, ProblemMarkerDto } from "./types";
+import type { AnalysisFrameDto, GameDto, MoveRankPreferencesDto, ProblemMarkerDto } from "./types";
 
 export const defaultMoveRankPreferences: MoveRankPreferencesDto = {
   mode: "auto",
@@ -85,12 +85,13 @@ function reachesThreshold(winrateLossPp: number, scoreLoss: number | null, level
   }
 }
 
-export function classifyProblemFrames(frames: AnalysisFrameDto[], settings: MoveRankPreferencesDto): ProblemMarkerDto[] {
+export function classifyProblemFrames(frames: AnalysisFrameDto[], settings: MoveRankPreferencesDto, moves: GameDto["moves"]): ProblemMarkerDto[] {
   const problems: ProblemMarkerDto[] = [];
   for (let index = 1; index < frames.length; index += 1) {
     const parent = frames[index - 1];
     const child = frames[index];
-    const color = parent.turn % 2 === 0 ? "black" : "white";
+    const color = moves[parent.turn]?.color;
+    if (!color) continue;
     const from = { visits: parent.visits, winrateBlack: parent.winrate_black, scoreMeanBlack: parent.score_mean_black ?? undefined };
     const to = { visits: child.visits, winrateBlack: child.winrate_black, scoreMeanBlack: child.score_mean_black ?? undefined };
     const rank = classifyPlayedMove(from, to, color, settings);

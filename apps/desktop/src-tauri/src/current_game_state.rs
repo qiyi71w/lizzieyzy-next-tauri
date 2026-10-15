@@ -386,9 +386,11 @@ impl CurrentGameState {
             return Err("Measurement fixture was superseded before publication".into());
         }
         let document = holder.document.as_ref().ok_or("No current measurement fixture")?;
-        Ok((holder.current_result().map_err(|error| error.to_string())?,
+        Ok((
+            holder.current_result().map_err(|error| error.to_string())?,
             document.serialize().map_err(|error| error.to_string())?,
-            document.mainline_projection()))
+            document.mainline_projection(),
+        ))
     }
 
     pub fn mainline_projection(&self) -> Result<GameDto, CurrentGameError> {
@@ -452,11 +454,24 @@ impl CurrentGameState {
         Ok(scope_preview(&admission, scope))
     }
 
-    pub fn start_analysis_task(&self,manager:&engine_manager::ForegroundEngineManager,run_id:String,preview:app_model::AnalysisScopePreviewDto,conditions:app_model::AnalysisStageConditionsDto)->crate::EngineCommandResult<app_model::AnalysisTaskDto>{
-        self.start_analysis_task_with_lease(manager,run_id,preview,conditions,None)
+    pub fn start_analysis_task(
+        &self,
+        manager: &engine_manager::ForegroundEngineManager,
+        run_id: String,
+        preview: app_model::AnalysisScopePreviewDto,
+        conditions: app_model::AnalysisStageConditionsDto,
+    ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
+        self.start_analysis_task_with_lease(manager, run_id, preview, conditions, None)
     }
-    pub(crate) fn start_measured_analysis_task(&self,manager:&engine_manager::ForegroundEngineManager,run_id:String,preview:app_model::AnalysisScopePreviewDto,conditions:app_model::AnalysisStageConditionsDto,lease:&engine_manager::SetupLease)->crate::EngineCommandResult<app_model::AnalysisTaskDto>{
-        self.start_analysis_task_with_lease(manager,run_id,preview,conditions,Some(lease))
+    pub(crate) fn start_measured_analysis_task(
+        &self,
+        manager: &engine_manager::ForegroundEngineManager,
+        run_id: String,
+        preview: app_model::AnalysisScopePreviewDto,
+        conditions: app_model::AnalysisStageConditionsDto,
+        lease: &engine_manager::SetupLease,
+    ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
+        self.start_analysis_task_with_lease(manager, run_id, preview, conditions, Some(lease))
     }
     fn start_analysis_task_with_lease(
         &self,
@@ -474,7 +489,9 @@ impl CurrentGameState {
             ))
         };
         conditions.validate_single_stage().map_err(invalid)?;
-        if lease.is_none(){manager.retire_setup_for_foreground().map_err(invalid)?;}
+        if lease.is_none() {
+            manager.retire_setup_for_foreground().map_err(invalid)?;
+        }
         // Keep semantic revalidation and manager admission under the same owner lock.
         let holder = self.holder.lock().expect("current game state");
         let admitted = holder
@@ -486,11 +503,16 @@ impl CurrentGameState {
             ));
         }
         let work_items = crate::whole_game_work_items(&admitted, conditions.total_visits.value, &run_id)?;
-        let request=engine_manager::WholeGameJobRequest{run_id,generation:admitted.generation,work_items};
+        let request = engine_manager::WholeGameJobRequest {
+            run_id,
+            generation: admitted.generation,
+            work_items,
+        };
         match lease {
-            Some(lease)=>manager.start_measured_analysis_task(request,preview.scope,conditions,lease),
-            None=>manager.start_analysis_task(request,preview.scope,conditions),
-        }.map_err(Box::new)
+            Some(lease) => manager.start_measured_analysis_task(request, preview.scope, conditions, lease),
+            None => manager.start_analysis_task(request, preview.scope, conditions),
+        }
+        .map_err(Box::new)
     }
 
     pub fn start_all_positions_analysis_task(
@@ -612,7 +634,13 @@ impl CurrentGameState {
         run_id: &str,
         task_id: &str,
     ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
-        manager.retire_setup_for_foreground().map_err(|message|Box::new(crate::job_failure(run_id,app_model::EngineFailureKind::InvalidState,message)))?;
+        manager.retire_setup_for_foreground().map_err(|message| {
+            Box::new(crate::job_failure(
+                run_id,
+                app_model::EngineFailureKind::InvalidState,
+                message,
+            ))
+        })?;
         let holder = self.holder.lock().expect("current game state");
         holder.ensure_review_access().map_err(|error| {
             crate::job_failure(run_id, app_model::EngineFailureKind::InvalidState, error.message)
@@ -895,11 +923,19 @@ impl CurrentGameState {
         action()
     }
 
-    pub fn local_focus_action(&self, manager: &engine_manager::ForegroundEngineManager, request: app_model::LocalFocusRequestDto) -> Result<app_model::LocalFocusSnapshotDto, String> {
+    pub fn local_focus_action(
+        &self,
+        manager: &engine_manager::ForegroundEngineManager,
+        request: app_model::LocalFocusRequestDto,
+    ) -> Result<app_model::LocalFocusSnapshotDto, String> {
         let holder = self.holder.lock().expect("current game state");
-        if holder.departure.is_some() || holder.edits_blocked || holder.human_match.blocks()
+        if holder.departure.is_some()
+            || holder.edits_blocked
+            || holder.human_match.blocks()
             || !matches!(holder.trial_mode, trial::TrialMode::Review)
-            || holder.generation != request.generation || holder.selected_path != request.node_path {
+            || holder.generation != request.generation
+            || holder.selected_path != request.node_path
+        {
             return Err("Focus requires the current ordinary review position".into());
         }
         manager.local_focus_action(request)
@@ -965,8 +1001,12 @@ impl CurrentGameState {
                 }
             }
         }
-        let focus_lineage = match self.analysis_manager.get().map(|manager| manager.local_focus_publication(event)) {
-            Some(Err(())) => {
+        let focus_lineage = match self
+            .analysis_manager
+            .get()
+            .map(|manager| manager.local_focus_publication(event))
+        {
+            Some(Err(_)) => {
                 self.trace_adoption(event, "rejected-retired-focus-output", None);
                 return None;
             }
@@ -975,11 +1015,15 @@ impl CurrentGameState {
         };
         if focus_lineage {
             let position = holder.document.as_ref()?.exact_position(&event.node_path).ok()?;
-            if !SgfAnalysisPayload::is_complete_frame(frame, &position, true) { return None; }
+            if !SgfAnalysisPayload::is_complete_frame(frame, &position, true) {
+                return None;
+            }
         }
         // Ordinary reuse only: Task attachment and the unconditional holder
         // replacement seam retain priority over this presentation policy.
-        let context = self.analysis_manager.get()
+        let context = self
+            .analysis_manager
+            .get()
             .filter(|_| event.lane == app_model::AnalysisJobLaneDto::SelectedNode)
             .and_then(|manager| manager.ordinary_analysis_context(event));
         if let Some(context) = context.as_ref() {
@@ -991,15 +1035,26 @@ impl CurrentGameState {
             }
             if holder.generation == event.generation
                 && !focus_lineage
-                && self.analysis_manager.get().is_some_and(|manager| manager.retain_node_analysis())
+                && self
+                    .analysis_manager
+                    .get()
+                    .is_some_and(|manager| manager.retain_node_analysis())
                 && holder.ordinary_analysis_contexts.get(&event.node_path.indices) == Some(context)
             {
                 let snapshot = document.snapshot(&event.node_path).ok()?;
                 if snapshot.primary_analysis.as_ref().is_some_and(|old| {
                     old.visits > frame.visits
-                        && SgfAnalysisPayload::is_complete_frame(old, &position, context.ownership_requested())
+                        && SgfAnalysisPayload::is_complete_frame(
+                            old,
+                            &position,
+                            context.ownership_requested(),
+                        )
                 }) {
-                    self.trace_adoption(event, "retained-stronger-comparable-result", snapshot.primary_analysis.as_ref());
+                    self.trace_adoption(
+                        event,
+                        "retained-stronger-comparable-result",
+                        snapshot.primary_analysis.as_ref(),
+                    );
                     // No incoming adoption: keep the already displayed result,
                     // including its live-only policy, without splicing new maps.
                     return None;
@@ -1023,7 +1078,9 @@ impl CurrentGameState {
             }
         };
         if let Some(context) = context {
-            holder.ordinary_analysis_contexts.insert(event.node_path.indices.clone(), context);
+            holder
+                .ordinary_analysis_contexts
+                .insert(event.node_path.indices.clone(), context);
         }
         if self
             .analysis_manager
@@ -1042,7 +1099,11 @@ impl CurrentGameState {
             };
             self.trace_adoption(event, reason, cached.as_ref());
         }
-        if let Some(manager) = self.analysis_manager.get().filter(|manager| manager.measured_observing(&event.run_id)) {
+        if let Some(manager) = self
+            .analysis_manager
+            .get()
+            .filter(|manager| manager.measured_observing(&event.run_id))
+        {
             // Retention returns before attach_primary_analysis; this point observes only adopted input.
             manager.measured_note_adopted(event);
         }

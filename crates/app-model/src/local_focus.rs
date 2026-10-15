@@ -7,12 +7,16 @@ use serde::{Deserialize, Serialize};
 #[serde(transparent)]
 pub struct AnalysisRefreshIntervalDto(pub u64);
 impl Default for AnalysisRefreshIntervalDto {
-    fn default() -> Self { Self(10) }
+    fn default() -> Self {
+        Self(10)
+    }
 }
 impl AnalysisRefreshIntervalDto {
     pub fn validate(self) -> Result<(), String> {
         if self.0 == 0 || self.0 > 9_007_199_254_740_991 {
-            return Err("Analysis refresh interval must be a positive exact JSON integer in centiseconds.".into());
+            return Err(
+                "Analysis refresh interval must be a positive exact JSON integer in centiseconds.".into(),
+            );
         }
         Ok(())
     }
@@ -26,7 +30,13 @@ pub struct LocalFocusPreferencesDto {
     pub outline_opacity: u8,
 }
 impl Default for LocalFocusPreferencesDto {
-    fn default() -> Self { Self { max_visits: 500, show_outline: true, outline_opacity: 92 } }
+    fn default() -> Self {
+        Self {
+            max_visits: 500,
+            show_outline: true,
+            outline_opacity: 92,
+        }
+    }
 }
 impl LocalFocusPreferencesDto {
     pub fn validate(&self) -> Result<(), String> {
@@ -45,7 +55,13 @@ pub struct LocalFocusOutputDto {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum LocalFocusPointStatusDto { Active, Completed, Blocked, Expired, Stopped }
+pub enum LocalFocusPointStatusDto {
+    Active,
+    Completed,
+    Blocked,
+    Expired,
+    Stopped,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalFocusPointDto {

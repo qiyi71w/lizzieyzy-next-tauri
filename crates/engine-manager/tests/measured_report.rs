@@ -353,7 +353,11 @@ fn check_scene_apply_restore(whole_first: bool) {
         generation: 1,
         target_id: settings.profiles[0].id.clone(),
         target_name: original.name.clone(),
-        scene: if whole_first { MeasuredSceneDto::WholeGame } else { MeasuredSceneDto::Live },
+        scene: if whole_first {
+            MeasuredSceneDto::WholeGame
+        } else {
+            MeasuredSceneDto::Live
+        },
         profile_revision: format!("{:x}", Sha256::digest(serde_json::to_vec(&original).unwrap())),
         policy_revision: settings.profiles[0].thread_policy.revision,
         overlay_revision: 0,
@@ -366,7 +370,11 @@ fn check_scene_apply_restore(whole_first: bool) {
     };
     engine_manager::apply_measured_to_catalog(&mut settings, &review, &lease).unwrap();
     let first = settings.profiles[0].measured_scenes.clone();
-    review.scene = if whole_first { MeasuredSceneDto::Live } else { MeasuredSceneDto::WholeGame };
+    review.scene = if whole_first {
+        MeasuredSceneDto::Live
+    } else {
+        MeasuredSceneDto::WholeGame
+    };
     review.report = valid(!whole_first, 3);
     review.baseline_parameters = parsed(&review.report).baseline;
     review.candidate_parameters = parsed(&review.report).candidate;
@@ -389,7 +397,10 @@ fn check_scene_apply_restore(whole_first: bool) {
         settings.profiles[0].measured_scenes
     );
     assert!(engine_manager::restore_measured_catalog(&mut settings, &review.target_id, 1, &lease).is_err());
-    assert_eq!(settings.profiles[0].measured_scenes, prepared.profiles[0].measured_scenes);
+    assert_eq!(
+        settings.profiles[0].measured_scenes,
+        prepared.profiles[0].measured_scenes
+    );
     engine_manager::restore_measured_catalog(&mut settings, &review.target_id, 2, &lease).unwrap();
     assert!(settings.profiles[0].measured_scenes.live.is_none());
     assert!(settings.profiles[0].measured_scenes.whole_game.is_none());
@@ -470,17 +481,29 @@ fn accepted_live_launch_restart_and_whole_scene_isolation() {
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("measured-launch-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("nvidia-smi"), "#!/bin/sh\nprintf 'GPU-fixture, Named GPU, 591.66, 12227, 1000\\n'\n").unwrap();
+        std::fs::write(
+            dir.join("nvidia-smi"),
+            "#!/bin/sh\nprintf 'GPU-fixture, Named GPU, 591.66, 12227, 1000\\n'\n",
+        )
+        .unwrap();
         std::fs::set_permissions(dir.join("nvidia-smi"), std::fs::Permissions::from_mode(0o700)).unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "accepted_live_launch_restart_and_whole_scene_isolation", "--nocapture"])
+            .args([
+                "--exact",
+                "accepted_live_launch_restart_and_whole_scene_isolation",
+                "--nocapture",
+            ])
             .env(CHILD, &dir)
             .env("PATH", &dir)
             .output()
             .unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
         println!("{}", String::from_utf8_lossy(&output.stdout));
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         return;
     };
     controlled_launch_scenario(std::path::Path::new(&directory));
@@ -513,7 +536,11 @@ for line in sys.stdin:
 "#).unwrap();
     std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o700)).unwrap();
     std::fs::write(dir.join("model"), "model-a").unwrap();
-    std::fs::write(dir.join("config"), "numSearchThreads=4\nnumAnalysisThreads=1\nnumSearchThreadsPerAnalysisThread=4\nnnMaxBatchSize=8\n").unwrap();
+    std::fs::write(
+        dir.join("config"),
+        "numSearchThreads=4\nnumAnalysisThreads=1\nnumSearchThreadsPerAnalysisThread=4\nnnMaxBatchSize=8\n",
+    )
+    .unwrap();
     let mut settings = engine_manager::default_engine_profiles_settings();
     let target = settings.profiles[0].id.clone();
     settings.profiles[0].profile = app_model::EngineProfileDto {
@@ -536,46 +563,78 @@ for line in sys.stdin:
     };
     let catalog = Arc::new(engine_manager::InMemoryEngineProfileCatalog::new());
     catalog.upsert(saved(&settings));
-    let manager = ForegroundEngineManager::new(catalog.clone(), engine_manager::ForegroundEngineConfig::for_tests());
+    let manager = ForegroundEngineManager::new(
+        catalog.clone(),
+        engine_manager::ForegroundEngineConfig::for_tests(),
+    );
     struct Cleanup<'a>(&'a ForegroundEngineManager);
     impl Drop for Cleanup<'_> {
-        fn drop(&mut self) { let _ = self.0.teardown(); }
+        fn drop(&mut self) {
+            let _ = self.0.teardown();
+        }
     }
     let _cleanup = Cleanup(&manager);
     let gpu = engine_manager::measured_report::fingerprint::sample_gpu().unwrap();
     // WHOLE first, then LIVE: both pass actual Review and receipt revalidation before Apply.
     for whole in [true, false] {
-        let scene = if whole { MeasuredSceneDto::WholeGame } else { MeasuredSceneDto::Live };
+        let scene = if whole {
+            MeasuredSceneDto::WholeGame
+        } else {
+            MeasuredSceneDto::Live
+        };
         let baseline = manager.measured_baseline(&saved(&settings), scene).unwrap();
         let (fingerprint, parameters) = capture(&baseline, scene, &gpu, &|| false).unwrap();
         let mut report = valid(whole, 3);
         report["fingerprint"] = fingerprint;
         report["baselineParameters"] = serde_json::to_value(parameters).unwrap();
         let before = settings.clone();
-        let review = manager.review_measured_report(&target, &serde_json::to_vec(&report).unwrap()).unwrap();
-        assert!(review.assessment.eligible && review.qualification_reasons.is_empty(), "{review:?}");
-        assert_eq!(catalog.get(&target).unwrap(), saved(&before), "Review must not write");
-        assert!(manager.validate_measured_apply("wrong-receipt", review.generation).is_err());
-        let (lease, receipt) = manager.validate_measured_apply(&review.operation_id, review.generation).unwrap();
+        let review = manager
+            .review_measured_report(&target, &serde_json::to_vec(&report).unwrap())
+            .unwrap();
+        assert!(
+            review.assessment.eligible && review.qualification_reasons.is_empty(),
+            "{review:?}"
+        );
+        assert_eq!(
+            catalog.get(&target).unwrap(),
+            saved(&before),
+            "Review must not write"
+        );
+        assert!(manager
+            .validate_measured_apply("wrong-receipt", review.generation)
+            .is_err());
+        let (lease, receipt) = manager
+            .validate_measured_apply(&review.operation_id, review.generation)
+            .unwrap();
         engine_manager::apply_measured_to_catalog(&mut settings, &receipt, &lease).unwrap();
         catalog.upsert(saved(&settings));
         drop(lease);
         if !whole {
-            assert_eq!(settings.profiles[0].measured_scenes.whole_game, before.profiles[0].measured_scenes.whole_game);
+            assert_eq!(
+                settings.profiles[0].measured_scenes.whole_game,
+                before.profiles[0].measured_scenes.whole_game
+            );
         }
         assert_eq!(settings.profiles[0].profile, original);
     }
-    let baseline = manager.measured_baseline(&saved(&settings), MeasuredSceneDto::Live).unwrap();
+    let baseline = manager
+        .measured_baseline(&saved(&settings), MeasuredSceneDto::Live)
+        .unwrap();
     let launches = || -> Vec<Value> {
-        std::fs::read_to_string(dir.join("launches.jsonl")).unwrap().lines()
-            .map(|line| serde_json::from_str(line).unwrap()).collect()
+        std::fs::read_to_string(dir.join("launches.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
     };
     let wait_ready = |previous: Option<&str>| {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let snapshot = manager.snapshot();
             if let ForegroundEngineLifecycleDto::Ready { run } = &snapshot.lifecycle {
-                if previous != Some(run.run_id.as_str()) { return run.clone(); }
+                if previous != Some(run.run_id.as_str()) {
+                    return run.clone();
+                }
             }
             assert!(Instant::now() < deadline, "not Ready: {:?}", snapshot.lifecycle);
             std::thread::sleep(Duration::from_millis(10));
@@ -594,12 +653,19 @@ for line in sys.stdin:
     assert_eq!(rows.len(), 2);
     for row in &rows {
         let mut expected = baseline.args.clone();
-        let manual = expected.iter_mut().find(|arg| arg.starts_with("  appleUseFP16=true  ,")).unwrap();
-        *manual = "  appleUseFP16=true  ,reportAnalysisWinratesAs=BLACK,nnMaxBatchSize=8,numSearchThreads=8".into();
+        let manual = expected
+            .iter_mut()
+            .find(|arg| arg.starts_with("  appleUseFP16=true  ,"))
+            .unwrap();
+        *manual =
+            "  appleUseFP16=true  ,reportAnalysisWinratesAs=BLACK,nnMaxBatchSize=8,numSearchThreads=8".into();
         assert_eq!(row["argv"], json!(expected));
         assert_eq!(row["cwd"], json!(dir));
     }
-    println!("controlled Start/Restart adopted LIVE only: {} -> {}; argv={}", first.run_id, second.run_id, rows[1]["argv"]);
+    println!(
+        "controlled Start/Restart adopted LIVE only: {} -> {}; argv={}",
+        first.run_id, second.run_id, rows[1]["argv"]
+    );
     // Same-size changed resource invalidates the accepted report on the next ordinary Restart.
     std::fs::write(dir.join("model"), "model-b").unwrap();
     manager.restart().unwrap();
@@ -608,55 +674,104 @@ for line in sys.stdin:
     assert_eq!(catalog.get(&target).unwrap(), saved(&settings));
     let diagnostics = serde_json::to_string(&manager.diagnostic_snapshots()).unwrap();
     assert!(diagnostics.contains("Overlay not applied; original launch policy retained"));
-    println!("controlled stale Restart retained exact manual launch: {}; argv={}", third.run_id, launches()[2]["argv"]);
+    println!(
+        "controlled stale Restart retained exact manual launch: {}; argv={}",
+        third.run_id,
+        launches()[2]["argv"]
+    );
     manager.stop().unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
-    while !matches!(manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::NoEngine { .. }) || manager.measured_process_count() != 0 {
+    while !matches!(
+        manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::NoEngine { .. }
+    ) || manager.measured_process_count() != 0
+    {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(10));
     }
     std::fs::write(dir.join("model"), "model-a").unwrap();
     let lease = manager.begin_setup_operation().unwrap();
-    let whole = manager.start_independent_measured_scene(&target, MeasuredSceneDto::WholeGame, &lease).unwrap();
+    let whole = manager
+        .start_independent_measured_scene(&target, MeasuredSceneDto::WholeGame, &lease)
+        .unwrap();
     assert_eq!(whole.measured_scene, Some(MeasuredSceneDto::WholeGame));
     let whole_args = launches()[3]["argv"].clone();
     assert_eq!(whole_args[0], "analysis");
     assert_eq!(whole_args[6], "  appleUseFP16=true  ,nnMaxBatchSize=8,numAnalysisThreads=2,numSearchThreadsPerAnalysisThread=4,numSearchThreads=");
-    assert!(manager.start_independent_measured_scene(&target, MeasuredSceneDto::WholeGame, &lease).is_err(), "reuse-current must be rejected");
+    assert!(
+        manager
+            .start_independent_measured_scene(&target, MeasuredSceneDto::WholeGame, &lease)
+            .is_err(),
+        "reuse-current must be rejected"
+    );
     drop(lease);
     // HumanSL has no separate manager request type: its selected-node work shares
     // this admission gate. Exercise both ordinary and finite/quick consumer modes.
     for (label, mode) in [
         ("ordinary", app_model::AnalysisJobModeDto::Continuous),
-        ("quick/HumanSL shared selected-node", app_model::AnalysisJobModeDto::Finite),
+        (
+            "quick/HumanSL shared selected-node",
+            app_model::AnalysisJobModeDto::Finite,
+        ),
     ] {
         let query = serde_json::from_value(json!({"id":"fixture", "moves":[], "rules":"chinese", "komi":7.5, "boardXSize":9, "boardYSize":9, "maxVisits":2})).unwrap();
         let request = engine_manager::SelectedNodeJobRequest {
-            run_id: whole.run_id.clone(), mode, generation: 1, node_path: app_model::NodePath { indices: vec![] },
-            query, board_width: 9, board_height: 9, position_empty: true,
+            run_id: whole.run_id.clone(),
+            mode,
+            generation: 1,
+            node_path: app_model::NodePath { indices: vec![] },
+            query,
+            board_width: 9,
+            board_height: 9,
+            position_empty: true,
             exact_position: Err("JSONL fixture".into()),
         };
         let error = manager.start_selected_node_job(request).unwrap_err();
-        assert!(error.message.contains("cannot serve ordinary, quick or HumanSL"), "{label}: {error}");
-        println!("controlled WHOLE rejects {label} selected admission: {}", error.message);
+        assert!(
+            error.message.contains("cannot serve ordinary, quick or HumanSL"),
+            "{label}: {error}"
+        );
+        println!(
+            "controlled WHOLE rejects {label} selected admission: {}",
+            error.message
+        );
     }
     manager.stop_measured_scene(&whole.run_id).unwrap();
     let mut unsupported = saved(&settings);
     unsupported.profile.adapter = EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings {});
-    assert!(manager.measured_baseline(&unsupported, MeasuredSceneDto::WholeGame).unwrap_err().contains("Unsupported report scene"));
+    assert!(manager
+        .measured_baseline(&unsupported, MeasuredSceneDto::WholeGame)
+        .unwrap_err()
+        .contains("Unsupported report scene"));
     unsupported = saved(&settings);
     std::fs::copy(&engine, dir.join("ssh")).unwrap();
     unsupported.profile.program = dir.join("ssh").to_string_lossy().into_owned();
     catalog.upsert(unsupported);
-    let report = settings.profiles[0].measured_scenes.whole_game.as_ref().unwrap().report.clone();
-    let rejected = manager.review_measured_report(&target, &serde_json::to_vec(&report).unwrap()).unwrap();
-    assert!(rejected.qualification_reasons.iter().any(|reason| reason.contains("remote and wrapper targets are unsupported")));
-    assert!(manager.validate_measured_apply(&rejected.operation_id, rejected.generation).is_err());
+    let report = settings.profiles[0]
+        .measured_scenes
+        .whole_game
+        .as_ref()
+        .unwrap()
+        .report
+        .clone();
+    let rejected = manager
+        .review_measured_report(&target, &serde_json::to_vec(&report).unwrap())
+        .unwrap();
+    assert!(rejected
+        .qualification_reasons
+        .iter()
+        .any(|reason| reason.contains("remote and wrapper targets are unsupported")));
+    assert!(manager
+        .validate_measured_apply(&rejected.operation_id, rejected.generation)
+        .is_err());
     catalog.upsert(saved(&settings));
     assert_eq!(launches().len(), 4, "unsupported report must not spawn a process");
     assert_eq!(manager.measured_process_count(), 0);
     for row in launches() {
-        assert!(!std::path::Path::new(&format!("/proc/{}", row["pid"])).exists(), "owned process not reaped");
+        assert!(
+            !std::path::Path::new(&format!("/proc/{}", row["pid"])).exists(),
+            "owned process not reaped"
+        );
     }
     println!("controlled WHOLE reuse/unsupported rejected; all four owned engine processes reaped");
 }

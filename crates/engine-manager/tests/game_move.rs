@@ -57,19 +57,22 @@ impl Rig {
             EngineAdapterSettings::GenericGtp(GenericGtpSettings {})
         };
         let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-        catalog.upsert(SavedEngineProfile { measured_scenes: Default::default(), profile_id: "engine".into(),
-        profile: EngineProfileDto {
-            name: "pipe fixture".into(),
-            program: executable.to_string_lossy().into(),
-            argv: if kata {
-                vec![]
-            } else {
-                GNU_ARGS.map(String::from).into()
+        catalog.upsert(SavedEngineProfile {
+            measured_scenes: Default::default(),
+            profile_id: "engine".into(),
+            profile: EngineProfileDto {
+                name: "pipe fixture".into(),
+                program: executable.to_string_lossy().into(),
+                argv: if kata {
+                    vec![]
+                } else {
+                    GNU_ARGS.map(String::from).into()
+                },
+                working_dir: Some(dir.to_string_lossy().into()),
+                adapter,
             },
-            working_dir: Some(dir.to_string_lossy().into()),
-            adapter,
-        },
-        thread_policy: Default::default(), });
+            thread_policy: Default::default(),
+        });
         let mut second = catalog.get("engine").unwrap();
         second.profile_id = "second".into();
         catalog.upsert(second);
@@ -149,11 +152,18 @@ fn shared_rectangular_positions_do_not_expand_gnu_go_admission() {
         let mut request = rig.request(3000);
         request.position = document.exact_position(&NodePath::default()).unwrap();
         request.identity.node_path = NodePath::default();
-        let error = rig.manager.start_game_move(request).err().expect("unqualified dimensions");
+        let error = rig
+            .manager
+            .start_game_move(request)
+            .err()
+            .expect("unqualified dimensions");
         assert!(error.message.contains("qualified GNU Go sizes"));
         assert_eq!(rig.trace(), before);
     }
-    assert!(matches!(rig.manager.snapshot().lifecycle, ForegroundEngineLifecycleDto::Ready { .. }));
+    assert!(matches!(
+        rig.manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
 }
 
 #[test]

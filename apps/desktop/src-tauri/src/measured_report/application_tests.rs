@@ -17,11 +17,19 @@ fn measurement_fixture_publication_is_committed_and_coherent_even_when_delivery_
         assert!(captured.1.contains("SZ[9]"));
         seen.borrow_mut().push(captured);
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     assert_eq!(seen.borrow().len(), 1);
     let failed = reset_fixture(&current, "(;SZ[13])", &|result| {
         assert!(result.generation > first.generation);
-        assert_eq!(current.capture_measurement_document(result)?.2.summary.board_width, 13);
+        assert_eq!(
+            current
+                .capture_measurement_document(result)?
+                .2
+                .summary
+                .board_width,
+            13
+        );
         Err("WebView closed after commit".into())
     });
     assert!(failed.unwrap_err().contains("WebView closed"));
@@ -114,7 +122,19 @@ fn real_application_measurement_scene_smoke() {
                 assert!(manager.reserve_match("unrelated-match").is_err());
                 let fixture = "(;GM[1]FF[4]SZ[9]KM[7.5]RU[Chinese];B[dd];W[ff])";
                 let game = reset_fixture(&current, fixture, &|_| Ok(()))?;
-                let row = exercise(&current, &manager, &lease, &run, &game, 8, true, fixture, &|_| Ok(()));
+                let row = exercise(
+                    &current,
+                    &manager,
+                    &lease,
+                    &run,
+                    &game,
+                    ExercisePlan {
+                        budget: 8,
+                        timed: true,
+                        fixture,
+                    },
+                    &|_| Ok(()),
+                );
                 let stopped = manager.stop_measured_scene(&run.run_id);
                 let row = row?;
                 stopped?;

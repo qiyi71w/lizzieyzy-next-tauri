@@ -12,18 +12,38 @@ pub fn sort_candidates_by_visits(frame: &mut AnalysisFrameDto) {
         .sort_by_key(|candidate| Reverse(candidate.visits));
 }
 
-pub fn classify_problem_markers(frames: &[AnalysisFrameDto], settings: &MoveRankPreferencesDto) -> Vec<ProblemMarkerDto> {
+pub fn classify_problem_markers(
+    frames: &[AnalysisFrameDto],
+    settings: &MoveRankPreferencesDto,
+    moves: &[app_model::MoveDto],
+) -> Vec<ProblemMarkerDto> {
     let mut markers = Vec::new();
     for pair in frames.windows(2) {
         let previous = &pair[0];
         let current = &pair[1];
-        let color = if previous.turn % 2 == 0 { PlayerColor::Black } else { PlayerColor::White };
-        let parent = DisplayedAnalysis { visits: previous.visits, winrate_black: previous.winrate_black, score_mean_black: previous.score_mean_black };
-        let child = DisplayedAnalysis { visits: current.visits, winrate_black: current.winrate_black, score_mean_black: current.score_mean_black };
-        let Some(rank) = classify_played_move(Some(&parent), Some(&child), color, settings) else { continue; };
+        let Some(played) = moves.get(previous.turn as usize) else {
+            continue;
+        };
+        let color = played.color;
+        let parent = DisplayedAnalysis {
+            visits: previous.visits,
+            winrate_black: previous.winrate_black,
+            score_mean_black: previous.score_mean_black,
+        };
+        let child = DisplayedAnalysis {
+            visits: current.visits,
+            winrate_black: current.winrate_black,
+            score_mean_black: current.score_mean_black,
+        };
+        let Some(rank) = classify_played_move(Some(&parent), Some(&child), color, settings) else {
+            continue;
+        };
         let sign = if color == PlayerColor::Black { 1.0 } else { -1.0 };
         let winrate_loss = (sign * (previous.winrate_black - current.winrate_black)).max(0.0);
-        let score_loss = previous.score_mean_black.zip(current.score_mean_black).map(|(parent, child)| (sign * (parent - child)).max(0.0));
+        let score_loss = previous
+            .score_mean_black
+            .zip(current.score_mean_black)
+            .map(|(parent, child)| (sign * (parent - child)).max(0.0));
         let severity = match rank {
             MoveRank::Blunder => ProblemSeverity::Blunder,
             MoveRank::Mistake => ProblemSeverity::Mistake,
@@ -75,8 +95,31 @@ mod tests {
     #[test]
     fn classifies() {
         assert_eq!(
-            classify_problem_markers(&[f(0, 0.62, 3.0), f(1, 0.48, -5.0)], &MoveRankPreferencesDto::default()).len(),
+            classify_problem_markers(
+                &[f(0, 0.62, 3.0), f(1, 0.48, -5.0)],
+                &MoveRankPreferencesDto::default(),
+                &[app_model::MoveDto {
+                    color: PlayerColor::Black,
+                    vertex: app_model::MoveVertex::Pass,
+                    move_number: 1
+                }]
+            )
+            .len(),
             1
         )
+    }
+    #[test]
+    fn white_first_move_uses_actual_color() {
+        let moves = [app_model::MoveDto {
+            color: PlayerColor::White,
+            vertex: app_model::MoveVertex::Pass,
+            move_number: 1,
+        }];
+        let settings = MoveRankPreferencesDto::default();
+        let markers = classify_problem_markers(&[f(0, 0.3, -8.0), f(1, 0.6, 8.0)], &settings, &moves);
+        assert_eq!(markers[0].severity, ProblemSeverity::Blunder);
+        assert!((markers[0].winrate_loss - 0.3).abs() < 0.0001);
+        assert_eq!(markers[0].score_loss, Some(16.0));
+        assert!(classify_problem_markers(&[f(0, 0.6, 8.0), f(1, 0.3, -8.0)], &settings, &moves).is_empty());
     }
 }

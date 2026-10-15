@@ -90,11 +90,22 @@ fn serialize(position: &ExactPositionDto) -> String {
         ExactRulesDto::ChineseKgs => "Chinese-KGS",
     };
     let mut text = if position.board_width == position.board_height {
-        format!("(;FF[4]GM[1]SZ[{}]RU[{}]KM[{}]PL[{}]",
-            position.board_width, rules, position.komi, color(position.initial_player))
+        format!(
+            "(;FF[4]GM[1]SZ[{}]RU[{}]KM[{}]PL[{}]",
+            position.board_width,
+            rules,
+            position.komi,
+            color(position.initial_player)
+        )
     } else {
-        format!("(;FF[4]GM[1]SZ[{}:{}]RU[{}]KM[{}]PL[{}]",
-            position.board_width, position.board_height, rules, position.komi, color(position.initial_player))
+        format!(
+            "(;FF[4]GM[1]SZ[{}:{}]RU[{}]KM[{}]PL[{}]",
+            position.board_width,
+            position.board_height,
+            rules,
+            position.komi,
+            color(position.initial_player)
+        )
     };
     if !position.initial_stones.is_empty() {
         text.push_str(&format!("HA[{}]AB", position.initial_stones.len()));
@@ -201,17 +212,39 @@ mod tests {
     #[test]
     fn restore_serialization_keeps_square_and_rectangular_geometry() {
         for size in ["9", "9:7"] {
-            let document = sgf::CurrentSgfDocument::open(&format!("(;SZ[{size}]RU[Chinese]KM[7.5])")).unwrap();
+            let document =
+                sgf::CurrentSgfDocument::open(&format!("(;SZ[{size}]RU[Chinese]KM[7.5])")).unwrap();
             let position = document.exact_position(&NodePath::default()).unwrap();
             let text = serialize(position.dto());
             assert!(text.contains(&format!("SZ[{size}]")));
-            let restored = sgf::CurrentSgfDocument::open(&text).unwrap().exact_position(&NodePath::default()).unwrap();
+            let restored = sgf::CurrentSgfDocument::open(&text)
+                .unwrap()
+                .exact_position(&NodePath::default())
+                .unwrap();
             assert_eq!(restored.dto(), position.dto());
-            let board = (1..=position.dto().board_height).rev().map(|row| format!("{row} . . . . . . . . .\n")).collect::<String>() + "Next player: Black";
+            let board = (1..=position.dto().board_height)
+                .rev()
+                .map(|row| format!("{row} . . . . . . . . .\n"))
+                .collect::<String>()
+                + "Next player: Black";
             let rules = r#"{"friendlyPassOk":true,"hasButton":false,"ko":"SIMPLE","scoring":"AREA","suicide":false,"tax":"NONE","whiteHandicapBonus":"N"}"#;
             assert!(verify(&position, rules, "7.5", &board, &text).is_ok());
-            assert!(verify(&position, rules, "7.5", &board.replace(". . . . . . . . .", ". . . . . . . ."), &text).is_err());
-            assert!(verify(&position, rules, "7.5", &format!("{} . . . . . . . . .\n{board}", position.dto().board_height + 1), &text).is_err());
+            assert!(verify(
+                &position,
+                rules,
+                "7.5",
+                &board.replace(". . . . . . . . .", ". . . . . . . ."),
+                &text
+            )
+            .is_err());
+            assert!(verify(
+                &position,
+                rules,
+                "7.5",
+                &format!("{} . . . . . . . . .\n{board}", position.dto().board_height + 1),
+                &text
+            )
+            .is_err());
         }
     }
 }

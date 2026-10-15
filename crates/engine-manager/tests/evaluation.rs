@@ -15,9 +15,12 @@ impl EngineProfileCatalog for DiskCatalog {
             .profiles
             .into_iter()
             .find(|r| r.id == id)
-            .map(|r| SavedEngineProfile { measured_scenes: Default::default(), profile_id: r.id,
-            profile: r.profile,
-            thread_policy: r.thread_policy, })
+            .map(|r| SavedEngineProfile {
+                measured_scenes: Default::default(),
+                profile_id: r.id,
+                profile: r.profile,
+                thread_policy: r.thread_policy,
+            })
     }
     fn preload_profiles(&self) -> Vec<SavedEngineProfile> {
         load_engine_profiles(&self.0)
@@ -25,9 +28,12 @@ impl EngineProfileCatalog for DiskCatalog {
             .profiles
             .into_iter()
             .filter(|r| r.preload)
-            .map(|r| SavedEngineProfile { measured_scenes: Default::default(), profile_id: r.id,
-            profile: r.profile,
-            thread_policy: r.thread_policy, })
+            .map(|r| SavedEngineProfile {
+                measured_scenes: Default::default(),
+                profile_id: r.id,
+                profile: r.profile,
+                thread_policy: r.thread_policy,
+            })
             .collect()
     }
 }
@@ -102,19 +108,22 @@ fn unknown_fixture_and_wrapper_never_spawn_even_a_version_probe() {
         wrapper,
     ] {
         let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-        catalog.upsert(SavedEngineProfile { measured_scenes: Default::default(), profile_id: "target".into(),
-        thread_policy: Default::default(),
-        profile: EngineProfileDto {
-            name: "unknown local-looking target".into(),
-            program: program.to_string_lossy().into_owned(),
-            argv: vec![],
-            working_dir: Some(dir.to_string_lossy().into_owned()),
-            adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings {
-                model_path: Some("model.bin".into()),
-                config_path: Some("config.cfg".into()),
-                max_visits: 4,
-            }),
-        }, });
+        catalog.upsert(SavedEngineProfile {
+            measured_scenes: Default::default(),
+            profile_id: "target".into(),
+            thread_policy: Default::default(),
+            profile: EngineProfileDto {
+                name: "unknown local-looking target".into(),
+                program: program.to_string_lossy().into_owned(),
+                argv: vec![],
+                working_dir: Some(dir.to_string_lossy().into_owned()),
+                adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings {
+                    model_path: Some("model.bin".into()),
+                    config_path: Some("config.cfg".into()),
+                    max_visits: 4,
+                }),
+            },
+        });
         let owner = Owned(ForegroundEngineManager::new(
             catalog,
             ForegroundEngineConfig::for_tests(),
@@ -236,20 +245,23 @@ fn real_two_saved_ids_recommend_save_launch_and_effective_thread_readback() {
     settings.profiles.clear();
     settings.selected_profile_id = "a".into();
     for id in ["a", "b"] {
-        settings.profiles.push(EngineProfileRecord { measured_scenes: Default::default(), id: id.into(),
-        preload: false,
-        thread_policy: Default::default(),
-        profile: EngineProfileDto {
-            name: format!("Policy {id}"),
-            program: engine.clone(),
-            argv: vec![],
-            working_dir: Some(cwd.to_string_lossy().into_owned()),
-            adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings {
-                model_path: Some(model.clone()),
-                config_path: Some("engine.cfg".into()),
-                max_visits: 8,
-            }),
-        }, });
+        settings.profiles.push(EngineProfileRecord {
+            measured_scenes: Default::default(),
+            id: id.into(),
+            preload: false,
+            thread_policy: Default::default(),
+            profile: EngineProfileDto {
+                name: format!("Policy {id}"),
+                program: engine.clone(),
+                argv: vec![],
+                working_dir: Some(cwd.to_string_lossy().into_owned()),
+                adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings {
+                    model_path: Some(model.clone()),
+                    config_path: Some("engine.cfg".into()),
+                    max_visits: 8,
+                }),
+            },
+        });
     }
     let originals = settings
         .profiles

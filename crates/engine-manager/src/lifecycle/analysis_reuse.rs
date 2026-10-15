@@ -15,7 +15,10 @@ pub struct OrdinaryAnalysisContext {
 
 impl OrdinaryAnalysisContext {
     pub fn ownership_requested(&self) -> bool {
-        self.query.get("includeOwnership").and_then(serde_json::Value::as_bool) == Some(true)
+        self.query
+            .get("includeOwnership")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
     }
 }
 
@@ -50,8 +53,14 @@ pub(super) fn capture(
         object.remove(key);
     }
     Some(Arc::new(OrdinaryAnalysisContext {
-        run_id: run.run_id.clone(), resource, generation: request.generation,
-        node_path: request.node_path.clone(), query, position, parameters, threads,
+        run_id: run.run_id.clone(),
+        resource,
+        generation: request.generation,
+        node_path: request.node_path.clone(),
+        query,
+        position,
+        parameters,
+        threads,
     }))
 }
 
@@ -63,26 +72,44 @@ impl ForegroundEngineManager {
         event: &AnalysisJobEventDto,
     ) -> Option<Arc<OrdinaryAnalysisContext>> {
         let state = self.lock();
-        state.jobs.iter().find(|job| {
-            job.run_id == event.run_id && job.job_id == event.job_id
-                && job.generation == event.generation && job.node_path == event.node_path
-                && job.lane == AnalysisJobLane::SelectedNode && job.submitted
-        }).and_then(|job| job.ordinary_context.clone()).or_else(|| {
-            state.last_ordinary_context.as_ref()
-                .filter(|(scope, _)| scope.run_id == event.run_id && scope.job_id == event.job_id
-                    && scope.generation == event.generation && scope.node_path == event.node_path)
-                .map(|(_, context)| context.clone())
-        })
+        state
+            .jobs
+            .iter()
+            .find(|job| {
+                job.run_id == event.run_id
+                    && job.job_id == event.job_id
+                    && job.generation == event.generation
+                    && job.node_path == event.node_path
+                    && job.lane == AnalysisJobLane::SelectedNode
+                    && job.submitted
+            })
+            .and_then(|job| job.ordinary_context.clone())
+            .or_else(|| {
+                state
+                    .last_ordinary_context
+                    .as_ref()
+                    .filter(|(scope, _)| {
+                        scope.run_id == event.run_id
+                            && scope.job_id == event.job_id
+                            && scope.generation == event.generation
+                            && scope.node_path == event.node_path
+                    })
+                    .map(|(_, context)| context.clone())
+            })
     }
 
     /// Called only by the serialized durable preferences owner after a successful write.
     /// This prospective presentation policy never reconciles or restarts analysis.
     pub fn set_retain_node_analysis(&self, enabled: bool) {
-        self.inner.retain_node_analysis.store(enabled, std::sync::atomic::Ordering::Release);
+        self.inner
+            .retain_node_analysis
+            .store(enabled, std::sync::atomic::Ordering::Release);
     }
 
     pub fn retain_node_analysis(&self) -> bool {
-        self.inner.retain_node_analysis.load(std::sync::atomic::Ordering::Acquire)
+        self.inner
+            .retain_node_analysis
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 }
 
@@ -92,19 +119,38 @@ mod tests {
 
     #[test]
     fn ordinary_reuse_context_captures_runtime_and_excludes_only_budgets() {
-        let manager = ForegroundEngineManager::new(Arc::new(crate::InMemoryEngineProfileCatalog::new()), ForegroundEngineConfig::for_tests());
+        let manager = ForegroundEngineManager::new(
+            Arc::new(crate::InMemoryEngineProfileCatalog::new()),
+            ForegroundEngineConfig::for_tests(),
+        );
         let run = EngineRunDto {
             measured_scene: None,
             measured_scenes_snapshot: Default::default(),
-            run_id: "run".into(), profile_id: "profile".into(), adapter_kind: EngineBackend::KataGoGtp,
+            run_id: "run".into(),
+            profile_id: "profile".into(),
+            adapter_kind: EngineBackend::KataGoGtp,
             profile_snapshot: app_model::EngineProfileDto {
-                name: "test".into(), program: "test".into(), argv: vec![], working_dir: None,
-                adapter: app_model::EngineAdapterSettings::KataGoGtp(app_model::KataGoSettings { model_path: None, config_path: None, max_visits: 800 }),
+                name: "test".into(),
+                program: "test".into(),
+                argv: vec![],
+                working_dir: None,
+                adapter: app_model::EngineAdapterSettings::KataGoGtp(app_model::KataGoSettings {
+                    model_path: None,
+                    config_path: None,
+                    max_visits: 800,
+                }),
             },
-            thread_policy_snapshot: Default::default(), capability_snapshot: None,
+            thread_policy_snapshot: Default::default(),
+            capability_snapshot: None,
             qualified_resource: Some(Arc::new(app_model::QualifiedLocalResourceDto {
-                profile_revision: "revision".into(), resources: vec![], origin: "fixture".into(),
-                version: None, source_commit: None, backend: None, static_zlib_exemption: false, thread_sources: None,
+                profile_revision: "revision".into(),
+                resources: vec![],
+                origin: "fixture".into(),
+                version: None,
+                source_commit: None,
+                backend: None,
+                static_zlib_exemption: false,
+                thread_sources: None,
             })),
         };
         let document = sgf::CurrentSgfDocument::open("(;SZ[9]RU[Chinese]KM[7.5])").unwrap();
@@ -116,30 +162,59 @@ mod tests {
         let mut state = manager.lock();
         assert!(capture(&state, &run, &request).is_none());
         state.runtime_parameters = Some(app_model::RuntimeParametersSnapshotDto {
-            run_id: Some("run".into()), profile_revision: Some("revision".into()), supported: true,
-            reason: None, request_id: None, last_valid: Some(app_model::RuntimeParameterPairDto { playout_doubling_advantage: 0.0, analysis_wide_root_noise: 0.0 }),
-            status: app_model::RuntimeParametersStatusDto::Confirmed, failure: None,
+            run_id: Some("run".into()),
+            profile_revision: Some("revision".into()),
+            supported: true,
+            reason: None,
+            request_id: None,
+            last_valid: Some(app_model::RuntimeParameterPairDto {
+                playout_doubling_advantage: 0.0,
+                analysis_wide_root_noise: 0.0,
+            }),
+            status: app_model::RuntimeParametersStatusDto::Confirmed,
+            failure: None,
         });
         state.runtime_threads = Some(app_model::RuntimeThreadsSnapshotDto {
-            run_id: Some("run".into()), profile_revision: Some("revision".into()), supported: true, reason: None,
-            minimum: 1, maximum: 64, sources: None, request_id: None, requested: None, actual: Some(1), temporary: false,
-            status: app_model::RuntimeThreadsStatusDto::Confirmed, failure: None,
+            run_id: Some("run".into()),
+            profile_revision: Some("revision".into()),
+            supported: true,
+            reason: None,
+            minimum: 1,
+            maximum: 64,
+            sources: None,
+            request_id: None,
+            requested: None,
+            actual: Some(1),
+            temporary: false,
+            status: app_model::RuntimeThreadsStatusDto::Confirmed,
+            failure: None,
         });
         let before = capture(&state, &run, &request).unwrap();
         request.query.max_visits = Some(100);
         request.query.id = "new-budget".into();
         request.query.continuous(ContinuousAnalysisBudgetDto::default());
         assert_eq!(capture(&state, &run, &request).as_ref(), Some(&before));
-        state.runtime_parameters.as_mut().unwrap().last_valid.as_mut().unwrap().playout_doubling_advantage = 1.0;
+        state
+            .runtime_parameters
+            .as_mut()
+            .unwrap()
+            .last_valid
+            .as_mut()
+            .unwrap()
+            .playout_doubling_advantage = 1.0;
         let after = capture(&state, &run, &request).unwrap();
         assert_ne!(before, after);
-        assert_eq!(before.parameters.as_ref().unwrap().playout_doubling_advantage, 0.0);
+        assert_eq!(
+            before.parameters.as_ref().unwrap().playout_doubling_advantage,
+            0.0
+        );
         state.runtime_parameters.as_mut().unwrap().status = app_model::RuntimeParametersStatusDto::Failed;
         assert!(capture(&state, &run, &request).is_none());
         state.runtime_parameters.as_mut().unwrap().status = app_model::RuntimeParametersStatusDto::Confirmed;
         request.query.include_policy = Some(true);
         assert_ne!(capture(&state, &run, &request).as_ref(), Some(&after));
-        let mut other_run = run.clone(); other_run.run_id = "another-run".into();
+        let mut other_run = run.clone();
+        other_run.run_id = "another-run".into();
         assert!(capture(&state, &other_run, &request).is_none());
     }
 }

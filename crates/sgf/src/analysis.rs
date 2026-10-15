@@ -22,19 +22,31 @@ impl SgfAnalysisPayload {
 
     /// Live ordinary results require a real candidate and PV; visits alone are
     /// neither a complete result nor evidence that an imported cache is reusable.
-    pub fn is_complete_frame(frame: &AnalysisFrameDto, position: &crate::ExactPosition, ownership_requested: bool) -> bool {
+    pub fn is_complete_frame(
+        frame: &AnalysisFrameDto,
+        position: &crate::ExactPosition,
+        ownership_requested: bool,
+    ) -> bool {
         let area = usize::from(position.dto().board_width) * usize::from(position.dto().board_height);
-        let valid_map = |map: &Vec<f32>| map.len() == area && map.iter().all(|v| v.is_finite() && (-1.0..=1.0).contains(v));
+        let valid_map = |map: &Vec<f32>| {
+            map.len() == area && map.iter().all(|v| v.is_finite() && (-1.0..=1.0).contains(v))
+        };
         frame.visits > 0
-            && frame.winrate_black.is_finite() && (0.0..=1.0).contains(&frame.winrate_black)
+            && frame.winrate_black.is_finite()
+            && (0.0..=1.0).contains(&frame.winrate_black)
             && frame.score_mean_black.is_none_or(f32::is_finite)
             && frame.score_stdev.is_none_or(|v| v.is_finite() && v >= 0.0)
-            && frame.candidates.first().is_some_and(|candidate| candidate.visits > 0 && candidate.pv.first() == Some(&candidate.vertex))
+            && frame.candidates.first().is_some_and(|candidate| {
+                candidate.visits > 0 && candidate.pv.first() == Some(&candidate.vertex)
+            })
             && frame.candidates.iter().all(|candidate| {
                 candidate.winrate_black.is_finite()
                     && (0.0..=1.0).contains(&candidate.winrate_black)
                     && candidate.score_mean_black.is_none_or(f32::is_finite)
-                    && candidate.pv.first().is_none_or(|vertex| vertex == &candidate.vertex)
+                    && candidate
+                        .pv
+                        .first()
+                        .is_none_or(|vertex| vertex == &candidate.vertex)
                     && position.validate_move(&candidate.vertex).is_ok()
                     && candidate.ownership.as_ref().is_none_or(valid_map)
             })

@@ -75,9 +75,12 @@ impl Rig {
             },
         };
         let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-        catalog.upsert(SavedEngineProfile { measured_scenes: Default::default(), profile_id: "engine".into(),
-        profile: profile.clone(),
-        thread_policy: Default::default(), });
+        catalog.upsert(SavedEngineProfile {
+            measured_scenes: Default::default(),
+            profile_id: "engine".into(),
+            profile: profile.clone(),
+            thread_policy: Default::default(),
+        });
         let manager = ForegroundEngineManager::new(catalog.clone(), config);
         let state = CurrentGameState::default();
         state.connect_analysis_manager(manager.clone());

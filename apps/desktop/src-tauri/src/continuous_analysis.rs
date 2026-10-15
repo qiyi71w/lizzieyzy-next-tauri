@@ -568,15 +568,19 @@ impl PreferencesState {
                     .selected_node_job
                     .is_some_and(|job| job.mode == AnalysisJobModeDto::Finite);
                 preferences.continuous_analysis_enabled = start;
-                preferences =
-                    manager.commit_continuous_preferences(start, preferences.continuous_budget, None, || {
+                preferences = manager.commit_continuous_preferences(
+                    start,
+                    preferences.continuous_budget,
+                    None,
+                    || {
                         let saved = app_preferences::save_to_path(path, preferences)?;
                         *committed = Some(AppPreferencesLoadResultDto {
                             preferences: saved.clone(),
                             recovery: None,
                         });
                         Ok(saved)
-                    })?;
+                    },
+                )?;
                 if !start {
                     manager.retire_auto_load().map_err(|failure| failure.message)?;
                 }

@@ -78,12 +78,22 @@ fn response_error(error: RecvTimeoutError, context: &'static str) -> AnalysisErr
 }
 
 fn retain_same_tree_maps(frame: &mut AnalysisFrameDto, previous: Option<&AnalysisFrameDto>) {
-    let Some(previous) = previous else { return; };
-    if frame.ownership.is_none() { frame.ownership.clone_from(&previous.ownership); }
-    if frame.policy.is_none() { frame.policy.clone_from(&previous.policy); }
+    let Some(previous) = previous else {
+        return;
+    };
+    if frame.ownership.is_none() {
+        frame.ownership.clone_from(&previous.ownership);
+    }
+    if frame.policy.is_none() {
+        frame.policy.clone_from(&previous.policy);
+    }
     for candidate in &mut frame.candidates {
         if candidate.ownership.is_none() {
-            if let Some(old) = previous.candidates.iter().find(|old| old.vertex == candidate.vertex) {
+            if let Some(old) = previous
+                .candidates
+                .iter()
+                .find(|old| old.vertex == candidate.vertex)
+            {
                 candidate.ownership.clone_from(&old.ownership);
             }
         }
@@ -91,9 +101,21 @@ fn retain_same_tree_maps(frame: &mut AnalysisFrameDto, previous: Option<&Analysi
 }
 
 impl ForegroundEngineManager {
-    pub(super) fn lock_gtp_writer<'a>(&'a self, stdin: &'a Mutex<Option<std::process::ChildStdin>>, deadline: Instant) -> Result<(std::sync::MutexGuard<'a, ManagerState>, std::sync::MutexGuard<'a, Option<std::process::ChildStdin>>), String> {
+    pub(super) fn lock_gtp_writer<'a>(
+        &'a self,
+        stdin: &'a Mutex<Option<std::process::ChildStdin>>,
+        deadline: Instant,
+    ) -> Result<
+        (
+            std::sync::MutexGuard<'a, ManagerState>,
+            std::sync::MutexGuard<'a, Option<std::process::ChildStdin>>,
+        ),
+        String,
+    > {
         loop {
-            if Instant::now() >= deadline { return Err("GTP write boundary timed out".into()); }
+            if Instant::now() >= deadline {
+                return Err("GTP write boundary timed out".into());
+            }
             let state = self.lock();
             match stdin.try_lock() {
                 Ok(writer) => return Ok((state, writer)),
@@ -135,10 +157,17 @@ impl ForegroundEngineManager {
         let payload = format!("{id} {body}");
         let deadline = Instant::now() + Duration::from_secs(5);
         thread::spawn(move || {
-            let (mut state, mut guard) = match manager.lock_gtp_writer(&stdin, deadline) {
+            let (state, mut guard) = match manager.lock_gtp_writer(&stdin, deadline) {
                 Ok(guards) => guards,
                 Err(message) => {
-                    let _ = sender.send(Err(failure(EngineOperationDto::Job, EngineFailureKind::Timeout, FailureText::unscoped(&message), Some(&run_id), None, None)));
+                    let _ = sender.send(Err(failure(
+                        EngineOperationDto::Job,
+                        EngineFailureKind::Timeout,
+                        FailureText::unscoped(&message),
+                        Some(&run_id),
+                        None,
+                        None,
+                    )));
                     return;
                 }
             };
@@ -150,9 +179,14 @@ impl ForegroundEngineManager {
                         && (!stream || job.disposition == JobDisposition::Running)
                 });
             let focus_write = stream && state.local_focus.owns_job(&run_id, &job_id);
+            let revision = state.local_focus.revision;
             let payload = if focus_write {
                 format!("{id} {}", state.local_focus.command(state.local_focus.color))
-            } else { payload };
+            } else {
+                payload
+            };
+            // A blocked pipe must leave cancellation and the deadline owner able to acquire state.
+            drop(state);
             let result = if !valid {
                 Err(failure(
                     EngineOperationDto::Job,
@@ -166,14 +200,20 @@ impl ForegroundEngineManager {
                 match write_jsonl(writer, &payload) {
                     Ok(()) => {
                         if focus_write {
-                            let revision = state.local_focus.revision;
-                            state.local_focus.applied(id, revision);
+                            let mut state = manager.lock();
+                            if state.local_focus.owns_job(&run_id, &job_id) {
+                                state.local_focus.applied(id, revision);
+                            }
                         }
                         Ok(())
                     }
                     Err(_) => Err(failure(
-                        EngineOperationDto::Job, EngineFailureKind::Protocol,
-                        "analysis write failed".into(), Some(&run_id), None, None,
+                        EngineOperationDto::Job,
+                        EngineFailureKind::Protocol,
+                        "analysis write failed".into(),
+                        Some(&run_id),
+                        None,
+                        None,
                     )),
                 }
             } else {
@@ -297,15 +337,19 @@ impl ForegroundEngineManager {
             let eligible = started.mode == AnalysisJobModeDto::Continuous
                 && !state.continuous_departing
                 && admitting_run(&state.phase, &started.run_id).is_some()
-                && state.continuous_target.as_ref().is_some_and(|target|
-                    target.generation == started.generation && target.node_path == started.node_path);
+                && state.continuous_target.as_ref().is_some_and(|target| {
+                    target.generation == started.generation && target.node_path == started.node_path
+                });
             if eligible {
                 state.local_focus.bind(started);
                 state.local_focus.height = request.board_height;
                 state.local_focus.color = color;
                 state.local_focus.refresh_eligible = admitting_run(&state.phase, &started.run_id)
-                    .is_some_and(|run| run.qualified_resource.as_deref()
-                        .is_some_and(crate::thread_policy::direct_local));
+                    .is_some_and(|run| {
+                        run.qualified_resource
+                            .as_deref()
+                            .is_some_and(crate::thread_policy::direct_local)
+                    });
                 if state.local_focus.refresh_eligible {
                     state.local_focus.interval = state.analysis_refresh_interval;
                 }
@@ -324,111 +368,247 @@ impl ForegroundEngineManager {
             {
                 let mut state = self.lock();
                 if let Some(job) = state.jobs.iter_mut().find(|job| job.job_id == started.job_id) {
-                    if !job.submitted { job.submitted = true; job.submitted_at = began; }
+                    if !job.submitted {
+                        job.submitted = true;
+                        job.submitted_at = began;
+                    }
                 }
             }
             let header_deadline = Instant::now() + Duration::from_secs(5);
             let mut header = false;
             let ending = loop {
                 let mut state = self.lock();
-                let Some(job) = state.jobs.iter().find(|job| job.job_id == started.job_id && !job.terminal) else {
+                let Some(job) = state
+                    .jobs
+                    .iter()
+                    .find(|job| job.job_id == started.job_id && !job.terminal)
+                else {
                     return Err("analysis job retired before its stream drain".into());
                 };
-                if job.disposition != JobDisposition::Running { break Some(stopped_outcome(job.disposition)); }
+                if job.disposition != JobDisposition::Running {
+                    break Some(stopped_outcome(job.disposition));
+                }
                 let visits = last.as_ref().map_or(0, |frame| frame.visits);
                 if let Some(budget) = job.continuous_budget {
-                    if budget.continuous_visits_limit_enabled && visits >= budget.continuous_visits_limit { break Some(AnalysisJobOutcomeDto::VisitsLimited); }
-                    if budget.continuous_time_limit_enabled && began.elapsed() >= Duration::from_secs(u64::from(budget.continuous_time_limit_seconds)) { break Some(AnalysisJobOutcomeDto::TimeLimited); }
-                } else if request.query.max_visits.is_some_and(|limit| visits >= limit) { break Some(AnalysisJobOutcomeDto::Completed); }
+                    if budget.continuous_visits_limit_enabled && visits >= budget.continuous_visits_limit {
+                        break Some(AnalysisJobOutcomeDto::VisitsLimited);
+                    }
+                    if budget.continuous_time_limit_enabled
+                        && began.elapsed()
+                            >= Duration::from_secs(u64::from(budget.continuous_time_limit_seconds))
+                    {
+                        break Some(AnalysisJobOutcomeDto::TimeLimited);
+                    }
+                } else if request.query.max_visits.is_some_and(|limit| visits >= limit) {
+                    break Some(AnalysisJobOutcomeDto::Completed);
+                }
                 if state.local_focus.matches(started) {
-                    if state.local_focus.observe(None, Instant::now()) { publish_snapshot(&mut state); }
-                    if state.local_focus.revision != state.local_focus.applied { break None; }
+                    if state.local_focus.observe(None, Instant::now()) {
+                        publish_snapshot(&mut state);
+                    }
+                    if state.local_focus.revision != state.local_focus.applied {
+                        break None;
+                    }
                 }
                 drop(state);
                 // unpark retains a token when cancellation/data races this empty check.
                 // Every wake returns through the authoritative state/budget/focus checks above.
                 match stream.response.try_recv() {
                     Ok(line) => {
-                        if !header { require_stream_header(stream.id, &line)?; header = true; continue; }
-                        if line.is_empty() { return Err("KataGo analysis ended without the requested stop barrier".into()); }
+                        if !header {
+                            require_stream_header(stream.id, &line)?;
+                            header = true;
+                            continue;
+                        }
+                        if line.is_empty() {
+                            return Err("KataGo analysis ended without the requested stop barrier".into());
+                        }
                         // Check the output owner before parsing and again before publishing.
                         {
                             let state = self.lock();
-                            if focus_owned && (!state.local_focus.matches(started) || state.local_focus.output.map(|output| output.command) != Some(stream.id)) { continue; }
+                            if focus_owned
+                                && (!state.local_focus.matches(started)
+                                    || state.local_focus.output.map(|output| output.command)
+                                        != Some(stream.id))
+                            {
+                                continue;
+                            }
                         }
                         let mut frame = katago_protocol::parse_gtp_analysis(
-                            &line, Uuid::parse_str(&started.job_id).map_err(|error| error.to_string())?,
-                            request.board_width, request.board_height, position.dto().moves.len() as u32,
+                            &line,
+                            Uuid::parse_str(&started.job_id).map_err(|error| error.to_string())?,
+                            request.board_width,
+                            request.board_height,
+                            position.dto().moves.len() as u32,
                         )?;
                         let mut state = self.lock();
                         if admitting_run(&state.phase, &started.run_id).is_none()
-                            || (focus_owned && (!state.local_focus.matches(started)
-                            || state.local_focus.output.map(|output| output.command) != Some(stream.id))) { continue; }
+                            || (focus_owned
+                                && (!state.local_focus.matches(started)
+                                    || state.local_focus.output.map(|output| output.command)
+                                        != Some(stream.id)))
+                        {
+                            continue;
+                        }
                         retain_same_tree_maps(&mut frame, last.as_ref());
-                        let Some(job) = state.jobs.iter_mut().find(|job| job.job_id == started.job_id && !job.terminal && job.disposition == JobDisposition::Running) else { continue; };
+                        let Some(job) = state.jobs.iter_mut().find(|job| {
+                            job.job_id == started.job_id
+                                && !job.terminal
+                                && job.disposition == JobDisposition::Running
+                        }) else {
+                            continue;
+                        };
                         job.state = AnalysisJobStateDto::Searching;
                         state.last_activity = Instant::now();
-                        publish_event(&mut state, ForegroundEngineEventDto::Job { job: selected_node_job_event(started, AnalysisJobOutcomeDto::Progress, Some(frame.clone()), None) });
-                        if focus_owned { state.local_focus.observe(Some(&frame), Instant::now()); }
+                        publish_event(
+                            &mut state,
+                            ForegroundEngineEventDto::Job {
+                                job: selected_node_job_event(
+                                    started,
+                                    AnalysisJobOutcomeDto::Progress,
+                                    Some(frame.clone()),
+                                    None,
+                                ),
+                            },
+                        );
+                        if focus_owned {
+                            state.local_focus.observe(Some(&frame), Instant::now());
+                        }
                         publish_snapshot(&mut state);
                         last = Some(frame);
                     }
                     Err(TryRecvError::Empty) => {
-                        if !header && Instant::now() >= header_deadline { return Err(response_error(RecvTimeoutError::Timeout, "KataGo analysis header")); }
+                        if !header && Instant::now() >= header_deadline {
+                            return Err(response_error(
+                                RecvTimeoutError::Timeout,
+                                "KataGo analysis header",
+                            ));
+                        }
                         thread::park_timeout(Duration::from_millis(20));
                     }
-                    Err(TryRecvError::Disconnected) => return Err("KataGo analysis response disconnected".into()),
+                    Err(TryRecvError::Disconnected) => {
+                        return Err("KataGo analysis response disconnected".into())
+                    }
                 }
             };
             let final_line = self.drain_analysis_stream(started, &stream, header)?;
             let mut state = self.lock();
-            let final_eligible = focus_owned && state.local_focus.matches(started) && state.local_focus.output.is_some_and(|output| output.command == stream.id && output.lineage > 0);
-            if final_eligible && state.jobs.iter().any(|job| job.job_id == started.job_id && job.disposition == JobDisposition::Running && !job.terminal) {
+            let final_eligible = focus_owned
+                && state.local_focus.matches(started)
+                && state
+                    .local_focus
+                    .output
+                    .is_some_and(|output| output.command == stream.id && output.lineage > 0);
+            if final_eligible
+                && state.jobs.iter().any(|job| {
+                    job.job_id == started.job_id
+                        && job.disposition == JobDisposition::Running
+                        && !job.terminal
+                })
+            {
                 if let Some(line) = final_line {
-                    let mut frame = katago_protocol::parse_gtp_analysis(&line, Uuid::parse_str(&started.job_id).map_err(|error| error.to_string())?, request.board_width, request.board_height, position.dto().moves.len() as u32)?;
+                    let mut frame = katago_protocol::parse_gtp_analysis(
+                        &line,
+                        Uuid::parse_str(&started.job_id).map_err(|error| error.to_string())?,
+                        request.board_width,
+                        request.board_height,
+                        position.dto().moves.len() as u32,
+                    )?;
                     retain_same_tree_maps(&mut frame, last.as_ref());
-                    publish_event(&mut state, ForegroundEngineEventDto::Job { job: selected_node_job_event(started, AnalysisJobOutcomeDto::Progress, Some(frame.clone()), None) });
+                    publish_event(
+                        &mut state,
+                        ForegroundEngineEventDto::Job {
+                            job: selected_node_job_event(
+                                started,
+                                AnalysisJobOutcomeDto::Progress,
+                                Some(frame.clone()),
+                                None,
+                            ),
+                        },
+                    );
                     last = Some(frame);
                 }
             }
-            if state.local_focus.matches(started) { state.local_focus.drained(); }
-            let Some(job) = state.jobs.iter().find(|job| job.job_id == started.job_id && !job.terminal) else { return Ok(()); };
-            if job.disposition != JobDisposition::Running { break 'ordinary stopped_outcome(job.disposition); }
-            if let Some(outcome) = ending { break 'ordinary outcome; }
+            if state.local_focus.matches(started) {
+                state.local_focus.drained();
+            }
+            let Some(job) = state
+                .jobs
+                .iter()
+                .find(|job| job.job_id == started.job_id && !job.terminal)
+            else {
+                return Ok(());
+            };
+            if job.disposition != JobDisposition::Running {
+                break 'ordinary stopped_outcome(job.disposition);
+            }
+            if let Some(outcome) = ending {
+                break 'ordinary outcome;
+            }
             if let Some(budget) = job.continuous_budget {
-                if budget.continuous_visits_limit_enabled && last.as_ref().is_some_and(|frame| frame.visits >= budget.continuous_visits_limit) { break 'ordinary AnalysisJobOutcomeDto::VisitsLimited; }
-                if budget.continuous_time_limit_enabled && began.elapsed() >= Duration::from_secs(u64::from(budget.continuous_time_limit_seconds)) { break 'ordinary AnalysisJobOutcomeDto::TimeLimited; }
+                if budget.continuous_visits_limit_enabled
+                    && last
+                        .as_ref()
+                        .is_some_and(|frame| frame.visits >= budget.continuous_visits_limit)
+                {
+                    break 'ordinary AnalysisJobOutcomeDto::VisitsLimited;
+                }
+                if budget.continuous_time_limit_enabled
+                    && began.elapsed() >= Duration::from_secs(u64::from(budget.continuous_time_limit_seconds))
+                {
+                    break 'ordinary AnalysisJobOutcomeDto::TimeLimited;
+                }
             }
             // Only the next ordinary analyze is sent. Position, rules, job, start and
             // cumulative budget remain owned by this invocation, including drain time.
         };
         let mut state = self.lock();
-        let frame = state.jobs.iter().find(|job| job.job_id == started.job_id)
-            .filter(|job| job.disposition == JobDisposition::Running).and(last);
+        let frame = state
+            .jobs
+            .iter()
+            .find(|job| job.job_id == started.job_id)
+            .filter(|job| job.disposition == JobDisposition::Running)
+            .and(last);
         finish_selected_node_job(&mut state, started, Some(outcome), frame, None);
         state.last_activity = Instant::now();
         publish_snapshot(&mut state);
         Ok(())
     }
 
-    fn drain_analysis_stream(&self, started: &AnalysisJobStartedDto, stream: &Command, mut header: bool) -> Result<Option<String>, AnalysisError> {
+    fn drain_analysis_stream(
+        &self,
+        started: &AnalysisJobStartedDto,
+        stream: &Command,
+        mut header: bool,
+    ) -> Result<Option<String>, AnalysisError> {
         let deadline = Instant::now() + Duration::from_secs(5);
         let stop = self.begin_analysis_command(started, "stop", false)?;
         wait_written(&stop, deadline)?;
         let mut final_line = None;
         loop {
-            let line = stream.response.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            let line = stream
+                .response
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
                 .map_err(|error| response_error(error, "KataGo stream drain"))?;
-            if !header { require_stream_header(stream.id, &line)?; header = true; }
-            else if line.is_empty() { break; }
-            else if line.starts_with("info ") { final_line = Some(line); }
+            if !header {
+                require_stream_header(stream.id, &line)?;
+                header = true;
+            } else if line.is_empty() {
+                break;
+            } else if line.starts_with("info ") {
+                final_line = Some(line);
+            }
         }
         let mut decoder = crate::gtp::ResponseDecoder::new(stop.id);
         loop {
-            let line = stop.response.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            let line = stop
+                .response
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
                 .map_err(|error| response_error(error, "KataGo Stop acknowledgement"))?;
             if let Some(reply) = decoder.push(&line)? {
-                if !reply.success || !reply.body.trim().is_empty() { return Err("KataGo rejected the numbered Stop request".into()); }
+                if !reply.success || !reply.body.trim().is_empty() {
+                    return Err("KataGo rejected the numbered Stop request".into());
+                }
                 break;
             }
         }
@@ -472,18 +652,43 @@ mod writer_tests {
         std::fs::write(directory.join("model"), "").unwrap();
         std::fs::write(directory.join("config"), "numSearchThreads=1\n").unwrap();
         use std::os::unix::fs::PermissionsExt;
-        std::fs::write(directory.join("engine.py"), concat!("#!/usr/bin/env python3\n", include_str!("../../tests/fixtures/rules_process.py"))).unwrap();
-        std::fs::set_permissions(directory.join("engine.py"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(
+            directory.join("engine.py"),
+            concat!(
+                "#!/usr/bin/env python3\n",
+                include_str!("../../tests/fixtures/rules_process.py")
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            directory.join("engine.py"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
         let catalog = Arc::new(crate::InMemoryEngineProfileCatalog::new());
-        catalog.upsert(SavedEngineProfile { profile_id: "queued".into(), thread_policy: Default::default(), measured_scenes: Default::default(), profile: app_model::EngineProfileDto {
-            name: "queued writer".into(), program: directory.join("engine.py").to_string_lossy().into(), argv: vec![], working_dir: Some(directory.to_string_lossy().into()),
-            adapter: app_model::EngineAdapterSettings::KataGoGtp(app_model::KataGoSettings { model_path: Some("model".into()), config_path: Some("config".into()), max_visits: 32 }),
-        } });
+        catalog.upsert(SavedEngineProfile {
+            profile_id: "queued".into(),
+            thread_policy: Default::default(),
+            measured_scenes: Default::default(),
+            profile: app_model::EngineProfileDto {
+                name: "queued writer".into(),
+                program: directory.join("engine.py").to_string_lossy().into(),
+                argv: vec![],
+                working_dir: Some(directory.to_string_lossy().into()),
+                adapter: app_model::EngineAdapterSettings::KataGoGtp(app_model::KataGoSettings {
+                    model_path: Some("model".into()),
+                    config_path: Some("config".into()),
+                    max_visits: 32,
+                }),
+            },
+        });
         let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
         manager.start("queued").unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         let run = loop {
-            if let ForegroundEngineLifecycleDto::Ready { run } = manager.snapshot().lifecycle { break run; }
+            if let ForegroundEngineLifecycleDto::Ready { run } = manager.snapshot().lifecycle {
+                break run;
+            }
             assert!(Instant::now() < deadline, "{:?}", manager.snapshot());
             thread::sleep(Duration::from_millis(2));
         };
@@ -493,7 +698,13 @@ mod writer_tests {
     #[test]
     fn cancellation_at_wait_entry_wakes_registered_stream_without_protocol_data() {
         let (directory, manager, run) = ready_fixture();
-        let job = manager.register_job(&run.run_id, AnalysisJobLane::SelectedNode, Arc::new(AnalysisCancelToken::new())).unwrap();
+        let job = manager
+            .register_job(
+                &run.run_id,
+                AnalysisJobLane::SelectedNode,
+                Arc::new(AnalysisCancelToken::new()),
+            )
+            .unwrap();
         let (registered, registered_rx) = mpsc::sync_channel(1);
         let enter = Arc::new(std::sync::Barrier::new(2));
         let worker_enter = enter.clone();
@@ -502,13 +713,20 @@ mod writer_tests {
         let worker_run = run.run_id.clone();
         let worker_job = job.clone();
         let worker = thread::spawn(move || {
-            let response = worker_manager.lock().gtp_dispatch.register(&worker_run, 900, &worker_job, true).unwrap();
+            let response = worker_manager
+                .lock()
+                .gtp_dispatch
+                .register(&worker_run, 900, &worker_job, true)
+                .unwrap();
             registered.send(()).unwrap();
             worker_enter.wait();
             // No fallback timeout: cancellation must leave a wake token even before wait entry.
             thread::park();
             let state = worker_manager.lock();
-            let cancelled = state.jobs.iter().any(|job| job.job_id == worker_job && job.disposition == JobDisposition::Cancelled);
+            let cancelled = state
+                .jobs
+                .iter()
+                .any(|job| job.job_id == worker_job && job.disposition == JobDisposition::Cancelled);
             done.send((cancelled, response.try_recv())).unwrap();
         });
         registered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -523,17 +741,32 @@ mod writer_tests {
         std::fs::remove_dir_all(directory).unwrap();
         let (cancelled, line) = result.expect("committed cancellation did not wake the registered stream");
         assert!(cancelled);
-        assert_eq!(line, Err(mpsc::TryRecvError::Empty), "wake must not be a protocol response");
+        assert_eq!(
+            line,
+            Err(mpsc::TryRecvError::Empty),
+            "wake must not be a protocol response"
+        );
     }
 
     #[test]
     fn contended_writer_releases_state_and_retired_queued_analyze_never_emits() {
         let (directory, manager, run) = ready_fixture();
-        let id = manager.register_job(&run.run_id, AnalysisJobLane::SelectedNode, Arc::new(AnalysisCancelToken::new())).unwrap();
-        let started = { let state = manager.lock(); started_from(state.jobs.iter().find(|job| job.job_id == id).unwrap()) };
+        let id = manager
+            .register_job(
+                &run.run_id,
+                AnalysisJobLane::SelectedNode,
+                Arc::new(AnalysisCancelToken::new()),
+            )
+            .unwrap();
+        let started = {
+            let state = manager.lock();
+            started_from(state.jobs.iter().find(|job| job.job_id == id).unwrap())
+        };
         let stdin = engine_stdin(&manager.lock(), &run.run_id).unwrap();
         let held_stdin = stdin.lock().unwrap();
-        let command = manager.begin_analysis_command(&started, "kata-analyze B interval 10 rootInfo true", true).unwrap();
+        let command = manager
+            .begin_analysis_command(&started, "kata-analyze B interval 10 rootInfo true", true)
+            .unwrap();
         let (entered, entered_rx) = mpsc::sync_channel(1);
         let (finished, finished_rx) = mpsc::sync_channel(1);
         let cancelling = manager.clone();
@@ -548,11 +781,70 @@ mod writer_tests {
         entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         drop(held_stdin);
         finished_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert!(command.written.recv_timeout(Duration::from_secs(1)).unwrap().is_err());
+        assert!(command
+            .written
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .is_err());
         cancellation.join().unwrap();
         manager.teardown().unwrap();
         let trace = std::fs::read_to_string(directory.join("trace")).unwrap();
         assert!(!trace.contains("kata-analyze B"), "{trace}");
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn blocked_analysis_pipe_does_not_block_job_cancellation() {
+        let (directory, manager, run) = ready_fixture();
+        let id = manager
+            .register_job(
+                &run.run_id,
+                AnalysisJobLane::SelectedNode,
+                Arc::new(AnalysisCancelToken::new()),
+            )
+            .unwrap();
+        let started = {
+            let state = manager.lock();
+            started_from(state.jobs.iter().find(|job| job.job_id == id).unwrap())
+        };
+        let stdin = engine_stdin(&manager.lock(), &run.run_id).unwrap();
+        let mut stalled = std::process::Command::new("python3")
+            .args(["-c", "import time; time.sleep(30)"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let original = std::mem::replace(&mut *stdin.lock().unwrap(), stalled.stdin.take());
+        // Saturate the real pipe, independently of engine-specific command sizes.
+        let command = manager
+            .begin_analysis_command(&started, &"x".repeat(1024 * 1024), false)
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while stdin.try_lock().is_ok() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        let cancelling = manager.clone();
+        let run_id = run.run_id.clone();
+        let job_id = id.clone();
+        let (done, received) = mpsc::sync_channel(1);
+        let cancellation = thread::spawn(move || {
+            let result = cancelling.cancel_job(&run_id, &job_id);
+            let _ = done.send(result);
+        });
+        let result = received.recv_timeout(Duration::from_secs(1));
+        stalled.kill().unwrap();
+        stalled.wait().unwrap();
+        let write_result = command.written.recv_timeout(Duration::from_secs(2));
+        cancellation.join().unwrap();
+        *stdin.lock().unwrap() = original;
+        let cancelled = manager
+            .lock()
+            .jobs
+            .iter()
+            .any(|job| job.job_id == id && job.disposition == JobDisposition::Cancelled);
+        manager.teardown().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+        assert!(result.expect("blocked pipe prevented job cancellation").is_ok());
+        assert!(cancelled);
+        assert!(write_result.unwrap().is_err());
     }
 }

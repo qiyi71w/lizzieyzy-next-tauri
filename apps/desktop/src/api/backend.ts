@@ -781,12 +781,12 @@ export async function replaySgfPositions(sgfText: string): Promise<PositionDto[]
   }
 }
 
-export async function classifyProblems(frames: AnalysisFrameDto[], settings: MoveRankPreferencesDto): Promise<ProblemMarkerDto[]> {
-  if (!isTauriRuntime()) return classifyProblemFrames(frames, settings);
+export async function classifyProblems(frames: AnalysisFrameDto[], settings: MoveRankPreferencesDto, moves: GameDto["moves"]): Promise<ProblemMarkerDto[]> {
+  if (!isTauriRuntime()) return classifyProblemFrames(frames, settings, moves);
   try {
-    return await invoke<ProblemMarkerDto[]>("classify_problems", { frames, settings });
+    return await invoke<ProblemMarkerDto[]>("classify_problems", { frames, settings, moves });
   } catch {
-    return classifyProblemFrames(frames, settings);
+    return classifyProblemFrames(frames, settings, moves);
   }
 }
 

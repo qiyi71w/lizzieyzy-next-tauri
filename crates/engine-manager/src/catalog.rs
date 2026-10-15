@@ -62,9 +62,12 @@ impl EngineProfilesSettings {
             .as_deref()
             .and_then(|id| self.profiles.iter().find(|record| record.id == id))
             .ok_or("Startup evaluation unavailable: select an existing saved target")?;
-        Ok(Some(SavedEngineProfile { measured_scenes: target.measured_scenes.clone(), profile_id: target.id.clone(),
-        profile: target.profile.clone(),
-        thread_policy: target.thread_policy.clone(), }))
+        Ok(Some(SavedEngineProfile {
+            measured_scenes: target.measured_scenes.clone(),
+            profile_id: target.id.clone(),
+            profile: target.profile.clone(),
+            thread_policy: target.thread_policy.clone(),
+        }))
     }
 }
 
@@ -223,20 +226,23 @@ pub fn default_engine_profiles_settings() -> EngineProfilesSettings {
 }
 
 pub fn default_engine_profile_record() -> EngineProfileRecord {
-    EngineProfileRecord { measured_scenes: Default::default(), id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
-    preload: false,
-    thread_policy: Default::default(),
-    profile: EngineProfileDto {
-        name: "Local KataGo".to_string(),
-        program: String::new(),
-        argv: Vec::new(),
-        working_dir: None,
-        adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
-            model_path: None,
-            config_path: None,
-            max_visits: 800,
-        }),
-    }, }
+    EngineProfileRecord {
+        measured_scenes: Default::default(),
+        id: DEFAULT_ENGINE_PROFILE_ID.to_string(),
+        preload: false,
+        thread_policy: Default::default(),
+        profile: EngineProfileDto {
+            name: "Local KataGo".to_string(),
+            program: String::new(),
+            argv: Vec::new(),
+            working_dir: None,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: None,
+                config_path: None,
+                max_visits: 800,
+            }),
+        },
+    }
 }
 
 pub fn load_engine_profiles(path: &Path) -> Result<EngineProfilesSettings, String> {
@@ -283,10 +289,13 @@ pub fn parse_engine_profiles(contents: &str) -> Result<EngineProfilesSettings, S
                 .profiles
                 .into_iter()
                 .map(|record| {
-                    Ok(EngineProfileRecord { measured_scenes: Default::default(), id: record.id,
-                    preload: false,
-                    thread_policy: Default::default(),
-                    profile: record.profile.migrate(record.max_visits)?, })
+                    Ok(EngineProfileRecord {
+                        measured_scenes: Default::default(),
+                        id: record.id,
+                        preload: false,
+                        thread_policy: Default::default(),
+                        profile: record.profile.migrate(record.max_visits)?,
+                    })
                 })
                 .collect::<Result<_, String>>()?,
         }

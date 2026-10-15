@@ -182,31 +182,34 @@ mod tests {
         outcome: AnalysisJobOutcomeDto,
         with_frame: bool,
     ) -> AnalysisJobEventDto {
-        AnalysisJobEventDto { local_focus_output: None, run_id: run_id.into(),
-        job_id: job_id.into(),
-        lane: AnalysisJobLaneDto::SelectedNode,
-        mode: AnalysisJobModeDto::Finite,
-        generation,
-        node_path: NodePath { indices },
-        outcome,
-        completed: None,
-        expected: None,
-        remaining: None,
-        frame: with_frame.then(|| AnalysisFrameDto {
-            job_id: Uuid::nil(),
-            game_id: None,
-            node_id: None,
-            turn: 0,
-            visits: 2,
-            winrate_black: 0.5,
-            score_mean_black: Some(0.0),
-            score_stdev: None,
-            candidates: vec![],
-            ownership: None,
-            policy: None,
-        }),
-        failure: None,
-        current_game: None, }
+        AnalysisJobEventDto {
+            local_focus_output: None,
+            run_id: run_id.into(),
+            job_id: job_id.into(),
+            lane: AnalysisJobLaneDto::SelectedNode,
+            mode: AnalysisJobModeDto::Finite,
+            generation,
+            node_path: NodePath { indices },
+            outcome,
+            completed: None,
+            expected: None,
+            remaining: None,
+            frame: with_frame.then(|| AnalysisFrameDto {
+                job_id: Uuid::nil(),
+                game_id: None,
+                node_id: None,
+                turn: 0,
+                visits: 2,
+                winrate_black: 0.5,
+                score_mean_black: Some(0.0),
+                score_stdev: None,
+                candidates: vec![],
+                ownership: None,
+                policy: None,
+            }),
+            failure: None,
+            current_game: None,
+        }
     }
 
     #[test]
@@ -354,19 +357,22 @@ mod tests {
 
     #[test]
     fn unified_job_progress_keeps_lane_generation_path_and_counts() {
-        let event = AnalysisJobEventDto { local_focus_output: None, run_id: "run-1".into(),
-        job_id: "job-9".into(),
-        lane: AnalysisJobLaneDto::WholeGame,
-        mode: AnalysisJobModeDto::Finite,
-        generation: 4,
-        node_path: NodePath { indices: vec![] },
-        outcome: AnalysisJobOutcomeDto::Progress,
-        completed: Some(1),
-        expected: Some(3),
-        remaining: Some(2),
-        frame: None,
-        failure: None,
-        current_game: None, };
+        let event = AnalysisJobEventDto {
+            local_focus_output: None,
+            run_id: "run-1".into(),
+            job_id: "job-9".into(),
+            lane: AnalysisJobLaneDto::WholeGame,
+            mode: AnalysisJobModeDto::Finite,
+            generation: 4,
+            node_path: NodePath { indices: vec![] },
+            outcome: AnalysisJobOutcomeDto::Progress,
+            completed: Some(1),
+            expected: Some(3),
+            remaining: Some(2),
+            frame: None,
+            failure: None,
+            current_game: None,
+        };
         let wrapped = ForegroundEngineEventDto::Job { job: event.clone() };
         let json = serde_json::to_value(&wrapped).unwrap();
         assert_eq!(json["type"], "job");

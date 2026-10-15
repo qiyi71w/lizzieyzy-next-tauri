@@ -17,12 +17,12 @@ pub mod diagnostic_export;
 pub mod diagnostics;
 mod game_move_protocol;
 mod gtp;
-mod raw_net;
 mod katago_config;
 mod lifecycle;
 pub mod managed;
-pub mod models;
 pub mod measured_report;
+pub mod models;
+mod raw_net;
 mod resources;
 mod thread_policy;
 
@@ -33,13 +33,14 @@ pub use catalog::{
     EngineProfileRecord, EngineProfilesSettings, InMemoryEngineProfileCatalog, SavedEngineProfile,
     DEFAULT_ENGINE_PROFILE_ID, ENGINE_PROFILES_VERSION,
 };
-pub use lifecycle::measured_report::{apply_to_catalog as apply_measured_to_catalog, restore_catalog as restore_measured_catalog, SetupLease};
+pub use lifecycle::measured_report::{
+    apply_to_catalog as apply_measured_to_catalog, restore_catalog as restore_measured_catalog, SetupLease,
+};
 pub use lifecycle::{
     AnalysisJobCancel, AnalysisJobEventDto, AnalysisJobLane, ContinuationAction, ContinuousPrimaryAction,
-    ForegroundEngineConfig, ForegroundEngineManager, GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle,
-    OrdinaryAnalysisContext,
-    RawNetHandle,
-    SelectedNodeJobRequest, SwingAnalysisTaskRequest, WholeGameJobRequest, WholeGameWorkItem,
+    ForegroundEngineConfig, ForegroundEngineManager, GameMoveHandle, GameMoveRequest,
+    OrdinaryAnalysisContext, OrdinaryRulesHandle, RawNetHandle, SelectedNodeJobRequest,
+    SwingAnalysisTaskRequest, WholeGameJobRequest, WholeGameWorkItem,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

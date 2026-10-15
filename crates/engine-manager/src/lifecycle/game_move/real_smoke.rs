@@ -133,9 +133,12 @@ fn real_exact_move_smoke() {
                 EngineAdapterSettings::GenericGtp(GenericGtpSettings {})
             },
         };
-        catalog.upsert(SavedEngineProfile { measured_scenes: Default::default(), profile_id: "real".into(),
-        profile,
-        thread_policy: Default::default(), });
+        catalog.upsert(SavedEngineProfile {
+            measured_scenes: Default::default(),
+            profile_id: "real".into(),
+            profile,
+            thread_policy: Default::default(),
+        });
         let manager = ForegroundEngineManager::new(
             catalog.clone(),
             ForegroundEngineConfig {

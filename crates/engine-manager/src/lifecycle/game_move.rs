@@ -5,10 +5,10 @@ use crate::game_move_protocol::{
 use app_model::{GameMoveDto, GameMoveJobDto, GameMoveRequestDto, GameMoveResultDto};
 use std::sync::mpsc::SyncSender;
 
-#[cfg(test)]
-mod real_smoke;
 #[cfg(all(test, unix))]
 mod raw_net_tests;
+#[cfg(test)]
+mod real_smoke;
 
 /// The exact position can only be obtained by strict SGF projection.
 #[derive(Clone, Debug)]
@@ -32,16 +32,32 @@ pub struct RawNetHandle {
 impl RawNetHandle {
     pub fn wait(self) -> Result<app_model::RawNetSnapshotDto, EngineFailureDto> {
         let (result, _, confirmation, raw) = self.handle.completion.recv().map_err(|_| {
-            move_failure(&self.handle.identity, EngineFailureKind::Protocol, "raw-net worker disconnected")
+            move_failure(
+                &self.handle.identity,
+                EngineFailureKind::Protocol,
+                "raw-net worker disconnected",
+            )
         })?;
         result?;
-        let (resource, values) = raw.ok_or_else(|| move_failure(&self.handle.identity, EngineFailureKind::Protocol, "raw-net completion absent"))?;
+        let (resource, values) = raw.ok_or_else(|| {
+            move_failure(
+                &self.handle.identity,
+                EngineFailureKind::Protocol,
+                "raw-net completion absent",
+            )
+        })?;
         let (ownership, unavailable) = match values {
             Ok(values) => (Some(values), None),
             Err(reason) => (None, Some(reason)),
         };
         Ok(app_model::RawNetSnapshotDto {
-            confirmation: confirmation.ok_or_else(|| move_failure(&self.handle.identity, EngineFailureKind::Protocol, "raw-net position confirmation absent"))?,
+            confirmation: confirmation.ok_or_else(|| {
+                move_failure(
+                    &self.handle.identity,
+                    EngineFailureKind::Protocol,
+                    "raw-net position confirmation absent",
+                )
+            })?,
             resource,
             document_identity: self.document_identity,
             board_revision: self.board_revision,
@@ -52,7 +68,10 @@ impl RawNetHandle {
     }
 }
 
-type RawCompletion = (Arc<app_model::QualifiedLocalResourceDto>, Result<Vec<f32>, String>);
+type RawCompletion = (
+    Arc<app_model::QualifiedLocalResourceDto>,
+    Result<Vec<f32>, String>,
+);
 pub struct OrdinaryRulesHandle(GameMoveHandle);
 impl OrdinaryRulesHandle {
     pub fn wait(self) -> Result<app_model::OrdinaryRulesSnapshotDto, EngineFailureDto> {
@@ -353,7 +372,11 @@ impl ForegroundEngineManager {
         board_revision: u64,
     ) -> Result<RawNetHandle, EngineFailureDto> {
         self.start_game_move_owned(None, request, MoveMode::RawNet, None)
-            .map(|handle| RawNetHandle { handle, document_identity, board_revision })
+            .map(|handle| RawNetHandle {
+                handle,
+                document_identity,
+                board_revision,
+            })
     }
 
     pub fn start_ordinary_rules(
@@ -440,7 +463,12 @@ impl ForegroundEngineManager {
         mode: MoveMode,
         analysis_job: Option<&str>,
     ) -> Result<GameMoveHandle, EngineFailureDto> {
-        if analysis_job.is_none() && self.measured_reservation(){return Err(continuous_invalid_state(&self.lock(),"A leased measurement scene cannot serve an ordinary or Match move"));}
+        if analysis_job.is_none() && self.measured_reservation() {
+            return Err(continuous_invalid_state(
+                &self.lock(),
+                "A leased measurement scene cannot serve an ordinary or Match move",
+            ));
+        }
         let analysis_restore = analysis_job.is_some();
         let job_uuid = Uuid::new_v4();
         let identity = GameMoveJobDto {
@@ -463,12 +491,13 @@ impl ForegroundEngineManager {
         let (events_tx, events) = mpsc::sync_channel(64);
         let (writes, writes_rx) = mpsc::channel::<String>();
         let (completed, completion) = mpsc::channel();
-        let (frames_tx, frames) = if matches!(mode, MoveMode::Move | MoveMode::ConfirmRules | MoveMode::RawNet) {
-            (None, None)
-        } else {
-            let (sender, receiver) = mpsc::sync_channel(8);
-            (Some(sender), Some(receiver))
-        };
+        let (frames_tx, frames) =
+            if matches!(mode, MoveMode::Move | MoveMode::ConfirmRules | MoveMode::RawNet) {
+                (None, None)
+            } else {
+                let (sender, receiver) = mpsc::sync_channel(8);
+                (Some(sender), Some(receiver))
+            };
         let (run, plan, stdin, deadline, restore_file) = {
             let mut state = self.lock();
             match_reservation::require_move_owner(&state, owner, &identity.run_id)?;
@@ -481,21 +510,39 @@ impl ForegroundEngineManager {
             })?;
             if mode == MoveMode::RawNet {
                 if run.adapter_kind != EngineBackend::KataGoGtp
-                    || !run.qualified_resource.as_deref().is_some_and(crate::raw_net::admitted)
+                    || !run
+                        .qualified_resource
+                        .as_deref()
+                        .is_some_and(crate::raw_net::admitted)
                 {
-                    return Err(fail(EngineFailureKind::UnsupportedCapability, "Raw-net requires the qualified direct-local KataGo CPU producer and main model"));
+                    return Err(fail(
+                        EngineFailureKind::UnsupportedCapability,
+                        "Raw-net requires the qualified direct-local KataGo CPU producer and main model",
+                    ));
                 }
                 continuation::require_idle(&state)?;
                 batch::admit(&state, None)?;
-                if !matches!(continuous_snapshot(&state).phase,
-                    ContinuousAnalysisPhaseDto::Off | ContinuousAnalysisPhaseDto::Paused
-                    | ContinuousAnalysisPhaseDto::TimeLimited | ContinuousAnalysisPhaseDto::VisitsLimited
-                    | ContinuousAnalysisPhaseDto::EmptyBoard)
-                {
-                    return Err(fail(EngineFailureKind::Occupied, "Raw-net requires idle analysis; use Pause, then explicitly Compute"));
+                if !matches!(
+                    continuous_snapshot(&state).phase,
+                    ContinuousAnalysisPhaseDto::Off
+                        | ContinuousAnalysisPhaseDto::Paused
+                        | ContinuousAnalysisPhaseDto::TimeLimited
+                        | ContinuousAnalysisPhaseDto::VisitsLimited
+                        | ContinuousAnalysisPhaseDto::EmptyBoard
+                ) {
+                    return Err(fail(
+                        EngineFailureKind::Occupied,
+                        "Raw-net requires idle analysis; use Pause, then explicitly Compute",
+                    ));
                 }
-                if matches!(state.auto_load.snapshot.phase, app_model::AutoLoadPhaseDto::Waiting | app_model::AutoLoadPhaseDto::Running) {
-                    return Err(fail(EngineFailureKind::Occupied, "Raw-net is busy; use Pause before explicit Compute"));
+                if matches!(
+                    state.auto_load.snapshot.phase,
+                    app_model::AutoLoadPhaseDto::Waiting | app_model::AutoLoadPhaseDto::Running
+                ) {
+                    return Err(fail(
+                        EngineFailureKind::Occupied,
+                        "Raw-net is busy; use Pause before explicit Compute",
+                    ));
                 }
             }
             let budget = request.identity.budget;
@@ -617,20 +664,24 @@ impl ForegroundEngineManager {
                 #[cfg(test)]
                 real_smoke::record("stdin", &payload);
                 let result = if mode == MoveMode::RawNet {
-                    writer_manager.lock_gtp_writer(&stdin, deadline).and_then(|(state, mut guard)| {
-                        let valid = state.game_move.as_ref().is_some_and(|slot|
-                            slot.identity == writer_identity && slot.sealed.is_none())
-                            && ready_move_run(&state, &writer_identity.run_id).is_some();
-                        if !valid {
-                            return Err("raw-net queued write retired".to_owned());
-                        }
-                        // Acquiring stdin ends the queued phase. Sealing after dispatch must drain.
-                        drop(state);
-                        let input = guard.as_mut().ok_or_else(|| "engine stdin closed".to_owned())?;
-                        write_jsonl(input, &payload).map_err(|error| error.to_string())
-                    })
+                    writer_manager
+                        .lock_gtp_writer(&stdin, deadline)
+                        .and_then(|(state, mut guard)| {
+                            let valid = state.game_move.as_ref().is_some_and(|slot| {
+                                slot.identity == writer_identity && slot.sealed.is_none()
+                            }) && ready_move_run(&state, &writer_identity.run_id).is_some();
+                            if !valid {
+                                return Err("raw-net queued write retired".to_owned());
+                            }
+                            // Acquiring stdin ends the queued phase. Sealing after dispatch must drain.
+                            drop(state);
+                            let input = guard.as_mut().ok_or_else(|| "engine stdin closed".to_owned())?;
+                            write_jsonl(input, &payload).map_err(|error| error.to_string())
+                        })
                 } else {
-                    stdin.lock().map_err(|_| "engine stdin lock poisoned".to_owned())
+                    stdin
+                        .lock()
+                        .map_err(|_| "engine stdin lock poisoned".to_owned())
                         .and_then(|mut guard| {
                             let input = guard.as_mut().ok_or_else(|| "engine stdin closed".to_owned())?;
                             write_jsonl(input, &payload).map_err(|error| error.to_string())
@@ -1079,7 +1130,9 @@ impl MoveWorker {
                     if self.mode == MoveMode::RawNet && message == "raw-net queued write retired" {
                         self.raw_wire_complete = true;
                         self.raw_command_draining = false;
-                        return Err(self.error(EngineFailureKind::Cancellation, "raw-net queued write retired"));
+                        return Err(
+                            self.error(EngineFailureKind::Cancellation, "raw-net queued write retired")
+                        );
                     }
                     return Err(self.write_error(&message));
                 }
@@ -1096,7 +1149,9 @@ impl MoveWorker {
                             .push(&line)
                             .map_err(|message| self.dynamic_error(EngineFailureKind::Protocol, &message))?
                         {
-                            if self.mode == MoveMode::RawNet { self.raw_wire_complete = true; }
+                            if self.mode == MoveMode::RawNet {
+                                self.raw_wire_complete = true;
+                            }
                             if !response.success {
                                 return Err(self.error(
                                     EngineFailureKind::Command,
@@ -1196,7 +1251,10 @@ impl MoveWorker {
                 let body = self.gtp_command("kata-raw-nn 0".into())?;
                 let position = self.request.position.dto();
                 self.raw = Some((
-                    self.run.qualified_resource.clone().expect("admitted raw resource"),
+                    self.run
+                        .qualified_resource
+                        .clone()
+                        .expect("admitted raw resource"),
                     crate::raw_net::ownership(&body, position.board_width, position.board_height),
                 ));
             }

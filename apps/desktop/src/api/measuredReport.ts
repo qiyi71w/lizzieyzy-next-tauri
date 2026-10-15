@@ -1,4 +1,3 @@
-/// <reference lib="esnext.promise" />
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { isTauriRuntime } from "./backend";
 import type { AnalysisScopeDto, AnalysisScopePreviewDto, AnalysisTaskDto, ApplicationMeasurementRequestDto, ApplicationMeasurementProbeDto, ApplicationMeasurementProgressDto, EngineProfilesSettingsDto, MeasuredReviewDto } from "../domain/types";
@@ -25,8 +24,6 @@ export function measurementProgress(): Promise<ApplicationMeasurementProgressDto
 export function submitMeasurementProbe(probe: ApplicationMeasurementProbeDto): Promise<void> { native(); return invoke("measurement_probe", { probe }); }
 export async function waitForMeasuredWorker(): Promise<void> {
   while (await measuredReportBusy()) {
-    const { promise, resolve } = Promise.withResolvers<void>();
-    window.setTimeout(resolve, 50);
-    await promise;
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
   }
 }

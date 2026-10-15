@@ -619,7 +619,7 @@ export function App() {
   const rawNet = useRawNet(JSON.stringify([activeScope, rawRequest, Boolean(rootSetupDraft)]), rawRequest);
   const presentationLive = publishedScope !== null && shouldPublishReviewPresentation(activeScope, publishedScope);
   const visibleFrames = useMemo(() => presentationLive ? frames : [], [presentationLive, frames]);
-  const visibleProblems = useMemo(() => classifyProblemFrames(visibleFrames, preferences.moveRank), [visibleFrames, preferences.moveRank]);
+  const visibleProblems = useMemo(() => classifyProblemFrames(visibleFrames, preferences.moveRank, game.moves), [visibleFrames, preferences.moveRank, game.moves]);
   const treeFrame = reviewGame?.snapshot.primary_analysis ?? undefined;
   const currentFrame = useMemo(
     () => {

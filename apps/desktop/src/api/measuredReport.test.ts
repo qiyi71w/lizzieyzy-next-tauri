@@ -4,7 +4,7 @@ import type { ApplicationMeasurementDocumentDto, ApplicationMeasurementRequestDt
 const ipc = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("./backend", () => ({ isTauriRuntime: () => true }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: ipc.invoke, Channel: class { onmessage?: (value: ApplicationMeasurementDocumentDto) => void; } }));
-import { measureApplication } from "./measuredReport";
+import { measureApplication, waitForMeasuredWorker } from "./measuredReport";
 
 it("installs the invocation channel before dispatch and delivers committed documents independently of command failure", async () => {
   const received = vi.fn();
@@ -29,4 +29,25 @@ it("installs the invocation channel before dispatch and delivers committed docum
   expect(received).toHaveBeenCalledTimes(2);
   deliver?.({ ...committed, operation_id: "other-operation" });
   expect(received).toHaveBeenCalledTimes(2);
+});
+
+it("waits for cleanup without Promise.withResolvers on older WebViews", async () => {
+  vi.useFakeTimers();
+  const descriptor = Object.getOwnPropertyDescriptor(Promise, "withResolvers");
+  Object.defineProperty(Promise, "withResolvers", { configurable: true, value: undefined });
+  try {
+    ipc.invoke.mockReset().mockResolvedValueOnce(true).mockResolvedValueOnce(true).mockResolvedValue(false);
+    let settled = false;
+    const cleanup = waitForMeasuredWorker().then(() => { settled = true; });
+    const completion = expect(cleanup).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(50);
+    await completion;
+    expect(settled).toBe(true);
+  } finally {
+    if (descriptor) Object.defineProperty(Promise, "withResolvers", descriptor);
+    else Reflect.deleteProperty(Promise, "withResolvers");
+    vi.useRealTimers();
+  }
 });

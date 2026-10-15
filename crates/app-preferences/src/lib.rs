@@ -305,13 +305,26 @@ fn parse_preferences(contents: &str) -> Result<AppPreferencesDto, serde_json::Er
     let mut value: serde_json::Value = serde_json::from_str(contents)?;
     if value.get("localFocus").is_none() {
         let legacy = value.get("ui").unwrap_or(&value);
-        let visits = legacy.get("tracking-analysis-max-visits")
+        let visits = legacy
+            .get("tracking-analysis-max-visits")
             .or_else(|| legacy.get("tracking-engine-max-visits"))
-            .and_then(serde_json::Value::as_u64).filter(|value| *value > 0 && *value <= u32::MAX as u64).unwrap_or(500);
-        let outline = legacy.get("show-tracking-point-outline").and_then(serde_json::Value::as_bool).unwrap_or(true);
-        let opacity = legacy.get("tracking-point-outline-opacity").and_then(serde_json::Value::as_i64).unwrap_or(92).clamp(0, 100);
+            .and_then(serde_json::Value::as_u64)
+            .filter(|value| *value > 0 && *value <= u32::MAX as u64)
+            .unwrap_or(500);
+        let outline = legacy
+            .get("show-tracking-point-outline")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        let opacity = legacy
+            .get("tracking-point-outline-opacity")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(92)
+            .clamp(0, 100);
         if let Some(object) = value.as_object_mut() {
-            object.insert("localFocus".into(), serde_json::json!({"maxVisits": visits, "showOutline": outline, "outlineOpacity": opacity}));
+            object.insert(
+                "localFocus".into(),
+                serde_json::json!({"maxVisits": visits, "showOutline": outline, "outlineOpacity": opacity}),
+            );
         }
     }
     serde_json::from_value(value)
@@ -329,7 +342,10 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
                     && preferences.granular_display.validate().is_ok()
                     && preferences.move_rank.validate().is_ok()
                     && preferences.local_focus.validate().is_ok()
-                    && preferences.analysis_refresh_interval_centiseconds.validate().is_ok()
+                    && preferences
+                        .analysis_refresh_interval_centiseconds
+                        .validate()
+                        .is_ok()
                     && preferences.network.validate().is_ok()
                     && preferences.flash_analysis_visits > 0
                     && validate_review_autoplay_interval(preferences.review_autoplay_interval_ms).is_ok() =>
@@ -1081,7 +1097,9 @@ mod tests {
     fn analysis_refresh_interval_defaults_validates_and_reopens_atomically() {
         let (dir, path) = temp_prefs();
         let mut old = serde_json::to_value(sample_preferences()).unwrap();
-        old.as_object_mut().unwrap().remove("analysisRefreshIntervalCentiseconds");
+        old.as_object_mut()
+            .unwrap()
+            .remove("analysisRefreshIntervalCentiseconds");
         fs::write(&path, old.to_string()).unwrap();
         let mut settings = load_from_path(&path).unwrap().preferences;
         assert_eq!(settings.analysis_refresh_interval_centiseconds.0, 10);
@@ -1091,7 +1109,14 @@ mod tests {
             assert_eq!(load_from_path(&path).unwrap().preferences, settings);
         }
         let durable = fs::read(&path).unwrap();
-        for value in [serde_json::json!(0), serde_json::json!(-1), serde_json::json!(1.5), serde_json::json!(9_007_199_254_740_992u64), serde_json::json!("17"), serde_json::json!(null)] {
+        for value in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!(9_007_199_254_740_992u64),
+            serde_json::json!("17"),
+            serde_json::json!(null),
+        ] {
             let mut input = serde_json::to_value(&settings).unwrap();
             input["analysisRefreshIntervalCentiseconds"] = value;
             if let Ok(invalid) = serde_json::from_value(input) {
@@ -1101,7 +1126,12 @@ mod tests {
         }
         let mut changed = settings.clone();
         changed.analysis_refresh_interval_centiseconds = app_model::AnalysisRefreshIntervalDto(37);
-        assert!(atomic_replace_file_with(&path, &serde_json::to_string(&changed).unwrap(), |_, _| Err(io::Error::other("refresh replace failure"))).is_err());
+        assert!(
+            atomic_replace_file_with(&path, &serde_json::to_string(&changed).unwrap(), |_, _| Err(
+                io::Error::other("refresh replace failure")
+            ))
+            .is_err()
+        );
         assert_eq!(load_from_path(&path).unwrap().preferences, settings);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1126,7 +1156,12 @@ mod tests {
             assert_eq!(load_from_path(&path).unwrap().preferences, saved);
             let mut replacement = saved.clone();
             replacement.local_focus.max_visits = 1200;
-            assert!(atomic_replace_file_with(&path, &serde_json::to_string(&replacement).unwrap(), |_, _| Err(io::Error::other("focus replace failure"))).is_err());
+            assert!(atomic_replace_file_with(
+                &path,
+                &serde_json::to_string(&replacement).unwrap(),
+                |_, _| Err(io::Error::other("focus replace failure"))
+            )
+            .is_err());
             assert_eq!(load_from_path(&path).unwrap().preferences, saved);
             fs::remove_dir_all(dir).unwrap();
         }

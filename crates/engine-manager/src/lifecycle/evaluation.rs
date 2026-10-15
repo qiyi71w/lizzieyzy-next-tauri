@@ -213,7 +213,11 @@ impl ForegroundEngineManager {
         saved: Result<SavedEngineProfile, EngineFailureDto>,
         startup: bool,
     ) -> Result<EvaluationSnapshotDto, EngineFailureDto> {
-        if self.setup_operation_busy()&&!self.inner.evaluation_worker.load(Ordering::Acquire){return Err(eval_failure("Another setup operation is running or retiring; retry explicitly after cleanup"));}
+        if self.setup_operation_busy() && !self.inner.evaluation_worker.load(Ordering::Acquire) {
+            return Err(eval_failure(
+                "Another setup operation is running or retiring; retry explicitly after cleanup",
+            ));
+        }
         {
             let mut state = self.lock();
             if let Some(old) = state.evaluation.as_mut() {
@@ -229,7 +233,9 @@ impl ForegroundEngineManager {
             }
             thread::sleep(Duration::from_millis(10));
         }
-        let setup = self.begin_setup_operation().map_err(|_| eval_failure("Another setup operation is running or retiring; retry explicitly after cleanup"))?;
+        let setup = self.begin_setup_operation().map_err(|_| {
+            eval_failure("Another setup operation is running or retiring; retry explicitly after cleanup")
+        })?;
         self.inner
             .evaluation_worker
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)

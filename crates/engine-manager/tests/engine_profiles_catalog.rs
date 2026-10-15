@@ -44,20 +44,23 @@ impl Drop for TestTempDir {
 }
 
 fn profile(id: &str, name: &str) -> EngineProfileRecord {
-    EngineProfileRecord { measured_scenes: Default::default(), id: id.to_string(),
-    preload: false,
-    profile: EngineProfileDto {
-        name: name.to_string(),
-        program: format!("/bin/{id}"),
-        argv: vec![],
-        working_dir: None,
-        adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
-            model_path: None,
-            config_path: None,
-            max_visits: 800,
-        }),
-    },
-    thread_policy: Default::default(), }
+    EngineProfileRecord {
+        measured_scenes: Default::default(),
+        id: id.to_string(),
+        preload: false,
+        profile: EngineProfileDto {
+            name: name.to_string(),
+            program: format!("/bin/{id}"),
+            argv: vec![],
+            working_dir: None,
+            adapter: EngineAdapterSettings::KataGoAnalysis(KataGoSettings {
+                model_path: None,
+                config_path: None,
+                max_visits: 800,
+            }),
+        },
+        thread_policy: Default::default(),
+    }
 }
 
 fn settings(

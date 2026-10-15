@@ -43,8 +43,8 @@ mod export;
 mod file_activation;
 mod human_match;
 mod managed_resources;
-mod models;
 mod measured_report;
+mod models;
 mod readboard;
 mod save_as;
 mod session_recovery;
@@ -89,9 +89,12 @@ impl EngineProfileCatalog for DiskEngineCatalog {
                     .profiles
                     .into_iter()
                     .filter(|record| record.preload)
-                    .map(|record| SavedEngineProfile { measured_scenes: record.measured_scenes, profile_id: record.id,
-                    profile: record.profile,
-                    thread_policy: record.thread_policy, })
+                    .map(|record| SavedEngineProfile {
+                        measured_scenes: record.measured_scenes,
+                        profile_id: record.id,
+                        profile: record.profile,
+                        thread_policy: record.thread_policy,
+                    })
                     .collect()
             })
             .unwrap_or_default()
@@ -103,9 +106,12 @@ impl EngineProfileCatalog for DiskEngineCatalog {
             .profiles
             .into_iter()
             .find(|record| record.id == profile_id)
-            .map(|record| SavedEngineProfile { measured_scenes: record.measured_scenes, profile_id: record.id,
-            profile: record.profile,
-            thread_policy: record.thread_policy, })
+            .map(|record| SavedEngineProfile {
+                measured_scenes: record.measured_scenes,
+                profile_id: record.id,
+                profile: record.profile,
+                thread_policy: record.thread_policy,
+            })
     }
 
     fn autoload_profile_id(&self) -> Option<String> {
@@ -539,8 +545,12 @@ fn trial_start_finite(
 }
 
 #[tauri::command]
-fn classify_problems(frames: Vec<AnalysisFrameDto>, settings: app_model::MoveRankPreferencesDto) -> Vec<app_model::ProblemMarkerDto> {
-    analysis_core::classify_problem_markers(&frames, &settings)
+fn classify_problems(
+    frames: Vec<AnalysisFrameDto>,
+    settings: app_model::MoveRankPreferencesDto,
+    moves: Vec<app_model::MoveDto>,
+) -> Vec<app_model::ProblemMarkerDto> {
+    analysis_core::classify_problem_markers(&frames, &settings, &moves)
 }
 
 #[tauri::command]
@@ -549,9 +559,12 @@ fn katago_launch_plan(profile: EngineProfileDto) -> Result<CommandSpec, String> 
 }
 
 #[tauri::command]
-fn engine_asset_checks(profile: EngineProfileDto, manager: State<'_, ForegroundEngineManager>) -> Result<Vec<AssetCheck>, String> {
-    let lease=manager.begin_setup_operation()?;
-    let result=check_assets(&profile);
+fn engine_asset_checks(
+    profile: EngineProfileDto,
+    manager: State<'_, ForegroundEngineManager>,
+) -> Result<Vec<AssetCheck>, String> {
+    let lease = manager.begin_setup_operation()?;
+    let result = check_assets(&profile);
     lease.check()?;
     Ok(result)
 }
@@ -655,7 +668,7 @@ fn save_engine_profiles_at_path(
                 .map_err(map_engine_failure)?;
         }
     }
-    let saved = lease.commit(||persist_engine_profiles(path, settings))?;
+    let saved = lease.commit(|| persist_engine_profiles(path, settings))?;
     manager.evaluation_snapshot();
     for previous in &current.profiles {
         if !saved.profiles.iter().any(|next| {
@@ -714,7 +727,7 @@ fn reorder_engine_profiles_settings(
         .map_err(|_| "engine catalog lock poisoned")?;
     let current = load_engine_profiles_from_disk(&app_handle)?;
     let path = engine_profile_path(&app_handle)?;
-    _lease.commit(||reorder_engine_profiles_at_path(&path, current, &request))
+    _lease.commit(|| reorder_engine_profiles_at_path(&path, current, &request))
 }
 
 fn reorder_engine_profiles_at_path(
@@ -830,11 +843,19 @@ async fn foreground_engine_compute_raw_net(
     let run_id = request.run_id.clone();
     let handle = current_game.start_raw_net(&manager, request)?;
     let result = tauri::async_runtime::spawn_blocking(move || handle.wait().map_err(Box::new))
-        .await.map_err(|_| Box::new(EngineFailureDto {
-            operation: EngineOperationDto::Job, run_id: Some(run_id), job_id: None,
-            switch_id: None, profile_id: None, kind: EngineFailureKind::Protocol,
-            message: "Raw-net worker failed".into(), diagnostic_summary: None,
-        }))??;
+        .await
+        .map_err(|_| {
+            Box::new(EngineFailureDto {
+                operation: EngineOperationDto::Job,
+                run_id: Some(run_id),
+                job_id: None,
+                switch_id: None,
+                profile_id: None,
+                kind: EngineFailureKind::Protocol,
+                message: "Raw-net worker failed".into(),
+                diagnostic_summary: None,
+            })
+        })??;
     current_game.publish_raw_net(&manager, result)
 }
 
@@ -1157,7 +1178,11 @@ fn readboard_error(error: readboard_sidecar::ReadboardSidecarError) -> ProviderE
     }
 }
 #[tauri::command]
-fn local_focus_action(manager: State<'_, ForegroundEngineManager>, current_game: State<'_, CurrentGameState>, request: app_model::LocalFocusRequestDto) -> Result<app_model::LocalFocusSnapshotDto, String> {
+fn local_focus_action(
+    manager: State<'_, ForegroundEngineManager>,
+    current_game: State<'_, CurrentGameState>,
+    request: app_model::LocalFocusRequestDto,
+) -> Result<app_model::LocalFocusSnapshotDto, String> {
     current_game.local_focus_action(&manager, request)
 }
 
@@ -1662,9 +1687,12 @@ mod tests {
                     .profiles
                     .into_iter()
                     .find(|record| record.id == id)
-                    .map(|record| SavedEngineProfile { measured_scenes: Default::default(), profile_id: record.id,
-                    profile: record.profile,
-                    thread_policy: record.thread_policy, })
+                    .map(|record| SavedEngineProfile {
+                        measured_scenes: Default::default(),
+                        profile_id: record.id,
+                        profile: record.profile,
+                        thread_policy: record.thread_policy,
+                    })
             }
             fn startup_evaluation_target(&self) -> Result<Option<SavedEngineProfile>, String> {
                 engine_manager::load_engine_profiles(&self.0)?.startup_evaluation_target()
@@ -1730,12 +1758,26 @@ mod tests {
         let bytes = std::fs::read(&path).unwrap();
         let mut invalid = settings.clone();
         invalid.profiles[0].profile.name.clear();
-        assert!(save_engine_profiles_at_path(&path, &manager, &settings, invalid, &manager.begin_setup_operation().unwrap()).is_err());
+        assert!(save_engine_profiles_at_path(
+            &path,
+            &manager,
+            &settings,
+            invalid,
+            &manager.begin_setup_operation().unwrap()
+        )
+        .is_err());
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
         assert_eq!(manager.evaluation_snapshot(), refused);
         let mut edited = settings.clone();
         edited.profiles[0].profile.name = "Edited target".into();
-        save_engine_profiles_at_path(&path, &manager, &settings, edited, &manager.begin_setup_operation().unwrap()).unwrap();
+        save_engine_profiles_at_path(
+            &path,
+            &manager,
+            &settings,
+            edited,
+            &manager.begin_setup_operation().unwrap(),
+        )
+        .unwrap();
         let retired = manager.evaluation_snapshot();
         assert_eq!(retired.phase, app_model::EvaluationPhaseDto::Retired);
         assert!(retired.process_id.is_none() && retired.result.is_none() && retired.output.is_empty());
@@ -1802,14 +1844,28 @@ mod tests {
         let run_before = manager.snapshot();
         let mut invalid = current.clone();
         invalid.profiles[0].profile.argv = vec!["-model=other".into()];
-        assert!(save_engine_profiles_at_path(&path, &manager, &current, invalid, &manager.begin_setup_operation().unwrap()).is_err());
+        assert!(save_engine_profiles_at_path(
+            &path,
+            &manager,
+            &current,
+            invalid,
+            &manager.begin_setup_operation().unwrap()
+        )
+        .is_err());
         assert_eq!(std::fs::read(&path).unwrap(), before);
         assert_eq!(engine_manager::load_engine_profiles(&path).unwrap(), current);
         assert_eq!(manager.snapshot(), run_before);
         let mut next = current.clone();
         next.profiles[0].profile.name = "edited name".into();
         std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
-        assert!(save_engine_profiles_at_path(&path, &manager, &current, next, &manager.begin_setup_operation().unwrap()).is_err());
+        assert!(save_engine_profiles_at_path(
+            &path,
+            &manager,
+            &current,
+            next,
+            &manager.begin_setup_operation().unwrap()
+        )
+        .is_err());
         assert_eq!(std::fs::read(&path).unwrap(), before);
         assert_eq!(engine_manager::load_engine_profiles(&path).unwrap(), current);
         assert_eq!(manager.snapshot(), run_before);
@@ -1886,7 +1942,14 @@ mod tests {
             std::sync::Arc::new(engine_manager::InMemoryEngineProfileCatalog::new()),
             ForegroundEngineConfig::for_tests(),
         );
-        let saved = save_engine_profiles_at_path(&path, &manager, &current, stale, &manager.begin_setup_operation().unwrap()).unwrap();
+        let saved = save_engine_profiles_at_path(
+            &path,
+            &manager,
+            &current,
+            stale,
+            &manager.begin_setup_operation().unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             saved
                 .profiles
@@ -1929,19 +1992,22 @@ for line in sys.stdin:
         std::fs::write(directory.join("model"), "").unwrap();
         std::fs::write(directory.join("config"), "").unwrap();
         let catalog = Arc::new(engine_manager::InMemoryEngineProfileCatalog::new());
-        catalog.upsert(SavedEngineProfile { measured_scenes: Default::default(), profile_id: "test".into(),
-        profile: EngineProfileDto {
-            name: "test".into(),
-            program: executable.to_string_lossy().into(),
-            argv: vec![],
-            working_dir: Some(directory.to_string_lossy().into()),
-            adapter: app_model::EngineAdapterSettings::KataGoAnalysis(app_model::KataGoSettings {
-                model_path: Some("model".into()),
-                config_path: Some("config".into()),
-                max_visits: 800,
-            }),
-        },
-        thread_policy: Default::default(), });
+        catalog.upsert(SavedEngineProfile {
+            measured_scenes: Default::default(),
+            profile_id: "test".into(),
+            profile: EngineProfileDto {
+                name: "test".into(),
+                program: executable.to_string_lossy().into(),
+                argv: vec![],
+                working_dir: Some(directory.to_string_lossy().into()),
+                adapter: app_model::EngineAdapterSettings::KataGoAnalysis(app_model::KataGoSettings {
+                    model_path: Some("model".into()),
+                    config_path: Some("config".into()),
+                    max_visits: 800,
+                }),
+            },
+            thread_policy: Default::default(),
+        });
         let manager =
             ForegroundEngineManager::new(catalog, engine_manager::ForegroundEngineConfig::for_tests());
         let events = manager.subscribe();

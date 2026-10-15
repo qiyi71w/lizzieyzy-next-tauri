@@ -442,19 +442,22 @@ fn job_event(
     indices: &[u32],
     frame: Option<AnalysisFrameDto>,
 ) -> AnalysisJobEventDto {
-    AnalysisJobEventDto { local_focus_output: None, run_id: "run-1".into(),
-    job_id: "job-1".into(),
-    lane,
-    mode: AnalysisJobModeDto::Finite,
-    generation,
-    node_path: path(indices),
-    outcome,
-    completed: None,
-    expected: None,
-    remaining: None,
-    frame,
-    failure: None,
-    current_game: None, }
+    AnalysisJobEventDto {
+        local_focus_output: None,
+        run_id: "run-1".into(),
+        job_id: "job-1".into(),
+        lane,
+        mode: AnalysisJobModeDto::Finite,
+        generation,
+        node_path: path(indices),
+        outcome,
+        completed: None,
+        expected: None,
+        remaining: None,
+        frame,
+        failure: None,
+        current_game: None,
+    }
 }
 
 fn continuous_job_event(
@@ -825,15 +828,18 @@ fn diagnostic_trace_reports_actual_stronger_weaker_ownership_and_identity_decisi
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-    catalog.upsert(SavedEngineProfile { measured_scenes: Default::default(), profile_id: "trace".into(),
-    profile: app_model::EngineProfileDto {
-        name: "Trace fixture".into(),
-        program: "/definitely-missing-diagnostic-fixture".into(),
-        argv: vec![],
-        working_dir: None,
-        adapter: app_model::EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings {}),
-    },
-    thread_policy: Default::default(), });
+    catalog.upsert(SavedEngineProfile {
+        measured_scenes: Default::default(),
+        profile_id: "trace".into(),
+        profile: app_model::EngineProfileDto {
+            name: "Trace fixture".into(),
+            program: "/definitely-missing-diagnostic-fixture".into(),
+            argv: vec![],
+            working_dir: None,
+            adapter: app_model::EngineAdapterSettings::GenericGtp(app_model::GenericGtpSettings {}),
+        },
+        thread_policy: Default::default(),
+    });
     let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::for_tests());
     manager.start("trace").unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);

@@ -50,8 +50,8 @@ pub async fn refresh_model_inventory(
         lease.check()?;
         Ok(result)
     })
-        .await
-        .map_err(|_| "model_inventory_worker_failed".to_string())?
+    .await
+    .map_err(|_| "model_inventory_worker_failed".to_string())?
 }
 
 #[tauri::command]
@@ -66,8 +66,8 @@ pub async fn select_installed_model(
         lease.check()?;
         Ok(result)
     })
-        .await
-        .map_err(|_| "model_inventory_worker_failed".to_string())?
+    .await
+    .map_err(|_| "model_inventory_worker_failed".to_string())?
 }
 
 #[cfg(test)]

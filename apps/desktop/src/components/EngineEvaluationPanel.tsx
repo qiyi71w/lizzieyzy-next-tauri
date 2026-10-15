@@ -43,7 +43,13 @@ export function EngineEvaluationPanel({ profiles, disabled, currentRun = null, o
       const generation = state.generation;
       try {
         const next = await getEngineEvaluation();
-        if (setupOwned.current && !(await measuredReportBusy())) { setupOwned.current = false; setupCallbacks.current.endOperation?.(); }
+        const evaluationActive = next.phase === "running" || next.phase === "qualifying";
+        if (setupOwned.current && !evaluationActive && !(await measuredReportBusy())
+          && !stopped && !state.pending && generation === state.generation
+          && (!state.id || next.evaluation_id === state.id && next.input_revision === state.revision)) {
+          setupOwned.current = false;
+          setupCallbacks.current.endOperation?.();
+        }
         if (!stopped && !state.pending && generation === state.generation
           && (!target || next.target_id === target)
           && (!next.evaluation_id || !retired.current.has(next.evaluation_id))

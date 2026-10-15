@@ -101,24 +101,27 @@ fn real_runtime_threads_same_pid_analysis_pause_reset_and_expiry() {
         .join(format!("thread-layer-{}.cfg", uuid::Uuid::new_v4()));
     std::fs::write(&layer, "numSearchThreads=2\n").unwrap();
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-    catalog.upsert(SavedEngineProfile { measured_scenes: Default::default(), profile_id: "threads".into(),
-    profile: EngineProfileDto {
-        name: "manual GTP threads".into(),
-        program: engine.clone(),
-        argv: vec![
-            "-config".into(),
-            layer.file_name().unwrap().to_string_lossy().into_owned(),
-            "-override-config".into(),
-            "numSearchThreads=1".into(),
-        ],
-        working_dir: Some(std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap()),
-        adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings {
-            model_path: Some(std::env::var("LIZZIEYZY_KATAGO_MODEL").unwrap()),
-            config_path: Some(config.clone()),
-            max_visits: 4,
-        }),
-    },
-    thread_policy: Default::default(), });
+    catalog.upsert(SavedEngineProfile {
+        measured_scenes: Default::default(),
+        profile_id: "threads".into(),
+        profile: EngineProfileDto {
+            name: "manual GTP threads".into(),
+            program: engine.clone(),
+            argv: vec![
+                "-config".into(),
+                layer.file_name().unwrap().to_string_lossy().into_owned(),
+                "-override-config".into(),
+                "numSearchThreads=1".into(),
+            ],
+            working_dir: Some(std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap()),
+            adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings {
+                model_path: Some(std::env::var("LIZZIEYZY_KATAGO_MODEL").unwrap()),
+                config_path: Some(config.clone()),
+                max_visits: 4,
+            }),
+        },
+        thread_policy: Default::default(),
+    });
     let owner = OwnedManager(ForegroundEngineManager::new(
         catalog.clone(),
         ForegroundEngineConfig::default(),
@@ -269,19 +272,22 @@ fn real_runtime_pair_same_pid_analysis_threads_pause_and_expiry() {
     let config = std::env::var("LIZZIEYZY_KATAGO_CONFIG").unwrap();
     let config_bytes = std::fs::read(&config).unwrap();
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
-    catalog.upsert(SavedEngineProfile { measured_scenes: Default::default(), profile_id: "pair".into(),
-    profile: EngineProfileDto {
-        name: "read-only GTP pair".into(),
-        program: engine.clone(),
-        argv: vec![],
-        working_dir: Some(std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap()),
-        adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings {
-            model_path: Some(std::env::var("LIZZIEYZY_KATAGO_MODEL").unwrap()),
-            config_path: Some(config.clone()),
-            max_visits: 4,
-        }),
-    },
-    thread_policy: Default::default(), });
+    catalog.upsert(SavedEngineProfile {
+        measured_scenes: Default::default(),
+        profile_id: "pair".into(),
+        profile: EngineProfileDto {
+            name: "read-only GTP pair".into(),
+            program: engine.clone(),
+            argv: vec![],
+            working_dir: Some(std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap()),
+            adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings {
+                model_path: Some(std::env::var("LIZZIEYZY_KATAGO_MODEL").unwrap()),
+                config_path: Some(config.clone()),
+                max_visits: 4,
+            }),
+        },
+        thread_policy: Default::default(),
+    });
     let owner = OwnedManager(ForegroundEngineManager::new(
         catalog.clone(),
         ForegroundEngineConfig::default(),

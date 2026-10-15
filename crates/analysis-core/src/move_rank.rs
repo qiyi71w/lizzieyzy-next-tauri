@@ -30,9 +30,15 @@ pub struct DisplayedAnalysis {
     pub score_mean_black: Option<f32>,
 }
 
-pub fn classify_move_rank(winrate_loss_pp: f64, score_loss: Option<f64>, settings: &MoveRankPreferencesDto) -> MoveRank {
+pub fn classify_move_rank(
+    winrate_loss_pp: f64,
+    score_loss: Option<f64>,
+    settings: &MoveRankPreferencesDto,
+) -> MoveRank {
     let winrate_loss = winrate_loss_pp.max(0.0);
-    let score_loss = score_loss.filter(|loss| loss.is_finite()).map(|loss| loss.max(0.0));
+    let score_loss = score_loss
+        .filter(|loss| loss.is_finite())
+        .map(|loss| loss.max(0.0));
     for level in (1..=5).rev() {
         if reaches_threshold(winrate_loss, score_loss, level, settings) {
             return MoveRank::from_level(level);
@@ -57,7 +63,11 @@ pub fn classify_played_move(
         }
         _ => None,
     };
-    Some(classify_move_rank(f64::from(winrate_loss_pp), score_loss.map(f64::from), settings))
+    Some(classify_move_rank(
+        f64::from(winrate_loss_pp),
+        score_loss.map(f64::from),
+        settings,
+    ))
 }
 
 pub fn is_blunder_bar_rank(rank: MoveRank) -> bool {
@@ -82,7 +92,12 @@ fn player_score(score_mean_black: f32, color: PlayerColor) -> f32 {
     }
 }
 
-fn reaches_threshold(winrate_loss_pp: f64, score_loss: Option<f64>, level: usize, settings: &MoveRankPreferencesDto) -> bool {
+fn reaches_threshold(
+    winrate_loss_pp: f64,
+    score_loss: Option<f64>,
+    level: usize,
+    settings: &MoveRankPreferencesDto,
+) -> bool {
     let reaches_winrate = winrate_loss_pp >= settings.winrate_thresholds_pp[level - 1];
     let reaches_score = score_loss.is_some_and(|loss| loss >= settings.score_thresholds[level - 1]);
     match settings.mode {
@@ -102,7 +117,11 @@ mod tests {
         classify_move_rank(winrate_loss, score_loss, &MoveRankPreferencesDto::default())
     }
 
-    fn classify_played_move(parent: Option<&DisplayedAnalysis>, child: Option<&DisplayedAnalysis>, color: PlayerColor) -> Option<MoveRank> {
+    fn classify_played_move(
+        parent: Option<&DisplayedAnalysis>,
+        child: Option<&DisplayedAnalysis>,
+        color: PlayerColor,
+    ) -> Option<MoveRank> {
         super::classify_played_move(parent, child, color, &MoveRankPreferencesDto::default())
     }
 

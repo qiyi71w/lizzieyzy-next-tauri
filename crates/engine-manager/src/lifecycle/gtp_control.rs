@@ -56,16 +56,22 @@ impl Dispatch {
     pub(super) fn wake_stream(&self, run: &str, request: &str) {
         for ((owner, _), pending) in &self.pending {
             if owner == run && pending.request == request {
-                if let Some(worker) = &pending.worker { worker.unpark(); }
+                if let Some(worker) = &pending.worker {
+                    worker.unpark();
+                }
             }
         }
     }
 
     pub(super) fn retire(&mut self, run: &str, request: &str) {
         self.pending.retain(|(owner, _), pending| {
-            if owner != run || pending.request != request { return true; }
+            if owner != run || pending.request != request {
+                return true;
+            }
             // The manager lock remains held until removal; the worker rechecks it before receiving.
-            if let Some(worker) = &pending.worker { worker.unpark(); }
+            if let Some(worker) = &pending.worker {
+                worker.unpark();
+            }
             false
         });
         // Keep the framing cursor until its delimiter: its remaining lines must be discarded.
@@ -73,8 +79,12 @@ impl Dispatch {
 
     pub(super) fn retire_run(&mut self, run: &str) {
         self.pending.retain(|(owner, _), pending| {
-            if owner != run { return true; }
-            if let Some(worker) = &pending.worker { worker.unpark(); }
+            if owner != run {
+                return true;
+            }
+            if let Some(worker) = &pending.worker {
+                worker.unpark();
+            }
             false
         });
         self.active.remove(run);
@@ -108,7 +118,9 @@ impl Dispatch {
         if let Some(pending) = self.pending.get(&key) {
             if pending.stream || !crate::gtp::is_analysis_stream_record(line) {
                 let sent = pending.sender.try_send(line.to_owned());
-                if let Some(worker) = &pending.worker { worker.unpark(); }
+                if let Some(worker) = &pending.worker {
+                    worker.unpark();
+                }
                 sent.map_err(|_| "GTP request exceeded its bounded response queue")?;
             }
         }
@@ -208,8 +220,8 @@ mod tests {
     }
     #[test]
     fn stream_wake_preserves_full_queue_and_retirement_disconnects() {
-        use std::{sync::Arc, thread, time::Duration};
         use parking_lot::Mutex;
+        use std::{sync::Arc, thread, time::Duration};
         for action in ["wake", "retire", "retire_run", "data"] {
             let dispatch = Arc::new(Mutex::new(Dispatch::default()));
             let (ready, ready_rx) = mpsc::sync_channel(1);
@@ -223,11 +235,15 @@ mod tests {
                     let receiver = dispatch.register("run", 1, "job", true).unwrap();
                     if action == "wake" {
                         dispatch.route("run", "=1").unwrap();
-                        for _ in 1..QUEUE_LINES { dispatch.route("run", "info queued").unwrap(); }
+                        for _ in 1..QUEUE_LINES {
+                            dispatch.route("run", "info queued").unwrap();
+                        }
                     }
                     receiver
                 };
-                if action == "wake" { thread::park(); } // Consume the earlier data notification.
+                if action == "wake" {
+                    thread::park();
+                } // Consume the earlier data notification.
                 ready.send(()).unwrap();
                 worker_enter.wait();
                 thread::park(); // The action happens before wait entry; no periodic fallback.
@@ -239,7 +255,10 @@ mod tests {
             {
                 let mut dispatch = dispatch.lock();
                 match action {
-                    "wake" => { dispatch.wake_stream("run", "job"); dispatch.wake_stream("run", "job"); }
+                    "wake" => {
+                        dispatch.wake_stream("run", "job");
+                        dispatch.wake_stream("run", "job");
+                    }
                     "retire" => dispatch.retire("run", "job"),
                     "retire_run" => dispatch.retire_run("run"),
                     "data" => dispatch.route("run", "=1").unwrap(),
@@ -252,17 +271,27 @@ mod tests {
             worker.join().unwrap();
             let (lines, ending) = result.expect("stream notification lost before wait entry");
             match action {
-                "wake" => { assert_eq!(lines.len(), QUEUE_LINES); assert_eq!(lines[0], "=1"); assert_eq!(ending, Err(mpsc::TryRecvError::Empty)); }
-                "data" => { assert_eq!(lines, ["=1"]); assert_eq!(ending, Err(mpsc::TryRecvError::Empty)); }
-                _ => { assert!(lines.is_empty()); assert_eq!(ending, Err(mpsc::TryRecvError::Disconnected)); }
+                "wake" => {
+                    assert_eq!(lines.len(), QUEUE_LINES);
+                    assert_eq!(lines[0], "=1");
+                    assert_eq!(ending, Err(mpsc::TryRecvError::Empty));
+                }
+                "data" => {
+                    assert_eq!(lines, ["=1"]);
+                    assert_eq!(ending, Err(mpsc::TryRecvError::Empty));
+                }
+                _ => {
+                    assert!(lines.is_empty());
+                    assert_eq!(ending, Err(mpsc::TryRecvError::Disconnected));
+                }
             }
         }
     }
 
     #[test]
     fn wake_targets_only_exact_stream_owner() {
-        use std::{sync::Arc, thread, time::Duration};
         use parking_lot::Mutex;
+        use std::{sync::Arc, thread, time::Duration};
         let dispatch = Arc::new(Mutex::new(Dispatch::default()));
         let (ready, ready_rx) = mpsc::sync_channel(1);
         let (done, done_rx) = mpsc::sync_channel(1);
@@ -274,10 +303,18 @@ mod tests {
             done.send(()).unwrap();
         });
         ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        { let dispatch = dispatch.lock(); dispatch.wake_stream("other-run", "job"); dispatch.wake_stream("run", "other-job"); }
+        {
+            let dispatch = dispatch.lock();
+            dispatch.wake_stream("other-run", "job");
+            dispatch.wake_stream("run", "other-job");
+        }
         let unrelated = done_rx.recv_timeout(Duration::from_millis(100));
         dispatch.lock().wake_stream("run", "job");
-        let matching = if unrelated.is_err() { done_rx.recv_timeout(Duration::from_secs(2)) } else { Ok(()) };
+        let matching = if unrelated.is_err() {
+            done_rx.recv_timeout(Duration::from_secs(2))
+        } else {
+            Ok(())
+        };
         worker.thread().unpark();
         worker.join().unwrap();
         assert!(matches!(unrelated, Err(mpsc::RecvTimeoutError::Timeout)));

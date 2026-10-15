@@ -170,3 +170,17 @@ it("lets the user explicitly select the observed startup target without cancelli
   expect(backend.cancelEngineEvaluation).not.toHaveBeenCalled();
   expect(backend.startEngineEvaluation).not.toHaveBeenCalled();
 });
+
+it.each(["running", "qualifying"] as const)("retains Setup ownership while evaluation is %s", async (phase) => {
+  let owned = false;
+  const beginOperation = () => { if (owned) return false; owned = true; return true; };
+  const endOperation = () => { owned = false; };
+  await act(async () => root!.render(<EngineEvaluationPanel profiles={profiles} disabled={false} beginOperation={beginOperation} endOperation={endOperation} />));
+  await select(); await click(t("evaluation.start"));
+  vi.mocked(backend.getEngineEvaluation).mockResolvedValue({ ...running, phase });
+  await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+  expect(beginOperation()).toBe(false);
+  vi.mocked(backend.getEngineEvaluation).mockResolvedValue({ ...running, phase: "completed", process_id: null });
+  await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+  expect(beginOperation()).toBe(true);
+});
