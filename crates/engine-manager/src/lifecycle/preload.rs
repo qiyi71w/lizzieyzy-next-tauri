@@ -8,6 +8,13 @@ pub(super) struct PreloadSlot {
     worker_running: bool,
 }
 
+pub(super) fn occupied(state: &ManagerState) -> bool {
+    state
+        .preloads
+        .iter()
+        .any(|slot| slot.live.is_some() || slot.worker_running)
+}
+
 pub(super) fn preparing(state: &ManagerState, run_id: &str) -> bool {
     state
         .preloads
@@ -77,9 +84,21 @@ impl ForegroundEngineManager {
         saved: SavedEngineProfile,
         startup_operation: Option<u64>,
     ) -> Result<(), EngineFailureDto> {
+        if self.measured_reservation() {
+            return Err(continuous_invalid_state(
+                &self.lock(),
+                "Measurement scene reserves the sole engine process",
+            ));
+        }
         let profile_id = saved.profile_id.as_str();
         let (operation, run) = {
             let mut state = self.lock();
+            if self.measured_reservation() {
+                return Err(continuous_invalid_state(
+                    &state,
+                    "Measurement scene reserves the sole engine process",
+                ));
+            }
             if let Some(operation) = startup_operation {
                 if state.operation != operation
                     || state.startup_preload_operation != Some(operation)
@@ -165,8 +184,14 @@ impl ForegroundEngineManager {
     }
 
     pub fn schedule_startup_preloads(&self) {
+        if self.measured_reservation() {
+            return;
+        }
         let (operation, profiles) = {
             let mut state = self.lock();
+            if self.measured_reservation() {
+                return;
+            }
             let Some(profiles) = state.startup_preloads.take() else {
                 return;
             };

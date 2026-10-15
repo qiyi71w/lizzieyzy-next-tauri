@@ -1,3 +1,4 @@
+/// <reference lib="esnext.promise" />
 // @vitest-environment jsdom
 
 import { act } from "react";
@@ -9,6 +10,9 @@ import * as backend from "../api/backend";
 import type { ForegroundEngineSnapshotDto } from "../domain/types";
 import * as models from "../api/models";
 import type { ModelInventoryDto } from "../domain/types";
+import * as measured from "../api/measuredReport";
+import type { EvaluationSnapshotDto, MeasuredReviewDto } from "../domain/types";
+import { t } from "../i18n/resources";
 
 let root: Root | null = null;
 let host: HTMLDivElement;
@@ -25,6 +29,7 @@ afterEach(async () => {
   root = null;
   host.remove();
   vi.restoreAllMocks();
+  vi.useRealTimers();
   localStorage.clear();
 });
 
@@ -57,6 +62,86 @@ async function render(snapshot: ForegroundEngineSnapshotDto | null = null) {
   root = createRoot(host);
   await act(async () => { root!.render(<EngineSetupPanel engineSnapshot={snapshot} />); });
 }
+
+describe("engine settings horizontal focus visibility", () => {
+  let scrollingElementDescriptor: PropertyDescriptor | undefined;
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    scrollingElementDescriptor = Object.getOwnPropertyDescriptor(document, "scrollingElement");
+    Object.defineProperty(document, "scrollingElement", { configurable: true, get: () => document.documentElement });
+    vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(945);
+    document.documentElement.scrollLeft = 25;
+    document.documentElement.scrollTop = 15;
+    host.style.overflowX = "auto";
+    host.scrollTop = 1596;
+    host.scrollLeft = 0;
+    vi.spyOn(host, "clientWidth", "get").mockReturnValue(1085);
+    vi.spyOn(host, "getBoundingClientRect").mockImplementation(() => new DOMRect(-document.documentElement.scrollLeft, 400, 1100, 240));
+  });
+  afterEach(() => {
+    if (scrollingElementDescriptor) Object.defineProperty(document, "scrollingElement", scrollingElementDescriptor);
+    else Reflect.deleteProperty(document, "scrollingElement");
+    document.documentElement.scrollLeft = 0;
+    document.documentElement.scrollTop = 0;
+  });
+
+  async function focusControl(left: number, width: number) {
+    await render();
+    const button = Array.from(host.querySelectorAll("button")).find((element) => element.textContent === "保存配置")!;
+    button.style.outlineStyle = "solid";
+    button.style.outlineWidth = "2px";
+    button.style.outlineOffset = "1px";
+    const bounds = () => new DOMRect(left - document.documentElement.scrollLeft, 572, width, 27);
+    vi.spyOn(button, "getBoundingClientRect").mockImplementation(bounds);
+    vi.spyOn(button, "getClientRects").mockImplementation(() => Object.assign([bounds()], { item: () => bounds() }));
+    button.focus();
+    return button;
+  }
+
+  it.each([
+    { name: "left-clipped reverse focus", left: 12, width: 172, scroll: 9 },
+    { name: "right-clipped focus", left: 900, width: 172, scroll: 130 },
+    { name: "already visible focus", left: 200, width: 172, scroll: 25 },
+    { name: "a field wider than the viewport", left: 25, width: 1057, scroll: 25 }
+  ])("reveals $name without moving vertical or nested scroll owners", async ({ left, width, scroll }) => {
+    const button = await focusControl(left, width);
+    await act(async () => { vi.advanceTimersToNextFrame(); });
+    expect(document.documentElement.scrollLeft).toBe(scroll);
+    expect(document.documentElement.scrollTop).toBe(15);
+    expect(host.scrollTop).toBe(1596);
+    expect(host.scrollLeft).toBe(0);
+    expect(document.activeElement).toBe(button);
+    if (width < 945) {
+      expect(button.getBoundingClientRect().left - 3).toBeGreaterThanOrEqual(0);
+      expect(button.getBoundingClientRect().right + 3).toBeLessThanOrEqual(945);
+    }
+  });
+
+  it("does not move the page to compensate for clipping inside another scroll owner", async () => {
+    await focusControl(12, 172);
+    vi.spyOn(host, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 400, 1100, 240));
+    await act(async () => { vi.advanceTimersToNextFrame(); });
+    expect(document.documentElement.scrollLeft).toBe(25);
+  });
+
+  it.each(["focus departure", "unmount", "hidden panel"])("retires pending reveal after %s", async (retirement) => {
+    await focusControl(12, 172);
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    try {
+      if (retirement === "focus departure") outside.focus();
+      else if (retirement === "unmount") {
+        await act(async () => { root!.unmount(); });
+        root = null;
+      } else await act(async () => { root!.render(<EngineSetupPanel visible={false} />); });
+      await act(async () => { vi.advanceTimersToNextFrame(); });
+      expect(document.documentElement.scrollLeft).toBe(25);
+      if (retirement === "focus departure") expect(document.activeElement).toBe(outside);
+    } finally {
+      outside.remove();
+    }
+  });
+});
 
 describe("engine profile configuration editor", () => {
   it("persists startup evaluation independently, preserving drafts and failed-save bytes without running", async () => {
@@ -470,4 +555,59 @@ it("saves preload opt-in explicitly and keeps browser preparation unavailable", 
   expect(prepare.disabled).toBe(true);
   await click("重新加载配置");
   expect((field("允许此配置后台预加载（保存后生效）") as HTMLInputElement).checked).toBe(true);
+});
+
+it("keeps report Cancel reachable while the composed editor and competing benchmark are locked", async () => {
+  vi.spyOn(backend, "isTauriRuntime").mockReturnValue(true);
+  const pending = Promise.withResolvers<MeasuredReviewDto>();
+  const review = vi.spyOn(measured, "reviewMeasuredReport").mockReturnValue(pending.promise);
+  const retire = vi.spyOn(measured, "retireMeasuredReport").mockResolvedValue();
+  vi.spyOn(measured, "waitForMeasuredWorker").mockResolvedValue();
+  await render();
+  const file = new File(['{}'], "report.json", { type: "application/json" });
+  Object.defineProperty(file, "text", { value: async () => '{}' });
+  const upload = host.querySelector<HTMLInputElement>('input[accept="application/json,.json"]')!;
+  await act(async () => { Object.defineProperty(upload, "files", { value: [file] }); upload.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(review).toHaveBeenCalledTimes(1);
+  expect(field("名称").matches(":disabled")).toBe(true);
+  expect(upload.matches(":disabled")).toBe(true);
+  const benchmark = Array.from(host.querySelectorAll("button")).find(b => b.textContent === t("evaluation.start"))!;
+  expect(benchmark.matches(":disabled")).toBe(true);
+  const cancel = Array.from(host.querySelectorAll("button")).find(b => b.textContent === t("measured.cancel"))!;
+  expect(cancel.matches(":disabled")).toBe(false);
+  retire.mockClear();
+  await click(t("measured.cancel"));
+  expect(retire).toHaveBeenCalledTimes(1);
+  expect(field("名称").matches(":disabled")).toBe(true);
+  await act(async () => pending.reject(new Error("retired after worker exit")));
+  expect(field("名称").matches(":disabled")).toBe(false);
+  expect(host.textContent).not.toContain("Paired ratios:");
+});
+
+it("keeps active benchmark Cancel reachable without admitting editor or report work", async () => {
+  vi.useFakeTimers();
+  vi.spyOn(backend, "isTauriRuntime").mockReturnValue(true);
+  const idle: EvaluationSnapshotDto = { evaluation_id: null, target_id: null, input_revision: null, phase: "idle", process_id: null, exit_code: null, output: [], output_truncated: false, message: null, result: null };
+  const running: EvaluationSnapshotDto = { ...idle, evaluation_id: "owned", target_id: "default", input_revision: "revision", phase: "running", process_id: 123 };
+  let snapshot = idle;
+  vi.spyOn(backend, "getEngineEvaluation").mockImplementation(async () => snapshot);
+  const start = vi.spyOn(backend, "startEngineEvaluation").mockImplementation(async () => { snapshot = running; return running; });
+  const cancel = vi.spyOn(backend, "cancelEngineEvaluation").mockImplementation(async () => { snapshot = { ...running, phase: "cancelled", process_id: null }; return snapshot; });
+  vi.spyOn(measured, "measuredReportBusy").mockResolvedValue(false);
+  vi.spyOn(measured, "retireMeasuredReport").mockResolvedValue();
+  await render();
+  const target = host.querySelector<HTMLSelectElement>('section[aria-label="本地性能评估 Benchmark"] select')!;
+  await change(target, "default");
+  await click(t("evaluation.start"));
+  expect(start).toHaveBeenCalledTimes(1);
+  expect(field("名称").matches(":disabled")).toBe(true);
+  expect(host.querySelector('input[accept="application/json,.json"]')!.matches(":disabled")).toBe(true);
+  const cancelButton = Array.from(host.querySelectorAll("button")).find(b => b.textContent === t("evaluation.cancel"))!;
+  expect(cancelButton.matches(":disabled")).toBe(false);
+  await click(t("evaluation.start"));
+  expect(start).toHaveBeenCalledTimes(1);
+  await click(t("evaluation.cancel"));
+  expect(cancel).toHaveBeenCalledWith("owned");
+  await act(async () => vi.advanceTimersByTimeAsync(300));
+  expect(field("名称").matches(":disabled")).toBe(false);
 });

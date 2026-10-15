@@ -1,8 +1,4 @@
-use app_model::PlayerColor;
-
-const WINRATE_THRESHOLDS_PP: [f32; 5] = [1.0, 3.0, 6.0, 12.0, 24.0];
-const SCORE_THRESHOLDS: [f32; 5] = [0.5, 1.5, 3.0, 6.0, 12.0];
-const MISTAKE_LEVEL: usize = 3;
+use app_model::{MoveRankMode, MoveRankPreferencesDto, PlayerColor};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MoveRank {
@@ -34,11 +30,17 @@ pub struct DisplayedAnalysis {
     pub score_mean_black: Option<f32>,
 }
 
-pub fn classify_auto_move_rank(winrate_loss_pp: f32, score_loss: Option<f32>) -> MoveRank {
+pub fn classify_move_rank(
+    winrate_loss_pp: f64,
+    score_loss: Option<f64>,
+    settings: &MoveRankPreferencesDto,
+) -> MoveRank {
     let winrate_loss = winrate_loss_pp.max(0.0);
-    let score_loss = score_loss.map(|loss| loss.max(0.0));
+    let score_loss = score_loss
+        .filter(|loss| loss.is_finite())
+        .map(|loss| loss.max(0.0));
     for level in (1..=5).rev() {
-        if reaches_auto_threshold(winrate_loss, score_loss, level) {
+        if reaches_threshold(winrate_loss, score_loss, level, settings) {
             return MoveRank::from_level(level);
         }
     }
@@ -49,6 +51,7 @@ pub fn classify_played_move(
     parent: Option<&DisplayedAnalysis>,
     child: Option<&DisplayedAnalysis>,
     parent_to_play: PlayerColor,
+    settings: &MoveRankPreferencesDto,
 ) -> Option<MoveRank> {
     let parent = displayed(parent)?;
     let child = displayed(child)?;
@@ -60,7 +63,11 @@ pub fn classify_played_move(
         }
         _ => None,
     };
-    Some(classify_auto_move_rank(winrate_loss_pp, score_loss))
+    Some(classify_move_rank(
+        f64::from(winrate_loss_pp),
+        score_loss.map(f64::from),
+        settings,
+    ))
 }
 
 pub fn is_blunder_bar_rank(rank: MoveRank) -> bool {
@@ -85,18 +92,38 @@ fn player_score(score_mean_black: f32, color: PlayerColor) -> f32 {
     }
 }
 
-fn reaches_auto_threshold(winrate_loss_pp: f32, score_loss: Option<f32>, level: usize) -> bool {
-    let reaches_winrate = winrate_loss_pp >= WINRATE_THRESHOLDS_PP[level - 1];
-    let reaches_score = score_loss.is_some_and(|loss| loss >= SCORE_THRESHOLDS[level - 1]);
-    match score_loss {
-        None => reaches_winrate,
-        Some(_) => reaches_score || (level > MISTAKE_LEVEL && reaches_winrate),
+fn reaches_threshold(
+    winrate_loss_pp: f64,
+    score_loss: Option<f64>,
+    level: usize,
+    settings: &MoveRankPreferencesDto,
+) -> bool {
+    let reaches_winrate = winrate_loss_pp >= settings.winrate_thresholds_pp[level - 1];
+    let reaches_score = score_loss.is_some_and(|loss| loss >= settings.score_thresholds[level - 1]);
+    match settings.mode {
+        MoveRankMode::Auto if score_loss.is_none() => reaches_winrate,
+        MoveRankMode::Auto => reaches_score || (level > 3 && reaches_winrate),
+        MoveRankMode::Score => reaches_score,
+        MoveRankMode::Winrate => reaches_winrate,
+        MoveRankMode::Combined => reaches_score || reaches_winrate,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn classify_auto_move_rank(winrate_loss: f64, score_loss: Option<f64>) -> MoveRank {
+        classify_move_rank(winrate_loss, score_loss, &MoveRankPreferencesDto::default())
+    }
+
+    fn classify_played_move(
+        parent: Option<&DisplayedAnalysis>,
+        child: Option<&DisplayedAnalysis>,
+        color: PlayerColor,
+    ) -> Option<MoveRank> {
+        super::classify_played_move(parent, child, color, &MoveRankPreferencesDto::default())
+    }
 
     fn analysis(visits: u32, winrate_black: f32, score_mean_black: Option<f32>) -> DisplayedAnalysis {
         DisplayedAnalysis {

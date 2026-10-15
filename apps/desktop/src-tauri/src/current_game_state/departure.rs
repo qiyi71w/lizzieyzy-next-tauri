@@ -488,6 +488,7 @@ impl CurrentGameHolder {
         self.departure = None;
         self.closed_jobs.clear();
         self.analysis_target = None;
+        self.ordinary_analysis_contexts.clear();
         self.trial_mode = super::trial::TrialMode::Review;
         self.current_result()
     }

@@ -48,6 +48,8 @@ pub struct AppPreferencesDto {
     pub allow_double_click: bool,
     #[serde(default = "default_continuous_analysis_enabled")]
     pub continuous_analysis_enabled: bool,
+    #[serde(default = "default_continuous_analysis_enabled")]
+    pub retain_node_analysis: bool,
     #[serde(flatten)]
     pub continuous_budget: ContinuousAnalysisBudgetDto,
     #[serde(default)]
@@ -70,8 +72,16 @@ pub struct AppPreferencesDto {
     pub candidate_limit: u32,
     #[serde(default)]
     pub granular_display: app_model::GranularDisplayDto,
+    #[serde(default)]
+    pub move_rank: app_model::MoveRankPreferencesDto,
+    #[serde(default)]
+    pub local_focus: app_model::LocalFocusPreferencesDto,
+    #[serde(default)]
+    pub analysis_refresh_interval_centiseconds: app_model::AnalysisRefreshIntervalDto,
     #[serde(default = "default_max_visits")]
     pub default_max_visits: u32,
+    #[serde(default = "default_flash_analysis_visits")]
+    pub flash_analysis_visits: u32,
     #[serde(default, alias = "taskConditions", skip_serializing_if = "Option::is_none")]
     pub task_single_stage_conditions: Option<AnalysisStageConditionsDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -184,6 +194,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         allow_drag: false,
         allow_double_click: true,
         continuous_analysis_enabled: default_continuous_analysis_enabled(),
+        retain_node_analysis: true,
         continuous_budget: ContinuousAnalysisBudgetDto::default(),
         auto_load: app_model::AutoLoadPreferencesDto::default(),
         batch: app_model::BatchPreferencesDto::default(),
@@ -195,7 +206,11 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         show_candidates: default_show_candidates(),
         candidate_limit: default_candidate_limit(),
         granular_display: app_model::GranularDisplayDto::default(),
+        move_rank: app_model::MoveRankPreferencesDto::default(),
+        local_focus: app_model::LocalFocusPreferencesDto::default(),
+        analysis_refresh_interval_centiseconds: app_model::AnalysisRefreshIntervalDto::default(),
         default_max_visits: default_max_visits(),
+        flash_analysis_visits: default_flash_analysis_visits(),
         task_single_stage_conditions: Some(default_task_single_stage_conditions(default_max_visits())),
         task_overview_conditions: Some(default_task_overview_conditions()),
         task_deep_conditions: Some(default_task_deep_conditions(default_max_visits())),
@@ -286,9 +301,38 @@ pub fn normalize_app_preferences(mut preferences: AppPreferencesDto) -> AppPrefe
     preferences
 }
 
+fn parse_preferences(contents: &str) -> Result<AppPreferencesDto, serde_json::Error> {
+    let mut value: serde_json::Value = serde_json::from_str(contents)?;
+    if value.get("localFocus").is_none() {
+        let legacy = value.get("ui").unwrap_or(&value);
+        let visits = legacy
+            .get("tracking-analysis-max-visits")
+            .or_else(|| legacy.get("tracking-engine-max-visits"))
+            .and_then(serde_json::Value::as_u64)
+            .filter(|value| *value > 0 && *value <= u32::MAX as u64)
+            .unwrap_or(500);
+        let outline = legacy
+            .get("show-tracking-point-outline")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        let opacity = legacy
+            .get("tracking-point-outline-opacity")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(92)
+            .clamp(0, 100);
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "localFocus".into(),
+                serde_json::json!({"maxVisits": visits, "showOutline": outline, "outlineOpacity": opacity}),
+            );
+        }
+    }
+    serde_json::from_value(value)
+}
+
 pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String> {
     match fs::read_to_string(path) {
-        Ok(contents) => match serde_json::from_str::<AppPreferencesDto>(&contents) {
+        Ok(contents) => match parse_preferences(&contents) {
             Ok(preferences)
                 if preferences.continuous_budget.validate().is_ok()
                     && preferences.auto_load.validate().is_ok()
@@ -296,7 +340,14 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
                     && preferences.continuation.validate().is_ok()
                     && preferences.match_defaults.validate().is_ok()
                     && preferences.granular_display.validate().is_ok()
+                    && preferences.move_rank.validate().is_ok()
+                    && preferences.local_focus.validate().is_ok()
+                    && preferences
+                        .analysis_refresh_interval_centiseconds
+                        .validate()
+                        .is_ok()
                     && preferences.network.validate().is_ok()
+                    && preferences.flash_analysis_visits > 0
                     && validate_review_autoplay_interval(preferences.review_autoplay_interval_ms).is_ok() =>
             {
                 let preferences = normalize_app_preferences(preferences);
@@ -345,6 +396,9 @@ pub fn load_from_path(path: &Path) -> Result<AppPreferencesLoadResultDto, String
 pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPreferencesDto, String> {
     validate_review_autoplay_interval(preferences.review_autoplay_interval_ms)?;
     preferences.granular_display.validate()?;
+    preferences.move_rank.validate()?;
+    preferences.local_focus.validate()?;
+    preferences.analysis_refresh_interval_centiseconds.validate()?;
     preferences.network.validate()?;
     preferences.match_defaults.validate()?;
     if let Some(shares) = preferences.workspace_shares {
@@ -366,6 +420,9 @@ pub fn save_to_path(path: &Path, preferences: AppPreferencesDto) -> Result<AppPr
         return Err("Default komi must be finite.".to_string());
     }
     preferences.continuous_budget.validate()?;
+    if preferences.flash_analysis_visits == 0 {
+        return Err("Explicit flash visits must be a positive integer.".to_string());
+    }
     preferences.auto_load.validate()?;
     preferences.batch.validate()?;
     preferences.continuation.validate()?;
@@ -505,6 +562,10 @@ fn default_candidate_limit() -> u32 {
 
 fn default_max_visits() -> u32 {
     800
+}
+
+fn default_flash_analysis_visits() -> u32 {
+    1
 }
 
 fn default_task_single_stage_conditions(total_visits: u32) -> AnalysisStageConditionsDto {
@@ -663,6 +724,9 @@ mod tests {
     fn sample_preferences() -> AppPreferencesDto {
         AppPreferencesDto {
             granular_display: app_model::GranularDisplayDto::default(),
+            move_rank: app_model::MoveRankPreferencesDto::default(),
+            local_focus: app_model::LocalFocusPreferencesDto::default(),
+            analysis_refresh_interval_centiseconds: app_model::AnalysisRefreshIntervalDto::default(),
             network: app_model::NetworkSettingsDto::default(),
             yike_locator: None,
             yike_sync: app_model::YikeSyncPreferencesDto::default(),
@@ -681,6 +745,7 @@ mod tests {
             allow_drag: false,
             allow_double_click: true,
             continuous_analysis_enabled: false,
+            retain_node_analysis: true,
             continuous_budget: ContinuousAnalysisBudgetDto {
                 continuous_time_limit_enabled: false,
                 continuous_time_limit_seconds: 7,
@@ -698,6 +763,7 @@ mod tests {
             show_candidates: false,
             candidate_limit: 3,
             default_max_visits: 200,
+            flash_analysis_visits: 7,
             task_single_stage_conditions: Some(default_task_single_stage_conditions(200)),
             task_overview_conditions: Some(default_task_overview_conditions()),
             task_deep_conditions: Some(default_task_deep_conditions(800)),
@@ -1025,6 +1091,80 @@ mod tests {
             assert_eq!(load_from_path(&path).unwrap().preferences, original);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn analysis_refresh_interval_defaults_validates_and_reopens_atomically() {
+        let (dir, path) = temp_prefs();
+        let mut old = serde_json::to_value(sample_preferences()).unwrap();
+        old.as_object_mut()
+            .unwrap()
+            .remove("analysisRefreshIntervalCentiseconds");
+        fs::write(&path, old.to_string()).unwrap();
+        let mut settings = load_from_path(&path).unwrap().preferences;
+        assert_eq!(settings.analysis_refresh_interval_centiseconds.0, 10);
+        for value in [17, 9_007_199_254_740_991] {
+            settings.analysis_refresh_interval_centiseconds = app_model::AnalysisRefreshIntervalDto(value);
+            settings = save_to_path(&path, settings).unwrap();
+            assert_eq!(load_from_path(&path).unwrap().preferences, settings);
+        }
+        let durable = fs::read(&path).unwrap();
+        for value in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!(9_007_199_254_740_992u64),
+            serde_json::json!("17"),
+            serde_json::json!(null),
+        ] {
+            let mut input = serde_json::to_value(&settings).unwrap();
+            input["analysisRefreshIntervalCentiseconds"] = value;
+            if let Ok(invalid) = serde_json::from_value(input) {
+                assert!(save_to_path(&path, invalid).is_err());
+            }
+            assert_eq!(fs::read(&path).unwrap(), durable);
+        }
+        let mut changed = settings.clone();
+        changed.analysis_refresh_interval_centiseconds = app_model::AnalysisRefreshIntervalDto(37);
+        assert!(
+            atomic_replace_file_with(&path, &serde_json::to_string(&changed).unwrap(), |_, _| Err(
+                io::Error::other("refresh replace failure")
+            ))
+            .is_err()
+        );
+        assert_eq!(load_from_path(&path).unwrap().preferences, settings);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_focus_migrates_positive_legacy_visits_and_saves_only_ordinary_settings() {
+        for (legacy, expected) in [(937, 937), (0, 500), (-5, 500)] {
+            let (dir, path) = temp_prefs();
+            let mut value = serde_json::to_value(sample_preferences()).unwrap();
+            value.as_object_mut().unwrap().remove("localFocus");
+            value["ui"] = serde_json::json!({"tracking-analysis-max-visits": legacy, "show-tracking-point-outline": false, "tracking-point-outline-opacity": 92, "tracking-point-fill-color": "obsolete"});
+            fs::write(&path, value.to_string()).unwrap();
+            let loaded = load_from_path(&path).unwrap().preferences;
+            assert_eq!(loaded.local_focus.max_visits, expected);
+            assert!(!loaded.local_focus.show_outline);
+            let saved = save_to_path(&path, loaded).unwrap();
+            assert_eq!(load_from_path(&path).unwrap().preferences, saved);
+            assert!(!fs::read_to_string(&path).unwrap().contains("tracking-point-fill"));
+            let mut invalid = saved.clone();
+            invalid.local_focus.max_visits = 0;
+            assert!(save_to_path(&path, invalid).is_err());
+            assert_eq!(load_from_path(&path).unwrap().preferences, saved);
+            let mut replacement = saved.clone();
+            replacement.local_focus.max_visits = 1200;
+            assert!(atomic_replace_file_with(
+                &path,
+                &serde_json::to_string(&replacement).unwrap(),
+                |_, _| Err(io::Error::other("focus replace failure"))
+            )
+            .is_err());
+            assert_eq!(load_from_path(&path).unwrap().preferences, saved);
+            fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     #[test]

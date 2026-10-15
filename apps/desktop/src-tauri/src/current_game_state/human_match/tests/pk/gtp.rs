@@ -21,6 +21,7 @@ impl PkRig {
         profile.argv = GNU.map(String::from).into();
         profile.adapter = EngineAdapterSettings::GenericGtp(GenericGtpSettings {});
         self.0.catalog.upsert(SavedEngineProfile {
+            measured_scenes: Default::default(),
             profile_id: "gnugo".into(),
             profile: profile.clone(),
             thread_policy: Default::default(),

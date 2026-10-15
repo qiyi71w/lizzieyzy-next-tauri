@@ -90,6 +90,7 @@ impl ForegroundEngineManager {
         mut current: EngineProfilesSettings,
         request: ThreadPolicySaveRequestDto,
     ) -> Result<EngineProfilesSettings, String> {
+        let lease = self.begin_setup_operation()?;
         let record = current
             .profiles
             .iter_mut()
@@ -139,7 +140,7 @@ impl ForegroundEngineManager {
                 .ok_or("policy_revision_exhausted")?,
             recommendation,
         };
-        let saved = crate::save_engine_profiles(path, current)?;
+        let saved = lease.commit(|| crate::save_engine_profiles(path, current))?;
         drop(evaluation_guard);
         // The existing preparation owner seals and retires the old policy only after a successful write.
         self.invalidate_preload(&request.target_id);

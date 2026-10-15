@@ -143,6 +143,8 @@ pub(crate) fn capture(
     managed_root: Option<&Path>,
 ) -> Result<QualifiedLocalResourceDto, String> {
     let run = EngineRunDto {
+        measured_scenes_snapshot: Default::default(),
+        measured_scene: None,
         run_id: "policy-qualification".into(),
         profile_id: saved.profile_id.clone(),
         adapter_kind: saved.profile.adapter_kind(),
@@ -248,6 +250,7 @@ pub(crate) fn apply(
         return Ok(false);
     }
     let saved = SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: run.profile_id.clone(),
         profile: run.profile_snapshot.clone(),
         thread_policy: run.thread_policy_snapshot.clone(),

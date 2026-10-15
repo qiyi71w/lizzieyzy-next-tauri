@@ -238,6 +238,7 @@ fn real_import_restart_recovery(gtp: bool) {
     }
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     catalog.upsert(SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: "recovery".into(),
         profile,
         thread_policy: Default::default(),
@@ -300,6 +301,15 @@ fn real_import_restart_recovery(gtp: bool) {
     let old = wait_job(&events, Duration::from_secs(30), |job| {
         job.outcome == AnalysisJobOutcomeDto::Progress
     });
+    if gtp {
+        let run = run_from_ready(&manager.snapshot().lifecycle).clone();
+        let focus = run.capability_snapshot.as_ref().unwrap().focus;
+        assert!(matches!(
+            focus,
+            FocusCapabilityDto::Supported | FocusCapabilityDto::Unsupported
+        ));
+        println!("FOCUS-PROBE-RESULT {}", serde_json::to_string(&run).unwrap());
+    }
     kill_owned_katago(&first.profile_snapshot);
     wait_current(&manager, Duration::from_secs(30), |phase| {
         matches!(phase, ForegroundEngineLifecycleDto::Error { .. })
@@ -339,6 +349,12 @@ fn real_import_restart_recovery(gtp: bool) {
     });
     let restarted = run_from_ready(&restarted.lifecycle).clone();
     assert_ne!(restarted.run_id, first.run_id);
+    if gtp {
+        assert_eq!(
+            restarted.capability_snapshot.as_ref().unwrap().focus,
+            FocusCapabilityDto::Unchecked
+        );
+    }
     assert_eq!(
         manager.snapshot().continuous.phase,
         ContinuousAnalysisPhaseDto::SafetyHold
@@ -408,6 +424,15 @@ fn real_import_restart_recovery(gtp: bool) {
         run_from_ready(&manager.snapshot().lifecycle).run_id,
         restarted.run_id
     );
+    if gtp {
+        println!(
+            "FOCUS-RESTART-PAUSE {}",
+            serde_json::to_string(&manager.snapshot()).unwrap()
+        );
+        for capture in manager.diagnostic_snapshots() {
+            println!("FOCUS-PROTOCOL {}", serde_json::to_string(&capture).unwrap());
+        }
+    }
     assert_eq!(document.serialize().unwrap(), before);
     println!(
         "RECOVERY adapter={:?} old={} new={} generation=2 user_continue=true personal_c_preserved=true",
@@ -619,11 +644,13 @@ fn real_katago_ready_job_stop_restart_and_switch() {
 
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     catalog.upsert(SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: "profile-a".into(),
         profile: real_profile("Real KataGo A"),
         thread_policy: Default::default(),
     });
     catalog.upsert(SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: "profile-b".into(),
         profile: real_profile("Real KataGo B"),
         thread_policy: Default::default(),
@@ -754,11 +781,13 @@ fn real_katago_failed_start_failed_switch_crash_and_autoload() {
 
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     catalog.upsert(SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: "profile-good".into(),
         profile: real_profile("Real KataGo Good"),
         thread_policy: Default::default(),
     });
     catalog.upsert(SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: "profile-bad".into(),
         profile: missing_model_profile("Missing Model"),
         thread_policy: Default::default(),
@@ -854,6 +883,7 @@ fn real_local_resource_qualification_start_switch_and_corrupt_model_preserve_pri
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     for id in ["qualified-a", "qualified-b"] {
         catalog.upsert(SavedEngineProfile {
+            measured_scenes: Default::default(),
             profile_id: id.into(),
             profile: real_profile(id),
             thread_policy: Default::default(),
@@ -867,6 +897,7 @@ fn real_local_resource_qualification_start_switch_and_corrupt_model_preserve_pri
         settings.model_path = Some(corrupt.to_string_lossy().into_owned());
     }
     catalog.upsert(SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: "invalid".into(),
         profile: invalid,
         thread_policy: Default::default(),
@@ -944,6 +975,7 @@ fn real_katago_bounded_live_diagnostics() {
     let profile = real_profile("Real diagnostics");
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     catalog.upsert(SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: "diagnostics-real".into(),
         profile: profile.clone(),
         thread_policy: Default::default(),
@@ -1016,6 +1048,7 @@ fn real_katago_bounded_live_diagnostics() {
         .argv
         .push("--r12-diagnostic-fixture-invalid-argument".into());
     catalog.upsert(SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: "diagnostics-failed".into(),
         profile: invalid,
         thread_policy: Default::default(),
@@ -1128,6 +1161,7 @@ fn real_katago_startup_modes_reopen_durable_catalog() {
                 .into_iter()
                 .find(|record| record.id == id)
                 .map(|record| SavedEngineProfile {
+                    measured_scenes: record.measured_scenes,
                     profile_id: record.id,
                     profile: record.profile,
                     thread_policy: record.thread_policy,
@@ -1157,6 +1191,7 @@ fn real_katago_startup_modes_reopen_durable_catalog() {
                 profile: profile.clone(),
                 preload: false,
                 thread_policy: Default::default(),
+                measured_scenes: Default::default(),
             },
             engine_manager::EngineProfileRecord {
                 id: "b".into(),
@@ -1166,6 +1201,7 @@ fn real_katago_startup_modes_reopen_durable_catalog() {
                 },
                 preload: false,
                 thread_policy: Default::default(),
+                measured_scenes: Default::default(),
             },
         ],
     };
@@ -1263,6 +1299,7 @@ fn real_preload_promotion_cancellation_and_memory_pressure_preserve_primary() {
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     for id in ["preload-a", "preload-b", "preload-pressure"] {
         catalog.upsert(SavedEngineProfile {
+            measured_scenes: Default::default(),
             profile_id: id.into(),
             profile: real_profile(id),
             thread_policy: Default::default(),

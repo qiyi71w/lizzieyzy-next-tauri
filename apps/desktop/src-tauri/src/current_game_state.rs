@@ -7,7 +7,7 @@ use app_model::{
     StoneDto, TrialSessionDto,
 };
 use sgf::{CurrentSgfDocument, DocumentHistory, SgfAnalysisPayload, SgfDocumentEdit, TrialLine};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 #[cfg(test)]
@@ -99,6 +99,7 @@ struct CurrentGameHolder {
     document_identity: u64,
     snapshot_seq: u64,
     analysis_target: Option<(u64, NodePath)>,
+    ordinary_analysis_contexts: HashMap<Vec<u32>, std::sync::Arc<engine_manager::OrdinaryAnalysisContext>>,
     trial_mode: trial::TrialMode,
     next_trial_id: u64,
     next_trial_revision: u64,
@@ -375,6 +376,23 @@ impl CurrentGameState {
         })
     }
 
+    /// Capture only the exact committed measurement fixture; never mix a newer document's artifacts.
+    pub(crate) fn capture_measurement_document(
+        &self,
+        expected: &CurrentGameResultDto,
+    ) -> Result<(CurrentGameResultDto, String, GameDto), String> {
+        let holder = self.holder.lock().expect("current game state");
+        if holder.generation != expected.generation || holder.snapshot_seq != expected.snapshot_seq {
+            return Err("Measurement fixture was superseded before publication".into());
+        }
+        let document = holder.document.as_ref().ok_or("No current measurement fixture")?;
+        Ok((
+            holder.current_result().map_err(|error| error.to_string())?,
+            document.serialize().map_err(|error| error.to_string())?,
+            document.mainline_projection(),
+        ))
+    }
+
     pub fn mainline_projection(&self) -> Result<GameDto, CurrentGameError> {
         self.with_document(|document| Ok(document.mainline_projection()))
     }
@@ -443,6 +461,26 @@ impl CurrentGameState {
         preview: app_model::AnalysisScopePreviewDto,
         conditions: app_model::AnalysisStageConditionsDto,
     ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
+        self.start_analysis_task_with_lease(manager, run_id, preview, conditions, None)
+    }
+    pub(crate) fn start_measured_analysis_task(
+        &self,
+        manager: &engine_manager::ForegroundEngineManager,
+        run_id: String,
+        preview: app_model::AnalysisScopePreviewDto,
+        conditions: app_model::AnalysisStageConditionsDto,
+        lease: &engine_manager::SetupLease,
+    ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
+        self.start_analysis_task_with_lease(manager, run_id, preview, conditions, Some(lease))
+    }
+    fn start_analysis_task_with_lease(
+        &self,
+        manager: &engine_manager::ForegroundEngineManager,
+        run_id: String,
+        preview: app_model::AnalysisScopePreviewDto,
+        conditions: app_model::AnalysisStageConditionsDto,
+        lease: Option<&engine_manager::SetupLease>,
+    ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
         let invalid = |message| {
             Box::new(crate::job_failure(
                 &run_id,
@@ -451,6 +489,9 @@ impl CurrentGameState {
             ))
         };
         conditions.validate_single_stage().map_err(invalid)?;
+        if lease.is_none() {
+            manager.retire_setup_for_foreground().map_err(invalid)?;
+        }
         // Keep semantic revalidation and manager admission under the same owner lock.
         let holder = self.holder.lock().expect("current game state");
         let admitted = holder
@@ -462,17 +503,16 @@ impl CurrentGameState {
             ));
         }
         let work_items = crate::whole_game_work_items(&admitted, conditions.total_visits.value, &run_id)?;
-        manager
-            .start_analysis_task(
-                engine_manager::WholeGameJobRequest {
-                    run_id,
-                    generation: admitted.generation,
-                    work_items,
-                },
-                preview.scope,
-                conditions,
-            )
-            .map_err(Box::new)
+        let request = engine_manager::WholeGameJobRequest {
+            run_id,
+            generation: admitted.generation,
+            work_items,
+        };
+        match lease {
+            Some(lease) => manager.start_measured_analysis_task(request, preview.scope, conditions, lease),
+            None => manager.start_analysis_task(request, preview.scope, conditions),
+        }
+        .map_err(Box::new)
     }
 
     pub fn start_all_positions_analysis_task(
@@ -495,6 +535,7 @@ impl CurrentGameState {
             &deep_conditions,
         )
         .map_err(invalid)?;
+        manager.retire_setup_for_foreground().map_err(invalid)?;
         let holder = self.holder.lock().expect("current game state");
         let admitted = holder
             .analysis_scope_admission(preview.generation, &preview.scope, None)
@@ -542,6 +583,7 @@ impl CurrentGameState {
             .clone()
             .ok_or_else(|| invalid("Swing-selected analysis requires swing criteria.".into()))?;
         criteria.validate().map_err(invalid)?;
+        manager.retire_setup_for_foreground().map_err(invalid)?;
         let holder = self.holder.lock().expect("current game state");
         let admitted = holder
             .analysis_scope_admission(preview.generation, &preview.scope, Some(&criteria))
@@ -592,6 +634,13 @@ impl CurrentGameState {
         run_id: &str,
         task_id: &str,
     ) -> crate::EngineCommandResult<app_model::AnalysisTaskDto> {
+        manager.retire_setup_for_foreground().map_err(|message| {
+            Box::new(crate::job_failure(
+                run_id,
+                app_model::EngineFailureKind::InvalidState,
+                message,
+            ))
+        })?;
         let holder = self.holder.lock().expect("current game state");
         holder.ensure_review_access().map_err(|error| {
             crate::job_failure(run_id, app_model::EngineFailureKind::InvalidState, error.message)
@@ -874,6 +923,24 @@ impl CurrentGameState {
         action()
     }
 
+    pub fn local_focus_action(
+        &self,
+        manager: &engine_manager::ForegroundEngineManager,
+        request: app_model::LocalFocusRequestDto,
+    ) -> Result<app_model::LocalFocusSnapshotDto, String> {
+        let holder = self.holder.lock().expect("current game state");
+        if holder.departure.is_some()
+            || holder.edits_blocked
+            || holder.human_match.blocks()
+            || !matches!(holder.trial_mode, trial::TrialMode::Review)
+            || holder.generation != request.generation
+            || holder.selected_path != request.node_path
+        {
+            return Err("Focus requires the current ordinary review position".into());
+        }
+        manager.local_focus_action(request)
+    }
+
     pub fn attach_from_job_event(&self, event: &AnalysisJobEventDto) -> Option<CurrentGameResultDto> {
         if self
             .analysis_manager
@@ -908,7 +975,6 @@ impl CurrentGameState {
                 }
             }
         }
-        let payload = SgfAnalysisPayload::from_frame(frame, "KataGo");
         let mut holder = self.holder.lock().expect("current game state");
         if holder.human_match.blocks() || !matches!(holder.trial_mode, trial::TrialMode::Review) {
             self.trace_adoption(event, "rejected-owner-reservation", None);
@@ -935,6 +1001,66 @@ impl CurrentGameState {
                 }
             }
         }
+        let focus_lineage = match self
+            .analysis_manager
+            .get()
+            .map(|manager| manager.local_focus_publication(event))
+        {
+            Some(Err(_)) => {
+                self.trace_adoption(event, "rejected-retired-focus-output", None);
+                return None;
+            }
+            Some(Ok(focus)) => focus,
+            None => false,
+        };
+        if focus_lineage {
+            let position = holder.document.as_ref()?.exact_position(&event.node_path).ok()?;
+            if !SgfAnalysisPayload::is_complete_frame(frame, &position, true) {
+                return None;
+            }
+        }
+        // Ordinary reuse only: Task attachment and the unconditional holder
+        // replacement seam retain priority over this presentation policy.
+        let context = self
+            .analysis_manager
+            .get()
+            .filter(|_| event.lane == app_model::AnalysisJobLaneDto::SelectedNode)
+            .and_then(|manager| manager.ordinary_analysis_context(event));
+        if let Some(context) = context.as_ref() {
+            let document = holder.document.as_ref()?;
+            let position = document.exact_position(&event.node_path).ok()?;
+            if !SgfAnalysisPayload::is_complete_frame(frame, &position, context.ownership_requested()) {
+                self.trace_adoption(event, "rejected-incomplete-ordinary-result", None);
+                return None;
+            }
+            if holder.generation == event.generation
+                && !focus_lineage
+                && self
+                    .analysis_manager
+                    .get()
+                    .is_some_and(|manager| manager.retain_node_analysis())
+                && holder.ordinary_analysis_contexts.get(&event.node_path.indices) == Some(context)
+            {
+                let snapshot = document.snapshot(&event.node_path).ok()?;
+                if snapshot.primary_analysis.as_ref().is_some_and(|old| {
+                    old.visits > frame.visits
+                        && SgfAnalysisPayload::is_complete_frame(
+                            old,
+                            &position,
+                            context.ownership_requested(),
+                        )
+                }) {
+                    self.trace_adoption(
+                        event,
+                        "retained-stronger-comparable-result",
+                        snapshot.primary_analysis.as_ref(),
+                    );
+                    // No incoming adoption: keep the already displayed result,
+                    // including its live-only policy, without splicing new maps.
+                    return None;
+                }
+            }
+        }
         let cached = self
             .analysis_manager
             .get()
@@ -942,6 +1068,7 @@ impl CurrentGameState {
             .and_then(|_| holder.document.as_ref())
             .and_then(|document| document.snapshot(&event.node_path).ok())
             .and_then(|snapshot| snapshot.primary_analysis);
+        let payload = SgfAnalysisPayload::from_frame(frame, "KataGo");
         let result = holder.attach_primary_analysis(event.generation, event.node_path.clone(), payload);
         let mut result = match result {
             Ok(result) => result,
@@ -950,6 +1077,11 @@ impl CurrentGameState {
                 return None;
             }
         };
+        if let Some(context) = context {
+            holder
+                .ordinary_analysis_contexts
+                .insert(event.node_path.indices.clone(), context);
+        }
         if self
             .analysis_manager
             .get()
@@ -966,6 +1098,14 @@ impl CurrentGameState {
                 Some(_) => "accepted-equal-visits-update",
             };
             self.trace_adoption(event, reason, cached.as_ref());
+        }
+        if let Some(manager) = self
+            .analysis_manager
+            .get()
+            .filter(|manager| manager.measured_observing(&event.run_id))
+        {
+            // Retention returns before attach_primary_analysis; this point observes only adopted input.
+            manager.measured_note_adopted(event);
         }
         if let Some(analysis) = result.snapshot.primary_analysis.as_mut() {
             // Global policy is a live search output; Java LZ stores candidates and ownership.
@@ -1374,6 +1514,9 @@ impl CurrentGameHolder {
             .ok_or_else(no_current_game)?
             .replace_primary_analysis(&path, &payload)?
             .1;
+        // Task, unknown-source, and explicit whole-slot replacement retire the
+        // previous ordinary comparability proof, even when the bytes match.
+        self.ordinary_analysis_contexts.remove(&path.indices);
         if changed {
             self.mark_nonhistory_change();
             self.bump_snapshot();

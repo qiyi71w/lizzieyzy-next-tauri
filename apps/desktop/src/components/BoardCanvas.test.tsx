@@ -9,6 +9,8 @@ import type { PointSearchScopeDto } from "../domain/types";
 import { BoardCanvas } from "./BoardCanvas";
 import * as backend from "../api/backend";
 import { defaultGranularDisplay } from "../domain/granularDisplay";
+import { defaultLocalFocusPreferences } from "../domain/localFocus";
+import { defaultMoveRankPreferences } from "../domain/moveRank";
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -77,6 +79,23 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+it("offers current-node flash on empty intersections without placing stones and refuses stale context", () => {
+  const onFlashCurrentNode = vi.fn();
+  const onPointClick = vi.fn();
+  const onGestureRefused = vi.fn();
+  const { canvas, host, rerender } = renderBoard({ onFlashCurrentNode, onPointClick, onGestureRefused, previewScope: initialPreviewScope });
+  canvas.getBoundingClientRect = () => new DOMRect(0, 0, 500, 500);
+  act(() => canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 159, clientY: 159 })));
+  act(() => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent === "闪电分析本手")!.click());
+  expect(onFlashCurrentNode).toHaveBeenCalledExactlyOnceWith();
+  expect(onPointClick).not.toHaveBeenCalled();
+  act(() => canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 159, clientY: 159 })));
+  rerender(position, { ...initialPreviewScope, generation: 2 });
+  act(() => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent === "闪电分析本手")!.click());
+  expect(onFlashCurrentNode).toHaveBeenCalledTimes(1);
+  expect(onGestureRefused).toHaveBeenCalledTimes(1);
 });
 
 it("keeps rectangular corner stones inside the canvas and maps their clicks to the same vertices", () => {
@@ -515,6 +534,7 @@ function renderBoard({
   nextMoveMode,
   nextMoveMarkers,
   keyboardPlacement,
+  onFlashCurrentNode,
   allowDrag, allowDoubleClick, authoringEnabled, onAuthoring, onGestureRefused, pointSearchEnabled, onPointSearch
 }: {
   onPointClick?: (point: PointDto) => void;
@@ -532,6 +552,7 @@ function renderBoard({
   onPointSearch?: (point: PointDto, scope: PointSearchScopeDto, captured: ReviewPresentationScope) => void;
   authoringEnabled?: boolean;
   onAuthoring?: (action: SgfAuthoringActionDto, captured: ReviewPresentationScope) => void;
+  onFlashCurrentNode?: () => void;
   onGestureRefused?: (message: string) => void;
 }) {
   const host = document.createElement("div");
@@ -555,6 +576,7 @@ function renderBoard({
         onPointSearch={onPointSearch}
         authoringEnabled={authoringEnabled}
         onAuthoring={onAuthoring}
+        onFlashCurrentNode={onFlashCurrentNode}
         onGestureRefused={onGestureRefused}
       />
     ));
@@ -675,4 +697,93 @@ it("never substitutes root ownership for a selected candidate lacking its own pa
   expect(button?.disabled).toBe(true);
   act(() => root?.render(<BoardCanvas position={position} analysis={{ ...frame, candidates: [{ ...frame.candidates[0], ownership: Array(81).fill(-0.4) }] }} selectedCandidateIndex={0} overlayMode="ownership" />));
   expect(host.textContent).not.toContain("不能用根局面领地代替");
+});
+
+it("toggles watched outlines without changing ordinary candidate text or dispatching focus", () => {
+  const host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  const onFocusPoint = vi.fn();
+  const watched = [{ vertex: analysis.candidates[1].vertex, target_visits: 500, visits: 500, status: "completed" as const }];
+  const render = (showOutline: boolean) => act(() => root?.render(<BoardCanvas position={position} analysis={analysis} showCoordinates={false}
+    focusPoints={watched} focusPreferences={{ ...defaultLocalFocusPreferences, showOutline }} focusGrading={defaultMoveRankPreferences}
+    focusAnalysis={analysis} onFocusPoint={onFocusPoint} />));
+  render(true);
+  expect(drawStroke.mock.calls.some(([color]) => color === "#808080")).toBe(true);
+  const text = drawText.mock.calls.map(([label]) => label);
+  drawStroke.mockClear();
+  render(false);
+  expect(drawText.mock.calls.map(([label]) => label)).toEqual(text);
+  expect(drawStroke.mock.calls.some(([color]) => color === "#808080")).toBe(false);
+  expect(onFocusPoint).not.toHaveBeenCalled();
+});
+
+it("allows watched removal during Pause and rejects context-retired focus input", () => {
+  const host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  const onFocusPoint = vi.fn();
+  const onPointClick = vi.fn();
+  const onGestureRefused = vi.fn();
+  const point = { x: 4, y: 4 };
+  const render = (enabled: boolean, watched: boolean, scope = initialPreviewScope) => act(() => root?.render(
+    <BoardCanvas position={position} previewScope={scope} focusEnabled={enabled}
+      focusPoints={watched ? [{ vertex: { point }, target_visits: 500, visits: 42, status: "stopped" }] : []}
+      onFocusPoint={onFocusPoint} onPointClick={onPointClick} onGestureRefused={onGestureRefused} />
+  ));
+  render(false, false);
+  const canvas = host.querySelector("canvas")!;
+  setCanvasBounds(canvas);
+  const open = () => act(() => canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, ...renderedPoint(4, 4) })));
+  const action = (label: string) => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent === label)!;
+  open();
+  expect(action("关注此点").disabled).toBe(true);
+  render(true, false);
+  act(() => action("关注此点").click());
+  expect(onFocusPoint).toHaveBeenCalledExactlyOnceWith(point, initialPreviewScope);
+  expect(onPointClick).not.toHaveBeenCalled();
+  render(false, true);
+  open();
+  expect(action("移除关注").disabled).toBe(false);
+  act(() => action("移除关注").click());
+  expect(onFocusPoint).toHaveBeenCalledTimes(2);
+  open();
+  render(false, true, { ...initialPreviewScope, generation: 2 });
+  act(() => action("移除关注").click());
+  expect(onFocusPoint).toHaveBeenCalledTimes(2);
+  expect(onGestureRefused).toHaveBeenCalledOnce();
+});
+
+it("paints raw ownership through all independent styles without ordinary fallback or display-triggered compute", () => {
+  const host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  const context = canvasContext(drawArc, drawStroke);
+  const painted: { color: string; width: number }[] = [];
+  context.fillRect = (_x, _y, width) => { painted.push({ color: String(context.fillStyle), width }); };
+  vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue(context);
+  const onComputeRawNet = vi.fn();
+  const rectangular = { ...position, board_width: 2, board_height: 1, to_play: "white" as const };
+  const frame = { ...analysis, ownership: [-0.8, -0.8], candidates: [] };
+  const render = (style: typeof defaultGranularDisplay.rawNetOwnershipStyle, rawOwnership: number[] | null = [0.8, 0]) => {
+    painted.length = 0;
+    act(() => root?.render(<BoardCanvas position={rectangular} analysis={frame} overlayMode="raw_net"
+      rawOwnership={rawOwnership} onComputeRawNet={onComputeRawNet}
+      displayPreferences={{ ...defaultGranularDisplay, ownershipStyle: "small", rawNetOwnershipStyle: style }} />));
+    return painted.filter(point => point.color.startsWith("rgba("));
+  };
+  const big = render("bigBelow");
+  expect(big).toHaveLength(1);
+  expect(big[0].color).toContain("rgba(0,0,0,");
+  const grid = big[0].width;
+  for (const [style, ratio] of [["small", 0.25], ["normal", 0.5], ["notOnLive", 0.5], ["bySize", 0.48]] as const) {
+    const cells = render(style);
+    expect(cells).toHaveLength(1);
+    expect(cells[0].width).toBeCloseTo(grid * ratio);
+    expect(cells[0].color).toContain("rgba(0,0,0,");
+  }
+  expect(render("bigBelow", null)).toHaveLength(0);
+  expect(host.querySelector('[role="status"]')?.textContent).toContain("不可用");
+  expect(render("bigBelow", [0.8])).toHaveLength(0);
+  expect(render("bigBelow", [NaN, 0])).toHaveLength(0);
+  const rawButton = [...host.querySelectorAll("button")].find(button => button.textContent === "Raw-net 领地")!;
+  act(() => rawButton.click());
+  expect(onComputeRawNet).not.toHaveBeenCalled();
+  const compute = [...host.querySelectorAll("button")].find(button => button.textContent === "计算／刷新 Raw-net")!;
+  act(() => compute.click());
+  expect(onComputeRawNet).toHaveBeenCalledOnce();
 });

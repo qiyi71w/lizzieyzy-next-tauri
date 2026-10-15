@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { acquireManagedResources, cancelManagedResources, inspectManagedTrtRepair, loadManagedResources, managedRepairDraft, repairManagedTrt } from "../api/managedResources";
+import { measuredReportBusy, retireMeasuredReport, waitForMeasuredWorker } from "../api/measuredReport";
 import { networkSnapshot } from "../api/providers";
 import type { EngineProfileDto, ManagedInstallationDto, ManagedRepairPreviewDto, ManagedResourcesDto } from "../domain/types";
 import { t } from "../i18n/resources";
@@ -57,7 +58,8 @@ export function ManagedResourcesPanel(props: Props) {
             pending.current = true;
             setBusy(true);
           }
-          if (!active && pending.current && !requesting.current && (!ownedId.current || ownedId.current === next.operation?.operation_id)) {
+          if (!active && pending.current && !requesting.current && (!ownedId.current || ownedId.current === next.operation?.operation_id) && !(await measuredReportBusy())) {
+            if (epoch.current !== generation) return;
             pending.current = false;
             setBusy(false);
             latest.current.endOperation();
@@ -73,14 +75,16 @@ export function ManagedResourcesPanel(props: Props) {
       ++epoch.current;
       clearTimeout(timer);
       if (pending.current) {
-        if (ownedId.current) void cancelManagedResources(ownedId.current).catch(() => {});
-        latest.current.endOperation();
+        const cancellation = ownedId.current ? cancelManagedResources(ownedId.current) : retireMeasuredReport();
+        void cancellation.then(waitForMeasuredWorker).catch(() => {}).finally(() => latest.current.endOperation());
       }
     };
   }, []);
 
   async function inspectRepair() {
-    if (checking || pending.current || props.disabled || !props.profile) return;
+    if (checking || pending.current || props.disabled || !props.profile || !props.beginOperation()) return;
+    pending.current = true;
+    requesting.current = true;
     const captured = props;
     const key = selectionKey;
     const version = selectionVersion.current;
@@ -96,6 +100,9 @@ export function ManagedResourcesPanel(props: Props) {
     } catch (error) {
       if (selection.current === key && selectionVersion.current === version && epoch.current === generation) setRepairError(String(error));
     } finally {
+      pending.current = false;
+      requesting.current = false;
+      if (epoch.current === generation) latest.current.endOperation();
       if (epoch.current === generation) setChecking(false);
     }
   }

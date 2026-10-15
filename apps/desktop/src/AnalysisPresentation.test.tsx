@@ -134,9 +134,11 @@ const navigableRoot: CurrentGameResultDto = {
   native_path: null
 };
 
+let attachmentSequence = 1;
 function snapshotAt(path: NodePath): CurrentGameResultDto {
   return {
     ...navigableRoot,
+    snapshot_seq: attachmentSequence,
     selected_path: path,
     snapshot: {
       path,
@@ -188,6 +190,7 @@ const capability = {
 let root: Root | null = null;
 
 beforeEach(() => {
+  attachmentSequence = 1;
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   vi.spyOn(HTMLCanvasElement.prototype, "clientWidth", "get").mockReturnValue(240);
   vi.spyOn(HTMLCanvasElement.prototype, "clientHeight", "get").mockReturnValue(240);
@@ -197,7 +200,15 @@ beforeEach(() => {
   preferencesApi.loadAppPreferences.mockResolvedValue({ preferences: defaultAppPreferences });
   currentGameFixture.mockResolvedValue(navigableRoot);
   backend.projectCurrentGameMainline.mockResolvedValue(initialProjection);
-  backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => snapshotAt(path));
+  let selectedPath = "[]";
+  backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => {
+    const nextPath = JSON.stringify(path.indices);
+    if (nextPath !== selectedPath) {
+      attachmentSequence += 1;
+      selectedPath = nextPath;
+    }
+    return snapshotAt(path);
+  });
   backend.loadEngineProfilesSettings.mockResolvedValue({
     version: 2,
     selected_profile_id: "profile-1",
@@ -326,11 +337,14 @@ async function startSelectedNode(host: HTMLElement, jobId = "job-1", path: NodeP
   });
   await act(async () => {
     buttonNamed(host, "分析当前节点").click();
-    await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
+    const started = await backend.startSelectedNodeAnalysis.mock.results.at(-1)?.value;
+    expect(started?.job_id).toBe(jobId);
   });
 }
 
 async function completeSelectedNode(jobId: string, path: NodePath, frame: AnalysisFrameDto) {
+  attachmentSequence += 1;
+  const attached = snapshotAt(path);
   await act(async () => {
     listeners.onJob?.({
       run_id: "run-1",
@@ -340,7 +354,8 @@ async function completeSelectedNode(jobId: string, path: NodePath, frame: Analys
       generation: 1,
       node_path: path,
       outcome: "completed",
-      frame
+      frame,
+      current_game: { ...attached, dirty: true, snapshot: { ...attached.snapshot, primary_analysis: frame } }
     });
     await Promise.all([
       backend.classifyProblems.mock.results.at(-1)?.value,
@@ -661,16 +676,22 @@ describe("analysis presentation bound to exact nodes", () => {
 
     const host = await renderApp();
     expect(candidateCoords(host)).toEqual([]);
-    expect(backend.classifyProblems).toHaveBeenCalledWith([rootOnly]);
     expect(host.textContent).toContain("61.0%");
   });
 
-  it("clears presentation when the Foreground Engine Run leaves Ready", async () => {
+  it("retains attached node analysis after engine retirement and revisit without a live owner", async () => {
     const host = await renderApp();
     await readyEngine(host);
     await startSelectedNode(host);
     await completeSelectedNode("job-1", { indices: [] }, analysisFrame());
     expect(candidateCoords(host)).toEqual(["D6"]);
+    const selectNode = backend.selectCurrentGameNode.getMockImplementation()!;
+    backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => {
+      const result = await selectNode(path);
+      return path.indices.length === 0
+        ? { ...result, snapshot: { ...result.snapshot, primary_analysis: analysisFrame() } }
+        : result;
+    });
 
     await act(async () => {
       listeners.onSnapshot?.({
@@ -679,9 +700,13 @@ describe("analysis presentation bound to exact nodes", () => {
         lifecycle: { state: "no_engine" }
       });
     });
+    expect(candidateCoords(host)).toEqual(["D6"]);
+    expect(buttonNamed(host, "分析当前节点").disabled).toBe(true);
+    await selectPath(host, "下一变化");
     expect(candidateCoords(host)).toEqual([]);
-    expect(buttonNamed(host, "领地").disabled).toBe(true);
-    expect(buttonNamed(host, "策略").disabled).toBe(true);
+    await selectPath(host, "父节点");
+    expect(candidateCoords(host)).toEqual(["D6"]);
+    expect(buttonNamed(host, "分析当前节点").disabled).toBe(true);
   });
 });
 

@@ -5,6 +5,8 @@ use app_model::{
 use engine_manager::{ForegroundEngineManager, GameMoveHandle, GameMoveRequest};
 
 #[cfg(all(test, unix))]
+mod raw_net_cpu_smoke;
+#[cfg(all(test, unix))]
 mod tests;
 
 fn failure(run_id: &str, kind: EngineFailureKind, message: String) -> Box<EngineFailureDto> {
@@ -21,6 +23,86 @@ fn failure(run_id: &str, kind: EngineFailureKind, message: String) -> Box<Engine
 }
 
 impl CurrentGameState {
+    pub fn start_raw_net(
+        &self,
+        manager: &ForegroundEngineManager,
+        request: app_model::RawNetRequestDto,
+    ) -> crate::EngineCommandResult<engine_manager::RawNetHandle> {
+        let holder = self.holder.lock().expect("current game state");
+        if holder.departure.is_some()
+            || holder.human_match.blocks()
+            || !matches!(holder.trial_mode, trial::TrialMode::Review)
+            || holder.generation != request.generation
+            || holder.selected_path != request.node_path
+        {
+            return Err(failure(
+                &request.run_id,
+                EngineFailureKind::InvalidState,
+                "Raw-net requires the current review position outside departure or Match".into(),
+            ));
+        }
+        let document = holder.document.as_ref().ok_or_else(|| {
+            failure(
+                &request.run_id,
+                EngineFailureKind::InvalidState,
+                "Raw-net requires a current game".into(),
+            )
+        })?;
+        let position = document
+            .exact_position(&request.node_path)
+            .map_err(|message| failure(&request.run_id, EngineFailureKind::UnsupportedCapability, message))?;
+        manager
+            .start_raw_net(
+                GameMoveRequest {
+                    identity: GameMoveRequestDto {
+                        run_id: request.run_id,
+                        generation: request.generation,
+                        node_path: request.node_path,
+                        budget: app_model::ComputeBudgetDto {
+                            deadline_ms: 30000,
+                            max_visits: None,
+                        },
+                    },
+                    position,
+                },
+                holder.document_identity,
+                holder.generation,
+            )
+            .map_err(Box::new)
+    }
+
+    pub fn publish_raw_net(
+        &self,
+        manager: &ForegroundEngineManager,
+        result: app_model::RawNetSnapshotDto,
+    ) -> crate::EngineCommandResult<app_model::RawNetSnapshotDto> {
+        let holder = self.holder.lock().expect("current game state");
+        let id = &result.confirmation.identity;
+        if holder.departure.is_some()
+            || holder.human_match.blocks()
+            || !matches!(holder.trial_mode, trial::TrialMode::Review)
+            || holder.document_identity != result.document_identity
+            || holder.generation != result.board_revision
+            || holder.generation != id.generation
+            || holder.selected_path != id.node_path
+            || holder
+                .document
+                .as_ref()
+                .and_then(|document| document.exact_position(&id.node_path).ok())
+                .is_none_or(|position| position.dto() != &result.confirmation.position)
+        {
+            return Err(failure(
+                &id.run_id,
+                EngineFailureKind::Cancellation,
+                "Raw-net belongs to a retired position".into(),
+            ));
+        }
+        manager
+            .claim_ordinary_rules(&result.confirmation)
+            .map_err(Box::new)?;
+        Ok(result)
+    }
+
     pub fn start_ordinary_rules(
         &self,
         manager: &ForegroundEngineManager,

@@ -192,6 +192,11 @@ impl ForegroundEngineManager {
             BatchCommandDto::Start { output } => {
                 self.retire_auto_load().map_err(|e| e.message)?;
                 let mut state = self.lock();
+                if self.measured_reservation() {
+                    return Err(
+                        "A measurement scene owns the engine; explicitly Stop before batch Start.".into(),
+                    );
+                }
                 if state.batch.snapshot.started {
                     return Err("This batch already started; use Continue or create a new batch.".into());
                 }
@@ -231,6 +236,11 @@ impl ForegroundEngineManager {
             BatchCommandDto::Continue => {
                 self.retire_auto_load().map_err(|e| e.message)?;
                 let mut state = self.lock();
+                if self.measured_reservation() {
+                    return Err(
+                        "A measurement scene owns the engine; explicitly Stop before batch Continue.".into(),
+                    );
+                }
                 if !state.batch.review_allowed {
                     return Err("Return to local review before continuing the batch.".into());
                 }

@@ -102,6 +102,7 @@ fn real_runtime_threads_same_pid_analysis_pause_reset_and_expiry() {
     std::fs::write(&layer, "numSearchThreads=2\n").unwrap();
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     catalog.upsert(SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: "threads".into(),
         profile: EngineProfileDto {
             name: "manual GTP threads".into(),
@@ -272,6 +273,7 @@ fn real_runtime_pair_same_pid_analysis_threads_pause_and_expiry() {
     let config_bytes = std::fs::read(&config).unwrap();
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     catalog.upsert(SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: "pair".into(),
         profile: EngineProfileDto {
             name: "read-only GTP pair".into(),

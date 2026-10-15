@@ -31,6 +31,7 @@ type Props = {
   selectedCandidateIndex: number | null;
   previewCandidateIndex?: number | null;
   onSelectCandidate: (index: number) => void;
+  onPreviewInputOwnerChange?: (element: HTMLElement, active: boolean, reference: boolean) => void;
   onSelectProblem: (problem: ReviewProblem) => void;
   pane?: Pane;
   contentMode?: SubBoardContentMode;
@@ -66,6 +67,7 @@ export function AnalysisPanel({
   selectedCandidateIndex,
   previewCandidateIndex = null,
   onSelectCandidate,
+  onPreviewInputOwnerChange,
   onSelectProblem,
   pane = "commentary",
   contentMode = "variation",
@@ -190,7 +192,8 @@ export function AnalysisPanel({
             aria-label={t("analysis.candidates.instructions")}
             aria-activedescendant={focusedKey ? `${listId}-${focusedKey}` : undefined}
             onKeyDown={handleListKey} onScroll={captureScrollAnchor} onWheel={(event) => event.stopPropagation()}
-            onFocus={() => { if (focusedKey) revealRow(focusedKey); }}>
+            onFocus={(event) => { if (focusedKey) revealRow(focusedKey); onPreviewInputOwnerChange?.(event.currentTarget, true, false); }}
+            onBlur={(event) => onPreviewInputOwnerChange?.(event.currentTarget, false, false)}>
           {candidates.length > 0 ? (
               <table className="candidate-table" role="presentation">
                 <thead>
@@ -224,7 +227,7 @@ export function AnalysisPanel({
                         }}
                       >
                         <td role="gridcell">
-                          <span className={`rank-badge rank-${index + 1}`}>{index + 1}</span>
+                          <span className={`rank-badge rank-${(candidate.order ?? index) + 1}`}>{(candidate.order ?? index) + 1}</span>
                         </td>
                         <td role="gridcell" className="cand-coord">{moveText}</td>
                         <td role="gridcell" className="cand-winrate">{winrateText}</td>
@@ -242,7 +245,12 @@ export function AnalysisPanel({
           )}
           </div>
         </section>
-        <section className="subboard-section" aria-label="副棋盘">
+        <section className="subboard-section" aria-label="副棋盘" tabIndex={0}
+          onPointerEnter={(event) => onPreviewInputOwnerChange?.(event.currentTarget, true, true)}
+          onPointerLeave={(event) => onPreviewInputOwnerChange?.(event.currentTarget, false, true)}
+          onPointerDown={(event) => { event.currentTarget.focus(); onPreviewInputOwnerChange?.(event.currentTarget, true, true); }}
+          onFocus={(event) => onPreviewInputOwnerChange?.(event.currentTarget, true, true)}
+          onBlur={(event) => onPreviewInputOwnerChange?.(event.currentTarget, false, true)}>
           <div className="subboard-card">
             <SubBoardCanvas
               boardWidth={boardWidth}

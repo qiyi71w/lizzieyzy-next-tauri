@@ -18,11 +18,13 @@ type Host = {
   departurePending: () => boolean;
   departurePrompt: () => boolean;
   preferenceSaveBusy: () => boolean;
+  preferencesLoaded: () => boolean;
   savePreferences: (patch: Partial<AppPreferences>) => Promise<AppPreferences>;
   resolveMaxVisits: (requested: number) => number;
   message: (message: string) => void;
   acceptFrame: (path: NodePath, frame: AnalysisFrameDto) => void;
   refreshAttachment: () => Promise<void>;
+  openEngineSettings: () => void;
 };
 
 type WholeGameProgress = { completed: number; expected: number; remaining: number };
@@ -66,6 +68,9 @@ export function useAnalysisTasks(input: Host) {
   const [wholeGameProgress, setWholeGameProgress] = useState<WholeGameProgress | null>(null);
   const [analysisScopeDraft, setAnalysisScopeDraft] = useState<AnalysisScopeDraft>(defaultAnalysisScopeDraft);
   const [analysisScopePreview, setAnalysisScopePreview] = useState<AnalysisScopePreviewDto | null>(null);
+  const [flashDraft, setFlashDraft] = useState<AnalysisScopeDraft | null>(null);
+  const flashRequestRef = useRef(0);
+  const flashPreviewRunRef = useRef<string | null>(null);
   const [analysisTask, setAnalysisTask] = useState<AnalysisTaskDto | null>(null);
   const [analysisTaskError, setAnalysisTaskError] = useState<string | null>(null);
   const [analysisTaskRequestPending, setAnalysisTaskRequestPending] = useState(false);
@@ -108,6 +113,12 @@ export function useAnalysisTasks(input: Host) {
     }
   }
   function acceptSnapshot(snapshot: ForegroundEngineSnapshotDto) {
+    if (flashPreviewRunRef.current && flashPreviewRunRef.current !== runFromSnapshot(snapshot)?.run_id) {
+      ++analysisScopePreviewRequestRef.current;
+      setAnalysisScopePreview(null);
+      setAnalysisTaskError("The scope preview is no longer current. Preview again and confirm before starting.");
+      flashPreviewRunRef.current = null;
+    }
     const snapshotWholeGameJob = snapshot.whole_game_job ?? null;
     const taskReserved = isAnalysisTaskReserved(analysisTaskRef.current);
     const pauseFence = analysisTaskPauseFenceRef.current;
@@ -131,6 +142,10 @@ export function useAnalysisTasks(input: Host) {
   }
 
   function retireDocument() {
+    ++flashRequestRef.current;
+    ++analysisScopePreviewRequestRef.current;
+    flashPreviewRunRef.current = null;
+    setFlashDraft(null);
     resetRunDisplay();
     analysisTaskRef.current = null;
     analysisTaskPauseFenceRef.current = null;
@@ -173,6 +188,13 @@ export function useAnalysisTasks(input: Host) {
   }
 
   function handleAnalysisScopeDraftChange(incoming: AnalysisScopeDraft) {
+    if (flashDraft) {
+      setFlashDraft({ ...flashDraft, intervalStart: incoming.intervalStart, intervalEnd: incoming.intervalEnd });
+      ++analysisScopePreviewRequestRef.current;
+      setAnalysisScopePreview(null);
+      setAnalysisTaskError(null);
+      return;
+    }
     const current = analysisScopeDraft;
     let next = incoming;
     if (incoming.strategy !== current.strategy && incoming.strategy !== "single_stage") {
@@ -234,6 +256,10 @@ export function useAnalysisTasks(input: Host) {
   }
 
   async function handlePreviewAnalysisScope() {
+    if (flashDraft) {
+      await previewFlashPart(flashDraft);
+      return;
+    }
     const game = host.current.currentGame();
     if (!nativeRuntime || !game) {
       setAnalysisTaskError(nativeRuntime ? "Analysis preview requires a current game." : nativeCurrentGameUnavailable);
@@ -306,12 +332,16 @@ export function useAnalysisTasks(input: Host) {
     } : null;
   }
 
-  async function refreshAnalysisTaskSnapshot(force = false) {
+  async function refreshAnalysisTaskSnapshot(force = false, started?: AnalysisTaskDto) {
     if (!nativeRuntime || (analysisTaskActionInFlightRef.current && !force)) return analysisTaskRef.current;
     const request = ++analysisTaskSnapshotRequestRef.current;
     try {
       const next = await analysisTaskSnapshot();
-      if (request === analysisTaskSnapshotRequestRef.current) adoptAnalysisTask(next);
+      if (request === analysisTaskSnapshotRequestRef.current
+        && (!started || (started.generation === host.current.currentGame()?.generation
+          && started.run_id === runFromSnapshot(host.current.engineSnapshot())?.run_id
+          && next?.task_id === started.task_id && next.run_id === started.run_id
+          && next.generation === started.generation))) adoptAnalysisTask(next);
       return next;
     } catch {
       return null;
@@ -422,14 +452,21 @@ export function useAnalysisTasks(input: Host) {
       conditions: input.conditions,
       overviewConditions: input.overviewConditions
     });
+    if (host.current.currentGame()?.generation !== preview.generation
+      || runFromSnapshot(host.current.engineSnapshot())?.run_id !== input.runId) return;
     ++analysisTaskSnapshotRequestRef.current;
     setAnalysisScopePreview(preview);
     adoptAnalysisTask(started);
     host.current.message(`Analysis task ${started.state}: ${analysisTaskProgress(started)} completed.`);
-    void refreshAnalysisTaskSnapshot();
+    // A fast task may complete while its start action suppresses event-driven reads.
+    void refreshAnalysisTaskSnapshot(true, started);
   }
 
   async function handleStartAnalysisTask() {
+    if (flashDraft) {
+      await startFlashPart();
+      return;
+    }
     if (host.current.matchOwnsWorkspace()) return;
     if (host.current.trialActive() || host.current.scoringActive()) return;
     const run = runFromSnapshot(host.current.engineSnapshot());
@@ -467,32 +504,157 @@ export function useAnalysisTasks(input: Host) {
     }
   }
 
-  async function handleQuickAnalysisTask() {
-    if (host.current.matchOwnsWorkspace()) return;
-    if (host.current.trialActive() || host.current.scoringActive()) return;
-    const run = runFromSnapshot(host.current.engineSnapshot());
+  function flashConditions(): AnalysisStageConditionsDto {
+    return {
+      time_seconds: { enabled: false, value: 10 },
+      total_visits: { enabled: true, value: host.current.committedPreferences().flashAnalysisVisits },
+      leading_candidate_visits: { enabled: false, value: 500 }
+    };
+  }
+
+  function flashAvailable() {
+    if (host.current.matchOwnsWorkspace() || host.current.trialActive() || host.current.scoringActive()
+      || host.current.departurePending() || host.current.departurePrompt() || explicitTaskReserved()
+      || analysisTaskActionInFlightRef.current || host.current.preferenceSaveBusy()) return false;
+    try {
+      if (!nativeRuntime) throw new Error(nativeCurrentGameUnavailable);
+      assertTaskCapabilities(undefined, null, [flashConditions()]);
+      return true;
+    } catch (error) {
+      const detail = `${errorMessage(error)} 请配置并启动合格引擎，然后显式重试闪电入口；不会自动重试。`;
+      setAnalysisTaskError(detail);
+      host.current.message(detail);
+      host.current.openEngineSettings();
+      return false;
+    }
+  }
+
+  async function handleQuickAnalysisTask(mode: "first_child_mainline" | "all_branches" | "current_node" | "part" = "first_child_mainline") {
+    if (!flashAvailable()) return;
+    const request = ++flashRequestRef.current;
+    ++analysisScopePreviewRequestRef.current;
+    flashPreviewRunRef.current = null;
+    setAnalysisScopePreview(null);
+    setAnalysisTaskError(null);
+    setFlashDraft(null);
     const game = host.current.currentGame();
-    if (!run || !game || !admitsForegroundEngineJobs(host.current.engineSnapshot(), "whole_game_analysis") || host.current.departurePending() || explicitTaskReserved()) return;
+    const run = runFromSnapshot(host.current.engineSnapshot());
+    if (!game || !run) return;
+    if (mode === "part") {
+      const draft: AnalysisScopeDraft = {
+        ...defaultAnalysisScopeDraft, strategy: "single_stage", mode: "first_child_mainline",
+        intervalEnabled: true, intervalStart: "", intervalEnd: "", toPlay: "both",
+        singleTimeEnabled: false, singleTotalVisitsEnabled: true,
+        singleTotalVisits: String(flashConditions().total_visits.value), singleLeadingCandidateVisitsEnabled: false
+      };
+      setFlashDraft(draft);
+      await previewFlashPart(draft);
+      return;
+    }
+    analysisTaskActionInFlightRef.current = true;
+    setAnalysisTaskRequestPending(true);
+    try {
+      const scope = { ...presetAnalysisScope(game.selected_path, []), mode };
+      const conditions = flashConditions();
+      const preview = await previewAnalysisScope({ generation: game.generation, scope });
+      if (request !== flashRequestRef.current || host.current.currentGame()?.generation !== game.generation
+        || JSON.stringify(host.current.currentGame()?.selected_path) !== JSON.stringify(game.selected_path)) {
+        throw new Error("The flash scope changed. Explicitly retry to capture the current target.");
+      }
+      await runAnalysisTask({ runId: run.run_id, scope, strategy: "single_stage", conditions, preview });
+    } catch (error) {
+      setAnalysisTaskError(errorMessage(error));
+      host.current.message(errorMessage(error));
+    } finally {
+      analysisTaskActionInFlightRef.current = false;
+      setAnalysisTaskRequestPending(false);
+    }
+  }
+
+  async function captureFlashPart(draft: AnalysisScopeDraft) {
+    const game = host.current.currentGame();
+    if (!game) throw new Error("Analysis scope requires a current game.");
+    const scope = presetAnalysisScope(game.selected_path, []);
+    const full = await previewAnalysisScope({ generation: game.generation, scope });
+    const first = full.targets[0]?.move_number;
+    const last = full.targets.at(-1)?.move_number;
+    if (first === undefined || last === undefined) throw new Error("The mainline has no legal positions.");
+    const start = draft.intervalStart.trim() === "" ? first : parseU32(draft.intervalStart, "Interval start", true);
+    const end = draft.intervalEnd.trim() === "" ? last : parseU32(draft.intervalEnd, "Interval end", true);
+    if (start < first || end > last || start > end) throw new Error(`Position interval must be within ${first}–${last}, with start ≤ end.`);
+    return previewAnalysisScope({ generation: game.generation, scope: { ...scope, interval: { start, end } } });
+  }
+
+  async function previewFlashPart(draft: AnalysisScopeDraft) {
+    if (!flashAvailable()) return;
+    const request = ++analysisScopePreviewRequestRef.current;
+    const runId = runFromSnapshot(host.current.engineSnapshot())?.run_id;
     setAnalysisTaskRequestPending(true);
     setAnalysisTaskError(null);
     try {
-      await runAnalysisTask({
-        runId: run.run_id,
-        scope: presetAnalysisScope(game.selected_path, host.current.branchChoices()),
-        strategy: "single_stage",
-        conditions: {
-          time_seconds: { enabled: false, value: 10 },
-          total_visits: { enabled: true, value: 1 },
-          leading_candidate_visits: { enabled: false, value: 500 }
-        }
-      });
+      const preview = await captureFlashPart(draft);
+      if (request !== analysisScopePreviewRequestRef.current) return;
+      if (preview.generation !== host.current.currentGame()?.generation || runId !== runFromSnapshot(host.current.engineSnapshot())?.run_id) {
+        throw new Error("The scope preview is no longer current. Preview again before starting.");
+      }
+      flashPreviewRunRef.current = runId ?? null;
+      setAnalysisScopePreview(preview);
     } catch (error) {
-      const detail = errorMessage(error);
-      setAnalysisTaskError(detail);
-      host.current.message(detail);
+      if (request === analysisScopePreviewRequestRef.current) {
+        setAnalysisScopePreview(null);
+        setAnalysisTaskError(errorMessage(error));
+      }
     } finally {
       setAnalysisTaskRequestPending(false);
     }
+  }
+
+  async function startFlashPart() {
+    if (!flashDraft || !analysisScopePreview || !flashAvailable()) return;
+    const request = analysisScopePreviewRequestRef.current;
+    analysisTaskActionInFlightRef.current = true;
+    setAnalysisTaskRequestPending(true);
+    try {
+      const preview = await captureFlashPart(flashDraft);
+      if (request !== analysisScopePreviewRequestRef.current || JSON.stringify(preview) !== JSON.stringify(analysisScopePreview)
+        || flashPreviewRunRef.current !== runFromSnapshot(host.current.engineSnapshot())?.run_id) {
+        setAnalysisScopePreview(null);
+        throw new Error("The scope preview is no longer current. Preview again and confirm before starting.");
+      }
+      await runAnalysisTask({ runId: flashPreviewRunRef.current!, scope: preview.scope, strategy: "single_stage", conditions: taskConditionsFromDraft(flashDraft, "single"), preview });
+    } catch (error) {
+      setAnalysisTaskError(errorMessage(error));
+    } finally {
+      analysisTaskActionInFlightRef.current = false;
+      setAnalysisTaskRequestPending(false);
+    }
+  }
+
+  function dismissFlash() {
+    ++flashRequestRef.current;
+    ++analysisScopePreviewRequestRef.current;
+    flashPreviewRunRef.current = null;
+    setFlashDraft(null);
+    setAnalysisScopePreview(null);
+    setAnalysisTaskError(null);
+  }
+
+  function resetDraft() {
+    if (!host.current.preferencesLoaded() || host.current.preferenceSaveBusy()) return;
+    const saved = host.current.committedPreferences();
+    dismissFlash();
+    analysisConditionsDraftEditedRef.current = true;
+    setAnalysisScopeDraft({
+      ...defaultAnalysisScopeDraft,
+      ...analysisTaskStageDraft(saved.taskOverviewConditions, saved.taskDeepConditions),
+      ...swingCriteriaDraft(saved.taskSwingCriteria),
+      singleTimeEnabled: saved.taskSingleStageConditions.time_seconds.enabled,
+      singleTimeSeconds: String(saved.taskSingleStageConditions.time_seconds.value),
+      singleTotalVisitsEnabled: saved.taskSingleStageConditions.total_visits.enabled,
+      singleTotalVisits: String(saved.taskSingleStageConditions.total_visits.value),
+      singleLeadingCandidateVisitsEnabled: saved.taskSingleStageConditions.leading_candidate_visits.enabled,
+      singleLeadingCandidateVisits: String(saved.taskSingleStageConditions.leading_candidate_visits.value)
+    });
   }
 
   async function handleAllPositionsAnalysisTask() {
@@ -644,10 +806,10 @@ export function useAnalysisTasks(input: Host) {
       host.current.message(errorMessage(error));
     }
   }
-  async function handleCancelWholeGameAnalysis() {
+  async function handleCancelWholeGameAnalysis(explicitOnly = false) {
     if (analysisTaskActionInFlightRef.current) return;
     const task = analysisTaskRef.current;
-    const pending = wholeGameJobRef.current;
+    const pending = explicitOnly ? null : wholeGameJobRef.current;
     const activeTask = isAnalysisTaskReserved(task) ? task : null;
     const runId = pending?.run_id ?? activeTask?.run_id;
     const jobId = pending?.job_id ?? activeTask?.job_id;
@@ -667,7 +829,7 @@ export function useAnalysisTasks(input: Host) {
     }
   }
   return {
-    view: { wholeGameRunning, wholeGameProgress, analysisScopeDraft, analysisScopePreview, analysisTask, analysisTaskError, analysisTaskRequestPending },
+    view: { wholeGameRunning, wholeGameProgress, analysisScopeDraft: flashDraft ?? analysisScopeDraft, flashActive: flashDraft !== null, analysisScopePreview, analysisTask, analysisTaskError, analysisTaskRequestPending },
     isActionPending: () => analysisTaskActionInFlightRef.current,
     currentJobId: () => wholeGameJobRef.current?.job_id,
     explicitTaskReserved,
@@ -675,6 +837,10 @@ export function useAnalysisTasks(input: Host) {
     preview: handlePreviewAnalysisScope,
     start: handleStartAnalysisTask,
     quick: handleQuickAnalysisTask,
+    dismissFlash,
+    enterOrdinary: () => { if (flashDraft) dismissFlash(); else ++flashRequestRef.current; },
+    resetDraft,
+    cancelExplicit: () => explicitTaskReserved() ? handleCancelWholeGameAnalysis(true) : Promise.resolve(),
     allPositions: handleAllPositionsAnalysisTask,
     pause: handlePauseAnalysisTask,
     continue: handleContinueAnalysisTask,

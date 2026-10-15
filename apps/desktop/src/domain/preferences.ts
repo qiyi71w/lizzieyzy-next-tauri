@@ -8,6 +8,15 @@ import { defaultBatchPreferences } from "./batch";
 import type { BatchPreferencesDto } from "./types";
 import type { ContinuationPreferencesDto } from "./types";
 import { defaultContinuationPreferences } from "./continuation";
+import type { MoveRankPreferencesDto } from "./types";
+import { defaultMoveRankPreferences, readMoveRankPreferences } from "./moveRank";
+import { defaultLocalFocusPreferences } from "./localFocus";
+import type { LocalFocusPreferencesDto } from "./types";
+
+export function analysisRefreshIntervalError(value: number): string | null {
+  return Number.isSafeInteger(value) && value > 0 ? null
+    : "Analysis refresh interval must be a positive exact JSON integer in centiseconds.";
+}
 
 export type ReviewMode = "quick" | "deep";
 export type BoardTheme = "classic" | "high-contrast";
@@ -44,7 +53,11 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   showCandidates: boolean;
   candidateLimit: number;
   granularDisplay: GranularDisplay;
+  moveRank: MoveRankPreferencesDto;
+  localFocus: LocalFocusPreferencesDto;
+  analysisRefreshIntervalCentiseconds: number;
   defaultMaxVisits: number;
+  flashAnalysisVisits: number;
   taskSingleStageConditions: AnalysisStageConditionsDto;
   taskOverviewConditions: AnalysisStageConditionsDto;
   taskDeepConditions: AnalysisStageConditionsDto;
@@ -68,6 +81,7 @@ export type AppPreferences = ContinuousAnalysisBudgetDto & {
   soundEnabled: boolean;
   scoringRule: ScoringRule;
   continuousAnalysisEnabled: boolean;
+  retainNodeAnalysis: boolean;
   defaultBoardWidth: number;
   defaultBoardHeight: number;
   defaultKomi: number;
@@ -99,7 +113,11 @@ export const defaultAppPreferences: AppPreferences = {
   showCandidates: true,
   candidateLimit: 8,
   granularDisplay: defaultGranularDisplay,
+  moveRank: defaultMoveRankPreferences,
+  localFocus: defaultLocalFocusPreferences,
+  analysisRefreshIntervalCentiseconds: 10,
   defaultMaxVisits: 800,
+  flashAnalysisVisits: 1,
   defaultBoardWidth: 19,
   defaultBoardHeight: 19,
   defaultKomi: 7.5,
@@ -150,6 +168,7 @@ export const defaultAppPreferences: AppPreferences = {
   soundEnabled: true,
   scoringRule: "area",
   continuousAnalysisEnabled: true,
+  retainNodeAnalysis: true,
   autoLoad: { enabled: false, totalVisits: 1 },
   batch: defaultBatchPreferences(),
   continuation: defaultContinuationPreferences(),
@@ -246,7 +265,11 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
     showCandidates: booleanValue(value?.showCandidates, defaultAppPreferences.showCandidates),
     candidateLimit: integerValue(value?.candidateLimit, defaultAppPreferences.candidateLimit, 1, 20),
     granularDisplay: readGranularDisplay(value?.granularDisplay),
+    moveRank: readMoveRankPreferences(value?.moveRank),
+    localFocus: { ...defaultLocalFocusPreferences, ...value?.localFocus },
+    analysisRefreshIntervalCentiseconds: value?.analysisRefreshIntervalCentiseconds === undefined ? 10 : value.analysisRefreshIntervalCentiseconds,
     defaultMaxVisits,
+    flashAnalysisVisits: value?.flashAnalysisVisits === undefined ? 1 : value.flashAnalysisVisits,
     defaultBoardWidth: integerValue(value?.defaultBoardWidth, defaultAppPreferences.defaultBoardWidth, 2, 25),
     defaultBoardHeight: integerValue(value?.defaultBoardHeight, defaultAppPreferences.defaultBoardHeight, 2, 25),
     defaultKomi: finiteValue(value?.defaultKomi, defaultAppPreferences.defaultKomi),
@@ -288,6 +311,7 @@ export function normalizeAppPreferences(value: StoredAppPreferences | null | und
     soundEnabled: booleanValue(value?.soundEnabled, defaultAppPreferences.soundEnabled),
     scoringRule: value?.scoringRule === "territory" ? "territory" : "area",
     continuousAnalysisEnabled: booleanValue(value?.continuousAnalysisEnabled, defaultAppPreferences.continuousAnalysisEnabled),
+    retainNodeAnalysis: booleanValue(value?.retainNodeAnalysis, defaultAppPreferences.retainNodeAnalysis),
     recentGamePaths: Array.isArray(value?.recentGamePaths) ? value.recentGamePaths : [],
     recentImageExportDirectory: typeof value?.recentImageExportDirectory === "string" ? value.recentImageExportDirectory : null,
     continuousTimeLimitEnabled: booleanValue(value?.continuousTimeLimitEnabled, defaultAppPreferences.continuousTimeLimitEnabled),

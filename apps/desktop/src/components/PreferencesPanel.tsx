@@ -6,11 +6,17 @@ import { parsePositiveScoreLeadScale } from "../domain/winrateChart";
 import { parseReviewAutoplaySeconds } from "../domain/reviewAutoplay";
 import { t } from "../i18n/resources";
 import { validGranularDisplay, type GranularDisplay, type CandidateTextField, type OwnershipStyle } from "../domain/granularDisplay";
+import { defaultMoveRankPreferences, readMoveRankPreferences, validMoveRankPreferences } from "../domain/moveRank";
+import type { MoveRankPreferencesDto } from "../domain/types";
+import { validLocalFocusPreferences } from "../domain/localFocus";
+import { analysisRefreshIntervalError } from "../domain/preferences";
 
 type Props = {
   windowPin?: MainWindowPinControl;
   preferences: AppPreferences;
   status: string;
+  actualRefreshInterval?: number | null;
+  refreshIntervalPending?: boolean;
   disabled?: boolean;
   scoreLeadAvailable?: boolean;
   onChange: (preferences: AppPreferences) => void;
@@ -23,7 +29,7 @@ type Props = {
   onRailVisibility: (side: "left" | "right", visible: boolean) => void;
 };
 
-export function PreferencesPanel({ preferences, status, disabled = false, scoreLeadAvailable = true, onChange, onRestoreWorkspace, workspaceDisabled, windowGeometryStatus, windowGeometryDisabled, onResetWindowGeometry, railVisibilityDisabled = false, onRailVisibility, windowPin }: Props) {
+export function PreferencesPanel({ preferences, status, actualRefreshInterval, refreshIntervalPending, disabled = false, scoreLeadAvailable = true, onChange, onRestoreWorkspace, workspaceDisabled, windowGeometryStatus, windowGeometryDisabled, onResetWindowGeometry, railVisibilityDisabled = false, onRailVisibility, windowPin }: Props) {
   function update(patch: Partial<AppPreferences>) {
     onChange({ ...preferences, ...patch });
   }
@@ -35,6 +41,11 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
         <span>{status}</span>
       </div>
       <AutoLoadEditor preferences={preferences} disabled={disabled} onChange={onChange} />
+      <NodeAnalysisReuseEditor preferences={preferences} disabled={disabled} onChange={onChange} />
+      <MoveRankEditor preferences={preferences} disabled={disabled} onChange={onChange} />
+      <AnalysisRefreshEditor preferences={preferences} disabled={disabled} onChange={onChange} actualRefreshInterval={actualRefreshInterval} refreshIntervalPending={refreshIntervalPending} />
+      <LocalFocusEditor preferences={preferences} disabled={disabled} onChange={onChange} />
+      <FlashVisitsEditor preferences={preferences} disabled={disabled} onChange={onChange} />
       {windowPin ? <fieldset className="preferences-grid">
         <legend>窗口</legend>
         <WindowPinControl control={windowPin} />
@@ -221,6 +232,22 @@ export function PreferencesPanel({ preferences, status, disabled = false, scoreL
   );
 }
 
+function FlashVisitsEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
+  const [edited, setEdited] = useState<string | null>(null);
+  const value = edited ?? String(preferences.flashAnalysisVisits);
+  const visits = Number(value);
+  const valid = value.trim() !== "" && Number.isInteger(visits) && visits > 0 && visits <= 4294967295;
+  useEffect(() => { setEdited(null); }, [preferences.flashAnalysisVisits]);
+  return <fieldset className="preferences-grid" disabled={disabled}>
+    <legend>显式闪电分析</legend>
+    <label>显式闪电 visits<input aria-label="Explicit flash visits" type="number" min={1} max={4294967295} step={1} value={value} onChange={(event) => setEdited(event.target.value)} /></label>
+    <span>仅影响下次显式闪电请求；保存不会开始或重试分析。</span>
+    {!valid ? <span role="alert">Visits 必须是 1–4294967295 的整数。</span> : null}
+    <button type="button" disabled={!valid || edited === null} onClick={() => onChange({ ...preferences, flashAnalysisVisits: visits })}>保存闪电设置</button>
+    <button type="button" onClick={() => setEdited(null)}>取消闪电设置</button>
+  </fieldset>;
+}
+
 function AutoLoadEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
   const [edited, setEdited] = useState<{ enabled: boolean; visits: string } | null>(null);
   const [invalid, setInvalid] = useState(false);
@@ -273,6 +300,98 @@ function ReviewAutoplayEditor({ preferences, disabled, onChange }: Pick<Props, "
   </div>;
 }
 
+function NodeAnalysisReuseEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
+  const [edited, setEdited] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (edited === preferences.retainNodeAnalysis) setEdited(null);
+  }, [preferences.retainNodeAnalysis]);
+  return <fieldset className="preferences-grid" disabled={disabled}>
+    <legend>{t("reuse.title")}</legend>
+    <Toggle label={t("reuse.enabled")} checked={edited ?? preferences.retainNodeAnalysis} disabled={disabled} onChange={setEdited} />
+    <p>{t("reuse.help")}</p>
+    <button type="button" disabled={disabled || edited === null} onClick={() => onChange({ ...preferences, retainNodeAnalysis: edited ?? preferences.retainNodeAnalysis })}>{t("reuse.apply")}</button>
+    <button type="button" disabled={disabled || edited === null} onClick={() => setEdited(null)}>{t("reuse.cancel")}</button>
+  </fieldset>;
+}
+
+function MoveRankEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
+  const [edited, setEdited] = useState<MoveRankPreferencesDto | null>(null);
+  const [error, setError] = useState(false);
+  const draft = edited ?? preferences.moveRank;
+  useEffect(() => {
+    if (edited && JSON.stringify(edited) === JSON.stringify(preferences.moveRank)) setEdited(null);
+  }, [preferences.moveRank]);
+  return <fieldset className="preferences-grid move-rank-preferences" disabled={disabled}>
+    <legend>{t("rank.title")}</legend>
+    <p>{t("rank.help")}</p>
+    <label>{t("rank.mode")}<select aria-label={t("rank.mode")} value={draft.mode} onChange={event => {
+      setEdited({ ...draft, mode: event.target.value as MoveRankPreferencesDto["mode"] }); setError(false);
+    }}>{(["auto", "score", "winrate", "combined"] as const).map(mode => <option key={mode} value={mode}>{t(`rank.${mode}`)}</option>)}</select></label>
+    {(["winrateThresholdsPp", "scoreThresholds"] as const).map(key => <fieldset key={key}>
+      <legend>{t(`rank.${key}`)}</legend>
+      {([1, 2, 3, 4, 5] as const).map((level, index) => <label key={level}>{t(`rank.level${level}`)}<input
+        aria-label={`${t(`rank.${key}`)} ${index + 1}`} type="number" step="any"
+        value={Number.isFinite(draft[key][index]) ? draft[key][index] : ""} onChange={event => {
+          const values = [...draft[key]] as MoveRankPreferencesDto[typeof key];
+          values[index] = event.target.value === "" ? NaN : Number(event.target.value);
+          setEdited({ ...draft, [key]: values }); setError(false);
+        }} /></label>)}
+    </fieldset>)}
+    {error ? <p role="alert">{t("rank.invalid")}</p> : null}
+    <button type="button" disabled={disabled || edited === null} onClick={() => {
+      if (!validMoveRankPreferences(draft)) { setError(true); return; }
+      onChange({ ...preferences, moveRank: draft });
+    }}>{t("rank.apply")}</button>
+    <button type="button" disabled={disabled || edited === null} onClick={() => { setEdited(null); setError(false); }}>{t("rank.cancel")}</button>
+    <button type="button" onClick={() => { setEdited(readMoveRankPreferences(defaultMoveRankPreferences)); setError(false); }}>{t("rank.restore")}</button>
+  </fieldset>;
+}
+
+function AnalysisRefreshEditor({ preferences, disabled, onChange, actualRefreshInterval, refreshIntervalPending }: Pick<Props, "preferences" | "disabled" | "onChange" | "actualRefreshInterval" | "refreshIntervalPending">) {
+  const [edited, setEdited] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+  const saved = preferences.analysisRefreshIntervalCentiseconds;
+  const value = Number(edited ?? saved);
+  const valid = /^\d+$/.test(edited ?? String(saved)) && !analysisRefreshIntervalError(value);
+  useEffect(() => {
+    if (edited !== null && Number(edited) === saved) setEdited(null);
+  }, [saved]);
+  return <fieldset className="preferences-grid" disabled={disabled}>
+    <legend>{t("refresh.title")}</legend>
+    <label>{t("refresh.interval")}<input type="number" min={1} step={1} value={edited ?? String(saved)}
+      onChange={event => { setEdited(event.target.value); setError(false); }} /></label>
+    {valid ? <p>{t("refresh.conversion").replace("{value}", (BigInt(value) * 10n).toString())}</p> : null}
+    <p>{t("refresh.help")}</p>
+    <p role="status">{t("refresh.saved").replace("{value}", String(saved))} · {actualRefreshInterval == null
+      ? t("refresh.inactive") : t("refresh.actual").replace("{value}", String(actualRefreshInterval))}
+      {refreshIntervalPending || actualRefreshInterval !== saved ? ` · ${t("refresh.pending")}` : ""}</p>
+    {error ? <p role="alert">{t("refresh.invalid")}</p> : null}
+    <button type="button" disabled={disabled || edited === null} onClick={() => {
+      if (!valid) { setError(true); return; }
+      onChange({ ...preferences, analysisRefreshIntervalCentiseconds: value });
+    }}>{t("refresh.apply")}</button>
+    <button type="button" disabled={disabled || edited === null} onClick={() => { setEdited(null); setError(false); }}>{t("refresh.cancel")}</button>
+  </fieldset>;
+}
+
+function LocalFocusEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
+  const [edited, setEdited] = useState<AppPreferences["localFocus"] | null>(null);
+  const [error, setError] = useState(false);
+  const draft = edited ?? preferences.localFocus;
+  useEffect(() => {
+    if (edited && JSON.stringify(edited) === JSON.stringify(preferences.localFocus)) setEdited(null);
+  }, [preferences.localFocus]);
+  return <fieldset className="preferences-grid" disabled={disabled}>
+    <legend>{t("focus.title")}</legend><p>{t("focus.help")}</p>
+    <label>{t("focus.visits")}<input type="number" min={1} step={1} value={Number.isFinite(draft.maxVisits) ? draft.maxVisits : ""} onChange={event => { setEdited({ ...draft, maxVisits: event.target.value === "" ? NaN : Number(event.target.value) }); setError(false); }} /></label>
+    <Toggle label={t("focus.outline")} checked={draft.showOutline} onChange={showOutline => setEdited({ ...draft, showOutline })} />
+    <label>{t("focus.opacity")}<input type="number" min={0} max={100} step={1} value={Number.isFinite(draft.outlineOpacity) ? draft.outlineOpacity : ""} onChange={event => { setEdited({ ...draft, outlineOpacity: event.target.value === "" ? NaN : Number(event.target.value) }); setError(false); }} /></label>
+    {error ? <p role="alert">{t("focus.invalid")}</p> : null}
+    <button type="button" disabled={disabled || edited === null} onClick={() => { if (!validLocalFocusPreferences(draft)) { setError(true); return; } onChange({ ...preferences, localFocus: draft }); }}>{t("focus.apply")}</button>
+    <button type="button" disabled={disabled || edited === null} onClick={() => { setEdited(null); setError(false); }}>{t("focus.cancel")}</button>
+  </fieldset>;
+}
+
 function DisplayPreferencesEditor({ preferences, disabled, onChange }: Pick<Props, "preferences" | "disabled" | "onChange">) {
   type DisplayDraft = Pick<AppPreferences, "showCoordinates" | "showMoveNumbers" | "granularDisplay">;
   const [edited, setEdited] = useState<DisplayDraft | null>(null);
@@ -311,7 +430,10 @@ function DisplayPreferencesEditor({ preferences, disabled, onChange }: Pick<Prop
     <label>{t("display.ownershipStyle")}<select aria-label={t("display.ownershipStyle")} value={display.ownershipStyle} onChange={event => update({ ownershipStyle: event.target.value as OwnershipStyle })}>
       {(["small", "normal", "notOnLive", "bigBelow", "bySize"] as const).map(value => <option key={value} value={value}>{t(`display.${value}`)}</option>)}
     </select></label>
-    <p role="status">{t("display.rawUnavailable")}</p>
+    <label>{t("display.rawStyle")}<select aria-label={t("display.rawStyle")} value={display.rawNetOwnershipStyle} onChange={event => update({ rawNetOwnershipStyle: event.target.value as OwnershipStyle })}>
+      {(["small", "normal", "notOnLive", "bigBelow", "bySize"] as const).map(value => <option key={value} value={value}>{t(`display.${value}`)}</option>)}
+    </select></label>
+    <p>{t("display.rawHint")}</p>
     {error ? <p role="alert">{t("display.invalid")}</p> : null}
     <button type="button" aria-label="应用显示设置" disabled={disabled || edited === null} onClick={() => {
       if (!validGranularDisplay(display)) { setError(true); return; }

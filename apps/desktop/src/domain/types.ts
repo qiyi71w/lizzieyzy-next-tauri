@@ -1,3 +1,9 @@
+export type MoveRankMode = "auto" | "score" | "winrate" | "combined";
+export type MoveRankPreferencesDto = {
+  mode: MoveRankMode;
+  winrateThresholdsPp: [number, number, number, number, number];
+  scoreThresholds: [number, number, number, number, number];
+};
 import type { NetworkRoute } from "./providers";
 export type EvaluationPhaseDto = "idle" | "unavailable" | "qualifying" | "running" | "completed" | "failed" | "cancelled" | "yielded" | "retired";
 export type EvaluationMeasurementDto = {
@@ -223,7 +229,7 @@ export type ApplicationExitOutcomeDto = {
   teardown?: ApplicationTeardownAttemptDto | null;
   recovery_persist_error?: string | null;
 };
-export type CandidateMoveDto = { vertex: MoveVertex; visits: number; winrate_black: number; score_mean_black: number | null; policy_prior?: number | null; pv: MoveVertex[]; pv_visits?: number[] | null; ownership?: number[] | null };
+export type CandidateMoveDto = { order?: number | null; vertex: MoveVertex; visits: number; winrate_black: number; score_mean_black: number | null; policy_prior?: number | null; pv: MoveVertex[]; pv_visits?: number[] | null; ownership?: number[] | null };
 export type AnalysisFrameDto = { job_id: string; game_id?: string | null; node_id?: string | null; turn: number; visits: number; winrate_black: number; score_mean_black?: number | null; score_stdev?: number | null; candidates: CandidateMoveDto[]; ownership?: number[] | null; policy?: number[] | null };
 export type ProblemMarkerDto = { turn: number; severity: "info" | "inaccuracy" | "mistake" | "blunder"; winrate_loss: number; score_loss?: number | null; label: string };
 export type EngineBackendDto = "kata_go_analysis" | "kata_go_gtp" | "generic_gtp";
@@ -237,7 +243,7 @@ export type EngineProfileDto = {
   | { adapter_kind: "kata_go_analysis" | "kata_go_gtp"; settings: KataGoSettingsDto }
   | { adapter_kind: "generic_gtp"; settings: Record<string, never> }
 );
-export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto; preload: boolean; thread_policy?: SavedThreadPolicyDto };
+export type EngineProfileRecordDto = { id: string; profile: EngineProfileDto; preload: boolean; thread_policy?: SavedThreadPolicyDto; measured_scenes?: MeasuredScenesDto };
 export type EngineStartupPolicyDto = { mode: "off" } | { mode: "fixed"; profile_id: string } | { mode: "last_primary" };
 export type StartupEvaluationSettingsDto = { enabled: boolean; target_profile_id: string | null };
 export type EngineProfilesSettingsDto = { version: number; selected_profile_id: string; startup: EngineStartupPolicyDto; last_primary_profile_id: string | null; startup_evaluation: StartupEvaluationSettingsDto; profiles: EngineProfileRecordDto[] };
@@ -308,6 +314,7 @@ export type EngineGtpFactsDto = {
 export type EngineCapabilitySnapshotDto = {
   adapter_kind: EngineBackendDto;
   analysis?: EngineAnalysisCapabilitiesDto | null;
+  focus?: "unchecked" | "supported" | "unsupported" | "uncertain";
   game_move?: boolean;
   gtp?: EngineGtpFactsDto | null;
 };
@@ -384,8 +391,20 @@ export type EngineRunDto = {
   adapter_kind: EngineBackendDto;
   profile_snapshot: EngineProfileDto;
   thread_policy_snapshot?: SavedThreadPolicyDto;
+  measured_scenes_snapshot?: MeasuredScenesDto;
+  measured_scene?: MeasuredSceneDto | null;
   capability_snapshot?: EngineCapabilitySnapshotDto | null;
   qualified_resource?: QualifiedLocalResourceDto | null;
+};
+export type MeasuredSceneDto = "live" | "whole-game";
+export type AcceptedMeasuredSceneDto = { report: unknown; profile_revision: string; policy_revision: number; accepted_at: string };
+export type MeasuredScenesDto = { revision: number; live: AcceptedMeasuredSceneDto | null; whole_game: AcceptedMeasuredSceneDto | null };
+export type MeasuredAssessmentDto = { eligible: boolean; needs_five_pairs: boolean; reasons: string[]; pair_ratios: number[]; median_ratio: number | null; sample_cv: number | null; experimental: boolean };
+export type MeasuredReviewDto = {
+  operation_id: string; generation: number; target_id: string; target_name: string; scene: MeasuredSceneDto;
+  profile_revision: string; policy_revision: number; overlay_revision: number;
+  baseline_parameters: Record<string, number>; candidate_parameters: Record<string, number>;
+  assessment: MeasuredAssessmentDto; qualification_reasons: string[]; cold_verification_seconds: number; report: unknown;
 };
 export type EnginePreloadDto = {
   run: EngineRunDto;
@@ -425,6 +444,16 @@ export type OrdinaryRulesSnapshotDto = {
   confirmed_rules: string;
   stones: StoneDto[];
   true_final_move: MoveDto | null;
+};
+export type RawNetRequestDto = { run_id: string; generation: number; node_path: NodePath };
+export type RawNetSnapshotDto = {
+  confirmation: OrdinaryRulesSnapshotDto;
+  resource: QualifiedLocalResourceDto;
+  document_identity: number;
+  board_revision: number;
+  slot: "main_board";
+  ownership: number[] | null;
+  unavailable: string | null;
 };
 export type GameMoveDto = { kind: "move"; vertex: MoveVertex } | { kind: "resign" };
 export type GameMoveResultDto = GameMoveJobDto & {
@@ -523,7 +552,17 @@ export type AutoLoadSnapshotDto = {
   load_id: number; generation: number; run_id: string | null; task_id: string | null;
   total_visits: number; reason: string | null;
 };
+export type LocalFocusPreferencesDto = { maxVisits: number; showOutline: boolean; outlineOpacity: number };
+export type LocalFocusPointDto = { vertex: MoveVertex; target_visits: number; visits: number; status: "active" | "completed" | "blocked" | "expired" | "stopped" };
+export type LocalFocusSnapshotDto = {
+  run_id: string | null; job_id: string | null; generation: number | null; node_path: NodePath | null;
+  points: LocalFocusPointDto[]; withdrawal_pending: boolean;
+  actual_interval_centiseconds?: number | null;
+};
+export type LocalFocusActionDto = { action: "add"; vertex: MoveVertex; max_visits: number } | { action: "remove"; vertex: MoveVertex } | { action: "clear" };
+export type LocalFocusRequestDto = { run_id: string; job_id: string; generation: number; node_path: NodePath } & LocalFocusActionDto;
 export type ForegroundEngineSnapshotDto = {
+  local_focus?: LocalFocusSnapshotDto;
   revision: number;
   lifecycle: ForegroundEngineLifecycleDto;
   continuous: ContinuousAnalysisSnapshotDto;
@@ -563,6 +602,7 @@ export type AnalysisPublicationScopeDto = {
   node_path: NodePath;
 };
 export type AnalysisJobEventDto = {
+  local_focus_output?: { command: number; lineage: number } | null;
   run_id: string;
   job_id: string;
   lane: AnalysisJobLaneDto;
@@ -773,3 +813,12 @@ export type ContinuationSnapshotDto = {
   mode: ContinuationModeDto; run_id: string | null; request_id: string | null;
   generation: number; node_path: NodePath; reason: string | null; current_game: CurrentGameResultDto | null;
 };
+
+export type ApplicationMeasurementRequestDto = {
+  target_id: string; scene: MeasuredSceneDto; candidate_parameters: Record<string, number>;
+  pairs: number; budget: number; fixture_sgf: string; replace_current_document: boolean;
+};
+export type ApplicationMeasurementProbeDto = { operation_id: string; row_id: string; samples_seconds: number[]; sample_times_ms: [number, number][]; clock_exchange_ms: [number, number, number]; finished: boolean };
+export type ApplicationMeasurementProgressDto = { operation_id: string; row_id: string; scene: MeasuredSceneDto; round: number; candidate: boolean; sampling: boolean; closing: boolean; backend_clock_ms: number };
+export type ApplicationMeasurementResultDto = { report: unknown; evidence: unknown };
+export type ApplicationMeasurementDocumentDto = { operation_id: string; row_id: string; run_id: string; current_game: CurrentGameResultDto; serialized: string; projection: GameDto };

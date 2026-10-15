@@ -1,3 +1,4 @@
+/// <reference lib="esnext.promise" />
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -6,6 +7,7 @@ import * as backend from "../api/backend";
 import type { EngineProfileRecordDto, EvaluationSnapshotDto } from "../domain/types";
 import { EngineEvaluationPanel } from "./EngineEvaluationPanel";
 import { t } from "../i18n/resources";
+import * as measuredReport from "../api/measuredReport";
 import productionResult from "../../../../crates/engine-manager/tests/fixtures/katago-1.18.2-benchmark/variations-result.json";
 
 const idle: EvaluationSnapshotDto = { evaluation_id: null, target_id: null, input_revision: null, phase: "idle", process_id: null, exit_code: null, output: [], output_truncated: false, message: null, result: null };
@@ -22,6 +24,7 @@ beforeEach(() => {
   vi.spyOn(backend, "getEngineEvaluation").mockResolvedValue(idle);
   vi.spyOn(backend, "startEngineEvaluation").mockResolvedValue(running);
   vi.spyOn(backend, "cancelEngineEvaluation").mockResolvedValue({ ...running, phase: "cancelled", process_id: null });
+  vi.spyOn(measuredReport, "measuredReportBusy").mockResolvedValue(false);
 });
 afterEach(async () => {
   await act(async () => root?.unmount()); root = null;
@@ -104,16 +107,80 @@ it("renders the production parser DTO as independently paired rows with frozen i
   expect(region.tabIndex).toBe(0);
   region.focus();
   expect(document.activeElement).toBe(region);
-  // Editor/profile changes cannot relabel the result's own ID, threads or resource tuple.
-  await act(async () => root!.render(<EngineEvaluationPanel profiles={[{
-    ...profiles[0], profile: { ...profiles[0].profile, name: "Later target", argv: ["-t", "64"] },
-  }]} disabled={false} />));
-  expect(host.querySelector("tbody tr")!.textContent).toBe("187.25123.5");
-  expect(host.textContent).toContain(productionResult.input_revision);
   for (const phase of ["failed", "cancelled", "yielded", "retired"] as const) {
     vi.mocked(backend.getEngineEvaluation).mockResolvedValue({ ...completed, phase, result: null });
     await act(async () => { await vi.advanceTimersByTimeAsync(250); });
     expect(host.textContent).toContain(t(`evaluation.${phase}`));
     expect(host.querySelector("table")).toBeNull();
   }
+});
+
+it("retires deferred polls and announcements when the saved target inputs change", async () => {
+  const { promise, resolve } = Promise.withResolvers<EvaluationSnapshotDto>();
+  await render(); await select(); await click(t("evaluation.start"));
+  vi.mocked(backend.getEngineEvaluation).mockReturnValueOnce(promise);
+  await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+  await act(async () => root!.render(<EngineEvaluationPanel profiles={[{
+    ...profiles[0], profile: { ...profiles[0].profile, argv: ["-t", "4"] },
+  }]} disabled={false} />));
+  await act(async () => resolve({ ...running, phase: "completed", message: "OLD RESULT" }));
+  expect(host.textContent).not.toContain("OLD RESULT");
+  expect(host.textContent).not.toContain(t("evaluation.completed"));
+  expect(backend.cancelEngineEvaluation).toHaveBeenCalledWith("one");
+});
+
+it.each(["completed", "failed", "cancelled"] as const)("keeps keyboard focus actionable after %s", async (phase) => {
+  const { promise, resolve } = Promise.withResolvers<EvaluationSnapshotDto>();
+  vi.mocked(backend.startEngineEvaluation).mockReturnValueOnce(promise);
+  await render(); await select();
+  const start = host.querySelector<HTMLButtonElement>("button")!;
+  start.focus();
+  await click(t("evaluation.start"));
+  expect(document.activeElement).toBe(start);
+  expect(start.disabled).toBe(false);
+  expect(start.getAttribute("aria-disabled")).toBe("true");
+  await act(async () => resolve({ ...running, phase }));
+  expect(document.activeElement).toBe(start);
+  expect(start.getAttribute("aria-disabled")).toBe("false");
+  expect(host.querySelector('[role="status"]')?.textContent).toContain(t(`evaluation.${phase}`));
+});
+
+it("rejects a wrong evaluation or revision and late poll errors after target changes", async () => {
+  await render(); await select(); await click(t("evaluation.start"));
+  vi.mocked(backend.getEngineEvaluation).mockResolvedValue({ ...running, evaluation_id: "other", phase: "completed", message: "WRONG EVALUATION" });
+  await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+  expect(host.textContent).not.toContain("WRONG EVALUATION");
+  vi.mocked(backend.getEngineEvaluation).mockResolvedValue({ ...running, input_revision: "other", phase: "completed", message: "WRONG REVISION" });
+  await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+  expect(host.textContent).not.toContain("WRONG REVISION");
+  const { promise, reject } = Promise.withResolvers<EvaluationSnapshotDto>();
+  vi.mocked(backend.getEngineEvaluation).mockReturnValueOnce(promise).mockResolvedValue(idle);
+  await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+  await act(async () => { const select = host.querySelector("select")!; select.value = ""; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  await act(async () => reject(new Error("OLD ERROR")));
+  expect(host.textContent).not.toContain("OLD ERROR");
+  expect(host.textContent).not.toContain(t("evaluation.running"));
+});
+
+it("lets the user explicitly select the observed startup target without cancelling it", async () => {
+  vi.mocked(backend.getEngineEvaluation).mockResolvedValue(running);
+  await render();
+  await select();
+  expect(host.textContent).toContain(t("evaluation.running"));
+  expect(backend.cancelEngineEvaluation).not.toHaveBeenCalled();
+  expect(backend.startEngineEvaluation).not.toHaveBeenCalled();
+});
+
+it.each(["running", "qualifying"] as const)("retains Setup ownership while evaluation is %s", async (phase) => {
+  let owned = false;
+  const beginOperation = () => { if (owned) return false; owned = true; return true; };
+  const endOperation = () => { owned = false; };
+  await act(async () => root!.render(<EngineEvaluationPanel profiles={profiles} disabled={false} beginOperation={beginOperation} endOperation={endOperation} />));
+  await select(); await click(t("evaluation.start"));
+  vi.mocked(backend.getEngineEvaluation).mockResolvedValue({ ...running, phase });
+  await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+  expect(beginOperation()).toBe(false);
+  vi.mocked(backend.getEngineEvaluation).mockResolvedValue({ ...running, phase: "completed", process_id: null });
+  await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+  expect(beginOperation()).toBe(true);
 });

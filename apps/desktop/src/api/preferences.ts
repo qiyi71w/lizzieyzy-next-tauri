@@ -1,8 +1,11 @@
+import { validLocalFocusPreferences } from "../domain/localFocus";
+import { validMoveRankPreferences } from "../domain/moveRank";
 import { validReviewAutoplayInterval } from "../domain/reviewAutoplay";
 import { invoke } from "@tauri-apps/api/core";
 import { continuousBudgetError, defaultAppPreferences, newGameDefaultsError, normalizeAppPreferences, swingCriteriaError, taskConditionsError, taskStageConditionsError, type AppPreferences } from "../domain/preferences";
 import type { WorkspaceSharesDto, WorkspaceVisibilityDto } from "../domain/types";
 import { normalizeWorkspaceShares } from "../domain/preferences";
+import { analysisRefreshIntervalError } from "../domain/preferences";
 import { validateBatchPreferences } from "../domain/batch";
 import type { BatchPreferencesDto } from "../domain/types";
 import type { ContinuationPreferencesDto } from "../domain/types";
@@ -30,6 +33,11 @@ const browserPreferencesKey = "lizzieyzy-next-app-preferences";
 const browserUnreadableKey = `${browserPreferencesKey}.unreadable`;
 const isTauriRuntime = () => typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
 
+function flashVisitsError(value: number): string | null {
+  return Number.isInteger(value) && value > 0 && value <= 4294967295
+    ? null : "Explicit flash visits must be a positive integer no greater than 4294967295.";
+}
+
 export async function loadAppPreferences(): Promise<AppPreferencesLoadResult> {
   if (!isTauriRuntime()) return loadBrowserPreferences();
   const result = await invoke<AppPreferencesLoadResult>("load_app_preferences");
@@ -40,11 +48,17 @@ export async function loadAppPreferences(): Promise<AppPreferencesLoadResult> {
 }
 
 export async function saveAppPreferences(preferences: AppPreferences): Promise<AppPreferences> {
+  if (!validLocalFocusPreferences(preferences.localFocus)) throw new Error("Focus visits must be positive and opacity must be 0–100.");
+  if (!validMoveRankPreferences(preferences.moveRank)) {
+    throw new Error("Move Rank thresholds must be finite and nondecreasing.");
+  }
   if (!validReviewAutoplayInterval(preferences.reviewAutoplayIntervalMs)) {
     throw new Error("Review autoplay interval is not safely representable in whole milliseconds.");
   }
   const error = newGameDefaultsError(preferences)
+    ?? analysisRefreshIntervalError(preferences.analysisRefreshIntervalCentiseconds)
     ?? continuousBudgetError(preferences)
+    ?? flashVisitsError(preferences.flashAnalysisVisits)
     ?? taskConditionsError(preferences.taskSingleStageConditions)
     ?? taskStageConditionsError(preferences.taskOverviewConditions, preferences.taskDeepConditions)
     ?? taskConditionsError(preferences.taskSwingOverviewConditions)
@@ -113,7 +127,9 @@ function loadBrowserPreferences(): AppPreferencesLoadResult {
   try {
     const preferences = normalizeAppPreferences(JSON.parse(raw) as Partial<AppPreferences>);
     const error = newGameDefaultsError(preferences)
+      ?? analysisRefreshIntervalError(preferences.analysisRefreshIntervalCentiseconds)
       ?? continuousBudgetError(preferences)
+      ?? flashVisitsError(preferences.flashAnalysisVisits)
       ?? taskConditionsError(preferences.taskSingleStageConditions)
       ?? taskStageConditionsError(preferences.taskOverviewConditions, preferences.taskDeepConditions)
       ?? taskConditionsError(preferences.taskSwingOverviewConditions)

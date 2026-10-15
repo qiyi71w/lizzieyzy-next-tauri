@@ -6,6 +6,195 @@ use std::{
 };
 
 #[test]
+#[ignore = "requires explicitly provided real local KataGo resources"]
+fn real_cpu_same_tree_focus_add_remove_clear_budget() {
+    assert_eq!(std::env::var("LIZZIEYZY_REAL_KATAGO").unwrap(), "1");
+    let workdir = std::env::var("LIZZIEYZY_KATAGO_WORKDIR").unwrap();
+    let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
+    catalog.upsert(SavedEngineProfile {
+        profile_id: "focus".into(),
+        measured_scenes: Default::default(),
+        thread_policy: Default::default(),
+        profile: EngineProfileDto {
+            name: "real local focus".into(),
+            program: std::env::var("LIZZIEYZY_KATAGO_ENGINE").unwrap(),
+            argv: vec![],
+            working_dir: Some(workdir.clone()),
+            adapter: EngineAdapterSettings::KataGoGtp(KataGoSettings {
+                model_path: Some(std::env::var("LIZZIEYZY_KATAGO_MODEL").unwrap()),
+                config_path: Some(std::env::var("LIZZIEYZY_KATAGO_CONFIG").unwrap()),
+                max_visits: 1000000,
+            }),
+        },
+    });
+    let manager = ForegroundEngineManager::new(catalog, ForegroundEngineConfig::default());
+    manager.start("focus").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let run = loop {
+        match manager.snapshot().lifecycle {
+            ForegroundEngineLifecycleDto::Ready { run } => break run,
+            ForegroundEngineLifecycleDto::Error { failure, .. } => panic!("{failure:?}"),
+            _ => assert!(Instant::now() < deadline),
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    println!("REAL_FOCUS_RUN {}", serde_json::to_string(&run).unwrap());
+    let document = sgf::CurrentSgfDocument::open("(;SZ[9]RU[Chinese]KM[7.5])").unwrap();
+    let path = NodePath { indices: vec![] };
+    let query = katago_protocol::analysis_query_from_position(
+        9,
+        9,
+        7.5,
+        &[],
+        PlayerColor::Black,
+        katago_protocol::AnalysisQueryOptions {
+            id: "pending".into(),
+            rules: "chinese".into(),
+            turn: 0,
+            max_visits: None,
+            include_ownership: Some(true),
+            include_policy: Some(true),
+        },
+    )
+    .unwrap();
+    let budget = ContinuousAnalysisBudgetDto {
+        continuous_time_limit_enabled: true,
+        continuous_time_limit_seconds: 15,
+        continuous_visits_limit_enabled: false,
+        ..Default::default()
+    };
+    manager.set_continuous_preferences(true, budget).unwrap();
+    let events = manager.subscribe();
+    manager.follow_continuous_position(SelectedNodeJobRequest {
+        run_id: run.run_id.clone(),
+        generation: 7,
+        node_path: path.clone(),
+        mode: AnalysisJobModeDto::Continuous,
+        query,
+        board_width: 9,
+        board_height: 9,
+        position_empty: true,
+        exact_position: Ok(document.exact_position(&path).unwrap()),
+    });
+    let next = |command: Option<u32>| {
+        let until = Instant::now() + Duration::from_secs(30);
+        loop {
+            match events
+                .recv_timeout(until.saturating_duration_since(Instant::now()))
+                .unwrap()
+            {
+                ForegroundEngineEventDto::Job { job }
+                    if job.outcome == AnalysisJobOutcomeDto::Progress
+                        && job
+                            .local_focus_output
+                            .is_some_and(|output| Some(output.command) != command) =>
+                {
+                    break job
+                }
+                ForegroundEngineEventDto::Failure { failure } => panic!("{failure:?}"),
+                _ => {}
+            }
+        }
+    };
+    let first = next(None);
+    let began = Instant::now();
+    let mut command = first.local_focus_output.unwrap().command;
+    std::fs::write(
+        std::path::Path::new(&workdir).join("focus-initial-diagnostics.json"),
+        serde_json::to_vec_pretty(&manager.diagnostic_snapshots()).unwrap(),
+    )
+    .unwrap();
+    let vertex = MoveVertex::Point(PointDto { x: 3, y: 5 });
+    let second_vertex = MoveVertex::Point(PointDto { x: 4, y: 4 });
+    for action in [
+        LocalFocusActionDto::Add {
+            vertex: vertex.clone(),
+            max_visits: 1000000,
+        },
+        LocalFocusActionDto::Add {
+            vertex: second_vertex.clone(),
+            max_visits: 1000000,
+        },
+        LocalFocusActionDto::Remove {
+            vertex: vertex.clone(),
+        },
+        LocalFocusActionDto::Remove {
+            vertex: second_vertex,
+        },
+        LocalFocusActionDto::Add {
+            vertex,
+            max_visits: 1000000,
+        },
+        LocalFocusActionDto::Clear,
+    ] {
+        let receipt = manager
+            .local_focus_action(LocalFocusRequestDto {
+                run_id: first.run_id.clone(),
+                job_id: first.job_id.clone(),
+                generation: 7,
+                node_path: path.clone(),
+                action,
+            })
+            .unwrap();
+        assert!(receipt.withdrawal_pending);
+        let frame = next(Some(command));
+        assert_eq!(frame.job_id, first.job_id);
+        assert_eq!(frame.run_id, first.run_id);
+        assert_eq!(manager.local_focus_publication(&frame), Ok(true));
+        println!("REAL_FOCUS_FRAME {}", serde_json::to_string(&frame).unwrap());
+        command = frame.local_focus_output.unwrap().command;
+        assert!(!manager.snapshot().local_focus.withdrawal_pending);
+        std::fs::write(
+            std::path::Path::new(&workdir).join(format!("focus-binding-{command}-diagnostics.json")),
+            serde_json::to_vec_pretty(&manager.diagnostic_snapshots()).unwrap(),
+        )
+        .unwrap();
+        // Space changes far enough apart that resetting the15s budget would fail.
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    loop {
+        match events.recv_timeout(Duration::from_secs(20)).unwrap() {
+            ForegroundEngineEventDto::Job { job } if job.outcome == AnalysisJobOutcomeDto::TimeLimited => {
+                assert_eq!(job.job_id, first.job_id);
+                assert!(began.elapsed() < Duration::from_secs(18));
+                assert_eq!(manager.local_focus_publication(&job), Ok(true));
+                assert!(job
+                    .frame
+                    .as_ref()
+                    .is_some_and(|frame| frame.visits > 0 && frame.ownership.is_some()));
+                std::fs::write(
+                    std::path::Path::new(&workdir).join("focus-final-event.json"),
+                    serde_json::to_vec_pretty(&job).unwrap(),
+                )
+                .unwrap();
+                std::fs::write(
+                    std::path::Path::new(&workdir).join("focus-final-diagnostics.json"),
+                    serde_json::to_vec_pretty(&manager.diagnostic_snapshots()).unwrap(),
+                )
+                .unwrap();
+                println!(
+                    "REAL_FOCUS_BUDGET elapsed={:?} same_job={} outcome={:?}",
+                    began.elapsed(),
+                    job.job_id,
+                    job.outcome
+                );
+                break;
+            }
+            ForegroundEngineEventDto::Failure { failure } => panic!("{failure:?}"),
+            _ => {}
+        }
+    }
+    assert!(manager.snapshot().local_focus.points.is_empty());
+    manager.teardown().unwrap();
+    let diagnostics = manager.diagnostic_snapshots();
+    std::fs::write(
+        std::path::Path::new(&workdir).join("focus-diagnostics.json"),
+        serde_json::to_vec_pretty(&diagnostics).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
 #[ignore = "requires explicitly provided real KataGo 1.18.2 resources"]
 fn real_katago_gtp_rules_and_exact_selected_positions() {
     assert_eq!(std::env::var("LIZZIEYZY_REAL_KATAGO").unwrap(), "1");
@@ -14,6 +203,7 @@ fn real_katago_gtp_rules_and_exact_selected_positions() {
     std::fs::write(&layer, "numSearchThreads=2\n").unwrap();
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     catalog.upsert(SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: "gtp".into(),
         profile: EngineProfileDto {
             name: "explicit KataGo GTP".into(),
@@ -34,6 +224,7 @@ fn real_katago_gtp_rules_and_exact_selected_positions() {
         thread_policy: Default::default(),
     });
     catalog.upsert(SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: "prepared-gtp".into(),
         profile: catalog.get("gtp").unwrap().profile,
         thread_policy: Default::default(),
@@ -326,6 +517,7 @@ mod controlled {
             std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
             let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
             catalog.upsert(SavedEngineProfile {
+                measured_scenes: Default::default(),
                 profile_id: "gtp".into(),
                 profile: EngineProfileDto {
                     name: "controlled GTP".into(),
@@ -1167,6 +1359,528 @@ mod controlled {
         }
     }
 
+    fn focus_rig(mode: &str) -> Rig {
+        let rig = Rig::new(mode);
+        let ForegroundEngineLifecycleDto::Ready { run } = rig.manager.snapshot().lifecycle else {
+            panic!()
+        };
+        let mut resource = (*run.qualified_resource.unwrap()).clone();
+        // Only the process is substituted; admission, writer, parser and publication are production.
+        resource
+            .resources
+            .iter_mut()
+            .find(|r| r.component == "executable")
+            .unwrap()
+            .sha256 = "20c4ede9f39455ab3c019ada7a22a6e4d7696361161feed5c56f2c42d1507bd0".into();
+        rig.manager.set_qualified_resource_for_tests(resource);
+        rig
+    }
+
+    fn focus_status(rig: &Rig) -> FocusCapabilityDto {
+        let run = match rig.manager.snapshot().lifecycle {
+            ForegroundEngineLifecycleDto::Ready { run } | ForegroundEngineLifecycleDto::Error { run, .. } => {
+                run
+            }
+            other => panic!("{other:?}"),
+        };
+        run.capability_snapshot.unwrap().focus
+    }
+
+    #[test]
+    fn analysis_refresh_update_drains_old_intent_preserves_job_and_pause() {
+        let rig = focus_rig("analysis_focus_update_hold");
+        let events = rig.manager.subscribe();
+        let budget = ContinuousAnalysisBudgetDto {
+            continuous_time_limit_enabled: false,
+            ..Default::default()
+        };
+        rig.manager
+            .commit_continuous_preferences(true, budget, Some(AnalysisRefreshIntervalDto(17)), || Ok(()))
+            .unwrap();
+        rig.manager
+            .follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        let first = event(&events, AnalysisJobOutcomeDto::Progress);
+        assert_eq!(
+            rig.manager.snapshot().local_focus.actual_interval_centiseconds,
+            Some(17)
+        );
+        let request = |action| LocalFocusRequestDto {
+            run_id: first.run_id.clone(),
+            job_id: first.job_id.clone(),
+            generation: 7,
+            node_path: first.node_path.clone(),
+            action,
+        };
+        let before = rig.manager.snapshot();
+        assert!(rig
+            .manager
+            .commit_continuous_preferences(
+                true,
+                budget,
+                Some(AnalysisRefreshIntervalDto(37)),
+                || Err::<(), _>("disk failure".into())
+            )
+            .is_err());
+        assert_eq!(rig.manager.snapshot(), before);
+        assert!(rig
+            .manager
+            .commit_continuous_preferences::<()>(
+                true,
+                budget,
+                Some(AnalysisRefreshIntervalDto(0)),
+                || panic!("invalid value must not persist")
+            )
+            .is_err());
+        assert_eq!(rig.manager.local_focus_publication(&first), Ok(false));
+        rig.manager
+            .local_focus_action(request(LocalFocusActionDto::Add {
+                vertex: MoveVertex::Point(PointDto { x: 3, y: 5 }),
+                max_visits: 500,
+            }))
+            .unwrap();
+        rig.held(); // Old stream final arrived, but the Stop final remains held.
+        rig.manager
+            .commit_continuous_preferences(true, budget, Some(AnalysisRefreshIntervalDto(37)), || Ok(()))
+            .unwrap();
+        let pending = rig.manager.snapshot();
+        assert!(pending.local_focus.points.is_empty());
+        assert!(pending.local_focus.withdrawal_pending);
+        assert_eq!(pending.local_focus.actual_interval_centiseconds, Some(17));
+        assert!(rig.manager.local_focus_publication(&first).is_err());
+        let trace = std::fs::read_to_string(rig.dir.join("trace")).unwrap();
+        assert_eq!(trace.matches("kata-analyze").count(), 2);
+        assert!(!trace.contains("interval 37"));
+        std::fs::write(rig.dir.join("release"), "").unwrap();
+        let next = event(&events, AnalysisJobOutcomeDto::Progress);
+        assert_eq!(next.job_id, first.job_id);
+        assert_eq!(next.run_id, first.run_id);
+        assert_eq!(
+            rig.manager.snapshot().local_focus.actual_interval_centiseconds,
+            Some(37)
+        );
+        assert_eq!(rig.manager.local_focus_publication(&next), Ok(true));
+        let trace = std::fs::read_to_string(rig.dir.join("trace")).unwrap();
+        assert_eq!(trace.matches("loadsgf").count(), 1);
+        assert_eq!(trace.matches("kata-get-rules").count(), 1);
+        assert!(trace.contains("kata-analyze B interval 17 rootInfo true ownership true"));
+        assert!(trace.contains("kata-analyze B interval 37 rootInfo true ownership true"));
+        assert!(!trace.contains("focus D4"));
+        rig.manager.set_continuous_preferences(false, budget).unwrap();
+        event(&events, AnalysisJobOutcomeDto::Cancelled);
+        let paused_trace = std::fs::read_to_string(rig.dir.join("trace")).unwrap();
+        rig.manager
+            .commit_continuous_preferences(false, budget, Some(AnalysisRefreshIntervalDto(41)), || Ok(()))
+            .unwrap();
+        assert_eq!(
+            rig.manager.snapshot().continuous.phase,
+            ContinuousAnalysisPhaseDto::Off
+        );
+        assert_eq!(
+            rig.manager.snapshot().local_focus.actual_interval_centiseconds,
+            None
+        );
+        assert_eq!(
+            std::fs::read_to_string(rig.dir.join("trace")).unwrap(),
+            paused_trace
+        );
+        rig.manager.set_continuous_preferences(true, budget).unwrap();
+        event(&events, AnalysisJobOutcomeDto::Progress);
+        assert_eq!(
+            rig.manager.snapshot().local_focus.actual_interval_centiseconds,
+            Some(41)
+        );
+        assert!(rig.manager.snapshot().local_focus.points.is_empty());
+    }
+
+    #[test]
+    fn analysis_refresh_save_does_not_preempt_finite_or_leased_continuous() {
+        for measured in [false, true] {
+            let rig = focus_rig("analysis_focus_live");
+            let events = rig.manager.subscribe();
+            let budget = ContinuousAnalysisBudgetDto {
+                continuous_time_limit_enabled: false,
+                ..Default::default()
+            };
+            rig.manager.set_continuous_preferences(false, budget).unwrap();
+            let lease = measured.then(|| rig.manager.begin_setup_operation().unwrap());
+            let mut request = selected(
+                &rig,
+                7,
+                if measured {
+                    AnalysisJobModeDto::Continuous
+                } else {
+                    AnalysisJobModeDto::Finite
+                },
+            );
+            request.query.max_visits = Some(100000);
+            let started = if let Some(lease) = &lease {
+                rig.manager
+                    .start_measured_selected_node_job(request, lease)
+                    .unwrap()
+            } else {
+                rig.manager.start_selected_node_job(request).unwrap()
+            };
+            let progress = event(&events, AnalysisJobOutcomeDto::Progress);
+            let before = std::fs::read_to_string(rig.dir.join("trace")).unwrap();
+            rig.manager
+                .commit_continuous_preferences(false, budget, Some(AnalysisRefreshIntervalDto(29)), || Ok(()))
+                .unwrap();
+            assert_eq!(
+                rig.manager.snapshot().selected_node_job.unwrap().job_id,
+                started.job_id
+            );
+            assert_eq!(rig.manager.local_focus_publication(&progress), Ok(false));
+            assert_eq!(
+                rig.manager.snapshot().local_focus.actual_interval_centiseconds,
+                None
+            );
+            assert_eq!(std::fs::read_to_string(rig.dir.join("trace")).unwrap(), before);
+            if let Some(lease) = &lease {
+                lease.check().unwrap();
+            }
+            rig.manager.teardown().unwrap();
+        }
+    }
+
+    #[test]
+    fn local_focus_queued_remove_waits_for_final_and_never_revives_after_pause() {
+        let rig = focus_rig("analysis_focus_update_hold");
+        let events = rig.manager.subscribe();
+        let budget = ContinuousAnalysisBudgetDto {
+            continuous_time_limit_enabled: false,
+            ..Default::default()
+        };
+        rig.manager.set_continuous_preferences(true, budget).unwrap();
+        rig.manager
+            .follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        let first = event(&events, AnalysisJobOutcomeDto::Progress);
+        let vertex = MoveVertex::Point(PointDto { x: 3, y: 5 });
+        let request = |action| LocalFocusRequestDto {
+            run_id: first.run_id.clone(),
+            job_id: first.job_id.clone(),
+            generation: 7,
+            node_path: first.node_path.clone(),
+            action,
+        };
+        rig.manager
+            .local_focus_action(request(LocalFocusActionDto::Add {
+                vertex: vertex.clone(),
+                max_visits: 500,
+            }))
+            .unwrap();
+        rig.held(); // Stream delimiter has arrived; the numbered Stop ACK has not.
+        let removed = rig
+            .manager
+            .local_focus_action(request(LocalFocusActionDto::Remove {
+                vertex: vertex.clone(),
+            }))
+            .unwrap();
+        assert!(removed.points.is_empty());
+        assert!(removed.withdrawal_pending);
+        assert!(rig.manager.local_focus_publication(&first).is_err());
+        assert_eq!(
+            std::fs::read_to_string(rig.dir.join("trace"))
+                .unwrap()
+                .matches("kata-analyze")
+                .count(),
+            2
+        );
+        std::fs::write(rig.dir.join("release"), "").unwrap();
+        let next = event(&events, AnalysisJobOutcomeDto::Progress);
+        assert_eq!(next.job_id, first.job_id);
+        assert!(!rig.manager.snapshot().local_focus.withdrawal_pending);
+        assert!(!std::fs::read_to_string(rig.dir.join("trace"))
+            .unwrap()
+            .contains("focus D4"));
+        rig.manager
+            .local_focus_action(request(LocalFocusActionDto::Add {
+                vertex: vertex.clone(),
+                max_visits: 500,
+            }))
+            .unwrap();
+        let focused = event(&events, AnalysisJobOutcomeDto::Progress);
+        rig.manager.set_continuous_preferences(false, budget).unwrap();
+        event(&events, AnalysisJobOutcomeDto::Cancelled);
+        let paused = rig.manager.snapshot().local_focus;
+        assert_eq!(paused.points.len(), 1);
+        assert_eq!(paused.points[0].status, LocalFocusPointStatusDto::Stopped);
+        assert!(!paused.withdrawal_pending);
+        assert!(rig
+            .manager
+            .local_focus_action(request(LocalFocusActionDto::Add {
+                vertex,
+                max_visits: 500
+            }))
+            .is_err());
+        rig.manager
+            .follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
+        assert!(rig.manager.snapshot().local_focus.points.is_empty());
+        assert!(rig.manager.local_focus_publication(&focused).is_err());
+        assert_eq!(rig.manager.snapshot().continuous.enabled, Some(false));
+    }
+
+    #[test]
+    fn leased_continuous_progress_reaches_budget_without_ordinary_focus_owner() {
+        let rig = focus_rig("analysis_focus_live");
+        let events = rig.manager.subscribe();
+        let budget = ContinuousAnalysisBudgetDto {
+            continuous_time_limit_enabled: false,
+            continuous_visits_limit_enabled: true,
+            continuous_visits_limit: 32,
+            ..Default::default()
+        };
+        rig.manager.set_continuous_preferences(false, budget).unwrap();
+        let lease = rig.manager.begin_setup_operation().unwrap();
+        let started = rig
+            .manager
+            .start_measured_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Continuous), &lease)
+            .unwrap();
+        let progress = event(&events, AnalysisJobOutcomeDto::Progress);
+        assert_eq!(progress.job_id, started.job_id);
+        assert!(progress.frame.as_ref().unwrap().visits >= 32);
+        assert!(progress.local_focus_output.is_none());
+        assert_eq!(rig.manager.local_focus_publication(&progress), Ok(false));
+        assert!(rig.manager.snapshot().local_focus.job_id.is_none());
+        let completed = event(&events, AnalysisJobOutcomeDto::VisitsLimited);
+        assert_eq!(completed.job_id, started.job_id);
+        assert!(completed.frame.unwrap().visits >= 32);
+        assert!(completed.local_focus_output.is_none());
+        assert!(lease.check().is_ok());
+        rig.manager.teardown().unwrap();
+    }
+
+    #[test]
+    fn local_focus_limit_keeps_complete_final_publishable_until_context_retirement() {
+        let rig = focus_rig("analysis_focus_live");
+        let events = rig.manager.subscribe();
+        let budget = ContinuousAnalysisBudgetDto {
+            continuous_time_limit_enabled: true,
+            continuous_time_limit_seconds: 1,
+            continuous_visits_limit_enabled: false,
+            ..Default::default()
+        };
+        rig.manager.set_continuous_preferences(true, budget).unwrap();
+        rig.manager
+            .follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        let first = event(&events, AnalysisJobOutcomeDto::Progress);
+        rig.manager
+            .local_focus_action(LocalFocusRequestDto {
+                run_id: first.run_id.clone(),
+                job_id: first.job_id.clone(),
+                generation: 7,
+                node_path: first.node_path.clone(),
+                action: LocalFocusActionDto::Add {
+                    vertex: MoveVertex::Point(PointDto { x: 3, y: 5 }),
+                    max_visits: 500,
+                },
+            })
+            .unwrap();
+        let final_event = event(&events, AnalysisJobOutcomeDto::TimeLimited);
+        assert_eq!(final_event.frame.as_ref().unwrap().winrate_black, 0.01);
+        assert_eq!(rig.manager.local_focus_publication(&final_event), Ok(true));
+        assert_eq!(
+            rig.manager.snapshot().local_focus.points[0].status,
+            LocalFocusPointStatusDto::Stopped
+        );
+        rig.manager
+            .follow_continuous_position(selected(&rig, 8, AnalysisJobModeDto::Continuous));
+        assert!(rig.manager.local_focus_publication(&final_event).is_err());
+    }
+
+    #[test]
+    fn local_focus_add_remove_clear_preserves_job_and_restores_only_once() {
+        let rig = focus_rig("analysis_focus_live");
+        let events = rig.manager.subscribe();
+        let budget = ContinuousAnalysisBudgetDto {
+            continuous_time_limit_enabled: false,
+            ..Default::default()
+        };
+        rig.manager.set_continuous_preferences(true, budget).unwrap();
+        rig.manager
+            .follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        let first = event(&events, AnalysisJobOutcomeDto::Progress);
+        let vertex = MoveVertex::Point(PointDto { x: 3, y: 5 });
+        let second_vertex = MoveVertex::Point(PointDto { x: 4, y: 5 });
+        let request = |action| LocalFocusRequestDto {
+            run_id: first.run_id.clone(),
+            job_id: first.job_id.clone(),
+            generation: 7,
+            node_path: first.node_path.clone(),
+            action,
+        };
+        let mut command = first.local_focus_output.unwrap().command;
+        for action in [
+            LocalFocusActionDto::Add {
+                vertex: vertex.clone(),
+                max_visits: 500,
+            },
+            LocalFocusActionDto::Add {
+                vertex: second_vertex.clone(),
+                max_visits: 500,
+            },
+            LocalFocusActionDto::Remove {
+                vertex: vertex.clone(),
+            },
+            LocalFocusActionDto::Clear,
+        ] {
+            let receipt = rig.manager.local_focus_action(request(action)).unwrap();
+            assert!(receipt.withdrawal_pending);
+            assert!(rig.manager.local_focus_publication(&first).is_err());
+            loop {
+                let next = event(&events, AnalysisJobOutcomeDto::Progress);
+                assert_eq!(next.job_id, first.job_id);
+                let output = next.local_focus_output.unwrap();
+                if output.command == command {
+                    continue;
+                }
+                command = output.command;
+                assert_eq!(output.lineage, 1);
+                assert_eq!(rig.manager.local_focus_publication(&next), Ok(true));
+                break;
+            }
+        }
+        assert!(rig.manager.snapshot().local_focus.points.is_empty());
+        assert!(!rig.manager.snapshot().local_focus.withdrawal_pending);
+        rig.manager.set_continuous_preferences(false, budget).unwrap();
+        event(&events, AnalysisJobOutcomeDto::Cancelled);
+        let trace = std::fs::read_to_string(rig.dir.join("trace")).unwrap();
+        assert_eq!(trace.matches("loadsgf").count(), 1, "{trace}");
+        assert_eq!(trace.matches("kata-get-rules").count(), 1, "{trace}");
+        assert!(trace.contains("focus D4 0.5"), "{trace}");
+        assert!(trace.contains("focus D4,E4 0.5"), "{trace}");
+        assert!(trace.contains("focus E4 0.5"), "{trace}");
+        assert_eq!(trace.matches("kata-analyze").count(), 6, "{trace}");
+        assert_eq!(trace.matches(" stop\n").count(), 6, "{trace}");
+    }
+
+    #[test]
+    fn focus_unknown_or_remote_executable_does_not_probe_or_interrupt_ordinary() {
+        let rig = Rig::new("analysis_focus_hold");
+        let events = rig.manager.subscribe();
+        rig.manager
+            .start_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Finite))
+            .unwrap();
+        event(&events, AnalysisJobOutcomeDto::Completed);
+        assert_eq!(focus_status(&rig), FocusCapabilityDto::Unchecked);
+        assert!(!std::fs::read_to_string(rig.dir.join("trace"))
+            .unwrap()
+            .contains("focus pass"));
+    }
+
+    #[test]
+    fn focus_old_incarnation_cannot_qualify_replacement_run() {
+        let rig = focus_rig("analysis_focus_hold");
+        rig.manager
+            .start_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Finite))
+            .unwrap();
+        rig.held();
+        rig.manager.stop().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !matches!(
+            rig.manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::NoEngine { .. }
+        ) {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        rig.manager.start("gtp").unwrap();
+        assert_ne!(ready(&rig.manager), rig.run);
+        std::fs::write(rig.dir.join("release"), "").unwrap();
+        assert_eq!(focus_status(&rig), FocusCapabilityDto::Unchecked);
+        assert!(rig.manager.snapshot().selected_node_job.is_none());
+    }
+
+    #[test]
+    fn focus_supported_only_after_complete_stop_final_then_ordinary_remains_usable() {
+        let rig = focus_rig("analysis_focus_final");
+        let events = rig.manager.subscribe();
+        rig.manager
+            .start_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Finite))
+            .unwrap();
+        rig.held();
+        assert_eq!(focus_status(&rig), FocusCapabilityDto::Unchecked);
+        assert!(!events
+            .try_iter()
+            .any(|e| matches!(e, ForegroundEngineEventDto::Job { job } if job.frame.is_some())));
+        std::fs::write(rig.dir.join("release"), "").unwrap();
+        let completed = event(&events, AnalysisJobOutcomeDto::Completed);
+        assert_eq!(completed.frame.unwrap().winrate_black, 0.62);
+        assert_eq!(focus_status(&rig), FocusCapabilityDto::Supported);
+        let trace = std::fs::read_to_string(rig.dir.join("trace")).unwrap();
+        assert!(trace.contains("rootInfo true focus pass 0"));
+        assert_eq!(trace.matches(" stop\n").count(), 2);
+        assert_eq!(trace.matches("loadsgf").count(), 1);
+    }
+
+    #[test]
+    fn focus_syntax_rejection_is_cached_only_for_this_run_and_keeps_ordinary_analysis() {
+        let rig = focus_rig("analysis");
+        let events = rig.manager.subscribe();
+        for _ in 0..2 {
+            rig.manager
+                .start_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Finite))
+                .unwrap();
+            event(&events, AnalysisJobOutcomeDto::Completed);
+            assert_eq!(focus_status(&rig), FocusCapabilityDto::Unsupported);
+        }
+        assert_eq!(
+            std::fs::read_to_string(rig.dir.join("trace"))
+                .unwrap()
+                .matches("focus pass 0")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn focus_uncertain_failure_is_not_unsupported_and_does_not_start_ordinary() {
+        let rig = focus_rig("analysis_focus_uncertain");
+        rig.manager
+            .start_selected_node_job(selected(&rig, 7, AnalysisJobModeDto::Finite))
+            .unwrap();
+        rig.held();
+        std::fs::write(rig.dir.join("release"), "").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !matches!(
+            rig.manager.snapshot().lifecycle,
+            ForegroundEngineLifecycleDto::Error { .. }
+        ) {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(focus_status(&rig), FocusCapabilityDto::Uncertain);
+        assert_eq!(
+            std::fs::read_to_string(rig.dir.join("trace"))
+                .unwrap()
+                .matches("kata-analyze")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn focus_late_success_cannot_change_pause_or_publish_capability_or_start_ponder() {
+        let rig = focus_rig("analysis_focus_hold");
+        let events = rig.manager.subscribe();
+        let budget = ContinuousAnalysisBudgetDto::default();
+        rig.manager.set_continuous_preferences(true, budget).unwrap();
+        rig.manager
+            .follow_continuous_position(selected(&rig, 7, AnalysisJobModeDto::Continuous));
+        rig.held();
+        rig.manager.set_continuous_preferences(false, budget).unwrap();
+        std::fs::write(rig.dir.join("release"), "").unwrap();
+        event(&events, AnalysisJobOutcomeDto::Cancelled);
+        assert_eq!(focus_status(&rig), FocusCapabilityDto::Unchecked);
+        assert_eq!(rig.manager.snapshot().continuous.enabled, Some(false));
+        assert_eq!(
+            std::fs::read_to_string(rig.dir.join("trace"))
+                .unwrap()
+                .matches("kata-analyze")
+                .count(),
+            1
+        );
+    }
+
     #[test]
     fn rich_analysis_uses_exact_restore_same_run_and_preserves_absent_fields() {
         let rig = Rig::new("analysis");
@@ -1207,6 +1921,7 @@ mod controlled {
         assert_eq!(first.frame.as_ref().unwrap().winrate_black, 0.61);
         rig.manager.set_continuous_preferences(false, budget).unwrap();
         rig.held();
+        rig.manager.cancel_job(&first.run_id, &first.job_id).unwrap();
         assert_eq!(
             rig.manager.snapshot().selected_node_job.unwrap().state,
             AnalysisJobStateDto::Stopping
@@ -1229,6 +1944,14 @@ mod controlled {
                 .count(),
             1
         );
+        assert_eq!(
+            std::fs::read_to_string(rig.dir.join("trace"))
+                .unwrap()
+                .lines()
+                .filter(|line| line.split_once(' ').is_some_and(|(_, body)| body == "stop"))
+                .count(),
+            1
+        );
         rig.manager.set_continuous_preferences(true, budget).unwrap();
         let next = event(&events, AnalysisJobOutcomeDto::Progress);
         assert_eq!(next.generation, 8);
@@ -1237,6 +1960,14 @@ mod controlled {
         assert_eq!(ready(&rig.manager), rig.run);
         rig.manager.set_continuous_preferences(false, budget).unwrap();
         event(&events, AnalysisJobOutcomeDto::Cancelled);
+        assert_eq!(
+            std::fs::read_to_string(rig.dir.join("trace"))
+                .unwrap()
+                .lines()
+                .filter(|line| line.split_once(' ').is_some_and(|(_, body)| body == "stop"))
+                .count(),
+            2
+        );
     }
     #[test]
     fn ready_gtp_reader_starts_the_existing_enabled_target() {

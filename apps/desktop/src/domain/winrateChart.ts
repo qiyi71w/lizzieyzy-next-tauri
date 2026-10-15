@@ -1,4 +1,4 @@
-import type { NodePath, PlayerColor, SgfPropertyDto, SgfTreeNodeDto } from "./types";
+import type { MoveRankPreferencesDto, NodePath, PlayerColor, SgfPropertyDto, SgfTreeNodeDto } from "./types";
 import {
   classifyPlayedMove,
   isBlunderBarRank,
@@ -23,6 +23,7 @@ export type BlunderBar = {
 };
 
 export type WinrateChartSettings = {
+  moveRank?: MoveRankPreferencesDto;
   graphPerspective: GraphPerspective;
   winrateLine: boolean;
   scoreLeadLine: boolean;
@@ -201,12 +202,12 @@ export function buildWinrateChartModel(input: {
     showWinrate: series.showWinrate,
     showScore: series.showScore,
     scoreScale: sessionScoreLeadScale(input.settings.scoreLeadScale, points),
-    bars: input.settings.blunderBar ? blunderBars(points) : [],
+    bars: input.settings.blunderBar ? blunderBars(points, input.settings.moveRank) : [],
     hoverEnabled: input.settings.graphHover
   };
 }
 
-export function blunderBars(points: ChartPoint[]): BlunderBar[] {
+export function blunderBars(points: ChartPoint[], settings?: MoveRankPreferencesDto): BlunderBar[] {
   const displayed = points
     .map((point, index) => ({ point, index }))
     .filter(({ point }) => point.analysis);
@@ -215,7 +216,7 @@ export function blunderBars(points: ChartPoint[]): BlunderBar[] {
     const parent = displayed[index - 1];
     const child = displayed[index];
     if (!child.point.isMove) continue;
-    const rank = classifyPlayedMove(parent.point.analysis, child.point.analysis, parent.point.toPlay);
+    const rank = classifyPlayedMove(parent.point.analysis, child.point.analysis, parent.point.toPlay, settings);
     if (!rank || !isBlunderBarRank(rank)) continue;
     bars.push({ fromIndex: parent.index, toIndex: child.index, rank });
   }

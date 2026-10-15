@@ -41,12 +41,15 @@ mod auto_load_recovery;
 mod batch;
 mod continuation;
 mod evaluation;
+pub mod measured_report;
 pub use continuation::ContinuationAction;
+mod analysis_reuse;
 #[cfg(test)]
 mod evaluation_tests;
 mod game_move;
 mod gtp_analysis;
 mod gtp_control;
+mod local_focus;
 mod match_reservation;
 mod ordinary_rules;
 mod preload;
@@ -54,7 +57,8 @@ mod runtime_control;
 mod runtime_parameters;
 mod runtime_threads;
 mod thread_policy;
-pub use game_move::{GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle};
+pub use analysis_reuse::OrdinaryAnalysisContext;
+pub use game_move::{GameMoveHandle, GameMoveRequest, OrdinaryRulesHandle, RawNetHandle};
 
 pub trait AnalysisJobCancel: Send + Sync {
     fn cancel(&self);
@@ -183,6 +187,7 @@ struct RegisteredJob {
     lane: AnalysisJobLane,
     mode: AnalysisJobModeDto,
     continuous_budget: Option<ContinuousAnalysisBudgetDto>,
+    ordinary_context: Option<Arc<OrdinaryAnalysisContext>>,
     state: AnalysisJobStateDto,
     cancel_deadline: Option<Instant>,
     cleanup_deadline: Option<Instant>,
@@ -249,6 +254,8 @@ struct ManagerState {
     auto_load: auto_load::Owner,
     batch: batch::Owner,
     continuation: continuation::Owner,
+    local_focus: local_focus::Owner,
+    analysis_refresh_interval: app_model::AnalysisRefreshIntervalDto,
     subscribers: Vec<Sender<ForegroundEngineEventDto>>,
     continuous_intent: Option<bool>,
     continuous_budget: ContinuousAnalysisBudgetDto,
@@ -268,6 +275,10 @@ struct ManagerState {
     evaluation: Option<evaluation::EvaluationSlot>,
     startup_evaluation: Option<Result<Option<SavedEngineProfile>, String>>,
     evaluation_notice: app_model::EvaluationSnapshotDto,
+    last_ordinary_context: Option<(
+        app_model::AnalysisPublicationScopeDto,
+        Arc<OrdinaryAnalysisContext>,
+    )>,
     runtime_control: Option<runtime_control::Slot>,
     runtime_threads: Option<app_model::RuntimeThreadsSnapshotDto>,
     runtime_parameters: Option<app_model::RuntimeParametersSnapshotDto>,
@@ -280,6 +291,8 @@ struct Inner {
     diagnostics: Mutex<std::collections::VecDeque<AttemptCapture>>,
     evaluation_worker: Arc<std::sync::atomic::AtomicBool>,
     runtime_control_writer: Arc<std::sync::atomic::AtomicBool>,
+    retain_node_analysis: std::sync::atomic::AtomicBool,
+    measured: Mutex<measured_report::Owner>,
 }
 
 #[derive(Clone)]
@@ -298,6 +311,8 @@ impl ForegroundEngineManager {
                 diagnostics: Mutex::new(std::collections::VecDeque::new()),
                 evaluation_worker: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 runtime_control_writer: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                retain_node_analysis: std::sync::atomic::AtomicBool::new(true),
+                measured: Mutex::new(measured_report::Owner::default()),
                 state: Mutex::new(ManagerState {
                     revision: 0,
                     phase: Phase::NoEngine { failure: None },
@@ -317,6 +332,8 @@ impl ForegroundEngineManager {
                     auto_load: auto_load::Owner::default(),
                     batch: batch::Owner::default(),
                     continuation: continuation::Owner::default(),
+                    local_focus: local_focus::Owner::default(),
+                    analysis_refresh_interval: app_model::AnalysisRefreshIntervalDto::default(),
                     last_activity: Instant::now(),
                     subscribers: Vec::new(),
                     continuous_intent: None,
@@ -335,6 +352,7 @@ impl ForegroundEngineManager {
                     match_reservation: None,
                     retiring: Vec::new(),
                     evaluation: None,
+                    last_ordinary_context: None,
                     startup_evaluation,
                     evaluation_notice: Default::default(),
                     runtime_control: None,
@@ -407,7 +425,7 @@ impl ForegroundEngineManager {
         enabled: bool,
         budget: ContinuousAnalysisBudgetDto,
     ) -> Result<(), String> {
-        self.commit_continuous_preferences(enabled, budget, || Ok(()))
+        self.commit_continuous_preferences(enabled, budget, None, || Ok(()))
     }
 
     /// Holds admission through persistence and intent installation. The callback must not
@@ -416,17 +434,29 @@ impl ForegroundEngineManager {
         &self,
         enabled: bool,
         budget: ContinuousAnalysisBudgetDto,
+        interval: Option<app_model::AnalysisRefreshIntervalDto>,
         persist: impl FnOnce() -> Result<T, String>,
     ) -> Result<T, String> {
         budget.validate()?;
+        if let Some(interval) = interval {
+            interval.validate()?;
+        }
         let saved = {
             let mut state = self.lock();
             let budget_changed = state.continuous_budget != budget;
             if state.continuous_intent == Some(enabled) && !budget_changed {
-                return persist();
+                let saved = persist()?;
+                if let Some(interval) = interval {
+                    local_focus::set_refresh_interval(&mut state, interval);
+                    publish_snapshot(&mut state);
+                }
+                return Ok(saved);
             }
             match_reservation::require_unreserved(&state).map_err(|error| error.message)?;
             let saved = persist()?;
+            if let Some(interval) = interval {
+                local_focus::set_refresh_interval(&mut state, interval);
+            }
             if !enabled {
                 auto_load::retire_locked(self, &mut state).map_err(|error| error.message)?;
             }
@@ -670,6 +700,31 @@ impl ForegroundEngineManager {
         operation_kind: EngineOperationDto,
         profile_id: &str,
     ) -> Result<(), EngineFailureDto> {
+        if matches!(
+            operation_kind,
+            EngineOperationDto::Start | EngineOperationDto::Restart
+        ) {
+            self.retire_setup_for_foreground().map_err(|_| {
+                continuous_invalid_state(
+                    &self.lock(),
+                    "Setup worker must finish actual cleanup before foreground Start",
+                )
+            })?;
+        } else if self.setup_operation_busy() {
+            return Err(continuous_invalid_state(
+                &self.lock(),
+                "Setup measurement owns foreground admission",
+            ));
+        }
+        self.begin_start_scene(operation_kind, profile_id, None)
+    }
+
+    fn begin_start_scene(
+        &self,
+        operation_kind: EngineOperationDto,
+        profile_id: &str,
+        scene: Option<app_model::MeasuredSceneDto>,
+    ) -> Result<(), EngineFailureDto> {
         match_reservation::require_unreserved(&self.lock())?;
         let saved = match self.inner.catalog.get(profile_id) {
             Some(saved) => saved,
@@ -703,7 +758,17 @@ impl ForegroundEngineManager {
             self.yield_preloads_locked(&mut state);
             state.operation += 1;
             state.operation_kind = operation_kind;
-            let run = starting_run(&saved);
+            let mut run = starting_run(&saved);
+            run.measured_scene = scene.or_else(|| {
+                (matches!(
+                    operation_kind,
+                    EngineOperationDto::Start | EngineOperationDto::Restart
+                ) && run.adapter_kind == EngineBackend::KataGoGtp)
+                    .then_some(app_model::MeasuredSceneDto::Live)
+            });
+            if run.measured_scene == Some(app_model::MeasuredSceneDto::WholeGame) {
+                run.adapter_kind = EngineBackend::KataGoAnalysis;
+            }
             state.phase = Phase::Starting(run.clone());
             auto_load_recovery::started(&mut state, &run, operation_kind);
             publish_snapshot(&mut state);
@@ -898,6 +963,7 @@ impl ForegroundEngineManager {
         let job_id = Uuid::new_v4().to_string();
         self.yield_preloads_locked(&mut state);
         state.jobs.push(RegisteredJob {
+            ordinary_context: None,
             job_id: job_id.clone(),
             query_id: job_id.clone(),
             submitted: true,
@@ -925,6 +991,30 @@ impl ForegroundEngineManager {
     }
 
     pub fn start_selected_node_job(
+        &self,
+        request: SelectedNodeJobRequest,
+    ) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+        if self.measured_reservation() {
+            self.retire_setup_for_foreground().map_err(|_| {
+                continuous_invalid_state(
+                    &self.lock(),
+                    "Measurement cleanup must finish before foreground analysis",
+                )
+            })?;
+        }
+        self.start_selected_node_job_owned(request)
+    }
+    pub fn start_measured_selected_node_job(
+        &self,
+        request: SelectedNodeJobRequest,
+        lease: &measured_report::SetupLease,
+    ) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
+        lease
+            .check()
+            .map_err(|_| continuous_invalid_state(&self.lock(), "Measurement lease retired"))?;
+        self.start_selected_node_job_owned(request)
+    }
+    fn start_selected_node_job_owned(
         &self,
         request: SelectedNodeJobRequest,
     ) -> Result<AnalysisJobStartedDto, EngineFailureDto> {
@@ -1031,6 +1121,8 @@ impl ForegroundEngineManager {
         };
         let board_width = request.board_width;
         let board_height = request.board_height;
+        let ordinary_context = analysis_reuse::capture(state, &run, &request);
+        state.last_ordinary_context = None;
         let (command, run_id, node_path) = if run.adapter_kind == EngineBackend::KataGoGtp {
             (
                 SelectedCommand::Gtp(Box::new(request)),
@@ -1055,6 +1147,7 @@ impl ForegroundEngineManager {
         };
         self.yield_preloads_locked(state);
         state.jobs.push(RegisteredJob {
+            ordinary_context,
             query_id: job_id.clone(),
             job_id,
             run_id,
@@ -1290,6 +1383,7 @@ impl ForegroundEngineManager {
         if admitting_run(&state.phase, run_id).is_some_and(|run| run.adapter_kind == EngineBackend::KataGoGtp)
         {
             // The registered stream worker owns Stop and both terminal barriers.
+            state.gtp_dispatch.wake_stream(run_id, job_id);
             return Ok(());
         }
         let manager = self.clone();
@@ -1308,6 +1402,17 @@ impl ForegroundEngineManager {
         }
         if let Phase::Ready(run) = &mut state.phase {
             run.capability_snapshot = snapshot;
+        }
+    }
+
+    /// Controlled-transport tests substitute only the captured process resource identity.
+    #[doc(hidden)]
+    pub fn set_qualified_resource_for_tests(&self, resource: app_model::QualifiedLocalResourceDto) {
+        let mut state = self.lock();
+        if state.match_reservation.is_none() {
+            if let Phase::Ready(run) = &mut state.phase {
+                run.qualified_resource = Some(Arc::new(resource));
+            }
         }
     }
 
@@ -1430,9 +1535,17 @@ impl ForegroundEngineManager {
     }
 
     fn reconcile_continuous(&self) {
+        if self.measured_reservation() {
+            return;
+        }
         self.reconcile_auto_load_recovery();
         let work = {
             let mut state = self.lock();
+            if current_admitting_run(&state.phase)
+                .is_some_and(|run| run.measured_scene == Some(app_model::MeasuredSceneDto::WholeGame))
+            {
+                return;
+            }
             if state.match_reservation.is_some() {
                 return;
             }
@@ -1708,7 +1821,13 @@ impl Inner {
             return Ok(());
         }
 
-        let mut spec = build_command_spec(&run.profile_snapshot).map_err(|error| {
+        let mut launch_profile = run.profile_snapshot.clone();
+        if run.measured_scene == Some(app_model::MeasuredSceneDto::WholeGame) {
+            if let app_model::EngineAdapterSettings::KataGoGtp(settings) = &launch_profile.adapter {
+                launch_profile.adapter = app_model::EngineAdapterSettings::KataGoAnalysis(settings.clone());
+            }
+        }
+        let mut spec = build_command_spec(&launch_profile).map_err(|error| {
             failure(
                 kind,
                 EngineFailureKind::Start,
@@ -1730,6 +1849,7 @@ impl Inner {
                         None,
                     )
                 })?;
+        measured_report::apply_launch(self, run, &mut spec, &capture, operation, background);
         let resource_deadline = Instant::now() + Duration::from_secs(30);
         let resources = ResourceSnapshot::capture(
             run,
@@ -1910,6 +2030,7 @@ impl Inner {
         capture.readiness_confirmed();
         let capabilities = EngineCapabilitySnapshotDto {
             adapter_kind: run.adapter_kind,
+            focus: app_model::FocusCapabilityDto::Unchecked,
             game_move: !generic
                 || gtp.as_ref().is_some_and(|facts| {
                     crate::game_move_protocol::qualified_gtp_launch(&run.profile_snapshot, facts)
@@ -3259,6 +3380,7 @@ fn snapshot_from(state: &ManagerState) -> ForegroundEngineSnapshotDto {
     };
     let mut snapshot = ForegroundEngineSnapshotDto::with_lifecycle(state.revision, lifecycle);
     snapshot.continuous = continuous_snapshot(state);
+    snapshot.local_focus = state.local_focus.snapshot();
     snapshot.auto_load = state.auto_load.snapshot.clone();
     snapshot.auto_load_recovery = auto_load_recovery::phase(state);
     snapshot.selected_node_job = current_non_terminal_job(state, AnalysisJobLane::SelectedNode);
@@ -3268,6 +3390,7 @@ fn snapshot_from(state: &ManagerState) -> ForegroundEngineSnapshotDto {
 }
 
 fn publish_snapshot(state: &mut ManagerState) {
+    local_focus::reconcile(state);
     auto_load_recovery::observe_failure(state);
     auto_load::refresh(state);
     state.revision = state.revision.saturating_add(1);
@@ -3275,7 +3398,12 @@ fn publish_snapshot(state: &mut ManagerState) {
     publish_event(state, ForegroundEngineEventDto::Snapshot { snapshot });
 }
 
-fn publish_event(state: &mut ManagerState, event: ForegroundEngineEventDto) {
+fn publish_event(state: &mut ManagerState, mut event: ForegroundEngineEventDto) {
+    if let ForegroundEngineEventDto::Job { job } = &mut event {
+        if state.local_focus.owns_job(&job.run_id, &job.job_id) {
+            job.local_focus_output = state.local_focus.output;
+        }
+    }
     batch::observe(state, &event);
     continuation::observe(state, &event);
     state
@@ -3360,6 +3488,7 @@ fn selected_node_job_event(
     failure: Option<EngineFailureDto>,
 ) -> AnalysisJobEventDto {
     AnalysisJobEventDto {
+        local_focus_output: None,
         run_id: started.run_id.clone(),
         job_id: started.job_id.clone(),
         lane: started.lane,
@@ -3415,6 +3544,13 @@ fn finish_selected_node_job(
     let mode = job.mode;
     let Some(outcome) = outcome else {
         return;
+    };
+    state.last_ordinary_context = if frame.is_some() && job.submitted {
+        job.ordinary_context
+            .as_ref()
+            .map(|context| (started.publication_scope(), context.clone()))
+    } else {
+        None
     };
     if auto_load_recovery::terminal(state, started, outcome, frame.is_some()) {
         frame = None;
@@ -3605,6 +3741,14 @@ fn validate_selected_admission(
     state: &ManagerState,
     request: &SelectedNodeJobRequest,
 ) -> Result<EngineRunDto, EngineFailureDto> {
+    if current_admitting_run(&state.phase)
+        .is_some_and(|run| run.measured_scene == Some(app_model::MeasuredSceneDto::WholeGame))
+    {
+        return Err(continuous_invalid_state(
+            state,
+            "An independent whole-game scene cannot serve ordinary, quick or HumanSL analysis",
+        ));
+    }
     match_reservation::require_unreserved(state)?;
     game_move::require_idle_move(state)?;
     runtime_control::require_idle(state)?;
@@ -3978,6 +4122,8 @@ fn current_run_id(phase: &Phase) -> Option<String> {
 
 fn starting_run(saved: &SavedEngineProfile) -> EngineRunDto {
     EngineRunDto {
+        measured_scenes_snapshot: saved.measured_scenes.clone(),
+        measured_scene: None,
         run_id: Uuid::new_v4().to_string(),
         profile_id: saved.profile_id.clone(),
         adapter_kind: saved.profile.adapter_kind(),

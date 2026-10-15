@@ -33,6 +33,23 @@ it("persists whole-millisecond review intervals and keeps durable values on inva
   expect(window.localStorage.getItem(storageKey)).toBe(durable);
 });
 
+it("persists only positive explicit flash visits and preserves independent budgets on failed writes", async () => {
+  expect((await loadAppPreferences()).preferences.flashAnalysisVisits).toBe(1);
+  await saveAppPreferences({ ...defaultAppPreferences, flashAnalysisVisits: 4294967295 });
+  const saved = window.localStorage.getItem(storageKey);
+  for (const flashAnalysisVisits of [0, -1, 1.5, NaN, Infinity, 4294967296]) {
+    await expect(saveAppPreferences({ ...defaultAppPreferences, flashAnalysisVisits })).rejects.toThrow("Explicit flash visits");
+    expect(window.localStorage.getItem(storageKey)).toBe(saved);
+  }
+  const loaded = (await loadAppPreferences()).preferences;
+  expect(loaded.flashAnalysisVisits).toBe(4294967295);
+  expect(loaded.autoLoad).toEqual({ enabled: false, totalVisits: 1 });
+  expect(loaded.taskSingleStageConditions).toEqual(defaultAppPreferences.taskSingleStageConditions);
+  window.localStorage.setItem(storageKey, JSON.stringify({ flashAnalysisVisits: null }));
+  expect((await loadAppPreferences()).recovery?.message).toBe(UNREADABLE_PREFERENCES_RECOVERY_MESSAGE);
+});
+
+
 describe("browser preference storage", () => {
   it("loads independent Java drag and double-click defaults and persists each permission", async () => {
     window.localStorage.setItem(storageKey, JSON.stringify({ enableClickReview: true }));

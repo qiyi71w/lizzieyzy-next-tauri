@@ -45,6 +45,7 @@ impl Drop for TestTempDir {
 
 fn profile(id: &str, name: &str) -> EngineProfileRecord {
     EngineProfileRecord {
+        measured_scenes: Default::default(),
         id: id.to_string(),
         preload: false,
         profile: EngineProfileDto {

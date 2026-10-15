@@ -79,6 +79,8 @@ pub struct AnalysisPublicationScopeDto {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnalysisJobEventDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_focus_output: Option<crate::LocalFocusOutputDto>,
     pub run_id: String,
     pub job_id: String,
     pub lane: AnalysisJobLaneDto,
@@ -181,6 +183,7 @@ mod tests {
         with_frame: bool,
     ) -> AnalysisJobEventDto {
         AnalysisJobEventDto {
+            local_focus_output: None,
             run_id: run_id.into(),
             job_id: job_id.into(),
             lane: AnalysisJobLaneDto::SelectedNode,
@@ -355,6 +358,7 @@ mod tests {
     #[test]
     fn unified_job_progress_keeps_lane_generation_path_and_counts() {
         let event = AnalysisJobEventDto {
+            local_focus_output: None,
             run_id: "run-1".into(),
             job_id: "job-9".into(),
             lane: AnalysisJobLaneDto::WholeGame,
@@ -400,6 +404,7 @@ mod tests {
             score_mean_black: Some(1.5),
             score_stdev: Some(0.2),
             candidates: vec![CandidateMoveDto {
+                order: None,
                 pv_visits: None,
                 ownership: None,
                 vertex: MoveVertex::Point(PointDto { x: 3, y: 3 }),

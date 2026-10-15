@@ -326,6 +326,7 @@ impl CurrentGameState {
                 side_budget(&settings.pk_white, white),
             ]
         });
+        manager.retire_setup_for_foreground().map_err(invalid)?;
         let (id, baseline, staged, endpoint, position, turns) = {
             let mut holder = self.holder.lock().expect("current game state");
             self.interrupt_continuation();

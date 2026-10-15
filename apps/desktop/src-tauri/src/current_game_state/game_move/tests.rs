@@ -44,6 +44,7 @@ impl Rig {
         std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o755)).unwrap();
         let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
         catalog.upsert(SavedEngineProfile {
+            measured_scenes: Default::default(),
             profile_id: "engine".into(),
             profile: EngineProfileDto {
                 name: "fixture".into(),

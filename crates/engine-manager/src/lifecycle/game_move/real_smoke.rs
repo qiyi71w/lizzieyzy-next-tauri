@@ -134,6 +134,7 @@ fn real_exact_move_smoke() {
             },
         };
         catalog.upsert(SavedEngineProfile {
+            measured_scenes: Default::default(),
             profile_id: "real".into(),
             profile,
             thread_policy: Default::default(),

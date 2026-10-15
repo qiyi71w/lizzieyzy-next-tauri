@@ -135,6 +135,7 @@ fn real_public_acquisition_preserves_selection_and_qualifies_only_on_explicit_st
         max_visits: 1,
     });
     catalog.upsert(SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: "default".into(),
         profile: profile.clone(),
         thread_policy: Default::default(),
@@ -177,6 +178,7 @@ fn real_public_acquisition_preserves_selection_and_qualifies_only_on_explicit_st
     let config_bytes = std::fs::read(&installed.config_path).unwrap();
     std::fs::write(&installed.config_path, b"numAnalysisThreads = 999\n").unwrap();
     catalog.upsert(SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: "altered".into(),
         profile,
         thread_policy: Default::default(),

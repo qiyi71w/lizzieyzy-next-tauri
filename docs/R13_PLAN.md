@@ -1,8 +1,18 @@
 # R13 — 分析任务与展示
 
-Status: 滚动阶段计划；与 R12 联合安排的具名 KataGo GTP 主分析、隔离评估 runner 与手动入口已按批准 scope 交付并验收，见 [R12 完成证据](DEVELOPMENT.md#r12-completion-evidence)。其他 R13 决定、实现与验收仍由本阶段具名 owner 推进，不声明整个 R13 完成。
+Status (2026-10-15): **R13 按获批修订验收范围完成。** 最终运行候选 `cfaab53e41813dcb9762e974f2c436efa5d96729` 已完成集成验收、统一 Standards/Spec 成功审查及第15号只读 Closeout；[证据与限制](DEVELOPMENT.md#r13-bounded-acceptance)保留 G1–G3 原生正向延期、朗读豁免及原候选归属。R14 未启动；本地完成不表示已推送、合并 main 或发布。
 
 已交付范围：R12-10 完成 KataGo 1.18.2 的 selected-node/continuous 主分析，policy 与 whole-game 明确未准入；R12-13 完成冻结 saved-target 的实际可取消测量。R12-16 验证同一真实 GTP 进程的主分析、线程和 pair 组合。原始候选与条件见上述证据；以下能力/验收合同保留，剩余 B39/B40/B41/B45/B46 不由 B38 runner 代替。
+
+### 已交付范围与当前处置
+
+- 第一波及第二波原始 01–11 已经 PR #25 合入（`418bc74358c8f3d9dc0a230361140315c9b253ff`）：批量文件、自动快析/恢复/handback、续走、候选列表 B70、双指标 B39 与 saved CFG/BENCHMARK B41。其原生 17/17 与 22/22 包含继承及 changed-boundary 观察，不是最终提交上新跑 39 例。后续 PR #25 修复 `ae35956f2a34ccb6288ea51fb9b5574aa4356fd3` 保留原生候选归属。
+- 有限分析拆分 PR #26（`f2134a333ea4b7aa0870fd02d9d5f9d5950346c0`）完成 Rust 模块及 UI hook 边界；原生候选 `f0a7398ccf83a72adcf618097749157f7aa9eea3`、审查候选 `9dfeb517ebcc0a51cfcd6e89c2ba7e455d232615`。格式提交与 merge 同树，继承不是重跑；此拆分完成不等于整个 R13 完成。
+- 剩余票 01–13 已交付 B40 可访问反馈、同节点保留、闪电入口、自动任务控制、自定义评级、具名 CPU 重点分析、刷新合并、raw-net、报告校验/导入/测量/Apply/Restore 与预览输入所有权。七项调查按获批合同关闭；39 个 B ID / 37 个 source_ref 保持原来源归属，不以票数替代覆盖。
+- 本轮 A30 补齐测量租约与自动快析的实际进程 ownership 断言：Open 退役旧任务仍不得绕过有效测量租约；drain/worker 退出后才可建立新租约，Pause、当前 generation 及迟到帧隔离保持。源码修复仅收紧自动 admission，不改变正常自动快析。
+- 批准有界处置：G1 真实 LIVE 合格报告、G2 真实 LIVE Apply 后普通 Start/Restart 且保留 WHOLE、G3 双真实 accepted overlay Restore 暂缓；受控合格报告测试不充当这些原生正例。G4 已在 `05f17cd65776af96e70f4a33eb4618f201b5adcf` 原生 125% 观察通过。实际朗读由用户豁免，非 PASS。GPU focus/历史 054f/#445 未验，054d 归 R14；RAM 实验性质及发行/安装门不变。
+- 2026-10-14 规划的完整 25 项剩余 B 合同、raw-net 消费者与集成出口已由当前剩余规格承接；原 B40/focus 优先级不是删减其他来源。冻结 hover 120ms、SGF-only、不恢复 SQLite、单 manager/reader、原子偏好、固定报告 3/5 pairs 与 latency/memory 质量门均保持；本次仅调整获批验收处置。
+- R14 的 C01/C03/C17/C07/C09/C11/C15 继续各自消费具名本地结果和真实 host/service/account/readboard 前置，不以整个 R13 关闭为能力依赖。当前收尾授权不执行这些独立工作；原外部合同及 R15–R18 范围均未删除。
 
 ## 目标、完整范围与非目标
 
@@ -205,6 +215,8 @@ local same-tree focus包含054a/b/c/e/f：compatible binary真实probe、普通o
 
 以下 owner 是阶段内具名能力责任角色，实施细化时将阶段责任落到实际执行人；不是要求本轮解决所有未来选择。来源/协议/能力未证明保持 needs-info。普通工程设计不造审批；永久非等价才要逐项产品批准。
 
+当前执行解释：以下段落保留原来源问题、门与责任，不表示七项已关闭调查仍待重复设计。当前实施结果和批准的 G1–G4/朗读处置以上方状态及 DEVELOPMENT 证据节为准；未证明的硬件、发行与外部阶段义务仍保持未验。
+
 <a id="r13-gate-b11"></a>
 ### B11 来源问题（非新任务）
 
@@ -348,7 +360,7 @@ local same-tree focus包含054a/b/c/e/f：compatible binary真实probe、普通o
 - 环境：具名兼容本地真实引擎版本/协议/资源与原生UI；严格source focus/measurement阈值保持，GPU能力仅按实际准入。
 - 集成消费已经归属的 original candidate/条件证据，只执行最终 changed boundary gap；各全文适用 required modes/协议/失败/身份/恢复断言完整保留，不新增无理由次数、平台或全组合。没有兼容真实引擎/服务/凭据/目标硬件，完成reachable独立工作但对应门保持受阻。
 - 阶段退出：本阶段全部 required capability/Delta 有实际结果或逐项批准处置，required local/integration/native/service assertions 获证，保留残余发行或独立引擎编译 Not run。阶段实现与集成完成后统一 Spec/Standards 审查和集中修复、实际验收，再只读 Closeout；不逐票重复双轴审查。
-- 本计划不记录产品/native/真实服务/installed trust 验收通过；实际证据由对应能力与阶段验收负责人取得。
+- 当前记录分列原始候选的 repository、controlled process、真实 CPU、原生 UI 与批准暂缓/豁免；详见 DEVELOPMENT。最终 cfaab53 的集成验收、统一 Standards/Spec 审查和第15号只读 Closeout 均完成；具名延期不转写为原生 PASS。
 
 ## Baseline 与阶段启动细化规则
 

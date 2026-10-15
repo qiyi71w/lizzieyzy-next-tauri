@@ -241,6 +241,12 @@ impl ForegroundEngineManager {
     /// Reserves admission only. Process IO and cancellation happen during prepare.
     pub fn reserve_match(&self, owner: &str) -> Result<(), EngineFailureDto> {
         let mut state = self.lock();
+        if self.measured_reservation() {
+            return Err(reservation_failure(
+                EngineFailureKind::Occupied,
+                "A measurement scene owns the engine; explicitly Stop before Match admission.",
+            ));
+        }
         require_unreserved(&state)?;
         super::batch::admit(&state, None)?;
         game_move::require_idle_move(&state)?;
@@ -773,6 +779,8 @@ impl ForegroundEngineManager {
                     (
                         index,
                         EngineRunDto {
+                            measured_scenes_snapshot: Default::default(),
+                            measured_scene: None,
                             run_id: Uuid::new_v4().to_string(),
                             profile_id: old.profile_id.clone(),
                             adapter_kind: old.adapter_kind,

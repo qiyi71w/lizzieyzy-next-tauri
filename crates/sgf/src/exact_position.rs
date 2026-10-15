@@ -69,8 +69,8 @@ impl ExactPosition {
     pub(crate) fn from_nodes(nodes: &[&SgfNode]) -> Result<Self, String> {
         let root = nodes.first().ok_or("exact position requires an SGF root")?;
         let (board_width, board_height) = root_board_dimensions(root).map_err(|error| error.to_string())?;
-        if board_width != board_height || !(2..=19).contains(&board_width) {
-            return Err("exact position supports square boards from 2 through 19 only".into());
+        if !(2..=19).contains(&board_width) || !(2..=19).contains(&board_height) {
+            return Err("exact position supports board dimensions from 2 through 19 only".into());
         }
         let rules = match single_value(root, "RU")? {
             Some(value) if value.eq_ignore_ascii_case("Chinese") => ExactRulesDto::Chinese,
@@ -420,7 +420,8 @@ mod tests {
             "(;SZ[5]RU[Japanese])",
             "(;SZ[5]RU[Chinese]RU[Chinese-KGS])",
             "(;SZ[5]RU[Chinese][Chinese-KGS])",
-            "(;SZ[5:6]RU[Chinese])",
+            "(;SZ[9:20]RU[Chinese])",
+            "(;SZ[20:9]RU[Chinese])",
             "(;SZ[20]RU[Chinese])",
             "(;SZ[5]RU[Chinese]AW[aa])",
             "(;SZ[5]RU[Chinese]AB[aa][bb]AW[cc])",
@@ -547,6 +548,25 @@ mod tests {
         let simple = selected(&format!("(;SZ[5]RU[Chinese]{KO};W[];B[];W[bb])"));
         assert_eq!(simple.dto().to_play, PlayerColor::Black);
         rejected(&format!("(;SZ[5]RU[Chinese-KGS]{KO};W[];B[];W[bb])"));
+    }
+
+    #[test]
+    fn rectangular_position_preserves_edges_turn_and_ko_history() {
+        let position = selected("(;SZ[9:7]RU[Chinese]KM[7.5];B[ig];W[aa])");
+        assert_eq!((position.dto().board_width, position.dto().board_height), (9, 7));
+        assert_eq!(position.dto().to_play, PlayerColor::Black);
+        assert_eq!(position.dto().moves[0].vertex, point(8, 6));
+        assert!(position.validate_move(&point(8, 5)).is_ok());
+        for vertex in [point(8, 6), point(9, 0), point(0, 7)] {
+            assert!(position.validate_move(&vertex).is_err());
+        }
+        for rules in ["Chinese", "Chinese-KGS"] {
+            let ko = selected(&format!("(;SZ[9:7]RU[{rules}]{KO})"));
+            assert!(ko.validate_move(&point(1, 1)).is_err());
+            let passes = selected(&format!("(;SZ[9:7]RU[{rules}]{KO};W[];B[])"));
+            assert_eq!(passes.validate_move(&point(1, 1)).is_ok(), rules == "Chinese");
+        }
+        rejected("(;SZ[9:7]RU[Chinese];B[ig];B[aa])");
     }
 
     #[test]

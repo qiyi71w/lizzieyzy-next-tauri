@@ -11,6 +11,9 @@ mod batch_tests;
 #[cfg(unix)]
 #[path = "continuation_tests.rs"]
 mod continuation_tests;
+#[cfg(unix)]
+#[path = "node_analysis_reuse_tests.rs"]
+mod node_analysis_reuse_tests;
 #[test]
 fn confirmed_departure_hold_survives_navigation_and_preference_reload() {
     let manager = ForegroundEngineManager::new(
@@ -124,6 +127,7 @@ for line in sys.stdin:
         std::fs::write(directory.join("config"), "").unwrap();
         let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
         catalog.upsert(engine_manager::SavedEngineProfile {
+            measured_scenes: Default::default(),
             thread_policy: Default::default(),
             profile_id: "test".into(),
             profile: app_model::EngineProfileDto {
@@ -328,6 +332,7 @@ fn run_invalidation_rejects_already_queued_task_progress() {
             "restart" => engine.manager.restart().unwrap(),
             "switch" => {
                 engine.catalog.upsert(engine_manager::SavedEngineProfile {
+                    measured_scenes: Default::default(),
                     thread_policy: Default::default(),
                     profile_id: "replacement".into(),
                     profile: app_model::EngineProfileDto {
@@ -879,6 +884,7 @@ fn swing_selected_missing_required_score_fails_without_fake_deep_search() {
         .manager
         .set_capability_snapshot_for_tests(Some(EngineCapabilitySnapshotDto {
             adapter_kind: EngineBackend::KataGoAnalysis,
+            focus: Default::default(),
             game_move: true,
             gtp: None,
             analysis: Some(app_model::EngineAnalysisCapabilitiesDto {
@@ -909,6 +915,7 @@ fn swing_selected_missing_required_score_fails_without_fake_deep_search() {
         .manager
         .set_capability_snapshot_for_tests(Some(EngineCapabilitySnapshotDto {
             adapter_kind: EngineBackend::KataGoAnalysis,
+            focus: Default::default(),
             game_move: true,
             gtp: None,
             analysis: Some(app_model::EngineAnalysisCapabilitiesDto {

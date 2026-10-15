@@ -58,6 +58,7 @@ impl Rig {
         };
         let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
         catalog.upsert(SavedEngineProfile {
+            measured_scenes: Default::default(),
             profile_id: "engine".into(),
             profile: EngineProfileDto {
                 name: "pipe fixture".into(),
@@ -140,6 +141,29 @@ impl Drop for Rig {
         let _ = self.manager.teardown();
         let _ = std::fs::remove_dir_all(&self.dir);
     }
+}
+
+#[test]
+fn shared_rectangular_positions_do_not_expand_gnu_go_admission() {
+    let rig = Rig::new(false, "normal");
+    let before = rig.trace();
+    for size in ["9:7", "7"] {
+        let document = CurrentSgfDocument::open(&format!("(;SZ[{size}]RU[Chinese-KGS]KM[6.5])")).unwrap();
+        let mut request = rig.request(3000);
+        request.position = document.exact_position(&NodePath::default()).unwrap();
+        request.identity.node_path = NodePath::default();
+        let error = rig
+            .manager
+            .start_game_move(request)
+            .err()
+            .expect("unqualified dimensions");
+        assert!(error.message.contains("qualified GNU Go sizes"));
+        assert_eq!(rig.trace(), before);
+    }
+    assert!(matches!(
+        rig.manager.snapshot().lifecycle,
+        ForegroundEngineLifecycleDto::Ready { .. }
+    ));
 }
 
 #[test]

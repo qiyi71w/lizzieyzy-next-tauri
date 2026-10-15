@@ -550,6 +550,8 @@ mod tests {
             .profile
             .clone();
         let run = EngineRunDto {
+            measured_scenes_snapshot: Default::default(),
+            measured_scene: None,
             run_id: "retired-resource".into(),
             profile_id: "target".into(),
             adapter_kind: profile.adapter_kind(),

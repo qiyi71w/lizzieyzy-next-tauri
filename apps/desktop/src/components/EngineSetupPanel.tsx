@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { checkEngineAssets, loadEngineProfilesSettings, reorderEngineProfilesSettings, saveEngineProfilesSettings } from "../api/backend";
 import type { AssetCheckDto, EngineBackendDto, EngineFailureDto, EngineProfileDto, EngineProfileRecordDto, EngineStartupPolicyDto, StartupEvaluationSettingsDto, ForegroundEngineSnapshotDto } from "../domain/types";
+import type { ApplicationMeasurementDocumentDto, NodePath } from "../domain/types";
 import { profileHasPendingChanges, runFromSnapshot, verifiedEngineCapabilitiesLabel } from "../domain/foregroundEngine";
 import { t } from "../i18n/resources";
 import { EngineResourceDetails } from "./EngineResourceDetails";
@@ -13,16 +14,71 @@ import { threadPolicyMessage } from "./EngineThreadPolicyPanel";
 import { EnginePreloadPanel } from "./EnginePreloadPanel";
 import { RuntimeThreadsPanel } from "./RuntimeThreadsPanel";
 import { RuntimeParametersPanel } from "./RuntimeParametersPanel";
+import { MeasuredReportPanel } from "./MeasuredReportPanel";
 
 type Props = {
   disabled?: boolean;
   visible?: boolean;
+  documentGeneration?: number | null;
+  documentNode?: NodePath;
   engineSnapshot?: ForegroundEngineSnapshotDto | null;
   engineFailure?: EngineFailureDto | null;
   onProfilesChange?: (profiles: EngineProfileRecordDto[]) => void;
+  onMeasurementStart?: () => (document: ApplicationMeasurementDocumentDto) => void;
 };
 
-export function EngineSetupPanel({ disabled = false, visible = true, engineSnapshot = null, engineFailure = null, onProfilesChange }: Props) {
+export function EngineSetupPanel({ disabled = false, visible = true, documentGeneration = null, documentNode = { indices: [] }, engineSnapshot = null, engineFailure = null, onProfilesChange, onMeasurementStart }: Props) {
+  const panelRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!visible || !panel) return;
+    let pending: number | null = null;
+    const cancelReveal = () => {
+      if (pending !== null) cancelAnimationFrame(pending);
+      pending = null;
+    };
+    const revealFocus = (event: FocusEvent) => {
+      cancelReveal();
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      // Native focus first scrolls wide fields; a reverse Tab may leave a
+      // smaller control clipped by the document rather than the settings sheet.
+      pending = requestAnimationFrame(() => {
+        pending = null;
+        const page = document.scrollingElement;
+        if (!page || !panel.isConnected || !panel.contains(target)
+          || document.activeElement !== target || !target.getClientRects().length) return;
+        const rect = target.getBoundingClientRect();
+        const style = getComputedStyle(target);
+        const outline = style.outlineStyle === "none" ? 0
+          : Math.max(0, (parseFloat(style.outlineWidth) || 0) + (parseFloat(style.outlineOffset) || 0));
+        const left = rect.left - outline;
+        const right = rect.right + outline;
+        let visibleLeft = 0;
+        let visibleRight = document.documentElement.clientWidth;
+        for (let ancestor = target.parentElement; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement) {
+          if (!/^(auto|scroll|hidden|clip)$/.test(getComputedStyle(ancestor).overflowX)) continue;
+          const bounds = ancestor.getBoundingClientRect();
+          const clipLeft = bounds.left + ancestor.clientLeft;
+          const clipRight = clipLeft + ancestor.clientWidth;
+          // Moving the document cannot repair clipping inside a nested owner.
+          if (left < clipLeft || right > clipRight) return;
+          visibleLeft = Math.max(visibleLeft, clipLeft);
+          visibleRight = Math.min(visibleRight, clipRight);
+        }
+        if (right - left > visibleRight - visibleLeft) return;
+        if (left < visibleLeft) page.scrollLeft += Math.floor(left - visibleLeft);
+        else if (right > visibleRight) page.scrollLeft += Math.ceil(right - visibleRight);
+      });
+    };
+    panel.addEventListener("focusin", revealFocus);
+    panel.addEventListener("focusout", cancelReveal);
+    return () => {
+      cancelReveal();
+      panel.removeEventListener("focusin", revealFocus);
+      panel.removeEventListener("focusout", cancelReveal);
+    };
+  }, [visible]);
   const [profiles, setProfiles] = useState<EngineProfileRecordDto[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState("default");
   const [profileName, setProfileName] = useState("Local KataGo");
@@ -45,6 +101,10 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
   const modelOperation = useRef(false);
   const [modelBusy, setModelBusy] = useState(false);
   const editingProfile = profiles.find((record) => record.id === selectedProfileId)?.profile;
+  const assetInputKey = JSON.stringify([visible, selectedProfileId, profileName, enginePath, adapterKind, argv, modelPath, configPath, workingDir, maxVisits]);
+  const assetOwner = useRef({ key: assetInputKey, generation: 0, mounted: true });
+  if (assetOwner.current.key !== assetInputKey) { assetOwner.current.key = assetInputKey; assetOwner.current.generation++; }
+  useEffect(() => { assetOwner.current.mounted = true; return () => { assetOwner.current.mounted = false; assetOwner.current.generation++; }; }, []);
 
   function beginModelOperation() {
     if (disabled || catalogWritePending.current || modelOperation.current) return false;
@@ -307,12 +367,18 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
   }
 
   async function handleCheckAssets() {
+    if (!beginModelOperation()) return;
+    const generation = assetOwner.current.generation;
+    const current = () => assetOwner.current.mounted && assetOwner.current.generation === generation;
     try {
       const checks = await checkEngineAssets(buildProfile());
+      if (!current()) return;
       setAssetChecks(checks);
       setProfileStatus(assetStatus(checks));
     } catch (error) {
-      setProfileStatus(`Check failed: ${errorMessage(error)}`);
+      if (current()) setProfileStatus(`Check failed: ${errorMessage(error)}`);
+    } finally {
+      endModelOperation();
     }
   }
 
@@ -340,7 +406,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
   }
 
   return (
-    <section className="engine-setup-panel" aria-label="引擎设置" data-focus-owner="engine" tabIndex={-1}>
+    <section ref={panelRef} className="engine-setup-panel" aria-label="引擎设置" data-focus-owner="engine" tabIndex={-1}>
       <EngineDiagnosticsPanel engineSnapshot={snapshot} disabled={disabled} />
       <fieldset disabled={disabled || modelBusy} style={{ border: 0, padding: 0, minWidth: 0 }}>
       <div className="engine-run-row">
@@ -469,7 +535,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
         : adapterKind === "kata_go_gtp" ? t("engineRules.boundary")
         : "静态 adapter 上限：KataGoAnalysis 可提供单点、连续、整谱/task、候选/PV、胜率/分数、ownership/policy、visits 限制与协议取消；实际能力以当前 run 验证结果为准。"}</p>
       {adapterKind === "generic_gtp" ? <p className="message" role="status">启动后验证 GTP v2、引擎名称、版本与命令列表；保存配置不会验证协议或改变当前 run。</p> : null}
-      <p className="message" aria-label="当前 run 能力">{verifiedEngineCapabilitiesLabel(snapshot)}</p>
+      <p className="message engine-resource-message" aria-label="当前 run 能力">{verifiedEngineCapabilitiesLabel(snapshot)}</p>
       <EngineResourceDetails run={run} />
       {engineFailure && <section role="alert" className="message engine-resource-message">
         <h4>{t("engineResource.failure")}: {engineFailure.kind}</h4>
@@ -487,7 +553,7 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
         : null}
         <button onClick={() => void handleSaveProfile()} disabled={!canSave || catalogBusy}>保存配置</button>
         <button type="button" onClick={() => void handleReloadProfiles()} disabled={catalogBusy}>重新加载配置</button>
-        <button onClick={() => void handleCheckAssets()} disabled={disabled}>检查资源</button>
+        <button onClick={() => void handleCheckAssets()} disabled={disabled || catalogBusy || modelBusy}>检查资源</button>
       </div>
       {pendingChanges ? <p className="message" role="status">存在待应用更改。只有显式 Restart 才会替换当前 Foreground Engine Run。</p> : null}
       <p className="message">{profileStatus}</p>
@@ -505,9 +571,18 @@ export function EngineSetupPanel({ disabled = false, visible = true, engineSnaps
         </label>
         <p>{t("evaluation.startupHint")}</p>
       </div>
-      {visible && <EngineEvaluationPanel profiles={profiles} disabled={disabled || catalogBusy || modelBusy}
+      </fieldset>
+      {visible && <EngineEvaluationPanel profiles={profiles} currentRun={run} disabled={disabled || catalogBusy || modelBusy}
+        beginOperation={beginModelOperation} endOperation={endModelOperation}
         onPolicyBusyChange={(busy) => { catalogWritePending.current = busy; setCatalogBusy(busy); }}
         onProfilesSaved={(saved) => { setProfiles(saved); onProfilesChange?.(saved); }} />}
+      {visible && <MeasuredReportPanel target={profiles.find((profile) => profile.id === selectedProfileId)}
+        documentGeneration={documentGeneration} documentNode={documentNode}
+        onMeasurementStart={onMeasurementStart}
+        inputRevision={JSON.stringify([selectedProfileId, profileName, enginePath, adapterKind, argv, modelPath, configPath, workingDir, maxVisits])}
+        disabled={disabled || catalogBusy || modelBusy} beginOperation={beginModelOperation} endOperation={endModelOperation}
+        onProfilesSaved={(saved) => { setProfiles(saved); onProfilesChange?.(saved); }} />}
+      <fieldset disabled={disabled || modelBusy} style={{ border: 0, padding: 0, minWidth: 0 }}>
       {visible && <RuntimeThreadsPanel runId={run?.run_id ?? null} disabled={disabled || snapshot.lifecycle.state !== "ready"} />}
       {visible && <RuntimeParametersPanel runId={run?.run_id ?? null} disabled={disabled || snapshot.lifecycle.state !== "ready"} />}
       {assetChecks.length > 0 && (

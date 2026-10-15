@@ -341,6 +341,7 @@ const branchingGame: CurrentGameResultDto = {
 let root: Root | null = null;
 
 beforeEach(() => {
+  attachmentSequence = 1;
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   exportApi.exportSelectedLine.mockClear();
   exportApi.exportRenderedImage.mockClear();
@@ -1429,9 +1430,9 @@ describe("App candidate continuation preview", () => {
 describe("App stale review presentation", () => {
   it("drops candidate and hover presentation when the selected NodePath changes", async () => {
     currentGameFixture.mockResolvedValue(navigableRoot);
-    backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => (
-      path.indices.length === 0 ? navigableRoot : navigableChild
-    ));
+    backend.selectCurrentGameNode.mockImplementation(async (path: NodePath) => ({
+      ...(path.indices.length === 0 ? navigableRoot : navigableChild), snapshot_seq: attachmentSequence
+    }));
 
     const host = await renderApp();
     await readyEngine(host);
@@ -4616,7 +4617,9 @@ async function startSelectedNode(host: HTMLElement, jobId = "job-1") {
   });
 }
 
+let attachmentSequence = 1;
 async function completeSelectedNode(jobId: string, path: { indices: number[] }, frame: AnalysisFrameDto) {
+  const original: CurrentGameResultDto = await currentGameFixture.mock.results[0]?.value ?? initialGame;
   await act(async () => {
     listeners.onJob?.({
       run_id: "run-1",
@@ -4626,7 +4629,9 @@ async function completeSelectedNode(jobId: string, path: { indices: number[] }, 
       generation: 1,
       node_path: path,
       outcome: "completed",
-      frame
+      frame,
+      current_game: { ...original, snapshot_seq: ++attachmentSequence, dirty: true, selected_path: path,
+        snapshot: { ...original.snapshot, path, primary_analysis: frame } }
     });
     await Promise.all([
       backend.classifyProblems.mock.results.at(-1)?.value,

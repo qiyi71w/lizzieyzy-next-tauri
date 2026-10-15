@@ -61,6 +61,20 @@ describe("browser engine profile persistence", () => {
     expect(JSON.parse(localStorage.getItem(key)!)).toEqual(settings);
   });
 
+  it("preserves both measured scenes on ordinary saves without qualifying reports", async () => {
+    const settings = catalog();
+    const evidence = { report: { schemaVersion: 1, extra: ["preserved"] }, profile_revision: "saved", policy_revision: 0, accepted_at: "recorded" };
+    settings.profiles[0].measured_scenes = { revision: 2, live: evidence, whole_game: { ...evidence, profile_revision: "whole" } };
+    localStorage.setItem(key, JSON.stringify(settings));
+    const loaded = await loadEngineProfilesSettings();
+    expect(loaded.profiles[0].measured_scenes).toEqual(settings.profiles[0].measured_scenes);
+    const edited = catalog();
+    edited.profiles[0].profile.name = "manual edit";
+    const saved = await saveEngineProfilesSettings(edited);
+    expect(saved.profiles[0].measured_scenes).toEqual(settings.profiles[0].measured_scenes);
+    expect(saved.profiles[0].profile.argv).toEqual(settings.profiles[0].profile.argv);
+  });
+
   it.each([null, 0, 3, "1"])("rejects explicit unsupported version %s without rewriting it", async (version) => {
     const raw = JSON.stringify({ ...catalog(), version });
     localStorage.setItem(key, raw);

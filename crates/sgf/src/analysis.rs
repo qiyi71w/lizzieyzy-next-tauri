@@ -20,6 +20,40 @@ impl SgfAnalysisPayload {
         self.visits > 0
     }
 
+    /// Live ordinary results require a real candidate and PV; visits alone are
+    /// neither a complete result nor evidence that an imported cache is reusable.
+    pub fn is_complete_frame(
+        frame: &AnalysisFrameDto,
+        position: &crate::ExactPosition,
+        ownership_requested: bool,
+    ) -> bool {
+        let area = usize::from(position.dto().board_width) * usize::from(position.dto().board_height);
+        let valid_map = |map: &Vec<f32>| {
+            map.len() == area && map.iter().all(|v| v.is_finite() && (-1.0..=1.0).contains(v))
+        };
+        frame.visits > 0
+            && frame.winrate_black.is_finite()
+            && (0.0..=1.0).contains(&frame.winrate_black)
+            && frame.score_mean_black.is_none_or(f32::is_finite)
+            && frame.score_stdev.is_none_or(|v| v.is_finite() && v >= 0.0)
+            && frame.candidates.first().is_some_and(|candidate| {
+                candidate.visits > 0 && candidate.pv.first() == Some(&candidate.vertex)
+            })
+            && frame.candidates.iter().all(|candidate| {
+                candidate.winrate_black.is_finite()
+                    && (0.0..=1.0).contains(&candidate.winrate_black)
+                    && candidate.score_mean_black.is_none_or(f32::is_finite)
+                    && candidate
+                        .pv
+                        .first()
+                        .is_none_or(|vertex| vertex == &candidate.vertex)
+                    && position.validate_move(&candidate.vertex).is_ok()
+                    && candidate.ownership.as_ref().is_none_or(valid_map)
+            })
+            && frame.ownership.as_ref().is_none_or(valid_map)
+            && (!ownership_requested || frame.ownership.is_some())
+    }
+
     pub fn from_frame(frame: &AnalysisFrameDto, engine_name: impl Into<String>) -> Self {
         Self {
             engine_name: engine_name.into(),
@@ -158,6 +192,7 @@ fn parse_candidate(variation: &str, board_width: u8, board_height: u8) -> Option
     }
     let mut coordinate = None;
     let mut visits = 0;
+    let mut order = None;
     let mut winrate_black = 0.0;
     let mut policy_prior = None;
     let mut score_mean_black = None;
@@ -189,6 +224,7 @@ fn parse_candidate(variation: &str, board_width: u8, board_height: u8) -> Option
         match key {
             "move" => coordinate = Some(gtp_vertex(value, board_width, board_height)),
             "visits" => visits = parse_playouts(value),
+            "order" => order = value.parse().ok(),
             "winrate" => winrate_black = parse_playouts(value) as f32 / 10_000.0,
             "prior" => policy_prior = Some(parse_prior(value)),
             "scoreMean" => score_mean_black = parse_f32(value),
@@ -201,6 +237,7 @@ fn parse_candidate(variation: &str, board_width: u8, board_height: u8) -> Option
         pv.push(vertex.clone());
     }
     Some(CandidateMoveDto {
+        order,
         vertex,
         visits,
         winrate_black,
@@ -411,6 +448,9 @@ fn format_candidate(candidate: &CandidateMoveDto, board_width: u8, board_height:
         candidate.visits,
         (candidate.winrate_black * 10_000.0).round() as i32,
     );
+    if let Some(order) = candidate.order {
+        body.push_str(&format!(" order {order}"));
+    }
     if let Some(prior) = candidate.policy_prior {
         body.push_str(&format!(" prior {}", (prior * 10_000.0).round() as i32));
     }

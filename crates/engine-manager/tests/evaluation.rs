@@ -16,6 +16,7 @@ impl EngineProfileCatalog for DiskCatalog {
             .into_iter()
             .find(|r| r.id == id)
             .map(|r| SavedEngineProfile {
+                measured_scenes: Default::default(),
                 profile_id: r.id,
                 profile: r.profile,
                 thread_policy: r.thread_policy,
@@ -28,6 +29,7 @@ impl EngineProfileCatalog for DiskCatalog {
             .into_iter()
             .filter(|r| r.preload)
             .map(|r| SavedEngineProfile {
+                measured_scenes: Default::default(),
                 profile_id: r.id,
                 profile: r.profile,
                 thread_policy: r.thread_policy,
@@ -107,6 +109,7 @@ fn unknown_fixture_and_wrapper_never_spawn_even_a_version_probe() {
     ] {
         let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
         catalog.upsert(SavedEngineProfile {
+            measured_scenes: Default::default(),
             profile_id: "target".into(),
             thread_policy: Default::default(),
             profile: EngineProfileDto {
@@ -243,6 +246,7 @@ fn real_two_saved_ids_recommend_save_launch_and_effective_thread_readback() {
     settings.selected_profile_id = "a".into();
     for id in ["a", "b"] {
         settings.profiles.push(EngineProfileRecord {
+            measured_scenes: Default::default(),
             id: id.into(),
             preload: false,
             thread_policy: Default::default(),

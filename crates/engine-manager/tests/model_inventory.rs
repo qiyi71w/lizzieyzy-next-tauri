@@ -100,6 +100,7 @@ fn real_retained_selection_launches_without_rewriting_profile_inputs() {
     };
     let catalog = Arc::new(InMemoryEngineProfileCatalog::new());
     catalog.upsert(SavedEngineProfile {
+        measured_scenes: Default::default(),
         profile_id: "local-sample".into(),
         profile: profile.clone(),
         thread_policy: Default::default(),

@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { t } from "../i18n/resources";
 import type {
   AnalysisMoveActorFilterDto,
@@ -42,6 +42,11 @@ export type AnalysisScopeDraft = {
 };
 
 type Props = {
+  openRequest: number;
+  resetDisabled: boolean;
+  onResetDraft: () => void;
+  flashActive?: boolean;
+  onDismissFlash?: () => void;
   draft: AnalysisScopeDraft;
   preview: AnalysisScopePreviewDto | null;
   task: AnalysisTaskDto | null;
@@ -67,6 +72,14 @@ const modes: Array<{ value: AnalysisScopeModeDto; label: string }> = [
 export function AnalysisTaskPanel(props: Props) {
   const [visible, setVisible] = useState(true);
   const bodyId = useId();
+  const panelRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!props.openRequest) return;
+    setVisible(true);
+    panelRef.current?.focus();
+    panelRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [props.openRequest]);
+  useEffect(() => { if (props.flashActive) setVisible(true); }, [props.flashActive]);
   const reserved = props.task != null && ["queued", "searching", "pausing", "paused"].includes(props.task.state);
   const pauseable = props.task?.state === "queued" || props.task?.state === "searching";
   const continuable = props.task?.state === "paused";
@@ -105,7 +118,7 @@ export function AnalysisTaskPanel(props: Props) {
   }
 
   return (
-    <section className="sheet-row analysis-task-panel" aria-label="Analysis task">
+    <section ref={panelRef} tabIndex={-1} className="sheet-row analysis-task-panel" aria-label="Analysis task">
       <div className="document-row analysis-task-heading">
         <strong>{t("analysis.task.title")}</strong>
         <button
@@ -121,11 +134,15 @@ export function AnalysisTaskPanel(props: Props) {
         </button>
       </div>
       <div id={bodyId} className="sgf-tools" hidden={!visible}>
+        {props.flashActive ? <div role="status">部分闪电：第一子主线、双方、单阶段，仅显式闪电 visits。空起止端取首/末合法位置（含 move 0）。
+          <button type="button" disabled={props.busy} onClick={props.onDismissFlash}>取消闪电范围 / 返回普通任务</button>
+        </div> : null}
         <div className="document-row">
           <label>
             Strategy
             <select
               aria-label="Analysis strategy"
+              disabled={props.flashActive}
               value={props.draft.strategy}
               onChange={(event) => update({ strategy: event.target.value as AnalysisTaskStrategyDto })}
             >
@@ -138,6 +155,7 @@ export function AnalysisTaskPanel(props: Props) {
             Scope
             <select
               aria-label="Analysis scope"
+              disabled={props.flashActive}
               value={props.draft.mode}
               onChange={(event) => update({ mode: event.target.value as AnalysisScopeModeDto })}
             >
@@ -147,6 +165,7 @@ export function AnalysisTaskPanel(props: Props) {
           <label>
             <input
               aria-label="Use position interval"
+              disabled={props.flashActive}
               type="checkbox"
               checked={props.draft.intervalEnabled}
               onChange={(event) => update({ intervalEnabled: event.target.checked })}
@@ -181,6 +200,7 @@ export function AnalysisTaskPanel(props: Props) {
             To play
             <select
               aria-label="Side to play"
+              disabled={props.flashActive}
               value={props.draft.toPlay}
               onChange={(event) => update({ toPlay: event.target.value as PlayerColor | "both" })}
             >
@@ -236,7 +256,7 @@ export function AnalysisTaskPanel(props: Props) {
               </label>
             </fieldset>
           ) : null}
-          <fieldset>
+          <fieldset disabled={props.flashActive}>
             <legend>{singleStage ? "Single-stage" : "Deep"} conditions (any enabled condition ends the search)</legend>
             <label>
               <input
@@ -316,6 +336,7 @@ export function AnalysisTaskPanel(props: Props) {
           <button type="button" onClick={props.onPause} disabled={props.busy || !pauseable}>Pause task</button>
           <button type="button" onClick={props.onContinue} disabled={!props.canRun || props.busy || !continuable}>Continue task</button>
           <button type="button" onClick={props.onCancel} disabled={props.busy || !reserved}>Cancel task</button>
+          <button type="button" onClick={props.onResetDraft} disabled={props.resetDisabled}>重置草稿</button>
         </div>
         {props.preview ? (
           <p role="status">

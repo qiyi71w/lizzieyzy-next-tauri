@@ -5,6 +5,8 @@ use uuid::Uuid;
 
 mod display;
 pub use display::*;
+mod move_rank;
+pub use move_rank::{MoveRankMode, MoveRankPreferencesDto};
 
 mod workspace;
 pub use workspace::WorkspaceSharesDto;
@@ -21,12 +23,16 @@ mod continuation;
 pub use continuation::*;
 mod game_move;
 pub use game_move::*;
+mod raw_net;
+pub use raw_net::*;
 mod match_session;
 pub use match_session::*;
 mod managed_resources;
 pub use managed_resources::*;
 mod evaluation;
 pub use evaluation::*;
+mod measured_report;
+pub use measured_report::*;
 mod runtime_threads;
 pub use runtime_threads::*;
 mod runtime_parameters;
@@ -421,6 +427,8 @@ impl std::error::Error for CurrentGameError {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CandidateMoveDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<u32>,
     pub vertex: MoveVertex,
     pub visits: u32,
     pub winrate_black: f32,
@@ -763,11 +771,24 @@ pub struct EnginePreloadDto {
 pub struct EngineCapabilitySnapshotDto {
     pub adapter_kind: EngineBackend,
     pub analysis: Option<EngineAnalysisCapabilitiesDto>,
+    #[serde(default)]
+    pub focus: FocusCapabilityDto,
     /// Adapter implementation is available; each request still requires exact admission.
     #[serde(default)]
     pub game_move: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gtp: Option<EngineGtpFactsDto>,
+}
+
+/// Observed only on this process incarnation; never inferred from version/discovery.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FocusCapabilityDto {
+    #[default]
+    Unchecked,
+    Supported,
+    Unsupported,
+    Uncertain,
 }
 
 /// Observed protocol facts only; command discovery does not admit game operations.
@@ -825,6 +846,10 @@ pub struct EngineRunDto {
     pub profile_snapshot: EngineProfileDto,
     #[serde(default)]
     pub thread_policy_snapshot: SavedThreadPolicyDto,
+    #[serde(default)]
+    pub measured_scenes_snapshot: MeasuredScenesDto,
+    #[serde(default)]
+    pub measured_scene: Option<MeasuredSceneDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability_snapshot: Option<EngineCapabilitySnapshotDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -891,6 +916,8 @@ pub struct ContinuousAnalysisSnapshotDto {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ForegroundEngineSnapshotDto {
+    #[serde(default)]
+    pub local_focus: LocalFocusSnapshotDto,
     pub revision: u64,
     pub lifecycle: ForegroundEngineLifecycleDto,
     #[serde(default)]
@@ -912,6 +939,7 @@ impl ForegroundEngineSnapshotDto {
         Self {
             revision,
             lifecycle,
+            local_focus: LocalFocusSnapshotDto::default(),
             continuous: ContinuousAnalysisSnapshotDto::default(),
             auto_load: AutoLoadSnapshotDto::default(),
             auto_load_recovery: None,
@@ -966,6 +994,8 @@ pub struct AppHealthDto {
     pub notes: Vec<String>,
 }
 
+mod local_focus;
+pub use local_focus::*;
 mod network;
 pub use network::*;
 mod yike;
@@ -1450,6 +1480,7 @@ mod foreground_engine_wire {
     #[test]
     fn foreground_engine_snapshot_and_failure_keep_snake_case_identities() {
         let snapshot = ForegroundEngineSnapshotDto {
+            local_focus: Default::default(),
             revision: 4,
             auto_load: Default::default(),
             auto_load_recovery: None,
@@ -1457,6 +1488,8 @@ mod foreground_engine_wire {
             game_move_job: None,
             lifecycle: ForegroundEngineLifecycleDto::Ready {
                 run: EngineRunDto {
+                    measured_scenes_snapshot: Default::default(),
+                    measured_scene: None,
                     run_id: "run-1".into(),
                     profile_id: "profile-1".into(),
                     adapter_kind: EngineBackend::KataGoAnalysis,
@@ -1474,6 +1507,7 @@ mod foreground_engine_wire {
                     })),
                     capability_snapshot: Some(EngineCapabilitySnapshotDto {
                         adapter_kind: EngineBackend::KataGoAnalysis,
+                        focus: FocusCapabilityDto::Unchecked,
                         game_move: true,
                         gtp: None,
                         analysis: Some(EngineAnalysisCapabilitiesDto {
@@ -1571,6 +1605,8 @@ mod foreground_engine_wire {
     #[test]
     fn foreground_engine_lifecycle_tagged_union_includes_switching_variant() {
         let run = EngineRunDto {
+            measured_scenes_snapshot: Default::default(),
+            measured_scene: None,
             run_id: "run-b".into(),
             profile_id: "profile-b".into(),
             adapter_kind: EngineBackend::KataGoAnalysis,
@@ -1580,6 +1616,7 @@ mod foreground_engine_wire {
             thread_policy_snapshot: Default::default(),
         };
         let snapshot = ForegroundEngineSnapshotDto {
+            local_focus: Default::default(),
             revision: 1,
             auto_load: Default::default(),
             auto_load_recovery: None,
@@ -1588,6 +1625,8 @@ mod foreground_engine_wire {
             lifecycle: ForegroundEngineLifecycleDto::Switching {
                 primary: run.clone(),
                 candidate: Box::new(EngineRunDto {
+                    measured_scenes_snapshot: Default::default(),
+                    measured_scene: None,
                     run_id: "run-c".into(),
                     ..run
                 }),
@@ -1608,6 +1647,7 @@ mod foreground_engine_wire {
     #[test]
     fn no_engine_omits_clean_failure_and_keeps_attempt_scoped_payload() {
         let clean = ForegroundEngineSnapshotDto {
+            local_focus: Default::default(),
             revision: 1,
             auto_load: Default::default(),
             auto_load_recovery: None,
@@ -1637,6 +1677,7 @@ mod foreground_engine_wire {
             diagnostic_summary: None,
         };
         let failed = ForegroundEngineSnapshotDto {
+            local_focus: Default::default(),
             revision: 3,
             auto_load: Default::default(),
             auto_load_recovery: None,
