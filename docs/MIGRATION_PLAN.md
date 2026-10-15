@@ -1,6 +1,6 @@
 # Migration Plan
 
-Current execution note (2026-10-15): R11 and the approved R12 scope remain complete. R13 first-wave/second-wave workflows merged through PR #25 (`418bc74358c8f3d9dc0a230361140315c9b253ff`); the finite-analysis split merged through PR #26 (`f2134a333ea4b7aa0870fd02d9d5f9d5950346c0`). The approved remaining R13 scope is at bounded integrated acceptance, with final Spec/Standards review and read-only Closeout still pending. [R13 evidence](DEVELOPMENT.md#r13-bounded-acceptance) distinguishes inherited candidates, changed ownership acceptance, approved LIVE deferrals and the spoken-AT waiver. Historical frontier text below is provenance; no R14 execution, composite parity or installed/release acceptance follows from this reconciliation.
+Current execution note (2026-10-15): R11 and the approved R12 scope remain complete. R13 first-wave/second-wave workflows merged through PR #25 (`418bc74358c8f3d9dc0a230361140315c9b253ff`); the finite-analysis split merged through PR #26 (`f2134a333ea4b7aa0870fd02d9d5f9d5950346c0`). R13 is locally complete under the approved bounded acceptance scope at runtime candidate `cfaab53e41813dcb9762e974f2c436efa5d96729`, with successful integrated acceptance, Standards/Spec review and read-only Closeout. [R13 evidence](DEVELOPMENT.md#r13-bounded-acceptance) preserves inherited candidates, G1–G3 native deferrals and the spoken-AT waiver. R14 is not started; no push, main merge, release or blanket composite-parity acceptance is claimed.
 
 ## Goal
 
@@ -921,7 +921,7 @@ This table preserves the 25 historical Deferred IDs and their owner/admission cl
 
 ## Next Executable Stage
 
-R11 and the approved R12 spec remain complete within their recorded scopes. Consume their existing evidence and the [R13 bounded acceptance record](DEVELOPMENT.md#r13-bounded-acceptance), including preserved first-wave and finite-split reconciliation, instead of restarting completed work. R13 next requires root-owned final Spec/Standards review, bounded repairs if needed, then read-only Closeout; this owner handoff does not close the stage. Approved G1–3 deferrals and the speech waiver remain visible alongside unverified GPU, external and installed/release surfaces. Any later R14 or deferred-capability work needs its own authorization and actual prerequisites. [Owner routes](MIGRATION_ROUTES.json), [source dependencies](MIGRATION_SOURCE_MAP.md) and [source contracts](MIGRATION_CONTRACTS.md) remain binding; this synchronization authorizes no new scope or runtime acceptance.
+R11, the approved R12 spec and the amended R13 scope are complete within their recorded boundaries. Consume their existing evidence and the [R13 bounded acceptance record](DEVELOPMENT.md#r13-bounded-acceptance), including first-wave and finite-split reconciliation, instead of restarting completed work. R13 final Standards/Spec review and read-only Closeout succeeded at `cfaab53e41813dcb9762e974f2c436efa5d96729`; approved G1–G3 deferrals and the speech waiver remain visible alongside unverified GPU, external and installed/release surfaces. R14 and deferred-capability work remain unstarted and require separate authorization and actual prerequisites. [Owner routes](MIGRATION_ROUTES.json), [source dependencies](MIGRATION_SOURCE_MAP.md) and [source contracts](MIGRATION_CONTRACTS.md) remain binding.
 
 ### Historical completed batches
 

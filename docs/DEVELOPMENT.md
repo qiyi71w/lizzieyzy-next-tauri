@@ -1293,7 +1293,7 @@ Original R12 authority: `/home/dev/dev/weiqi/worktrees/lizzieyzy-next-tauri/r12-
 
 ## R13 Bounded Acceptance
 
-As of 2026-10-15, implementation and candidate-specific acceptance for the approved remaining R13 scope feed bounded integrated acceptance. Final shared Spec/Standards review and read-only Closeout are still pending. This section supersedes earlier scheduling statements that first-wave native tickets 05/10 or remaining tickets 01–13 have not run; it does not relabel old observations as new final-candidate runs. Acceptance checklists above remain reusable instructions, not evidence that each was rerun here.
+As of 2026-10-15, R13 is locally complete under the approved bounded acceptance scope. Integrated runtime candidate `cfaab53e41813dcb9762e974f2c436efa5d96729` passed final shared Standards/Spec review and ticket15 read-only Closeout. This section supersedes earlier scheduling statements that first-wave native tickets 05/10 or remaining tickets 01–13 have not run; original observations retain their candidate attribution. Acceptance checklists above remain reusable instructions, not evidence that each was rerun here.
 
 ### Preserved First-Wave And Finite-Split Evidence
 
@@ -1329,7 +1329,7 @@ The changed seam is automatic admission only: ordinary measured-scene launch, sa
 - G1 genuine LIVE-qualified report; G2 genuine LIVE Apply followed by ordinary Start/Restart while retaining WHOLE; G3 dual genuinely accepted overlays then Restore: **explicitly deferred by the approved bounded-closeout amendment**. Negative native evidence and controlled positive fixtures do not satisfy these original positive observations. Product schema, quality thresholds and identity checks are unchanged. RAM remains experimental.
 - G4 native report labels/focus at 125% passed on exact05f17cd above. Actual spoken AT is waived, not passed. GPU focus/historical054f/#445, external054d and installed/release obligations remain separate; no composite parity promotion follows from stage acceptance.
 - Matrix reconciles original frozen-scope ANA-07/19/20 and ENG-12/13 evidence. ANA-17/18 and ENG-14/15 retain Partial with explicit limits. All 39 unique B IDs and 37 source references retain their source contracts/routes; seven closed investigations are not restarted merely because historical plan paragraphs remain.
-- Next action is root-owned final Spec/Standards review, any approved bounded repair and read-only Closeout. No new R14, release, push or worktree cleanup is authorized here.
+- Final FULL_REVIEW batch1 covered the complete `f2134a333ea4b7aa0870fd02d9d5f9d5950346c0` → `cfaab53e41813dcb9762e974f2c436efa5d96729` change: 154 tracked paths, all01–14 tickets, Standards SUCCESS and Spec SUCCESS, zero new findings/follow-ups and no coverage gaps. Parent verified unchanged HEAD/diff/status/untracked contents before accepting both results. Ticket15 consumed that shared review once and reconciled the historical ledgers read-only. STD-02/04 remain two FIX candidates; STD-03 and R13-STARTUP-DIAG-01 remain two DIAGNOSE candidates, not automatically scheduled work. Local records are in `.scratch/r13-remaining/evidence/{final-review-cfaab53,15-read-only-closeout-cfaab53}.md` in the migration-next-20261014 tracker checkout. No R14, push/PR, main merge, release or worktree cleanup was performed; this final status update is documentation-only.
 
 ## Documentation Acceptance
 

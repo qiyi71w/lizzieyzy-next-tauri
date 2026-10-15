@@ -1,6 +1,6 @@
 # R13 — 分析任务与展示
 
-Status (2026-10-15): 已批准 R13 剩余范围进入有界集成验收收尾；逐项实现/实际验收及批准处置见 [证据与限制](DEVELOPMENT.md#r13-bounded-acceptance)。最终统一 Spec/Standards 审查及只读 Closeout 尚待 root 执行，不声明整个 R13 已关闭，也不启动 R14。
+Status (2026-10-15): **R13 按获批修订验收范围完成。** 最终运行候选 `cfaab53e41813dcb9762e974f2c436efa5d96729` 已完成集成验收、统一 Standards/Spec 成功审查及第15号只读 Closeout；[证据与限制](DEVELOPMENT.md#r13-bounded-acceptance)保留 G1–G3 原生正向延期、朗读豁免及原候选归属。R14 未启动；本地完成不表示已推送、合并 main 或发布。
 
 已交付范围：R12-10 完成 KataGo 1.18.2 的 selected-node/continuous 主分析，policy 与 whole-game 明确未准入；R12-13 完成冻结 saved-target 的实际可取消测量。R12-16 验证同一真实 GTP 进程的主分析、线程和 pair 组合。原始候选与条件见上述证据；以下能力/验收合同保留，剩余 B39/B40/B41/B45/B46 不由 B38 runner 代替。
 
@@ -360,7 +360,7 @@ local same-tree focus包含054a/b/c/e/f：compatible binary真实probe、普通o
 - 环境：具名兼容本地真实引擎版本/协议/资源与原生UI；严格source focus/measurement阈值保持，GPU能力仅按实际准入。
 - 集成消费已经归属的 original candidate/条件证据，只执行最终 changed boundary gap；各全文适用 required modes/协议/失败/身份/恢复断言完整保留，不新增无理由次数、平台或全组合。没有兼容真实引擎/服务/凭据/目标硬件，完成reachable独立工作但对应门保持受阻。
 - 阶段退出：本阶段全部 required capability/Delta 有实际结果或逐项批准处置，required local/integration/native/service assertions 获证，保留残余发行或独立引擎编译 Not run。阶段实现与集成完成后统一 Spec/Standards 审查和集中修复、实际验收，再只读 Closeout；不逐票重复双轴审查。
-- 当前记录分列原始候选的 repository、controlled process、真实 CPU、原生 UI 与批准暂缓/豁免；详见 DEVELOPMENT。阶段验收 owner 完成后仍须 root 的最终审查及只读 Closeout，不能用本文状态代替它们。
+- 当前记录分列原始候选的 repository、controlled process、真实 CPU、原生 UI 与批准暂缓/豁免；详见 DEVELOPMENT。最终 cfaab53 的集成验收、统一 Standards/Spec 审查和第15号只读 Closeout 均完成；具名延期不转写为原生 PASS。
 
 ## Baseline 与阶段启动细化规则
 
