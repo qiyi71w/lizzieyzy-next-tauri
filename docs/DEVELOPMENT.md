@@ -29,6 +29,20 @@ Local development validation is strictly scoped to the **affected surface** of e
   5. *Native gap*: what cannot be proven without native OS/hardware runtime and remains pending.
 - **Evidence Reuse & Ticket Dimensions**: Preserve exact frozen ticket dimensions. Evidence reuse must record provenance and equivalence so that already-verified, unchanged contracts are not re-run redundantly, and final affected smoke does not duplicate existing proofs.
 
+### Controlled Measured-Report Acceptance
+
+Run the focused catalog and real-pipe manager checks on Linux with Python 3 available:
+
+```bash
+cargo test -p engine-manager --test measured_report scene_apply_restore_and_full_saves_preserve_manual_bytes_and_other_ids -- --exact
+cargo test -p engine-manager --test measured_report accepted_live_launch_restart_and_whole_scene_isolation -- --exact --nocapture
+```
+
+The catalog check applies both scene orders, preserves manual argv/cwd and unrelated profiles through full-save preparation, and checks dual-overlay Restore and stale-revision refusal. The process check isolates its `nvidia-smi` shim in a child test process, uses synthetic quality rows bound to temporary resources, and exercises production Review/Apply, ordinary Start/Restart adoption, changed-resource fallback, WHOLE consumer admission and owned-process reaping. It does not access the user's catalog or run GPU measurements.
+
+These are controlled contract checks, not evidence of genuine LIVE performance qualification, native LIVE adoption, or native Restore with two genuinely qualified overlays. Real GPU/application reports, native interaction, and experimental total-GPU/RAM limitations retain their separate acceptance requirements.
+
+
 ### Function-first Evidence And Planning Checks
 
 The current R11–R17 functional route precedes R18 release acceptance (old, unexecuted R11 Release); see Matrix’s `ITEM::functional` records for exact inherited candidate/platform/service scope. A functional pass is not whole-item Accepted. Failed/unavailable required checks block the affected dependency; native/service acceptance cannot be replaced by repository fixtures or a review verdict. This documentation-only stage revision requires preservation/relationship checks and reader-navigation smoke, not repeated product/native runs. All planning implementation/integration tasks precede one integrated dual-axis review and centralized repair, then required actual acceptance and read-only Closeout; review does not publish the new R11 task group.
