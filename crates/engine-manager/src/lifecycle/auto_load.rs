@@ -151,6 +151,12 @@ impl ForegroundEngineManager {
         request: WholeGameJobRequest,
         scope: AnalysisScopeDto,
     ) -> Result<AnalysisTaskDto, EngineFailureDto> {
+        if self.measured_reservation() {
+            return Err(continuous_invalid_state(
+                &self.lock(),
+                "A leased measurement scene owns this Run; explicitly Stop before automatic analysis admission",
+            ));
+        }
         let conditions = AnalysisStageConditionsDto {
             time_seconds: app_model::AnalysisTaskLimitDto {
                 enabled: false,

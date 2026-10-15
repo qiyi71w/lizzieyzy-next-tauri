@@ -90,6 +90,143 @@ fn setup() -> (LiveFixture, CurrentGameState) {
 }
 
 #[test]
+fn measured_owner_retirement_preserves_pause_and_new_document_authority() {
+    use app_model::{BatchCommandDto, BatchOutputAuthorizationDto, MeasuredSceneDto};
+    let (engine, state) = setup();
+    engine
+        .manager
+        .set_continuous_preferences(false, Default::default())
+        .unwrap();
+    let opened = state.replace("(;SZ[9]C[measurement];B[dd])", None).unwrap();
+    let lease = engine.manager.begin_setup_operation().unwrap();
+    lease
+        .begin_row(
+            "test",
+            MeasuredSceneDto::WholeGame,
+            1,
+            false,
+            [
+                ("numAnalysisThreads".into(), 1),
+                ("numSearchThreadsPerAnalysisThread".into(), 1),
+                ("nnMaxBatchSize".into(), 1),
+            ]
+            .into(),
+        )
+        .unwrap();
+    let run = engine
+        .manager
+        .start_independent_measured_scene("test", MeasuredSceneDto::WholeGame, &lease)
+        .unwrap();
+    let preview = state
+        .preview_analysis_scope(
+            opened.generation,
+            app_model::AnalysisScopeDto {
+                mode: app_model::AnalysisScopeModeDto::FirstChildMainline,
+                current_node: NodePath::default(),
+                branch_choices: vec![],
+                interval: None,
+                to_play: None,
+            },
+            None,
+        )
+        .unwrap();
+    let task = state
+        .start_measured_analysis_task(
+            &engine.manager,
+            run.run_id.clone(),
+            preview,
+            app_model::AnalysisStageConditionsDto::default(),
+            &lease,
+        )
+        .unwrap();
+    let old_frame = loop {
+        let event = engine.events.recv_timeout(Duration::from_secs(8)).unwrap();
+        if let app_model::ForegroundEngineEventDto::Job { job } = event {
+            if job.job_id == task.job_id && job.frame.is_some() {
+                break job;
+            }
+        }
+    };
+    let batch_path = engine.directory.join("competing.sgf");
+    std::fs::write(&batch_path, "(;SZ[9];B[aa])").unwrap();
+    engine
+        .manager
+        .batch_command(BatchCommandDto::Intake {
+            paths: vec![batch_path.to_string_lossy().into()],
+            conditions: Default::default(),
+        })
+        .unwrap();
+    let blocked = engine
+        .manager
+        .batch_command(BatchCommandDto::Start {
+            output: BatchOutputAuthorizationDto::SessionOnly,
+        })
+        .unwrap_err();
+    assert!(blocked.contains("measurement"), "{blocked}");
+    let blocked = state
+        .start_continuation(
+            &engine.manager,
+            opened.generation,
+            opened.selected_path,
+            vec![],
+            Default::default(),
+            engine.manager.continuation_epoch(),
+        )
+        .unwrap_err();
+    assert!(blocked.contains("measurement"), "{blocked}");
+    let replacement = load(&engine, &state, "(;SZ[9]C[new document];B[cc])", Source::Open);
+    assert!(replacement.generation > opened.generation);
+    state.reconcile_auto_load();
+    assert!(engine.manager.snapshot().selected_node_job.is_none());
+    assert_ne!(engine.manager.snapshot().auto_load.phase, AutoPhase::Running);
+    let before = state.serialize().unwrap();
+    assert!(state.attach_from_job_event(&old_frame).is_none());
+    assert_eq!(state.serialize().unwrap(), before);
+    engine.manager.retire_setup_operation().unwrap();
+    assert!(lease.check().is_err());
+    assert!(engine.manager.begin_setup_operation().is_err());
+    engine.manager.stop_measured_scene(&run.run_id).unwrap();
+    assert_eq!(engine.manager.measured_process_count(), 0);
+    drop(lease);
+    assert!(!engine.manager.setup_operation_busy());
+    let fresh = engine.manager.begin_setup_operation().unwrap();
+    assert!(fresh.check().is_ok());
+    drop(fresh);
+    assert_eq!(engine.manager.snapshot().continuous.enabled, Some(false));
+    assert!(engine.manager.snapshot().selected_node_job.is_none());
+    assert!(state.attach_from_job_event(&old_frame).is_none());
+    assert_eq!(state.serialize().unwrap(), before);
+    engine
+        .manager
+        .set_auto_load_preferences(app_model::AutoLoadPreferencesDto {
+            enabled: false,
+            total_visits: 1,
+        })
+        .unwrap();
+    engine.manager.start("test").unwrap();
+    pump(&engine, &state, || {
+        matches!(
+            engine.manager.snapshot().lifecycle,
+            app_model::ForegroundEngineLifecycleDto::Ready { .. }
+        )
+    });
+    assert!(engine.manager.snapshot().selected_node_job.is_none());
+    engine
+        .manager
+        .set_continuous_preferences(true, Default::default())
+        .unwrap();
+    pump(&engine, &state, || {
+        engine.manager.snapshot().selected_node_job.is_some()
+    });
+    let current = engine.manager.snapshot().selected_node_job.unwrap();
+    assert_eq!(current.generation, replacement.generation);
+    assert_eq!(current.node_path, replacement.selected_path);
+    assert_ne!(current.run_id, run.run_id);
+    assert!(state.attach_from_job_event(&old_frame).is_none());
+    engine.manager.teardown().unwrap();
+}
+
+#[test]
 fn auto_load_refused_finite_capability_releases_ordinary_without_retry() {
     let (engine, state) = setup();
     engine
