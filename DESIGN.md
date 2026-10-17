@@ -66,6 +66,8 @@ Tokens live on `:root`. This release ships only the light default.
 
 Desktop parity references [Migration Baseline v1](docs/JAVA_BASELINE.md), fixed at Java commit `7b4027531c2b26062d0bfc27a040cc550cfbea4d`. Later Java screenshots or UI changes are not implicit design requirements; add them through an explicit parity decision.
 
+The approved increment through `af0e07a7386483f3bfc8a15780de72ffc2f0de4c` and the [2026-10-17 faithful migration policy](docs/MIGRATION_PLAN.md#faithful-migration-correction--approved-2026-10-17) also apply. Preserve Java layout, major styling, information density and operation habits; native-control polish must not silently remove modes, move entry points or rearrange the workbench. The restored complementary winrate curves, Sub-Board first-sense/search heatmaps and full move-number modes remain outstanding, not visually accepted. Existing title/border rules are retained pending same-state evidence; this document change claims no pixel or runtime equivalence.
+
 For every screenshot used as acceptance evidence, record:
 
 - Baseline name and parity item ID.

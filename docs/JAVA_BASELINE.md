@@ -2,7 +2,7 @@
 
 ## Baseline
 
-LizzieYzy Next uses the Java/Swing maintenance line only as a source of observable behavior. It does not migrate Java source, Swing structure, configuration classes, or Git history into this repository.
+LizzieYzy Next faithfully migrates the Java/Swing maintenance line's normal logic, user capabilities, operation habits, data semantics, UI layout and major styling within the approved reference range. Java algorithms, condition branches, defaults and state transitions may be consulted and ported behind the existing Rust/TypeScript boundaries. This does not require copying Java/Swing class structures, configuration classes, mutable globals or Git history, or restarting the existing Next implementation.
 
 Migration Baseline v1 is fixed at:
 
@@ -16,9 +16,11 @@ Migration Baseline v1 is fixed at:
 
 The commit is immutable. Later Java `main` changes do not silently expand or alter the Next migration target.
 
+The approved increment through `af0e07a7386483f3bfc8a15780de72ffc2f0de4c` is governed by [UPSTREAM_DELTA.md](UPSTREAM_DELTA.md). The 2026-10-17 correction retains v1 plus that increment; it does not follow current Java `main`. Severe correctness fixes on supported paths remain subject to timely assessment; other later changes follow the existing R17 append policy.
+
 ## What The Baseline Controls
 
-The baseline answers one question: what user-visible behavior must Next reproduce or deliberately replace?
+The baseline answers one question: what user-visible behavior must Next preserve? Non-equivalent replacement or removal requires a named, still-effective product decision; historical acceptance proves only its recorded scope and candidate.
 
 Use it for:
 
@@ -49,7 +51,7 @@ Changing the fixed commit requires a named successor such as `Migration Baseline
 
 ## Frozen Behavior References
 
-These Java-line changes identify behavior to extract. They are not implementation templates.
+These Java-line changes identify behavior to extract. Their business algorithms and state logic are valid implementation references; their Java/Swing structure is not a required Next template.
 
 | Reference | Observable behavior to preserve |
 | --- | --- |

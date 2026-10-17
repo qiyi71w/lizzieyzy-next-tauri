@@ -4,7 +4,7 @@ Current execution note (2026-10-15): R11 and the approved R12 scope remain compl
 
 ## Goal
 
-LizzieYzy Next remains the Tauri 2, Rust, and TypeScript product already implemented in this repository. Migration means reproducing or deliberately replacing observable behavior from the Java/Swing maintenance line; it does not mean translating Java source, preserving Swing internals, importing Java Git history, or restarting the Tauri implementation.
+LizzieYzy Next remains the Tauri 2, Rust, and TypeScript product already implemented in this repository. Migration means faithfully preserving normal Java behavior within the approved reference range, including operation habits, data semantics, UI layout and major styling. Consult and port Java business algorithms and state transitions where appropriate; do not copy Swing structure or import Java Git history, and do not restart the Tauri implementation. Non-equivalent changes require a named, still-effective product decision.
 
 The migration is planned as complete user workflows:
 
@@ -46,6 +46,17 @@ The current Delivery Order is R11 常用复盘与操作 → R12 引擎资源与�
 Two approved future directions remain obligations: one Direct/System/Manual policy for Next-owned remote HTTP(S)/WebSocket(S), including providers, compute, contribution and updates (excluding browser-owned traffic, local sidecars and SSH); and an explicit whitelist Java settings import for supported engine/display values with preview and atomic confirmation, no Java writes or automatic engine start. Their successor admission is separate from ANA-16; older narrower transport/import dispositions are historical, not the final migration scope.
 
 The [2026-09-12 decision record](../.scratch/migration-planning-20260912/planning.md) carries Q1–Q24 and their primary evidence. The [current-game task spec](../.scratch/current-game-analysis-tasks/spec.md) implements the approved planning boundary, not a runtime completion claim.
+
+### Faithful migration correction — approved 2026-10-17
+
+The approved 2026-10-17 correction retains v1 `7b4027531c2b26062d0bfc27a040cc550cfbea4d` plus the approved increment through `af0e07a7386483f3bfc8a15780de72ffc2f0de4c`. Faithful Migration is stricter than outcome-only Workflow Equivalence: preserve normal logic, capabilities, operation habits, data semantics, layout and major styling. Native-control polish, evidenced Java bug fixes and behavior-equivalent optimizations are allowed. Internal structure differences alone are not defects; existing reusable Next work stays.
+
+Q3 restores three outstanding obligations: Black/White complementary winrate curves (`SET-WINRATE-GRAPH` / historical `ANA-11`), first-sense/search heatmaps on the Sub-Board (`SET-SUBBOARD` / historical `ANA-12`), and last-N/custom/from-one/branch move-number modes (`SET-MOVE-NUMBERS` / historical `REVIEW-07`). Their former single-line/mainboard-only/boolean-only substitutions are no longer final parity targets. [Matrix restoration obligations](PARITY_MATRIX.md#restored-fidelity-obligations--2026-10-17) own the remaining scope; original IDs, Accepted conditions and candidate evidence are retained. Material scope extensions use the existing successor rule when admitted, without inventing tickets or promoting status in this correction.
+
+The first bounded comparison is daily review: Open → continuous current-node analysis → previous/next/variation navigation → candidate/chart following → Pause/Stop. This is priority and planning only, not implementation or acceptance authorization. The three restored obligations need not ship together; non-conflicting Next capabilities are not automatically removed. Other historical decisions, including manual saves, are not reopened by Q3.
+
+The first implementation slice under this policy restores Java `load-sgf-last` for local SGF files as Partial successor [`SGF-18`](PARITY_MATRIX.md#audited-successor-obligations). The durable preference defaults off; native Open, recent, cold/warm activation and single-file drop of SGF land on the root or the first-child mainline leaf inside the protected replacement transaction. GIB, text/clipboard, recovery, provider/readboard, match and task/batch targets are unchanged in this slice; the known Java GIB and SGF-string landing differences remain recorded gaps. `SGF-18` acceptance requires its own native, restart, file-delivery and real-KataGo evidence. The historical `SGF-02`, `SGF-07`, `ANA-06` and R13 records are not inherited as passes, and the three Q3 obligations above remain outstanding.
+
 
 ## Evidence Model
 
@@ -399,7 +410,7 @@ All thirteen records now map exactly once to supported Parity Items or explicit 
 | `SET-NETWORK-PROXY` | `NET-01` successor: Direct/System/Manual preferences and shared provider transport; Partial pending installed-platform evidence. Java-key import remains separate. |
 | `SET-NEXT-MOVE` | Missing `ANA-10` |
 | `SET-WINRATE-GRAPH` | Missing `ANA-11` |
-| `SET-SUBBOARD` | Missing `ANA-12`; heatmap-on-sub and mouse-over freeze Abandoned |
+| `SET-SUBBOARD` | Historical: Missing `ANA-12`; heatmap-on-sub and mouse-over freeze Abandoned. The 2026-10-17 correction restores heatmap-on-sub as an outstanding obligation; this does not independently decide mouse-over freeze. |
 | `SET-MAIN-PANEL` | Missing `REVIEW-09` and `WINDOW-02`; large-sub/large-WR presets and write-into-`C` Abandoned |
 | `SET-HINT-AUTOANALYZE` | Excluded with abandoned `CAP-04-ANA-08`; `GUIDE-01` remains Deferred until a Guidance Producer is named |
 | `SGF-03-ADJ-SAVE-MORE` | Deferred `EXPORT-03`; Sub-Board Image Export Abandoned |
@@ -412,7 +423,7 @@ All thirteen records now map exactly once to supported Parity Items or explicit 
 
 ### Ticket 10 Roadmap Reconciliation
 
-**Historical reconstruction snapshot — `c9f5749fa175fe01c95587c0aa5a9fd2fa835f2c`.** The original paragraphs and rule table below preserve the source-bound Ticket 10 reconstruction, including its 108-item/27-Deferred census, R3 frontier and whole-item prerequisite descriptions. They are historical evidence, not current counts or start gates. Current readers use the Matrix [132-item completeness index](PARITY_MATRIX.md#item-completeness-index) and its canonical `Depends on` cells (including `CONTRIB-01::functional` for `GAME-09`), plus [Current Function-first Delivery](#current-function-first-delivery) and the [R11 Next Executable Stage](#next-executable-stage).
+**Historical reconstruction snapshot — `c9f5749fa175fe01c95587c0aa5a9fd2fa835f2c`.** The original paragraphs and rule table below preserve the source-bound Ticket 10 reconstruction, including its 108-item/27-Deferred census, R3 frontier and whole-item prerequisite descriptions. They are historical evidence, not current counts or start gates. Current readers use the Matrix [133-item completeness index](PARITY_MATRIX.md#item-completeness-index) and its canonical `Depends on` cells (including `CONTRIB-01::functional` for `GAME-09`), plus [Current Function-first Delivery](#current-function-first-delivery) and the [R11 Next Executable Stage](#next-executable-stage).
 
 Independent reconstruction: [research 10](../.scratch/migration-baseline-v1-capability-audit/research/10-reconcile-r3-dependency-roadmap.md). This document owns phase membership, Deferred Promotion Gates, Delivery Order, Migration Phase Gates, and exits. Matrix `Depends on` remains the only Item Start Prerequisite set. Inventory mappings and Matrix item rows were not edited.
 
