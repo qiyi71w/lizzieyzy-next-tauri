@@ -169,6 +169,7 @@ type PendingPreferencesSave = {
 type CandidatePreview = { vertex: string; identity: string };
 type ReplacementOptions = {
   loadSource: GameLoadSourceDto;
+  format?: GameFileImportDto["format"];
   networkIdentity?: ProviderRequestIdentity;
   confirmMessage: string;
   fallbackName?: string | null;
@@ -2538,7 +2539,7 @@ export function App() {
     await enterFileFlow();
 
     try {
-      const admission = await prepareDocumentReplacement(sgfInput, nativePath, options.networkIdentity, options.loadSource);
+      const admission = await prepareDocumentReplacement(sgfInput, nativePath, options.networkIdentity, options.loadSource, options.format ?? null);
       const action: DocumentDepartureActionDto = admission.status === "needs_decision"
         ? await requestDepartureDecision(options.confirmMessage)
         : "discard";
@@ -2571,6 +2572,7 @@ export function App() {
   async function replaceImportedGame(document: GameFileImportDto, loadSource: GameLoadSourceDto): Promise<boolean> {
     return applyReplacement(document.sgf_text, document.native_path ?? null, {
       loadSource,
+      format: document.format,
       confirmMessage: "放弃未保存的棋谱并打开这个文件？",
       fallbackName: document.format === "gib"
         ? document.display_name.replace(/\.gib$/i, ".sgf")
@@ -3078,6 +3080,7 @@ export function App() {
       const imported = await importGameFile(file);
       await applyReplacement(imported.sgf_text, imported.native_path ?? null, {
         loadSource: "open",
+        format: imported.format,
         confirmMessage: "放弃未保存的棋谱并导入这个文件？",
         fallbackName: imported.format === "gib"
           ? imported.display_name.replace(/\.gib$/i, ".sgf")

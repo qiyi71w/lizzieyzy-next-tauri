@@ -4,7 +4,7 @@ Current execution note (2026-10-15): R11 and the approved R12 scope remain compl
 
 ## Goal
 
-LizzieYzy Next remains the Tauri 2, Rust, and TypeScript product already implemented in this repository. Migration means reproducing or deliberately replacing observable behavior from the Java/Swing maintenance line; it does not mean translating Java source, preserving Swing internals, importing Java Git history, or restarting the Tauri implementation.
+LizzieYzy Next remains the Tauri 2, Rust, and TypeScript product already implemented in this repository. Migration means faithfully preserving normal Java behavior within the approved reference range, including operation habits, data semantics, UI layout and major styling. Consult and port Java business algorithms and state transitions where appropriate; do not copy Swing structure or import Java Git history, and do not restart the Tauri implementation. Non-equivalent changes require a named, still-effective product decision.
 
 The migration is planned as complete user workflows:
 
@@ -46,6 +46,17 @@ The current Delivery Order is R11 常用复盘与操作 → R12 引擎资源与�
 Two approved future directions remain obligations: one Direct/System/Manual policy for Next-owned remote HTTP(S)/WebSocket(S), including providers, compute, contribution and updates (excluding browser-owned traffic, local sidecars and SSH); and an explicit whitelist Java settings import for supported engine/display values with preview and atomic confirmation, no Java writes or automatic engine start. Their successor admission is separate from ANA-16; older narrower transport/import dispositions are historical, not the final migration scope.
 
 The [2026-09-12 decision record](../.scratch/migration-planning-20260912/planning.md) carries Q1–Q24 and their primary evidence. The [current-game task spec](../.scratch/current-game-analysis-tasks/spec.md) implements the approved planning boundary, not a runtime completion claim.
+
+### Faithful migration correction — approved 2026-10-17
+
+The approved 2026-10-17 correction retains v1 `7b4027531c2b26062d0bfc27a040cc550cfbea4d` plus the approved increment through `af0e07a7386483f3bfc8a15780de72ffc2f0de4c`. Faithful Migration is stricter than outcome-only Workflow Equivalence: preserve normal logic, capabilities, operation habits, data semantics, layout and major styling. Native-control polish, evidenced Java bug fixes and behavior-equivalent optimizations are allowed. Internal structure differences alone are not defects; existing reusable Next work stays.
+
+Q3 restores three outstanding obligations: Black/White complementary winrate curves (`SET-WINRATE-GRAPH` / historical `ANA-11`), first-sense/search heatmaps on the Sub-Board (`SET-SUBBOARD` / historical `ANA-12`), and last-N/custom/from-one/branch move-number modes (`SET-MOVE-NUMBERS` / historical `REVIEW-07`). Their former single-line/mainboard-only/boolean-only substitutions are no longer final parity targets. [Matrix restoration obligations](PARITY_MATRIX.md#restored-fidelity-obligations--2026-10-17) own the remaining scope; original IDs, Accepted conditions and candidate evidence are retained. Material scope extensions use the existing successor rule when admitted, without inventing tickets or promoting status in this correction.
+
+The first bounded comparison is daily review: Open → continuous current-node analysis → previous/next/variation navigation → candidate/chart following → Pause/Stop. This is priority and planning only, not implementation or acceptance authorization. The three restored obligations need not ship together; non-conflicting Next capabilities are not automatically removed. Other historical decisions, including manual saves, are not reopened by Q3.
+
+The first implementation slice under this policy restores Java `load-sgf-last` for local SGF files as Accepted successor [`SGF-18`](PARITY_MATRIX.md#audited-successor-obligations), with candidate-bound [Windows and real-engine evidence](DEVELOPMENT.md#local-sgf-landing-acceptance). The durable preference defaults off; native Open, recent, cold/warm activation and single-file drop of SGF land on the root or the first-child mainline leaf inside the protected replacement transaction. GIB, text/clipboard, recovery, provider/readboard, match and task/batch targets are unchanged in this slice; the known Java GIB and SGF-string landing differences remain recorded gaps. Historical `SGF-02`, `SGF-07`, `ANA-06` and R13 records are not relabeled as these current passes, and the three Q3 obligations above remain outstanding.
+
 
 ## Evidence Model
 
@@ -230,6 +241,47 @@ The [single upstream ledger](UPSTREAM_DELTA.md) retains all 573 source objects a
 For a retained Capability or Delta, follow its stable intent in the source map, then the [owner routes](MIGRATION_ROUTES.json): R11 routes resolve to exact public behavior/acceptance anchors; R12–R18 routes resolve to their owning stage sections and named decision/acceptance responsibilities. Scoped consumers of R11 locale, chart-output and identity results refer to their providers without changing dependency semantics. Formal R11 execution records remain in the local tracker. Functional evidence and item states remain authoritative in Matrix.
 
 Future upstream audits append after `af0e07a7386483f3bfc8a15780de72ffc2f0de4c`; they never move v1 or rewrite this frozen range. `T06-UPSTREAM-FINAL` owns R17’s final audit; feature owners assess reachable serious correctness changes when discovered. Every additional source gets publication/containment evidence and a disposition.
+
+## 后续保真校正与迁移顺序
+
+本节细化现有 Delivery Order 和下一切片选择，不另建路线图，不改阶段编号、能力归属、Matrix `Depends on`、既有批准规格或验收范围。继承前述 Java v1 与截至 `af0e07a7386483f3bfc8a15780de72ffc2f0de4c` 的批准增量；后续 Java 变化仍按原追加规则处理。本次只修订计划，不授权源码全量审计、实现、产品验证或批量拆票。
+
+### 近期纠偏范围与优先次序
+
+近期优先围绕已选定的**本地日常复盘**：打开棋谱 → 当前节点连续分析 → 前后手／切分支 → 候选、PV、图表跟随 → 暂停／停止；保留无引擎读谱路径。只处理该链路有依据的偏移及受影响的展示、入口、默认值和保存语义，不扩成远程服务、ReadBoard、PK 或整个分析任务体系的重做。
+
+| 次序 | 范围与处理 | 既有依据及边界 |
+| --- | --- | --- |
+| 承接已完成基础 | 保留 `SGF-18` 的本地 SGF 打开定位、偏好持久化和连续分析衔接；不从头重做开谱，也不因旧规划中的“尚未实施”重开已完成票。 | 消费 [SGF-18 原候选验收](DEVELOPMENT.md#local-sgf-landing-acceptance) 和 Matrix 的正式条目；该结果不覆盖 GIB／字符串落点或三项展示恢复，也不是当前任意 HEAD 的全流程健康证明。 |
+| 优先修正影响正确性的已知问题 | 已有用户报告或证据表明数据结果、节点归属、分析控制、取消／失败保留有误时，先处理影响这条链路的最小完整行为及真实共享边界。 | 沿 [能力清单](JAVA_CAPABILITY_INVENTORY.md) 的入口和现有 owner 定位；用户报告直接作为失败依据，不要求重复证明。不得从“感觉不稳定”推造候选串位、停止失效等具体根因，也不因怀疑而重写生命周期。 |
+| 再恢复已确认的展示与操作偏移 | 没有上述阻塞时，从黑白互补曲线、副棋盘首感／搜索热力、完整手数模式中选择下一完整切片；相关图表主干参照及拖动差异一并核对归属，但不自动捆绑交付。 | [三项恢复义务](PARITY_MATRIX.md#restored-fidelity-obligations--2026-10-17) 是明确目标，内部先后尚未冻结。按受影响消费者、真实依赖和可用证据确定下一切片，不把三项一次性扩成整套 UI 重写。 |
+
+每次只把将要执行的完整用户行为细化到可实施程度；已有 spec／ticket 优先续接，不复制为新票。旧 Accepted 范围内的故障归原 owner，实质扩域才按既有 successor 规则准入。历史证据继续按原候选和条件保留；复用前核对相关行为、共享依赖、资源和环境是否仍适用，不以阶段完成或测试数量推定健康。
+
+**UI 随所属功能校正，不统一拖到 R17。** 受影响窗口／面板实施前，须实际查看来源明确的 Java 基线画面，并结合对应源码确定布局、主要样式、入口、快捷键及状态行为；同棋谱／节点／模式下记录平台、客户区尺寸和 DPI／缩放等可比条件。复用仍适用的参照，不每次重拍全产品。允许原生控件美化，不以美化为由重排布局、删除模式或改变默认操作；非等价变化须有具名批准。缺少画面时记录缺口，仅暂停依赖未知外观的决定与实现，不越过“仅文档／不运行”边界。
+
+### 切片完成与进入后续阶段的条件
+
+1. **先核对实际准入。** 新工作须另获实施授权，满足现有 Matrix 前置、具名决定、Deferred promotion 条件及必需的前置验收。继续已批准任务时继承其基线和最终完成记录；只有确实消费纠偏成果的任务才需要包含该成果的实现起点，不静默重置所有阶段基线。
+2. **完成的是行为链，不是控件或单层代码。** 所选切片须覆盖相关入口、状态／数据、设置、显示及实际消费者。例如曲线变化同时考虑实时图表和共享导出，热力模式同时考虑副棋盘、PV 交互和持久化，编号模式同时考虑控制入口与分支／pass／setup 语义。完成门槛沿用该任务的冻结验收与适用审查流程；保留项和排除项明确，不用缩小验收来宣布完成。
+3. **证明面与断言匹配。** 在原任务／验收位置简要对应受影响行为、最小验证面、可继承证据和仍需补证的原生缺口。确定性逻辑用聚焦行为检查；布局用实际画面与交互；Tauri 文件、持久化、真实引擎或服务断言用对应真实环境。截图不证明取消／持久化，Vite／mock 不证明原生或真实引擎。只补改变或失效边界的证据，不无条件重跑全项目；本节不执行这些后续检查。
+4. **完成记录能回答“哪些可信”。** 原记录须区分该候选已验证路径、已知故障、未验证和验证受阻，保留候选、环境、证据及剩余义务。新增行为不能借旧 PASS 核销；历史 Accepted 也不能豁免其范围内的新故障。状态仍只由 [Matrix](PARITY_MATRIX.md) 维护，不在本节建立第二张健康清单。
+5. **按真实依赖进入 R14–R16。** 所消费的复盘／引擎／文档能力须有适用证据；影响该消费路径的已知故障或必需验收缺口未解决时，不把依赖当作通过。无依赖的工作可在授权和原准入门满足后按既有阶段计划继续，不要求三项展示恢复或全部历史残余先清零。不能通过默认延期必需能力来绕过门禁，产品范围变更须明确批准。
+6. **保留 R17／R18 的原职责。** [R17](R17_PLAN.md) 仍负责跨功能对等收尾、白名单设置导入、完整语言及追加上游核对，不替代前面切片应完成的 UI 保真；[R18](R18_PLAN.md) 仍负责发行和各平台安装态门禁。功能证据与发行／安装证据互不替代，发布工作不用于掩盖尚未完成的功能迁移。
+
+### 保留但尚未冻结内部顺序的义务
+
+下表只索引剩余责任和排程边界，不新增 ID、票据或完成状态；后续处置回写原 owner／Matrix，不在此重复维护逐项进度。
+
+| 义务 | 现有归属与下一次准入边界 |
+| --- | --- |
+| 三项展示恢复的内部先后 | 沿上述三项恢复义务及 [设置能力来源](JAVA_CAPABILITY_INVENTORY.md#domain-02--settings-layout-and-persistence)。它们属于近期候选范围，但尚未冻结哪个先做，也不要求同批交付；原 `ANA-11`／`ANA-12`／`REVIEW-07` 窄范围验收不代表恢复完成。 |
+| 图表主干参照及拖动导航 | 既有日常复盘对照记录中的主干虚线参照归图表行为责任，与黑白互补曲线是两件事；拖动沿 [R11 原图表责任](R11_PLAN.md#behavior-a21) 和 [SPEC-F03 残余记录](DEVELOPMENT.md#integration-review-and-subsequent-repairs) 接续。准入时核对当前实现及相关消费者，不用点击证据核销拖动，也不重复造票。 |
+| GIB／SGF 字符串载入落点 | [能力清单已记录](JAVA_CAPABILITY_INVENTORY.md#frozen-accepted-r1r2-claims) 这些入口同样消费 Java 落点偏好，但它们不在 `SGF-18` 已验收文件范围。后续按各入口的真实来源与安装语义准入，不能把共享解析后的文本一律当作本地 SGF；剪贴板具体入口未对照前不作同等完成断言。 |
+| 其他既有残余、后续阶段和新增上游变化 | [R11 完成边界](R11_PLAN.md#完成记录与保留边界)、[R13 批准限界](DEVELOPMENT.md#approved-limits-and-next-action)、Matrix 的 Partial／Missing／Deferred 项及 R14–R18 原 owner 全部保留。R13 G1–G3 的批准延期、语音辅助技术豁免和具名硬件／外部／安装态缺口不重标通过，也不自动排到近期。严重可达正确性问题及时评估，其余上游增量仍由 R17 追加流程承接。 |
+
+其他历史删减或重设计只在相关流程出现具名冲突时核对原决定与后继关系，不把本次三项恢复扩大成撤销所有历史决定。下一次选择切片时，先读取该 owner 的当前完成记录，记录本次目标、排除项、适用证据和阻塞；无需先完成全量源码审计或重写所有阶段计划。
+
 ## Dependency Graph
 
 Stages express Delivery Order only. Item Start Prerequisites remain canonical in [PARITY_MATRIX.md](PARITY_MATRIX.md); a dependency may reference a passed `ITEM::functional` record without requiring its unexecuted installed/release obligations. The graph below preserves the historical R3–old-R11 organization: its old R11 Release node now maps to R18. It is a pre-R7 planning snapshot, not today’s frontier; R7–R10 have since completed within their recorded scopes. Independent ready functions may proceed across R11–R17; reachable correctness risks may be brought forward. No stage number itself is a prerequisite.
@@ -399,7 +451,7 @@ All thirteen records now map exactly once to supported Parity Items or explicit 
 | `SET-NETWORK-PROXY` | `NET-01` successor: Direct/System/Manual preferences and shared provider transport; Partial pending installed-platform evidence. Java-key import remains separate. |
 | `SET-NEXT-MOVE` | Missing `ANA-10` |
 | `SET-WINRATE-GRAPH` | Missing `ANA-11` |
-| `SET-SUBBOARD` | Missing `ANA-12`; heatmap-on-sub and mouse-over freeze Abandoned |
+| `SET-SUBBOARD` | Historical: Missing `ANA-12`; heatmap-on-sub and mouse-over freeze Abandoned. The 2026-10-17 correction restores heatmap-on-sub as an outstanding obligation; this does not independently decide mouse-over freeze. |
 | `SET-MAIN-PANEL` | Missing `REVIEW-09` and `WINDOW-02`; large-sub/large-WR presets and write-into-`C` Abandoned |
 | `SET-HINT-AUTOANALYZE` | Excluded with abandoned `CAP-04-ANA-08`; `GUIDE-01` remains Deferred until a Guidance Producer is named |
 | `SGF-03-ADJ-SAVE-MORE` | Deferred `EXPORT-03`; Sub-Board Image Export Abandoned |
@@ -412,7 +464,7 @@ All thirteen records now map exactly once to supported Parity Items or explicit 
 
 ### Ticket 10 Roadmap Reconciliation
 
-**Historical reconstruction snapshot — `c9f5749fa175fe01c95587c0aa5a9fd2fa835f2c`.** The original paragraphs and rule table below preserve the source-bound Ticket 10 reconstruction, including its 108-item/27-Deferred census, R3 frontier and whole-item prerequisite descriptions. They are historical evidence, not current counts or start gates. Current readers use the Matrix [132-item completeness index](PARITY_MATRIX.md#item-completeness-index) and its canonical `Depends on` cells (including `CONTRIB-01::functional` for `GAME-09`), plus [Current Function-first Delivery](#current-function-first-delivery) and the [R11 Next Executable Stage](#next-executable-stage).
+**Historical reconstruction snapshot — `c9f5749fa175fe01c95587c0aa5a9fd2fa835f2c`.** The original paragraphs and rule table below preserve the source-bound Ticket 10 reconstruction, including its 108-item/27-Deferred census, R3 frontier and whole-item prerequisite descriptions. They are historical evidence, not current counts or start gates. Current readers use the Matrix [133-item completeness index](PARITY_MATRIX.md#item-completeness-index) and its canonical `Depends on` cells (including `CONTRIB-01::functional` for `GAME-09`), plus [Current Function-first Delivery](#current-function-first-delivery) and the [R11 Next Executable Stage](#next-executable-stage).
 
 Independent reconstruction: [research 10](../.scratch/migration-baseline-v1-capability-audit/research/10-reconcile-r3-dependency-roadmap.md). This document owns phase membership, Deferred Promotion Gates, Delivery Order, Migration Phase Gates, and exits. Matrix `Depends on` remains the only Item Start Prerequisite set. Inventory mappings and Matrix item rows were not edited.
 

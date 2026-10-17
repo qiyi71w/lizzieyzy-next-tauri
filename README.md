@@ -60,6 +60,7 @@ The [current plan](docs/MIGRATION_PLAN.md#current-function-first-delivery) names
 | Baseline and migration inventory | `BASE-01`–`BASE-02` | Accepted | Repository tested | Maintain evidence as later slices land. |
 | SGF document and tree-shaped wire model | `SGF-01`–`SGF-02` | Accepted | Repository tested | None for R1. |
 | Native variation navigation, editing, comments, and save/reopen | `SGF-03`–`SGF-06` | Accepted | Native/live verified | None for R1. |
+| Local SGF open landing preference (Java `load-sgf-last`) | `SGF-18` | Accepted | [Windows native and real-KataGo verified](docs/DEVELOPMENT.md#local-sgf-landing-acceptance) | None within local SGF files; GIB/string landing parity and installed/release behavior remain separate. |
 | Go rules required by SGF editing | `RULE-01` | Accepted | Repository tested | None for the frozen R1 fixtures. |
 | Core review presentation and interaction | `UI-01`–`UI-03`, `UI-05` | Accepted / Partial | Native/live verified | `UI-02` still lacks engine-event delivery evidence while a board mutation promise is pending. |
 | No-engine desktop workflow | `UI-04` | Accepted | Native/live verified | None. |

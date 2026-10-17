@@ -35,7 +35,9 @@ pub(super) fn load(
     text: &str,
     source: Source,
 ) -> app_model::CurrentGameResultDto {
-    let admission = state.prepare_loaded_replacement(text, None, source).unwrap();
+    let admission = state
+        .prepare_loaded_replacement(text, None, source, Some(app_model::GameFileFormatDto::Sgf), true)
+        .unwrap();
     let departure_id = match admission {
         app_model::DocumentDepartureAdmissionDto::Ready { departure_id }
         | app_model::DocumentDepartureAdmissionDto::NeedsDecision { departure_id } => departure_id,
@@ -597,10 +599,16 @@ fn auto_load_committed_sources_exclusions_reopen_and_no_latent_start() {
     }
     let previous = engine.manager.snapshot().auto_load.load_id;
     assert!(state
-        .prepare_loaded_replacement("not sgf", None, Source::Text)
+        .prepare_loaded_replacement("not sgf", None, Source::Text, None, false)
         .is_err());
     let admission = state
-        .prepare_loaded_replacement("(;SZ[13])", None, Source::Open)
+        .prepare_loaded_replacement(
+            "(;SZ[13])",
+            None,
+            Source::Open,
+            Some(app_model::GameFileFormatDto::Sgf),
+            false,
+        )
         .unwrap();
     let id = match admission {
         app_model::DocumentDepartureAdmissionDto::Ready { departure_id }
@@ -963,7 +971,13 @@ fn auto_load_departure_cancel_preserves_owner_but_semantic_change_and_new_run_re
     let opened = load(&engine, &state, "(;SZ[9]KM[7.5];B[dd])", Source::Open);
     let task = engine.manager.analysis_task_snapshot().unwrap();
     let admission = state
-        .prepare_loaded_replacement("(;SZ[13])", None, Source::Open)
+        .prepare_loaded_replacement(
+            "(;SZ[13])",
+            None,
+            Source::Open,
+            Some(app_model::GameFileFormatDto::Sgf),
+            false,
+        )
         .unwrap();
     let departure_id = match admission {
         app_model::DocumentDepartureAdmissionDto::Ready { departure_id }

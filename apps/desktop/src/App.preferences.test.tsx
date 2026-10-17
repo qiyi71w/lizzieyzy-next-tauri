@@ -1,3 +1,4 @@
+/// <reference lib="es2024.promise" />
 // @vitest-environment jsdom
 
 import { act } from "react";
@@ -5,7 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CurrentGameResultDto, ForegroundEngineSnapshotDto, GameDto } from "./domain/types";
 import { defaultAppPreferences, type AppPreferences } from "./domain/preferences";
-import { UNREADABLE_PREFERENCES_RECOVERY_MESSAGE } from "./api/preferences";
+import { UNREADABLE_PREFERENCES_RECOVERY_MESSAGE, type AppPreferencesLoadResult } from "./api/preferences";
 
 const currentGameFixture = vi.hoisted(() => vi.fn());
 const backend = vi.hoisted(() => ({
@@ -173,6 +174,36 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.clearAllMocks();
   vi.restoreAllMocks();
+});
+
+it("keeps SGF landing at its committed value while saving and after failure without navigating", async () => {
+  const host = await renderApp();
+  openPreferences(host);
+  const checkbox = labeledControl<HTMLInputElement>(host, "打开 SGF 时定位到末手", "input");
+  expect(checkbox.checked).toBe(false);
+  // The app targets ES2022; the test runner provides the ES2024 deferred API.
+  const { promise, resolve } = Promise.withResolvers<AppPreferences>();
+  preferencesApi.saveAppPreferences.mockReturnValueOnce(promise);
+  await act(async () => checkbox.click());
+  expect(checkbox.checked).toBe(false);
+  await act(async () => resolve({ ...defaultAppPreferences, loadSgfLast: true }));
+  expect(checkbox.checked).toBe(true);
+  preferencesApi.saveAppPreferences.mockRejectedValueOnce(new Error("landing disk full"));
+  await act(async () => checkbox.click());
+  expect(checkbox.checked).toBe(true);
+  expect(host.textContent).toContain("landing disk full");
+  expect(backend.selectCurrentGameNode).not.toHaveBeenCalled();
+  expect(backend.startForegroundEngine).not.toHaveBeenCalled();
+});
+
+it("does not admit SGF landing changes before preferences initialize", async () => {
+  preferencesApi.loadAppPreferences.mockReturnValueOnce(Promise.withResolvers<AppPreferencesLoadResult>().promise);
+  const host = await renderApp({ waitForLoad: false });
+  openPreferences(host);
+  const checkbox = labeledControl<HTMLInputElement>(host, "打开 SGF 时定位到末手", "input");
+  expect(checkbox.disabled).toBe(true);
+  act(() => checkbox.click());
+  expect(preferencesApi.saveAppPreferences).not.toHaveBeenCalled();
 });
 
 it("saves independent automatic-load drafts only explicitly and retains committed values after cancellation or disk failure", async () => {

@@ -36,6 +36,8 @@ pub(crate) mod human_match;
 mod point_search_tests;
 pub(crate) mod recovery;
 mod scoring;
+#[cfg(test)]
+mod sgf_open_landing_tests;
 mod trial;
 
 #[derive(Debug, Clone)]
@@ -1254,7 +1256,7 @@ impl CurrentGameHolder {
         native_path: Option<String>,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let document = CurrentSgfDocument::open(sgf_text)?;
-        self.install_document(document, native_path)
+        self.install_document(document, native_path, None)
     }
 
     #[cfg(test)]

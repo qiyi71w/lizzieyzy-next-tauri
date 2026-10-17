@@ -46,6 +46,8 @@ pub struct AppPreferencesDto {
     pub allow_drag: bool,
     #[serde(default = "default_allow_double_click")]
     pub allow_double_click: bool,
+    #[serde(default)]
+    pub load_sgf_last: bool,
     #[serde(default = "default_continuous_analysis_enabled")]
     pub continuous_analysis_enabled: bool,
     #[serde(default = "default_continuous_analysis_enabled")]
@@ -193,6 +195,7 @@ pub fn default_app_preferences() -> AppPreferencesDto {
         main_window_always_on_top: false,
         allow_drag: false,
         allow_double_click: true,
+        load_sgf_last: false,
         continuous_analysis_enabled: default_continuous_analysis_enabled(),
         retain_node_analysis: true,
         continuous_budget: ContinuousAnalysisBudgetDto::default(),
@@ -744,6 +747,7 @@ mod tests {
             main_window_always_on_top: false,
             allow_drag: false,
             allow_double_click: true,
+            load_sgf_last: false,
             continuous_analysis_enabled: false,
             retain_node_analysis: true,
             continuous_budget: ContinuousAnalysisBudgetDto {

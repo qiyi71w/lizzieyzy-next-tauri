@@ -501,12 +501,16 @@ impl CurrentGameState {
             *source_status = result.metadata.provider_status;
             (operation.lease(), operation.identity().document_identity)
         };
-        let admission = self.admit_departure(departure::DepartureTarget::Replacement {
-            candidate,
-            candidate_path: None,
-            network_lease: Some((lease, document_identity)),
-            external_start: Some(std::num::NonZeroU64::new(id).expect("reserved sync start")),
-        })?;
+        let admission = self.admit_departure(
+            departure::DepartureTarget::Replacement {
+                candidate,
+                candidate_path: None,
+                network_lease: Some((lease, document_identity)),
+                external_start: Some(std::num::NonZeroU64::new(id).expect("reserved sync start")),
+            },
+            None,
+            app_model::GameLoadSourceDto::Excluded,
+        )?;
         Ok(ExternalSyncStartDto {
             start_id: id,
             admission,
@@ -835,12 +839,16 @@ impl CurrentGameState {
                 .0;
         };
         drop(holder);
-        let admission = self.admit_departure(departure::DepartureTarget::Replacement {
-            candidate,
-            candidate_path: None,
-            network_lease: None,
-            external_start: Some(std::num::NonZeroU64::new(id).expect("reserved sync start")),
-        })?;
+        let admission = self.admit_departure(
+            departure::DepartureTarget::Replacement {
+                candidate,
+                candidate_path: None,
+                network_lease: None,
+                external_start: Some(std::num::NonZeroU64::new(id).expect("reserved sync start")),
+            },
+            None,
+            app_model::GameLoadSourceDto::Excluded,
+        )?;
         Ok(ExternalSyncStartDto {
             start_id: id,
             admission,

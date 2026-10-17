@@ -1353,6 +1353,17 @@ When updating docs for this handoff package, keep these claims accurate:
 - Distinguish browser preview behavior from native Tauri desktop behavior.
 - Distinguish per-change focused validation from the full release matrix; do not make obsolete unconditional claims requiring full-workspace or full-smoke runs on every edit.
 - Report the exact validation command, affected surface, evidence provenance, and result in the handoff.
+
+## Local SGF Landing Acceptance
+
+`SGF-18` passed its local-file scope on Windows Tauri runtime `b6edcbf5d5e641ac3db7d7d65542ad1fa35bf3b4`. Focused Rust persistence and replacement regressions cover default/missing fields, malformed-type recovery, failed writes, exact root/first-child-leaf paths, content/history preservation, prepare/save ordering and excluded sources. Frontend preference, replacement and selected-node checks and the TypeScript/Vite build passed. The broader current-game run retained 232 passing cases and five explicitly opt-in real-engine skips; a new recovery-test fixture failure was repaired and all four focused landing cases then passed. This is not a claim of a subsequently rerun full workspace suite.
+
+Native verification used isolated app data and synthetic SGF/GIB files. Actual Open in both modes, recent, cold argv, same-desktop second-instance delivery and user-performed OS single-file drop were observed, including `.txt` SGF. Keyboard preference saving, both values across process restart, a read-only-destination preference failure, no-engine opening, initial Cancel, protected Save As Cancel, successful replacement, GIB exclusion and non-mainline recovery were checked. The branched fixture retained root setup/PL, pass, a comment-only mainline tail and its sibling. The OS-drop case selected the mainline comment tail without starting an engine.
+
+Actual qualified KataGo 1.18.2 Eigen CPU with the admitted B20 model provided Ready/run/job/path identities, evolving visits and visible candidates/PV/board/chart selection at root, mainline leaf, previous/next and sibling positions. A fresh unheld continuous run opened with `autoLoad=false` directly at root; another open followed the leaf. Explicit Stop and a recovery safety hold were retained. A one-visit automatic-load task completed all five mainline nodes and handed continuous analysis back to the selected root. Existing delayed-frame and protected-departure regressions cover the deterministic stale-identity and failure boundaries; native observation is not an injected-frame test.
+
+Standards and Spec implementation reviews found no defects and zero follow-up items against base `50d59f1c944ce05ca7df2f9684c2ad8c16cff446` and the runtime candidate plus its public contract update. Documentation-only acceptance recording preserves that runtime provenance. Historical `SGF-02`, `SGF-07`, `ANA-06` and R13 evidence is unchanged; this local-file acceptance does not accept GIB/string landing parity, the three restored display obligations, other platforms or installed/release behavior. No CI, push, merge or release result is inferred from these checks.
+
 ## Suggested Reading
 
 - [Next architecture](ARCHITECTURE_NEXT.md)

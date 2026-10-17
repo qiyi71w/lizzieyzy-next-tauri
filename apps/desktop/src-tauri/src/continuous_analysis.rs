@@ -19,6 +19,15 @@ impl PreferencesState {
         &self.1
     }
 
+    pub fn load_sgf_last(&self) -> Result<bool, String> {
+        let committed = self.0.lock().map_err(|_| "Preferences transaction poisoned")?;
+        Ok(committed
+            .as_ref()
+            .ok_or("Preferences must finish loading before opening a game.")?
+            .preferences
+            .load_sgf_last)
+    }
+
     pub fn load(
         &self,
         path: &Path,
