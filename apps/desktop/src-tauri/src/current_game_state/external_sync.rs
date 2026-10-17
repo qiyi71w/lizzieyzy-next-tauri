@@ -504,6 +504,8 @@ impl CurrentGameState {
         let admission = self.admit_departure(departure::DepartureTarget::Replacement {
             candidate,
             candidate_path: None,
+            selected_path: None,
+            load_source: app_model::GameLoadSourceDto::Excluded,
             network_lease: Some((lease, document_identity)),
             external_start: Some(std::num::NonZeroU64::new(id).expect("reserved sync start")),
         })?;
@@ -838,6 +840,8 @@ impl CurrentGameState {
         let admission = self.admit_departure(departure::DepartureTarget::Replacement {
             candidate,
             candidate_path: None,
+            selected_path: None,
+            load_source: app_model::GameLoadSourceDto::Excluded,
             network_lease: None,
             external_start: Some(std::num::NonZeroU64::new(id).expect("reserved sync start")),
         })?;

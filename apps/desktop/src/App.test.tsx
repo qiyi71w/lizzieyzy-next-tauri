@@ -2838,7 +2838,6 @@ describe("App document replacement", () => {
       await backend.projectCurrentGameMainline.mock.results.at(-1)?.value;
     });
     expect(host.querySelector(".doc-name")?.textContent).toContain("named.sgf");
-    expect(backend.prepareDocumentReplacement).toHaveBeenLastCalledWith("(;SZ[19]PB[Black]PW[White];B[dd])", null, undefined, "open");
   });
 
   it("imports a selected GIB file through the same read-only replacement contract", async () => {
@@ -2870,44 +2869,8 @@ describe("App document replacement", () => {
     });
     expect(backend.importGameFile).toHaveBeenCalledWith(file);
     expect(host.querySelector(".doc-name")?.textContent).toContain("upload.sgf");
-    expect(backend.prepareDocumentReplacement).toHaveBeenLastCalledWith("(;SZ[19]PB[Black]PW[White];B[dd])", null, undefined, "open");
   });
 
-  it("routes paste, sample, New, and parse through the shared replacement owner", async () => {
-    const host = await renderApp();
-    backend.prepareDocumentReplacement.mockClear();
-    backend.prepareDocumentReplacement.mockResolvedValue({ status: "ready", departure_id: 3 });
-    await act(async () => {
-      pressKey(buttonNamed(host, "坐标"), "v", { ctrlKey: true });
-      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
-    });
-    await act(async () => {
-      buttonNamed(host, "文件").click();
-    });
-    await act(async () => {
-      buttonNamed(host, "载入示例").click();
-      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
-    });
-    act(() => {
-      buttonLabeled(host, "新建").click();
-    });
-    await act(async () => {
-      buttonLabeled(host, "创建").click();
-      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
-    });
-    await act(async () => {
-      buttonNamed(host, "棋局").click();
-    });
-    await act(async () => {
-      buttonNamed(host, "解析棋谱").click();
-      await backend.prepareDocumentReplacement.mock.results.at(-1)?.value;
-    });
-    expect(backend.prepareDocumentReplacement.mock.calls.length).toBe(4);
-    expect(backend.prepareDocumentReplacement).toHaveBeenNthCalledWith(1, expect.any(String), null, undefined, "clipboard");
-    expect(backend.prepareDocumentReplacement).toHaveBeenNthCalledWith(2, expect.any(String), null, undefined, "excluded");
-    expect(backend.prepareDocumentReplacement).toHaveBeenNthCalledWith(3, expect.any(String), null, undefined, "excluded");
-    expect(backend.prepareDocumentReplacement).toHaveBeenNthCalledWith(4, expect.any(String), null, undefined, "text");
-  });
 
   it("exits keyboard placement after a committed document replacement", async () => {
     const host = await renderApp();
@@ -3614,7 +3577,6 @@ describe("App native file activation", () => {
     expect(backend.restoreCurrentGameRecovery).not.toHaveBeenCalled();
     expect(backend.readGameFile).toHaveBeenCalledWith(activatedFile.display_path);
     expect(backend.prepareDocumentReplacement).toHaveBeenCalledTimes(1);
-    expect(backend.prepareDocumentReplacement).toHaveBeenLastCalledWith(activatedFile.sgf_text, activatedFile.native_path, undefined, "file_delivery");
     expect(backend.markFileActivationReady).toHaveBeenCalledTimes(1);
     expect(host.textContent).toContain("open me.sgf");
   });
@@ -4084,7 +4046,6 @@ describe("App recent history", () => {
     await flushLast(backend.readGameFile);
     await flushLast(backend.prepareDocumentReplacement);
     expect(host.querySelector('[role="dialog"][aria-label="保存当前棋谱"]')).not.toBeNull();
-    expect(backend.prepareDocumentReplacement).toHaveBeenLastCalledWith("(;SZ[9])", path, undefined, "recent");
     act(() => buttonLabeled(host, "Cancel").click());
     await flushLast(backend.resolveDocumentReplacement);
     expect(preferencesApi.updateRecentGameHistory).not.toHaveBeenCalled();

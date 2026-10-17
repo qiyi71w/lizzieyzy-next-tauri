@@ -24,6 +24,8 @@ mod current_game_departure;
 mod current_game_save_write;
 #[cfg(test)]
 mod current_game_session_recovery;
+#[cfg(test)]
+mod sgf_open_landing_tests;
 mod departure;
 #[cfg(test)]
 mod export_tests;
@@ -1254,7 +1256,7 @@ impl CurrentGameHolder {
         native_path: Option<String>,
     ) -> Result<CurrentGameResultDto, CurrentGameError> {
         let document = CurrentSgfDocument::open(sgf_text)?;
-        self.install_document(document, native_path)
+        self.install_document(document, native_path, None)
     }
 
     #[cfg(test)]

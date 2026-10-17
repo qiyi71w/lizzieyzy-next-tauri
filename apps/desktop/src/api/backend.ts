@@ -6,7 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { t } from "../i18n/resources";
 import type { AcceptedMeasuredSceneDto, MeasuredScenesDto, SavedThreadPolicyDto } from "../domain/types";
-import type { GameLoadSourceDto } from "../domain/types";
+import type { GameLoadSourceDto, GameFileFormatDto } from "../domain/types";
 import type {
   RuntimeThreadsRequestDto,
   RuntimeThreadsSnapshotDto,
@@ -218,11 +218,12 @@ export async function prepareDocumentReplacement(
   nativePath: string | null,
   networkIdentity?: ProviderRequestIdentity,
   loadSource: GameLoadSourceDto = "excluded",
+  format: GameFileFormatDto | null = null,
 ): Promise<DocumentDepartureAdmissionDto> {
   if (!isTauriRuntime()) {
     throw new Error(nativeCurrentGameUnavailable);
   }
-  return invoke<DocumentDepartureAdmissionDto>("prepare_document_replacement", { sgfText, nativePath, networkIdentity: networkIdentity ?? null, loadSource });
+  return invoke<DocumentDepartureAdmissionDto>("prepare_document_replacement", { sgfText, nativePath, networkIdentity: networkIdentity ?? null, loadSource, format });
 }
 
 export async function cancelAutoLoad(): Promise<void> {

@@ -144,6 +144,13 @@ export function PreferencesPanel({ preferences, status, actualRefreshInterval, r
       <fieldset className="preferences-grid">
         <legend>复盘</legend>
         <Toggle
+          label="打开 SGF 时定位到末手"
+          checked={preferences.loadSgfLast}
+          disabled={disabled}
+          onChange={(checked) => update({ loadSgfLast: checked })}
+        />
+        <small>仅适用于本地 SGF 文件（含 .txt）；关闭时定位到根节点，下次打开生效。</small>
+        <Toggle
           label="落子声音"
           checked={preferences.soundEnabled}
           disabled={disabled}

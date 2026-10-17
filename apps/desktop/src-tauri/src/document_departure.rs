@@ -440,6 +440,7 @@ pub fn prepare_document_replacement(
     native_path: Option<String>,
     network_identity: Option<app_model::ProviderRequestIdentityDto>,
     load_source: Option<app_model::GameLoadSourceDto>,
+    format: Option<app_model::GameFileFormatDto>,
 ) -> Result<DocumentDepartureAdmissionDto, CurrentGameError> {
     if let Some(identity) = network_identity {
         let operation = preferences
@@ -451,7 +452,11 @@ pub fn prepare_document_replacement(
             })?;
         state.prepare_provider_replacement(&sgf_text, operation.lease(), identity.document_identity)
     } else {
-        state.prepare_loaded_replacement(&sgf_text, native_path, load_source.unwrap_or_default())
+        let load_sgf_last = preferences.load_sgf_last().map_err(|message| CurrentGameError {
+            kind: app_model::CurrentGameErrorKind::DepartureBlocked,
+            message,
+        })?;
+        state.prepare_loaded_replacement(&sgf_text, native_path, load_source.unwrap_or_default(), format, load_sgf_last)
     }
 }
 
