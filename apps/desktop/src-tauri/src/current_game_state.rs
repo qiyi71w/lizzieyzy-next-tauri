@@ -24,8 +24,6 @@ mod current_game_departure;
 mod current_game_save_write;
 #[cfg(test)]
 mod current_game_session_recovery;
-#[cfg(test)]
-mod sgf_open_landing_tests;
 mod departure;
 #[cfg(test)]
 mod export_tests;
@@ -38,6 +36,8 @@ pub(crate) mod human_match;
 mod point_search_tests;
 pub(crate) mod recovery;
 mod scoring;
+#[cfg(test)]
+mod sgf_open_landing_tests;
 mod trial;
 
 #[derive(Debug, Clone)]

@@ -8,14 +8,14 @@ pub(super) struct DepartureSession {
     pub id: u64,
     pub phase: DeparturePhase,
     pub target: DepartureTarget,
+    pub selected_path: Option<NodePath>,
+    pub load_source: app_model::GameLoadSourceDto,
 }
 
 pub(super) enum DepartureTarget {
     Replacement {
         candidate: CurrentSgfDocument,
         candidate_path: Option<String>,
-        selected_path: Option<NodePath>,
-        load_source: app_model::GameLoadSourceDto,
         network_lease: Option<(provider_core::network::NetworkLease, u64)>,
         external_start: Option<std::num::NonZeroU64>,
     },
@@ -37,14 +37,16 @@ impl CurrentGameState {
         native_path: Option<String>,
     ) -> Result<DocumentDepartureAdmissionDto, CurrentGameError> {
         let candidate = CurrentSgfDocument::open(sgf_text)?;
-        self.admit_departure(DepartureTarget::Replacement {
-            candidate,
-            candidate_path: native_path,
-            selected_path: None,
-            load_source: app_model::GameLoadSourceDto::Excluded,
-            network_lease: None,
-            external_start: None,
-        })
+        self.admit_departure(
+            DepartureTarget::Replacement {
+                candidate,
+                candidate_path: native_path,
+                network_lease: None,
+                external_start: None,
+            },
+            None,
+            app_model::GameLoadSourceDto::Excluded,
+        )
     }
 
     pub fn prepare_loaded_replacement(
@@ -56,22 +58,29 @@ impl CurrentGameState {
         load_sgf_last: bool,
     ) -> Result<DocumentDepartureAdmissionDto, CurrentGameError> {
         let candidate = CurrentSgfDocument::open(sgf_text)?;
-        let local_sgf = matches!(source, app_model::GameLoadSourceDto::Open
-            | app_model::GameLoadSourceDto::Recent | app_model::GameLoadSourceDto::FileDelivery)
-            && format == Some(app_model::GameFileFormatDto::Sgf);
-        let selected_path = local_sgf.then(|| if load_sgf_last {
-            candidate.default_selected_path()
-        } else {
-            NodePath { indices: Vec::new() }
+        let local_sgf = matches!(
+            source,
+            app_model::GameLoadSourceDto::Open
+                | app_model::GameLoadSourceDto::Recent
+                | app_model::GameLoadSourceDto::FileDelivery
+        ) && format == Some(app_model::GameFileFormatDto::Sgf);
+        let selected_path = local_sgf.then(|| {
+            if load_sgf_last {
+                candidate.default_selected_path()
+            } else {
+                NodePath { indices: Vec::new() }
+            }
         });
-        self.admit_departure(DepartureTarget::Replacement {
-            candidate,
-            candidate_path: native_path,
+        self.admit_departure(
+            DepartureTarget::Replacement {
+                candidate,
+                candidate_path: native_path,
+                network_lease: None,
+                external_start: None,
+            },
             selected_path,
-            load_source: source,
-            network_lease: None,
-            external_start: None,
-        })
+            source,
+        )
     }
 
     pub fn document_identity(&self) -> u64 {
@@ -89,18 +98,24 @@ impl CurrentGameState {
             message: error.message,
         })?;
         let candidate = CurrentSgfDocument::open(sgf_text)?;
-        self.admit_departure(DepartureTarget::Replacement {
-            candidate,
-            candidate_path: None,
-            selected_path: None,
-            load_source: app_model::GameLoadSourceDto::Excluded,
-            network_lease: Some((lease, document_identity)),
-            external_start: None,
-        })
+        self.admit_departure(
+            DepartureTarget::Replacement {
+                candidate,
+                candidate_path: None,
+                network_lease: Some((lease, document_identity)),
+                external_start: None,
+            },
+            None,
+            app_model::GameLoadSourceDto::Excluded,
+        )
     }
 
     pub fn prepare_exit(&self) -> Result<DocumentDepartureAdmissionDto, CurrentGameError> {
-        self.admit_departure(DepartureTarget::ApplicationExit)
+        self.admit_departure(
+            DepartureTarget::ApplicationExit,
+            None,
+            app_model::GameLoadSourceDto::Excluded,
+        )
     }
 
     pub fn cancel_replacement(
@@ -180,8 +195,6 @@ impl CurrentGameState {
         let DepartureTarget::Replacement {
             candidate,
             candidate_path,
-            selected_path,
-            load_source,
             network_lease,
             external_start,
         } = session.target
@@ -189,6 +202,8 @@ impl CurrentGameState {
             holder.departure = Some(session);
             return Err(departure_blocked());
         };
+        let selected_path = session.selected_path;
+        let load_source = session.load_source;
         let external_start = external_start.map(std::num::NonZeroU64::get);
         let yike_source = match external_start.filter(|id| holder.external_sync.start_needs_source(*id)) {
             Some(_) => Some((candidate.clone(), candidate.serialize()?)),
@@ -409,6 +424,8 @@ impl CurrentGameState {
     pub(super) fn admit_departure(
         &self,
         target: DepartureTarget,
+        selected_path: Option<NodePath>,
+        load_source: app_model::GameLoadSourceDto,
     ) -> Result<DocumentDepartureAdmissionDto, CurrentGameError> {
         let mut holder = self.holder.lock().expect("current game state");
         if let DepartureTarget::Replacement {
@@ -463,6 +480,8 @@ impl CurrentGameState {
             id: departure_id,
             phase: DeparturePhase::AwaitingDecision,
             target,
+            selected_path,
+            load_source,
         });
         if dirty {
             Ok(DocumentDepartureAdmissionDto::NeedsDecision { departure_id })

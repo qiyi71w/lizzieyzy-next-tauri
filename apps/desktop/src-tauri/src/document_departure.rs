@@ -456,7 +456,13 @@ pub fn prepare_document_replacement(
             kind: app_model::CurrentGameErrorKind::DepartureBlocked,
             message,
         })?;
-        state.prepare_loaded_replacement(&sgf_text, native_path, load_source.unwrap_or_default(), format, load_sgf_last)
+        state.prepare_loaded_replacement(
+            &sgf_text,
+            native_path,
+            load_source.unwrap_or_default(),
+            format,
+            load_sgf_last,
+        )
     }
 }
 

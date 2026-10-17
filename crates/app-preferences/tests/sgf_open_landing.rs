@@ -9,7 +9,14 @@ fn sgf_landing_defaults_and_durable_values_preserve_other_preferences() {
     assert!(!preferences.load_sgf_last);
     preferences.sound_enabled = false;
     preferences.recent_game_paths = vec!["/tmp/retained.sgf".into()];
-    let directory = std::env::temp_dir().join(format!("sgf-landing-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let directory = std::env::temp_dir().join(format!(
+        "sgf-landing-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
     std::fs::create_dir(&directory).unwrap();
     let path = directory.join("preferences.json");
     for value in [true, false] {

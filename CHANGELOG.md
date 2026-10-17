@@ -4,6 +4,7 @@
 
 ### English
 
+- Restored Rust formatting and strict-lint compliance for SGF opening. Captured landing and source metadata now live in the departure session, preserving atomic admission and commit behavior without adding a heap allocation to the candidate document.
 - Restored the Java "load SGF at last move" preference as Preferences → Review `打开 SGF 时定位到末手`, defaulting off. Native Open, recent files, cold/warm file activation and single-file drop of SGF (including `.txt` SGF) land on the root when off, or on the first-child mainline leaf when on. Rust captures the committed preference when the replacement is prepared and selects the node inside the protected install, so the snapshot, recovery cursor and continuous-analysis target agree. GIB, text/clipboard, sample/New, session recovery, provider/readboard, match and finite/batch targets keep their existing landing. Existing configurations without the field read as off; failed saves keep the previous value. Candidate-bound Windows and real-KataGo acceptance is recorded in [Development](docs/DEVELOPMENT.md#local-sgf-landing-acceptance).
 - Fixed KataGo analysis of Yike games containing `RU[cn]` by encoding the rule as `chinese` at the engine boundary. SGF Save/reopen retains the original rule, metadata and personal comments; unknown rules remain explicit engine errors.
 - Fixed authoring Undo/Redo carrying newly attached analysis onto the other board position when its original analysis slots were empty. Drag, whole-tree transforms and insertion now exchange affected payloads with their corresponding positions while preserving later unrelated analysis and SGF Save/reopen semantics.
@@ -70,6 +71,7 @@
 
 ### 中文
 
+- 修正 SGF 打开相关 Rust 格式和严格 lint：已捕获的落点与来源元数据由 departure session 持有，保留原子接纳及提交语义，不给候选棋谱增加堆分配。
 - 恢复 Java“打开 SGF 时定位到末手”偏好，位于首选项“复盘”组，默认关闭。原生打开、最近文件、冷/暖启动文件投递及单文件拖入的 SGF（含 `.txt` SGF）关闭时落在根节点，开启时落在第一子主线末端。Rust 在准备替换时读取已提交的偏好，并在受保护安装中确定落点，快照、恢复游标与连续分析目标一致。GIB、文本/剪贴板、示例/新建、会话恢复、provider/readboard、对局及有限/批量任务目标保持原落点。缺少该字段的旧配置视为关闭；保存失败保留原值。候选绑定的 Windows 与真实 KataGo 验收见 [Development](docs/DEVELOPMENT.md#local-sgf-landing-acceptance)。
 - 修复弈客 `RU[cn]` 棋谱的 KataGo 分析：仅在引擎请求编码时转换为 `chinese`，SGF 保存重开保留原规则、元数据与个人评论，未知规则继续明确报错。
 - 修复原分析槽位为空时，棋谱编辑 Undo/Redo 将后来附着的分析带入另一局面的问题。拖动、全树变换与列表插入按对应局面交换受影响分析，保留无关节点后来的分析及 SGF 保存重开语义。
